@@ -1,0 +1,4 @@
+# Claude Module System Configuration
+auto_compile: true
+max_size: 5000
+project_type: auto
