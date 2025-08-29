@@ -101,8 +101,5 @@ coverage.xml
 uv.lock
 .python-version
 
-# Reference implementations (to be added as submodules later)
-/reference/angr/
-/reference/cle/
-/reference/claripy/
-/reference/LIEF/
+# Reference implementations are managed as git submodules
+# See scripts/setup-references.sh to initialize them

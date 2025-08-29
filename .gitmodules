@@ -1,0 +1,12 @@
+[submodule "reference/angr"]
+	path = reference/angr
+	url = https://github.com/angr/angr.git
+[submodule "reference/claripy"]
+	path = reference/claripy
+	url = https://github.com/angr/claripy.git
+[submodule "reference/LIEF"]
+	path = reference/LIEF
+	url = https://github.com/lief-project/LIEF.git
+[submodule "reference/cle"]
+	path = reference/cle
+	url = https://github.com/angr/cle.git
