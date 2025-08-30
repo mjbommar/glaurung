@@ -102,27 +102,35 @@ build_cross_variants() {
     local source_file="$1" lang="$2" basename
     basename="$(basename "$source_file" .${lang})"
 
-    if command -v aarch64-linux-gnu-gcc &> /dev/null; then
-        compile_binary "$source_file" aarch64-linux-gnu-gcc "$BINARIES_DIR/cross/arm64" \
-            "${basename}-arm64-gcc" "-O2 -Wall" "GCC cross ARM64"
+    # Select C vs C++ drivers where needed
+    local gcc_cross="gcc"
+    local mingw_cross="x86_64-w64-mingw32-gcc"
+    if [[ "$lang" == "cpp" ]]; then
+        gcc_cross="g++"
+        mingw_cross="x86_64-w64-mingw32-g++"
     fi
-    if command -v riscv64-linux-gnu-gcc &> /dev/null; then
-        compile_binary "$source_file" riscv64-linux-gnu-gcc "$BINARIES_DIR/cross/riscv64" \
-            "${basename}-riscv64-gcc" "-O2 -Wall" "GCC cross RISC-V 64"
+
+    if command -v aarch64-linux-gnu-${gcc_cross} &> /dev/null; then
+        compile_binary "$source_file" aarch64-linux-gnu-${gcc_cross} "$BINARIES_DIR/cross/arm64" \
+            "${basename}-arm64-${gcc_cross}" "-O2 -Wall" "GCC cross ARM64 (${gcc_cross})"
     fi
-    # 32-bit via multilib if supported
-    if command -v gcc &> /dev/null; then
-        if echo "int main(){}" | gcc -m32 -x c - -o /dev/null &>/dev/null; then
-            compile_binary "$source_file" gcc "$BINARIES_DIR/cross/x86_32" \
-                "${basename}-x86_32-gcc" "-m32 -O2 -Wall" "GCC 32-bit x86"
+    if command -v riscv64-linux-gnu-${gcc_cross} &> /dev/null; then
+        compile_binary "$source_file" riscv64-linux-gnu-${gcc_cross} "$BINARIES_DIR/cross/riscv64" \
+            "${basename}-riscv64-${gcc_cross}" "-O2 -Wall" "GCC cross RISC-V 64 (${gcc_cross})"
+    fi
+    # 32-bit via multilib if supported (C or C++)
+    if command -v ${gcc_cross} &> /dev/null; then
+        if echo "int main(){}" | ${gcc_cross} -m32 -x c - -o /dev/null &>/dev/null; then
+            compile_binary "$source_file" ${gcc_cross} "$BINARIES_DIR/cross/x86_32" \
+                "${basename}-x86_32-${gcc_cross}" "-m32 -O2 -Wall" "${gcc_cross} 32-bit x86"
         else
-            warn "gcc -m32 unsupported (missing multilib)"
+            warn "${gcc_cross} -m32 unsupported (missing multilib)"
         fi
     fi
     # Windows PE via MinGW-w64 if available
-    if command -v x86_64-w64-mingw32-gcc &> /dev/null; then
-        compile_binary "$source_file" x86_64-w64-mingw32-gcc "$BINARIES_DIR/cross/windows-x86_64" \
-            "${basename}-x86_64-mingw.exe" "-O2 -Wall" "MinGW-w64 PE (x86_64)"
+    if command -v ${mingw_cross} &> /dev/null; then
+        compile_binary "$source_file" ${mingw_cross} "$BINARIES_DIR/cross/windows-x86_64" \
+            "${basename}-x86_64-mingw.exe" "-O2 -Wall" "MinGW-w64 PE (x86_64) via ${mingw_cross}"
     fi
 }
 
