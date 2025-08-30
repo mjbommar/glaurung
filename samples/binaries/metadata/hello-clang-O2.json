@@ -1,0 +1,1 @@
+{\n  "source_file": "/home/mjbommar/src/glaurung/samples/source/cpp/hello.cpp",\n  "compiler": "clang++-20",\n  "output_file": "/home/mjbommar/src/glaurung/samples/binaries/native/clang/O2/hello-clang-O2",\n  "compilation_flags": "-O2 -Wall -Wextra",\n  "description": "Clang 20 compiled with -O2",\n  "timestamp": "2025-08-30T18:33:16-04:00",\n  "hostname": "mobile4"\n}

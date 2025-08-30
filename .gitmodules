@@ -52,3 +52,21 @@
 [submodule "reference/pwndbg"]
 	path = reference/pwndbg
 	url = https://github.com/pwndbg/pwndbg.git
+[submodule "reference/capstone"]
+	path = reference/capstone
+	url = https://github.com/capstone-engine/capstone.git
+[submodule "reference/z3"]
+	path = reference/z3
+	url = https://github.com/Z3Prover/z3.git
+[submodule "reference/Cutter"]
+	path = reference/Cutter
+	url = https://github.com/rizinorg/cutter.git
+[submodule "reference/keystone"]
+	path = reference/keystone
+	url = https://github.com/keystone-engine/keystone.git
+[submodule "reference/goblin"]
+	path = reference/goblin
+	url = https://github.com/m4b/goblin.git
+[submodule "reference/retdec"]
+	path = reference/retdec
+	url = https://github.com/avast/retdec.git

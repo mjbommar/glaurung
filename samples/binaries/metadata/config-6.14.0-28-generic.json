@@ -1,0 +1,1 @@
+{\n  "source_path": "/boot/config-6.14.0-28-generic",\n  "output_file": "/home/mjbommar/src/glaurung/samples/binaries/native/system/config-6.14.0-28-generic",\n  "type": "kernel_config",\n  "description": "kernel_config from /boot",\n  "timestamp": "2025-08-30T18:33:19-04:00",\n  "hostname": "mobile4"\n}

@@ -78,6 +78,9 @@ $RECYCLE.BIN/
 .env
 .env.local
 
+# Samples outputs (keep committed for reproducibility)
+# (Intentionally not ignored)
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb

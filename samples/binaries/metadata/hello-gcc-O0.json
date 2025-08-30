@@ -1,0 +1,1 @@
+{\n  "source_file": "/home/mjbommar/src/glaurung/samples/source/cpp/hello.cpp",\n  "compiler": "g++",\n  "output_file": "/home/mjbommar/src/glaurung/samples/binaries/native/gcc/O0/hello-gcc-O0",\n  "compilation_flags": "-O0 -Wall -Wextra",\n  "description": "GCC compiled with -O0",\n  "timestamp": "2025-08-30T18:33:11-04:00",\n  "hostname": "mobile4"\n}

@@ -1,0 +1,1 @@
+{\n  "source_file": "/home/mjbommar/src/glaurung/samples/source/java/HelloWorld.java",\n  "compiler": "javac+jar",\n  "output_file": "/home/mjbommar/src/glaurung/samples/binaries/java/HelloWorld.jar",\n  "compilation_flags": "",\n  "description": "Java JAR",\n  "timestamp": "2025-08-30T18:33:18-04:00",\n  "hostname": "mobile4"\n}

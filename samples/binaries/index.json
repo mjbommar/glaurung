@@ -1,0 +1,779 @@
+{
+  "root": "/home/mjbommar/src/glaurung/samples/binaries",
+  "generated_at": "2025-08-30T18:33:20-04:00",
+  "host": "mobile4",
+  "tools": {
+    "gcc": "gcc (Ubuntu 14.2.0-19ubuntu2) 14.2.0",
+    "clang-20": "Ubuntu clang version 20.1.2 (0ubuntu1)",
+    "gfortran-15": "GNU Fortran (Ubuntu 15-20250404-0ubuntu1) 15.0.1 20250404 (experimental) [master r15-9193-g08e803aa9be]",
+    "javac": "javac 21.0.8",
+    "jar": "jar 21.0.8",
+    "python3": "Python 3.13.3",
+    "ldd": "ldd (Ubuntu GLIBC 2.41-6ubuntu1.1) 2.41",
+    "file": "file-5.45"
+  },
+  "files": [
+    {
+      "path": "fortran/hello-gfortran-O0",
+      "size": 16672,
+      "sha256": "6d2bbad790e0cb5c5ef4a2b260140c787a14c5bb6503f4d735f096b6ca8236a3",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=803ad621b4055c524d505e9ff6bec74571606bbd, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "fortran/hello-gfortran-O1",
+      "size": 16632,
+      "sha256": "1ca566eb93580b34bb18fb92ad32d3838a5f8a7d92d83eeb8feab4d7ac72df88",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=6add8d24c906cebff0882123cfcd3e9a12165fd2, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "fortran/hello-gfortran-O2",
+      "size": 16632,
+      "sha256": "1b6ae9025aec82accd3774ce63c0d895404bf60af5de581a807c959537b5b25c",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=2a9c1b3c7b9ac7fd89f1be18121ee5ca63490a80, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "fortran/hello-gfortran-O3",
+      "size": 16632,
+      "sha256": "1b6ae9025aec82accd3774ce63c0d895404bf60af5de581a807c959537b5b25c",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=2a9c1b3c7b9ac7fd89f1be18121ee5ca63490a80, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "fortran/hello-gfortran-debug",
+      "size": 18768,
+      "sha256": "de80012777295cf11e80bf823950e6f8621e8552c977fd7d5645b83d4578a9d0",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=1dcf154077e3b5074b4813f82eeb22fbc824a294, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "index.json",
+      "size": 32680,
+      "sha256": "e8960fee3c36153f11a89c0332339684b994927f4339de28c13bb87f3cc4d6e6",
+      "type": "JSON text data"
+    },
+    {
+      "path": "java/HelloWorld.class",
+      "size": 1726,
+      "sha256": "d80c8e09080c1c25b9f9c73767ee31341fc83e5a85c7a2bf8e7fb7ec50abeace",
+      "type": "compiled Java class data, version 65.0"
+    },
+    {
+      "path": "java/HelloWorld.jar",
+      "size": 1461,
+      "sha256": "4ae4f5125f3d8c158dfd8fa250f973c0d45ca98ed1e5a7cfc4673fb9af75a472",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "java/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/HelloWorld-jar.json",
+      "size": 332,
+      "sha256": "c9d91b48013a49fe3f1d0c8fa9dd55749c9346a76d67aabec21469fbb036a8a5",
+      "type": "ASCII text, with very long lines (331)"
+    },
+    {
+      "path": "metadata/HelloWorld-javac.json",
+      "size": 347,
+      "sha256": "ea33a135249e4fcb92f4c5d98594719c71eed2eecd4d5ab455aeeb828dcfa9a7",
+      "type": "ASCII text, with very long lines (346)"
+    },
+    {
+      "path": "metadata/awk.json",
+      "size": 261,
+      "sha256": "2c6a69ded50a9e1fe160ed964a54e653ed6c6e8792fbfc995de553b95a398907",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/bash.json",
+      "size": 264,
+      "sha256": "b974ab6c63bbd4b18bc12085029f8be794f1d187530c88e5e2aed26cf64ddf2a",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/cat.json",
+      "size": 261,
+      "sha256": "02d70b6276b278179315abf0b7730760a9d29b7e0c2d5b321c277edd07f3baac",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/clang-20.json",
+      "size": 276,
+      "sha256": "d2eb3c43399a54001df3f37dac1bbfd2ea7cc1ce9b3ff7d455c6548a3e40fa14",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/config-6.14.0-28-generic.json",
+      "size": 306,
+      "sha256": "a9725cd2132691b42865081ec3aa7117fac36753db7ed17ba8bc722f5a5805e4",
+      "type": "ASCII text, with very long lines (305)"
+    },
+    {
+      "path": "metadata/config-6.14.0-29-generic.json",
+      "size": 306,
+      "sha256": "0888859dd46db9b85c3bdc04ef140443b90004cf09f71c790e1cd7a948cb98fe",
+      "type": "ASCII text, with very long lines (305)"
+    },
+    {
+      "path": "metadata/gcc.json",
+      "size": 261,
+      "sha256": "9ee1b68a860a840a1647b6a02e280a197a3ba11e36f3d93aa631ff6782e903e5",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/grep.json",
+      "size": 264,
+      "sha256": "2653b2645de445757868dce4f094e1dd655198347777cbb132d88646742fb3fd",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/hello-clang-O0.json",
+      "size": 372,
+      "sha256": "3899e681faf4618a55a44c4384aa007f9ab59132b54966479163c91e1f31060b",
+      "type": "ASCII text, with very long lines (371)"
+    },
+    {
+      "path": "metadata/hello-clang-O1.json",
+      "size": 372,
+      "sha256": "c5f2315ea63e353a015a0c040a730d35aed7cd73f0da33c1a9f852d8ad328913",
+      "type": "ASCII text, with very long lines (371)"
+    },
+    {
+      "path": "metadata/hello-clang-O2-nofp.json",
+      "size": 392,
+      "sha256": "e2dbf8283778a4e5041484b5fe1fdd06a53417ab9d9acbedaa79f077fed527c0",
+      "type": "ASCII text, with very long lines (391)"
+    },
+    {
+      "path": "metadata/hello-clang-O2.json",
+      "size": 372,
+      "sha256": "c911a1a06d0ae16358dd4337510e47b74d82f1907b702094d7ca4f190cba001b",
+      "type": "ASCII text, with very long lines (371)"
+    },
+    {
+      "path": "metadata/hello-clang-O3-lto.json",
+      "size": 359,
+      "sha256": "0cea2d181239bd36e37337535833b08080979f3d93dc56f549ab88a569379e7d",
+      "type": "ASCII text, with very long lines (358)"
+    },
+    {
+      "path": "metadata/hello-clang-O3.json",
+      "size": 372,
+      "sha256": "23abbe8e7798b62f20675d782af81c726131cf113cfdb2566fa934688971f626",
+      "type": "ASCII text, with very long lines (371)"
+    },
+    {
+      "path": "metadata/hello-clang-debug.json",
+      "size": 375,
+      "sha256": "c68d7ef8174a24c9aba74ef260d49cba032b277cd5ab98fec265613bdaa4f7f1",
+      "type": "ASCII text, with very long lines (374)"
+    },
+    {
+      "path": "metadata/hello-clang-stripped.json",
+      "size": 371,
+      "sha256": "da1b1f530249882099394a4009755de7be474d0f22ca46d60ac957d763cc8065",
+      "type": "ASCII text, with very long lines (370)"
+    },
+    {
+      "path": "metadata/hello-gcc-O0.json",
+      "size": 356,
+      "sha256": "b31189587cebda23329058432b26ca340ba3ef908c0fe73042d5b9d4b8eae2d4",
+      "type": "ASCII text, with very long lines (355)"
+    },
+    {
+      "path": "metadata/hello-gcc-O1.json",
+      "size": 356,
+      "sha256": "c9b2869e8413ca12ec9e4e911d98c6f8c9fb320c14b0615ca3c695bcce48db9f",
+      "type": "ASCII text, with very long lines (355)"
+    },
+    {
+      "path": "metadata/hello-gcc-O2-nofp.json",
+      "size": 379,
+      "sha256": "ca7922489727f5f9fcd75cfe59715a61e2832b30bafc411369206bf10763851b",
+      "type": "ASCII text, with very long lines (378)"
+    },
+    {
+      "path": "metadata/hello-gcc-O2.json",
+      "size": 356,
+      "sha256": "3f2363d351918358aab928eb25ba45974f3a163658c22998fcdcd43878ff7ca9",
+      "type": "ASCII text, with very long lines (355)"
+    },
+    {
+      "path": "metadata/hello-gcc-O3-lto.json",
+      "size": 346,
+      "sha256": "ee5d0474d7ba6d1142dce1ca426c56bb303fdadf9607e7346b70ae799818b20d",
+      "type": "ASCII text, with very long lines (345)"
+    },
+    {
+      "path": "metadata/hello-gcc-O3.json",
+      "size": 356,
+      "sha256": "c97c2e5182ea5870a9a2dc8503ba6d7ee56f356df143c0548c986502eaa25777",
+      "type": "ASCII text, with very long lines (355)"
+    },
+    {
+      "path": "metadata/hello-gcc-debug.json",
+      "size": 359,
+      "sha256": "eec5ca0f9f9068ccd0a82ca09114078a17a57410024dcaf6407ec67591641c16",
+      "type": "ASCII text, with very long lines (358)"
+    },
+    {
+      "path": "metadata/hello-gcc-stripped.json",
+      "size": 351,
+      "sha256": "11749f3502f923107f52763271c710ee917c601fb683169461f9b18802d7d772",
+      "type": "ASCII text, with very long lines (350)"
+    },
+    {
+      "path": "metadata/hello-gfortran-O0.json",
+      "size": 361,
+      "sha256": "e82ea41058b2d363be49cbd9e441eb70aae2e92c59c0e403239113bec1c3c7d8",
+      "type": "ASCII text, with very long lines (360)"
+    },
+    {
+      "path": "metadata/hello-gfortran-O1.json",
+      "size": 361,
+      "sha256": "d6c43eb8f9334ffcf1acf8d598f8ab61c826a553b240befb179a3788f3d418a6",
+      "type": "ASCII text, with very long lines (360)"
+    },
+    {
+      "path": "metadata/hello-gfortran-O2.json",
+      "size": 361,
+      "sha256": "8cbf53cd8e4c12aa462d54a12dad407fa59158daed734daa8a39445b23ca43b0",
+      "type": "ASCII text, with very long lines (360)"
+    },
+    {
+      "path": "metadata/hello-gfortran-O3.json",
+      "size": 361,
+      "sha256": "594ed6051ea8e90349a16ef5408ddc605e686dd97fc4c7772771fc7150b5ea19",
+      "type": "ASCII text, with very long lines (360)"
+    },
+    {
+      "path": "metadata/hello-gfortran-debug.json",
+      "size": 381,
+      "sha256": "5dc96533f76cfd682cb4fb58fe2885933d6163c64263843f228ab18fe72b2ba1",
+      "type": "ASCII text, with very long lines (380)"
+    },
+    {
+      "path": "metadata/hello-python-opt.json",
+      "size": 348,
+      "sha256": "c8ff1c5919d63ef03797a9eff82bcf9edef947a687e357d98fe0d57f64aade18",
+      "type": "ASCII text, with very long lines (347)"
+    },
+    {
+      "path": "metadata/hello-python.json",
+      "size": 329,
+      "sha256": "8233ff056f4e8dce9602bcd3bfedcf6fcb8d70b1467c1ede30bd08ee9c1c404b",
+      "type": "ASCII text, with very long lines (328)"
+    },
+    {
+      "path": "metadata/hello-x86_64-mingw.exe.json",
+      "size": 384,
+      "sha256": "c8f8c28566ff057775c166c349c220a2dfc297c3f0f6d2455aaef3badb754fc6",
+      "type": "ASCII text, with very long lines (383)"
+    },
+    {
+      "path": "metadata/initrd.img-6.14.0-15-generic.json",
+      "size": 312,
+      "sha256": "8b28dac05e97cb75dbc55fb838e977d1e90dd7e32be9c18f9d2361046ef88094",
+      "type": "ASCII text, with very long lines (311)"
+    },
+    {
+      "path": "metadata/initrd.img-6.14.0-28-generic.json",
+      "size": 312,
+      "sha256": "c13b9b4b13665f1114997c288cafefde87a5daacfc19526e641b9bbde2ad0e9f",
+      "type": "ASCII text, with very long lines (311)"
+    },
+    {
+      "path": "metadata/initrd.img-6.14.0-29-generic.json",
+      "size": 312,
+      "sha256": "dc4f0801ae2ca3bf8b047cf02b956336930d7fd5885a42bc0baa0856ba0ed13b",
+      "type": "ASCII text, with very long lines (311)"
+    },
+    {
+      "path": "metadata/initrd.img.json",
+      "size": 276,
+      "sha256": "1263f7aad82372f07ac8262ebd40f836dc490bcde881802fe6badbbcf59fc05d",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/initrd.img.old.json",
+      "size": 284,
+      "sha256": "96a2c4275db924e4b721c5be7aefca54fafa411a726f911a15beb0fb879ca3c2",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/libLLVM.so.20.1.json",
+      "size": 317,
+      "sha256": "c224471c820374a0b0b8641925e598d484315b658093066bde5d17bd68a133dc",
+      "type": "ASCII text, with very long lines (316)"
+    },
+    {
+      "path": "metadata/libacl.so.1.json",
+      "size": 305,
+      "sha256": "e2f4188f74f6412e80c902a9c14ffb1cfcd61b32648ce48e0c0f61a532d558eb",
+      "type": "ASCII text, with very long lines (304)"
+    },
+    {
+      "path": "metadata/libbsd.so.0.json",
+      "size": 305,
+      "sha256": "8dea999a3ce197173f41c7ddd70b5e4c88a475afdd0f985d82423e07f4fd18bd",
+      "type": "ASCII text, with very long lines (304)"
+    },
+    {
+      "path": "metadata/libc.so.6.json",
+      "size": 299,
+      "sha256": "3a8b7f1716a5f83c1d414abec576b91d09b36012f75b2416ba9eec42df1c4683",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/libcap.so.2.json",
+      "size": 305,
+      "sha256": "d24922065be09d9888353e519ca3073304d035bc9302d22b7990381a8a613010",
+      "type": "ASCII text, with very long lines (304)"
+    },
+    {
+      "path": "metadata/libclang-cpp.so.20.1.json",
+      "size": 332,
+      "sha256": "a57be88733682c61ddfe3bfc7720de42c0fc92913132e7834dc74ab0ffbbc3c9",
+      "type": "ASCII text, with very long lines (331)"
+    },
+    {
+      "path": "metadata/libedit.so.2.json",
+      "size": 308,
+      "sha256": "5d50839beead11206c9a00009d1b48046d9b1f257862e3bb83cc5d6d61aca987",
+      "type": "ASCII text, with very long lines (307)"
+    },
+    {
+      "path": "metadata/libexpat.so.1.json",
+      "size": 311,
+      "sha256": "7f27a3049eca54938559fc71bcdcf22b4af3764f8ec9f024fdc460463e853623",
+      "type": "ASCII text, with very long lines (310)"
+    },
+    {
+      "path": "metadata/libffi.so.8.json",
+      "size": 305,
+      "sha256": "500a84366bf3dd632ad5307662b1f7d69413976f9e177a8ade639a96d79b1c5a",
+      "type": "ASCII text, with very long lines (304)"
+    },
+    {
+      "path": "metadata/libgcc_s.so.1.json",
+      "size": 311,
+      "sha256": "0da29a52d91404cf8e378c0664d2c5728d54156e8776ce79d22c8fec301e4886",
+      "type": "ASCII text, with very long lines (310)"
+    },
+    {
+      "path": "metadata/liblzma.so.5.json",
+      "size": 308,
+      "sha256": "322c8ffb554d5af5bb1e403b4fbf4ee81bb32773158e20e19a40935212094972",
+      "type": "ASCII text, with very long lines (307)"
+    },
+    {
+      "path": "metadata/libm.so.6.json",
+      "size": 299,
+      "sha256": "a1a757d64f01d64f1b37444e09d55d9f20fcd67bafc884b9ca0dc4ec0f324a29",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/libmd.so.0.json",
+      "size": 302,
+      "sha256": "67f0dc02272bfe21b0cc906b8b0a72b2cac99a5f02fcdc11478899ef4c59cf89",
+      "type": "ASCII text, with very long lines (301)"
+    },
+    {
+      "path": "metadata/libpcre2-8.so.0.json",
+      "size": 317,
+      "sha256": "09b5596624a163313f12304e99c0f9f23a32824796251c64be0b945c5fc81cde",
+      "type": "ASCII text, with very long lines (316)"
+    },
+    {
+      "path": "metadata/libselinux.so.1.json",
+      "size": 317,
+      "sha256": "45440a389acbc04e945cc5e7a58ea86a14c8f71219836f78fce07e5ec99dd66b",
+      "type": "ASCII text, with very long lines (316)"
+    },
+    {
+      "path": "metadata/libstdc++.so.6.json",
+      "size": 314,
+      "sha256": "fedfbc42e0420ebb77fdd8423ea69eedf15a1a389686966f6894f12ec1a97b85",
+      "type": "ASCII text, with very long lines (313)"
+    },
+    {
+      "path": "metadata/libtinfo.so.6.json",
+      "size": 311,
+      "sha256": "033a9ed60c4da8b96ac9e25690aa3d9b926ce05f966d1dd934e4eeeb440f9c7c",
+      "type": "ASCII text, with very long lines (310)"
+    },
+    {
+      "path": "metadata/libxml2.so.2.json",
+      "size": 308,
+      "sha256": "5555da2ae8ed54af942baa058b910022098da5941b1c2c3d4883b897f9daf9e6",
+      "type": "ASCII text, with very long lines (307)"
+    },
+    {
+      "path": "metadata/libz.so.1.json",
+      "size": 299,
+      "sha256": "f97fe8e1708ccb3508271c9fdcc2e039298b501add0c5f7f0fb60ae0273772c9",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/libzstd.so.1.json",
+      "size": 308,
+      "sha256": "3bf7e4c564b3a1ba6391cb920bec27e80f55f6955fd0704d518ec2c2571228ae",
+      "type": "ASCII text, with very long lines (307)"
+    },
+    {
+      "path": "metadata/ls.json",
+      "size": 258,
+      "sha256": "ada8ea19239d31aea842421f2ba8a0ab5f3a01c4494407d8469006b64a028f58",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/python3.json",
+      "size": 273,
+      "sha256": "b594d6c2593d3acaa7a3f4f1a73fb20f317d94c90537b9afba3d73d935d65efb",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/sed.json",
+      "size": 261,
+      "sha256": "dd8fd24e220663fd3e208f5ba4ee4f8e261d4bb57de0fb9ba7a42aebe6495c0f",
+      "type": "ASCII text"
+    },
+    {
+      "path": "metadata/sh.json",
+      "size": 258,
+      "sha256": "67ed88af8d16d3267b0bee4db439ac310e9d77fe13c617a80d0cc8aa8f44cd89",
+      "type": "ASCII text"
+    },
+    {
+      "path": "native/clang/O0/hello-clang-O0",
+      "size": 16360,
+      "sha256": "4880a507765d6ceb1f8a5f9da2093cec1937723b701222a1030203fb2e16527d",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=e2f7fcc1c86e423a5fbe8e60cfdeb70d2513722d, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/clang/O1/hello-clang-O1",
+      "size": 16368,
+      "sha256": "c59009b9aedac4ef1932ac3b49261e1a022a3728f990309bf7a0f155d7e89e65",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=8f01966bf1da7c3d386e33f5f3a32ea178e6704c, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/clang/O2/hello-clang-O2",
+      "size": 16368,
+      "sha256": "c59009b9aedac4ef1932ac3b49261e1a022a3728f990309bf7a0f155d7e89e65",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=8f01966bf1da7c3d386e33f5f3a32ea178e6704c, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/clang/O2/hello-clang-O2-nofp",
+      "size": 18680,
+      "sha256": "023bcc9b246c63bcaf76c08040d3af8e31595abfe5224bd94679222fabba285b",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d4608d1217ee376d6a854e71f19d8e5d4cba63f2, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "native/clang/O3/hello-clang-O3",
+      "size": 16368,
+      "sha256": "c59009b9aedac4ef1932ac3b49261e1a022a3728f990309bf7a0f155d7e89e65",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=8f01966bf1da7c3d386e33f5f3a32ea178e6704c, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/clang/O3/hello-clang-O3-lto",
+      "size": 16280,
+      "sha256": "14ba865f28af2110c7563b7cdfa8380b90fef4068538e6f1869cb1b1d0dc0b0c",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=bea528a15dc7e39a62121c88dbcf0fc72d21d766, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/clang/debug/hello-clang-debug",
+      "size": 18040,
+      "sha256": "dd246e15c996537e3d92bd54acabdd737340d0c4f69117a54c5c35ccfdb7e5c9",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=88fcd1b62ad8f26d3627507a2ec162d497b97c25, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "native/clang/debug/hello-clang-stripped",
+      "size": 14672,
+      "sha256": "79237e8e1f4b793076345ce603b3d5cc36fa27adfd8d31f46a55e35218d3db21",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=07c469d689fc41f088cda00058e8f5dc23e87b5f, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/gcc/O0/hello-gcc-O0",
+      "size": 42080,
+      "sha256": "d5e17ea3aabc77f1ebab61b75acca21fceee5263bfeb878140a68da43f7db009",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=0caf12cddbe4f349fe541909d7284972ee48c9e9, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/gcc/O1/hello-gcc-O1",
+      "size": 18472,
+      "sha256": "7a8e8febf69540f496ecae11ea807ac14965ddc099f299b6c430404dc1665830",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=95f36e03ccf713fc884b23cfe3dd369c2ec396fd, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/gcc/O2/hello-gcc-O2",
+      "size": 18232,
+      "sha256": "b48ceb04173c2f90454c12532592e80cb4385d4723862591c9fe5d4605e1d1ca",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=bf4624eb35aa61086294a1e53b82d99fcd367b34, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/gcc/O2/hello-gcc-O2-nofp",
+      "size": 154240,
+      "sha256": "35968af2b6750c6f4055ebae363795ae406f6a4eb2ee56a8ad75224443185f6d",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=3e9b52c236268ff5d999e3266f9a4a142761c090, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "native/gcc/O3/hello-gcc-O3",
+      "size": 18320,
+      "sha256": "d83419238094a7ad834f131bdba1356c75bf131dd65ba6faff31b7094f35b73f",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=dd2e2fbaa5817222b44d6796a3e921279dad0476, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/gcc/O3/hello-gcc-O3-lto",
+      "size": 17976,
+      "sha256": "f3921c8535ca2100c03f001099f359e477542505d08a01b11db6a73fd1dd9888",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=141354eb53efa5e103dd192eca7a06abced7599f, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "native/gcc/debug/hello-gcc-debug",
+      "size": 158048,
+      "sha256": "c478066767ac250042163828565093755ac8e006690abfca77b833cb2b8ae49c",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=46d431e66221e2c0f98b0dba843b5d111f4f431b, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "native/gcc/debug/hello-gcc-stripped",
+      "size": 14640,
+      "sha256": "d64c70f433609199647b1f47b936480f808e258d7ed3105f881a30672fe5bc72",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ada975f1b9622b6905e2e73c6af7619c8e69d39b, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/awk",
+      "size": 195416,
+      "sha256": "9f11bee2561b60b79397c67086c58734334cee3d7382a275ab40530c9dc9e9b7",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=8dc98288693c39369a2935c15bab49dce48a2074, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/bash",
+      "size": 1740896,
+      "sha256": "a30137eaadfc4a97cfa75eb5d39e5fd657cead2edf5c2836d96826fbe3add925",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=809f4a6b6cc88a02450914e06641aff486da0d09, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/cat",
+      "size": 43560,
+      "sha256": "cc04cc7e727e5a812d8558bf9875183d6e0004af9bcd09b2f0911a72c4f91fd9",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=af19919d4fb9b134011c1479b03ee75615da5823, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/clang-20",
+      "size": 132528,
+      "sha256": "c6406eec90d81881563fffe604bc30560521e9a125690677ccb9daf9a22297f9",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=3f50d43835c9f1c57eef4be562e478d18f5a37a1, stripped"
+    },
+    {
+      "path": "native/system/config-6.14.0-28-generic",
+      "size": 296778,
+      "sha256": "0b5a5ee9e6f4b3d2ba0385b7bb9a47568080c9d6d84ba1b161df303c5945e704",
+      "type": "Linux make config build file, ASCII text"
+    },
+    {
+      "path": "native/system/config-6.14.0-29-generic",
+      "size": 296778,
+      "sha256": "d350d4aa9a7f7094d368f7804e2e96566eab4412e9c99a4c237064ad9fd5677c",
+      "type": "Linux make config build file, ASCII text"
+    },
+    {
+      "path": "native/system/gcc",
+      "size": 1186944,
+      "sha256": "3350fa3007259def5975d41adcf3de4236266ac1d4f7871f60647ed7316faa7b",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (GNU/Linux), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ed4be9f7a252a270c32527d029018ded28c6b4b2, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/grep",
+      "size": 186824,
+      "sha256": "20a35a4c18f2fe9e6305c1cbf866b9c0fcc3f957132ae66028c99ec353bb0a80",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=94e89ce001d1bd1b0067229744810d2e56c9b020, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/initrd.img",
+      "size": 86237512,
+      "sha256": "d8a8e423eb538ddd08ca5cc9976187265cf0fbf860191351bbc7b030815bb9f2",
+      "type": "ASCII cpio archive (SVR4 with no CRC)"
+    },
+    {
+      "path": "native/system/initrd.img-6.14.0-15-generic",
+      "size": 75800851,
+      "sha256": "bfa858898085f2458b3333ec9394a8f6edd84818f9d4e7efb236c7ed79bb7c60",
+      "type": "ASCII cpio archive (SVR4 with no CRC)"
+    },
+    {
+      "path": "native/system/initrd.img-6.14.0-28-generic",
+      "size": 86235079,
+      "sha256": "f17c7f469944ec077dfcdda4a7e9f09472cf41a729a133a2f4145a07f4345ebf",
+      "type": "ASCII cpio archive (SVR4 with no CRC)"
+    },
+    {
+      "path": "native/system/initrd.img-6.14.0-29-generic",
+      "size": 86237512,
+      "sha256": "d8a8e423eb538ddd08ca5cc9976187265cf0fbf860191351bbc7b030815bb9f2",
+      "type": "ASCII cpio archive (SVR4 with no CRC)"
+    },
+    {
+      "path": "native/system/initrd.img.old",
+      "size": 86235079,
+      "sha256": "f17c7f469944ec077dfcdda4a7e9f09472cf41a729a133a2f4145a07f4345ebf",
+      "type": "ASCII cpio archive (SVR4 with no CRC)"
+    },
+    {
+      "path": "native/system/libs/libLLVM.so.20.1",
+      "size": 143762968,
+      "sha256": "3fdd6ebc0b2b54d89e0a69e14d10403e0826fc3b6a7af742684a76ee5c6d23a0",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, BuildID[sha1]=b856c61f98abf0989f157f153740fe0fadfbb760, stripped"
+    },
+    {
+      "path": "native/system/libs/libacl.so.1",
+      "size": 38984,
+      "sha256": "534d062c6b873081a5f5623627bdeb7d8339087c434be758493ad87c87e257ab",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=d9d62bfcf3954b996c05fc268332a15c3df94f4d, stripped"
+    },
+    {
+      "path": "native/system/libs/libbsd.so.0",
+      "size": 101528,
+      "sha256": "72d20619e98297935804c36aceda5fbb1526286952a9601dc37ceed9fa3a10f7",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=7b3571b91f7caf5e21fc10439c5318239a8dc413, stripped"
+    },
+    {
+      "path": "native/system/libs/libc.so.6",
+      "size": 2178688,
+      "sha256": "244a94af71d9e7aba6b172fefd1a1cff43cc6a11ddffb5eff15ddb6a979a31fd",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=f399e8592f739c5a422ebb62b955d2deebdf1e06, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/libs/libcap.so.2",
+      "size": 55712,
+      "sha256": "846915421788e109e15e7ecd687b1af48382fc9d06603316c477838c460977f3",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d9f6c8f8bebb833b4dcdd98a6f99e86d123bee4c, stripped"
+    },
+    {
+      "path": "native/system/libs/libclang-cpp.so.20.1",
+      "size": 67068240,
+      "sha256": "7d3fc9a8ef8698c7a152bf9fd3f122368f86866e8452394bf9bcea7a469cbf7b",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, BuildID[sha1]=6e434d731b33cf8da6922b099cee3dbe14125d2a, stripped"
+    },
+    {
+      "path": "native/system/libs/libedit.so.2",
+      "size": 261512,
+      "sha256": "28f0fcb19d3a8ce54405ee1ce8636b9f9e6b699b1ca572a477016dd2ed931fbf",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=5459459ecf5238bedcbd78bd1c2287a00697495e, stripped"
+    },
+    {
+      "path": "native/system/libs/libexpat.so.1",
+      "size": 186704,
+      "sha256": "84683025e1ce187ce323e36c5b79fd92e22e07e64768fe5813feac05c7e352e0",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=64f9953f9fc94ee0065c44a92408823cf39acb31, stripped"
+    },
+    {
+      "path": "native/system/libs/libffi.so.8",
+      "size": 47752,
+      "sha256": "e489f7e3ee064c1707520e6aaf887a6367363aed70308b9845802070472b723b",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=b333556ac4b88a74231f70f9d622db34ea4502b1, stripped"
+    },
+    {
+      "path": "native/system/libs/libgcc_s.so.1",
+      "size": 178928,
+      "sha256": "3838d5d14692b5fd8a1e6908886b0cb8e9ecc272bf10c9e17031c7017c9cfd33",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=9cdd77c77b882c82f6fd23309a5c6ea0f5842ca6, stripped"
+    },
+    {
+      "path": "native/system/libs/liblzma.so.5",
+      "size": 260320,
+      "sha256": "d35cd2f47d0ff1c7e65fe3347e38b3a5ba80a942b939898049c3e53e86e771a0",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=03a0a2530bf6dea9d45a20755f59565638e14f95, stripped"
+    },
+    {
+      "path": "native/system/libs/libm.so.6",
+      "size": 1010032,
+      "sha256": "24693874ec8b6166ed5e111b06d9f48f4b0a003e00f2827da5dbe51d964de72c",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, BuildID[sha1]=8e3690d86c0ef2e43343d19e43b424b2dfeda7c7, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/libs/libmd.so.0",
+      "size": 55608,
+      "sha256": "40e0911a5f1282e6957613710bc08a68a6160aa46462314c070bda47db65ddae",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=dcce6821dff854686eb5e437aea388b0b4161e7f, stripped"
+    },
+    {
+      "path": "native/system/libs/libpcre2-8.so.0",
+      "size": 776880,
+      "sha256": "dd07e2d518038af445782b3fafb7ed9422e633c7701623430ba09583535a0978",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=a8c5a8cf6051d431be785db4db284a736e387b37, stripped"
+    },
+    {
+      "path": "native/system/libs/libselinux.so.1",
+      "size": 195032,
+      "sha256": "9db8010842e31949e486108e31d7b5b8fc60c4a6c72e16a5d79c67ba10d5a71f",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=15dd288e9c6abbbd8fcaecec40f0dc057aa4596d, stripped"
+    },
+    {
+      "path": "native/system/libs/libstdc++.so.6",
+      "size": 2653696,
+      "sha256": "9fb7d85e8aa687d1d8b27d5c189f3d938579a29e75af9d4651db4d33218fb401",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, BuildID[sha1]=8d4f2235ec34ae33c412aa436c18ef4618f2efa6, stripped"
+    },
+    {
+      "path": "native/system/libs/libtinfo.so.6",
+      "size": 224792,
+      "sha256": "e60f876bb5e3ba4126478b78a1ce2e16aafafdb0c017b65f5a937621ed975422",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=9ab43738db1efaa6e3e248a2ce1a4ab1f9a76e2f, stripped"
+    },
+    {
+      "path": "native/system/libs/libxml2.so.2",
+      "size": 2012552,
+      "sha256": "21b068d5b3871f402bf2cc35b2c70b3d497025a82aba501d614cf4c28db2759e",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=a66a6a1d9737cedb8482718af9a8e01d6c01a056, stripped"
+    },
+    {
+      "path": "native/system/libs/libz.so.1",
+      "size": 121272,
+      "sha256": "103d30dafcda2d0e0375d3a17c82508ddf47d9617a1c09edde79092c3fe17929",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=3c688d12a2c0a9a584c64ca482d208defac6f88e, stripped"
+    },
+    {
+      "path": "native/system/libs/libzstd.so.1",
+      "size": 985240,
+      "sha256": "4cdaa615582c374a774506480b7bcaa408cc36368e04d2eae3ea30094c060c55",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=cb0411f6a6ba051787fa6b1936e379852aa76aaa, stripped"
+    },
+    {
+      "path": "native/system/ls",
+      "size": 158744,
+      "sha256": "373bc3a244af5119628b60f105864718aec8698325b18fbe76d28453494924ad",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=61ba10380519e44d3a68b348a69179b636cea85e, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/python3",
+      "size": 6820416,
+      "sha256": "e1e34309094145dd50841f35b202dd7b3a52a41c41db3ba0b33c0ac460ca9164",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ec18d81c0062a22c70cbed665f9010b77b033578, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/sed",
+      "size": 113224,
+      "sha256": "db67d4895f868617bfd19786247ebda7c2f50f4cb3857a987f732a2c267a799e",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=4f9c756ce484ca69572253d0790f456810e4c931, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "native/system/sh",
+      "size": 150368,
+      "sha256": "ba8b1117205141c0fb9381585bd2b74e5cf5459406687f39f09bf5905812c96f",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=072153eef38f6a0354bf1bfab3dbb41a27a42f19, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "python/hello.opt.pyc",
+      "size": 2813,
+      "sha256": "4f25eed982c87c206ff7e9c173df024574846abb6ccb955e295e722c40828bad",
+      "type": "Byte-compiled Python module for CPython 3.12 or newer, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "python/hello.pyc",
+      "size": 2813,
+      "sha256": "4f25eed982c87c206ff7e9c173df024574846abb6ccb955e295e722c40828bad",
+      "type": "Byte-compiled Python module for CPython 3.12 or newer, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    }
+  ]
+}
