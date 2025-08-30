@@ -10,3 +10,45 @@
 [submodule "reference/cle"]
 	path = reference/cle
 	url = https://github.com/angr/cle.git
+[submodule "reference/binary-inspector"]
+	path = reference/binary-inspector
+	url = https://github.com/aboutcode-org/binary-inspector.git
+[submodule "reference/ghidra"]
+	path = reference/ghidra
+	url = https://github.com/NationalSecurityAgency/ghidra.git
+[submodule "reference/symbolic"]
+	path = reference/symbolic
+	url = https://github.com/getsentry/symbolic.git
+[submodule "reference/radare2"]
+	path = reference/radare2
+	url = https://github.com/radareorg/radare2.git
+[submodule "reference/rizin"]
+	path = reference/rizin
+	url = https://github.com/rizinorg/rizin.git
+[submodule "reference/unicorn"]
+	path = reference/unicorn
+	url = https://github.com/unicorn-engine/unicorn.git
+[submodule "reference/Detect-It-Easy"]
+	path = reference/Detect-It-Easy
+	url = https://github.com/horsicq/Detect-It-Easy.git
+[submodule "reference/capa"]
+	path = reference/capa
+	url = https://github.com/mandiant/capa.git
+[submodule "reference/Triton"]
+	path = reference/Triton
+	url = https://github.com/JonathanSalwan/Triton.git
+[submodule "reference/manticore"]
+	path = reference/manticore
+	url = https://github.com/trailofbits/manticore.git
+[submodule "reference/HyperDbg"]
+	path = reference/HyperDbg
+	url = https://github.com/HyperDbg/HyperDbg.git
+[submodule "reference/REDasm"]
+	path = reference/REDasm
+	url = https://github.com/REDasmOrg/REDasm.git
+[submodule "reference/pharos"]
+	path = reference/pharos
+	url = https://github.com/cmu-sei/pharos.git
+[submodule "reference/pwndbg"]
+	path = reference/pwndbg
+	url = https://github.com/pwndbg/pwndbg.git

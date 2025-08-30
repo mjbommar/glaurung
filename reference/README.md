@@ -2,10 +2,33 @@
 
 This directory contains git submodules of reference implementations that inform the design of Glaurung:
 
-- **angr**: A binary analysis platform with symbolic execution capabilities
-- **cle**: CLE Loads Everything - a binary loader backend for angr
-- **claripy**: An abstracted constraint-solving wrapper
+## Binary Analysis Frameworks
+- **angr**: Binary analysis platform with symbolic execution capabilities
+- **ghidra**: NSA's software reverse engineering framework
+- **radare2**: Unix-like reverse engineering framework and command-line toolset
+- **rizin**: Fork of radare2 with refactored codebase
+- **REDasm**: Cross platform disassembler with modern C++ UI
+
+## Binary Loaders and Parsers
+- **cle**: CLE Loads Everything - binary loader backend for angr
 - **LIEF**: Library to Instrument Executable Formats
+- **binary-inspector**: Binary analysis library for executable formats
+
+## Symbolic Execution and Constraint Solving
+- **claripy**: Abstracted constraint-solving wrapper
+- **Triton**: Dynamic binary analysis framework with symbolic execution
+- **manticore**: Symbolic execution tool for binary analysis
+- **symbolic**: Library for symbolic execution and debugging formats
+
+## Malware Analysis and Detection
+- **capa**: FLARE tool to identify capabilities in executable files
+- **Detect-It-Easy**: Program for determining file types
+- **pharos**: Binary static analysis framework from CMU SEI
+
+## Debugging and Dynamic Analysis
+- **pwndbg**: GDB plugin for exploit development
+- **HyperDbg**: Hypervisor-based debugger
+- **unicorn**: Lightweight CPU emulator framework
 
 ## Setup
 

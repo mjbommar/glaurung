@@ -7,10 +7,35 @@ echo "Setting up reference implementation submodules..."
 
 # Define the submodules with their repository URLs
 declare -A SUBMODULES=(
+    # Binary analysis frameworks
     ["reference/angr"]="https://github.com/angr/angr.git"
     ["reference/cle"]="https://github.com/angr/cle.git"
     ["reference/claripy"]="https://github.com/angr/claripy.git"
+    ["reference/ghidra"]="https://github.com/NationalSecurityAgency/ghidra.git"
+    ["reference/radare2"]="https://github.com/radareorg/radare2.git"
+    ["reference/rizin"]="https://github.com/rizinorg/rizin.git"
+    ["reference/REDasm"]="https://github.com/REDasmOrg/REDasm.git"
+    
+    # Binary instrumentation and emulation
     ["reference/LIEF"]="https://github.com/lief-project/LIEF.git"
+    ["reference/unicorn"]="https://github.com/unicorn-engine/unicorn.git"
+    ["reference/Triton"]="https://github.com/JonathanSalwan/Triton.git"
+    
+    # Symbolic execution
+    ["reference/manticore"]="https://github.com/trailofbits/manticore.git"
+    ["reference/symbolic"]="https://github.com/getsentry/symbolic.git"
+    
+    # Malware analysis and detection
+    ["reference/capa"]="https://github.com/mandiant/capa.git"
+    ["reference/Detect-It-Easy"]="https://github.com/horsicq/Detect-It-Easy.git"
+    ["reference/binary-inspector"]="https://github.com/aboutcode-org/binary-inspector.git"
+    
+    # Debugging tools
+    ["reference/pwndbg"]="https://github.com/pwndbg/pwndbg.git"
+    ["reference/HyperDbg"]="https://github.com/HyperDbg/HyperDbg.git"
+    
+    # Other tools
+    ["reference/pharos"]="https://github.com/cmu-sei/pharos.git"
 )
 
 # Function to add a submodule if it doesn't exist
