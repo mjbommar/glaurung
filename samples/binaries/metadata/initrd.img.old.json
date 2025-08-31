@@ -1,1 +1,1 @@
-{\n  "source_path": "/boot/initrd.img.old",\n  "output_file": "/home/mjbommar/src/glaurung/samples/binaries/native/system/initrd.img.old",\n  "type": "initrd_image",\n  "description": "initrd_image from /boot",\n  "timestamp": "2025-08-30T18:33:19-04:00",\n  "hostname": "mobile4"\n}
+{\n  "source_path": "/boot/initrd.img.old",\n  "output_file": "/home/mjbommar/src/glaurung/samples/binaries/native/system/initrd.img.old",\n  "type": "initrd_image",\n  "description": "initrd_image from /boot",\n  "timestamp": "2025-08-30T19:07:19-04:00",\n  "hostname": "mobile4"\n}
