@@ -1,0 +1,24 @@
+# Ignore build artifacts
+binaries/
+*.o
+*.out
+*.exe
+*.class
+*.jar
+*.pyc
+__pycache__/
+
+# Ignore development files
+.git
+.gitignore
+README.md
+build-binaries.sh
+
+# Ignore Docker files (avoid recursion)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Ignore metadata until final stage
+metadata/
+index.json
