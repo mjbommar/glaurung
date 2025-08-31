@@ -1,0 +1,12 @@
+{
+  "source_file": "/workspace/source/java/HelloWorld.java",
+  "compiler": "/usr/lib/jvm/java-1.17.0-openjdk-amd64/bin/javac",
+  "java_home": "/usr/lib/jvm/java-1.17.0-openjdk-amd64",
+  "java_version": "javac 17.0.16",
+  "output_file": "/workspace/binaries/java/jdk17/HelloWorld.class",
+  "compilation_flags": "",
+  "description": "Java compiled to bytecode (JDK 17)",
+  "timestamp": "2025-08-31T00:38:43+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

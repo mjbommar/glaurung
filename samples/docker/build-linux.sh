@@ -163,41 +163,68 @@ build_fortran_variants() {
 build_java_variants() {
     local source_file="$1" basename
     basename="$(basename "$source_file" .java)"
-    if command -v javac &> /dev/null; then
-        ensure_dir "$BINARIES_DIR/java"
-        local class_file="$BINARIES_DIR/java/${basename}.class"
-        write_metadata "$METADATA_DIR/${basename}-javac.json" "{
+
+    # Discover installed JDKs
+    local javac_paths=()
+    while IFS= read -r p; do javac_paths+=("$p"); done < <(compgen -G "/usr/lib/jvm/*/bin/javac" || true)
+    # Include default if not already present
+    if command -v javac &>/dev/null; then
+        local sys_javac
+        sys_javac="$(command -v javac)"
+        local found=false
+        for p in "${javac_paths[@]}"; do [ "$p" = "$sys_javac" ] && found=true && break; done
+        [ "$found" = false ] && javac_paths+=("$sys_javac")
+    fi
+
+    if [ ${#javac_paths[@]} -eq 0 ]; then
+        warn "javac not found, skipping Java"
+        return 0
+    fi
+
+    for javac_bin in "${javac_paths[@]}"; do
+        local java_home="$(dirname "$(dirname "$javac_bin")")"
+        local version
+        version="$($javac_bin -version 2>&1 | awk '{print $2}' | cut -d. -f1)"
+        [ -z "$version" ] && version="unknown"
+        local outdir="$BINARIES_DIR/java/jdk$version"
+        ensure_dir "$outdir"
+
+        local class_file="$outdir/${basename}.class"
+        write_metadata "$METADATA_DIR/${basename}-javac-jdk$version.json" "{
   \"source_file\": \"$source_file\",
-  \"compiler\": \"javac\",
+  \"compiler\": \"$javac_bin\",
+  \"java_home\": \"$java_home\",
+  \"java_version\": \"$($javac_bin -version 2>&1)\",
   \"output_file\": \"$class_file\",
   \"compilation_flags\": \"\",
-  \"description\": \"Java compiled to bytecode\",
+  \"description\": \"Java compiled to bytecode (JDK $version)\",
   \"timestamp\": \"$(date -Iseconds)\",
   \"platform\": \"linux\",
   \"architecture\": \"$(uname -m)\"
 }"
-        if ! javac -d "$BINARIES_DIR/java" "$source_file"; then
-            error "javac failed"
-            return 1
+        if ! "$javac_bin" -d "$outdir" "$source_file"; then
+            error "javac (JDK $version) failed"
+            continue
         fi
-        local jar_file="$BINARIES_DIR/java/${basename}.jar"
-        echo "Main-Class: ${basename}" > "$BINARIES_DIR/java/manifest.txt"
-        if command -v jar &> /dev/null; then
-            (cd "$BINARIES_DIR/java" && jar cfm "$jar_file" manifest.txt "${basename}.class")
-            write_metadata "$METADATA_DIR/${basename}-jar.json" "{
+        local jar_bin="$java_home/bin/jar"
+        if [ -x "$jar_bin" ]; then
+            local jar_file="$outdir/${basename}.jar"
+            echo "Main-Class: ${basename}" > "$outdir/manifest.txt"
+            (cd "$outdir" && "$jar_bin" cfm "$jar_file" manifest.txt "${basename}.class")
+            write_metadata "$METADATA_DIR/${basename}-jar-jdk$version.json" "{
   \"source_file\": \"$source_file\",
-  \"compiler\": \"javac+jar\",
+  \"compiler\": \"$javac_bin+jar\",
+  \"java_home\": \"$java_home\",
+  \"java_version\": \"$($javac_bin -version 2>&1)\",
   \"output_file\": \"$jar_file\",
   \"compilation_flags\": \"\",
-  \"description\": \"Java JAR\",
+  \"description\": \"Java JAR (JDK $version)\",
   \"timestamp\": \"$(date -Iseconds)\",
   \"platform\": \"linux\",
   \"architecture\": \"$(uname -m)\"
 }"
         fi
-    else
-        warn "javac not found, skipping Java"
-    fi
+    done
 }
 
 build_python_variants() {
