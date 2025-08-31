@@ -3,22 +3,28 @@
 This directory contains git submodules of reference implementations that inform the design of Glaurung:
 
 ## Binary Analysis Frameworks
-- **angr**: Binary analysis platform with symbolic execution capabilities
-- **ghidra**: NSA's software reverse engineering framework
+- **angr**: Binary analysis framework with symbolic execution capabilities
+- **ghidra**: NSA reverse engineering framework
 - **radare2**: Unix-like reverse engineering framework and command-line toolset
-- **rizin**: Fork of radare2 with refactored codebase
-- **REDasm**: Cross platform disassembler with modern C++ UI
+- **rizin**: radare2 fork with refactors and improvements
+- **REDasm**: Cross-platform disassembler with modern C++ UI
 
 ## Binary Loaders and Parsers
-- **cle**: CLE Loads Everything - binary loader backend for angr
-- **LIEF**: Library to Instrument Executable Formats
-- **binary-inspector**: Binary analysis library for executable formats
+- **cle**: CLE Loads Everything — cross-platform binary loader used by angr
+- **LIEF**: Parsing, modification, and instrumentation of ELF, PE, and Mach-O
+- **binary-inspector**: Extracts symbols from ELF/Mach-O/PE; ScanCode plugin for fast symbol harvesting
 
 ## Symbolic Execution and Constraint Solving
-- **claripy**: Abstracted constraint-solving wrapper
+- **claripy**: Symbolic expression and solver interface (used by angr; Z3 backend)
 - **Triton**: Dynamic binary analysis framework with symbolic execution
 - **manticore**: Symbolic execution tool for binary analysis
-- **symbolic**: Library for symbolic execution and debugging formats
+
+## Debug Info and Symbolication
+- **symbolic**: Debug info and symbolication library (ELF/PE/Mach-O, DWARF/PDB), demangling, symcache
+
+## Disassembly and Assembly
+- **capstone**: Lightweight, multi-architecture disassembly engine
+- **keystone**: Lightweight, multi-architecture assembler engine
 
 ## Malware Analysis and Detection
 - **capa**: FLARE tool to identify capabilities in executable files
@@ -28,7 +34,13 @@ This directory contains git submodules of reference implementations that inform 
 ## Debugging and Dynamic Analysis
 - **pwndbg**: GDB plugin for exploit development
 - **HyperDbg**: Hypervisor-based debugger
-- **unicorn**: Lightweight CPU emulator framework
+- **unicorn**: Lightweight CPU emulator engine
+
+## Constraint Solvers
+- **z3**: SMT solver used for symbolic reasoning and constraint solving
+
+## GUI Frontends
+- **Cutter**: Qt-based GUI for rizin (formerly the radare2 GUI)
 
 ## Setup
 
