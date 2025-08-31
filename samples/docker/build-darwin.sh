@@ -38,6 +38,83 @@ write_metadata() {
     echo "$content" > "$meta_file"
 }
 
+build_java_variants() {
+    local source_file="$1" basename
+    basename="$(basename "$source_file" .java)"
+
+    # Discover installed JDKs
+    local javac_paths=()
+    while IFS= read -r p; do javac_paths+=("$p"); done < <(compgen -G "/usr/lib/jvm/*/bin/javac" || true)
+    # Include default if present
+    if command -v javac &>/dev/null; then
+        local sys_javac
+        sys_javac="$(command -v javac)"
+        local found=false
+        for p in "${javac_paths[@]}"; do [ "$p" = "$sys_javac" ] && found=true && break; done
+        [ "$found" = false ] && javac_paths+=("$sys_javac")
+    fi
+
+    if [ ${#javac_paths[@]} -eq 0 ]; then
+        warn "javac not found, skipping Java"
+        return 0
+    fi
+
+    ensure_dir "$BINARIES_DIR/java"
+
+    # Default jar using first detected JDK
+    local default_javac="${javac_paths[0]}"
+    local default_dir="$BINARIES_DIR/java"
+    if "$default_javac" -d "$default_dir" "$source_file"; then
+        echo "Main-Class: ${basename}" > "$default_dir/manifest.txt"
+        local default_jar="$default_dir/${basename}.jar"
+        local jar_bin
+        jar_bin="$(dirname "$(dirname "$default_javac")")/bin/jar"
+        [ -x "$jar_bin" ] && (cd "$default_dir" && "$jar_bin" cfm "$default_jar" manifest.txt "${basename}.class")
+    fi
+
+    for javac_bin in "${javac_paths[@]}"; do
+        local java_home version outdir class_file jar_bin jar_file
+        java_home="$(dirname "$(dirname "$javac_bin")")"
+        version="$($javac_bin -version 2>&1 | awk '{print $2}' | cut -d. -f1)"; [ -z "$version" ] && version="unknown"
+        outdir="$BINARIES_DIR/java/jdk$version"
+        ensure_dir "$outdir"
+        class_file="$outdir/${basename}.class"
+        write_metadata "$METADATA_DIR/${basename}-javac-jdk$version.json" "{
+  \"source_file\": \"$source_file\",
+  \"compiler\": \"$javac_bin\",
+  \"java_home\": \"$java_home\",
+  \"java_version\": \"$($javac_bin -version 2>&1)\",
+  \"output_file\": \"$class_file\",
+  \"compilation_flags\": \"\",
+  \"description\": \"Java compiled to bytecode (JDK $version)\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"darwin\",
+  \"architecture\": \"$(uname -m)\"
+}"
+        if ! "$javac_bin" -d "$outdir" "$source_file"; then
+            warn "javac (JDK $version) failed"
+            continue
+        fi
+        jar_bin="$java_home/bin/jar"
+        if [ -x "$jar_bin" ]; then
+            jar_file="$outdir/${basename}.jar"
+            echo "Main-Class: ${basename}" > "$outdir/manifest.txt"
+            (cd "$outdir" && "$jar_bin" cfm "$jar_file" manifest.txt "${basename}.class")
+            write_metadata "$METADATA_DIR/${basename}-jar-jdk$version.json" "{
+  \"source_file\": \"$source_file\",
+  \"compiler\": \"$javac_bin+jar\",
+  \"java_home\": \"$java_home\",
+  \"java_version\": \"$($javac_bin -version 2>&1)\",
+  \"output_file\": \"$jar_file\",
+  \"compilation_flags\": \"\",
+  \"description\": \"Java JAR (JDK $version)\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"darwin\",
+  \"architecture\": \"$(uname -m)\"
+}"
+        fi
+    done
+}
 compile_binary() {
     local source_file="$1" compiler="$2" output_dir="$3" basename="$4" extra_flags="$5" description="$6"
     local output_file="$output_dir/${basename}"
@@ -178,6 +255,9 @@ main() {
 
     # Build Fortran for macOS
     [ -f "$SOURCE_DIR/fortran/hello.f90" ] && build_fortran_macos "$SOURCE_DIR/fortran/hello.f90"
+
+    # Build Java with multiple JDKs (platform-independent artifact)
+    [ -f "$SOURCE_DIR/java/HelloWorld.java" ] && build_java_variants "$SOURCE_DIR/java/HelloWorld.java"
 
     log "macOS cross-compilation builds completed successfully"
 }

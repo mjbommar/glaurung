@@ -28,7 +28,8 @@ Naming conventions
 - Native C/C++: `native/gcc/O{0..3}/hello-gcc-O{N}`, `native/clang/debug/hello-clang-debug`, `native/gcc/debug/hello-gcc-stripped`.
 - Cross C/C++: `cross/<target>/{hello-<target>-gcc, hello-<target>-g++}`, e.g. `cross/arm64/hello-arm64-gcc`, `cross/windows-x86_64/hello-c-x86_64-mingw.exe`.
 - Fortran: `fortran/hello-gfortran-O{N}`, `fortran/hello-gfortran-debug`.
-- Java/Python: `java/HelloWorld.{class,jar}`, `python/hello.{pyc,opt.pyc}`.
+- Java: default `java/HelloWorld.{class,jar}` plus per‑JDK variants under `java/jdk{version}/HelloWorld.{class,jar}` (e.g., jdk11, jdk17, jdk21).
+- Python: `python/hello.{pyc,opt.pyc}`.
 
 Build/Collect
 - Quick path: `cd samples && ./build-multiplatform.sh linux/amd64`.

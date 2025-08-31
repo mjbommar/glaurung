@@ -42,6 +42,13 @@ RUN apt-get update && apt-get install -y \
     binutils-mingw-w64 \
     && rm -rf /var/lib/apt/lists/*
 
+# Optionally install additional JDKs if available
+RUN set -eux; apt-get update; \
+    for pkg in openjdk-11-jdk openjdk-21-jdk; do \
+      if apt-cache show "$pkg" >/dev/null 2>&1; then apt-get install -y --no-install-recommends "$pkg"; fi; \
+    done; \
+    rm -rf /var/lib/apt/lists/*
+
 # Set environment variables
 ENV TARGET_OS=linux
 ENV TARGET_ARCH=riscv64
