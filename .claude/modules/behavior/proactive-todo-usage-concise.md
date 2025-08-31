@@ -1,6 +1,6 @@
 ---
-id: proactive-todo-usage
-name: Proactive Todo Usage
+id: proactive-todo-usage-concise
+name: Proactive Todo Usage (Concise)
 category: behavior
 priority: 85
 active: false
@@ -66,17 +66,6 @@ Action: IMMEDIATELY create todos:
 6. Verify fix with tests
 ```
 
-### Pattern 3: Multiple Requests
-```
-User: "Update the README, fix the tests, and add logging"
-Action: IMMEDIATELY create todos:
-1. Update README with latest changes
-2. Run tests and identify failures
-3. Fix failing tests
-4. Add logging to main functions
-5. Test logging output
-```
-
 ## Todo Format
 
 Always provide BOTH forms:
@@ -88,15 +77,6 @@ Examples:
   activeForm: "Writing user authentication tests"
 - content: "Fix database connection error"
   activeForm: "Fixing database connection error"
-
-## Integration with TDD
-
-When doing TDD, your todos should be:
-1. Write failing test for feature X
-2. Implement feature X to pass test
-3. Refactor implementation
-4. Run all tests to verify
-5. Fix any broken tests
 
 ## Before Saying "Done"
 

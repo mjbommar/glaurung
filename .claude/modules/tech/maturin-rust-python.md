@@ -3,7 +3,7 @@ id: maturin-rust-python
 name: Maturin Rust-Python Integration
 category: tech
 priority: 75
-active: true
+active: false
 ---
 
 # Maturin - Building Python Extensions with Rust
