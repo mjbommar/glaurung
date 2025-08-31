@@ -38,6 +38,29 @@ write_metadata() {
     echo "$content" > "$meta_file"
 }
 
+build_csharp_macos() {
+    local source_file="$1" basename
+    basename="$(basename "$source_file" .cs)"
+    if command -v mcs &> /dev/null; then
+        ensure_dir "$BINARIES_DIR/darwin/dotnet/mono"
+        local out_exe="$BINARIES_DIR/darwin/dotnet/mono/${basename}-mono.exe"
+        write_metadata "$METADATA_DIR/${basename}-mono-darwin.json" "{
+  \"source_file\": \"$source_file\",
+  \"compiler\": \"mcs\",
+  \"output_file\": \"$out_exe\",
+  \"compilation_flags\": \"-optimize+\",
+  \"description\": \"C# compiled with Mono mcs\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"darwin\",
+  \"architecture\": \"$(uname -m)\"
+}"
+        if ! mcs -optimize+ -out:"$out_exe" "$source_file"; then
+            warn "mcs failed"
+        fi
+    else
+        warn "mcs (Mono) not found, skipping C# for macOS"
+    fi
+}
 build_java_variants() {
     local source_file="$1" basename
     basename="$(basename "$source_file" .java)"
@@ -258,6 +281,8 @@ main() {
 
     # Build Java with multiple JDKs (platform-independent artifact)
     [ -f "$SOURCE_DIR/java/HelloWorld.java" ] && build_java_variants "$SOURCE_DIR/java/HelloWorld.java"
+    # Build C# with Mono
+    [ -f "$SOURCE_DIR/csharp/Hello.cs" ] && build_csharp_macos "$SOURCE_DIR/csharp/Hello.cs"
 
     log "macOS cross-compilation builds completed successfully"
 }

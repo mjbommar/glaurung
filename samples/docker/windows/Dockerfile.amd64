@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     ninja-build \
     pkg-config \
+    mono-devel \
     # MinGW-w64 toolchains for Windows
     gcc-mingw-w64 \
     g++-mingw-w64 \

@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     ninja-build \
     pkg-config \
+    mono-devel \
     # Cross-compilation toolchains for other architectures
     gcc-x86-64-linux-gnu \
     g++-x86-64-linux-gnu \

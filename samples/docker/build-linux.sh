@@ -278,6 +278,30 @@ PY
     fi
 }
 
+build_csharp_variants() {
+    local source_file="$1" basename
+    basename="$(basename "$source_file" .cs)"
+    if command -v mcs &> /dev/null; then
+        ensure_dir "$BINARIES_DIR/dotnet/mono"
+        local out_exe="$BINARIES_DIR/dotnet/mono/${basename}-mono.exe"
+        write_metadata "$METADATA_DIR/${basename}-mono.json" "{
+  \"source_file\": \"$source_file\",
+  \"compiler\": \"mcs\",
+  \"output_file\": \"$out_exe\",
+  \"compilation_flags\": \"-optimize+\",
+  \"description\": \"C# compiled with Mono mcs\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"linux\",
+  \"architecture\": \"$(uname -m)\"
+}"
+        if ! mcs -optimize+ -out:"$out_exe" "$source_file"; then
+            warn "mcs failed"
+        fi
+    else
+        warn "mcs (Mono) not found, skipping C#"
+    fi
+}
+
 main() {
     log "Starting Linux sample builds"
     log "Source: $SOURCE_DIR"
@@ -302,6 +326,7 @@ main() {
     [ -f "$SOURCE_DIR/fortran/hello.f90" ] && build_fortran_variants "$SOURCE_DIR/fortran/hello.f90"
     [ -f "$SOURCE_DIR/java/HelloWorld.java" ] && build_java_variants "$SOURCE_DIR/java/HelloWorld.java"
     [ -f "$SOURCE_DIR/python/hello.py" ] && build_python_variants "$SOURCE_DIR/python/hello.py"
+    [ -f "$SOURCE_DIR/csharp/Hello.cs" ] && build_csharp_variants "$SOURCE_DIR/csharp/Hello.cs"
 
     log "Linux builds completed successfully"
 }
