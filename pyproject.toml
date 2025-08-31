@@ -39,3 +39,12 @@ tests = [
 [tool.maturin]
 python-source = "python"
 features = ["pyo3/extension-module"]
+include = [
+    "python/glaurung/py.typed",
+    "python/glaurung/*.pyi",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+]
