@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/cpp/hello.cpp",
+  "compiler": "g++",
+  "output_file": "/workspace/binaries/native/gcc/O0/hello-gcc-O0",
+  "compilation_flags": "-O0 -Wall -Wextra",
+  "description": "GCC compiled with -O0",
+  "timestamp": "2025-08-30T23:59:13+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

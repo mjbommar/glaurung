@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/java/HelloWorld.java",
+  "compiler": "javac",
+  "output_file": "/workspace/binaries/java/HelloWorld.class",
+  "compilation_flags": "",
+  "description": "Java compiled to bytecode",
+  "timestamp": "2025-08-30T23:59:27+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

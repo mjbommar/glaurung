@@ -1,0 +1,142 @@
+{
+  "platforms": {
+    "linux": {
+      "amd64": {
+        "base_image": "ubuntu:22.04",
+        "description": "Linux x86_64 native builds",
+        "native_arch": true,
+        "cross_targets": ["aarch64", "armhf", "riscv64", "i386", "mingw64"],
+        "dockerfile": "docker/linux/Dockerfile.amd64"
+      },
+      "arm64": {
+        "base_image": "arm64v8/ubuntu:22.04",
+        "description": "Linux ARM64 native builds",
+        "native_arch": true,
+        "cross_targets": ["x86_64", "armhf", "riscv64", "mingw64"],
+        "dockerfile": "docker/linux/Dockerfile.arm64"
+      },
+      "armhf": {
+        "base_image": "arm32v7/ubuntu:22.04",
+        "description": "Linux ARM 32-bit native builds",
+        "native_arch": true,
+        "cross_targets": ["x86_64", "aarch64", "riscv64", "mingw64"],
+        "dockerfile": "docker/linux/Dockerfile.armhf"
+      },
+      "riscv64": {
+        "base_image": "riscv64/ubuntu:22.04",
+        "description": "Linux RISC-V 64 native builds",
+        "native_arch": true,
+        "cross_targets": ["x86_64", "aarch64", "armhf", "mingw64"],
+        "dockerfile": "docker/linux/Dockerfile.riscv64"
+      },
+      "i386": {
+        "base_image": "i386/ubuntu:22.04",
+        "description": "Linux x86 32-bit native builds",
+        "native_arch": true,
+        "cross_targets": ["x86_64", "aarch64", "armhf", "riscv64", "mingw64"],
+        "dockerfile": "docker/linux/Dockerfile.i386"
+      }
+    },
+    "windows": {
+      "amd64": {
+        "base_image": "ubuntu:22.04",
+        "description": "Windows x86_64 cross-compilation from Linux",
+        "native_arch": false,
+        "cross_targets": ["mingw64", "mingw32"],
+        "host_arch": "amd64",
+        "dockerfile": "docker/windows/Dockerfile.amd64"
+      },
+      "i386": {
+        "base_image": "ubuntu:22.04",
+        "description": "Windows i386 cross-compilation from Linux",
+        "native_arch": false,
+        "cross_targets": ["mingw32"],
+        "host_arch": "amd64",
+        "dockerfile": "docker/windows/Dockerfile.i386"
+      }
+    },
+    "darwin": {
+      "amd64": {
+        "base_image": "ubuntu:22.04",
+        "description": "macOS x86_64 cross-compilation from Linux",
+        "native_arch": false,
+        "cross_targets": ["darwin"],
+        "host_arch": "amd64",
+        "dockerfile": "docker/darwin/Dockerfile.amd64"
+      },
+      "arm64": {
+        "base_image": "ubuntu:22.04",
+        "description": "macOS ARM64 cross-compilation from Linux",
+        "native_arch": false,
+        "cross_targets": ["darwin"],
+        "host_arch": "amd64",
+        "dockerfile": "docker/darwin/Dockerfile.arm64"
+      }
+    }
+  },
+  "toolchains": {
+    "native": {
+      "linux": {
+        "c": "gcc",
+        "cpp": "g++",
+        "fortran": "gfortran-11"
+      },
+      "windows": {
+        "c": "x86_64-w64-mingw32-gcc",
+        "cpp": "x86_64-w64-mingw32-g++",
+        "fortran": "x86_64-w64-mingw32-gfortran"
+      },
+      "darwin": {
+        "c": "o64-clang",
+        "cpp": "o64-clang++",
+        "fortran": "o64-gfortran"
+      }
+    },
+    "cross": {
+      "aarch64-linux-gnu": {
+        "c": "aarch64-linux-gnu-gcc",
+        "cpp": "aarch64-linux-gnu-g++",
+        "fortran": "aarch64-linux-gnu-gfortran"
+      },
+      "arm-linux-gnueabihf": {
+        "c": "arm-linux-gnueabihf-gcc",
+        "cpp": "arm-linux-gnueabihf-g++",
+        "fortran": "arm-linux-gnueabihf-gfortran"
+      },
+      "riscv64-linux-gnu": {
+        "c": "riscv64-linux-gnu-gcc",
+        "cpp": "riscv64-linux-gnu-g++",
+        "fortran": "riscv64-linux-gnu-gfortran"
+      },
+      "x86_64-linux-gnu": {
+        "c": "x86_64-linux-gnu-gcc",
+        "cpp": "x86_64-linux-gnu-g++",
+        "fortran": "x86_64-linux-gnu-gfortran"
+      },
+      "x86_64-w64-mingw32": {
+        "c": "x86_64-w64-mingw32-gcc",
+        "cpp": "x86_64-w64-mingw32-g++",
+        "fortran": "x86_64-w64-mingw32-gfortran"
+      },
+      "i686-w64-mingw32": {
+        "c": "i686-w64-mingw32-gcc",
+        "cpp": "i686-w64-mingw32-g++",
+        "fortran": "i686-w64-mingw32-gfortran"
+      },
+      "o64": {
+        "c": "o64-clang",
+        "cpp": "o64-clang++",
+        "fortran": "o64-gfortran"
+      }
+    }
+  },
+  "build_matrix": {
+    "optimization_levels": ["O0", "O1", "O2", "O3"],
+    "languages": ["c", "cpp", "fortran", "java", "python"],
+    "output_formats": {
+      "linux": "elf",
+      "windows": "exe",
+      "darwin": "macho"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/cpp/hello.cpp",
+  "compiler": "aarch64-linux-gnu-g++",
+  "output_file": "/workspace/binaries/cross/arm64/hello-arm64-g++",
+  "compilation_flags": "-O2 -Wall",
+  "description": "GCC cross ARM64 (g++)",
+  "timestamp": "2025-08-30T23:59:23+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

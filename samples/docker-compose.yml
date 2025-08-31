@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # Linux AMD64 builds
+  linux-amd64:
+    build:
+      context: .
+      dockerfile: docker/linux/Dockerfile.amd64
+      platform: linux/amd64
+    volumes:
+      - ./binaries/platforms/linux/amd64:/workspace/binaries
+    profiles: ["linux", "amd64"]
+
+  # Linux ARM64 builds
+  linux-arm64:
+    build:
+      context: .
+      dockerfile: docker/linux/Dockerfile.arm64
+      platform: linux/arm64
+    volumes:
+      - ./binaries/platforms/linux/arm64:/workspace/binaries
+    profiles: ["linux", "arm64"]
+
+  # Linux RISC-V builds
+  linux-riscv64:
+    build:
+      context: .
+      dockerfile: docker/linux/Dockerfile.riscv64
+      platform: linux/riscv64
+    volumes:
+      - ./binaries/platforms/linux/riscv64:/workspace/binaries
+    profiles: ["linux", "riscv64"]
+
+  # Linux 32-bit builds
+  linux-i386:
+    build:
+      context: .
+      dockerfile: docker/linux/Dockerfile.i386
+      platform: linux/386
+    volumes:
+      - ./binaries/platforms/linux/i386:/workspace/binaries
+    profiles: ["linux", "i386"]
+
+  # Linux ARMHF (arm32) builds
+  linux-armhf:
+    build:
+      context: .
+      dockerfile: docker/linux/Dockerfile.armhf
+      platform: linux/arm/v7
+    volumes:
+      - ./binaries/platforms/linux/armhf:/workspace/binaries
+    profiles: ["linux", "armhf"]
+
+  # Windows cross-compilation builds
+  windows-amd64:
+    build:
+      context: .
+      dockerfile: docker/windows/Dockerfile.amd64
+      platform: linux/amd64
+    volumes:
+      - ./binaries/platforms/windows/amd64:/workspace/binaries
+    profiles: ["windows", "amd64"]
+
+  # Windows 32-bit cross-compilation builds
+  windows-i386:
+    build:
+      context: .
+      dockerfile: docker/windows/Dockerfile.i386
+      platform: linux/amd64
+    volumes:
+      - ./binaries/platforms/windows/i386:/workspace/binaries
+    profiles: ["windows", "i386"]
+
+  # macOS cross-compilation builds
+  darwin-amd64:
+    build:
+      context: .
+      dockerfile: docker/darwin/Dockerfile.amd64
+      platform: linux/amd64
+    volumes:
+      - ./binaries/platforms/darwin/amd64:/workspace/binaries
+    profiles: ["darwin", "amd64"]
+
+  # macOS ARM64 cross-compilation builds
+  darwin-arm64:
+    build:
+      context: .
+      dockerfile: docker/darwin/Dockerfile.arm64
+      platform: linux/amd64
+    volumes:
+      - ./binaries/platforms/darwin/arm64:/workspace/binaries
+    profiles: ["darwin", "arm64"]
+
+  # Note: multi-platform orchestration is handled by ./build-multiplatform.sh

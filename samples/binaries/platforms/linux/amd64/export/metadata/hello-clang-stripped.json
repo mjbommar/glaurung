@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/cpp/hello.cpp",
+  "compiler": "clang++",
+  "output_file": "/workspace/binaries/native/clang/debug/hello-clang-stripped",
+  "compilation_flags": "-O2 -Wl,-s",
+  "description": "Clang 15 stripped build",
+  "timestamp": "2025-08-30T23:59:22+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

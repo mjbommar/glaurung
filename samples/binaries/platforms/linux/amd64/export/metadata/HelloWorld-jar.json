@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/java/HelloWorld.java",
+  "compiler": "javac+jar",
+  "output_file": "/workspace/binaries/java/HelloWorld.jar",
+  "compilation_flags": "",
+  "description": "Java JAR",
+  "timestamp": "2025-08-30T23:59:28+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}
