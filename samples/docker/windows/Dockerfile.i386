@@ -34,18 +34,6 @@ RUN apt-get update && apt-get install -y \
     gcc-mingw-w64 \
     g++-mingw-w64 \
     binutils-mingw-w64 \
-    # Cross-compilers for Linux targets
-    gcc-aarch64-linux-gnu \
-    g++-aarch64-linux-gnu \
-    gcc-arm-linux-gnueabihf \
-    g++-arm-linux-gnueabihf \
-    gcc-riscv64-linux-gnu \
-    g++-riscv64-linux-gnu \
-    gcc-multilib \
-    g++-multilib \
-    binutils-aarch64-linux-gnu \
-    binutils-arm-linux-gnueabihf \
-    binutils-riscv64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*
 
 # Optionally install additional JDKs if available

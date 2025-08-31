@@ -1,0 +1,12 @@
+{
+  "source_file": "/workspace/source/java/HelloWorld.java",
+  "compiler": "/usr/bin/javac",
+  "java_home": "/usr",
+  "java_version": "javac 21.0.8",
+  "output_file": "/workspace/binaries/java/jdk21/HelloWorld.class",
+  "compilation_flags": "",
+  "description": "Java compiled to bytecode (JDK 21)",
+  "timestamp": "2025-08-31T00:50:12+00:00",
+  "platform": "windows",
+  "architecture": "x86_64"
+}

@@ -1,0 +1,11 @@
+{
+  "source_file": "/workspace/source/c/hello.c",
+  "compiler": "i686-w64-mingw32-gcc",
+  "output_file": "/workspace/binaries/windows/i686/O2/hello-c-mingw32-O2.exe",
+  "compilation_flags": "-O2 -Wall -Wextra",
+  "description": "MinGW-w64 i686 -O2",
+  "timestamp": "2025-08-31T00:55:01+00:00",
+  "platform": "windows",
+  "architecture": "i686",
+  "target_os": "windows"
+}

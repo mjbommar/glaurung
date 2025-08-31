@@ -1,0 +1,11 @@
+{
+  "source_file": "/workspace/source/cpp/hello.cpp",
+  "compiler": "i686-w64-mingw32-g++",
+  "output_file": "/workspace/binaries/windows/i686/O1/hello-cpp-mingw32-O1.exe",
+  "compilation_flags": "-O1 -Wall -Wextra",
+  "description": "MinGW-w64 i686 -O1",
+  "timestamp": "2025-08-31T00:50:02+00:00",
+  "platform": "windows",
+  "architecture": "i686",
+  "target_os": "windows"
+}

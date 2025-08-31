@@ -1,0 +1,11 @@
+{
+  "source_file": "/workspace/source/c/hello.c",
+  "compiler": "x86_64-w64-mingw32-gcc",
+  "output_file": "/workspace/binaries/windows/x86_64/release/hello-c-mingw64-release.exe",
+  "compilation_flags": "-O2 -s",
+  "description": "MinGW-w64 x86_64 release",
+  "timestamp": "2025-08-31T00:49:58+00:00",
+  "platform": "windows",
+  "architecture": "x86_64",
+  "target_os": "windows"
+}
