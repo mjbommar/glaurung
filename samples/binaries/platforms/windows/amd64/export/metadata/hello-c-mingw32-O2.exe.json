@@ -4,7 +4,7 @@
   "output_file": "/workspace/binaries/windows/i686/O2/hello-c-mingw32-O2.exe",
   "compilation_flags": "-O2 -Wall -Wextra",
   "description": "MinGW-w64 i686 -O2",
-  "timestamp": "2025-08-31T00:49:58+00:00",
+  "timestamp": "2025-08-31T01:38:53+00:00",
   "platform": "windows",
   "architecture": "i686",
   "target_os": "windows"

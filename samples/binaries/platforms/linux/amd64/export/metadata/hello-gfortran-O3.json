@@ -4,7 +4,7 @@
   "output_file": "/workspace/binaries/fortran/hello-gfortran-O3",
   "compilation_flags": "-O3 -Wall -Wextra",
   "description": "GFortran 11 -O3",
-  "timestamp": "2025-08-31T00:38:36+00:00",
+  "timestamp": "2025-08-31T01:04:33+00:00",
   "platform": "linux",
   "architecture": "x86_64"
 }

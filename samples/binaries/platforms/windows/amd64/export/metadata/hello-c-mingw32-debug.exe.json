@@ -4,7 +4,7 @@
   "output_file": "/workspace/binaries/windows/i686/debug/hello-c-mingw32-debug.exe",
   "compilation_flags": "-O0 -g -Wall -Wextra",
   "description": "MinGW-w64 i686 debug",
-  "timestamp": "2025-08-31T00:49:58+00:00",
+  "timestamp": "2025-08-31T01:38:54+00:00",
   "platform": "windows",
   "architecture": "i686",
   "target_os": "windows"

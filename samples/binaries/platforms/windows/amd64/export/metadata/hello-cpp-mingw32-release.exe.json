@@ -4,7 +4,7 @@
   "output_file": "/workspace/binaries/windows/i686/release/hello-cpp-mingw32-release.exe",
   "compilation_flags": "-O2 -s",
   "description": "MinGW-w64 i686 release",
-  "timestamp": "2025-08-31T00:50:03+00:00",
+  "timestamp": "2025-08-31T01:39:01+00:00",
   "platform": "windows",
   "architecture": "i686",
   "target_os": "windows"
