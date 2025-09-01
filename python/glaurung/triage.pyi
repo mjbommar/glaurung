@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 class SnifferSource:
     Infer: SnifferSource
@@ -67,6 +67,10 @@ class EntropySummary:
     overall: Optional[float]
     window_size: Optional[int]
     windows: Optional[List[float]]
+    mean: Optional[float]
+    std_dev: Optional[float]
+    min: Optional[float]
+    max: Optional[float]
     def __init__(
         self,
         overall: Optional[float] = ...,
@@ -74,18 +78,71 @@ class EntropySummary:
         windows: Optional[List[float]] = ...,
     ) -> None: ...
 
+class EntropyClass:
+    def value(self) -> float: ...
+
+class EntropyAnomaly:
+    index: int
+    from_value: float  # Renamed from 'from' to avoid Python keyword conflict
+    to_value: float    # Renamed for consistency
+    to: float          # Also available for backward compatibility
+    delta: float
+
+class PackedIndicators:
+    has_low_entropy_header: bool
+    has_high_entropy_body: bool
+    entropy_cliff: Optional[int]
+    verdict: float
+
+def entropy_of_bytes(data: bytes) -> float: ...
+def compute_entropy(
+    data: bytes,
+    window_size: int = ...,
+    step: int = ...,
+    max_windows: int = ...,
+    overall: bool = ...,
+    header_size: int = ...,
+) -> EntropySummary: ...
+def analyze_entropy_bytes(
+    data: bytes,
+    window_size: int = ...,
+    step: int = ...,
+    max_windows: int = ...,
+    header_size: int = ...,
+) -> EntropyAnalysis: ...
+
+class EntropyAnalysis:
+    summary: EntropySummary
+    classification: EntropyClass
+    packed_indicators: PackedIndicators
+    anomalies: list[EntropyAnomaly]
+    def __init__(self) -> None: ...
+
 class StringsSummary:
     ascii_count: int
     utf16le_count: int
     utf16be_count: int
+    strings: Optional[List[DetectedString]]
+    language_counts: Optional[Dict[str, int]]
+    script_counts: Optional[Dict[str, int]]
     samples: Optional[List[str]]
     def __init__(
         self,
         ascii_count: int,
         utf16le_count: int,
         utf16be_count: int,
-        samples: Optional[List[str]] = ...,
+        strings: Optional[List[DetectedString]] = ...,
+        language_counts: Optional[Dict[str, int]] = ...,
+        script_counts: Optional[Dict[str, int]] = ...,
     ) -> None: ...
+
+class DetectedString:
+    text: str
+    encoding: str
+    language: Optional[str]
+    script: Optional[str]
+    confidence: Optional[float]
+    offset: Optional[int]
 
 class PackerMatch:
     name: str
@@ -131,6 +188,7 @@ class TriagedArtifact:
     hints: List[TriageHint]
     verdicts: List[TriageVerdict]
     entropy: Optional[EntropySummary]
+    entropy_analysis: Optional[EntropyAnalysis]
     strings: Optional[StringsSummary]
     packers: Optional[List[PackerMatch]]
     containers: Optional[List[ContainerChild]]
@@ -142,7 +200,7 @@ class TriagedArtifact:
         id: str,
         path: str,
         size_bytes: int,
-        sha256: Optional[str] = ...,
+    sha256: Optional[str] = ...,
         hints: list[TriageHint] = ...,
         verdicts: list[TriageVerdict] = ...,
         entropy: Optional[EntropySummary] = ...,

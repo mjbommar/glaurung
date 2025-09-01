@@ -66,6 +66,19 @@ impl AddressRange {
             self.start, self.size, alignment_str
         )
     }
+
+    /// Python equality comparison.
+    fn __eq__(&self, other: &Self) -> bool {
+        self == other
+    }
+
+    /// Python hash.
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
     /// Get the start address of the range (inclusive).
     #[getter]
     fn start(&self) -> Address {

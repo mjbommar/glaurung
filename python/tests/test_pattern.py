@@ -367,8 +367,8 @@ class TestPatternProperties:
 
     def test_pattern_confidence_levels(self):
         """Test confidence level classification."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
-        pattern_def = PatternDefinition.Signature("DEADBEEF", None)
+        Address(AddressKind.VA, 0x400000, bits=64)
+        PatternDefinition.Signature("DEADBEEF", None)
 
         high_conf = Pattern(
             "high",
@@ -564,8 +564,8 @@ class TestPatternEdgeCases:
 
     def test_pattern_boundary_confidence_values(self):
         """Test pattern with boundary confidence values."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
-        pattern_def = PatternDefinition.Signature("DEADBEEF", None)
+        Address(AddressKind.VA, 0x400000, bits=64)
+        PatternDefinition.Signature("DEADBEEF", None)
 
         # Test minimum confidence
         min_conf = Pattern(

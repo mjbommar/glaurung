@@ -4,15 +4,18 @@
 //! and analyzing binary artifacts safely and deterministically.
 
 pub mod api;
+pub mod config;
 pub mod containers;
 pub mod entropy;
 pub mod headers;
 pub mod heuristics;
 pub mod io;
+pub mod languages;
 pub mod packers;
 pub mod parsers;
 pub mod recurse;
 pub mod score;
+pub mod signatures;
 pub mod sniffers;
 
 // Re-export key types from core for convenience

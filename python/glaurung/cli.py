@@ -1,18 +1,33 @@
-"""Command-line interface for Glaurung binary analysis."""
+"""Command-line interface for Glaurung triage."""
 
-from glaurung.logging import configure_logging, get_logger
+import argparse
+from pathlib import Path
+
+import glaurung as g
 
 
-def main():
-    """Main entry point for the Glaurung CLI."""
-    # Configure logging
-    configure_logging(level="INFO", json_output=False)
-    logger = get_logger(__name__)
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="glaurung", description="Glaurung triage CLI")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    triage = sub.add_parser("triage", help="Triage a file")
+    triage.add_argument("path", help="Path to file")
+    triage.add_argument("--json", action="store_true", help="Emit JSON")
 
-    logger.info("Starting Glaurung binary analysis tool")
-    print("Hello from glaurung!")
-    logger.info("Glaurung CLI completed")
+    args = parser.parse_args(argv)
+
+    if args.cmd == "triage":
+        p = Path(args.path)
+        art = g.triage.analyze_path(str(p))
+        if args.json:
+            print(art.to_json())
+        else:
+            print(
+                f"path: {art.path}\nsize: {art.size_bytes} bytes\nverdicts: {len(art.verdicts)}"
+            )
+        return 0
+
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

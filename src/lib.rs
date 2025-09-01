@@ -18,7 +18,7 @@ pub mod triage;
 mod example_integration;
 
 #[cfg(feature = "python-ext")]
-use pyo3::prelude::*;
+use pyo3::{prelude::*, wrap_pyfunction};
 
 /// A Python module implemented in Rust.
 #[cfg(feature = "python-ext")]
@@ -72,6 +72,23 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::core::relocation::Relocation>()?;
     m.add_class::<crate::core::tool_metadata::SourceKind>()?;
     m.add_class::<crate::core::tool_metadata::ToolMetadata>()?;
+    m.add_class::<crate::core::function::FunctionKind>()?;
+    m.add_class::<crate::core::function::FunctionFlagsPy>()?;
+    m.add_class::<crate::core::function::Function>()?;
+    m.add_class::<crate::core::reference::UnresolvedReferenceKind>()?;
+    m.add_class::<crate::core::reference::ReferenceTarget>()?;
+    m.add_class::<crate::core::reference::ReferenceKind>()?;
+    m.add_class::<crate::core::reference::Reference>()?;
+
+    // Graphs: ControlFlowGraph and CallGraph
+    m.add_class::<crate::core::control_flow_graph::ControlFlowEdgeKind>()?;
+    m.add_class::<crate::core::control_flow_graph::ControlFlowEdge>()?;
+    m.add_class::<crate::core::control_flow_graph::ControlFlowGraph>()?;
+    m.add_class::<crate::core::control_flow_graph::ControlFlowGraphStats>()?;
+    m.add_class::<crate::core::call_graph::CallType>()?;
+    m.add_class::<crate::core::call_graph::CallGraphEdge>()?;
+    m.add_class::<crate::core::call_graph::CallGraph>()?;
+    m.add_class::<crate::core::call_graph::CallGraphStats>()?;
 
     // Submodule: triage
     let triage = pyo3::types::PyModule::new(py, "triage")?;
@@ -83,12 +100,35 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     triage.add_class::<crate::core::triage::ParserKind>()?;
     triage.add_class::<crate::core::triage::ParserResult>()?;
     triage.add_class::<crate::core::triage::EntropySummary>()?;
+    triage.add_class::<crate::core::triage::DetectedString>()?;
     triage.add_class::<crate::core::triage::StringsSummary>()?;
     triage.add_class::<crate::core::triage::PackerMatch>()?;
     triage.add_class::<crate::core::triage::ContainerChild>()?;
     triage.add_class::<crate::core::triage::Budgets>()?;
     triage.add_class::<crate::core::triage::TriageVerdict>()?;
     triage.add_class::<crate::core::triage::TriagedArtifact>()?;
+    // Triage API functions
+    triage.add_function(wrap_pyfunction!(
+        crate::triage::api::analyze_path_py,
+        &triage
+    )?)?;
+    triage.add_function(wrap_pyfunction!(
+        crate::triage::api::analyze_bytes_py,
+        &triage
+    )?)?;
+    // Entropy convenience functions
+    triage.add_function(wrap_pyfunction!(
+        crate::triage::entropy::entropy_of_bytes_py,
+        &triage
+    )?)?;
+    triage.add_function(wrap_pyfunction!(
+        crate::triage::entropy::compute_entropy_bytes_py,
+        &triage
+    )?)?;
+    triage.add_function(wrap_pyfunction!(
+        crate::triage::entropy::analyze_entropy_bytes_py,
+        &triage
+    )?)?;
     m.add_submodule(&triage)?;
 
     // Register logging functions

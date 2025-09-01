@@ -111,7 +111,7 @@ impl TriageHint {
 }
 
 /// Standardized error kinds encountered during triage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum TriageErrorKind {
     ShortRead,
@@ -260,6 +260,11 @@ pub struct EntropySummary {
     pub window_size: Option<u32>,
     /// Optional sliding entropy values (order corresponds to sequential windows).
     pub windows: Option<Vec<f64>>,
+    /// Optional statistics for window entropies
+    pub mean: Option<f64>,
+    pub std_dev: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
 }
 
 #[cfg(feature = "python-ext")]
@@ -276,7 +281,282 @@ impl EntropySummary {
             overall,
             window_size,
             windows,
+            mean: None,
+            std_dev: None,
+            min: None,
+            max: None,
         }
+    }
+
+    #[getter]
+    fn overall(&self) -> Option<f64> {
+        self.overall
+    }
+    #[getter]
+    fn window_size(&self) -> Option<u32> {
+        self.window_size
+    }
+    #[getter]
+    fn windows(&self) -> Option<Vec<f64>> {
+        self.windows.clone()
+    }
+    #[getter]
+    fn mean(&self) -> Option<f64> {
+        self.mean
+    }
+    #[getter]
+    fn std_dev(&self) -> Option<f64> {
+        self.std_dev
+    }
+    #[getter]
+    fn min(&self) -> Option<f64> {
+        self.min
+    }
+    #[getter]
+    fn max(&self) -> Option<f64> {
+        self.max
+    }
+}
+
+/// Entropy classification bucket with associated measured value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "python-ext", pyclass)]
+pub enum EntropyClass {
+    Text(f32),
+    Code(f32),
+    Compressed(f32),
+    Encrypted(f32),
+    Random(f32),
+}
+
+#[cfg(feature = "python-ext")]
+#[pymethods]
+impl EntropyClass {
+    #[getter]
+    pub fn value(&self) -> f32 {
+        match self {
+            EntropyClass::Text(v)
+            | EntropyClass::Code(v)
+            | EntropyClass::Compressed(v)
+            | EntropyClass::Encrypted(v)
+            | EntropyClass::Random(v) => *v,
+        }
+    }
+}
+
+/// Sudden entropy jump info.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "python-ext", pyclass)]
+pub struct EntropyAnomaly {
+    pub index: usize,
+    pub from: f64,
+    pub to: f64,
+    pub delta: f64,
+}
+
+#[cfg(feature = "python-ext")]
+#[pymethods]
+impl EntropyAnomaly {
+    #[getter]
+    fn index(&self) -> usize {
+        self.index
+    }
+
+    // Rename 'from' to 'from_value' to avoid Python keyword conflict
+    #[getter(from_value)]
+    fn get_from(&self) -> f64 {
+        self.from
+    }
+
+    // Also provide 'to_value' for consistency
+    #[getter(to_value)]
+    fn get_to(&self) -> f64 {
+        self.to
+    }
+
+    // Keep 'to' as well for backward compatibility
+    #[getter]
+    fn to(&self) -> f64 {
+        self.to
+    }
+
+    #[getter]
+    fn delta(&self) -> f64 {
+        self.delta
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "EntropyAnomaly(index={}, from_value={:.2}, to_value={:.2}, delta={:.2})",
+            self.index, self.from, self.to, self.delta
+        )
+    }
+}
+
+/// Heuristics to detect packing/compression patterns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "python-ext", pyclass)]
+pub struct PackedIndicators {
+    pub has_low_entropy_header: bool,
+    pub has_high_entropy_body: bool,
+    pub entropy_cliff: Option<usize>,
+    pub verdict: f32,
+}
+
+/// Full entropy analysis record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "python-ext", pyclass)]
+pub struct EntropyAnalysis {
+    pub summary: EntropySummary,
+    pub classification: EntropyClass,
+    pub packed_indicators: PackedIndicators,
+    pub anomalies: Vec<EntropyAnomaly>,
+}
+
+#[cfg(feature = "python-ext")]
+#[pymethods]
+impl EntropyAnalysis {
+    #[getter]
+    fn classification_kind(&self) -> String {
+        match self.classification {
+            EntropyClass::Text(_) => "Text",
+            EntropyClass::Code(_) => "Code",
+            EntropyClass::Compressed(_) => "Compressed",
+            EntropyClass::Encrypted(_) => "Encrypted",
+            EntropyClass::Random(_) => "Random",
+        }
+        .to_string()
+    }
+    #[getter]
+    fn summary(&self) -> EntropySummary {
+        self.summary.clone()
+    }
+    #[getter]
+    fn packed_indicators(&self) -> PackedIndicators {
+        self.packed_indicators.clone()
+    }
+    #[getter]
+    fn anomalies(&self) -> Vec<EntropyAnomaly> {
+        self.anomalies.clone()
+    }
+}
+
+#[cfg(feature = "python-ext")]
+#[pymethods]
+impl PackedIndicators {
+    #[getter]
+    fn has_low_entropy_header(&self) -> bool {
+        self.has_low_entropy_header
+    }
+    #[getter]
+    fn has_high_entropy_body(&self) -> bool {
+        self.has_high_entropy_body
+    }
+    #[getter]
+    fn verdict(&self) -> f32 {
+        self.verdict
+    }
+    #[getter]
+    fn entropy_cliff(&self) -> Option<usize> {
+        self.entropy_cliff
+    }
+}
+
+/// A detected string with language information.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "python-ext", pyclass)]
+pub struct DetectedString {
+    /// The extracted string text
+    pub text: String,
+    /// The encoding (ascii, utf16le, utf16be)
+    pub encoding: String,
+    /// The detected language (ISO 639-3 code), if detected
+    pub language: Option<String>,
+    /// The writing script (e.g., Latin, Cyrillic, Arabic), if detected
+    pub script: Option<String>,
+    /// Language detection confidence score (0.0 to 1.0)
+    pub confidence: Option<f64>,
+    /// Offset in the binary where string was found
+    pub offset: Option<u64>,
+}
+
+#[cfg(feature = "python-ext")]
+#[pymethods]
+impl DetectedString {
+    #[new]
+    #[pyo3(signature = (text, encoding, language=None, script=None, confidence=None, offset=None))]
+    pub fn new_py(
+        text: String,
+        encoding: String,
+        language: Option<String>,
+        script: Option<String>,
+        confidence: Option<f64>,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            text,
+            encoding,
+            language,
+            script,
+            confidence,
+            offset,
+        }
+    }
+
+    #[getter]
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    #[getter]
+    fn encoding(&self) -> &str {
+        &self.encoding
+    }
+
+    #[getter]
+    fn language(&self) -> Option<String> {
+        self.language.clone()
+    }
+
+    #[getter]
+    fn script(&self) -> Option<String> {
+        self.script.clone()
+    }
+
+    #[getter]
+    fn confidence(&self) -> Option<f64> {
+        self.confidence
+    }
+
+    #[getter]
+    fn offset(&self) -> Option<u64> {
+        self.offset
+    }
+
+    fn __str__(&self) -> String {
+        match (&self.language, &self.script, self.confidence) {
+            (Some(lang), Some(script), Some(conf)) => {
+                format!(
+                    "DetectedString({:?} [{}] {} {} conf={:.2})",
+                    self.text.chars().take(30).collect::<String>(),
+                    self.encoding,
+                    lang,
+                    script,
+                    conf
+                )
+            }
+            _ => {
+                format!(
+                    "DetectedString({:?} [{}])",
+                    self.text.chars().take(30).collect::<String>(),
+                    self.encoding
+                )
+            }
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        self.__str__()
     }
 }
 
@@ -287,27 +567,73 @@ pub struct StringsSummary {
     pub ascii_count: u32,
     pub utf16le_count: u32,
     pub utf16be_count: u32,
-    /// Optional top-N sample strings (truncated/sanitized).
-    pub samples: Option<Vec<String>>,
+    /// Detected strings with language information
+    pub strings: Option<Vec<DetectedString>>,
+    /// Summary of detected languages and their counts
+    pub language_counts: Option<std::collections::HashMap<String, u32>>,
+    /// Summary of detected scripts and their counts
+    pub script_counts: Option<std::collections::HashMap<String, u32>>,
 }
 
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl StringsSummary {
     #[new]
-    #[pyo3(signature = (ascii_count, utf16le_count, utf16be_count, samples=None))]
+    #[pyo3(signature = (ascii_count, utf16le_count, utf16be_count, strings=None, language_counts=None, script_counts=None))]
     pub fn new_py(
         ascii_count: u32,
         utf16le_count: u32,
         utf16be_count: u32,
-        samples: Option<Vec<String>>,
+        strings: Option<Vec<DetectedString>>,
+        language_counts: Option<std::collections::HashMap<String, u32>>,
+        script_counts: Option<std::collections::HashMap<String, u32>>,
     ) -> Self {
         Self {
             ascii_count,
             utf16le_count,
             utf16be_count,
-            samples,
+            strings,
+            language_counts,
+            script_counts,
         }
+    }
+
+    #[getter]
+    fn ascii_count(&self) -> u32 {
+        self.ascii_count
+    }
+
+    #[getter]
+    fn utf16le_count(&self) -> u32 {
+        self.utf16le_count
+    }
+
+    #[getter]
+    fn utf16be_count(&self) -> u32 {
+        self.utf16be_count
+    }
+
+    #[getter]
+    fn strings(&self) -> Option<Vec<DetectedString>> {
+        self.strings.clone()
+    }
+
+    #[getter]
+    fn language_counts(&self) -> Option<std::collections::HashMap<String, u32>> {
+        self.language_counts.clone()
+    }
+
+    #[getter]
+    fn script_counts(&self) -> Option<std::collections::HashMap<String, u32>> {
+        self.script_counts.clone()
+    }
+
+    // For backward compatibility
+    #[getter]
+    fn samples(&self) -> Option<Vec<String>> {
+        self.strings
+            .as_ref()
+            .map(|strings| strings.iter().take(10).map(|s| s.text.clone()).collect())
     }
 }
 
@@ -364,6 +690,14 @@ impl PackerMatch {
     pub fn new_py(name: String, confidence: f32) -> Self {
         Self { name, confidence }
     }
+    #[getter]
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+    #[getter]
+    fn confidence(&self) -> f32 {
+        self.confidence
+    }
 }
 
 /// Child artifact discovered within a container or overlay.
@@ -385,6 +719,10 @@ impl ContainerChild {
             offset,
             size,
         }
+    }
+    #[getter]
+    fn type_name(&self) -> String {
+        self.type_name.clone()
     }
 }
 
@@ -504,6 +842,30 @@ impl EntropySummary {
             overall,
             window_size,
             windows,
+            mean: None,
+            std_dev: None,
+            min: None,
+            max: None,
+        }
+    }
+}
+
+impl DetectedString {
+    pub fn new(
+        text: String,
+        encoding: String,
+        language: Option<String>,
+        script: Option<String>,
+        confidence: Option<f64>,
+        offset: Option<u64>,
+    ) -> Self {
+        Self {
+            text,
+            encoding,
+            language,
+            script,
+            confidence,
+            offset,
         }
     }
 }
@@ -513,13 +875,40 @@ impl StringsSummary {
         ascii_count: u32,
         utf16le_count: u32,
         utf16be_count: u32,
-        samples: Option<Vec<String>>,
+        strings: Option<Vec<DetectedString>>,
+        language_counts: Option<std::collections::HashMap<String, u32>>,
+        script_counts: Option<std::collections::HashMap<String, u32>>,
     ) -> Self {
         Self {
             ascii_count,
             utf16le_count,
             utf16be_count,
-            samples,
+            strings,
+            language_counts,
+            script_counts,
+        }
+    }
+
+    /// Create from old-style samples for backward compatibility
+    pub fn from_samples(
+        ascii_count: u32,
+        utf16le_count: u32,
+        utf16be_count: u32,
+        samples: Option<Vec<String>>,
+    ) -> Self {
+        let strings = samples.map(|s| {
+            s.into_iter()
+                .map(|text| DetectedString::new(text, "ascii".to_string(), None, None, None, None))
+                .collect()
+        });
+
+        Self {
+            ascii_count,
+            utf16le_count,
+            utf16be_count,
+            strings,
+            language_counts: None,
+            script_counts: None,
         }
     }
 }
@@ -599,6 +988,7 @@ impl TriagedArtifact {
         hints: Vec<TriageHint>,
         verdicts: Vec<TriageVerdict>,
         entropy: Option<EntropySummary>,
+        entropy_analysis: Option<EntropyAnalysis>,
         strings: Option<StringsSummary>,
         packers: Option<Vec<PackerMatch>>,
         containers: Option<Vec<ContainerChild>>,
@@ -614,6 +1004,7 @@ impl TriagedArtifact {
             hints,
             verdicts,
             entropy,
+            entropy_analysis,
             strings,
             packers,
             containers,
@@ -650,6 +1041,7 @@ pub struct TriagedArtifact {
 
     /// Summaries
     pub entropy: Option<EntropySummary>,
+    pub entropy_analysis: Option<EntropyAnalysis>,
     pub strings: Option<StringsSummary>,
     pub packers: Option<Vec<PackerMatch>>,
     pub containers: Option<Vec<ContainerChild>>,
@@ -673,6 +1065,7 @@ impl TriagedArtifact {
         hints=Vec::new(),
         verdicts=Vec::new(),
         entropy=None,
+        entropy_analysis=None,
         strings=None,
         packers=None,
         containers=None,
@@ -688,6 +1081,7 @@ impl TriagedArtifact {
         hints: Vec<TriageHint>,
         verdicts: Vec<TriageVerdict>,
         entropy: Option<EntropySummary>,
+        entropy_analysis: Option<EntropyAnalysis>,
         strings: Option<StringsSummary>,
         packers: Option<Vec<PackerMatch>>,
         containers: Option<Vec<ContainerChild>>,
@@ -703,6 +1097,7 @@ impl TriagedArtifact {
             hints,
             verdicts,
             entropy,
+            entropy_analysis,
             strings,
             packers,
             containers,
@@ -755,6 +1150,10 @@ impl TriagedArtifact {
     #[getter]
     fn entropy(&self) -> Option<EntropySummary> {
         self.entropy.clone()
+    }
+    #[getter]
+    fn entropy_analysis(&self) -> Option<EntropyAnalysis> {
+        self.entropy_analysis.clone()
     }
     #[getter]
     fn strings(&self) -> Option<StringsSummary> {
@@ -811,7 +1210,13 @@ mod tests {
             vec![hint],
             vec![verdict],
             Some(EntropySummary::new(Some(7.9), Some(4096), None)),
-            Some(StringsSummary::new(3, 0, 0, Some(vec!["hello".into()]))),
+            None,
+            Some(StringsSummary::from_samples(
+                3,
+                0,
+                0,
+                Some(vec!["hello".into()]),
+            )),
             None,
             None,
             Some(vec![ParserResult::new(ParserKind::Object, true, None)]),
@@ -855,7 +1260,7 @@ mod tests {
     fn summaries_and_matches() {
         let e = EntropySummary::new(Some(7.8), Some(4096), Some(vec![7.0, 7.5]));
         assert_eq!(e.window_size, Some(4096));
-        let s = StringsSummary::new(10, 2, 1, Some(vec!["a".into()]));
+        let s = StringsSummary::from_samples(10, 2, 1, Some(vec!["a".into()]));
         assert_eq!(s.ascii_count, 10);
         let pm = PackerMatch::new("UPX".into(), 0.9);
         assert_eq!(pm.name, "UPX");

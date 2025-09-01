@@ -84,6 +84,23 @@ MetadataValue = _native.MetadataValue
 # Expose triage submodule from the native extension
 triage = _native.triage
 
+# Graph types (CFG and CallGraph)
+ControlFlowGraph = _native.ControlFlowGraph
+ControlFlowEdge = _native.ControlFlowEdge
+ControlFlowEdgeKind = _native.ControlFlowEdgeKind
+CallGraph = _native.CallGraph
+CallGraphEdge = _native.CallGraphEdge
+CallType = _native.CallType
+CallGraphStats = _native.CallGraphStats
+ControlFlowGraphStats = _native.ControlFlowGraphStats
+Function = _native.Function
+FunctionKind = _native.FunctionKind
+FunctionFlags = _native.FunctionFlagsPy
+Reference = _native.Reference
+ReferenceKind = _native.ReferenceKind
+UnresolvedReferenceKind = _native.UnresolvedReferenceKind
+ReferenceTarget = _native.ReferenceTarget
+
 __all__ = [
     # Address types
     "Address",
@@ -138,6 +155,22 @@ __all__ = [
     "PatternType",
     "YaraMatch",
     "MetadataValue",
+    # Graphs
+    "ControlFlowGraph",
+    "ControlFlowEdge",
+    "ControlFlowEdgeKind",
+    "ControlFlowGraphStats",
+    "CallGraph",
+    "CallGraphEdge",
+    "CallType",
+    "CallGraphStats",
+    "Function",
+    "FunctionKind",
+    "FunctionFlags",
+    "Reference",
+    "ReferenceKind",
+    "UnresolvedReferenceKind",
+    "ReferenceTarget",
     # Triage submodule
     "triage",
 ]

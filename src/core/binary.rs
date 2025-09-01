@@ -22,6 +22,8 @@ pub enum Format {
     MachO,
     /// WebAssembly binary format
     Wasm,
+    /// Python bytecode (.pyc/.pyo)
+    PythonBytecode,
     /// Common Object File Format (Unix)
     COFF,
     /// Raw binary (no format)
@@ -40,6 +42,7 @@ impl Format {
             Format::PE => "PE".to_string(),
             Format::MachO => "MachO".to_string(),
             Format::Wasm => "Wasm".to_string(),
+            Format::PythonBytecode => "PythonBytecode".to_string(),
             Format::COFF => "COFF".to_string(),
             Format::Raw => "Raw".to_string(),
             Format::Unknown => "Unknown".to_string(),
@@ -761,6 +764,7 @@ impl fmt::Display for Format {
             Format::PE => write!(f, "PE"),
             Format::MachO => write!(f, "MachO"),
             Format::Wasm => write!(f, "Wasm"),
+            Format::PythonBytecode => write!(f, "PythonBytecode"),
             Format::COFF => write!(f, "COFF"),
             Format::Raw => write!(f, "Raw"),
             Format::Unknown => write!(f, "Unknown"),

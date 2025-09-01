@@ -24,6 +24,20 @@ impl ContentSniffer {
     pub fn sniff_bytes(data: &[u8]) -> Option<TriageHint> {
         debug!("Sniffing {} bytes of content", data.len());
 
+        // Check for Python bytecode magic first (not detected by infer)
+        if data.len() >= 4 {
+            let tail = (data[2], data[3]);
+            if tail == (0x0D, 0x0A) || tail == (0x0D, 0x0D) {
+                debug!("Detected Python bytecode magic");
+                return Some(TriageHint::new(
+                    SnifferSource::Infer,
+                    Some("application/x-python-bytecode".to_string()),
+                    None,
+                    Some("pyc".to_string()),
+                ));
+            }
+        }
+
         // Use infer to detect file type from content
         if let Some(kind) = infer::get(data) {
             let mime = Some(kind.mime_type().to_string());

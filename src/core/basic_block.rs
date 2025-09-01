@@ -13,7 +13,7 @@ use crate::core::address::Address;
 // Note: ID types are handled as Strings here to avoid cross-feature coupling
 
 /// BasicBlock represents a straight-line code region (basic block) in control flow analysis
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct BasicBlock {
     /// Unique identifier for this basic block (deterministic: binary_id + start_address)
@@ -196,6 +196,17 @@ impl BasicBlock {
 
     fn __str__(&self) -> String {
         format!("{}", self)
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self == other
+    }
+
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
     }
 
     // Getters for fields

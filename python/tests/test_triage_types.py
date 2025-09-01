@@ -41,7 +41,7 @@ def test_artifact_round_trip():
         hints=[hint],
         verdicts=[verdict],
         entropy=T.EntropySummary(7.5, 4096, None),
-        strings=T.StringsSummary(1, 0, 0, ["hello"]),
+        strings=T.StringsSummary(1, 0, 0, [T.DetectedString("hello", "ascii")]),
         packers=[T.PackerMatch("UPX", 0.9)],
         containers=[T.ContainerChild("zip", 0, 10)],
         parse_status=[T.ParserResult(T.ParserKind.Object, True, None)],

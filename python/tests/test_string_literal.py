@@ -178,7 +178,7 @@ class TestStringLiteralProperties:
             classification=StringClassification.Key,
         )
 
-        other_string = StringLiteral(
+        StringLiteral(
             "other",
             address,
             "some string",
