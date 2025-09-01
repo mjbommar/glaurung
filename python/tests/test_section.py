@@ -1,9 +1,7 @@
 """Tests for the Section type."""
 
 import pytest
-from glaurung import (
-    Section, SectionPerms, Address, AddressKind, AddressRange
-)
+from glaurung import Section, SectionPerms, Address, AddressKind, AddressRange
 
 
 class TestSectionCreation:
@@ -86,7 +84,9 @@ class TestSectionCreation:
         range_obj = AddressRange(start, 0x1000)
         invalid_file_offset = Address(AddressKind.VA, 0x1000, bits=64)  # Wrong kind
 
-        with pytest.raises(ValueError, match="file_offset must have AddressKind::FileOffset"):
+        with pytest.raises(
+            ValueError, match="file_offset must have AddressKind::FileOffset"
+        ):
             Section(
                 "test",
                 ".test",
@@ -100,7 +100,10 @@ class TestSectionCreation:
         range_obj = AddressRange(start, 0x1000)
         file_offset = Address(AddressKind.FileOffset, 0x1000, bits=64)
 
-        with pytest.raises(ValueError, match="range addresses must have AddressKind::VA or AddressKind::RVA for sections"):
+        with pytest.raises(
+            ValueError,
+            match="range addresses must have AddressKind::VA or AddressKind::RVA for sections",
+        ):
             Section(
                 "test",
                 ".test",

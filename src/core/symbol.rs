@@ -3,6 +3,7 @@
 //! Symbol represents named program entities from symbol tables, debug info,
 //! imports, exports, and other sources.
 
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -11,7 +12,7 @@ use crate::core::address::Address;
 
 /// Symbol kinds for different types of program entities
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub enum SymbolKind {
     /// Function symbol
     Function,
@@ -33,6 +34,7 @@ pub enum SymbolKind {
     Other,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl SymbolKind {
     /// String representation for display
@@ -59,7 +61,7 @@ impl fmt::Display for SymbolKind {
 
 /// Symbol binding types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub enum SymbolBinding {
     /// Local symbol
     Local,
@@ -69,6 +71,7 @@ pub enum SymbolBinding {
     Weak,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl SymbolBinding {
     /// String representation for display
@@ -89,7 +92,7 @@ impl fmt::Display for SymbolBinding {
 
 /// Symbol visibility levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub enum SymbolVisibility {
     /// Public/default visibility
     Public,
@@ -101,6 +104,7 @@ pub enum SymbolVisibility {
     Hidden,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl SymbolVisibility {
     /// String representation for display
@@ -122,7 +126,7 @@ impl fmt::Display for SymbolVisibility {
 
 /// Symbol source types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub enum SymbolSource {
     /// From debug information
     DebugInfo,
@@ -140,6 +144,7 @@ pub enum SymbolSource {
     Ai,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl SymbolSource {
     /// String representation for display
@@ -164,40 +169,68 @@ impl fmt::Display for SymbolSource {
 
 /// Named program entity from various sources
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Symbol {
     /// Unique identifier for the symbol
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub id: String,
     /// Mangled/exported name
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub name: String,
     /// Demangled name (optional)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub demangled: Option<String>,
     /// Symbol kind
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub kind: SymbolKind,
     /// Address where symbol is located (optional)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub address: Option<Address>,
     /// Size of the symbol (optional)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub size: Option<u64>,
     /// Symbol binding (optional)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub binding: Option<SymbolBinding>,
     /// Module/library source (optional)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub module: Option<String>,
     /// Symbol visibility (optional)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub visibility: Option<SymbolVisibility>,
     /// Source of the symbol information
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub source: SymbolSource,
 }
 
+impl Symbol {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: String,
+        name: String,
+        kind: SymbolKind,
+        source: SymbolSource,
+        demangled: Option<String>,
+        address: Option<Address>,
+        size: Option<u64>,
+        binding: Option<SymbolBinding>,
+        module: Option<String>,
+        visibility: Option<SymbolVisibility>,
+    ) -> Self {
+        Self { id, name, demangled, kind, address, size, binding, module, visibility, source }
+    }
+
+    pub fn display_name(&self) -> &str { self.demangled.as_deref().unwrap_or(&self.name) }
+    pub fn is_function(&self) -> bool { self.kind == SymbolKind::Function }
+    pub fn is_object(&self) -> bool { self.kind == SymbolKind::Object }
+    pub fn is_import(&self) -> bool { self.kind == SymbolKind::Import }
+    pub fn is_export(&self) -> bool { self.kind == SymbolKind::Export }
+    pub fn is_global(&self) -> bool { self.binding == Some(SymbolBinding::Global) }
+    pub fn is_local(&self) -> bool { self.binding == Some(SymbolBinding::Local) }
+    pub fn is_weak(&self) -> bool { self.binding == Some(SymbolBinding::Weak) }
+}
+
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Symbol {
     /// Create a new Symbol instance
@@ -311,7 +344,7 @@ impl Symbol {
 
 impl fmt::Display for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display_name = self.display_name();
+        let display_name = self.demangled.as_deref().unwrap_or(&self.name);
         write!(f, "Symbol '{}' ({})", display_name, self.id)
     }
 }

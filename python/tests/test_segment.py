@@ -1,9 +1,7 @@
 """Tests for the Segment type."""
 
 import pytest
-from glaurung import (
-    Segment, Perms, Address, AddressKind, AddressRange
-)
+from glaurung import Segment, Perms, Address, AddressKind, AddressRange
 
 
 class TestSegmentCreation:
@@ -60,7 +58,9 @@ class TestSegmentCreation:
         invalid_file_offset = Address(AddressKind.VA, 0x1000, bits=64)  # Wrong kind
         perms = Perms(read=True, write=False, execute=True)
 
-        with pytest.raises(ValueError, match="file_offset must have AddressKind::FileOffset"):
+        with pytest.raises(
+            ValueError, match="file_offset must have AddressKind::FileOffset"
+        ):
             Segment(
                 "test",
                 range_obj,
@@ -76,7 +76,9 @@ class TestSegmentCreation:
         file_offset = Address(AddressKind.FileOffset, 0x1000, bits=64)
         perms = Perms(read=True, write=False, execute=True)
 
-        with pytest.raises(ValueError, match="range addresses must have AddressKind::VA for segments"):
+        with pytest.raises(
+            ValueError, match="range addresses must have AddressKind::VA for segments"
+        ):
             Segment(
                 "test",
                 range_obj,

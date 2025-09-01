@@ -3,6 +3,7 @@
 //! ToolMetadata captures information about tools used in the analysis pipeline,
 //! including their identity, version, parameters, and classification.
 
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -10,7 +11,7 @@ use std::fmt;
 
 /// Classification of tool source types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub enum SourceKind {
     /// Static analysis tools (e.g., disassemblers, loaders)
     Static,
@@ -22,6 +23,7 @@ pub enum SourceKind {
     External,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl SourceKind {
     /// Get string representation of the source kind.
@@ -51,7 +53,7 @@ impl SourceKind {
 
 /// Metadata describing a tool used in the analysis pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct ToolMetadata {
     /// Unique tool name (e.g., "identify", "loader.lief", "disasm.capstone")
     pub name: String,
@@ -63,6 +65,7 @@ pub struct ToolMetadata {
     pub source_kind: Option<SourceKind>,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl ToolMetadata {
     /// Create a new ToolMetadata instance.
@@ -77,7 +80,7 @@ impl ToolMetadata {
     /// New ToolMetadata instance
     #[new]
     #[pyo3(signature = (name, version, parameters=None, source_kind=None))]
-    pub fn new(
+    pub fn new_py(
         name: String,
         version: String,
         parameters: Option<HashMap<String, String>>,
@@ -194,63 +197,14 @@ impl ToolMetadata {
         self.validate().is_ok()
     }
 
-    /// Get a parameter value by name.
-    ///
-    /// # Arguments
-    /// * `key` - Parameter name
-    ///
-    /// # Returns
-    /// Parameter value if found, None otherwise
-    pub fn get_parameter(&self, key: &str) -> Option<&String> {
-        self.parameters.as_ref()?.get(key)
-    }
-
-    /// Set a parameter value.
-    ///
-    /// # Arguments
-    /// * `key` - Parameter name
-    /// * `value` - Parameter value
-    pub fn set_parameter(&mut self, key: String, value: String) {
-        self.parameters
-            .get_or_insert_with(HashMap::new)
-            .insert(key, value);
-    }
-
-    /// Remove a parameter.
-    ///
-    /// # Arguments
-    /// * `key` - Parameter name to remove
-    ///
-    /// # Returns
-    /// Previous value if the parameter existed, None otherwise
-    pub fn remove_parameter(&mut self, key: &str) -> Option<String> {
-        self.parameters.as_mut()?.remove(key)
-    }
-
-    /// Get the number of parameters.
-    ///
-    /// # Returns
-    /// Number of parameters
-    pub fn parameter_count(&self) -> usize {
-        self.parameters.as_ref().map_or(0, |p| p.len())
-    }
-
-    /// Check if the tool has any parameters.
-    ///
-    /// # Returns
-    /// true if parameters exist, false otherwise
-    pub fn has_parameters(&self) -> bool {
-        self.parameters.as_ref().is_some_and(|p| !p.is_empty())
-    }
+    // Parameter helpers exposed in pure Rust impl below
 
     /// Serialize to JSON string.
     ///
     /// # Returns
     /// JSON string representation
     pub fn to_json(&self) -> PyResult<String> {
-        serde_json::to_string(self).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Serialization error: {}", e))
-        })
+        self.to_json_string().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Deserialize from JSON string.
@@ -272,13 +226,7 @@ impl ToolMetadata {
     /// # Returns
     /// Binary representation as bytes
     pub fn to_binary(&self) -> PyResult<Vec<u8>> {
-        // Use bincode with explicit configuration
-        bincode::serialize(self).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Binary serialization error: {}",
-                e
-            ))
-        })
+        self.to_bincode().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Deserialize from binary data.
@@ -290,23 +238,38 @@ impl ToolMetadata {
     /// Deserialized ToolMetadata instance
     #[staticmethod]
     pub fn from_binary(data: Vec<u8>) -> PyResult<Self> {
-        // Try deserialization and provide more detailed error info
-        match bincode::deserialize(&data) {
-            Ok(result) => Ok(result),
-            Err(e) => {
-                eprintln!("Bincode deserialization failed: {}", e);
-                eprintln!("Data length: {}", data.len());
-                eprintln!("Data: {:?}", &data[..std::cmp::min(data.len(), 50)]);
-                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "Binary deserialization error: {}",
-                    e
-                )))
-            }
-        }
+        Self::from_bincode(&data).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 }
 
 impl ToolMetadata {
+    /// Create a new ToolMetadata instance (pure Rust version).
+    ///
+    /// # Arguments
+    /// * `name` - Unique tool name
+    /// * `version` - Semantic version or git SHA
+    /// * `parameters` - Optional map of parameter names to values
+    /// * `source_kind` - Optional classification of the tool's analysis approach
+    ///
+    /// # Returns
+    /// New ToolMetadata instance or error
+    pub fn new_pure(
+        name: String,
+        version: String,
+        parameters: Option<HashMap<String, String>>,
+        source_kind: Option<SourceKind>,
+    ) -> Result<Self, String> {
+        let metadata = Self {
+            name,
+            version,
+            parameters,
+            source_kind,
+        };
+
+        metadata.validate()?;
+        Ok(metadata)
+    }
+
     /// Validate the tool metadata.
     ///
     /// # Returns
@@ -334,17 +297,58 @@ impl ToolMetadata {
 
         Ok(())
     }
+
+    pub fn is_valid(&self) -> bool { self.validate().is_ok() }
+    pub fn get_parameter(&self, key: &str) -> Option<&String> { self.parameters.as_ref()?.get(key) }
+    pub fn set_parameter(&mut self, key: String, value: String) {
+        self.parameters.get_or_insert_with(HashMap::new).insert(key, value);
+    }
+    pub fn remove_parameter(&mut self, key: &str) -> Option<String> { self.parameters.as_mut()?.remove(key) }
+    pub fn parameter_count(&self) -> usize { self.parameters.as_ref().map_or(0, |p| p.len()) }
+    pub fn has_parameters(&self) -> bool { self.parameters.as_ref().is_some_and(|p| !p.is_empty()) }
+
+    /// Serialize to JSON string (pure Rust version).
+    pub fn to_json_string(&self) -> Result<String, crate::error::GlaurungError> {
+        serde_json::to_string(self)
+            .map_err(|e| crate::error::GlaurungError::Serialization(format!("JSON serialization error: {}", e)))
+    }
+
+    /// Deserialize from JSON string (pure Rust version).
+    pub fn from_json_str(json_str: &str) -> Result<Self, crate::error::GlaurungError> {
+        serde_json::from_str(json_str)
+            .map_err(|e| crate::error::GlaurungError::Serialization(format!("JSON deserialization error: {}", e)))
+    }
+
+    /// Serialize to binary data (pure Rust version).
+    pub fn to_bincode(&self) -> Result<Vec<u8>, crate::error::GlaurungError> {
+        bincode::serialize(self)
+            .map_err(|e| crate::error::GlaurungError::Serialization(format!("Binary serialization error: {}", e)))
+    }
+
+    /// Deserialize from binary data (pure Rust version).
+    pub fn from_bincode(data: &[u8]) -> Result<Self, crate::error::GlaurungError> {
+        bincode::deserialize(data)
+            .map_err(|e| crate::error::GlaurungError::Serialization(format!("Binary deserialization error: {}", e)))
+    }
 }
 
 impl fmt::Display for ToolMetadata {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.__str__())
+        match &self.source_kind {
+            Some(kind) => write!(f, "{}@{} ({})", self.name, self.version, kind),
+            None => write!(f, "{}@{}", self.name, self.version),
+        }
     }
 }
 
 impl fmt::Display for SourceKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.__str__())
+        match self {
+            SourceKind::Static => write!(f, "Static"),
+            SourceKind::Dynamic => write!(f, "Dynamic"),
+            SourceKind::Heuristic => write!(f, "Heuristic"),
+            SourceKind::External => write!(f, "External"),
+        }
     }
 }
 
@@ -354,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_tool_metadata_creation() {
-        let metadata = ToolMetadata::new(
+        let metadata = ToolMetadata::new_pure(
             "disasm.capstone".to_string(),
             "5.0.1".to_string(),
             None,
@@ -374,7 +378,7 @@ mod tests {
         params.insert("arch".to_string(), "x86_64".to_string());
         params.insert("syntax".to_string(), "intel".to_string());
 
-        let metadata = ToolMetadata::new(
+        let metadata = ToolMetadata::new_pure(
             "disasm.capstone".to_string(),
             "5.0.1".to_string(),
             Some(params.clone()),
@@ -392,7 +396,7 @@ mod tests {
     fn test_tool_metadata_validation() {
         // Valid metadata
         let valid =
-            ToolMetadata::new("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
+            ToolMetadata::new_pure("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
         assert!(valid.is_valid());
 
         // Invalid: empty name
@@ -439,7 +443,7 @@ mod tests {
     #[test]
     fn test_parameter_operations() {
         let mut metadata =
-            ToolMetadata::new("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
+            ToolMetadata::new_pure("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
 
         // Initially no parameters
         assert!(!metadata.has_parameters());
@@ -469,7 +473,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("arch".to_string(), "x86_64".to_string());
 
-        let original = ToolMetadata::new(
+        let original = ToolMetadata::new_pure(
             "disasm.capstone".to_string(),
             "5.0.1".to_string(),
             Some(params),
@@ -478,19 +482,19 @@ mod tests {
         .unwrap();
 
         // JSON serialization
-        let json_str = original.to_json().unwrap();
-        let deserialized = ToolMetadata::from_json(&json_str).unwrap();
+        let json_str = original.to_json_string().unwrap();
+        let deserialized = ToolMetadata::from_json_str(&json_str).unwrap();
         assert_eq!(original, deserialized);
 
         // Binary serialization
-        let binary_data = original.to_binary().unwrap();
-        let deserialized = ToolMetadata::from_binary(binary_data).unwrap();
+        let binary_data = original.to_bincode().unwrap();
+        let deserialized = ToolMetadata::from_bincode(&binary_data).unwrap();
         assert_eq!(original, deserialized);
     }
 
     #[test]
     fn test_display() {
-        let metadata = ToolMetadata::new(
+        let metadata = ToolMetadata::new_pure(
             "disasm.capstone".to_string(),
             "5.0.1".to_string(),
             None,

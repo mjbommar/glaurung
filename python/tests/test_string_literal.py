@@ -1,9 +1,11 @@
 """Tests for the StringLiteral type."""
 
-import pytest
 from glaurung import (
-    StringLiteral, StringEncoding, StringClassification,
-    Address, AddressKind
+    StringLiteral,
+    StringEncoding,
+    StringClassification,
+    Address,
+    AddressKind,
 )
 
 
@@ -56,11 +58,7 @@ class TestStringLiteralCreation:
         """Test creating a minimal StringLiteral."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
         string_lit = StringLiteral(
-            "str_1",
-            address,
-            "Hello World",
-            StringEncoding.Ascii,
-            11
+            "str_1", address, "Hello World", StringEncoding.Ascii, 11
         )
 
         assert string_lit.id == "str_1"
@@ -89,7 +87,7 @@ class TestStringLiteralCreation:
             referenced_by=referenced_by,
             language_hint="en",
             classification=StringClassification.Other,
-            entropy=3.5
+            entropy=3.5,
         )
 
         assert string_lit.id == "str_2"
@@ -112,17 +110,13 @@ class TestStringLiteralCreation:
             address,
             "Hello",
             StringEncoding.Utf16,
-            10  # 5 chars * 2 bytes
+            10,  # 5 chars * 2 bytes
         )
         assert str(utf16_string.encoding) == "Utf16"
 
         # Test Base64
         b64_string = StringLiteral(
-            "str_b64",
-            address,
-            "SGVsbG8=",
-            StringEncoding.Base64,
-            8
+            "str_b64", address, "SGVsbG8=", StringEncoding.Base64, 8
         )
         assert str(b64_string.encoding) == "Base64"
 
@@ -138,7 +132,9 @@ class TestStringLiteralProperties:
         assert empty_string.len() == 0
         assert empty_string.is_empty()
 
-        normal_string = StringLiteral("normal", address, "Hello", StringEncoding.Ascii, 5)
+        normal_string = StringLiteral(
+            "normal", address, "Hello", StringEncoding.Ascii, 5
+        )
         assert normal_string.len() == 5
         assert not normal_string.is_empty()
 
@@ -152,7 +148,7 @@ class TestStringLiteralProperties:
             "http://example.com",
             StringEncoding.Ascii,
             18,
-            classification=StringClassification.Url
+            classification=StringClassification.Url,
         )
 
         path_string = StringLiteral(
@@ -161,7 +157,7 @@ class TestStringLiteralProperties:
             "/usr/bin/ls",
             StringEncoding.Ascii,
             11,
-            classification=StringClassification.Path
+            classification=StringClassification.Path,
         )
 
         email_string = StringLiteral(
@@ -170,7 +166,7 @@ class TestStringLiteralProperties:
             "user@example.com",
             StringEncoding.Ascii,
             15,
-            classification=StringClassification.Email
+            classification=StringClassification.Email,
         )
 
         key_string = StringLiteral(
@@ -179,7 +175,7 @@ class TestStringLiteralProperties:
             "secret_key_123",
             StringEncoding.Ascii,
             13,
-            classification=StringClassification.Key
+            classification=StringClassification.Key,
         )
 
         other_string = StringLiteral(
@@ -188,7 +184,7 @@ class TestStringLiteralProperties:
             "some string",
             StringEncoding.Ascii,
             11,
-            classification=StringClassification.Other
+            classification=StringClassification.Other,
         )
 
         # Test positive cases
@@ -204,7 +200,9 @@ class TestStringLiteralProperties:
         assert not key_string.is_email()
 
         # Test None classification
-        no_class_string = StringLiteral("no_class", address, "test", StringEncoding.Ascii, 4)
+        no_class_string = StringLiteral(
+            "no_class", address, "test", StringEncoding.Ascii, 4
+        )
         assert not no_class_string.is_url()
         assert not no_class_string.is_path()
         assert not no_class_string.is_email()
@@ -215,11 +213,7 @@ class TestStringLiteralProperties:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         simple_string = StringLiteral(
-            "simple",
-            address,
-            "Hello",
-            StringEncoding.Ascii,
-            5
+            "simple", address, "Hello", StringEncoding.Ascii, 5
         )
         desc = simple_string.description()
         assert "Hello" in desc
@@ -232,7 +226,7 @@ class TestStringLiteralProperties:
             "http://test.com",
             StringEncoding.Utf8,
             15,
-            classification=StringClassification.Url
+            classification=StringClassification.Url,
         )
         desc = classified_string.description()
         assert "http://test.com" in desc
@@ -244,11 +238,7 @@ class TestStringLiteralProperties:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         string_lit = StringLiteral(
-            "test_id",
-            address,
-            "Test String",
-            StringEncoding.Ascii,
-            11
+            "test_id", address, "Test String", StringEncoding.Ascii, 11
         )
 
         assert str(string_lit) == "String 'Test String' (test_id)"
@@ -275,7 +265,7 @@ class TestStringLiteralEdgeCases:
             address,
             "Hello 世界 🌍",
             StringEncoding.Utf8,
-            18  # Approximate byte length
+            18,  # Approximate byte length
         )
 
         assert unicode_string.value == "Hello 世界 🌍"
@@ -287,12 +277,7 @@ class TestStringLiteralEdgeCases:
         raw_data = b"\x00\x01\x02\x03Hello\x04\x05"
 
         string_lit = StringLiteral(
-            "with_bytes",
-            address,
-            "Hello",
-            StringEncoding.Ascii,
-            5,
-            raw_bytes=raw_data
+            "with_bytes", address, "Hello", StringEncoding.Ascii, 5, raw_bytes=raw_data
         )
 
         assert string_lit.raw_bytes == raw_data
@@ -310,7 +295,7 @@ class TestStringLiteralEdgeCases:
             "Referenced String",
             StringEncoding.Ascii,
             16,
-            referenced_by=[ref1, ref2]
+            referenced_by=[ref1, ref2],
         )
 
         assert len(string_lit.referenced_by) == 2
@@ -327,7 +312,7 @@ class TestStringLiteralEdgeCases:
             "random_data_12345",
             StringEncoding.Ascii,
             17,
-            entropy=7.8
+            entropy=7.8,
         )
 
         assert high_entropy.entropy == 7.8

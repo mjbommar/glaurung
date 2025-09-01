@@ -1,9 +1,6 @@
 """Tests for the Relocation type."""
 
-import pytest
-from glaurung import (
-    Relocation, RelocationType, Address, AddressKind
-)
+from glaurung import Relocation, RelocationType, Address, AddressKind
 
 
 class TestRelocationType:
@@ -47,11 +44,7 @@ class TestRelocationCreation:
         """Test creating a minimal Relocation."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
-        relocation = Relocation(
-            "reloc_1",
-            address,
-            RelocationType.Absolute
-        )
+        relocation = Relocation("reloc_1", address, RelocationType.Absolute)
 
         assert relocation.id == "reloc_1"
         assert str(relocation.kind) == "Absolute"
@@ -76,7 +69,7 @@ class TestRelocationCreation:
             value=0x1000,
             symbol="target_function",
             addend=8,
-            size=8
+            size=8,
         )
 
         assert relocation.id == "reloc_2"
@@ -95,10 +88,7 @@ class TestRelocationCreation:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "reloc_3",
-            address,
-            RelocationType.Plt,
-            symbol="external_func"
+            "reloc_3", address, RelocationType.Plt, symbol="external_func"
         )
 
         assert str(relocation.kind) == "Plt"
@@ -112,10 +102,7 @@ class TestRelocationCreation:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "reloc_4",
-            address,
-            RelocationType.Absolute,
-            value=0x2000
+            "reloc_4", address, RelocationType.Absolute, value=0x2000
         )
 
         assert str(relocation.kind) == "Absolute"
@@ -130,11 +117,15 @@ class TestRelocationTypeChecks:
 
     def test_absolute_relocation_types(self):
         """Test absolute relocation type detection."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
-
-        abs_reloc = Relocation("abs", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Absolute)
-        abs32_reloc = Relocation("abs32", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Abs32)
-        abs64_reloc = Relocation("abs64", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Abs64)
+        abs_reloc = Relocation(
+            "abs", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Absolute
+        )
+        abs32_reloc = Relocation(
+            "abs32", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Abs32
+        )
+        abs64_reloc = Relocation(
+            "abs64", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Abs64
+        )
 
         assert abs_reloc.is_absolute()
         assert abs32_reloc.is_absolute()
@@ -142,11 +133,15 @@ class TestRelocationTypeChecks:
 
     def test_pc_relative_relocation_types(self):
         """Test PC-relative relocation type detection."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
-
-        pc_reloc = Relocation("pc", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.PcRelative)
-        pc32_reloc = Relocation("pc32", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Pc32)
-        pc64_reloc = Relocation("pc64", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Pc64)
+        pc_reloc = Relocation(
+            "pc", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.PcRelative
+        )
+        pc32_reloc = Relocation(
+            "pc32", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Pc32
+        )
+        pc64_reloc = Relocation(
+            "pc64", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Pc64
+        )
 
         assert pc_reloc.is_pc_relative()
         assert pc32_reloc.is_pc_relative()
@@ -154,10 +149,12 @@ class TestRelocationTypeChecks:
 
     def test_got_related_relocation_types(self):
         """Test GOT-related relocation type detection."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
-
-        got_reloc = Relocation("got", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Got)
-        gotpc_reloc = Relocation("gotpc", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.GotPc)
+        got_reloc = Relocation(
+            "got", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Got
+        )
+        gotpc_reloc = Relocation(
+            "gotpc", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.GotPc
+        )
 
         assert got_reloc.is_got_related()
         assert gotpc_reloc.is_got_related()
@@ -166,9 +163,15 @@ class TestRelocationTypeChecks:
         """Test PLT-related relocation type detection."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
-        plt_reloc = Relocation("plt", address.clone(), RelocationType.Plt)
-        pltpc_reloc = Relocation("pltpc", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.PltPc)
-        jumpslot_reloc = Relocation("jumpslot", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.JumpSlot)
+        plt_reloc = Relocation("plt", address, RelocationType.Plt)
+        pltpc_reloc = Relocation(
+            "pltpc", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.PltPc
+        )
+        jumpslot_reloc = Relocation(
+            "jumpslot",
+            Address(AddressKind.VA, 0x400000, bits=64),
+            RelocationType.JumpSlot,
+        )
 
         assert plt_reloc.is_plt_related()
         assert pltpc_reloc.is_plt_related()
@@ -178,10 +181,22 @@ class TestRelocationTypeChecks:
         """Test TLS-related relocation type detection."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
-        tls_reloc = Relocation("tls", address.clone(), RelocationType.Tls)
-        tls_offset_reloc = Relocation("tls_offset", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.TlsOffset)
-        tls_module_reloc = Relocation("tls_module", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.TlsModule)
-        tls_module_offset_reloc = Relocation("tls_module_offset", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.TlsModuleOffset)
+        tls_reloc = Relocation("tls", address, RelocationType.Tls)
+        tls_offset_reloc = Relocation(
+            "tls_offset",
+            Address(AddressKind.VA, 0x400000, bits=64),
+            RelocationType.TlsOffset,
+        )
+        tls_module_reloc = Relocation(
+            "tls_module",
+            Address(AddressKind.VA, 0x400000, bits=64),
+            RelocationType.TlsModule,
+        )
+        tls_module_offset_reloc = Relocation(
+            "tls_module_offset",
+            Address(AddressKind.VA, 0x400000, bits=64),
+            RelocationType.TlsModuleOffset,
+        )
 
         assert tls_reloc.is_tls_related()
         assert tls_offset_reloc.is_tls_related()
@@ -192,11 +207,19 @@ class TestRelocationTypeChecks:
         """Test that relocation types don't match incorrect categories."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
-        abs_reloc = Relocation("abs", address.clone(), RelocationType.Absolute)
-        pc_reloc = Relocation("pc", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.PcRelative)
-        got_reloc = Relocation("got", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Got)
-        plt_reloc = Relocation("plt", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Plt)
-        tls_reloc = Relocation("tls", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Tls)
+        abs_reloc = Relocation("abs", address, RelocationType.Absolute)
+        pc_reloc = Relocation(
+            "pc", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.PcRelative
+        )
+        got_reloc = Relocation(
+            "got", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Got
+        )
+        plt_reloc = Relocation(
+            "plt", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Plt
+        )
+        tls_reloc = Relocation(
+            "tls", Address(AddressKind.VA, 0x400000, bits=64), RelocationType.Tls
+        )
 
         # Test negative cases
         assert not abs_reloc.is_pc_relative()
@@ -214,11 +237,7 @@ class TestRelocationAddressCalculation:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "abs_calc",
-            address,
-            RelocationType.Absolute,
-            value=0x1000,
-            addend=0x10
+            "abs_calc", address, RelocationType.Absolute, value=0x1000, addend=0x10
         )
 
         result = relocation.calculate_relocated_address(0)
@@ -229,40 +248,28 @@ class TestRelocationAddressCalculation:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "pc_calc",
-            address,
-            RelocationType.PcRelative,
-            value=0x100,
-            addend=4
+            "pc_calc", address, RelocationType.PcRelative, value=0x100, addend=4
         )
 
         result = relocation.calculate_relocated_address(0)
-        assert result == Some(0x400104)
+        assert result == 0x400104
 
     def test_calculate_relative_relocation(self):
         """Test calculating address for relative relocation."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "rel_calc",
-            address,
-            RelocationType.Relative,
-            value=0x200,
-            addend=8
+            "rel_calc", address, RelocationType.Relative, value=0x200, addend=8
         )
 
         result = relocation.calculate_relocated_address(0x1000)
-        assert result == Some(0x1208)
+        assert result == 0x1208
 
     def test_calculate_without_value(self):
         """Test calculating address when no value is set."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
-        relocation = Relocation(
-            "no_value",
-            address,
-            RelocationType.Absolute
-        )
+        relocation = Relocation("no_value", address, RelocationType.Absolute)
 
         result = relocation.calculate_relocated_address(0)
         assert result is None
@@ -272,14 +279,11 @@ class TestRelocationAddressCalculation:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "unknown",
-            address,
-            RelocationType.Unknown,
-            value=0x1000
+            "unknown", address, RelocationType.Unknown, value=0x1000
         )
 
         result = relocation.calculate_relocated_address(0)
-        assert result == Some(0x1000)  # Should use fallback calculation
+        assert result == 0x1000  # Should use fallback calculation
 
 
 class TestRelocationDescription:
@@ -289,11 +293,7 @@ class TestRelocationDescription:
         """Test description for minimal relocation."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
-        relocation = Relocation(
-            "minimal",
-            address,
-            RelocationType.Absolute
-        )
+        relocation = Relocation("minimal", address, RelocationType.Absolute)
 
         desc = relocation.description()
         assert "minimal" in desc
@@ -305,10 +305,7 @@ class TestRelocationDescription:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "with_symbol",
-            address,
-            RelocationType.Plt,
-            symbol="external_function"
+            "with_symbol", address, RelocationType.Plt, symbol="external_function"
         )
 
         desc = relocation.description()
@@ -321,10 +318,7 @@ class TestRelocationDescription:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "with_value",
-            address,
-            RelocationType.Absolute,
-            value=0x1000
+            "with_value", address, RelocationType.Absolute, value=0x1000
         )
 
         desc = relocation.description()
@@ -337,11 +331,7 @@ class TestRelocationDescription:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "with_addend",
-            address,
-            RelocationType.PcRelative,
-            value=0x100,
-            addend=8
+            "with_addend", address, RelocationType.PcRelative, value=0x100, addend=8
         )
 
         desc = relocation.description()
@@ -355,15 +345,11 @@ class TestRelocationDescription:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "zero_addend",
-            address,
-            RelocationType.Absolute,
-            value=0x1000,
-            addend=0
+            "zero_addend", address, RelocationType.Absolute, value=0x1000, addend=0
         )
 
         desc = relocation.description()
-        assert "addend" not in desc
+        assert "addend:" not in desc
 
     def test_description_complete(self):
         """Test description for relocation with all fields."""
@@ -375,7 +361,7 @@ class TestRelocationDescription:
             RelocationType.Got,
             value=0x2000,
             symbol="global_var",
-            addend=16
+            addend=16,
         )
 
         desc = relocation.description()
@@ -393,11 +379,7 @@ class TestRelocationDisplay:
         """Test display for relocation without symbol."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
-        relocation = Relocation(
-            "no_symbol",
-            address,
-            RelocationType.Absolute
-        )
+        relocation = Relocation("no_symbol", address, RelocationType.Absolute)
 
         display = str(relocation)
         assert display == "Relocation 'no_symbol' (Absolute)"
@@ -407,10 +389,7 @@ class TestRelocationDisplay:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         relocation = Relocation(
-            "with_symbol",
-            address,
-            RelocationType.Plt,
-            symbol="external_func"
+            "with_symbol", address, RelocationType.Plt, symbol="external_func"
         )
 
         display = str(relocation)
@@ -418,7 +397,7 @@ class TestRelocationDisplay:
 
     def test_display_different_relocation_types(self):
         """Test display for different relocation types."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
+        base_address = Address(AddressKind.VA, 0x400000, bits=64)
 
         types_and_symbols = [
             (RelocationType.Absolute, "abs_func"),
@@ -429,11 +408,10 @@ class TestRelocationDisplay:
         ]
 
         for reloc_type, symbol in types_and_symbols:
+            # Create a new address instance for each relocation
+            address = Address(base_address.kind, base_address.value, bits=base_address.bits)
             relocation = Relocation(
-                f"test_{reloc_type}",
-                address.clone(),
-                reloc_type,
-                symbol=symbol
+                f"test_{reloc_type}", address, reloc_type, symbol=symbol
             )
 
             display = str(relocation)
@@ -459,21 +437,21 @@ class TestRelocationEdgeCases:
 
     def test_relocation_large_values(self):
         """Test relocation with large values."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
+        base_address = Address(AddressKind.VA, 0x400000, bits=64)
 
         large_value_reloc = Relocation(
             "large_value",
-            address.clone(),
+            Address(base_address.kind, base_address.value, bits=base_address.bits),
             RelocationType.Absolute,
-            value=0xFFFFFFFFFFFFFFFF  # Max u64
+            value=0xFFFFFFFFFFFFFFFF,  # Max u64
         )
 
         large_addend_reloc = Relocation(
             "large_addend",
-            address,
+            Address(base_address.kind, base_address.value, bits=base_address.bits),
             RelocationType.PcRelative,
             value=0x1000,
-            addend=0x7FFFFFFFFFFFFFFF  # Large positive addend
+            addend=0x7FFFFFFFFFFFFFFF,  # Large positive addend
         )
 
         assert large_value_reloc.value == 0xFFFFFFFFFFFFFFFF
@@ -484,26 +462,20 @@ class TestRelocationEdgeCases:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         neg_addend_reloc = Relocation(
-            "neg_addend",
-            address,
-            RelocationType.Absolute,
-            value=0x1000,
-            addend=-8
+            "neg_addend", address, RelocationType.Absolute, value=0x1000, addend=-8
         )
 
         assert neg_addend_reloc.addend == -8
 
     def test_relocation_all_sizes(self):
         """Test relocation with different sizes."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
+        base_address = Address(AddressKind.VA, 0x400000, bits=64)
 
         sizes = [1, 2, 4, 8, 16]
         for size in sizes:
+            address = Address(base_address.kind, base_address.value, bits=base_address.bits)
             relocation = Relocation(
-                f"size_{size}",
-                address.clone(),
-                RelocationType.Absolute,
-                size=size
+                f"size_{size}", address, RelocationType.Absolute, size=size
             )
             assert relocation.effective_size() == size
 
@@ -512,9 +484,7 @@ class TestRelocationEdgeCases:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         default_size_reloc = Relocation(
-            "default_size",
-            address,
-            RelocationType.Absolute
+            "default_size", address, RelocationType.Absolute
         )
 
         assert default_size_reloc.size is None
@@ -522,14 +492,11 @@ class TestRelocationEdgeCases:
 
     def test_relocation_symbol_edge_cases(self):
         """Test relocation with edge case symbol names."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
+        base_address = Address(AddressKind.VA, 0x400000, bits=64)
 
         # Empty symbol name
         empty_symbol_reloc = Relocation(
-            "empty_symbol",
-            address.clone(),
-            RelocationType.Plt,
-            symbol=""
+            "empty_symbol", Address(base_address.kind, base_address.value, bits=base_address.bits), RelocationType.Plt, symbol=""
         )
         assert empty_symbol_reloc.symbol == ""
         assert empty_symbol_reloc.has_symbol()
@@ -537,37 +504,28 @@ class TestRelocationEdgeCases:
         # Very long symbol name
         long_symbol = "a" * 1000
         long_symbol_reloc = Relocation(
-            "long_symbol",
-            address,
-            RelocationType.Got,
-            symbol=long_symbol
+            "long_symbol", Address(base_address.kind, base_address.value, bits=base_address.bits), RelocationType.Got, symbol=long_symbol
         )
         assert len(long_symbol_reloc.symbol) == 1000
         assert long_symbol_reloc.symbol == long_symbol
 
     def test_relocation_calculate_edge_cases(self):
         """Test address calculation edge cases."""
-        address = Address(AddressKind.VA, 0x400000, bits=64)
+        base_address = Address(AddressKind.VA, 0x400000, bits=64)
 
         # Test with None addend (should default to 0)
         no_addend_reloc = Relocation(
-            "no_addend",
-            address.clone(),
-            RelocationType.Absolute,
-            value=0x1000
+            "no_addend", Address(base_address.kind, base_address.value, bits=base_address.bits), RelocationType.Absolute, value=0x1000
         )
 
         result = no_addend_reloc.calculate_relocated_address(0)
-        assert result == Some(0x1000)
+        assert result == 0x1000
 
         # Test with very large address values
         large_address = Address(AddressKind.VA, 0xFFFFFFFFFFFFFFFF, bits=64)
         large_addr_reloc = Relocation(
-            "large_addr",
-            large_address,
-            RelocationType.PcRelative,
-            value=0x100
+            "large_addr", large_address, RelocationType.PcRelative, value=0x100
         )
 
         result = large_addr_reloc.calculate_relocated_address(0)
-        assert result == Some(0xFFFFFFFFFFFFFFFF.wrapping_add(0x100))
+        assert result == (0xFFFFFFFFFFFFFFFF + 0x100) % (2**64)  # wrapping addition

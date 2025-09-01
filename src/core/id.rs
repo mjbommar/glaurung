@@ -3,6 +3,7 @@
 //! This module provides stable, deterministic ID generation for various entities
 //! in the binary analysis system, supporting cross-tool mapping and deduplication.
 
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -10,7 +11,7 @@ use uuid::Uuid;
 
 /// ID kinds for different types of entities in the binary analysis system.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[pyclass(eq, eq_int)]
+#[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum IdKind {
     /// Binary-level identifier (content-based or UUID)
     Binary,
@@ -51,9 +52,14 @@ impl fmt::Display for IdKind {
     }
 }
 
+impl Id {
+    pub fn new(value: String, kind: IdKind) -> Self { Id { value, kind } }
+    pub fn is_valid(&self) -> bool { !self.value.is_empty() }
+}
+
 /// A stable identifier for entities in the binary analysis system.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[pyclass(eq)]
+#[cfg_attr(feature = "python-ext", pyclass(eq))]
 pub struct Id {
     /// The string value of the ID
     pub value: String,
@@ -61,6 +67,7 @@ pub struct Id {
     pub kind: IdKind,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Id {
     /// Create a new ID with the given value and kind.
@@ -110,6 +117,7 @@ impl fmt::Display for Id {
     }
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl IdKind {
     /// String representation for display.
@@ -125,9 +133,110 @@ impl IdKind {
 
 /// ID generation utilities and strategies.
 #[derive(Debug)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct IdGenerator;
 
+impl IdGenerator {
+    pub fn binary_from_content(content: &[u8], path: Option<String>) -> Id {
+        let mut hasher = Sha256::new();
+        hasher.update(content);
+        if let Some(path_str) = path {
+            hasher.update(b":");
+            hasher.update(path_str.as_bytes());
+        }
+        let hash = hasher.finalize();
+        let hash_hex = hex::encode(hash);
+        let value = format!("bin:sha256:{}", hash_hex);
+        Id { value, kind: IdKind::Binary }
+    }
+
+    pub fn binary_from_uuid(uuid: String) -> Id {
+        let value = format!("bin:uuid:{}", uuid);
+        Id { value, kind: IdKind::Binary }
+    }
+
+    pub fn function(binary_id: &str, address: &str) -> Id {
+        let value = format!("func:{}:{}", binary_id, address);
+        Id { value, kind: IdKind::Function }
+    }
+
+    pub fn basic_block(binary_id: &str, address: &str) -> Id {
+        let value = format!("bb:{}:{}", binary_id, address);
+        Id { value, kind: IdKind::BasicBlock }
+    }
+
+    pub fn symbol(name: &str, address: Option<String>) -> Id {
+        let value = if let Some(addr) = address { format!("sym:{}:{}", name, addr) } else { format!("sym:{}", name) };
+        Id { value, kind: IdKind::Symbol }
+    }
+
+    pub fn section(name: Option<String>, index: Option<u32>) -> Id {
+        let value = match (name, index) {
+            (Some(n), Some(i)) => format!("sect:{}:{}", n, i),
+            (Some(n), None) => format!("sect:{}", n),
+            (None, Some(i)) => format!("sect:idx:{}", i),
+            (None, None) => "sect:unknown".to_string(),
+        };
+        Id { value, kind: IdKind::Section }
+    }
+
+    pub fn segment(name: Option<String>, index: Option<u32>) -> Id {
+        let value = match (name, index) {
+            (Some(n), Some(i)) => format!("seg:{}:{}", n, i),
+            (Some(n), None) => format!("seg:{}", n),
+            (None, Some(i)) => format!("seg:idx:{}", i),
+            (None, None) => "seg:unknown".to_string(),
+        };
+        Id { value, kind: IdKind::Segment }
+    }
+
+    pub fn instruction(address: &str) -> Id {
+        let value = format!("insn:{}", address);
+        Id { value, kind: IdKind::Instruction }
+    }
+
+    pub fn variable(context: &str, name: Option<String>, offset: Option<i64>) -> Id {
+        let value = match (name, offset) {
+            (Some(n), Some(o)) => format!("var:{}:{}:{}", context, n, o),
+            (Some(n), None) => format!("var:{}:{}", context, n),
+            (None, Some(o)) => format!("var:{}:offset:{}", context, o),
+            (None, None) => format!("var:{}:unnamed", context),
+        };
+        Id { value, kind: IdKind::Variable }
+    }
+
+    pub fn data_type(name: Option<String>, content_hash: Option<String>) -> Id {
+        let value = match (name, content_hash) {
+            (Some(n), Some(h)) => format!("type:{}:{}", n, h),
+            (Some(n), None) => format!("type:{}", n),
+            (None, Some(h)) => format!("type:anon:{}", h),
+            (None, None) => "type:unknown".to_string(),
+        };
+        Id { value, kind: IdKind::DataType }
+    }
+
+    pub fn entity(entity_type: &str, identifier: &str) -> Id {
+        let value = format!("{}:{}", entity_type, identifier);
+        Id { value, kind: IdKind::Entity }
+    }
+
+    pub fn uuid(kind: IdKind) -> Id {
+        let uuid = Uuid::new_v4();
+        let value = format!("{}:uuid:{}", kind.to_string().to_lowercase(), uuid);
+        Id { value, kind }
+    }
+
+    pub fn hash(kind: IdKind, content: &str) -> Id {
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        let hash = hasher.finalize();
+        let hash_hex = hex::encode(hash);
+        let value = format!("{}:hash:{}", kind.to_string().to_lowercase(), hash_hex);
+        Id { value, kind }
+    }
+}
+
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl IdGenerator {
     /// Generate a binary ID based on content hash.

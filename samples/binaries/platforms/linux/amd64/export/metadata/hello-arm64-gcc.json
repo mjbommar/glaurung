@@ -4,7 +4,7 @@
   "output_file": "/workspace/binaries/cross/arm64/hello-arm64-gcc",
   "compilation_flags": "-O2 -Wall",
   "description": "GCC cross ARM64 (gcc)",
-  "timestamp": "2025-08-31T01:04:23+00:00",
+  "timestamp": "2025-08-31T20:55:26+00:00",
   "platform": "linux",
   "architecture": "x86_64"
 }

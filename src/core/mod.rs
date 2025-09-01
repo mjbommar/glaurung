@@ -8,13 +8,18 @@ pub mod address;
 pub mod address_range;
 pub mod address_space;
 pub mod artifact;
+// TODO: Fix BasicBlock compilation issues
+// pub mod basic_block;
 pub mod binary;
+pub mod disassembler;
 pub mod id;
 pub mod instruction;
 pub mod pattern;
+pub mod register;
 pub mod relocation;
 pub mod section;
 pub mod segment;
 pub mod string_literal;
 pub mod symbol;
 pub mod tool_metadata;
+pub mod triage;

@@ -13,15 +13,14 @@ Pipeline Overview
 ```mermaid
 flowchart TD
   A[Input Bytes/Path/Stream] --> B[Stage 0: Normalize + Bounds]
-  B --> C[Stage 1: Container/Wrapper Probe]
-  C --> D{Known Signature?}
-  D -- Yes --> E[Stage 2: Header Peek
-   (Magic + Minimal Header)]
-  D -- No --> F[Stage 3: Heuristics
-   (endianness/arch/strings)]
+  B --> S[Stage 0b: Sniffers\n infer(magic) + mime_guess(ext)]
+  S --> C[Stage 1: Container/Wrapper Probe]
+  S --> D{Known Signature?}
+  C --> D
+  D -- Yes --> E[Stage 2: Header Peek\n (Magic + Minimal Header)]
+  D -- No --> F[Stage 3: Heuristics\n (endianness/arch/strings)]
   E --> G{Header Coherent?}
-  G -- Yes --> H[Stage 4: Structured Parsers
-   (object/goblin/nom)]
+  G -- Yes --> H[Stage 4: Structured Parsers\n (object/goblin/nom)]
   G -- No --> F
   F --> I[Stage 5: Entropy/Packers]
   I --> J{Embedded Payload?}
@@ -39,7 +38,13 @@ Step‑By‑Step Plan
 - Map small inputs into memory; for large, use bounded buffered reads; never mmap beyond limits.
 - Establish budgets (time, bytes read, nested recursion depth) to prevent explosions.
 
-2) Stage 1 — Container/Wrapper Probe
+2) Stage 0b — Third‑Party Sniffers (infer/mime_guess)
+- Read a small prefix once (e.g., up to 32 KiB, under budget); pass a slice to `infer` for content‑based detection. Treat results as hints, not ground truth.
+- If a filesystem path is provided, use `mime_guess` to gather extension‑based clues; record as a weak hint only.
+- Map hints to signals: container types (zip/7z/gz/xz/…); common media/docs (to quickly de‑scope); potential program types. Do not short‑circuit header validation.
+- Record mismatches (e.g., extension suggests image, header suggests PE) as `SnifferMismatch` in diagnostics and reduce confidence.
+
+3) Stage 1 — Container/Wrapper Probe
 - Check for non‑program containers first (fast signature at offset 0 and common offsets):
   - Archives/containers: zip/7z (PK\x03\x04, 7z), tar (ustar), ar ("!<arch>\n"), cpio.
   - Compressed: gzip (1F 8B), xz (FD 37 7A 58 5A), bzip2 (BZh), zstd (28 B5 2F FD), lz4 (04 22 4D 18).
@@ -47,7 +52,7 @@ Step‑By‑Step Plan
   - Script wrappers: shebang (#!) with interpreter hints.
 - If matched, record container type and optionally schedule inner payload discovery (Stage 6) subject to budgets.
 
-3) Stage 2 — Fast Signature and Minimal Header Peek
+4) Stage 2 — Fast Signature and Minimal Header Peek
 - Probe magic values at offset 0, 0x3C (PE/COFF pointer), 512, page boundaries (4 KiB), and fat headers:
   - ELF: 0x7F 'E' 'L' 'F' (e_ident); parse Class (32/64), Endianness, Type, Machine.
   - PE/COFF: 'MZ' at 0, PE header offset at 0x3C -> 'PE\0\0'; machine, characteristics.
@@ -56,7 +61,7 @@ Step‑By‑Step Plan
   - .NET/CLI: PE plus CLI header in data directories.
 - Only read minimal header spans (<= 4 KiB) with strict bounds and explicit error kinds (ShortRead, BadMagic, IncoherentFields).
 
-4) Stage 3 — Heuristics When Inconclusive
+5) Stage 3 — Heuristics When Inconclusive
 - Endianness guess:
   - Sample 16/32‑bit words across the first N KiB; compare distributions of high vs low zero bytes (big‑endian tends to have more trailing zeros for aligned code/data in some contexts).
   - Try interpreting common header fields at offsets under BE/LE assumptions and check plausibility (e.g., section counts, small integer ranges).
@@ -67,7 +72,7 @@ Step‑By‑Step Plan
   - Quick scan for ASCII and UTF‑16LE/BE strings; presence of PE section names, "This program cannot be run in DOS mode", "ELF" in error strings, etc., informs scoring.
 - Output: candidate list (format, arch, endianness, bits) with confidence scores.
 
-5) Stage 4 — Entropy + Packers/Obfuscators
+6) Stage 4 — Entropy + Packers/Obfuscators
 - Compute overall and sliding‑window Shannon entropy (e.g., 4–16 KiB windows).
 - Heuristics:
   - Very high uniform entropy across most of the file suggests compression/encryption.
@@ -75,13 +80,13 @@ Step‑By‑Step Plan
 - Packer signature checks (fast): UPX header/section names, ASPack, Petite, etc.
 - If a known packer is detected, record it and optionally schedule unpack (UPX) under sandbox rules (later phase).
 
-6) Stage 5 — Structured Parsers (Multi‑Strategy)
+7) Stage 5 — Structured Parsers (Multi‑Strategy)
 - Primary: Rust "object" crate for portable parsing (ELF/PE/Mach‑O/COFF/Wasm) with bounds.
 - Secondary: "goblin"/"pelite" for cross‑validation or fallback on oddities.
 - Triager headers via "nom": implement tiny, resilient header parsers for ELF/PE/Mach‑O (just enough to validate invariants) that fail fast with precise errors.
 - Record success/failure per parser with reasons; never trust a single signal.
 
-7) Stage 6 — Embedded/Layered Payload Discovery
+8) Stage 6 — Embedded/Layered Payload Discovery
 - FAT/universal binaries (Mach‑O fat): iterate architectures.
 - Scanning for secondary signatures in overlays/trailers (appended data beyond last section) and within common sections (e.g., .rsrc, UPX overlay, zip at EOF).
 - Extract child payloads (bounded size/count) and recurse triage with reduced budgets.
@@ -116,11 +121,14 @@ Step‑By‑Step Plan
 sequenceDiagram
   participant CLI
   participant TriageSvc
+  participant Sniffers
   participant Sig
   participant Heur
   participant Parsers
   participant Report
   CLI->>TriageSvc: triage(path, budgets)
+  TriageSvc->>Sniffers: infer(prefix), mime_guess(ext)
+  Sniffers-->>TriageSvc: hints (content/ext)
   TriageSvc->>Sig: fast signatures
   Sig-->>TriageSvc: candidates
   TriageSvc->>Heur: endianness/arch/strings/entropy
@@ -135,17 +143,29 @@ sequenceDiagram
 - Parsing:
   - `object` (primary multi‑format), `goblin`, `pelite` (PE specialization), `scroll` for endian reads.
   - `nom` for custom resilient header parsers and partial/streaming parsing.
+- Type detection:
+  - `infer` (primary content sniffing): fast magic‑byte identification over a bounded prefix; used as an early hint for containers and broad file families. Treat as advisory and always validate via header checks.
+  - `mime_guess` (extension fallback): consulted only when a path is provided; considered a weak signal and never sufficient alone.
+  - Not using `file_type` for now: similar scope to `infer` but with narrower coverage/maintenance; can revisit if it gains advantages for our corpus.
 - Disassembly (heuristics only at triage): `capstone-rs`, `yaxpeax-*`, `iced-x86` (if needed for x86).
 - Entropy/statistics: small in‑house Shannon entropy, or `statrs` for more metrics (chi‑square, KL divergence).
 - Signatures: hand‑rolled table + `aho-corasick` for fast multi‑pattern search in small windows.
 - Strings: `encoding_rs` for BOM/UTF‑16 detection; fast ASCII scanning.
 - Compression/containers: `flate2`, `xz2`, `bzip2`, `zstd`, `zip`, `tar` (only for identification/unpack when opted in).
 
+Sniffer Integration Policy (infer/mime_guess)
+- Content‑first: always consult `infer` on a bounded prefix; treat as advisory and require header validation for any program classification.
+- Extension‑as‑hint: use `mime_guess` when a path is available; assign low weight; use primarily to de‑scope obvious non‑program inputs early.
+- Never trust extensions: any extension‑only classification must not bypass header checks; mismatches are recorded and reduce confidence.
+- Omit `file_type` for now: revisit if coverage or maintenance benefits emerge versus `infer`.
+
 12) Error Taxonomy and Confidence Model
-- Error kinds: ShortRead, BadMagic, IncoherentFields, UnsupportedVariant, Truncated, BudgetExceeded, ParserMismatch.
+- Error kinds: ShortRead, BadMagic, IncoherentFields, UnsupportedVariant, Truncated, BudgetExceeded, ParserMismatch, SnifferMismatch.
 - Confidence calculation:
-  - Signature match (+0.4 strong, +0.2 weak), header coherence (+0.2), parser success (+0.3), heuristic agreement (+0.2), entropy indicates packed (adjust verdict to container/packed classification).
-  - Normalize to [0,1], include per‑signal breakdown in report.
+  - Content sniffer match (infer): +0.15 (general) to +0.25 (specific container/program); extension hint (mime_guess): +0.05 (weak).
+  - Header coherence: +0.20; structured parser success: +0.30; heuristic agreement: +0.20.
+  - Penalize mismatches: sniffer/header disagreement −0.10; extension/header disagreement −0.15.
+  - Adjust classification if entropy/packer signals dominate (e.g., “packed PE”). Normalize to [0,1] and report per‑signal breakdown.
 
 13) Testing Strategy
 - Corpus: curated set from `samples/binaries/platforms/**/export` for ELF/PE/Mach‑O/Wasm; include packed (UPX) and archives.
@@ -154,6 +174,7 @@ sequenceDiagram
 - Property tests: random truncation/corruption; ensure bounded reads and clear errors.
 - Fuzzing: `cargo-fuzz` targets for header parsers and container detectors.
 - Differential: compare we classify like `file(1)`/`libmagic` on the corpus (informational).
+- Sniffer edge cases: files with deceptive extensions (e.g., `.jpg` that are actually PE), extensionless binaries, and archives with embedded executables; assert `SnifferMismatch` and confidence adjustments.
 
 14) Incremental Delivery Roadmap
 - MVP (Week 1–2): Stage 0/1/2/7 + basic entropy; object‑based parse for ELF/PE/Mach‑O; CLI triage with JSON; tests on a small matrix.
@@ -170,9 +191,12 @@ Appendix: Minimal Header Fields to Read
 ```mermaid
 stateDiagram-v2
   [*] --> Unknown
+  Unknown --> Hint: infer/mime_guess hints
   Unknown --> Container: container magic
   Unknown --> Candidate(ELF/PE/MachO/Wasm): header magic
   Unknown --> Heuristic: no magic
+  Hint --> Container: container hint
+  Hint --> Candidate: program hint
   Heuristic --> Candidate: scores converge
   Candidate --> Parsed: structured parser ok
   Candidate --> Packed: high entropy/packer sig
@@ -181,4 +205,3 @@ stateDiagram-v2
   Container --> Recurse: extract children
   Recurse --> Parsed
 ```
-

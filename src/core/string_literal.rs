@@ -3,6 +3,7 @@
 //! StringLiteral represents extracted strings from binary analysis with
 //! encoding detection, classification, and reference tracking.
 
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -11,7 +12,7 @@ use crate::core::address::Address;
 
 /// String encoding types for extracted strings
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub enum StringEncoding {
     /// ASCII encoding
     Ascii,
@@ -27,6 +28,7 @@ pub enum StringEncoding {
     Base64,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl StringEncoding {
     /// String representation for display
@@ -50,7 +52,7 @@ impl fmt::Display for StringEncoding {
 
 /// String classification for semantic analysis
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub enum StringClassification {
     /// URL string
     Url,
@@ -64,6 +66,7 @@ pub enum StringClassification {
     Other,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl StringClassification {
     /// String representation for display
@@ -86,40 +89,56 @@ impl fmt::Display for StringClassification {
 
 /// Extracted string with encoding and reference information
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct StringLiteral {
     /// Unique identifier for the string
-    #[pyo3(get, set)]
     pub id: String,
     /// Address where the string is located
-    #[pyo3(get, set)]
     pub address: Address,
     /// The actual string value
-    #[pyo3(get, set)]
     pub value: String,
     /// Raw bytes of the string (optional)
-    #[pyo3(get, set)]
     pub raw_bytes: Option<Vec<u8>>,
     /// String encoding
-    #[pyo3(get, set)]
     pub encoding: StringEncoding,
     /// Length in bytes
-    #[pyo3(get, set)]
     pub length_bytes: u64,
     /// Addresses that reference this string (optional)
-    #[pyo3(get, set)]
     pub referenced_by: Option<Vec<Address>>,
     /// Language hint (optional)
-    #[pyo3(get, set)]
     pub language_hint: Option<String>,
     /// String classification (optional)
-    #[pyo3(get, set)]
     pub classification: Option<StringClassification>,
     /// Entropy value (optional)
-    #[pyo3(get, set)]
     pub entropy: Option<f64>,
 }
 
+impl StringLiteral {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: String,
+        address: Address,
+        value: String,
+        encoding: StringEncoding,
+        length_bytes: u64,
+        raw_bytes: Option<Vec<u8>>,
+        referenced_by: Option<Vec<Address>>,
+        language_hint: Option<String>,
+        classification: Option<StringClassification>,
+        entropy: Option<f64>,
+    ) -> Self {
+        Self { id, address, value, raw_bytes, encoding, length_bytes, referenced_by, language_hint, classification, entropy }
+    }
+
+    pub fn len(&self) -> usize { self.value.len() }
+    pub fn is_empty(&self) -> bool { self.value.is_empty() }
+    pub fn is_url(&self) -> bool { self.classification == Some(StringClassification::Url) }
+    pub fn is_path(&self) -> bool { self.classification == Some(StringClassification::Path) }
+    pub fn is_email(&self) -> bool { self.classification == Some(StringClassification::Email) }
+    pub fn is_key(&self) -> bool { self.classification == Some(StringClassification::Key) }
+}
+
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl StringLiteral {
     /// Create a new StringLiteral instance
@@ -161,6 +180,126 @@ impl StringLiteral {
             classification,
             entropy,
         }
+    }
+
+    /// Get the string ID
+    #[getter]
+    pub fn get_id(&self) -> &str {
+        &self.id
+    }
+
+    /// Set the string ID
+    #[setter]
+    pub fn set_id(&mut self, id: String) {
+        self.id = id;
+    }
+
+    /// Get the string address
+    #[getter]
+    pub fn get_address(&self) -> &Address {
+        &self.address
+    }
+
+    /// Set the string address
+    #[setter]
+    pub fn set_address(&mut self, address: Address) {
+        self.address = address;
+    }
+
+    /// Get the string value
+    #[getter]
+    pub fn get_value(&self) -> &str {
+        &self.value
+    }
+
+    /// Set the string value
+    #[setter]
+    pub fn set_value(&mut self, value: String) {
+        self.value = value;
+    }
+
+    /// Get the raw bytes
+    #[getter]
+    pub fn get_raw_bytes(&self) -> Option<&Vec<u8>> {
+        self.raw_bytes.as_ref()
+    }
+
+    /// Set the raw bytes
+    #[setter]
+    pub fn set_raw_bytes(&mut self, raw_bytes: Option<Vec<u8>>) {
+        self.raw_bytes = raw_bytes;
+    }
+
+    /// Get the string encoding
+    #[getter]
+    pub fn get_encoding(&self) -> &StringEncoding {
+        &self.encoding
+    }
+
+    /// Set the string encoding
+    #[setter]
+    pub fn set_encoding(&mut self, encoding: StringEncoding) {
+        self.encoding = encoding;
+    }
+
+    /// Get the length in bytes
+    #[getter]
+    pub fn get_length_bytes(&self) -> u64 {
+        self.length_bytes
+    }
+
+    /// Set the length in bytes
+    #[setter]
+    pub fn set_length_bytes(&mut self, length_bytes: u64) {
+        self.length_bytes = length_bytes;
+    }
+
+    /// Get the addresses that reference this string
+    #[getter]
+    pub fn get_referenced_by(&self) -> Option<&Vec<Address>> {
+        self.referenced_by.as_ref()
+    }
+
+    /// Set the addresses that reference this string
+    #[setter]
+    pub fn set_referenced_by(&mut self, referenced_by: Option<Vec<Address>>) {
+        self.referenced_by = referenced_by;
+    }
+
+    /// Get the language hint
+    #[getter]
+    pub fn get_language_hint(&self) -> Option<&str> {
+        self.language_hint.as_deref()
+    }
+
+    /// Set the language hint
+    #[setter]
+    pub fn set_language_hint(&mut self, language_hint: Option<String>) {
+        self.language_hint = language_hint;
+    }
+
+    /// Get the string classification
+    #[getter]
+    pub fn get_classification(&self) -> Option<&StringClassification> {
+        self.classification.as_ref()
+    }
+
+    /// Set the string classification
+    #[setter]
+    pub fn set_classification(&mut self, classification: Option<StringClassification>) {
+        self.classification = classification;
+    }
+
+    /// Get the entropy value
+    #[getter]
+    pub fn get_entropy(&self) -> Option<f64> {
+        self.entropy
+    }
+
+    /// Set the entropy value
+    #[setter]
+    pub fn set_entropy(&mut self, entropy: Option<f64>) {
+        self.entropy = entropy;
     }
 
     /// String representation for display

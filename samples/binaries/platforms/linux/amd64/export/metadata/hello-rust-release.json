@@ -1,0 +1,11 @@
+{
+  "source_file": "/workspace/source/rust/hello.rs",
+  "compiler": "rustc",
+  "rust_version": "rustc 1.89.0 (29483883e 2025-08-04)",
+  "output_file": "/workspace/binaries/rust/hello-rust-release",
+  "compilation_flags": "-O",
+  "description": "Rust optimized build",
+  "timestamp": "2025-08-31T20:56:05+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

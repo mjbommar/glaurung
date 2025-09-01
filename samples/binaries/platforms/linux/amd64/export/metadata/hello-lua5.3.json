@@ -1,0 +1,11 @@
+{
+  "source_file": "/workspace/source/lua/hello.lua",
+  "compiler": "luac",
+  "lua_version": "5.3.6",
+  "output_file": "/workspace/binaries/lua/hello-lua5.3.luac",
+  "compilation_flags": "",
+  "description": "Lua bytecode compiled with lua5.3",
+  "timestamp": "2025-08-31T20:55:48+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

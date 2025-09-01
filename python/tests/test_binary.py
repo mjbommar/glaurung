@@ -1,8 +1,5 @@
 import pytest
-from glaurung import (
-    Binary, Format, Arch, Endianness, Hashes,
-    Address, AddressKind
-)
+from glaurung import Binary, Format, Arch, Endianness, Hashes, Address, AddressKind
 
 
 class TestFormat:
@@ -416,7 +413,13 @@ class TestBinaryEdgeCases:
         """Test 64-bit architectures."""
         entry_point = Address(AddressKind.VA, 0x140000000, 64)
 
-        architectures = [Arch.X86_64, Arch.AArch64, Arch.MIPS64, Arch.PPC64, Arch.RISCV64]
+        architectures = [
+            Arch.X86_64,
+            Arch.AArch64,
+            Arch.MIPS64,
+            Arch.PPC64,
+            Arch.RISCV64,
+        ]
 
         for arch in architectures:
             binary = Binary(

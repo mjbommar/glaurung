@@ -3,7 +3,6 @@ from __future__ import annotations
 import enum
 from typing import Optional, Dict, List, Any
 
-
 class AddressKind(enum.Enum):
     VA: AddressKind
     FileOffset: AddressKind
@@ -11,7 +10,6 @@ class AddressKind(enum.Enum):
     Physical: AddressKind
     Relative: AddressKind
     Symbolic: AddressKind
-
 
 class Address:
     kind: AddressKind
@@ -28,43 +26,41 @@ class Address:
         space: Optional[str] = ...,
         symbol_ref: Optional[str] = ...,
     ) -> None: ...
-
     def is_valid_py(self) -> bool: ...
-
     def add_py(self, other: int) -> Address: ...
     def sub_py(self, other: int) -> Address: ...
     def __add__(self, other: int) -> Address: ...
     def __sub__(self, other: int) -> Address: ...
-
     def to_rva_py(self, image_base: int) -> Optional[Address]: ...
     def to_va_py(self, image_base: int) -> Optional[Address]: ...
-    def file_offset_to_va_py(self, section_rva: int, image_base: int) -> Optional[Address]: ...
-    def va_to_file_offset_py(self, section_va: int, section_file_offset: int) -> Optional[Address]: ...
-
+    def file_offset_to_va_py(
+        self, section_rva: int, image_base: int
+    ) -> Optional[Address]: ...
+    def va_to_file_offset_py(
+        self, section_va: int, section_file_offset: int
+    ) -> Optional[Address]: ...
     def to_json_py(self) -> str: ...
     @staticmethod
     def from_json_py(json_str: str) -> Address: ...
     def to_binary_py(self) -> bytes: ...
     @staticmethod
     def from_binary_py(data: bytes) -> Address: ...
-
     def __lt__(self, other: Address) -> bool: ...
     def __le__(self, other: Address) -> bool: ...
     def __gt__(self, other: Address) -> bool: ...
     def __ge__(self, other: Address) -> bool: ...
     def __eq__(self, other: object) -> bool: ...
 
-
 class AddressRange:
     start: Address
     size: int
     alignment: Optional[int]
 
-    def __init__(self, start: Address, size: int, alignment: Optional[int] = ...) -> None: ...
-
+    def __init__(
+        self, start: Address, size: int, alignment: Optional[int] = ...
+    ) -> None: ...
     @property
     def end(self) -> Address: ...
-
     def contains_address(self, address: Address) -> bool: ...
     def is_valid_py(self) -> bool: ...
     def contains_range_py(self, other: AddressRange) -> bool: ...
@@ -74,10 +70,8 @@ class AddressRange:
     # Alternate names also exported by the extension
     def overlaps(self, other: AddressRange) -> bool: ...
     def intersection(self, other: AddressRange) -> Optional[AddressRange]: ...
-
     @property
     def size_bytes(self) -> int: ...
-
 
 class AddressSpaceKind(enum.Enum):
     Default: AddressSpaceKind
@@ -86,7 +80,6 @@ class AddressSpaceKind(enum.Enum):
     Heap: AddressSpaceKind
     MMIO: AddressSpaceKind
     Other: AddressSpaceKind
-
 
 class AddressSpace:
     name: str
@@ -101,14 +94,11 @@ class AddressSpace:
         size: Optional[int] = ...,
         base_space: Optional[str] = ...,
     ) -> None: ...
-
     def is_valid_py(self) -> bool: ...
     def is_overlay(self) -> bool: ...
     def has_base_space(self) -> bool: ...
-
     @property
     def effective_size(self) -> Optional[int]: ...
-
 
 class IdKind(enum.Enum):
     Binary: IdKind
@@ -122,7 +112,6 @@ class IdKind(enum.Enum):
     DataType: IdKind
     Entity: IdKind
 
-
 class Id:
     value: str
     kind: IdKind
@@ -131,54 +120,39 @@ class Id:
     def is_valid(self) -> bool: ...
     def __str__(self) -> str: ...
 
-
 class IdGenerator:
     @staticmethod
     def binary_from_content(content: bytes, path: Optional[str]) -> Id: ...
-
     @staticmethod
     def binary_from_uuid(uuid: str) -> Id: ...
-
     @staticmethod
     def function(binary_id: str, address: str) -> Id: ...
-
     @staticmethod
     def basic_block(binary_id: str, address: str) -> Id: ...
-
     @staticmethod
     def symbol(name: str, address: Optional[str]) -> Id: ...
-
     @staticmethod
     def section(name: Optional[str], index: Optional[int]) -> Id: ...
-
     @staticmethod
     def segment(name: Optional[str], index: Optional[int]) -> Id: ...
-
     @staticmethod
     def instruction(address: str) -> Id: ...
-
     @staticmethod
     def variable(context: str, name: Optional[str], offset: Optional[int]) -> Id: ...
-
     @staticmethod
     def data_type(name: Optional[str], content_hash: Optional[str]) -> Id: ...
-
     @staticmethod
     def entity(entity_type: str, identifier: str) -> Id: ...
-
     @staticmethod
     def uuid(kind: IdKind) -> Id: ...
-
     @staticmethod
     def hash(kind: IdKind, content: str) -> Id: ...
-
 
 class SourceKind(enum.Enum):
     Static: SourceKind
     Dynamic: SourceKind
     Heuristic: SourceKind
     External: SourceKind
-
 
 class ToolMetadata:
     name: str
@@ -216,7 +190,6 @@ class ToolMetadata:
     @staticmethod
     def from_binary(data: bytes) -> ToolMetadata: ...
 
-
 class Artifact:
     id: str
     tool: ToolMetadata
@@ -237,7 +210,6 @@ class Artifact:
         schema_version: str = ...,
         meta: Optional[str] = ...,
     ) -> None: ...
-
     def is_valid(self) -> bool: ...
 
     # Input refs operations

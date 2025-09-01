@@ -2,8 +2,13 @@
 
 import pytest
 from glaurung import (
-    Pattern, PatternType, PatternDefinition, YaraMatch, MetadataValue,
-    Address, AddressKind
+    Pattern,
+    PatternType,
+    PatternDefinition,
+    YaraMatch,
+    MetadataValue,
+    Address,
+    AddressKind,
 )
 
 
@@ -36,7 +41,9 @@ class TestMetadataValue:
         int_val = MetadataValue.Integer(42)
         float_val = MetadataValue.Float(3.14)
         bool_val = MetadataValue.Boolean(True)
-        array_val = MetadataValue.Array([MetadataValue.String("item1"), MetadataValue.Integer(2)])
+        array_val = MetadataValue.Array(
+            [MetadataValue.String("item1"), MetadataValue.Integer(2)]
+        )
 
         assert str(string_val) == "test"
         assert str(int_val) == "42"
@@ -78,7 +85,7 @@ class TestPatternDefinition:
         """Test Signature pattern definition."""
         sig_def = PatternDefinition.Signature("DEADBEEF", "FF00FF00")
 
-        assert str(sig_def.pattern_type()) == "Signature"
+        assert str(sig_def.pattern_type) == "Signature"
         desc = str(sig_def)
         assert "DEADBEEF" in desc
         assert "FF00FF00" in desc
@@ -87,7 +94,7 @@ class TestPatternDefinition:
         """Test Signature pattern definition without mask."""
         sig_def = PatternDefinition.Signature("DEADBEEF", None)
 
-        assert str(sig_def.pattern_type()) == "Signature"
+        assert str(sig_def.pattern_type) == "Signature"
         desc = str(sig_def)
         assert "DEADBEEF" in desc
         assert "mask" not in desc
@@ -97,7 +104,7 @@ class TestPatternDefinition:
         matches = [YaraMatch(0x1000, "$string1"), YaraMatch(0x2000, "$string2")]
         yara_def = PatternDefinition.Yara("malware_rule", matches)
 
-        assert yara_def.pattern_type() == PatternType.Yara
+        assert yara_def.pattern_type == PatternType.Yara
         desc = str(yara_def)
         assert "malware_rule" in desc
         assert "2 matches" in desc
@@ -107,7 +114,7 @@ class TestPatternDefinition:
         conditions = ["condition1", "condition2", "condition3"]
         heur_def = PatternDefinition.Heuristic(conditions)
 
-        assert heur_def.pattern_type() == PatternType.Heuristic
+        assert heur_def.pattern_type == PatternType.Heuristic
         desc = str(heur_def)
         assert "3 conditions" in desc
 
@@ -117,7 +124,7 @@ class TestPatternDefinition:
         sequences = ["push ebp", "mov ebp, esp"]
         beh_def = PatternDefinition.Behavior(api_calls, sequences)
 
-        assert beh_def.pattern_type() == PatternType.Behavior
+        assert beh_def.pattern_type == PatternType.Behavior
         desc = str(beh_def)
         assert "2 APIs" in desc
         assert "2 sequences" in desc
@@ -127,7 +134,7 @@ class TestPatternDefinition:
         api_calls = ["VirtualAlloc"]
         beh_def = PatternDefinition.Behavior(api_calls, None)
 
-        assert beh_def.pattern_type() == PatternType.Behavior
+        assert beh_def.pattern_type == PatternType.Behavior
         desc = str(beh_def)
         assert "1 APIs" in desc
         assert "0 sequences" in desc
@@ -135,10 +142,13 @@ class TestPatternDefinition:
     def test_statistical_definition_full(self):
         """Test Statistical pattern definition with all fields."""
         entropy = 7.5
-        metrics = {"mean": MetadataValue.Float(3.14), "count": MetadataValue.Integer(100)}
+        metrics = {
+            "mean": MetadataValue.Float(3.14),
+            "count": MetadataValue.Integer(100),
+        }
         stat_def = PatternDefinition.Statistical(entropy, metrics)
 
-        assert stat_def.pattern_type() == PatternType.Statistical
+        assert stat_def.pattern_type == PatternType.Statistical
         desc = str(stat_def)
         assert "7.500" in desc
         assert "2 metrics" in desc
@@ -148,7 +158,7 @@ class TestPatternDefinition:
         entropy = 6.2
         stat_def = PatternDefinition.Statistical(entropy, None)
 
-        assert stat_def.pattern_type() == PatternType.Statistical
+        assert stat_def.pattern_type == PatternType.Statistical
         desc = str(stat_def)
         assert "6.200" in desc
         assert "0 metrics" in desc
@@ -169,7 +179,7 @@ class TestPatternCreation:
             [address],
             0.9,
             pattern_def,
-            "A signature for deadbeef pattern"
+            "A signature for deadbeef pattern",
         )
 
         assert pattern.id == "sig_1"
@@ -190,7 +200,7 @@ class TestPatternCreation:
         metadata = {
             "author": MetadataValue.String("security_researcher"),
             "version": MetadataValue.Integer(1),
-            "severity": MetadataValue.Float(8.5)
+            "severity": MetadataValue.Float(8.5),
         }
 
         pattern = Pattern(
@@ -202,7 +212,7 @@ class TestPatternCreation:
             pattern_def,
             "An advanced signature for deadbeef pattern",
             ["https://example.com/sig2", "CVE-2023-12345"],
-            metadata
+            metadata,
         )
 
         assert pattern.id == "sig_2"
@@ -226,7 +236,7 @@ class TestPatternCreation:
             [address],
             0.8,
             pattern_def,
-            "YARA rule for malware detection"
+            "YARA rule for malware detection",
         )
 
         assert str(pattern.pattern_type) == "Yara"
@@ -246,7 +256,7 @@ class TestPatternCreation:
             [address],
             0.6,
             pattern_def,
-            "Heuristic pattern for suspicious behavior"
+            "Heuristic pattern for suspicious behavior",
         )
 
         assert str(pattern.pattern_type) == "Heuristic"
@@ -267,7 +277,7 @@ class TestPatternCreation:
             [address],
             0.85,
             pattern_def,
-            "Pattern for code injection behavior"
+            "Pattern for code injection behavior",
         )
 
         assert str(pattern.pattern_type) == "Behavior"
@@ -281,7 +291,7 @@ class TestPatternCreation:
         metrics = {
             "mean_entropy": MetadataValue.Float(7.8),
             "std_dev": MetadataValue.Float(1.2),
-            "anomaly_score": MetadataValue.Integer(95)
+            "anomaly_score": MetadataValue.Integer(95),
         }
         pattern_def = PatternDefinition.Statistical(entropy, metrics)
 
@@ -292,7 +302,7 @@ class TestPatternCreation:
             [address],
             0.7,
             pattern_def,
-            "Statistical pattern for high entropy anomalies"
+            "Statistical pattern for high entropy anomalies",
         )
 
         assert str(pattern.pattern_type) == "Statistical"
@@ -316,8 +326,8 @@ class TestPatternValidation:
                 "Test",
                 [address],
                 1.5,
-                pattern_def.clone(),
-                "Test"
+                pattern_def,
+                "Test",
             )
 
         # Test invalid confidence (negative)
@@ -329,7 +339,7 @@ class TestPatternValidation:
                 [address],
                 -0.1,
                 pattern_def,
-                "Test"
+                "Test",
             )
 
     def test_pattern_type_mismatch(self):
@@ -338,7 +348,9 @@ class TestPatternValidation:
         pattern_def = PatternDefinition.Signature("DEADBEEF", None)
 
         # Try to create pattern with mismatched type
-        with pytest.raises(ValueError, match="pattern_type must match pattern_definition type"):
+        with pytest.raises(
+            ValueError, match="pattern_type must match pattern_definition type"
+        ):
             Pattern(
                 "test",
                 PatternType.Heuristic,  # Wrong type
@@ -346,7 +358,7 @@ class TestPatternValidation:
                 [address],
                 0.8,
                 pattern_def,  # Signature definition
-                "Test"
+                "Test",
             )
 
 
@@ -365,7 +377,7 @@ class TestPatternProperties:
             [Address(AddressKind.VA, 0x400000, bits=64)],
             0.9,
             PatternDefinition.Signature("DEADBEEF", None),
-            "High confidence pattern"
+            "High confidence pattern",
         )
 
         medium_conf = Pattern(
@@ -375,7 +387,7 @@ class TestPatternProperties:
             [Address(AddressKind.VA, 0x400000, bits=64)],
             0.65,
             PatternDefinition.Signature("DEADBEEF", None),
-            "Medium confidence pattern"
+            "Medium confidence pattern",
         )
 
         low_conf = Pattern(
@@ -385,7 +397,7 @@ class TestPatternProperties:
             [Address(AddressKind.VA, 0x400000, bits=64)],
             0.3,
             PatternDefinition.Signature("DEADBEEF", None),
-            "Low confidence pattern"
+            "Low confidence pattern",
         )
 
         assert high_conf.is_high_confidence()
@@ -411,7 +423,7 @@ class TestPatternProperties:
             [address1, address2, address3],
             0.8,
             pattern_def,
-            "Pattern found at multiple addresses"
+            "Pattern found at multiple addresses",
         )
 
         assert pattern.address_count() == 3
@@ -429,13 +441,13 @@ class TestPatternProperties:
             [address],
             0.75,
             pattern_def,
-            "A test pattern"
+            "A test pattern",
         )
 
         summary = pattern.summary()
         assert "Test Pattern" in summary
         assert "Signature" in summary
-        assert "1 addresses" in summary
+        assert "1 locations" in summary
         assert "0.75" in summary
 
     def test_pattern_display(self):
@@ -450,7 +462,7 @@ class TestPatternProperties:
             [address],
             0.8,
             pattern_def,
-            "A pattern for display testing"
+            "A pattern for display testing",
         )
 
         display_str = str(pattern)
@@ -474,7 +486,7 @@ class TestPatternProperties:
             pattern_def,
             "Pattern with references",
             references,
-            None
+            None,
         )
 
         assert pattern.has_references()
@@ -490,7 +502,7 @@ class TestPatternProperties:
             "category": MetadataValue.String("malware"),
             "family": MetadataValue.String("trojan"),
             "confidence_score": MetadataValue.Float(0.95),
-            "detection_count": MetadataValue.Integer(150)
+            "detection_count": MetadataValue.Integer(150),
         }
 
         pattern = Pattern(
@@ -502,7 +514,7 @@ class TestPatternProperties:
             pattern_def,
             "Pattern with metadata",
             None,
-            metadata
+            metadata,
         )
 
         assert pattern.has_metadata()
@@ -526,7 +538,7 @@ class TestPatternEdgeCases:
             [],
             0.5,
             pattern_def,
-            "Pattern with no addresses"
+            "Pattern with no addresses",
         )
 
         assert pattern.address_count() == 0
@@ -544,7 +556,7 @@ class TestPatternEdgeCases:
             [address],
             0.7,
             pattern_def,
-            "Pattern with single address"
+            "Pattern with single address",
         )
 
         assert pattern.address_count() == 1
@@ -563,7 +575,7 @@ class TestPatternEdgeCases:
             [Address(AddressKind.VA, 0x400000, bits=64)],
             0.0,
             PatternDefinition.Signature("DEADBEEF", None),
-            "Minimum confidence pattern"
+            "Minimum confidence pattern",
         )
         assert min_conf.confidence == 0.0
         assert min_conf.is_low_confidence()
@@ -576,7 +588,7 @@ class TestPatternEdgeCases:
             [Address(AddressKind.VA, 0x400000, bits=64)],
             1.0,
             PatternDefinition.Signature("DEADBEEF", None),
-            "Maximum confidence pattern"
+            "Maximum confidence pattern",
         )
         assert max_conf.confidence == 1.0
         assert max_conf.is_high_confidence()
@@ -596,7 +608,7 @@ class TestPatternEdgeCases:
             [address],
             0.8,
             pattern_def,
-            long_description
+            long_description,
         )
 
         assert len(pattern.name) == 200
@@ -617,11 +629,13 @@ class TestPatternEdgeCases:
             "file_size": MetadataValue.Integer(1024000),
             "entropy": MetadataValue.Float(6.78),
             "is_packed": MetadataValue.Boolean(True),
-            "tags": MetadataValue.Array([
-                MetadataValue.String("malware"),
-                MetadataValue.String("trojan"),
-                MetadataValue.String("dropper")
-            ])
+            "tags": MetadataValue.Array(
+                [
+                    MetadataValue.String("malware"),
+                    MetadataValue.String("trojan"),
+                    MetadataValue.String("dropper"),
+                ]
+            ),
         }
 
         pattern = Pattern(
@@ -633,7 +647,7 @@ class TestPatternEdgeCases:
             pattern_def,
             "Pattern with complex metadata",
             None,
-            metadata
+            metadata,
         )
 
         assert pattern.has_metadata()

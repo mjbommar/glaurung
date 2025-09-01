@@ -1,98 +1,129 @@
-"""Python package entry for the glaurung extension.
+"""
+Glaurung Python package.
 
-Exports core Rust-backed types for convenient import in Python.
+This package wraps the Rust extension module `glaurung._native` and provides
+Python-friendly entry points. Rust types remain available under
+`glaurung._native` and `glaurung._native.triage`.
 """
 
-from typing import Any, TYPE_CHECKING
-from importlib import import_module
+from . import _native as _native  # type: ignore
 
-if not TYPE_CHECKING:
-    try:
-        _ext: Any = import_module(f"{__name__}.glaurung")
-        Address = _ext.Address
-        AddressKind = _ext.AddressKind
-        AddressRange = _ext.AddressRange
-        AddressSpace = _ext.AddressSpace
-        AddressSpaceKind = _ext.AddressSpaceKind
-        Artifact = _ext.Artifact
-        Binary = _ext.Binary
-        Format = _ext.Format
-        Arch = _ext.Arch
-        Endianness = _ext.Endianness
-        Hashes = _ext.Hashes
-        Id = _ext.Id
-        IdKind = _ext.IdKind
-        IdGenerator = _ext.IdGenerator
-        Perms = _ext.Perms
-        Section = _ext.Section
-        SectionPerms = _ext.SectionPerms
-        Segment = _ext.Segment
-        StringEncoding = _ext.StringEncoding
-        StringClassification = _ext.StringClassification
-        StringLiteral = _ext.StringLiteral
-        Symbol = _ext.Symbol
-        SymbolKind = _ext.SymbolKind
-        SymbolBinding = _ext.SymbolBinding
-        SymbolVisibility = _ext.SymbolVisibility
-        SymbolSource = _ext.SymbolSource
-        MetadataValue = _ext.MetadataValue
-        PatternType = _ext.PatternType
-        YaraMatch = _ext.YaraMatch
-        PatternDefinition = _ext.PatternDefinition
-        Pattern = _ext.Pattern
-        RelocationType = _ext.RelocationType
-        Relocation = _ext.Relocation
-        OperandKind = _ext.OperandKind
-        Access = _ext.Access
-        SideEffect = _ext.SideEffect
-        Operand = _ext.Operand
-        Instruction = _ext.Instruction
-        ToolMetadata = _ext.ToolMetadata
-        SourceKind = _ext.SourceKind
+# Re-export all core types at the package root for convenience
+# Address types
+Address = _native.Address
+AddressKind = _native.AddressKind
+AddressRange = _native.AddressRange
+AddressSpace = _native.AddressSpace
+AddressSpaceKind = _native.AddressSpaceKind
 
-        __all__ = [
-            "Address",
-            "AddressKind",
-            "AddressRange",
-            "AddressSpace",
-            "AddressSpaceKind",
-            "Artifact",
-            "Binary",
-            "Format",
-            "Arch",
-            "Endianness",
-            "Hashes",
-            "Id",
-            "IdKind",
-            "IdGenerator",
-            "Perms",
-            "Section",
-            "SectionPerms",
-            "Segment",
-            "StringEncoding",
-            "StringClassification",
-            "StringLiteral",
-            "Symbol",
-            "SymbolKind",
-            "SymbolBinding",
-            "SymbolVisibility",
-            "SymbolSource",
-            "MetadataValue",
-            "PatternType",
-            "YaraMatch",
-            "PatternDefinition",
-            "Pattern",
-            "RelocationType",
-            "Relocation",
-            "OperandKind",
-            "Access",
-            "SideEffect",
-            "Operand",
-            "Instruction",
-            "ToolMetadata",
-            "SourceKind",
-        ]
-    except Exception:
-        # Extension not built yet
-        __doc__ = "Glaurung binary analysis framework"
-        __all__ = []
+# Binary and format types
+Format = _native.Format
+Arch = _native.Arch
+Binary = _native.Binary
+Hashes = _native.Hashes
+
+# ID and identification types
+Id = _native.Id
+IdKind = _native.IdKind
+IdGenerator = _native.IdGenerator
+
+# Tool and metadata types
+ToolMetadata = _native.ToolMetadata
+SourceKind = _native.SourceKind
+Artifact = _native.Artifact
+
+# Binary analysis types
+Section = _native.Section
+SectionPerms = _native.SectionPerms
+Segment = _native.Segment
+Perms = _native.Perms
+Symbol = _native.Symbol
+SymbolKind = _native.SymbolKind
+SymbolBinding = _native.SymbolBinding
+SymbolVisibility = _native.SymbolVisibility
+SymbolSource = _native.SymbolSource
+Relocation = _native.Relocation
+RelocationType = _native.RelocationType
+Instruction = _native.Instruction
+Operand = _native.Operand
+OperandKind = _native.OperandKind
+Access = _native.Access
+SideEffect = _native.SideEffect
+Register = _native.Register
+RegisterKind = _native.RegisterKind
+DisassemblerError = _native.DisassemblerError
+Architecture = _native.Architecture
+Endianness = _native.Endianness
+DisassemblerConfig = _native.DisassemblerConfig
+# TODO: Fix BasicBlock compilation
+# BasicBlock = _native.BasicBlock
+StringLiteral = _native.StringLiteral
+StringEncoding = _native.StringEncoding
+StringClassification = _native.StringClassification
+
+# Pattern matching types
+Pattern = _native.Pattern
+PatternDefinition = _native.PatternDefinition
+PatternType = _native.PatternType
+YaraMatch = _native.YaraMatch
+MetadataValue = _native.MetadataValue
+
+# Expose triage submodule from the native extension
+triage = _native.triage
+
+__all__ = [
+    # Address types
+    "Address",
+    "AddressKind",
+    "AddressRange",
+    "AddressSpace",
+    "AddressSpaceKind",
+    # Binary and format types
+    "Format",
+    "Arch",
+    "Endianness",
+    "Binary",
+    "Hashes",
+    # ID and identification types
+    "Id",
+    "IdKind",
+    "IdGenerator",
+    # Tool and metadata types
+    "ToolMetadata",
+    "SourceKind",
+    "Artifact",
+    # Binary analysis types
+    "Section",
+    "SectionPerms",
+    "Segment",
+    "Perms",
+    "Symbol",
+    "SymbolKind",
+    "SymbolBinding",
+    "SymbolVisibility",
+    "SymbolSource",
+    "Relocation",
+    "RelocationType",
+    "Instruction",
+    "Operand",
+    "OperandKind",
+    "Access",
+    "SideEffect",
+    "Register",
+    "RegisterKind",
+    "DisassemblerError",
+    "Architecture",
+    "Endianness",
+    "DisassemblerConfig",
+    "StringLiteral",
+    "StringEncoding",
+    "StringClassification",
+    # Pattern matching types
+    "Pattern",
+    "PatternDefinition",
+    "PatternType",
+    "YaraMatch",
+    "MetadataValue",
+    # Triage submodule
+    "triage",
+]

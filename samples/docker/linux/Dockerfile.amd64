@@ -27,6 +27,14 @@ RUN apt-get update && apt-get install -y \
     ninja-build \
     pkg-config \
     mono-devel \
+    # Lua support
+    lua5.4 \
+    lua5.3 \
+    lua5.2 \
+    lua5.1 \
+    luajit \
+    # Additional tools
+    xz-utils \
     # Cross-compilation toolchains
     gcc-aarch64-linux-gnu \
     g++-aarch64-linux-gnu \
@@ -60,6 +68,19 @@ ENV CROSS_COMPILE_MINGW=x86_64-w64-mingw32-
 
 # Set up Python
 RUN python3 -m pip install --upgrade pip setuptools wheel
+
+# Install Go (latest stable)
+ENV GO_VERSION=1.23.5
+RUN curl -sL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xz
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# Install Rust (stable toolchain)
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal \
+    && rustup target add x86_64-unknown-linux-musl \
+    && rustup component add rust-std
 
 # Create workspace
 WORKDIR /workspace

@@ -4,6 +4,7 @@
 //! including its format, architecture, entry points, and metadata.
 
 use crate::core::address::Address;
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,7 +12,7 @@ use std::fmt;
 
 /// The executable format of a binary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass(eq, eq_int)]
+#[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum Format {
     /// Executable and Linkable Format (Linux, Unix)
     ELF,
@@ -29,6 +30,7 @@ pub enum Format {
     Unknown,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Format {
     /// String representation for display.
@@ -52,7 +54,7 @@ impl Format {
 
 /// The CPU architecture of a binary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass(eq, eq_int)]
+#[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum Arch {
     /// 32-bit x86
     X86,
@@ -78,6 +80,7 @@ pub enum Arch {
     Unknown,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Arch {
     /// String representation for display.
@@ -128,7 +131,7 @@ impl Arch {
 
 /// The endianness of a binary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass(eq, eq_int)]
+#[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum Endianness {
     /// Little-endian byte order
     Little,
@@ -136,6 +139,7 @@ pub enum Endianness {
     Big,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Endianness {
     /// String representation for display.
@@ -152,24 +156,38 @@ impl Endianness {
     }
 }
 
+impl Arch {
+    pub fn is_64_bit(&self) -> bool {
+        matches!(
+            self,
+            Arch::X86_64 | Arch::AArch64 | Arch::MIPS64 | Arch::PPC64 | Arch::RISCV64
+        )
+    }
+
+    pub fn bits(&self) -> u8 {
+        if self.is_64_bit() { 64 } else { 32 }
+    }
+}
+
 /// Cryptographic hashes for a binary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Hashes {
     /// SHA-256 hash (hex string)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub sha256: Option<String>,
     /// MD5 hash (hex string)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub md5: Option<String>,
     /// SHA-1 hash (hex string)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub sha1: Option<String>,
     /// Additional hashes as key-value pairs
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub additional: Option<HashMap<String, String>>,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Hashes {
     /// Create a new Hashes instance.
@@ -353,6 +371,17 @@ impl Hashes {
     fn is_valid_hex_hash(s: &str, expected_len: usize) -> bool {
         s.len() == expected_len && s.chars().all(|c| c.is_ascii_hexdigit())
     }
+
+    pub fn has_sha256(&self) -> bool { self.sha256.is_some() }
+    pub fn has_any_hash(&self) -> bool { self.sha256.is_some() || self.md5.is_some() || self.sha1.is_some() || self.additional.is_some() }
+    pub fn get_hash(&self, name: &str) -> Option<String> {
+        match name {
+            "sha256" => self.sha256.clone(),
+            "md5" => self.md5.clone(),
+            "sha1" => self.sha1.clone(),
+            _ => self.additional.as_ref()?.get(name).cloned(),
+        }
+    }
 }
 
 impl fmt::Display for Hashes {
@@ -381,43 +410,44 @@ impl fmt::Display for Hashes {
 
 /// A program under analysis.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Binary {
     /// Unique identifier for this binary
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub id: String,
     /// Filesystem path to the binary
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub path: String,
     /// Executable format
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub format: Format,
     /// CPU architecture
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub arch: Arch,
     /// Bit width (32 or 64)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub bits: u8,
     /// Endianness
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub endianness: Endianness,
     /// Entry point addresses
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub entry_points: Vec<Address>,
     /// Size in bytes
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub size_bytes: u64,
     /// Cryptographic hashes
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub hashes: Option<Hashes>,
     /// UUID/build-id (Mach-O UUID, ELF build-id)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub uuid: Option<String>,
     /// Format-specific timestamps
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub timestamps: Option<HashMap<String, u64>>,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Binary {
     /// Create a new Binary instance.
@@ -568,16 +598,16 @@ impl Binary {
 
     /// Serialize to JSON string.
     fn to_json_py(&self) -> PyResult<String> {
-        serde_json::to_string(self).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Serialization error: {}", e))
+        self.to_json_string().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
         })
     }
 
     /// Deserialize from JSON string.
     #[staticmethod]
     fn from_json_py(json_str: &str) -> PyResult<Self> {
-        serde_json::from_str(json_str).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Deserialization error: {}", e))
+        Self::from_json_str(json_str).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
         })
     }
 }
@@ -683,29 +713,73 @@ impl Binary {
     pub fn is_valid(&self) -> bool {
         self.validate().is_ok()
     }
+
+    /// Serialize to JSON string (pure Rust version).
+    pub fn to_json_string(&self) -> Result<String, crate::error::GlaurungError> {
+        serde_json::to_string(self)
+            .map_err(|e| crate::error::GlaurungError::Serialization(format!("JSON serialization error: {}", e)))
+    }
+
+    /// Deserialize from JSON string (pure Rust version).
+    pub fn from_json_str(json_str: &str) -> Result<Self, crate::error::GlaurungError> {
+        serde_json::from_str(json_str)
+            .map_err(|e| crate::error::GlaurungError::Serialization(format!("JSON deserialization error: {}", e)))
+    }
+
+    pub fn primary_entry_point(&self) -> Option<Address> { self.entry_points.first().cloned() }
+    pub fn has_entry_points(&self) -> bool { !self.entry_points.is_empty() }
+    pub fn has_hashes(&self) -> bool { self.hashes.is_some() }
+    pub fn is_64_bit(&self) -> bool { self.bits == 64 }
 }
 
 impl fmt::Display for Format {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.__str__())
+        match self {
+            Format::ELF => write!(f, "ELF"),
+            Format::PE => write!(f, "PE"),
+            Format::MachO => write!(f, "MachO"),
+            Format::Wasm => write!(f, "Wasm"),
+            Format::COFF => write!(f, "COFF"),
+            Format::Raw => write!(f, "Raw"),
+            Format::Unknown => write!(f, "Unknown"),
+        }
     }
 }
 
 impl fmt::Display for Arch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.__str__())
+        match self {
+            Arch::X86 => write!(f, "x86"),
+            Arch::X86_64 => write!(f, "x86_64"),
+            Arch::ARM => write!(f, "arm"),
+            Arch::AArch64 => write!(f, "aarch64"),
+            Arch::MIPS => write!(f, "mips"),
+            Arch::MIPS64 => write!(f, "mips64"),
+            Arch::PPC => write!(f, "ppc"),
+            Arch::PPC64 => write!(f, "ppc64"),
+            Arch::RISCV => write!(f, "riscv"),
+            Arch::RISCV64 => write!(f, "riscv64"),
+            Arch::Unknown => write!(f, "unknown"),
+        }
     }
 }
 
 impl fmt::Display for Endianness {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.__str__())
+        match self {
+            Endianness::Little => write!(f, "Little"),
+            Endianness::Big => write!(f, "Big"),
+        }
     }
 }
 
 impl fmt::Display for Binary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.__str__())
+        write!(
+            f,
+            "{}:{} {}-bit {}",
+            self.format, self.arch, self.bits, self.endianness
+        )
     }
 }
 
@@ -872,8 +946,8 @@ mod tests {
         .unwrap();
 
         // JSON serialization
-        let json_str = original.to_json_py().unwrap();
-        let deserialized = Binary::from_json_py(&json_str).unwrap();
+        let json_str = original.to_json_string().unwrap();
+        let deserialized = Binary::from_json_str(&json_str).unwrap();
 
         assert_eq!(original, deserialized);
     }

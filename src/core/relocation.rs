@@ -4,6 +4,7 @@
 //! when loading or linking executable files. These specify how addresses should
 //! be adjusted based on the final load address or symbol resolution.
 
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -13,7 +14,7 @@ use crate::core::address::Address;
 /// Relocation types for different executable formats and architectures.
 /// These represent common relocation types found in ELF, PE, MachO, etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub enum RelocationType {
     /// Absolute relocation (direct address)
     Absolute,
@@ -53,6 +54,7 @@ pub enum RelocationType {
     Unknown,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl RelocationType {
     /// String representation for display
@@ -89,31 +91,72 @@ impl fmt::Display for RelocationType {
 /// Link-time relocation entry that specifies how an address should be adjusted
 /// during loading or linking of executable files.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Relocation {
     /// Unique identifier for the relocation
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub id: String,
     /// Address where the relocation should be applied
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub address: Address,
     /// Type of relocation to perform
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub kind: RelocationType,
     /// Resolved value or addend for the relocation (optional)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub value: Option<u64>,
     /// Symbol reference if this relocation references a symbol (optional)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub symbol: Option<String>,
     /// Additional offset to add to the resolved address (optional)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub addend: Option<i64>,
     /// Size of the relocation in bytes (optional, usually 4 or 8)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub size: Option<u8>,
 }
 
+impl Relocation {
+    pub fn new(
+        id: String,
+        address: Address,
+        kind: RelocationType,
+        value: Option<u64>,
+        symbol: Option<String>,
+        addend: Option<i64>,
+        size: Option<u8>,
+    ) -> Self {
+        Self { id, address, kind, value, symbol, addend, size }
+    }
+
+    pub fn is_resolved(&self) -> bool { self.value.is_some() }
+    pub fn has_symbol(&self) -> bool { self.symbol.is_some() }
+    pub fn has_addend(&self) -> bool { self.addend.is_some() }
+    pub fn effective_size(&self) -> u8 { self.size.unwrap_or(4) }
+    pub fn is_absolute(&self) -> bool { matches!(self.kind, RelocationType::Absolute | RelocationType::Abs32 | RelocationType::Abs64) }
+    pub fn is_pc_relative(&self) -> bool { matches!(self.kind, RelocationType::PcRelative | RelocationType::Pc32 | RelocationType::Pc64) }
+    pub fn is_got_related(&self) -> bool { matches!(self.kind, RelocationType::Got | RelocationType::GotPc) }
+    pub fn is_plt_related(&self) -> bool { matches!(self.kind, RelocationType::Plt | RelocationType::PltPc | RelocationType::JumpSlot) }
+    pub fn is_tls_related(&self) -> bool { matches!(self.kind, RelocationType::Tls | RelocationType::TlsOffset | RelocationType::TlsModule | RelocationType::TlsModuleOffset) }
+    pub fn description(&self) -> String {
+        let symbol_str = self.symbol.as_ref().map(|s| format!(" -> {}", s)).unwrap_or_default();
+        let value_str = self.value.map(|v| format!(" (value: 0x{:x})", v)).unwrap_or_default();
+        let addend_str = self.addend.filter(|&a| a != 0).map(|a| format!(" (addend: {})", a)).unwrap_or_default();
+        format!("Relocation '{}' at {}: {}{}{}{}", self.id, self.address, self.kind, symbol_str, value_str, addend_str)
+    }
+    pub fn calculate_relocated_address(&self, base_address: u64) -> Option<u64> {
+        match self.kind {
+            RelocationType::Absolute | RelocationType::Abs32 | RelocationType::Abs64 => self.value.map(|v| v.wrapping_add(self.addend.unwrap_or(0) as u64)),
+            RelocationType::Relative => self.value.map(|v| base_address.wrapping_add(v).wrapping_add(self.addend.unwrap_or(0) as u64)),
+            RelocationType::PcRelative | RelocationType::Pc32 | RelocationType::Pc64 => {
+                self.value.map(|v| self.address.value.wrapping_add(v).wrapping_add(self.addend.unwrap_or(0) as u64))
+            }
+            _ => self.value.map(|v| v.wrapping_add(self.addend.unwrap_or(0) as u64)),
+        }
+    }
+}
+
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Relocation {
     /// Create a new Relocation instance

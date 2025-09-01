@@ -1,8 +1,13 @@
 """Tests for the Instruction type."""
 
 from glaurung import (
-    Instruction, Operand, OperandKind, Access, SideEffect,
-    Address, AddressKind
+    Instruction,
+    Operand,
+    OperandKind,
+    Access,
+    SideEffect,
+    Address,
+    AddressKind,
 )
 
 
@@ -106,14 +111,7 @@ class TestOperandCreation:
 
     def test_operand_memory_creation_complex(self):
         """Test creating a complex memory operand."""
-        mem = Operand.memory(
-            64,
-            Access.ReadWrite,
-            0x100,
-            "rbx",
-            "rcx",
-            4
-        )
+        mem = Operand.memory(64, Access.ReadWrite, 0x100, "rbx", "rcx", 4)
 
         assert str(mem.kind) == "Memory"
         assert mem.size == 64
@@ -156,14 +154,7 @@ class TestInstructionCreation:
         address = Address(AddressKind.VA, 0x400000, bits=64)
         bytes_data = [0x90]  # NOP
 
-        instr = Instruction(
-            address,
-            bytes_data,
-            "nop",
-            [],
-            1,
-            "x86_64"
-        )
+        instr = Instruction(address, bytes_data, "nop", [], 1, "x86_64")
 
         assert instr.address.value == 0x400000
         assert instr.bytes == bytes(bytes_data)  # PyO3 converts Vec<u8> to bytes
@@ -180,7 +171,7 @@ class TestInstructionCreation:
     def test_instruction_creation_with_operands(self):
         """Test creating an instruction with operands."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
-        bytes_data = [0x48, 0x89, 0xc7]  # mov rdi, rax
+        bytes_data = [0x48, 0x89, 0xC7]  # mov rdi, rax
         operands = [
             Operand.register("rdi", 64, Access.Write),
             Operand.register("rax", 64, Access.Read),
@@ -196,7 +187,7 @@ class TestInstructionCreation:
             semantics="move register to register",
             side_effects=[SideEffect.RegisterModify],
             prefixes=None,
-            groups=["general", "move"]
+            groups=["general", "move"],
         )
 
         assert instr.mnemonic == "mov"
@@ -210,7 +201,7 @@ class TestInstructionCreation:
     def test_instruction_creation_jump(self):
         """Test creating a jump instruction."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
-        bytes_data = [0xeb, 0x10]  # jmp +0x10
+        bytes_data = [0xEB, 0x10]  # jmp +0x10
         operands = [Operand.immediate(0x10, 8)]
 
         instr = Instruction(
@@ -221,7 +212,7 @@ class TestInstructionCreation:
             2,
             "x86_64",
             side_effects=[SideEffect.ControlFlow],
-            groups=["branch", "unconditional"]
+            groups=["branch", "unconditional"],
         )
 
         assert instr.mnemonic == "jmp"
@@ -234,7 +225,7 @@ class TestInstructionCreation:
     def test_instruction_creation_call(self):
         """Test creating a call instruction."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
-        bytes_data = [0xe8, 0x00, 0x00, 0x00, 0x00]  # call 0x400010
+        bytes_data = [0xE8, 0x00, 0x00, 0x00, 0x00]  # call 0x400010
         operands = [Operand.immediate(0x400010, 32)]
 
         instr = Instruction(
@@ -245,7 +236,7 @@ class TestInstructionCreation:
             5,
             "x86_64",
             side_effects=[SideEffect.ControlFlow, SideEffect.StackOperation],
-            groups=["call"]
+            groups=["call"],
         )
 
         assert instr.mnemonic == "call"
@@ -257,7 +248,7 @@ class TestInstructionCreation:
     def test_instruction_creation_return(self):
         """Test creating a return instruction."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
-        bytes_data = [0xc3]  # ret
+        bytes_data = [0xC3]  # ret
 
         instr = Instruction(
             address,
@@ -267,7 +258,7 @@ class TestInstructionCreation:
             1,
             "x86_64",
             side_effects=[SideEffect.ControlFlow, SideEffect.StackOperation],
-            groups=["return"]
+            groups=["return"],
         )
 
         assert instr.mnemonic == "ret"
@@ -295,7 +286,7 @@ class TestInstructionProperties:
             ],
             2,
             "x86_64",
-            side_effects=[SideEffect.MemoryWrite]
+            side_effects=[SideEffect.MemoryWrite],
         )
 
         assert mem_write_instr.modifies_memory()
@@ -303,14 +294,14 @@ class TestInstructionProperties:
         # Instruction without memory write side effect
         reg_instr = Instruction(
             address,
-            [0x89, 0xc7],  # mov edi, eax
+            [0x89, 0xC7],  # mov edi, eax
             "mov",
             [
                 Operand.register("edi", 32, Access.Write),
                 Operand.register("eax", 32, Access.Read),
             ],
             2,
-            "x86_64"
+            "x86_64",
         )
 
         assert not reg_instr.modifies_memory()
@@ -322,7 +313,7 @@ class TestInstructionProperties:
         # Instruction with register modify side effect
         reg_mod_instr = Instruction(
             Address(AddressKind.VA, 0x400000, bits=64),
-            [0x89, 0xc7],  # mov edi, eax
+            [0x89, 0xC7],  # mov edi, eax
             "mov",
             [
                 Operand.register("edi", 32, Access.Write),
@@ -330,7 +321,7 @@ class TestInstructionProperties:
             ],
             2,
             "x86_64",
-            side_effects=[SideEffect.RegisterModify]
+            side_effects=[SideEffect.RegisterModify],
         )
 
         assert reg_mod_instr.modifies_registers()
@@ -342,7 +333,7 @@ class TestInstructionProperties:
             "nop",
             [],
             1,
-            "x86_64"
+            "x86_64",
         )
 
         assert not nop_instr.modifies_registers()
@@ -354,12 +345,12 @@ class TestInstructionProperties:
         # Instruction with system call side effect
         syscall_instr = Instruction(
             Address(AddressKind.VA, 0x400000, bits=64),
-            [0x0f, 0x05],  # syscall
+            [0x0F, 0x05],  # syscall
             "syscall",
             [],
             2,
             "x86_64",
-            side_effects=[SideEffect.SystemCall]
+            side_effects=[SideEffect.SystemCall],
         )
 
         assert syscall_instr.is_system_call()
@@ -367,14 +358,14 @@ class TestInstructionProperties:
         # Instruction without system call side effect
         mov_instr = Instruction(
             address,
-            [0x89, 0xc7],  # mov edi, eax
+            [0x89, 0xC7],  # mov edi, eax
             "mov",
             [
                 Operand.register("edi", 32, Access.Write),
                 Operand.register("eax", 32, Access.Read),
             ],
             2,
-            "x86_64"
+            "x86_64",
         )
 
         assert not mov_instr.is_system_call()
@@ -389,7 +380,7 @@ class TestInstructionProperties:
             "nop",
             [],
             3,
-            "x86_64"
+            "x86_64",
         )
 
         end_addr = instr.end_address()
@@ -403,14 +394,14 @@ class TestInstructionProperties:
 
         instr = Instruction(
             address,
-            [0x48, 0x89, 0xc7],  # mov rdi, rax
+            [0x48, 0x89, 0xC7],  # mov rdi, rax
             "mov",
             [
                 Operand.register("rdi", 64, Access.Write),
                 Operand.register("rax", 64, Access.Read),
             ],
             3,
-            "x86_64"
+            "x86_64",
         )
 
         disasm = instr.disassembly()
@@ -426,7 +417,7 @@ class TestInstructionProperties:
 
         instr = Instruction(
             address,
-            [0x48, 0x89, 0xc7],  # mov rdi, rax
+            [0x48, 0x89, 0xC7],  # mov rdi, rax
             "mov",
             [
                 Operand.register("rdi", 64, Access.Write),
@@ -434,7 +425,7 @@ class TestInstructionProperties:
             ],
             3,
             "x86_64",
-            groups=["general", "move"]
+            groups=["general", "move"],
         )
 
         summary = instr.summary()
@@ -450,12 +441,7 @@ class TestInstructionProperties:
 
         # Instruction without operands
         nop_instr = Instruction(
-            Address(AddressKind.VA, 0x400000, bits=64),
-            [0x90],
-            "nop",
-            [],
-            1,
-            "x86_64"
+            Address(AddressKind.VA, 0x400000, bits=64), [0x90], "nop", [], 1, "x86_64"
         )
 
         assert str(nop_instr) == "nop"
@@ -463,14 +449,14 @@ class TestInstructionProperties:
         # Instruction with operands
         mov_instr = Instruction(
             address,
-            [0x48, 0x89, 0xc7],
+            [0x48, 0x89, 0xC7],
             "mov",
             [
                 Operand.register("rdi", 64, Access.Write),
                 Operand.register("rax", 64, Access.Read),
             ],
             3,
-            "x86_64"
+            "x86_64",
         )
 
         mov_str = str(mov_instr)
@@ -486,14 +472,7 @@ class TestInstructionEdgeCases:
         """Test instruction with empty byte sequence."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
-        instr = Instruction(
-            address,
-            [],
-            "invalid",
-            [],
-            0,
-            "unknown"
-        )
+        instr = Instruction(address, [], "invalid", [], 0, "unknown")
 
         assert instr.bytes == b""  # PyO3 converts empty Vec<u8> to empty bytes
         assert instr.length == 0
@@ -504,14 +483,7 @@ class TestInstructionEdgeCases:
         address = Address(AddressKind.VA, 0x400000, bits=64)
         large_bytes = [0x90] * 16  # 16 NOP bytes
 
-        instr = Instruction(
-            address,
-            large_bytes,
-            "nop_sequence",
-            [],
-            16,
-            "x86_64"
-        )
+        instr = Instruction(address, large_bytes, "nop_sequence", [], 16, "x86_64")
 
         assert len(instr.bytes) == 16
         assert instr.length == 16
@@ -529,11 +501,11 @@ class TestInstructionEdgeCases:
 
         instr = Instruction(
             address,
-            [0x48, 0x01, 0xda],  # add rdx, rbx (simplified)
+            [0x48, 0x01, 0xDA],  # add rdx, rbx (simplified)
             "add",
             operands,
             3,
-            "x86_64"
+            "x86_64",
         )
 
         assert instr.operand_count() == 4
@@ -549,7 +521,7 @@ class TestInstructionEdgeCases:
                 "nop",
                 [],
                 1,
-                arch
+                arch,
             )
             assert instr.arch == arch
 
@@ -559,7 +531,7 @@ class TestInstructionEdgeCases:
 
         instr = Instruction(
             address,
-            [0xcd, 0x80],  # int 0x80 (Linux syscall)
+            [0xCD, 0x80],  # int 0x80 (Linux syscall)
             "int",
             [Operand.immediate(0x80, 8)],
             2,
@@ -568,8 +540,8 @@ class TestInstructionEdgeCases:
                 SideEffect.SystemCall,
                 SideEffect.ControlFlow,
                 SideEffect.RegisterModify,
-                SideEffect.StackOperation
-            ]
+                SideEffect.StackOperation,
+            ],
         )
 
         assert len(instr.side_effects) == 4
@@ -590,7 +562,7 @@ class TestInstructionEdgeCases:
             [],
             2,
             "x86_64",
-            prefixes=["operand-size"]
+            prefixes=["operand-size"],
         )
 
         assert instr.prefixes == ["operand-size"]
@@ -602,14 +574,7 @@ class TestInstructionEdgeCases:
         # x86_64 instructions can be up to 15 bytes
         max_bytes = [0x90] * 15
 
-        instr = Instruction(
-            address,
-            max_bytes,
-            "complex_instruction",
-            [],
-            15,
-            "x86_64"
-        )
+        instr = Instruction(address, max_bytes, "complex_instruction", [], 15, "x86_64")
 
         assert len(instr.bytes) == 15
         assert instr.length == 15
@@ -618,14 +583,7 @@ class TestInstructionEdgeCases:
         """Test instruction with zero length."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
-        instr = Instruction(
-            address,
-            [],
-            "pseudo",
-            [],
-            0,
-            "unknown"
-        )
+        instr = Instruction(address, [], "pseudo", [], 0, "unknown")
 
         assert instr.length == 0
         end_addr = instr.end_address()

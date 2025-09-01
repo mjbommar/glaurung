@@ -302,6 +302,194 @@ build_csharp_variants() {
     fi
 }
 
+build_lua_variants() {
+    local source_file="$1" basename
+    basename="$(basename "$source_file" .lua)"
+    ensure_dir "$BINARIES_DIR/lua"
+    
+    # Build with different Lua versions
+    for lua_cmd in lua5.4 lua5.3 lua5.2 lua5.1 luajit; do
+        if command -v $lua_cmd &> /dev/null; then
+            local version=$($lua_cmd -v 2>&1 | head -1 | awk '{print $2}')
+            local compiler="${lua_cmd}c"
+            
+            # LuaJIT uses different compiler name
+            if [[ "$lua_cmd" == "luajit" ]]; then
+                compiler="luajit -b"
+            elif ! command -v $compiler &> /dev/null; then
+                # Try without version suffix
+                compiler="luac"
+            fi
+            
+            local output_file="$BINARIES_DIR/lua/${basename}-${lua_cmd}.luac"
+            log "Compiling Lua bytecode with $lua_cmd -> $output_file"
+            
+            write_metadata "$METADATA_DIR/${basename}-${lua_cmd}.json" "{
+  \"source_file\": \"$source_file\",
+  \"compiler\": \"$compiler\",
+  \"lua_version\": \"$version\",
+  \"output_file\": \"$output_file\",
+  \"compilation_flags\": \"\",
+  \"description\": \"Lua bytecode compiled with $lua_cmd\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"linux\",
+  \"architecture\": \"$(uname -m)\"
+}"
+            
+            if [[ "$lua_cmd" == "luajit" ]]; then
+                luajit -b "$source_file" "$output_file" 2>/dev/null || warn "LuaJIT compilation failed"
+            else
+                $compiler -o "$output_file" "$source_file" 2>/dev/null || warn "$compiler compilation failed"
+            fi
+        fi
+    done
+}
+
+build_go_variants() {
+    local source_file="$1" basename
+    basename="$(basename "$source_file" .go)"
+    
+    if command -v go &> /dev/null; then
+        ensure_dir "$BINARIES_DIR/go"
+        
+        # Standard build
+        local output_file="$BINARIES_DIR/go/${basename}-go"
+        log "Building Go binary -> $output_file"
+        write_metadata "$METADATA_DIR/${basename}-go.json" "{
+  \"source_file\": \"$source_file\",
+  \"compiler\": \"go build\",
+  \"go_version\": \"$(go version)\",
+  \"output_file\": \"$output_file\",
+  \"compilation_flags\": \"-ldflags='-s -w'\",
+  \"description\": \"Go binary with stripped symbols\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"linux\",
+  \"architecture\": \"$(uname -m)\"
+}"
+        CGO_ENABLED=0 go build -ldflags="-s -w" -o "$output_file" "$source_file" || warn "Go build failed"
+        
+        # Static build with CGO disabled
+        local static_output="$BINARIES_DIR/go/${basename}-go-static"
+        log "Building static Go binary -> $static_output"
+        write_metadata "$METADATA_DIR/${basename}-go-static.json" "{
+  \"source_file\": \"$source_file\",
+  \"compiler\": \"go build\",
+  \"go_version\": \"$(go version)\",
+  \"output_file\": \"$static_output\",
+  \"compilation_flags\": \"CGO_ENABLED=0 GOOS=linux\",
+  \"description\": \"Static Go binary without CGO\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"linux\",
+  \"architecture\": \"$(uname -m)\"
+}"
+        CGO_ENABLED=0 GOOS=linux go build -a -ldflags="-s -w" -o "$static_output" "$source_file" || warn "Go static build failed"
+        
+        # Debug build
+        local debug_output="$BINARIES_DIR/go/${basename}-go-debug"
+        log "Building Go debug binary -> $debug_output"
+        go build -gcflags="all=-N -l" -o "$debug_output" "$source_file" || warn "Go debug build failed"
+    else
+        warn "go not found, skipping Go"
+    fi
+}
+
+build_rust_variants() {
+    local source_file="$1" basename
+    basename="$(basename "$source_file" .rs)"
+    
+    if command -v rustc &> /dev/null; then
+        ensure_dir "$BINARIES_DIR/rust"
+        
+        # Debug build
+        local debug_output="$BINARIES_DIR/rust/${basename}-rust-debug"
+        log "Building Rust debug binary -> $debug_output"
+        write_metadata "$METADATA_DIR/${basename}-rust-debug.json" "{
+  \"source_file\": \"$source_file\",
+  \"compiler\": \"rustc\",
+  \"rust_version\": \"$(rustc --version)\",
+  \"output_file\": \"$debug_output\",
+  \"compilation_flags\": \"-g\",
+  \"description\": \"Rust debug build\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"linux\",
+  \"architecture\": \"$(uname -m)\"
+}"
+        rustc -g -o "$debug_output" "$source_file" || warn "Rust debug build failed"
+        
+        # Release build
+        local release_output="$BINARIES_DIR/rust/${basename}-rust-release"
+        log "Building Rust release binary -> $release_output"
+        write_metadata "$METADATA_DIR/${basename}-rust-release.json" "{
+  \"source_file\": \"$source_file\",
+  \"compiler\": \"rustc\",
+  \"rust_version\": \"$(rustc --version)\",
+  \"output_file\": \"$release_output\",
+  \"compilation_flags\": \"-O\",
+  \"description\": \"Rust optimized build\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"linux\",
+  \"architecture\": \"$(uname -m)\"
+}"
+        rustc -O -o "$release_output" "$source_file" || warn "Rust release build failed"
+        
+        # Static musl build
+        if rustup target list | grep -q "x86_64-unknown-linux-musl (installed)"; then
+            local musl_output="$BINARIES_DIR/rust/${basename}-rust-musl"
+            log "Building Rust musl static binary -> $musl_output"
+            rustc --target x86_64-unknown-linux-musl -O -o "$musl_output" "$source_file" || warn "Rust musl build failed"
+        fi
+    else
+        warn "rustc not found, skipping Rust"
+    fi
+}
+
+build_library_variants() {
+    local source_dir="$SOURCE_DIR/library"
+    if [[ ! -f "$source_dir/mathlib.c" ]]; then
+        return
+    fi
+    
+    ensure_dir "$BINARIES_DIR/libraries/shared"
+    ensure_dir "$BINARIES_DIR/libraries/static"
+    
+    # Build shared library (.so)
+    local so_file="$BINARIES_DIR/libraries/shared/libmathlib.so"
+    log "Building shared library -> $so_file"
+    gcc -shared -fPIC -O2 -o "$so_file" "$source_dir/mathlib.c" -lm || warn "Shared library build failed"
+    write_metadata "$METADATA_DIR/libmathlib-so.json" "{
+  \"source_file\": \"$source_dir/mathlib.c\",
+  \"compiler\": \"gcc\",
+  \"output_file\": \"$so_file\",
+  \"compilation_flags\": \"-shared -fPIC -O2\",
+  \"description\": \"Shared library (.so)\",
+  \"timestamp\": \"$(date -Iseconds)\",
+  \"platform\": \"linux\",
+  \"architecture\": \"$(uname -m)\"
+}"
+    
+    # Build static library (.a)
+    local obj_file="/tmp/mathlib.o"
+    local a_file="$BINARIES_DIR/libraries/static/libmathlib.a"
+    log "Building static library -> $a_file"
+    gcc -c -O2 -o "$obj_file" "$source_dir/mathlib.c" && \
+    ar rcs "$a_file" "$obj_file" || warn "Static library build failed"
+    rm -f "$obj_file"
+    
+    # Build Windows DLL (cross-compile)
+    if command -v x86_64-w64-mingw32-gcc &> /dev/null; then
+        local dll_file="$BINARIES_DIR/libraries/shared/mathlib.dll"
+        log "Building Windows DLL -> $dll_file"
+        x86_64-w64-mingw32-gcc -shared -DMATHLIB_EXPORTS -O2 -o "$dll_file" "$source_dir/mathlib.c" || warn "DLL build failed"
+    fi
+    
+    # Build test executable using the library
+    if [[ -f "$source_dir/test_mathlib.c" && -f "$so_file" ]]; then
+        local test_exe="$BINARIES_DIR/libraries/test_mathlib"
+        log "Building test executable -> $test_exe"
+        gcc -O2 -o "$test_exe" "$source_dir/test_mathlib.c" -L"$BINARIES_DIR/libraries/shared" -lmathlib -Wl,-rpath='$ORIGIN' || warn "Test executable build failed"
+    fi
+}
+
 main() {
     log "Starting Linux sample builds"
     log "Source: $SOURCE_DIR"
@@ -327,6 +515,14 @@ main() {
     [ -f "$SOURCE_DIR/java/HelloWorld.java" ] && build_java_variants "$SOURCE_DIR/java/HelloWorld.java"
     [ -f "$SOURCE_DIR/python/hello.py" ] && build_python_variants "$SOURCE_DIR/python/hello.py"
     [ -f "$SOURCE_DIR/csharp/Hello.cs" ] && build_csharp_variants "$SOURCE_DIR/csharp/Hello.cs"
+    
+    # Build new language samples
+    [ -f "$SOURCE_DIR/lua/hello.lua" ] && build_lua_variants "$SOURCE_DIR/lua/hello.lua"
+    [ -f "$SOURCE_DIR/go/hello.go" ] && build_go_variants "$SOURCE_DIR/go/hello.go"
+    [ -f "$SOURCE_DIR/rust/hello.rs" ] && build_rust_variants "$SOURCE_DIR/rust/hello.rs"
+    
+    # Build libraries
+    build_library_variants
 
     log "Linux builds completed successfully"
 }

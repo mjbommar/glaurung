@@ -5,7 +5,9 @@
 //! functions, and other binary constructs.
 
 use crate::core::address::Address;
+#[cfg(feature = "python-ext")]
 use pyo3::exceptions::PyValueError;
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -17,19 +19,17 @@ use std::fmt;
 /// fundamental building block for representing segments, sections, functions,
 /// and other binary constructs that occupy contiguous memory regions.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct AddressRange {
     /// The starting address of the range (inclusive)
-    #[pyo3(get, set)]
     pub start: Address,
     /// The size of the range in bytes
-    #[pyo3(get, set)]
     pub size: u64,
     /// Optional alignment requirement in bytes
-    #[pyo3(get, set)]
     pub alignment: Option<u64>,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl AddressRange {
     /// Create a new AddressRange.
@@ -42,11 +42,11 @@ impl AddressRange {
     /// Returns:
     ///     AddressRange: A new AddressRange instance
     ///
-    /// Raises:
-    ///     ValueError: If size is 0 or alignment is invalid
-    #[new]
-    #[pyo3(signature = (start, size, alignment=None))]
-    fn new_py(start: Address, size: u64, alignment: Option<u64>) -> PyResult<Self> {
+     /// Raises:
+     ///     ValueError: If size is 0 or alignment is invalid
+     #[new]
+     #[pyo3(signature = (start, size, alignment=None))]
+     fn new_py(start: Address, size: u64, alignment: Option<u64>) -> PyResult<Self> {
         Self::new(start, size, alignment).map_err(PyValueError::new_err)
     }
 
@@ -67,12 +67,12 @@ impl AddressRange {
         )
     }
 
-    /// Get the end address of the range (exclusive).
-    ///
-    /// Returns:
-    ///     Address: The end address (start + size)
-    #[getter]
-    fn end(&self) -> PyResult<Address> {
+     /// Get the end address of the range (exclusive).
+     ///
+     /// Returns:
+     ///     Address: The end address (start + size)
+     #[getter]
+     fn end(&self) -> PyResult<Address> {
         self.end_addr().map_err(PyValueError::new_err)
     }
 

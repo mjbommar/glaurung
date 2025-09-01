@@ -3,7 +3,9 @@
 //! This module provides the fundamental Address and AddressKind types
 //! that serve as the foundation for all location references in Glaurung.
 
+#[cfg(feature = "python-ext")]
 use pyo3::exceptions::PyValueError;
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -11,7 +13,7 @@ use std::fmt;
 
 /// The kind of address representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
-#[pyclass(eq, eq_int)]
+#[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum AddressKind {
     /// Virtual Address (runtime memory address)
     VA,
@@ -27,7 +29,7 @@ pub enum AddressKind {
     Symbolic,
 }
 
-#[pymethods]
+#[cfg_attr(feature = "python-ext", pymethods)]
 impl AddressKind {
     /// String representation for display.
     fn __str__(&self) -> String {
@@ -53,25 +55,26 @@ impl AddressKind {
 /// file offsets, symbolic references, etc.) and include metadata about
 /// the address space and bit width.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Address {
     /// The kind of address this represents
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub kind: AddressKind,
     /// The numeric value of the address
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub value: u64,
     /// Address space identifier (optional, defaults to "default")
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub space: Option<String>,
     /// Bit width (16, 32, or 64)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub bits: u8,
     /// Symbol reference (required when kind=Symbolic)
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub symbol_ref: Option<String>,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Address {
     /// Create a new Address.

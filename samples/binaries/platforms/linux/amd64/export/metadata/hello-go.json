@@ -1,0 +1,11 @@
+{
+  "source_file": "/workspace/source/go/hello.go",
+  "compiler": "go build",
+  "go_version": "go version go1.23.5 linux/amd64",
+  "output_file": "/workspace/binaries/go/hello-go",
+  "compilation_flags": "-ldflags='-s -w'",
+  "description": "Go binary with stripped symbols",
+  "timestamp": "2025-08-31T20:55:48+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

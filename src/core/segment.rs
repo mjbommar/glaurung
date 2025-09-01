@@ -3,6 +3,7 @@
 //! Segments represent load-time memory mapping units in binary analysis.
 //! They correspond to program segments that are loaded into memory at runtime.
 
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -12,17 +13,14 @@ use crate::core::address_range::AddressRange;
 
 /// Permission flags for memory segments
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Perms {
     /// Raw permission bits: read=1, write=2, execute=4
-    #[pyo3(get, set)]
     pub bits: u8,
 }
 
-#[pymethods]
 impl Perms {
-    /// Create a new Perms instance
-    #[new]
+    /// Create a new Perms instance (pure Rust)
     pub fn new(read: bool, write: bool, execute: bool) -> Self {
         let mut bits = 0u8;
         if read {
@@ -35,11 +33,6 @@ impl Perms {
             bits |= 4;
         }
         Self { bits }
-    }
-
-    /// String representation for display
-    fn __str__(&self) -> String {
-        format!("{}", self)
     }
 
     /// Check if segment has read permission
@@ -73,6 +66,15 @@ impl Perms {
     }
 }
 
+#[cfg(feature = "python-ext")]
+#[pymethods]
+impl Perms {
+    /// String representation for display
+    fn __str__(&self) -> String {
+        format!("{}", self)
+    }
+}
+
 impl fmt::Display for Perms {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut perms = String::new();
@@ -85,33 +87,24 @@ impl fmt::Display for Perms {
 
 /// Load-time memory mapping unit
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Segment {
     /// Unique identifier for the segment
-    #[pyo3(get, set)]
     pub id: String,
     /// Optional human-readable name
-    #[pyo3(get, set)]
     pub name: Option<String>,
     /// Virtual address range where segment is mapped
-    #[pyo3(get, set)]
     pub range: AddressRange,
     /// Memory permissions for the segment
-    #[pyo3(get, set)]
     pub perms: Perms,
     /// File offset where segment data begins
-    #[pyo3(get, set)]
     pub file_offset: Address,
     /// Optional alignment requirement
-    #[pyo3(get, set)]
     pub alignment: Option<u64>,
 }
 
-#[pymethods]
 impl Segment {
-    /// Create a new Segment instance
-    #[new]
-    #[pyo3(signature = (id, range, perms, file_offset, name=None, alignment=None))]
+    /// Create a new Segment instance (pure Rust)
     pub fn new(
         id: String,
         range: AddressRange,
@@ -119,18 +112,14 @@ impl Segment {
         file_offset: Address,
         name: Option<String>,
         alignment: Option<u64>,
-    ) -> PyResult<Self> {
+    ) -> Result<Self, String> {
         // Basic validation
         if file_offset.kind != AddressKind::FileOffset {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "file_offset must have AddressKind::FileOffset",
-            ));
+            return Err("file_offset must have AddressKind::FileOffset".to_string());
         }
 
         if range.start.kind != AddressKind::VA {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "range addresses must have AddressKind::VA for segments",
-            ));
+            return Err("range addresses must have AddressKind::VA for segments".to_string());
         }
 
         Ok(Self {
@@ -143,10 +132,93 @@ impl Segment {
         })
     }
 
-    /// String representation for display
-    fn __str__(&self) -> String {
-        format!("{}", self)
+    /// Get the segment ID
+    #[cfg(feature = "python-ext")]
+    #[getter]
+    pub fn get_id(&self) -> &str {
+        &self.id
     }
+
+    /// Set the segment ID
+    #[cfg(feature = "python-ext")]
+    #[setter]
+    pub fn set_id(&mut self, id: String) {
+        self.id = id;
+    }
+
+    /// Get the segment name
+    #[cfg(feature = "python-ext")]
+    #[getter]
+    pub fn get_name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Set the segment name
+    #[cfg(feature = "python-ext")]
+    #[setter]
+    pub fn set_name(&mut self, name: Option<String>) {
+        self.name = name;
+    }
+
+    /// Get the segment range
+    #[cfg(feature = "python-ext")]
+    #[getter]
+    pub fn get_range(&self) -> &AddressRange {
+        &self.range
+    }
+
+    /// Set the segment range
+    #[cfg(feature = "python-ext")]
+    #[setter]
+    pub fn set_range(&mut self, range: AddressRange) {
+        self.range = range;
+    }
+
+    /// Get the segment permissions
+    #[cfg(feature = "python-ext")]
+    #[getter]
+    pub fn get_perms(&self) -> &Perms {
+        &self.perms
+    }
+
+    /// Set the segment permissions
+    #[cfg(feature = "python-ext")]
+    #[setter]
+    pub fn set_perms(&mut self, perms: Perms) {
+        self.perms = perms;
+    }
+
+    /// Get the file offset
+    #[cfg(feature = "python-ext")]
+    #[getter]
+    pub fn get_file_offset(&self) -> &Address {
+        &self.file_offset
+    }
+
+    /// Set the file offset
+    #[cfg(feature = "python-ext")]
+    #[setter]
+    pub fn set_file_offset(&mut self, file_offset: Address) {
+        self.file_offset = file_offset;
+    }
+
+    /// Get the alignment
+    #[cfg(feature = "python-ext")]
+    #[getter]
+    pub fn get_alignment(&self) -> Option<u64> {
+        self.alignment
+    }
+
+    /// Set the alignment
+    #[cfg(feature = "python-ext")]
+    #[setter]
+    pub fn set_alignment(&mut self, alignment: Option<u64>) {
+        self.alignment = alignment;
+    }
+
+    /// String representation for display (Python only)
+    #[cfg(feature = "python-ext")]
+    fn __str__(&self) -> String { format!("{}", self) }
 
     /// Get the segment size in bytes
     pub fn size(&self) -> u64 {
@@ -180,6 +252,30 @@ impl Segment {
             self.size(),
             perms_str
         )
+    }
+}
+
+#[cfg(feature = "python-ext")]
+#[pymethods]
+impl Segment {
+    /// Create a new Segment instance (Python constructor)
+    #[new]
+    #[pyo3(signature = (id, range, perms, file_offset, name=None, alignment=None))]
+    pub fn new_py(
+        id: String,
+        range: AddressRange,
+        perms: Perms,
+        file_offset: Address,
+        name: Option<String>,
+        alignment: Option<u64>,
+    ) -> PyResult<Self> {
+        Self::new(id, range, perms, file_offset, name, alignment)
+            .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
+    /// String representation for display
+    fn __str__(&self) -> String {
+        format!("{}", self)
     }
 }
 

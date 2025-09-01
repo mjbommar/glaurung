@@ -29,6 +29,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dynamic = ["version"]
+dependencies = [
+    "structlog>=25.4.0",
+]
 
 [project.scripts]
 glaurung = "glaurung.cli:main"
@@ -38,11 +41,12 @@ tests = [
 ]
 [tool.maturin]
 python-source = "python"
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "python-ext"]
 include = [
     "python/glaurung/py.typed",
     "python/glaurung/*.pyi",
 ]
+module-name = "glaurung._native"
 
 [dependency-groups]
 dev = [

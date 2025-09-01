@@ -3,13 +3,15 @@
 //! This module provides the AddressSpace type that represents named addressing
 //! domains within a binary, such as default memory, overlays, stack, heap, and MMIO.
 
+#[cfg(feature = "python-ext")]
 use pyo3::exceptions::PyValueError;
+#[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use std::fmt;
 
 /// The kind of address space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[pyclass(eq, eq_int)]
+#[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum AddressSpaceKind {
     /// Default address space (standard virtual memory)
     Default,
@@ -25,6 +27,7 @@ pub enum AddressSpaceKind {
     Other,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl AddressSpaceKind {
     /// String representation for display.
@@ -52,22 +55,23 @@ impl AddressSpaceKind {
 /// This allows for proper handling of segmented/overlay architectures and
 /// different memory types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct AddressSpace {
     /// The name of this address space
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub name: String,
     /// The kind of address space this represents
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub kind: AddressSpaceKind,
     /// Optional maximum size of this address space
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub size: Option<u64>,
     /// Optional parent space for overlays
-    #[pyo3(get, set)]
+    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub base_space: Option<String>,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl AddressSpace {
     /// Create a new AddressSpace.
@@ -211,6 +215,21 @@ impl AddressSpace {
 
         true
     }
+
+    /// Check if this is an overlay address space (pure Rust).
+    pub fn is_overlay(&self) -> bool {
+        self.kind == AddressSpaceKind::Overlay
+    }
+
+    /// Check if this address space has a base space (pure Rust).
+    pub fn has_base_space(&self) -> bool {
+        self.base_space.is_some()
+    }
+
+    /// Get the effective size of this address space (pure Rust).
+    pub fn effective_size(&self) -> Option<u64> {
+        self.size
+    }
 }
 
 impl fmt::Display for AddressSpace {
@@ -225,12 +244,7 @@ impl fmt::Display for AddressSpace {
             .map(|b| format!(" -> {}", b))
             .unwrap_or_default();
 
-        write!(
-            f,
-            "{}:{}{size_str}{base_str}",
-            self.name,
-            self.kind.__str__()
-        )
+        write!(f, "{}:{}{size_str}{base_str}", self.name, self.kind)
     }
 }
 

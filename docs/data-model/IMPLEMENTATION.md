@@ -215,7 +215,7 @@ assert va == restored
 4. **ToolMetadata** ✅ **COMPLETE**
 5. **Artifact** ✅ **COMPLETE**
 
-### Phase 1: Structure (Week 2)
+### Phase 1: Structure (Week 2) - 100% COMPLETE ✅
 6. **Binary** ✅ **COMPLETE**
 7. **Segment** ✅ **COMPLETE**
 8. **Section** ✅ **COMPLETE**
@@ -223,13 +223,13 @@ assert va == restored
 10. **Hashes** ✅ **COMPLETE**
 
 ### Phase 2: Symbols & Strings (Week 3)
-11. **Symbol**
-12. **StringLiteral**
-13. **Pattern** (basic)
-14. **Relocation**
+11. **Symbol** ✅ Implemented (Rust + PyO3)
+12. **StringLiteral** ✅ Implemented (Rust + PyO3)
+13. **Pattern** (basic) ✅ Implemented (Rust + PyO3)
+14. **Relocation** ✅ Implemented (Rust + PyO3)
 
 ### Phase 3: Instructions (Week 4)
-15. **Instruction**
+15. **Instruction** (includes streaming decoder)
 16. **Operand**
 17. **Register**
 18. **Disassembler trait**
@@ -397,15 +397,10 @@ impl Address {
 - Endianness enum (Little, Big)
 - Hashes type with SHA-256, MD5, SHA-1, and custom hash support
 
-⏳ **REMAINING (Phase 1):**
-1. ✅ Segment type for load-time memory mapping - **COMPLETE**
-2. ✅ Section type for file-format organization - **COMPLETE**
-3. Build streaming instruction decoder
-4. Add Symbol and StringLiteral types
-
-**Ready for Phase 2:**
-5. Add Relocation type
-6. Implement Pattern type for signatures/anomalies
+⏳ **STATUS UPDATE:**
+- Phase 1: Structure — 100% Complete ✅
+- Phase 2: Symbols/Strings — Implementations are in place (Symbol, StringLiteral, Pattern, Relocation). Tests exist under `python/tests/` and can be expanded as features integrate.
+- Phase 3: Instructions — Upcoming work includes the streaming instruction decoder, operand/register models, and a disassembler trait.
 
 This iterative approach ensures each component is solid before building on it.
 

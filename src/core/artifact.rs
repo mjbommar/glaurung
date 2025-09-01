@@ -5,16 +5,19 @@
 //! dependencies, and structure.
 
 use crate::core::tool_metadata::ToolMetadata;
+use crate::error::GlaurungError;
 use chrono::{DateTime, Utc};
-use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(feature = "python-ext")]
+use pyo3::prelude::*;
+
 /// Typed result envelope with caching and provenance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[pyclass]
+#[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Artifact {
     /// Unique identifier for this artifact
     pub id: String,
@@ -34,8 +37,10 @@ pub struct Artifact {
     pub meta: Option<HashMap<String, Value>>,
 }
 
+#[cfg(feature = "python-ext")]
 #[pymethods]
 impl Artifact {
+
     /// Create a new Artifact instance.
     ///
     /// # Arguments
@@ -59,7 +64,7 @@ impl Artifact {
         schema_version="1.0".to_string(),
         meta=None
     ))]
-    pub fn new(
+    pub fn new_py(
         id: String,
         tool: ToolMetadata,
         data_type: String,
@@ -68,38 +73,8 @@ impl Artifact {
         schema_version: String,
         meta: Option<String>,
     ) -> PyResult<Self> {
-        // Parse JSON strings to Values
-        let data_value: Value = serde_json::from_str(&data).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid JSON for data: {}", e))
-        })?;
-
-        let meta_value = meta
-            .map(|m| {
-                serde_json::from_str(&m).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "Invalid JSON for meta: {}",
-                        e
-                    ))
-                })
-            })
-            .transpose()?;
-
-        let artifact = Self {
-            id,
-            tool,
-            created_at: chrono::Utc::now(),
-            input_refs: input_refs.unwrap_or_default(),
-            schema_version,
-            data_type,
-            data: data_value,
-            meta: meta_value,
-        };
-
-        // Validate the artifact
-        artifact
-            .validate()
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        Ok(artifact)
+        Self::new(id, tool, data_type, data, input_refs, schema_version, meta)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
     }
 
     /// Get the artifact ID.
@@ -155,17 +130,8 @@ impl Artifact {
     /// Set the metadata from JSON string.
     #[setter]
     pub fn set_meta(&mut self, meta: Option<String>) -> PyResult<()> {
-        self.meta = meta
-            .map(|m| {
-                serde_json::from_str(&m).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "Invalid JSON for meta: {}",
-                        e
-                    ))
-                })
-            })
-            .transpose()?;
-        Ok(())
+        self.set_meta_pure(meta)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
     }
 
     /// Add an input reference.
@@ -242,64 +208,142 @@ impl Artifact {
 
     /// Serialize to JSON string.
     pub fn to_json(&self) -> PyResult<String> {
-        serde_json::to_string(self).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Serialization error: {}", e))
-        })
+        self.to_json_string().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Deserialize from JSON string.
     #[staticmethod]
     pub fn from_json(json_str: &str) -> PyResult<Self> {
-        serde_json::from_str(json_str).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Deserialization error: {}", e))
-        })
+        Self::from_json_str(json_str).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Serialize to binary data.
     pub fn to_binary(&self) -> PyResult<Vec<u8>> {
-        bincode::serialize(self).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Binary serialization error: {}",
-                e
-            ))
-        })
+        self.to_bincode().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Deserialize from binary data.
     #[staticmethod]
-    pub fn from_binary(data: Vec<u8>) -> PyResult<Self> {
-        bincode::deserialize(&data).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Binary deserialization error: {}",
-                e
-            ))
-        })
+    pub fn from_binary(data: &[u8]) -> PyResult<Self> {
+        Self::from_bincode(data).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Get data as JSON string.
     pub fn data_as_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.data).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Serialization error: {}", e))
-        })
+        self.data_as_json_string().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Get meta as JSON string.
     pub fn meta_as_json(&self) -> PyResult<Option<String>> {
-        self.meta
-            .as_ref()
-            .map(|m| {
-                serde_json::to_string(m).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "Serialization error: {}",
-                        e
-                    ))
-                })
-            })
-            .transpose()
+        self.meta_as_json_string().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 }
 
 impl Artifact {
+    /// Construct a new Artifact (pure Rust), validating inputs.
+    ///
+    /// This helper mirrors the Python constructor but returns a Result and
+    /// accepts JSON strings for `data` and optional `meta`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: String,
+        tool: ToolMetadata,
+        data_type: String,
+        data: String,
+        input_refs: Option<Vec<String>>,
+        schema_version: String,
+        meta: Option<String>,
+    ) -> Result<Self, String> {
+        // Parse data JSON
+        let data_value: Value = serde_json::from_str(&data)
+            .map_err(|e| format!("Invalid data JSON: {}", e))?;
+
+        // Parse optional meta JSON map
+        let meta_map: Option<HashMap<String, Value>> = match meta {
+            None => None,
+            Some(s) => {
+                let v: Value = serde_json::from_str(&s)
+                    .map_err(|e| format!("Invalid meta JSON: {}", e))?;
+                match v {
+                    Value::Object(map) => Some(map.into_iter().collect()),
+                    _ => return Err("Meta must be a JSON object".to_string()),
+                }
+            }
+        };
+
+        let artifact = Self {
+            id,
+            tool,
+            created_at: Utc::now(),
+            input_refs: input_refs.unwrap_or_default(),
+            schema_version,
+            data_type,
+            data: data_value,
+            meta: meta_map,
+        };
+
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    /// Set the `meta` field from an optional JSON string (pure Rust).
+    pub fn set_meta_pure(&mut self, meta: Option<String>) -> Result<(), String> {
+        self.meta = match meta {
+            None => None,
+            Some(s) => {
+                let v: Value = serde_json::from_str(&s)
+                    .map_err(|e| format!("Invalid meta JSON: {}", e))?;
+                match v {
+                    Value::Object(map) => Some(map.into_iter().collect()),
+                    _ => return Err("Meta must be a JSON object".to_string()),
+                }
+            }
+        };
+        Ok(())
+    }
+
+    /// Serialize to JSON string (pure Rust version).
+    pub fn to_json_string(&self) -> Result<String, GlaurungError> {
+        serde_json::to_string(self)
+            .map_err(|e| GlaurungError::Serialization(format!("JSON serialization error: {}", e)))
+    }
+
+    /// Deserialize from JSON string (pure Rust version).
+    pub fn from_json_str(json_str: &str) -> Result<Self, GlaurungError> {
+        serde_json::from_str(json_str)
+            .map_err(|e| GlaurungError::Serialization(format!("JSON deserialization error: {}", e)))
+    }
+
+    /// Serialize to binary data (pure Rust version).
+    pub fn to_bincode(&self) -> Result<Vec<u8>, GlaurungError> {
+        // Fallback: encode as JSON bytes to avoid serde_json::Value limitations with bincode
+        self.to_json_string().map(|s| s.into_bytes())
+    }
+
+    /// Deserialize from binary data (pure Rust version).
+    pub fn from_bincode(data: &[u8]) -> Result<Self, GlaurungError> {
+        let s = std::str::from_utf8(data)
+            .map_err(|e| GlaurungError::Serialization(format!("Binary deserialization error: {}", e)))?;
+        Self::from_json_str(s)
+    }
+
+    /// Get data as JSON string (pure Rust version).
+    pub fn data_as_json_string(&self) -> Result<String, GlaurungError> {
+        serde_json::to_string(&self.data)
+            .map_err(|e| GlaurungError::Serialization(format!("Data serialization error: {}", e)))
+    }
+
+    /// Get meta as JSON string (pure Rust version).
+    pub fn meta_as_json_string(&self) -> Result<Option<String>, GlaurungError> {
+        self.meta
+            .as_ref()
+            .map(|m| {
+                serde_json::to_string(m)
+                    .map_err(|e| GlaurungError::Serialization(format!("Meta serialization error: {}", e)))
+            })
+            .transpose()
+    }
+
     /// Validate the artifact.
     pub fn validate(&self) -> Result<(), String> {
         if self.id.trim().is_empty() {
@@ -328,11 +372,48 @@ impl Artifact {
 
         Ok(())
     }
+
+    /// Check if the artifact is valid (pure Rust).
+    pub fn is_valid(&self) -> bool {
+        self.validate().is_ok()
+    }
+
+    /// Add an input reference (pure Rust).
+    pub fn add_input_ref(&mut self, input_ref: String) {
+        self.input_refs.push(input_ref);
+    }
+
+    /// Remove an input reference (pure Rust).
+    pub fn remove_input_ref(&mut self, input_ref: &str) -> bool {
+        if let Some(pos) = self.input_refs.iter().position(|r| r == input_ref) {
+            self.input_refs.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the number of input references (pure Rust).
+    pub fn input_ref_count(&self) -> usize {
+        self.input_refs.len()
+    }
+
+    /// Check if the artifact has any input references (pure Rust).
+    pub fn has_input_refs(&self) -> bool {
+        !self.input_refs.is_empty()
+    }
 }
 
 impl fmt::Display for Artifact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.__str__())
+        write!(
+            f,
+            "Artifact(id={}, tool={}, type={}, created_at={})",
+            self.id,
+            self.tool,
+            self.data_type,
+            self.created_at.to_rfc3339()
+        )
     }
 }
 
@@ -344,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_artifact_creation() {
-        let tool = ToolMetadata::new(
+        let tool = ToolMetadata::new_pure(
             "test.tool".to_string(),
             "1.0.0".to_string(),
             None,
@@ -377,8 +458,8 @@ mod tests {
 
     #[test]
     fn test_artifact_validation() {
-        let tool =
-            ToolMetadata::new("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
+        let tool = ToolMetadata::new_pure("test.tool".to_string(), "1.0.0".to_string(), None, None)
+            .unwrap();
 
         let data = json!({"test": true});
 
@@ -427,7 +508,7 @@ mod tests {
     #[test]
     fn test_input_ref_operations() {
         let tool =
-            ToolMetadata::new("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
+            ToolMetadata::new_pure("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
 
         let mut artifact = Artifact {
             id: "test".to_string(),
@@ -460,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_serialization() {
-        let tool = ToolMetadata::new(
+        let tool = ToolMetadata::new_pure(
             "test.tool".to_string(),
             "1.0.0".to_string(),
             Some([("key".to_string(), "value".to_string())].into()),
@@ -482,8 +563,8 @@ mod tests {
         };
 
         // JSON serialization
-        let json_str = original.to_json().unwrap();
-        let deserialized = Artifact::from_json(&json_str).unwrap();
+        let json_str = original.to_json_string().unwrap();
+        let deserialized = Artifact::from_json_str(&json_str).unwrap();
 
         // Note: created_at won't be exactly equal due to timestamp precision
         assert_eq!(original.id, deserialized.id);
@@ -495,8 +576,8 @@ mod tests {
         assert_eq!(original.meta, deserialized.meta);
 
         // Binary serialization
-        let binary_data = original.to_binary().unwrap();
-        let deserialized = Artifact::from_binary(binary_data).unwrap();
+        let binary_data = original.to_bincode().unwrap();
+        let deserialized = Artifact::from_bincode(&binary_data).unwrap();
 
         assert_eq!(original.id, deserialized.id);
         assert_eq!(original.tool, deserialized.tool);
@@ -510,7 +591,7 @@ mod tests {
     #[test]
     fn test_display() {
         let tool =
-            ToolMetadata::new("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
+            ToolMetadata::new_pure("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
 
         let artifact = Artifact {
             id: "test-artifact".to_string(),
