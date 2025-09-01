@@ -58,19 +58,14 @@ impl AddressKind {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Address {
     /// The kind of address this represents
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub kind: AddressKind,
     /// The numeric value of the address
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub value: u64,
     /// Address space identifier (optional, defaults to "default")
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub space: Option<String>,
     /// Bit width (16, 32, or 64)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub bits: u8,
     /// Symbol reference (required when kind=Symbolic)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub symbol_ref: Option<String>,
 }
 
@@ -126,6 +121,28 @@ impl Address {
             self.value,
             self.bits
         )
+    }
+
+    // Property getters for Python
+    #[getter]
+    pub fn kind(&self) -> AddressKind {
+        self.kind
+    }
+    #[getter]
+    pub fn value(&self) -> u64 {
+        self.value
+    }
+    #[getter]
+    pub fn space(&self) -> Option<String> {
+        self.space.clone()
+    }
+    #[getter]
+    pub fn bits(&self) -> u8 {
+        self.bits
+    }
+    #[getter]
+    pub fn symbol_ref(&self) -> Option<String> {
+        self.symbol_ref.clone()
     }
 
     /// Add an offset to this address.

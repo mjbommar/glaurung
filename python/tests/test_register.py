@@ -361,7 +361,9 @@ class TestRegisterEdgeCases:
 
         va_reg = Register("va_reg", 32, RegisterKind.General, va_addr, None, None)
         file_reg = Register("file_reg", 32, RegisterKind.General, file_addr, None, None)
-        physical_reg = Register("phys_reg", 32, RegisterKind.General, physical_addr, None, None)
+        physical_reg = Register(
+            "phys_reg", 32, RegisterKind.General, physical_addr, None, None
+        )
 
         assert va_reg.address.kind == AddressKind.VA
         assert file_reg.address.kind == AddressKind.FileOffset

@@ -58,16 +58,12 @@ impl AddressSpaceKind {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct AddressSpace {
     /// The name of this address space
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub name: String,
     /// The kind of address space this represents
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub kind: AddressSpaceKind,
     /// Optional maximum size of this address space
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub size: Option<u64>,
     /// Optional parent space for overlays
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub base_space: Option<String>,
 }
 
@@ -126,29 +122,47 @@ impl AddressSpace {
         self.is_valid()
     }
 
-    /// Check if this is an overlay address space.
-    ///
-    /// Returns:
-    ///     bool: True if this is an overlay space
-    fn is_overlay(&self) -> bool {
-        self.kind == AddressSpaceKind::Overlay
-    }
-
-    /// Check if this address space has a base space.
-    ///
-    /// Returns:
-    ///     bool: True if this space has a base_space defined
-    fn has_base_space(&self) -> bool {
-        self.base_space.is_some()
-    }
-
-    /// Get the effective size of this address space.
-    ///
-    /// Returns:
-    ///     int or None: The size if defined, None otherwise
+    /// Name of the address space.
     #[getter]
-    fn effective_size(&self) -> Option<u64> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Kind of this address space.
+    #[getter]
+    fn kind(&self) -> AddressSpaceKind {
+        self.kind
+    }
+
+    /// Optional size in bytes.
+    #[getter]
+    fn size(&self) -> Option<u64> {
         self.size
+    }
+
+    /// Optional base space for overlays.
+    #[getter]
+    fn base_space(&self) -> Option<String> {
+        self.base_space.clone()
+    }
+
+    /// Return True if this is an overlay.
+    #[pyo3(name = "is_overlay")]
+    fn is_overlay_py(&self) -> bool {
+        self.is_overlay()
+    }
+
+    /// Return True if this address space has a base space.
+    #[pyo3(name = "has_base_space")]
+    fn has_base_space_py(&self) -> bool {
+        self.has_base_space()
+    }
+
+    /// Effective size (alias of size) for Python API compatibility.
+    #[getter]
+    #[pyo3(name = "effective_size")]
+    fn effective_size_getter(&self) -> Option<u64> {
+        self.effective_size()
     }
 }
 

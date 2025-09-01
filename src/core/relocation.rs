@@ -94,25 +94,18 @@ impl fmt::Display for RelocationType {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Relocation {
     /// Unique identifier for the relocation
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub id: String,
     /// Address where the relocation should be applied
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub address: Address,
     /// Type of relocation to perform
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub kind: RelocationType,
     /// Resolved value or addend for the relocation (optional)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub value: Option<u64>,
     /// Symbol reference if this relocation references a symbol (optional)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub symbol: Option<String>,
     /// Additional offset to add to the resolved address (optional)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub addend: Option<i64>,
     /// Size of the relocation in bytes (optional, usually 4 or 8)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub size: Option<u8>,
 }
 
@@ -126,32 +119,100 @@ impl Relocation {
         addend: Option<i64>,
         size: Option<u8>,
     ) -> Self {
-        Self { id, address, kind, value, symbol, addend, size }
+        Self {
+            id,
+            address,
+            kind,
+            value,
+            symbol,
+            addend,
+            size,
+        }
     }
 
-    pub fn is_resolved(&self) -> bool { self.value.is_some() }
-    pub fn has_symbol(&self) -> bool { self.symbol.is_some() }
-    pub fn has_addend(&self) -> bool { self.addend.is_some() }
-    pub fn effective_size(&self) -> u8 { self.size.unwrap_or(4) }
-    pub fn is_absolute(&self) -> bool { matches!(self.kind, RelocationType::Absolute | RelocationType::Abs32 | RelocationType::Abs64) }
-    pub fn is_pc_relative(&self) -> bool { matches!(self.kind, RelocationType::PcRelative | RelocationType::Pc32 | RelocationType::Pc64) }
-    pub fn is_got_related(&self) -> bool { matches!(self.kind, RelocationType::Got | RelocationType::GotPc) }
-    pub fn is_plt_related(&self) -> bool { matches!(self.kind, RelocationType::Plt | RelocationType::PltPc | RelocationType::JumpSlot) }
-    pub fn is_tls_related(&self) -> bool { matches!(self.kind, RelocationType::Tls | RelocationType::TlsOffset | RelocationType::TlsModule | RelocationType::TlsModuleOffset) }
+    pub fn is_resolved(&self) -> bool {
+        self.value.is_some()
+    }
+    pub fn has_symbol(&self) -> bool {
+        self.symbol.is_some()
+    }
+    pub fn has_addend(&self) -> bool {
+        self.addend.is_some()
+    }
+    pub fn effective_size(&self) -> u8 {
+        self.size.unwrap_or(4)
+    }
+    pub fn is_absolute(&self) -> bool {
+        matches!(
+            self.kind,
+            RelocationType::Absolute | RelocationType::Abs32 | RelocationType::Abs64
+        )
+    }
+    pub fn is_pc_relative(&self) -> bool {
+        matches!(
+            self.kind,
+            RelocationType::PcRelative | RelocationType::Pc32 | RelocationType::Pc64
+        )
+    }
+    pub fn is_got_related(&self) -> bool {
+        matches!(self.kind, RelocationType::Got | RelocationType::GotPc)
+    }
+    pub fn is_plt_related(&self) -> bool {
+        matches!(
+            self.kind,
+            RelocationType::Plt | RelocationType::PltPc | RelocationType::JumpSlot
+        )
+    }
+    pub fn is_tls_related(&self) -> bool {
+        matches!(
+            self.kind,
+            RelocationType::Tls
+                | RelocationType::TlsOffset
+                | RelocationType::TlsModule
+                | RelocationType::TlsModuleOffset
+        )
+    }
     pub fn description(&self) -> String {
-        let symbol_str = self.symbol.as_ref().map(|s| format!(" -> {}", s)).unwrap_or_default();
-        let value_str = self.value.map(|v| format!(" (value: 0x{:x})", v)).unwrap_or_default();
-        let addend_str = self.addend.filter(|&a| a != 0).map(|a| format!(" (addend: {})", a)).unwrap_or_default();
-        format!("Relocation '{}' at {}: {}{}{}{}", self.id, self.address, self.kind, symbol_str, value_str, addend_str)
+        let symbol_str = self
+            .symbol
+            .as_ref()
+            .map(|s| format!(" -> {}", s))
+            .unwrap_or_default();
+        let value_str = self
+            .value
+            .map(|v| format!(" (value: 0x{:x})", v))
+            .unwrap_or_default();
+        let addend_str = self
+            .addend
+            .filter(|&a| a != 0)
+            .map(|a| format!(" (addend: {})", a))
+            .unwrap_or_default();
+        format!(
+            "Relocation '{}' at {}: {}{}{}{}",
+            self.id, self.address, self.kind, symbol_str, value_str, addend_str
+        )
     }
     pub fn calculate_relocated_address(&self, base_address: u64) -> Option<u64> {
         match self.kind {
-            RelocationType::Absolute | RelocationType::Abs32 | RelocationType::Abs64 => self.value.map(|v| v.wrapping_add(self.addend.unwrap_or(0) as u64)),
-            RelocationType::Relative => self.value.map(|v| base_address.wrapping_add(v).wrapping_add(self.addend.unwrap_or(0) as u64)),
+            RelocationType::Absolute | RelocationType::Abs32 | RelocationType::Abs64 => self
+                .value
+                .map(|v| v.wrapping_add(self.addend.unwrap_or(0) as u64)),
+            RelocationType::Relative => self.value.map(|v| {
+                base_address
+                    .wrapping_add(v)
+                    .wrapping_add(self.addend.unwrap_or(0) as u64)
+            }),
             RelocationType::PcRelative | RelocationType::Pc32 | RelocationType::Pc64 => {
-                self.value.map(|v| self.address.value.wrapping_add(v).wrapping_add(self.addend.unwrap_or(0) as u64))
+                self.value.map(|v| {
+                    self.address
+                        .value
+                        .wrapping_add(v)
+                        .wrapping_add(self.addend.unwrap_or(0) as u64)
+                })
             }
-            _ => self.value.map(|v| v.wrapping_add(self.addend.unwrap_or(0) as u64)),
+            _ => self
+                .value
+                .map(|v| v.wrapping_add(self.addend.unwrap_or(0) as u64)),
         }
     }
 }
@@ -170,7 +231,7 @@ impl Relocation {
         addend=None,
         size=None
     ))]
-    pub fn new(
+    pub fn new_py(
         id: String,
         address: Address,
         kind: RelocationType,
@@ -195,118 +256,92 @@ impl Relocation {
         format!("{}", self)
     }
 
-    /// Check if this relocation has a resolved value
-    pub fn is_resolved(&self) -> bool {
-        self.value.is_some()
+    // Python-visible wrappers that forward to pure-Rust helpers
+    #[pyo3(name = "is_resolved")]
+    pub fn is_resolved_py(&self) -> bool {
+        self.is_resolved()
     }
 
-    /// Check if this relocation references a symbol
-    pub fn has_symbol(&self) -> bool {
-        self.symbol.is_some()
+    #[pyo3(name = "has_symbol")]
+    pub fn has_symbol_py(&self) -> bool {
+        self.has_symbol()
     }
 
-    /// Check if this relocation has an addend
-    pub fn has_addend(&self) -> bool {
-        self.addend.is_some()
+    #[pyo3(name = "has_addend")]
+    pub fn has_addend_py(&self) -> bool {
+        self.has_addend()
     }
 
-    /// Get the effective size of this relocation (defaulting to 4 bytes if not specified)
-    pub fn effective_size(&self) -> u8 {
-        self.size.unwrap_or(4)
+    #[pyo3(name = "effective_size")]
+    pub fn effective_size_py(&self) -> u8 {
+        self.effective_size()
     }
 
-    /// Check if this is an absolute relocation
-    pub fn is_absolute(&self) -> bool {
-        matches!(
-            self.kind,
-            RelocationType::Absolute | RelocationType::Abs32 | RelocationType::Abs64
-        )
+    #[pyo3(name = "is_absolute")]
+    pub fn is_absolute_py(&self) -> bool {
+        self.is_absolute()
     }
 
-    /// Check if this is a PC-relative relocation
-    pub fn is_pc_relative(&self) -> bool {
-        matches!(
-            self.kind,
-            RelocationType::PcRelative | RelocationType::Pc32 | RelocationType::Pc64
-        )
+    #[pyo3(name = "is_pc_relative")]
+    pub fn is_pc_relative_py(&self) -> bool {
+        self.is_pc_relative()
     }
 
-    /// Check if this is a GOT-related relocation
-    pub fn is_got_related(&self) -> bool {
-        matches!(self.kind, RelocationType::Got | RelocationType::GotPc)
+    #[pyo3(name = "is_got_related")]
+    pub fn is_got_related_py(&self) -> bool {
+        self.is_got_related()
     }
 
-    /// Check if this is a PLT-related relocation
-    pub fn is_plt_related(&self) -> bool {
-        matches!(
-            self.kind,
-            RelocationType::Plt | RelocationType::PltPc | RelocationType::JumpSlot
-        )
+    #[pyo3(name = "is_plt_related")]
+    pub fn is_plt_related_py(&self) -> bool {
+        self.is_plt_related()
     }
 
-    /// Check if this is a TLS-related relocation
-    pub fn is_tls_related(&self) -> bool {
-        matches!(
-            self.kind,
-            RelocationType::Tls
-                | RelocationType::TlsOffset
-                | RelocationType::TlsModule
-                | RelocationType::TlsModuleOffset
-        )
+    #[pyo3(name = "is_tls_related")]
+    pub fn is_tls_related_py(&self) -> bool {
+        self.is_tls_related()
     }
 
-    /// Get a human-readable description of the relocation
-    pub fn description(&self) -> String {
-        let symbol_str = self
-            .symbol
-            .as_ref()
-            .map(|s| format!(" -> {}", s))
-            .unwrap_or_default();
-
-        let value_str = self
-            .value
-            .map(|v| format!(" (value: 0x{:x})", v))
-            .unwrap_or_default();
-
-        let addend_str = self
-            .addend
-            .filter(|&a| a != 0)
-            .map(|a| format!(" (addend: {})", a))
-            .unwrap_or_default();
-
-        format!(
-            "Relocation '{}' at {}: {}{}{}{}",
-            self.id, self.address, self.kind, symbol_str, value_str, addend_str
-        )
+    #[pyo3(name = "description")]
+    pub fn description_py(&self) -> String {
+        self.description()
     }
 
-    /// Calculate the final relocated address (if possible)
-    /// This is a simplified calculation - real relocation processing is more complex
-    pub fn calculate_relocated_address(&self, base_address: u64) -> Option<u64> {
-        match self.kind {
-            RelocationType::Absolute | RelocationType::Abs32 | RelocationType::Abs64 => self
-                .value
-                .map(|v| v.wrapping_add(self.addend.unwrap_or(0) as u64)),
-            RelocationType::Relative => self.value.map(|v| {
-                base_address
-                    .wrapping_add(v)
-                    .wrapping_add(self.addend.unwrap_or(0) as u64)
-            }),
-            RelocationType::PcRelative | RelocationType::Pc32 | RelocationType::Pc64 => {
-                self.value.map(|v| {
-                    self.address
-                        .value
-                        .wrapping_add(v)
-                        .wrapping_add(self.addend.unwrap_or(0) as u64)
-                })
-            }
-            _ => {
-                // For other types, we would need more context (GOT, PLT, etc.)
-                // This is a simplified implementation
-                self.value
-                    .map(|v| v.wrapping_add(self.addend.unwrap_or(0) as u64))
-            }
-        }
+    #[pyo3(name = "calculate_relocated_address")]
+    pub fn calculate_relocated_address_py(&self, base_address: u64) -> Option<u64> {
+        self.calculate_relocated_address(base_address)
+    }
+
+    // Helper methods are provided in the pure-Rust impl above.
+
+    // Property getters for Python access
+    #[getter]
+    fn id(&self) -> &str {
+        &self.id
+    }
+    #[getter]
+    fn address(&self) -> Address {
+        self.address.clone()
+    }
+    #[getter]
+    fn kind(&self) -> RelocationType {
+        self.kind
+    }
+    #[getter]
+    fn value(&self) -> Option<u64> {
+        self.value
+    }
+    #[getter]
+    fn symbol(&self) -> Option<String> {
+        self.symbol.clone()
+    }
+    #[getter]
+    fn addend(&self) -> Option<i64> {
+        self.addend
+    }
+    #[getter]
+    fn size(&self) -> Option<u8> {
+        self.size
     }
 }
 

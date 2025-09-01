@@ -73,6 +73,39 @@ impl Perms {
     fn __str__(&self) -> String {
         format!("{}", self)
     }
+
+    /// Python constructor
+    #[new]
+    #[pyo3(signature = (read, write, execute))]
+    fn new_py(read: bool, write: bool, execute: bool) -> Self {
+        Self::new(read, write, execute)
+    }
+
+    // Methods exposed to Python
+    #[pyo3(name = "has_read")]
+    fn has_read_py(&self) -> bool {
+        (self.bits & 1) != 0
+    }
+    #[pyo3(name = "has_write")]
+    fn has_write_py(&self) -> bool {
+        (self.bits & 2) != 0
+    }
+    #[pyo3(name = "has_execute")]
+    fn has_execute_py(&self) -> bool {
+        (self.bits & 4) != 0
+    }
+    #[pyo3(name = "is_code")]
+    fn is_code_py(&self) -> bool {
+        self.has_read_py() && self.has_execute_py() && !self.has_write_py()
+    }
+    #[pyo3(name = "is_data")]
+    fn is_data_py(&self) -> bool {
+        self.has_read_py() && self.has_write_py() && !self.has_execute_py()
+    }
+    #[pyo3(name = "is_readonly")]
+    fn is_readonly_py(&self) -> bool {
+        self.has_read_py() && !self.has_write_py() && !self.has_execute_py()
+    }
 }
 
 impl fmt::Display for Perms {
@@ -134,91 +167,77 @@ impl Segment {
 
     /// Get the segment ID
     #[cfg(feature = "python-ext")]
-    #[getter]
     pub fn get_id(&self) -> &str {
         &self.id
     }
 
     /// Set the segment ID
     #[cfg(feature = "python-ext")]
-    #[setter]
     pub fn set_id(&mut self, id: String) {
         self.id = id;
     }
 
     /// Get the segment name
     #[cfg(feature = "python-ext")]
-    #[getter]
     pub fn get_name(&self) -> Option<&str> {
         self.name.as_deref()
     }
 
     /// Set the segment name
     #[cfg(feature = "python-ext")]
-    #[setter]
     pub fn set_name(&mut self, name: Option<String>) {
         self.name = name;
     }
 
     /// Get the segment range
     #[cfg(feature = "python-ext")]
-    #[getter]
     pub fn get_range(&self) -> &AddressRange {
         &self.range
     }
 
     /// Set the segment range
     #[cfg(feature = "python-ext")]
-    #[setter]
     pub fn set_range(&mut self, range: AddressRange) {
         self.range = range;
     }
 
     /// Get the segment permissions
     #[cfg(feature = "python-ext")]
-    #[getter]
     pub fn get_perms(&self) -> &Perms {
         &self.perms
     }
 
     /// Set the segment permissions
     #[cfg(feature = "python-ext")]
-    #[setter]
     pub fn set_perms(&mut self, perms: Perms) {
         self.perms = perms;
     }
 
     /// Get the file offset
     #[cfg(feature = "python-ext")]
-    #[getter]
     pub fn get_file_offset(&self) -> &Address {
         &self.file_offset
     }
 
     /// Set the file offset
     #[cfg(feature = "python-ext")]
-    #[setter]
     pub fn set_file_offset(&mut self, file_offset: Address) {
         self.file_offset = file_offset;
     }
 
     /// Get the alignment
     #[cfg(feature = "python-ext")]
-    #[getter]
     pub fn get_alignment(&self) -> Option<u64> {
         self.alignment
     }
 
     /// Set the alignment
     #[cfg(feature = "python-ext")]
-    #[setter]
     pub fn set_alignment(&mut self, alignment: Option<u64>) {
         self.alignment = alignment;
     }
 
-    /// String representation for display (Python only)
-    #[cfg(feature = "python-ext")]
-    fn __str__(&self) -> String { format!("{}", self) }
+    // String representation for display is provided in the PyO3 #[pymethods] block.
 
     /// Get the segment size in bytes
     pub fn size(&self) -> u64 {
@@ -276,6 +295,54 @@ impl Segment {
     /// String representation for display
     fn __str__(&self) -> String {
         format!("{}", self)
+    }
+
+    // Property getters
+    #[getter]
+    fn id(&self) -> &str {
+        &self.id
+    }
+    #[getter]
+    fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+    #[getter]
+    fn range(&self) -> AddressRange {
+        self.range.clone()
+    }
+    #[getter]
+    fn perms(&self) -> Perms {
+        self.perms
+    }
+    #[getter]
+    fn file_offset(&self) -> Address {
+        self.file_offset.clone()
+    }
+    #[getter]
+    fn alignment(&self) -> Option<u64> {
+        self.get_alignment()
+    }
+
+    // Query helpers
+    #[pyo3(name = "size")]
+    fn size_py(&self) -> u64 {
+        self.range.size
+    }
+    #[pyo3(name = "is_code_segment")]
+    fn is_code_segment_py(&self) -> bool {
+        self.perms.is_code()
+    }
+    #[pyo3(name = "is_data_segment")]
+    fn is_data_segment_py(&self) -> bool {
+        self.perms.is_data()
+    }
+    #[pyo3(name = "is_readonly")]
+    fn is_readonly_py(&self) -> bool {
+        self.perms.is_readonly()
+    }
+    #[pyo3(name = "description")]
+    fn description_py(&self) -> String {
+        self.description()
     }
 }
 

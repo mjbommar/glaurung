@@ -73,6 +73,39 @@ impl SectionPerms {
     fn __str__(&self) -> String {
         format!("{}", self)
     }
+
+    /// Python constructor
+    #[new]
+    #[pyo3(signature = (read, write, execute))]
+    fn new_py(read: bool, write: bool, execute: bool) -> Self {
+        Self::new(read, write, execute)
+    }
+
+    // Methods exposed to Python
+    #[pyo3(name = "has_read")]
+    fn has_read_py(&self) -> bool {
+        (self.bits & 1) != 0
+    }
+    #[pyo3(name = "has_write")]
+    fn has_write_py(&self) -> bool {
+        (self.bits & 2) != 0
+    }
+    #[pyo3(name = "has_execute")]
+    fn has_execute_py(&self) -> bool {
+        (self.bits & 4) != 0
+    }
+    #[pyo3(name = "is_code")]
+    fn is_code_py(&self) -> bool {
+        self.has_read_py() && self.has_execute_py() && !self.has_write_py()
+    }
+    #[pyo3(name = "is_data")]
+    fn is_data_py(&self) -> bool {
+        self.has_read_py() && self.has_write_py() && !self.has_execute_py()
+    }
+    #[pyo3(name = "is_readonly")]
+    fn is_readonly_py(&self) -> bool {
+        self.has_read_py() && !self.has_write_py() && !self.has_execute_py()
+    }
 }
 
 impl fmt::Display for SectionPerms {
@@ -141,11 +174,6 @@ impl Section {
             section_type,
             file_offset,
         })
-    }
-
-    /// String representation for display
-    fn __str__(&self) -> String {
-        format!("{}", self)
     }
 
     /// Get the section size in bytes
@@ -229,6 +257,72 @@ impl Section {
     /// String representation for display
     fn __str__(&self) -> String {
         format!("{}", self)
+    }
+
+    // Property getters
+    #[getter]
+    fn id(&self) -> &str {
+        &self.id
+    }
+    #[getter]
+    fn name(&self) -> &str {
+        &self.name
+    }
+    #[getter]
+    fn range(&self) -> AddressRange {
+        self.range.clone()
+    }
+    #[getter]
+    fn perms(&self) -> Option<SectionPerms> {
+        self.perms
+    }
+    #[getter]
+    fn flags(&self) -> u64 {
+        self.flags
+    }
+    #[getter]
+    fn section_type(&self) -> Option<String> {
+        self.section_type.clone()
+    }
+    #[getter]
+    fn file_offset(&self) -> Address {
+        self.file_offset.clone()
+    }
+
+    // Query helpers
+    #[pyo3(name = "size")]
+    fn size_py(&self) -> u64 {
+        self.range.size
+    }
+    #[pyo3(name = "is_code_section")]
+    fn is_code_section_py(&self) -> bool {
+        self.perms.as_ref().map(|p| p.is_code()).unwrap_or(false)
+    }
+    #[pyo3(name = "is_data_section")]
+    fn is_data_section_py(&self) -> bool {
+        self.perms.as_ref().map(|p| p.is_data()).unwrap_or(false)
+    }
+    #[pyo3(name = "is_readonly")]
+    fn is_readonly_py(&self) -> bool {
+        self.perms
+            .as_ref()
+            .map(|p| p.is_readonly())
+            .unwrap_or(false)
+    }
+    #[pyo3(name = "is_executable")]
+    fn is_executable_py(&self) -> bool {
+        self.perms
+            .as_ref()
+            .map(|p| p.has_execute())
+            .unwrap_or(false)
+    }
+    #[pyo3(name = "is_writable")]
+    fn is_writable_py(&self) -> bool {
+        self.perms.as_ref().map(|p| p.has_write()).unwrap_or(false)
+    }
+    #[pyo3(name = "description")]
+    fn description_py(&self) -> String {
+        self.description()
     }
 }
 

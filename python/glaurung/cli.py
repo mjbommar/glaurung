@@ -8,7 +8,7 @@ def main():
     # Configure logging
     configure_logging(level="INFO", json_output=False)
     logger = get_logger(__name__)
-    
+
     logger.info("Starting Glaurung binary analysis tool")
     print("Hello from glaurung!")
     logger.info("Glaurung CLI completed")

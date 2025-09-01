@@ -74,7 +74,7 @@ pub type Result<T> = std::result::Result<T, GlaurungError>;
 impl From<GlaurungError> for pyo3::PyErr {
     fn from(err: GlaurungError) -> pyo3::PyErr {
         use pyo3::exceptions::{PyException, PyIOError, PyTimeoutError, PyValueError};
-        
+
         match err {
             GlaurungError::Io(e) => PyIOError::new_err(e.to_string()),
             GlaurungError::Timeout { seconds } => {
@@ -104,7 +104,7 @@ pub struct AnalysisBudget {
 impl Default for AnalysisBudget {
     fn default() -> Self {
         Self {
-            max_memory_mb: 1024,        // 1GB default
+            max_memory_mb: 1024,         // 1GB default
             max_time_seconds: 300,       // 5 minutes default
             max_recursion_depth: 100,    // Reasonable recursion limit
             max_instructions: 1_000_000, // 1M instructions max
@@ -132,13 +132,19 @@ mod tests {
     #[test]
     fn test_error_display() {
         let err = GlaurungError::InvalidFormat("Unknown magic bytes".to_string());
-        assert_eq!(err.to_string(), "Invalid binary format: Unknown magic bytes");
+        assert_eq!(
+            err.to_string(),
+            "Invalid binary format: Unknown magic bytes"
+        );
 
         let err = GlaurungError::ParseError {
             offset: 0x1234,
             message: "Invalid header".to_string(),
         };
-        assert_eq!(err.to_string(), "Parse error at offset 0x1234: Invalid header");
+        assert_eq!(
+            err.to_string(),
+            "Parse error at offset 0x1234: Invalid header"
+        );
     }
 
     #[test]

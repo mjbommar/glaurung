@@ -21,8 +21,8 @@ static INIT: Once = Once::new();
 /// Subsequent calls are ignored.
 pub fn init_tracing() {
     INIT.call_once(|| {
-        let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("info"));
+        let env_filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
         let fmt_layer = fmt::layer()
             .with_span_events(FmtSpan::CLOSE)
@@ -44,8 +44,8 @@ pub fn init_tracing() {
 /// Initialize tracing with JSON output for structured logging.
 pub fn init_tracing_json() {
     INIT.call_once(|| {
-        let env_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("info"));
+        let env_filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
         let fmt_layer = fmt::layer()
             .json()

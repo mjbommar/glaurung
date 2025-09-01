@@ -409,7 +409,9 @@ class TestRelocationDisplay:
 
         for reloc_type, symbol in types_and_symbols:
             # Create a new address instance for each relocation
-            address = Address(base_address.kind, base_address.value, bits=base_address.bits)
+            address = Address(
+                base_address.kind, base_address.value, bits=base_address.bits
+            )
             relocation = Relocation(
                 f"test_{reloc_type}", address, reloc_type, symbol=symbol
             )
@@ -473,7 +475,9 @@ class TestRelocationEdgeCases:
 
         sizes = [1, 2, 4, 8, 16]
         for size in sizes:
-            address = Address(base_address.kind, base_address.value, bits=base_address.bits)
+            address = Address(
+                base_address.kind, base_address.value, bits=base_address.bits
+            )
             relocation = Relocation(
                 f"size_{size}", address, RelocationType.Absolute, size=size
             )
@@ -496,7 +500,10 @@ class TestRelocationEdgeCases:
 
         # Empty symbol name
         empty_symbol_reloc = Relocation(
-            "empty_symbol", Address(base_address.kind, base_address.value, bits=base_address.bits), RelocationType.Plt, symbol=""
+            "empty_symbol",
+            Address(base_address.kind, base_address.value, bits=base_address.bits),
+            RelocationType.Plt,
+            symbol="",
         )
         assert empty_symbol_reloc.symbol == ""
         assert empty_symbol_reloc.has_symbol()
@@ -504,7 +511,10 @@ class TestRelocationEdgeCases:
         # Very long symbol name
         long_symbol = "a" * 1000
         long_symbol_reloc = Relocation(
-            "long_symbol", Address(base_address.kind, base_address.value, bits=base_address.bits), RelocationType.Got, symbol=long_symbol
+            "long_symbol",
+            Address(base_address.kind, base_address.value, bits=base_address.bits),
+            RelocationType.Got,
+            symbol=long_symbol,
         )
         assert len(long_symbol_reloc.symbol) == 1000
         assert long_symbol_reloc.symbol == long_symbol
@@ -515,7 +525,10 @@ class TestRelocationEdgeCases:
 
         # Test with None addend (should default to 0)
         no_addend_reloc = Relocation(
-            "no_addend", Address(base_address.kind, base_address.value, bits=base_address.bits), RelocationType.Absolute, value=0x1000
+            "no_addend",
+            Address(base_address.kind, base_address.value, bits=base_address.bits),
+            RelocationType.Absolute,
+            value=0x1000,
         )
 
         result = no_addend_reloc.calculate_relocated_address(0)

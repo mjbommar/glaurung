@@ -59,7 +59,7 @@ impl fmt::Display for MetadataValue {
 
 /// Types of patterns that can be detected
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "python-ext", pyclass)]
+#[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum PatternType {
     /// Byte signature pattern
     Signature,
@@ -99,10 +99,8 @@ impl fmt::Display for PatternType {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct YaraMatch {
     /// Offset where the match occurred
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub offset: u64,
     /// Identifier of the matching string
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub identifier: String,
 }
 
@@ -111,13 +109,23 @@ pub struct YaraMatch {
 impl YaraMatch {
     /// Create a new YaraMatch
     #[new]
-    pub fn new(offset: u64, identifier: String) -> Self {
+    pub fn new_py(offset: u64, identifier: String) -> Self {
         Self { offset, identifier }
     }
 
     /// String representation for display
     fn __str__(&self) -> String {
         format!("{}@{}", self.identifier, self.offset)
+    }
+
+    // Property getters
+    #[getter]
+    fn offset(&self) -> u64 {
+        self.offset
+    }
+    #[getter]
+    fn identifier(&self) -> &str {
+        &self.identifier
     }
 }
 
@@ -128,7 +136,9 @@ impl fmt::Display for YaraMatch {
 }
 
 impl YaraMatch {
-    pub fn new(offset: u64, identifier: String) -> Self { Self { offset, identifier } }
+    pub fn new(offset: u64, identifier: String) -> Self {
+        Self { offset, identifier }
+    }
 }
 
 /// Pattern definition variants based on pattern type
@@ -179,6 +189,12 @@ impl PatternDefinition {
     }
 
     // Python-only methods here
+
+    /// Underlying pattern type for this definition
+    #[getter(pattern_type)]
+    fn get_pattern_type(&self) -> PatternType {
+        self.pattern_type()
+    }
 }
 
 impl PatternDefinition {
@@ -238,31 +254,22 @@ impl fmt::Display for PatternDefinition {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Pattern {
     /// Unique identifier for the pattern
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub id: String,
     /// Type of pattern
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub pattern_type: PatternType,
     /// Human-readable name
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub name: String,
     /// Addresses where this pattern was found
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub addresses: Vec<Address>,
     /// Confidence score (0.0 to 1.0)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub confidence: f64,
     /// Pattern definition (varies by type)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub pattern_definition: PatternDefinition,
     /// Human-readable description
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub description: String,
     /// References (URLs, CVEs, etc.)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub references: Vec<String>,
     /// Additional metadata
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub metadata: Option<HashMap<String, MetadataValue>>,
 }
 
@@ -283,7 +290,7 @@ impl Pattern {
         metadata=None
     ))]
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new_py(
         id: String,
         pattern_type: PatternType,
         name: String,
@@ -326,45 +333,40 @@ impl Pattern {
         format!("{}", self)
     }
 
-    /// Get the number of addresses where this pattern was found
-    pub fn address_count(&self) -> usize {
-        self.addresses.len()
+    // Python-visible wrappers that forward to pure-Rust helpers
+    #[pyo3(name = "address_count")]
+    pub fn address_count_py(&self) -> usize {
+        self.address_count()
     }
 
-    /// Check if this is a high-confidence pattern
-    pub fn is_high_confidence(&self) -> bool {
-        self.confidence >= 0.8
+    #[pyo3(name = "is_high_confidence")]
+    pub fn is_high_confidence_py(&self) -> bool {
+        self.is_high_confidence()
     }
 
-    /// Check if this is a medium-confidence pattern
-    pub fn is_medium_confidence(&self) -> bool {
-        self.confidence >= 0.5 && self.confidence < 0.8
+    #[pyo3(name = "is_medium_confidence")]
+    pub fn is_medium_confidence_py(&self) -> bool {
+        self.is_medium_confidence()
     }
 
-    /// Check if this is a low-confidence pattern
-    pub fn is_low_confidence(&self) -> bool {
-        self.confidence < 0.5
+    #[pyo3(name = "is_low_confidence")]
+    pub fn is_low_confidence_py(&self) -> bool {
+        self.is_low_confidence()
     }
 
-    /// Get confidence level as string
-    pub fn confidence_level(&self) -> &'static str {
-        if self.is_high_confidence() {
-            "high"
-        } else if self.is_medium_confidence() {
-            "medium"
-        } else {
-            "low"
-        }
+    #[pyo3(name = "confidence_level")]
+    pub fn confidence_level_py(&self) -> &'static str {
+        self.confidence_level()
     }
 
-    /// Check if this pattern has any references
-    pub fn has_references(&self) -> bool {
-        !self.references.is_empty()
+    #[pyo3(name = "has_references")]
+    pub fn has_references_py(&self) -> bool {
+        self.has_references()
     }
 
-    /// Check if this pattern has metadata
-    pub fn has_metadata(&self) -> bool {
-        self.metadata.is_some()
+    #[pyo3(name = "has_metadata")]
+    pub fn has_metadata_py(&self) -> bool {
+        self.has_metadata()
     }
 
     /// Get a summary of the pattern
@@ -376,6 +378,44 @@ impl Pattern {
             self.address_count(),
             self.confidence
         )
+    }
+
+    // Property getters
+    #[getter]
+    fn id(&self) -> &str {
+        &self.id
+    }
+    #[getter]
+    fn pattern_type(&self) -> PatternType {
+        self.pattern_type
+    }
+    #[getter]
+    fn name(&self) -> &str {
+        &self.name
+    }
+    #[getter]
+    fn addresses(&self) -> Vec<Address> {
+        self.addresses.clone()
+    }
+    #[getter]
+    fn confidence(&self) -> f64 {
+        self.confidence
+    }
+    #[getter]
+    fn pattern_definition(&self) -> PatternDefinition {
+        self.pattern_definition.clone()
+    }
+    #[getter]
+    fn description(&self) -> &str {
+        &self.description
+    }
+    #[getter]
+    fn references(&self) -> Vec<String> {
+        self.references.clone()
+    }
+    #[getter]
+    fn metadata(&self) -> Option<HashMap<String, MetadataValue>> {
+        self.metadata.clone()
     }
 }
 
@@ -411,15 +451,33 @@ impl Pattern {
         })
     }
 
-    pub fn address_count(&self) -> usize { self.addresses.len() }
-    pub fn is_high_confidence(&self) -> bool { self.confidence >= 0.8 }
-    pub fn is_medium_confidence(&self) -> bool { self.confidence >= 0.5 && self.confidence < 0.8 }
-    pub fn is_low_confidence(&self) -> bool { self.confidence < 0.5 }
-    pub fn confidence_level(&self) -> &'static str {
-        if self.is_high_confidence() { "high" } else if self.is_medium_confidence() { "medium" } else { "low" }
+    pub fn address_count(&self) -> usize {
+        self.addresses.len()
     }
-    pub fn has_references(&self) -> bool { !self.references.is_empty() }
-    pub fn has_metadata(&self) -> bool { self.metadata.is_some() }
+    pub fn is_high_confidence(&self) -> bool {
+        self.confidence >= 0.8
+    }
+    pub fn is_medium_confidence(&self) -> bool {
+        self.confidence >= 0.5 && self.confidence < 0.8
+    }
+    pub fn is_low_confidence(&self) -> bool {
+        self.confidence < 0.5
+    }
+    pub fn confidence_level(&self) -> &'static str {
+        if self.is_high_confidence() {
+            "high"
+        } else if self.is_medium_confidence() {
+            "medium"
+        } else {
+            "low"
+        }
+    }
+    pub fn has_references(&self) -> bool {
+        !self.references.is_empty()
+    }
+    pub fn has_metadata(&self) -> bool {
+        self.metadata.is_some()
+    }
 }
 
 impl fmt::Display for Pattern {

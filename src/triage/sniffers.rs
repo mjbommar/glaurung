@@ -23,14 +23,17 @@ impl ContentSniffer {
     /// Reads a bounded prefix and attempts to identify the file type.
     pub fn sniff_bytes(data: &[u8]) -> Option<TriageHint> {
         debug!("Sniffing {} bytes of content", data.len());
-        
+
         // Use infer to detect file type from content
         if let Some(kind) = infer::get(data) {
             let mime = Some(kind.mime_type().to_string());
             let label = Some(kind.extension().to_string());
 
-            info!("Content detected as {} ({})", 
-                  kind.mime_type(), kind.extension());
+            info!(
+                "Content detected as {} ({})",
+                kind.mime_type(),
+                kind.extension()
+            );
 
             Some(TriageHint::new(
                 SnifferSource::Infer,

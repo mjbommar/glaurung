@@ -1,57 +1,60 @@
-from ._native import (
-    # Address types
-    Address as Address,
-    AddressKind as AddressKind,
-    AddressRange as AddressRange,
-    AddressSpace as AddressSpace,
-    AddressSpaceKind as AddressSpaceKind,
-    # Binary and format types
-    Format as Format,
-    Arch as Arch,
-    Binary as Binary,
-    Hashes as Hashes,
-    # ID and identification types
-    Id as Id,
-    IdKind as IdKind,
-    IdGenerator as IdGenerator,
-    # Tool and metadata types
-    ToolMetadata as ToolMetadata,
-    SourceKind as SourceKind,
-    Artifact as Artifact,
-    # Binary analysis types
-    Section as Section,
-    SectionPerms as SectionPerms,
-    Segment as Segment,
-    Perms as Perms,
-    Symbol as Symbol,
-    SymbolKind as SymbolKind,
-    SymbolBinding as SymbolBinding,
-    SymbolVisibility as SymbolVisibility,
-    SymbolSource as SymbolSource,
-    Relocation as Relocation,
-    RelocationType as RelocationType,
-    Instruction as Instruction,
-    Operand as Operand,
-    OperandKind as OperandKind,
-    Access as Access,
-    SideEffect as SideEffect,
-    Register as Register,
-    RegisterKind as RegisterKind,
-    DisassemblerError as DisassemblerError,
-    Architecture as Architecture,
-    Endianness as Endianness,
-    DisassemblerConfig as DisassemblerConfig,
-    StringLiteral as StringLiteral,
-    StringEncoding as StringEncoding,
-    StringClassification as StringClassification,
-    # Pattern matching types
-    Pattern as Pattern,
-    PatternDefinition as PatternDefinition,
-    PatternType as PatternType,
-    YaraMatch as YaraMatch,
-    MetadataValue as MetadataValue,
-)
-from ._native import triage as triage
+from typing import Any as _Any
+
+# Coarse stubs for runtime-provided native symbols to aid static type checking.
+# The actual implementations are provided by the compiled extension.
+# Address types
+Address: _Any
+AddressKind: _Any
+AddressRange: _Any
+AddressSpace: _Any
+AddressSpaceKind: _Any
+# Binary and format types
+Format: _Any
+Arch: _Any
+Binary: _Any
+Hashes: _Any
+# ID and identification types
+Id: _Any
+IdKind: _Any
+IdGenerator: _Any
+# Tool and metadata types
+ToolMetadata: _Any
+SourceKind: _Any
+Artifact: _Any
+# Binary analysis types
+Section: _Any
+SectionPerms: _Any
+Segment: _Any
+Perms: _Any
+Symbol: _Any
+SymbolKind: _Any
+SymbolBinding: _Any
+SymbolVisibility: _Any
+SymbolSource: _Any
+Relocation: _Any
+RelocationType: _Any
+Instruction: _Any
+Operand: _Any
+OperandKind: _Any
+Access: _Any
+SideEffect: _Any
+Register: _Any
+RegisterKind: _Any
+DisassemblerError: _Any
+Architecture: _Any
+Endianness: _Any
+DisassemblerConfig: _Any
+StringLiteral: _Any
+StringEncoding: _Any
+StringClassification: _Any
+# Pattern matching types
+Pattern: _Any
+PatternDefinition: _Any
+PatternType: _Any
+YaraMatch: _Any
+MetadataValue: _Any
+# Triage submodule
+triage: _Any
 
 __all__ = [
     # Address types

@@ -42,11 +42,11 @@ impl AddressRange {
     /// Returns:
     ///     AddressRange: A new AddressRange instance
     ///
-     /// Raises:
-     ///     ValueError: If size is 0 or alignment is invalid
-     #[new]
-     #[pyo3(signature = (start, size, alignment=None))]
-     fn new_py(start: Address, size: u64, alignment: Option<u64>) -> PyResult<Self> {
+    /// Raises:
+    ///     ValueError: If size is 0 or alignment is invalid
+    #[new]
+    #[pyo3(signature = (start, size, alignment=None))]
+    fn new_py(start: Address, size: u64, alignment: Option<u64>) -> PyResult<Self> {
         Self::new(start, size, alignment).map_err(PyValueError::new_err)
     }
 
@@ -66,13 +66,30 @@ impl AddressRange {
             self.start, self.size, alignment_str
         )
     }
+    /// Get the start address of the range (inclusive).
+    #[getter]
+    fn start(&self) -> Address {
+        self.start.clone()
+    }
 
-     /// Get the end address of the range (exclusive).
-     ///
-     /// Returns:
-     ///     Address: The end address (start + size)
-     #[getter]
-     fn end(&self) -> PyResult<Address> {
+    /// Get the size of the range in bytes.
+    #[getter]
+    fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// Get the alignment requirement in bytes, if any.
+    #[getter]
+    fn alignment(&self) -> Option<u64> {
+        self.alignment
+    }
+
+    /// Get the end address of the range (exclusive).
+    ///
+    /// Returns:
+    ///     Address: The end address (start + size)
+    #[getter]
+    fn end(&self) -> PyResult<Address> {
         self.end_addr().map_err(PyValueError::new_err)
     }
 

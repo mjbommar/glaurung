@@ -7,10 +7,10 @@
 
 use crate::core::binary::{Arch, Endianness, Format};
 use crate::error::GlaurungError;
-use std::fmt;
 #[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Source of a sniffer hint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +53,22 @@ pub struct TriageHint {
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl TriageHint {
+    #[new]
+    #[pyo3(signature = (source, mime=None, extension=None, label=None))]
+    pub fn new_py(
+        source: SnifferSource,
+        mime: Option<String>,
+        extension: Option<String>,
+        label: Option<String>,
+    ) -> Self {
+        Self {
+            source,
+            mime,
+            extension,
+            label,
+        }
+    }
+
     #[staticmethod]
     pub fn create(
         source: SnifferSource,
@@ -73,6 +89,24 @@ impl TriageHint {
             "TriageHint(source={:?}, mime={:?}, ext={:?}, label={:?})",
             self.source, self.mime, self.extension, self.label
         )
+    }
+
+    // Property getters
+    #[getter]
+    fn source(&self) -> SnifferSource {
+        self.source
+    }
+    #[getter]
+    fn mime(&self) -> Option<String> {
+        self.mime.clone()
+    }
+    #[getter]
+    fn extension(&self) -> Option<String> {
+        self.extension.clone()
+    }
+    #[getter]
+    fn label(&self) -> Option<String> {
+        self.label.clone()
     }
 }
 
@@ -125,6 +159,11 @@ pub struct TriageError {
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl TriageError {
+    #[new]
+    #[pyo3(signature = (kind, message=None))]
+    pub fn new_py(kind: TriageErrorKind, message: Option<String>) -> Self {
+        Self { kind, message }
+    }
     #[staticmethod]
     pub fn create(kind: TriageErrorKind, message: Option<String>) -> Self {
         Self { kind, message }
@@ -134,6 +173,14 @@ impl TriageError {
             "TriageError(kind={:?}, message={:?})",
             self.kind, self.message
         )
+    }
+    #[getter]
+    fn kind(&self) -> TriageErrorKind {
+        self.kind
+    }
+    #[getter]
+    fn message(&self) -> Option<String> {
+        self.message.clone()
     }
 }
 
@@ -197,8 +244,8 @@ pub struct ParserResult {
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl ParserResult {
-    #[staticmethod]
-    pub fn create(parser: ParserKind, ok: bool, error: Option<TriageError>) -> Self {
+    #[new]
+    pub fn new_py(parser: ParserKind, ok: bool, error: Option<TriageError>) -> Self {
         Self { parser, ok, error }
     }
 }
@@ -218,8 +265,13 @@ pub struct EntropySummary {
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl EntropySummary {
-    #[staticmethod]
-    pub fn create(overall: Option<f64>, window_size: Option<u32>, windows: Option<Vec<f64>>) -> Self {
+    #[new]
+    #[pyo3(signature = (overall=None, window_size=None, windows=None))]
+    pub fn new_py(
+        overall: Option<f64>,
+        window_size: Option<u32>,
+        windows: Option<Vec<f64>>,
+    ) -> Self {
         Self {
             overall,
             window_size,
@@ -242,8 +294,9 @@ pub struct StringsSummary {
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl StringsSummary {
-    #[staticmethod]
-    pub fn create(
+    #[new]
+    #[pyo3(signature = (ascii_count, utf16le_count, utf16be_count, samples=None))]
+    pub fn new_py(
         ascii_count: u32,
         utf16le_count: u32,
         utf16be_count: u32,
@@ -256,8 +309,6 @@ impl StringsSummary {
             samples,
         }
     }
-
-
 }
 
 impl fmt::Display for SnifferSource {
@@ -298,8 +349,6 @@ impl fmt::Display for ParserKind {
     }
 }
 
- 
-
 /// Packer detection entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "python-ext", pyclass)]
@@ -311,8 +360,8 @@ pub struct PackerMatch {
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl PackerMatch {
-    #[staticmethod]
-    pub fn create(name: String, confidence: f32) -> Self {
+    #[new]
+    pub fn new_py(name: String, confidence: f32) -> Self {
         Self { name, confidence }
     }
 }
@@ -329,8 +378,8 @@ pub struct ContainerChild {
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl ContainerChild {
-    #[staticmethod]
-    pub fn create(type_name: String, offset: u64, size: u64) -> Self {
+    #[new]
+    pub fn new_py(type_name: String, offset: u64, size: u64) -> Self {
         Self {
             type_name,
             offset,
@@ -351,8 +400,8 @@ pub struct Budgets {
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl Budgets {
-    #[staticmethod]
-    pub fn create(bytes_read: u64, time_ms: u64, recursion_depth: u32) -> Self {
+    #[new]
+    pub fn new_py(bytes_read: u64, time_ms: u64, recursion_depth: u32) -> Self {
         Self {
             bytes_read,
             time_ms,
@@ -374,8 +423,6 @@ pub struct TriageVerdict {
     pub signals: Option<Vec<ConfidenceSignal>>,
 }
 
- 
-
 #[cfg(feature = "python-ext")]
 #[pymethods]
 impl TriageVerdict {
@@ -392,6 +439,28 @@ impl TriageVerdict {
         Self::try_new(format, arch, bits, endianness, confidence, signals)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
+
+    // Property getters
+    #[getter]
+    fn format(&self) -> Format {
+        self.format
+    }
+    #[getter]
+    fn arch(&self) -> Arch {
+        self.arch
+    }
+    #[getter]
+    fn bits(&self) -> u8 {
+        self.bits
+    }
+    #[getter]
+    fn endianness(&self) -> Endianness {
+        self.endianness
+    }
+    #[getter]
+    fn confidence(&self) -> f32 {
+        self.confidence
+    }
 }
 
 // Pure Rust constructors and helpers
@@ -402,7 +471,12 @@ impl TriageHint {
         extension: Option<String>,
         label: Option<String>,
     ) -> Self {
-        Self { source, mime, extension, label }
+        Self {
+            source,
+            mime,
+            extension,
+            label,
+        }
     }
 }
 
@@ -426,7 +500,11 @@ impl ParserResult {
 
 impl EntropySummary {
     pub fn new(overall: Option<f64>, window_size: Option<u32>, windows: Option<Vec<f64>>) -> Self {
-        Self { overall, window_size, windows }
+        Self {
+            overall,
+            window_size,
+            windows,
+        }
     }
 }
 
@@ -437,21 +515,38 @@ impl StringsSummary {
         utf16be_count: u32,
         samples: Option<Vec<String>>,
     ) -> Self {
-        Self { ascii_count, utf16le_count, utf16be_count, samples }
+        Self {
+            ascii_count,
+            utf16le_count,
+            utf16be_count,
+            samples,
+        }
     }
 }
 
 impl PackerMatch {
-    pub fn new(name: String, confidence: f32) -> Self { Self { name, confidence } }
+    pub fn new(name: String, confidence: f32) -> Self {
+        Self { name, confidence }
+    }
 }
 
 impl ContainerChild {
-    pub fn new(type_name: String, offset: u64, size: u64) -> Self { Self { type_name, offset, size } }
+    pub fn new(type_name: String, offset: u64, size: u64) -> Self {
+        Self {
+            type_name,
+            offset,
+            size,
+        }
+    }
 }
 
 impl Budgets {
     pub fn new(bytes_read: u64, time_ms: u64, recursion_depth: u32) -> Self {
-        Self { bytes_read, time_ms, recursion_depth }
+        Self {
+            bytes_read,
+            time_ms,
+            recursion_depth,
+        }
     }
 }
 
@@ -466,7 +561,10 @@ impl TriageVerdict {
         signals: Option<Vec<ConfidenceSignal>>,
     ) -> Result<Self, GlaurungError> {
         if bits != 32 && bits != 64 {
-            return Err(GlaurungError::InvalidInput(format!("bits must be 32 or 64, got {}", bits)));
+            return Err(GlaurungError::InvalidInput(format!(
+                "bits must be 32 or 64, got {}",
+                bits
+            )));
         }
         Ok(Self {
             format,
@@ -566,8 +664,23 @@ pub struct TriagedArtifact {
 #[pymethods]
 impl TriagedArtifact {
     #[allow(clippy::too_many_arguments)]
-    #[staticmethod]
-    pub fn create(
+    #[new]
+    #[pyo3(signature = (
+        id,
+        path,
+        size_bytes,
+        sha256=None,
+        hints=Vec::new(),
+        verdicts=Vec::new(),
+        entropy=None,
+        strings=None,
+        packers=None,
+        containers=None,
+        parse_status=None,
+        budgets=None,
+        errors=None
+    ))]
+    pub fn new_py(
         id: String,
         path: String,
         size_bytes: u64,
@@ -612,6 +725,60 @@ impl TriagedArtifact {
         serde_json::from_str(json_str).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Deserialization error: {}", e))
         })
+    }
+
+    // Property getters
+    #[getter]
+    fn id(&self) -> &str {
+        &self.id
+    }
+    #[getter]
+    fn path(&self) -> &str {
+        &self.path
+    }
+    #[getter]
+    fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+    #[getter]
+    fn sha256(&self) -> Option<String> {
+        self.sha256.clone()
+    }
+    #[getter]
+    fn hints(&self) -> Vec<TriageHint> {
+        self.hints.clone()
+    }
+    #[getter]
+    fn verdicts(&self) -> Vec<TriageVerdict> {
+        self.verdicts.clone()
+    }
+    #[getter]
+    fn entropy(&self) -> Option<EntropySummary> {
+        self.entropy.clone()
+    }
+    #[getter]
+    fn strings(&self) -> Option<StringsSummary> {
+        self.strings.clone()
+    }
+    #[getter]
+    fn packers(&self) -> Option<Vec<PackerMatch>> {
+        self.packers.clone()
+    }
+    #[getter]
+    fn containers(&self) -> Option<Vec<ContainerChild>> {
+        self.containers.clone()
+    }
+    #[getter]
+    fn parse_status(&self) -> Option<Vec<ParserResult>> {
+        self.parse_status.clone()
+    }
+    #[getter]
+    fn budgets(&self) -> Option<Budgets> {
+        self.budgets.clone()
+    }
+    #[getter]
+    fn errors(&self) -> Option<Vec<TriageError>> {
+        self.errors.clone()
     }
 }
 

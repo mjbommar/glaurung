@@ -60,7 +60,10 @@ where
 
     match timeout(config.duration, future).await {
         Ok(result) => {
-            debug!("Operation '{}' completed successfully", config.operation_name);
+            debug!(
+                "Operation '{}' completed successfully",
+                config.operation_name
+            );
             result
         }
         Err(_) => {
@@ -69,11 +72,11 @@ where
                 config.operation_name,
                 config.duration.as_secs()
             );
-            
+
             if config.log_warnings {
                 error!("{}", msg);
             }
-            
+
             Err(GlaurungError::Timeout {
                 seconds: config.duration.as_secs(),
             })
@@ -112,31 +115,35 @@ impl IterationTimeout {
     /// Should be called in loops to prevent infinite iteration
     pub fn check(&mut self) -> Result<()> {
         self.iteration_count += 1;
-        
+
         // Only check elapsed time every N iterations for performance
         if self.iteration_count.is_multiple_of(self.check_interval) {
             let elapsed = self.start.elapsed();
-            
+
             if elapsed > self.max_duration {
                 error!(
                     "Operation '{}' timed out after {} iterations and {:?}",
                     self.operation_name, self.iteration_count, elapsed
                 );
-                
+
                 return Err(GlaurungError::Timeout {
                     seconds: elapsed.as_secs(),
                 });
             }
-            
+
             // Warn if taking longer than expected
-            if elapsed.as_secs() > 30 && self.iteration_count.is_multiple_of(self.check_interval * 10) {
+            if elapsed.as_secs() > 30
+                && self
+                    .iteration_count
+                    .is_multiple_of(self.check_interval * 10)
+            {
                 warn!(
                     "Operation '{}' still running after {} iterations ({:?})",
                     self.operation_name, self.iteration_count, elapsed
                 );
             }
         }
-        
+
         Ok(())
     }
 
@@ -172,40 +179,41 @@ mod tests {
     #[tokio::test]
     async fn test_async_timeout_success() {
         let config = TimeoutConfig::new(1, "test_operation");
-        
+
         let result = with_timeout(config, async {
             tokio::time::sleep(Duration::from_millis(100)).await;
             Ok(42)
-        }).await;
-        
+        })
+        .await;
+
         assert_eq!(result.unwrap(), 42);
     }
 
     #[tokio::test]
     async fn test_async_timeout_failure() {
         let config = TimeoutConfig::new(1, "test_operation");
-        
+
         let result: Result<i32> = with_timeout(config, async {
             tokio::time::sleep(Duration::from_secs(2)).await;
             Ok(42)
-        }).await;
-        
+        })
+        .await;
+
         assert!(matches!(result, Err(GlaurungError::Timeout { .. })));
     }
 
     #[test]
     fn test_iteration_timeout() {
-        let mut timeout = IterationTimeout::new(1, "test_loop")
-            .with_check_interval(10);
-        
+        let mut timeout = IterationTimeout::new(1, "test_loop").with_check_interval(10);
+
         // Should succeed for a reasonable number of iterations
         for _ in 0..100 {
             timeout.check().unwrap();
         }
-        
+
         // Simulate long-running operation
         std::thread::sleep(Duration::from_secs(2));
-        
+
         // Make sure we hit a check interval multiple (100 + 10 = 110)
         for _ in 0..10 {
             let result = timeout.check();
@@ -219,13 +227,12 @@ mod tests {
 
     #[test]
     fn test_iteration_counter() {
-        let mut timeout = IterationTimeout::new(60, "test_counter")
-            .with_check_interval(1);
-        
+        let mut timeout = IterationTimeout::new(60, "test_counter").with_check_interval(1);
+
         for _ in 0..50 {
             timeout.check().unwrap();
         }
-        
+
         assert_eq!(timeout.iterations(), 50);
     }
 }

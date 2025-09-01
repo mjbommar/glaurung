@@ -81,7 +81,14 @@ impl Register {
         parent_register: Option<String>,
         offset_in_parent: Option<u8>,
     ) -> Self {
-        Self { name, size, kind, address, parent_register, offset_in_parent }
+        Self {
+            name,
+            size,
+            kind,
+            address,
+            parent_register,
+            offset_in_parent,
+        }
     }
 
     /// Create a general purpose register (pure Rust)
@@ -130,39 +137,68 @@ impl Register {
         Self::new(name, size, kind, None, Some(parent_name), Some(offset))
     }
 
-    /// String representation for display (Python only)
-    fn __str__(&self) -> String {
-        format!("{}", self)
-    }
+    // (Removed Python-only __str__ from pure Rust impl; provided in #[pymethods])
 
     /// Check if this is a general purpose register
-    pub fn is_general(&self) -> bool { self.kind == RegisterKind::General }
+    pub fn is_general(&self) -> bool {
+        self.kind == RegisterKind::General
+    }
     /// Check if this is a floating point register
-    pub fn is_float(&self) -> bool { self.kind == RegisterKind::Float }
+    pub fn is_float(&self) -> bool {
+        self.kind == RegisterKind::Float
+    }
     /// Check if this is a vector/SIMD register
-    pub fn is_vector(&self) -> bool { self.kind == RegisterKind::Vector }
+    pub fn is_vector(&self) -> bool {
+        self.kind == RegisterKind::Vector
+    }
     /// Check if this is a flags register
-    pub fn is_flags(&self) -> bool { self.kind == RegisterKind::Flags }
+    pub fn is_flags(&self) -> bool {
+        self.kind == RegisterKind::Flags
+    }
     /// Check if this is a segment register
-    pub fn is_segment(&self) -> bool { self.kind == RegisterKind::Segment }
+    pub fn is_segment(&self) -> bool {
+        self.kind == RegisterKind::Segment
+    }
     /// Check if this is a control register
-    pub fn is_control(&self) -> bool { self.kind == RegisterKind::Control }
+    pub fn is_control(&self) -> bool {
+        self.kind == RegisterKind::Control
+    }
     /// Check if this is a debug register
-    pub fn is_debug(&self) -> bool { self.kind == RegisterKind::Debug }
+    pub fn is_debug(&self) -> bool {
+        self.kind == RegisterKind::Debug
+    }
     /// Check if this register has a parent (is a sub-register)
-    pub fn has_parent(&self) -> bool { self.parent_register.is_some() }
+    pub fn has_parent(&self) -> bool {
+        self.parent_register.is_some()
+    }
     /// Check if this register is memory-mapped
-    pub fn is_memory_mapped(&self) -> bool { self.address.is_some() }
+    pub fn is_memory_mapped(&self) -> bool {
+        self.address.is_some()
+    }
     /// Get the size in bytes (rounded up)
-    pub fn size_bytes(&self) -> usize { (self.size as usize).div_ceil(8) }
+    pub fn size_bytes(&self) -> usize {
+        (self.size as usize).div_ceil(8)
+    }
     /// Check if this register can contain the given value size
-    pub fn can_contain(&self, value_size_bits: u16) -> bool { value_size_bits <= self.size }
+    pub fn can_contain(&self, value_size_bits: u16) -> bool {
+        value_size_bits <= self.size
+    }
     /// Get a summary of the register
     pub fn summary(&self) -> String {
-        let mut parts = vec![ self.name.clone(), format!("{}bit", self.size), format!("{}", self.kind) ];
-        if let Some(parent) = &self.parent_register { parts.push(format!("parent:{}", parent)); }
-        if let Some(offset) = self.offset_in_parent { parts.push(format!("offset:{}", offset)); }
-        if self.is_memory_mapped() { parts.push("memory-mapped".to_string()); }
+        let mut parts = vec![
+            self.name.clone(),
+            format!("{}bit", self.size),
+            format!("{}", self.kind),
+        ];
+        if let Some(parent) = &self.parent_register {
+            parts.push(format!("parent:{}", parent));
+        }
+        if let Some(offset) = self.offset_in_parent {
+            parts.push(format!("offset:{}", offset));
+        }
+        if self.is_memory_mapped() {
+            parts.push("memory-mapped".to_string());
+        }
         parts.join(" ")
     }
 }
@@ -189,6 +225,135 @@ impl Register {
         offset_in_parent: Option<u8>,
     ) -> Self {
         Self::new(name, size, kind, address, parent_register, offset_in_parent)
+    }
+
+    /// String representation for display
+    fn __str__(&self) -> String {
+        format!("{}", self)
+    }
+
+    // Static factory methods for Python
+    #[staticmethod]
+    #[pyo3(name = "general")]
+    pub fn general_py(name: String, size: u16) -> Self {
+        Self::general(name, size)
+    }
+    #[staticmethod]
+    #[pyo3(name = "float")]
+    pub fn float_py(name: String, size: u16) -> Self {
+        Self::float(name, size)
+    }
+    #[staticmethod]
+    #[pyo3(name = "vector")]
+    pub fn vector_py(name: String, size: u16) -> Self {
+        Self::vector(name, size)
+    }
+    #[staticmethod]
+    #[pyo3(name = "flags")]
+    pub fn flags_py(name: String, size: u16) -> Self {
+        Self::flags(name, size)
+    }
+    #[staticmethod]
+    #[pyo3(name = "segment")]
+    pub fn segment_py(name: String, size: u16) -> Self {
+        Self::segment(name, size)
+    }
+    #[staticmethod]
+    #[pyo3(name = "control")]
+    pub fn control_py(name: String, size: u16) -> Self {
+        Self::control(name, size)
+    }
+    #[staticmethod]
+    #[pyo3(name = "debug")]
+    pub fn debug_py(name: String, size: u16) -> Self {
+        Self::debug(name, size)
+    }
+    #[staticmethod]
+    #[pyo3(name = "sub_register")]
+    pub fn sub_register_py(
+        name: String,
+        size: u16,
+        kind: RegisterKind,
+        parent_name: String,
+        offset: u8,
+    ) -> Self {
+        Self::sub_register(name, size, kind, parent_name, offset)
+    }
+
+    // Property getters
+    #[getter]
+    fn name(&self) -> &str {
+        &self.name
+    }
+    #[getter]
+    fn size(&self) -> u16 {
+        self.size
+    }
+    #[getter]
+    fn kind(&self) -> RegisterKind {
+        self.kind
+    }
+    #[getter]
+    fn address(&self) -> Option<Address> {
+        self.address.clone()
+    }
+    #[getter]
+    fn parent_register(&self) -> Option<String> {
+        self.parent_register.clone()
+    }
+    #[getter]
+    fn offset_in_parent(&self) -> Option<u8> {
+        self.offset_in_parent
+    }
+
+    // Helper wrappers (rename to avoid collision and forward to inherent methods)
+    #[pyo3(name = "is_general")]
+    fn is_general_py(&self) -> bool {
+        Register::is_general(self)
+    }
+    #[pyo3(name = "is_float")]
+    fn is_float_py(&self) -> bool {
+        Register::is_float(self)
+    }
+    #[pyo3(name = "is_vector")]
+    fn is_vector_py(&self) -> bool {
+        Register::is_vector(self)
+    }
+    #[pyo3(name = "is_flags")]
+    fn is_flags_py(&self) -> bool {
+        Register::is_flags(self)
+    }
+    #[pyo3(name = "is_segment")]
+    fn is_segment_py(&self) -> bool {
+        Register::is_segment(self)
+    }
+    #[pyo3(name = "is_control")]
+    fn is_control_py(&self) -> bool {
+        Register::is_control(self)
+    }
+    #[pyo3(name = "is_debug")]
+    fn is_debug_py(&self) -> bool {
+        Register::is_debug(self)
+    }
+    #[pyo3(name = "has_parent")]
+    fn has_parent_py(&self) -> bool {
+        Register::has_parent(self)
+    }
+    #[pyo3(name = "is_memory_mapped")]
+    fn is_memory_mapped_py(&self) -> bool {
+        Register::is_memory_mapped(self)
+    }
+    #[pyo3(name = "size_bytes")]
+    fn size_bytes_py(&self) -> usize {
+        Register::size_bytes(self)
+    }
+    #[pyo3(name = "can_contain")]
+    fn can_contain_py(&self, value_size_bits: u16) -> bool {
+        Register::can_contain(self, value_size_bits)
+    }
+    #[pyo3(name = "summary")]
+    fn summary_py(&self) -> String {
+        Register::summary(self)
     }
 }
 

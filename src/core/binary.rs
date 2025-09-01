@@ -105,27 +105,15 @@ impl Arch {
         format!("Arch.{}", self.__str__())
     }
 
-    /// Check if this is a 64-bit architecture.
-    ///
-    /// Returns:
-    ///     bool: True if 64-bit, False if 32-bit
-    fn is_64_bit(&self) -> bool {
-        matches!(
-            self,
-            Arch::X86_64 | Arch::AArch64 | Arch::MIPS64 | Arch::PPC64 | Arch::RISCV64
-        )
+    // Python-visible wrappers that forward to pure-Rust helpers
+    #[pyo3(name = "is_64_bit")]
+    fn is_64_bit_py(&self) -> bool {
+        self.is_64_bit()
     }
 
-    /// Get the bit width of this architecture.
-    ///
-    /// Returns:
-    ///     int: 64 for 64-bit architectures, 32 for 32-bit
-    fn bits(&self) -> u8 {
-        if self.is_64_bit() {
-            64
-        } else {
-            32
-        }
+    #[pyo3(name = "bits")]
+    fn bits_py(&self) -> u8 {
+        self.bits()
     }
 }
 
@@ -165,7 +153,11 @@ impl Arch {
     }
 
     pub fn bits(&self) -> u8 {
-        if self.is_64_bit() { 64 } else { 32 }
+        if self.is_64_bit() {
+            64
+        } else {
+            32
+        }
     }
 }
 
@@ -174,16 +166,12 @@ impl Arch {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Hashes {
     /// SHA-256 hash (hex string)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub sha256: Option<String>,
     /// MD5 hash (hex string)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub md5: Option<String>,
     /// SHA-1 hash (hex string)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub sha1: Option<String>,
     /// Additional hashes as key-value pairs
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub additional: Option<HashMap<String, String>>,
 }
 
@@ -234,24 +222,15 @@ impl Hashes {
     }
 
     /// Check if the hashes are valid.
+    #[pyo3(name = "is_valid")]
     fn is_valid_py(&self) -> bool {
         self.is_valid()
     }
 
-    /// Get a hash by name.
-    ///
-    /// Args:
-    ///     name: Hash algorithm name ('sha256', 'md5', 'sha1', or custom)
-    ///
-    /// Returns:
-    ///     str or None: The hash value if found
-    fn get_hash(&self, name: &str) -> Option<String> {
-        match name {
-            "sha256" => self.sha256.clone(),
-            "md5" => self.md5.clone(),
-            "sha1" => self.sha1.clone(),
-            _ => self.additional.as_ref()?.get(name).cloned(),
-        }
+    /// Legacy alias for Python API compatibility.
+    #[pyo3(name = "is_valid_py")]
+    fn is_valid_py_legacy(&self) -> bool {
+        self.is_valid()
     }
 
     /// Set a hash value.
@@ -272,23 +251,19 @@ impl Hashes {
         }
     }
 
-    /// Check if SHA-256 hash is available.
-    ///
-    /// Returns:
-    ///     bool: True if SHA-256 hash is present
-    fn has_sha256(&self) -> bool {
-        self.sha256.is_some()
+    #[pyo3(name = "has_sha256")]
+    fn has_sha256_py(&self) -> bool {
+        self.has_sha256()
     }
 
-    /// Check if any hashes are present.
-    ///
-    /// Returns:
-    ///     bool: True if at least one hash is present
-    fn has_any_hash(&self) -> bool {
-        self.sha256.is_some()
-            || self.md5.is_some()
-            || self.sha1.is_some()
-            || self.additional.is_some()
+    #[pyo3(name = "has_any_hash")]
+    fn has_any_hash_py(&self) -> bool {
+        self.has_any_hash()
+    }
+
+    #[pyo3(name = "get_hash")]
+    fn get_hash_py(&self, name: &str) -> Option<String> {
+        self.get_hash(name)
     }
 }
 
@@ -372,8 +347,15 @@ impl Hashes {
         s.len() == expected_len && s.chars().all(|c| c.is_ascii_hexdigit())
     }
 
-    pub fn has_sha256(&self) -> bool { self.sha256.is_some() }
-    pub fn has_any_hash(&self) -> bool { self.sha256.is_some() || self.md5.is_some() || self.sha1.is_some() || self.additional.is_some() }
+    pub fn has_sha256(&self) -> bool {
+        self.sha256.is_some()
+    }
+    pub fn has_any_hash(&self) -> bool {
+        self.sha256.is_some()
+            || self.md5.is_some()
+            || self.sha1.is_some()
+            || self.additional.is_some()
+    }
     pub fn get_hash(&self, name: &str) -> Option<String> {
         match name {
             "sha256" => self.sha256.clone(),
@@ -413,37 +395,26 @@ impl fmt::Display for Hashes {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Binary {
     /// Unique identifier for this binary
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub id: String,
     /// Filesystem path to the binary
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub path: String,
     /// Executable format
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub format: Format,
     /// CPU architecture
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub arch: Arch,
     /// Bit width (32 or 64)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub bits: u8,
     /// Endianness
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub endianness: Endianness,
     /// Entry point addresses
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub entry_points: Vec<Address>,
     /// Size in bytes
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub size_bytes: u64,
     /// Cryptographic hashes
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub hashes: Option<Hashes>,
     /// UUID/build-id (Mach-O UUID, ELF build-id)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub uuid: Option<String>,
     /// Format-specific timestamps
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub timestamps: Option<HashMap<String, u64>>,
 }
 
@@ -530,8 +501,61 @@ impl Binary {
     }
 
     /// Check if the binary is valid.
+    #[pyo3(name = "is_valid")]
     fn is_valid_py(&self) -> bool {
         self.is_valid()
+    }
+
+    /// Legacy alias for Python API compatibility.
+    #[pyo3(name = "is_valid_py")]
+    fn is_valid_py_legacy(&self) -> bool {
+        self.is_valid()
+    }
+
+    // Property getters
+    #[getter]
+    fn id(&self) -> &str {
+        &self.id
+    }
+    #[getter]
+    fn path(&self) -> &str {
+        &self.path
+    }
+    #[getter]
+    fn format(&self) -> Format {
+        self.format
+    }
+    #[getter]
+    fn arch(&self) -> Arch {
+        self.arch
+    }
+    #[getter]
+    fn bits(&self) -> u8 {
+        self.bits
+    }
+    #[getter]
+    fn endianness(&self) -> Endianness {
+        self.endianness
+    }
+    #[getter]
+    fn entry_points(&self) -> Vec<Address> {
+        self.entry_points.clone()
+    }
+    #[getter]
+    fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+    #[getter]
+    fn hashes(&self) -> Option<Hashes> {
+        self.hashes.clone()
+    }
+    #[getter]
+    fn uuid(&self) -> Option<String> {
+        self.uuid.clone()
+    }
+    #[getter]
+    fn timestamps(&self) -> Option<std::collections::HashMap<String, u64>> {
+        self.timestamps.clone()
     }
 
     /// Get the number of entry points.
@@ -542,37 +566,27 @@ impl Binary {
         self.entry_points.len()
     }
 
-    /// Check if the binary has any entry points.
-    ///
-    /// Returns:
-    ///     bool: True if entry points exist
-    fn has_entry_points(&self) -> bool {
-        !self.entry_points.is_empty()
+    #[pyo3(name = "has_entry_points")]
+    fn has_entry_points_py(&self) -> bool {
+        self.has_entry_points()
     }
 
-    /// Get the primary entry point (first one).
-    ///
-    /// Returns:
-    ///     Address or None: Primary entry point if available
-    fn primary_entry_point(&self) -> Option<Address> {
-        self.entry_points.first().cloned()
+    #[pyo3(name = "primary_entry_point")]
+    fn primary_entry_point_py(&self) -> Option<Address> {
+        self.primary_entry_point()
     }
 
-    /// Check if the binary is 64-bit.
-    ///
-    /// Returns:
-    ///     bool: True if 64-bit
-    fn is_64_bit(&self) -> bool {
-        self.bits == 64
+    #[pyo3(name = "is_64_bit")]
+    fn is_64_bit_py(&self) -> bool {
+        self.is_64_bit()
     }
 
-    /// Check if the binary has cryptographic hashes.
-    ///
-    /// Returns:
-    ///     bool: True if hashes are present
-    fn has_hashes(&self) -> bool {
-        self.hashes.is_some()
+    #[pyo3(name = "has_hashes")]
+    fn has_hashes_py(&self) -> bool {
+        self.has_hashes()
     }
+
+    // Query helpers are provided in the pure-Rust impl below.
 
     /// Get a timestamp by name.
     ///
@@ -598,17 +612,15 @@ impl Binary {
 
     /// Serialize to JSON string.
     fn to_json_py(&self) -> PyResult<String> {
-        self.to_json_string().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-        })
+        self.to_json_string()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
     }
 
     /// Deserialize from JSON string.
     #[staticmethod]
     fn from_json_py(json_str: &str) -> PyResult<Self> {
-        Self::from_json_str(json_str).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-        })
+        Self::from_json_str(json_str)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
     }
 }
 
@@ -716,20 +728,30 @@ impl Binary {
 
     /// Serialize to JSON string (pure Rust version).
     pub fn to_json_string(&self) -> Result<String, crate::error::GlaurungError> {
-        serde_json::to_string(self)
-            .map_err(|e| crate::error::GlaurungError::Serialization(format!("JSON serialization error: {}", e)))
+        serde_json::to_string(self).map_err(|e| {
+            crate::error::GlaurungError::Serialization(format!("JSON serialization error: {}", e))
+        })
     }
 
     /// Deserialize from JSON string (pure Rust version).
     pub fn from_json_str(json_str: &str) -> Result<Self, crate::error::GlaurungError> {
-        serde_json::from_str(json_str)
-            .map_err(|e| crate::error::GlaurungError::Serialization(format!("JSON deserialization error: {}", e)))
+        serde_json::from_str(json_str).map_err(|e| {
+            crate::error::GlaurungError::Serialization(format!("JSON deserialization error: {}", e))
+        })
     }
 
-    pub fn primary_entry_point(&self) -> Option<Address> { self.entry_points.first().cloned() }
-    pub fn has_entry_points(&self) -> bool { !self.entry_points.is_empty() }
-    pub fn has_hashes(&self) -> bool { self.hashes.is_some() }
-    pub fn is_64_bit(&self) -> bool { self.bits == 64 }
+    pub fn primary_entry_point(&self) -> Option<Address> {
+        self.entry_points.first().cloned()
+    }
+    pub fn has_entry_points(&self) -> bool {
+        !self.entry_points.is_empty()
+    }
+    pub fn has_hashes(&self) -> bool {
+        self.hashes.is_some()
+    }
+    pub fn is_64_bit(&self) -> bool {
+        self.bits == 64
+    }
 }
 
 impl fmt::Display for Format {

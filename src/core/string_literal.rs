@@ -127,15 +127,38 @@ impl StringLiteral {
         classification: Option<StringClassification>,
         entropy: Option<f64>,
     ) -> Self {
-        Self { id, address, value, raw_bytes, encoding, length_bytes, referenced_by, language_hint, classification, entropy }
+        Self {
+            id,
+            address,
+            value,
+            raw_bytes,
+            encoding,
+            length_bytes,
+            referenced_by,
+            language_hint,
+            classification,
+            entropy,
+        }
     }
 
-    pub fn len(&self) -> usize { self.value.len() }
-    pub fn is_empty(&self) -> bool { self.value.is_empty() }
-    pub fn is_url(&self) -> bool { self.classification == Some(StringClassification::Url) }
-    pub fn is_path(&self) -> bool { self.classification == Some(StringClassification::Path) }
-    pub fn is_email(&self) -> bool { self.classification == Some(StringClassification::Email) }
-    pub fn is_key(&self) -> bool { self.classification == Some(StringClassification::Key) }
+    pub fn len(&self) -> usize {
+        self.value.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.value.is_empty()
+    }
+    pub fn is_url(&self) -> bool {
+        self.classification == Some(StringClassification::Url)
+    }
+    pub fn is_path(&self) -> bool {
+        self.classification == Some(StringClassification::Path)
+    }
+    pub fn is_email(&self) -> bool {
+        self.classification == Some(StringClassification::Email)
+    }
+    pub fn is_key(&self) -> bool {
+        self.classification == Some(StringClassification::Key)
+    }
 }
 
 #[cfg(feature = "python-ext")]
@@ -156,7 +179,7 @@ impl StringLiteral {
         entropy=None
     ))]
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new_py(
         id: String,
         address: Address,
         value: String,
@@ -196,8 +219,8 @@ impl StringLiteral {
 
     /// Get the string address
     #[getter]
-    pub fn get_address(&self) -> &Address {
-        &self.address
+    pub fn get_address(&self) -> Address {
+        self.address.clone()
     }
 
     /// Set the string address
@@ -220,8 +243,8 @@ impl StringLiteral {
 
     /// Get the raw bytes
     #[getter]
-    pub fn get_raw_bytes(&self) -> Option<&Vec<u8>> {
-        self.raw_bytes.as_ref()
+    pub fn get_raw_bytes(&self) -> Option<Vec<u8>> {
+        self.raw_bytes.clone()
     }
 
     /// Set the raw bytes
@@ -232,8 +255,8 @@ impl StringLiteral {
 
     /// Get the string encoding
     #[getter]
-    pub fn get_encoding(&self) -> &StringEncoding {
-        &self.encoding
+    pub fn get_encoding(&self) -> StringEncoding {
+        self.encoding
     }
 
     /// Set the string encoding
@@ -256,8 +279,8 @@ impl StringLiteral {
 
     /// Get the addresses that reference this string
     #[getter]
-    pub fn get_referenced_by(&self) -> Option<&Vec<Address>> {
-        self.referenced_by.as_ref()
+    pub fn get_referenced_by(&self) -> Option<Vec<Address>> {
+        self.referenced_by.clone()
     }
 
     /// Set the addresses that reference this string
@@ -268,8 +291,8 @@ impl StringLiteral {
 
     /// Get the language hint
     #[getter]
-    pub fn get_language_hint(&self) -> Option<&str> {
-        self.language_hint.as_deref()
+    pub fn get_language_hint(&self) -> Option<String> {
+        self.language_hint.clone()
     }
 
     /// Set the language hint
@@ -280,8 +303,8 @@ impl StringLiteral {
 
     /// Get the string classification
     #[getter]
-    pub fn get_classification(&self) -> Option<&StringClassification> {
-        self.classification.as_ref()
+    pub fn get_classification(&self) -> Option<StringClassification> {
+        self.classification.clone()
     }
 
     /// Set the string classification
@@ -307,16 +330,6 @@ impl StringLiteral {
         format!("{}", self)
     }
 
-    /// Get the string length in characters
-    pub fn len(&self) -> usize {
-        self.value.len()
-    }
-
-    /// Check if the string is empty
-    pub fn is_empty(&self) -> bool {
-        self.value.is_empty()
-    }
-
     /// Get a human-readable description
     pub fn description(&self) -> String {
         let classification_str = self
@@ -331,23 +344,31 @@ impl StringLiteral {
         )
     }
 
-    /// Check if this appears to be a URL
-    pub fn is_url(&self) -> bool {
+    // Additional helpers are provided in the pure-Rust impl above.
+
+    // Helper wrappers for Python
+    #[pyo3(name = "len")]
+    pub fn len_py(&self) -> usize {
+        self.len()
+    }
+    #[pyo3(name = "is_empty")]
+    pub fn is_empty_py(&self) -> bool {
+        self.is_empty()
+    }
+    #[pyo3(name = "is_url")]
+    pub fn is_url_py(&self) -> bool {
         self.classification == Some(StringClassification::Url)
     }
-
-    /// Check if this appears to be a file path
-    pub fn is_path(&self) -> bool {
+    #[pyo3(name = "is_path")]
+    pub fn is_path_py(&self) -> bool {
         self.classification == Some(StringClassification::Path)
     }
-
-    /// Check if this appears to be an email
-    pub fn is_email(&self) -> bool {
+    #[pyo3(name = "is_email")]
+    pub fn is_email_py(&self) -> bool {
         self.classification == Some(StringClassification::Email)
     }
-
-    /// Check if this appears to be a key
-    pub fn is_key(&self) -> bool {
+    #[pyo3(name = "is_key")]
+    pub fn is_key_py(&self) -> bool {
         self.classification == Some(StringClassification::Key)
     }
 }

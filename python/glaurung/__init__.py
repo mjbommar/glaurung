@@ -6,6 +6,8 @@ Python-friendly entry points. Rust types remain available under
 `glaurung._native` and `glaurung._native.triage`.
 """
 
+from enum import Enum
+
 from . import _native as _native  # type: ignore
 
 # Re-export all core types at the package root for convenience
@@ -51,12 +53,23 @@ Access = _native.Access
 SideEffect = _native.SideEffect
 Register = _native.Register
 RegisterKind = _native.RegisterKind
-DisassemblerError = _native.DisassemblerError
+# Provide a thin Python Enum wrapper for DisassemblerError to get nicer str()
+
+
+class DisassemblerError(Enum):
+    InvalidInstruction = _native.DisassemblerError.InvalidInstruction
+    InvalidAddress = _native.DisassemblerError.InvalidAddress
+    InsufficientBytes = _native.DisassemblerError.InsufficientBytes
+    UnsupportedInstruction = _native.DisassemblerError.UnsupportedInstruction
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return self.name
+
+
 Architecture = _native.Architecture
 Endianness = _native.Endianness
 DisassemblerConfig = _native.DisassemblerConfig
-# TODO: Fix BasicBlock compilation
-# BasicBlock = _native.BasicBlock
+BasicBlock = _native.BasicBlock
 StringLiteral = _native.StringLiteral
 StringEncoding = _native.StringEncoding
 StringClassification = _native.StringClassification
@@ -115,6 +128,7 @@ __all__ = [
     "Architecture",
     "Endianness",
     "DisassemblerConfig",
+    "BasicBlock",
     "StringLiteral",
     "StringEncoding",
     "StringClassification",

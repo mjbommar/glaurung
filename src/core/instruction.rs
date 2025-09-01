@@ -123,37 +123,26 @@ impl fmt::Display for SideEffect {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Operand {
     /// Type of operand
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub kind: OperandKind,
     /// Size in bits
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub size: u8,
     /// Access type
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub access: Access,
     /// String representation of the operand (fallback)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub text: String,
     /// Register name (for Register operands)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub register: Option<String>,
     /// Immediate value (for Immediate operands)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub immediate: Option<i64>,
     /// Memory displacement (for Memory operands)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub displacement: Option<i64>,
     /// Memory segment register (for Memory operands)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub segment: Option<String>,
     /// Memory scale factor (for Memory operands)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub scale: Option<u8>,
     /// Memory base register (for Memory operands)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub base: Option<String>,
     /// Memory index register (for Memory operands)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub index: Option<String>,
 }
 
@@ -162,7 +151,8 @@ pub struct Operand {
 impl Operand {
     /// Create a new register operand
     #[staticmethod]
-    pub fn register(name: String, size: u8, access: Access) -> Self {
+    #[pyo3(name = "register")]
+    pub fn register_py(name: String, size: u8, access: Access) -> Self {
         Self {
             kind: OperandKind::Register,
             size,
@@ -180,7 +170,8 @@ impl Operand {
 
     /// Create a new immediate operand
     #[staticmethod]
-    pub fn immediate(value: i64, size: u8) -> Self {
+    #[pyo3(name = "immediate")]
+    pub fn immediate_py(value: i64, size: u8) -> Self {
         Self {
             kind: OperandKind::Immediate,
             size,
@@ -198,7 +189,8 @@ impl Operand {
 
     /// Create a new memory operand
     #[staticmethod]
-    pub fn memory(
+    #[pyo3(name = "memory")]
+    pub fn memory_py(
         size: u8,
         access: Access,
         displacement: Option<i64>,
@@ -267,34 +259,78 @@ impl Operand {
         format!("{}", self)
     }
 
-    /// Check if this operand is a register
-    pub fn is_register(&self) -> bool {
-        self.kind == OperandKind::Register
+    // Helper methods for Operand are provided in pure-Rust impl below.
+
+    // Property getters for Python access
+    #[getter]
+    fn kind(&self) -> OperandKind {
+        self.kind
+    }
+    #[getter]
+    fn size(&self) -> u8 {
+        self.size
+    }
+    #[getter]
+    fn access(&self) -> Access {
+        self.access
+    }
+    #[getter]
+    fn text(&self) -> &str {
+        &self.text
+    }
+    #[getter(register)]
+    fn get_register(&self) -> Option<String> {
+        self.register.clone()
+    }
+    #[getter(immediate)]
+    fn get_immediate(&self) -> Option<i64> {
+        self.immediate
+    }
+    #[getter(displacement)]
+    fn get_displacement(&self) -> Option<i64> {
+        self.displacement
+    }
+    #[getter(segment)]
+    fn get_segment(&self) -> Option<String> {
+        self.segment.clone()
+    }
+    #[getter]
+    fn scale(&self) -> Option<u8> {
+        self.scale
+    }
+    #[getter(base)]
+    fn get_base(&self) -> Option<String> {
+        self.base.clone()
+    }
+    #[getter(index)]
+    fn get_index(&self) -> Option<String> {
+        self.index.clone()
     }
 
-    /// Check if this operand is an immediate
-    pub fn is_immediate(&self) -> bool {
-        self.kind == OperandKind::Immediate
+    // Helper wrappers
+    #[pyo3(name = "is_register")]
+    fn is_register_py(&self) -> bool {
+        Operand::is_register(self)
     }
-
-    /// Check if this operand is a memory reference
-    pub fn is_memory(&self) -> bool {
-        self.kind == OperandKind::Memory
+    #[pyo3(name = "is_immediate")]
+    fn is_immediate_py(&self) -> bool {
+        Operand::is_immediate(self)
     }
-
-    /// Check if this operand reads from the operand
-    pub fn is_read(&self) -> bool {
-        matches!(self.access, Access::Read | Access::ReadWrite)
+    #[pyo3(name = "is_memory")]
+    fn is_memory_py(&self) -> bool {
+        Operand::is_memory(self)
     }
-
-    /// Check if this operand writes to the operand
-    pub fn is_write(&self) -> bool {
-        matches!(self.access, Access::Write | Access::ReadWrite)
+    #[pyo3(name = "is_read")]
+    fn is_read_py(&self) -> bool {
+        Operand::is_read(self)
     }
-
-    /// Get the effective size in bytes
-    pub fn size_bytes(&self) -> usize {
-        (self.size as usize).div_ceil(8) // Round up to bytes
+    #[pyo3(name = "is_write")]
+    fn is_write_py(&self) -> bool {
+        Operand::is_write(self)
+    }
+    #[pyo3(name = "size_bytes")]
+    fn size_bytes_py(&self) -> usize {
+        Operand::size_bytes(self)
     }
 }
 
@@ -341,34 +377,73 @@ impl Operand {
         scale: Option<u8>,
     ) -> Self {
         let mut text = String::new();
-        if let Some(seg) = &base { if seg != "ds" { text.push_str(&format!("{}:", seg)); } }
+        if let Some(seg) = &base {
+            if seg != "ds" {
+                text.push_str(&format!("{}:", seg));
+            }
+        }
         text.push('[');
-        if let Some(b) = &base { text.push_str(b); }
+        if let Some(b) = &base {
+            text.push_str(b);
+        }
         if let Some(idx) = &index {
-            if base.is_some() { text.push_str(" + "); }
+            if base.is_some() {
+                text.push_str(" + ");
+            }
             text.push_str(idx);
-            if let Some(s) = scale { if s > 1 { text.push_str(&format!(" * {}", s)); } }
+            if let Some(s) = scale {
+                if s > 1 {
+                    text.push_str(&format!(" * {}", s));
+                }
+            }
         }
         if let Some(disp) = displacement {
             if base.is_some() || index.is_some() {
-                if disp >= 0 { text.push_str(&format!(" + 0x{:x}", disp)); }
-                else { text.push_str(&format!(" - 0x{:x}", -disp)); }
+                if disp >= 0 {
+                    text.push_str(&format!(" + 0x{:x}", disp));
+                } else {
+                    text.push_str(&format!(" - 0x{:x}", -disp));
+                }
             } else {
                 text.push_str(&format!("0x{:x}", disp));
             }
         }
         text.push(']');
-        Self { kind: OperandKind::Memory, size, access, text, register: None, immediate: None, displacement, segment: None, scale, base, index }
+        Self {
+            kind: OperandKind::Memory,
+            size,
+            access,
+            text,
+            register: None,
+            immediate: None,
+            displacement,
+            segment: None,
+            scale,
+            base,
+            index,
+        }
     }
 }
 
 impl Operand {
-    pub fn is_register(&self) -> bool { self.kind == OperandKind::Register }
-    pub fn is_immediate(&self) -> bool { self.kind == OperandKind::Immediate }
-    pub fn is_memory(&self) -> bool { self.kind == OperandKind::Memory }
-    pub fn is_read(&self) -> bool { matches!(self.access, Access::Read | Access::ReadWrite) }
-    pub fn is_write(&self) -> bool { matches!(self.access, Access::Write | Access::ReadWrite) }
-    pub fn size_bytes(&self) -> usize { (self.size as usize).div_ceil(8) }
+    pub fn is_register(&self) -> bool {
+        self.kind == OperandKind::Register
+    }
+    pub fn is_immediate(&self) -> bool {
+        self.kind == OperandKind::Immediate
+    }
+    pub fn is_memory(&self) -> bool {
+        self.kind == OperandKind::Memory
+    }
+    pub fn is_read(&self) -> bool {
+        matches!(self.access, Access::Read | Access::ReadWrite)
+    }
+    pub fn is_write(&self) -> bool {
+        matches!(self.access, Access::Write | Access::ReadWrite)
+    }
+    pub fn size_bytes(&self) -> usize {
+        (self.size as usize).div_ceil(8)
+    }
 }
 
 impl fmt::Display for Operand {
@@ -382,34 +457,24 @@ impl fmt::Display for Operand {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Instruction {
     /// Address where this instruction is located
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub address: Address,
     /// Raw bytes of the instruction
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub bytes: Vec<u8>,
     /// Instruction mnemonic (e.g., "mov", "add", "jmp")
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub mnemonic: String,
     /// Structured operands
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub operands: Vec<Operand>,
     /// Length of the instruction in bytes
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub length: u16,
     /// Architecture this instruction belongs to
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub arch: String,
     /// Optional semantic descriptor (for future IR/SSA integrations)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub semantics: Option<String>,
     /// Optional side effects of this instruction
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub side_effects: Option<Vec<SideEffect>>,
     /// Optional instruction prefixes
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub prefixes: Option<Vec<String>>,
     /// Optional instruction groups/categories
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub groups: Option<Vec<String>>,
 }
 
@@ -431,7 +496,7 @@ impl Instruction {
         groups=None
     ))]
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new_py(
         address: Address,
         bytes: Vec<u8>,
         mnemonic: String,
@@ -462,160 +527,107 @@ impl Instruction {
         format!("{}", self)
     }
 
-    /// Get the number of operands
-    pub fn operand_count(&self) -> usize {
-        self.operands.len()
+    // Python-visible wrappers that forward to pure-Rust helpers
+    #[pyo3(name = "operand_count")]
+    pub fn operand_count_py(&self) -> usize {
+        self.operand_count()
     }
 
-    /// Check if this instruction has operands
-    pub fn has_operands(&self) -> bool {
-        !self.operands.is_empty()
+    #[pyo3(name = "has_operands")]
+    pub fn has_operands_py(&self) -> bool {
+        self.has_operands()
     }
 
-    /// Check if this instruction modifies memory
-    pub fn modifies_memory(&self) -> bool {
-        if let Some(effects) = &self.side_effects {
-            effects.contains(&SideEffect::MemoryWrite)
-        } else {
-            // Fallback: check operands for write access to memory
-            self.operands
-                .iter()
-                .any(|op| op.is_memory() && op.is_write())
-        }
+    #[pyo3(name = "modifies_memory")]
+    pub fn modifies_memory_py(&self) -> bool {
+        self.modifies_memory()
     }
 
-    /// Check if this instruction modifies registers
-    pub fn modifies_registers(&self) -> bool {
-        if let Some(effects) = &self.side_effects {
-            effects.contains(&SideEffect::RegisterModify)
-        } else {
-            // Fallback: check operands for write access to registers
-            self.operands
-                .iter()
-                .any(|op| op.is_register() && op.is_write())
-        }
+    #[pyo3(name = "modifies_registers")]
+    pub fn modifies_registers_py(&self) -> bool {
+        self.modifies_registers()
     }
 
-    /// Check if this instruction changes control flow
-    pub fn changes_control_flow(&self) -> bool {
-        if let Some(effects) = &self.side_effects {
-            effects.contains(&SideEffect::ControlFlow)
-        } else {
-            // Fallback: check for control flow mnemonics
-            matches!(
-                self.mnemonic.as_str(),
-                "jmp" | "je" | "jne" | "jg" | "jl" | "ja" | "jb" | "call" | "ret" | "iret"
-            )
-        }
+    #[pyo3(name = "changes_control_flow")]
+    pub fn changes_control_flow_py(&self) -> bool {
+        self.changes_control_flow()
     }
 
-    /// Check if this instruction is a branch
-    pub fn is_branch(&self) -> bool {
-        if let Some(groups) = &self.groups {
-            groups.contains(&"branch".to_string())
-        } else {
-            // Fallback: check mnemonic
-            matches!(
-                self.mnemonic.as_str(),
-                "jmp" | "je" | "jne" | "jg" | "jl" | "ja" | "jb" | "jbe" | "jae" | "js" | "jns"
-            )
-        }
+    #[pyo3(name = "is_branch")]
+    pub fn is_branch_py(&self) -> bool {
+        self.is_branch()
     }
 
-    /// Check if this instruction is a call
-    pub fn is_call(&self) -> bool {
-        self.mnemonic == "call"
+    #[pyo3(name = "is_call")]
+    pub fn is_call_py(&self) -> bool {
+        self.is_call()
     }
 
-    /// Check if this instruction is a return
-    pub fn is_return(&self) -> bool {
-        matches!(self.mnemonic.as_str(), "ret" | "iret" | "retf")
+    #[pyo3(name = "is_return")]
+    pub fn is_return_py(&self) -> bool {
+        self.is_return()
     }
 
-    /// Check if this instruction is a system call
-    pub fn is_system_call(&self) -> bool {
-        if let Some(effects) = &self.side_effects {
-            effects.contains(&SideEffect::SystemCall)
-        } else {
-            // Fallback: check for syscall instructions
-            matches!(
-                self.mnemonic.as_str(),
-                "syscall" | "sysenter" | "int" | "svc"
-            )
-        }
+    #[pyo3(name = "is_system_call")]
+    pub fn is_system_call_py(&self) -> bool {
+        self.is_system_call()
     }
 
-    /// Get the end address of this instruction
-    pub fn end_address(&self) -> Address {
-        // Note: This is a simplified calculation. In reality, addresses might not be
-        // simply additive depending on the architecture and addressing mode.
-        let end_value = self.address.value + self.length as u64;
-        Address::new(
-            self.address.kind,
-            end_value,
-            self.address.bits,
-            self.address.space.clone(),
-            None,
-        )
-        .unwrap_or_else(|_| Address {
-            kind: self.address.kind,
-            value: self.address.value,
-            space: self.address.space.clone(),
-            bits: self.address.bits,
-            symbol_ref: self.address.symbol_ref.clone(),
-        })
+    #[pyo3(name = "end_address")]
+    pub fn end_address_py(&self) -> Address {
+        self.end_address()
     }
 
-    /// Get a human-readable disassembly string
-    pub fn disassembly(&self) -> String {
-        let mut result = format!("{:08x}: ", self.address.value);
-
-        // Add hex bytes
-        for (i, byte) in self.bytes.iter().enumerate() {
-            if i > 0 {
-                result.push(' ');
-            }
-            result.push_str(&format!("{:02x}", byte));
-        }
-
-        // Pad to align mnemonics
-        while result.len() < 30 {
-            result.push(' ');
-        }
-
-        // Add mnemonic and operands
-        result.push_str(&self.mnemonic);
-
-        if !self.operands.is_empty() {
-            result.push(' ');
-            for (i, operand) in self.operands.iter().enumerate() {
-                if i > 0 {
-                    result.push_str(", ");
-                }
-                result.push_str(&operand.text);
-            }
-        }
-
-        result
+    #[pyo3(name = "disassembly")]
+    pub fn disassembly_py(&self) -> String {
+        self.disassembly()
     }
 
-    /// Get a summary of the instruction
-    pub fn summary(&self) -> String {
-        let mut parts = vec![self.mnemonic.clone()];
+    #[pyo3(name = "summary")]
+    pub fn summary_py(&self) -> String {
+        self.summary()
+    }
 
-        if !self.operands.is_empty() {
-            let operand_texts: Vec<String> =
-                self.operands.iter().map(|op| op.text.clone()).collect();
-            parts.push(operand_texts.join(", "));
-        }
-
-        if let Some(groups) = &self.groups {
-            if !groups.is_empty() {
-                parts.push(format!("({})", groups.join(", ")));
-            }
-        }
-
-        parts.join(" ")
+    // Property getters
+    #[getter]
+    fn address(&self) -> Address {
+        self.address.clone()
+    }
+    #[getter]
+    fn bytes<'py>(&self, py: Python<'py>) -> Py<pyo3::types::PyBytes> {
+        pyo3::types::PyBytes::new(py, &self.bytes).into()
+    }
+    #[getter]
+    fn mnemonic(&self) -> &str {
+        &self.mnemonic
+    }
+    #[getter]
+    fn operands(&self) -> Vec<Operand> {
+        self.operands.clone()
+    }
+    #[getter]
+    fn length(&self) -> u16 {
+        self.length
+    }
+    #[getter]
+    fn arch(&self) -> &str {
+        &self.arch
+    }
+    #[getter]
+    fn semantics(&self) -> Option<String> {
+        self.semantics.clone()
+    }
+    #[getter]
+    fn side_effects(&self) -> Option<Vec<SideEffect>> {
+        self.side_effects.clone()
+    }
+    #[getter]
+    fn prefixes(&self) -> Option<Vec<String>> {
+        self.prefixes.clone()
+    }
+    #[getter]
+    fn groups(&self) -> Option<Vec<String>> {
+        self.groups.clone()
     }
 }
 
@@ -633,45 +645,132 @@ impl Instruction {
         prefixes: Option<Vec<String>>,
         groups: Option<Vec<String>>,
     ) -> Self {
-        Self { address, bytes, mnemonic, operands, length, arch, semantics, side_effects, prefixes, groups }
+        Self {
+            address,
+            bytes,
+            mnemonic,
+            operands,
+            length,
+            arch,
+            semantics,
+            side_effects,
+            prefixes,
+            groups,
+        }
     }
 
-    pub fn operand_count(&self) -> usize { self.operands.len() }
-    pub fn has_operands(&self) -> bool { !self.operands.is_empty() }
+    pub fn operand_count(&self) -> usize {
+        self.operands.len()
+    }
+    pub fn has_operands(&self) -> bool {
+        !self.operands.is_empty()
+    }
     pub fn modifies_memory(&self) -> bool {
-        if let Some(effects) = &self.side_effects { effects.contains(&SideEffect::MemoryWrite) } else { self.operands.iter().any(|op| op.is_memory() && op.is_write()) }
+        if let Some(effects) = &self.side_effects {
+            effects.contains(&SideEffect::MemoryWrite)
+        } else {
+            self.operands
+                .iter()
+                .any(|op| op.is_memory() && op.is_write())
+        }
     }
     pub fn modifies_registers(&self) -> bool {
-        if let Some(effects) = &self.side_effects { effects.contains(&SideEffect::RegisterModify) } else { self.operands.iter().any(|op| op.is_register() && op.is_write()) }
+        if let Some(effects) = &self.side_effects {
+            effects.contains(&SideEffect::RegisterModify)
+        } else {
+            self.operands
+                .iter()
+                .any(|op| op.is_register() && op.is_write())
+        }
     }
     pub fn changes_control_flow(&self) -> bool {
-        if let Some(effects) = &self.side_effects { effects.contains(&SideEffect::ControlFlow) } else { matches!( self.mnemonic.as_str(), "jmp"|"je"|"jne"|"jg"|"jl"|"ja"|"jb"|"call"|"ret"|"iret" ) }
+        if let Some(effects) = &self.side_effects {
+            effects.contains(&SideEffect::ControlFlow)
+        } else {
+            matches!(
+                self.mnemonic.as_str(),
+                "jmp" | "je" | "jne" | "jg" | "jl" | "ja" | "jb" | "call" | "ret" | "iret"
+            )
+        }
     }
     pub fn is_branch(&self) -> bool {
-        if let Some(groups) = &self.groups { groups.contains(&"branch".to_string()) } else { matches!( self.mnemonic.as_str(), "jmp"|"je"|"jne"|"jg"|"jl"|"ja"|"jb"|"jbe"|"jae"|"js"|"jns" ) }
+        if let Some(groups) = &self.groups {
+            groups.contains(&"branch".to_string())
+        } else {
+            matches!(
+                self.mnemonic.as_str(),
+                "jmp" | "je" | "jne" | "jg" | "jl" | "ja" | "jb" | "jbe" | "jae" | "js" | "jns"
+            )
+        }
     }
-    pub fn is_call(&self) -> bool { self.mnemonic == "call" }
-    pub fn is_return(&self) -> bool { matches!(self.mnemonic.as_str(), "ret" | "iret" | "retf") }
+    pub fn is_call(&self) -> bool {
+        self.mnemonic == "call"
+    }
+    pub fn is_return(&self) -> bool {
+        matches!(self.mnemonic.as_str(), "ret" | "iret" | "retf")
+    }
+    pub fn is_system_call(&self) -> bool {
+        if let Some(effects) = &self.side_effects {
+            effects.contains(&SideEffect::SystemCall)
+        } else {
+            matches!(
+                self.mnemonic.as_str(),
+                "syscall" | "sysenter" | "int" | "svc"
+            )
+        }
+    }
     pub fn end_address(&self) -> Address {
         let end_value = self.address.value + self.length as u64;
-        Address::new(self.address.kind, end_value, self.address.bits, self.address.space.clone(), None)
-            .unwrap_or_else(|_| Address { kind: self.address.kind, value: self.address.value, space: self.address.space.clone(), bits: self.address.bits, symbol_ref: self.address.symbol_ref.clone() })
+        Address::new(
+            self.address.kind,
+            end_value,
+            self.address.bits,
+            self.address.space.clone(),
+            None,
+        )
+        .unwrap_or_else(|_| Address {
+            kind: self.address.kind,
+            value: self.address.value,
+            space: self.address.space.clone(),
+            bits: self.address.bits,
+            symbol_ref: self.address.symbol_ref.clone(),
+        })
     }
     pub fn disassembly(&self) -> String {
         let mut result = format!("{:08x}: ", self.address.value);
-        for (i, byte) in self.bytes.iter().enumerate() { if i > 0 { result.push(' '); } result.push_str(&format!("{:02x}", byte)); }
-        while result.len() < 30 { result.push(' '); }
+        for (i, byte) in self.bytes.iter().enumerate() {
+            if i > 0 {
+                result.push(' ');
+            }
+            result.push_str(&format!("{:02x}", byte));
+        }
+        while result.len() < 30 {
+            result.push(' ');
+        }
         result.push_str(&self.mnemonic);
         if !self.operands.is_empty() {
             result.push(' ');
-            for (i, operand) in self.operands.iter().enumerate() { if i > 0 { result.push_str(", "); } result.push_str(&operand.text); }
+            for (i, operand) in self.operands.iter().enumerate() {
+                if i > 0 {
+                    result.push_str(", ");
+                }
+                result.push_str(&operand.text);
+            }
         }
         result
     }
     pub fn summary(&self) -> String {
         let mut parts = vec![self.mnemonic.clone()];
-        if !self.operands.is_empty() { let operand_texts: Vec<String> = self.operands.iter().map(|op| op.text.clone()).collect(); parts.push(operand_texts.join(", ")); }
-        if let Some(groups) = &self.groups { if !groups.is_empty() { parts.push(format!("({})", groups.join(", "))); } }
+        if !self.operands.is_empty() {
+            let operand_texts: Vec<String> =
+                self.operands.iter().map(|op| op.text.clone()).collect();
+            parts.push(operand_texts.join(", "));
+        }
+        if let Some(groups) = &self.groups {
+            if !groups.is_empty() {
+                parts.push(format!("({})", groups.join(", ")));
+            }
+        }
         parts.join(" ")
     }
 }

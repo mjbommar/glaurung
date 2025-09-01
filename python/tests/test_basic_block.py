@@ -115,7 +115,7 @@ class TestBasicBlockProperties:
         assert not block.contains_address(end_addr_test)
 
         # Address before the block
-        before_addr = Address(AddressKind.VA, 0x0ff0, bits=64)
+        before_addr = Address(AddressKind.VA, 0x0FF0, bits=64)
         assert not block.contains_address(before_addr)
 
         # Address after the block
@@ -203,7 +203,9 @@ class TestBasicBlockDisplay:
         start_addr = Address(AddressKind.VA, 0x1000, bits=64)
         end_addr = Address(AddressKind.VA, 0x1020, bits=64)
 
-        block = BasicBlock("test_bb", start_addr, end_addr, 3, ["succ1"], ["pred1", "pred2"])
+        block = BasicBlock(
+            "test_bb", start_addr, end_addr, 3, ["succ1"], ["pred1", "pred2"]
+        )
 
         display_str = str(block)
         assert "BasicBlock" in display_str
@@ -220,7 +222,9 @@ class TestBasicBlockDisplay:
         end_addr = Address(AddressKind.VA, 0x1020, bits=64)
 
         # Regular block
-        regular_block = BasicBlock("regular", start_addr, end_addr, 3, ["succ1"], ["pred1"])
+        regular_block = BasicBlock(
+            "regular", start_addr, end_addr, 3, ["succ1"], ["pred1"]
+        )
         summary = regular_block.summary()
         assert "BB:regular" in summary
         assert "1000-1020" in summary
@@ -329,7 +333,8 @@ class TestBasicBlockEdgeCases:
 
         block = BasicBlock("large", start_addr, end_addr, 1000)
 
-        assert block.size_bytes() == 0xFFFFF  # 1MB - 1
+        # Library uses half-open intervals [start, end), so size = end - start
+        assert block.size_bytes() == 0xFF000  # 1MB - 4KB
         assert not block.is_single_instruction()
 
     def test_basic_block_many_relationships(self):
@@ -340,7 +345,9 @@ class TestBasicBlockEdgeCases:
         successors = [f"bb_{i}" for i in range(10)]
         predecessors = [f"pred_{i}" for i in range(5)]
 
-        block = BasicBlock("many_relations", start_addr, end_addr, 5, successors, predecessors)
+        block = BasicBlock(
+            "many_relations", start_addr, end_addr, 5, successors, predecessors
+        )
 
         assert block.successor_count() == 10
         assert block.predecessor_count() == 5
@@ -377,7 +384,9 @@ class TestBasicBlockEdgeCases:
         start_addr = Address(AddressKind.VA, 0x1000, bits=64)
         end_addr = Address(AddressKind.VA, 0x1020, bits=64)
 
-        block = BasicBlock("test", start_addr, end_addr, 5, ["existing"], ["existing_pred"])
+        block = BasicBlock(
+            "test", start_addr, end_addr, 5, ["existing"], ["existing_pred"]
+        )
 
         # Try to remove non-existent relationships
         block.remove_successor("nonexistent")

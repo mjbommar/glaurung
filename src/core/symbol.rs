@@ -172,34 +172,24 @@ impl fmt::Display for SymbolSource {
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Symbol {
     /// Unique identifier for the symbol
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub id: String,
     /// Mangled/exported name
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub name: String,
     /// Demangled name (optional)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub demangled: Option<String>,
     /// Symbol kind
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub kind: SymbolKind,
     /// Address where symbol is located (optional)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub address: Option<Address>,
     /// Size of the symbol (optional)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub size: Option<u64>,
     /// Symbol binding (optional)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub binding: Option<SymbolBinding>,
     /// Module/library source (optional)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub module: Option<String>,
     /// Symbol visibility (optional)
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub visibility: Option<SymbolVisibility>,
     /// Source of the symbol information
-    #[cfg_attr(feature = "python-ext", pyo3(get, set))]
     pub source: SymbolSource,
 }
 
@@ -217,17 +207,44 @@ impl Symbol {
         module: Option<String>,
         visibility: Option<SymbolVisibility>,
     ) -> Self {
-        Self { id, name, demangled, kind, address, size, binding, module, visibility, source }
+        Self {
+            id,
+            name,
+            demangled,
+            kind,
+            address,
+            size,
+            binding,
+            module,
+            visibility,
+            source,
+        }
     }
 
-    pub fn display_name(&self) -> &str { self.demangled.as_deref().unwrap_or(&self.name) }
-    pub fn is_function(&self) -> bool { self.kind == SymbolKind::Function }
-    pub fn is_object(&self) -> bool { self.kind == SymbolKind::Object }
-    pub fn is_import(&self) -> bool { self.kind == SymbolKind::Import }
-    pub fn is_export(&self) -> bool { self.kind == SymbolKind::Export }
-    pub fn is_global(&self) -> bool { self.binding == Some(SymbolBinding::Global) }
-    pub fn is_local(&self) -> bool { self.binding == Some(SymbolBinding::Local) }
-    pub fn is_weak(&self) -> bool { self.binding == Some(SymbolBinding::Weak) }
+    pub fn display_name(&self) -> &str {
+        self.demangled.as_deref().unwrap_or(&self.name)
+    }
+    pub fn is_function(&self) -> bool {
+        self.kind == SymbolKind::Function
+    }
+    pub fn is_object(&self) -> bool {
+        self.kind == SymbolKind::Object
+    }
+    pub fn is_import(&self) -> bool {
+        self.kind == SymbolKind::Import
+    }
+    pub fn is_export(&self) -> bool {
+        self.kind == SymbolKind::Export
+    }
+    pub fn is_global(&self) -> bool {
+        self.binding == Some(SymbolBinding::Global)
+    }
+    pub fn is_local(&self) -> bool {
+        self.binding == Some(SymbolBinding::Local)
+    }
+    pub fn is_weak(&self) -> bool {
+        self.binding == Some(SymbolBinding::Weak)
+    }
 }
 
 #[cfg(feature = "python-ext")]
@@ -248,7 +265,7 @@ impl Symbol {
         visibility=None
     ))]
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new_py(
         id: String,
         name: String,
         kind: SymbolKind,
@@ -279,65 +296,96 @@ impl Symbol {
         format!("{}", self)
     }
 
-    /// Get the display name (demangled if available, otherwise mangled)
-    pub fn display_name(&self) -> &str {
-        self.demangled.as_ref().unwrap_or(&self.name)
+    // Property getters
+    #[getter]
+    fn id(&self) -> &str {
+        &self.id
+    }
+    #[getter]
+    fn name(&self) -> &str {
+        &self.name
+    }
+    #[getter]
+    fn demangled(&self) -> Option<String> {
+        self.demangled.clone()
+    }
+    #[getter]
+    fn kind(&self) -> SymbolKind {
+        self.kind
+    }
+    #[getter]
+    fn address(&self) -> Option<Address> {
+        self.address.clone()
+    }
+    #[getter]
+    fn size(&self) -> Option<u64> {
+        self.size
+    }
+    #[getter]
+    fn binding(&self) -> Option<SymbolBinding> {
+        self.binding
+    }
+    #[getter]
+    fn module(&self) -> Option<String> {
+        self.module.clone()
+    }
+    #[getter]
+    fn visibility(&self) -> Option<SymbolVisibility> {
+        self.visibility
+    }
+    #[getter]
+    fn source(&self) -> SymbolSource {
+        self.source
     }
 
-    /// Check if this is a function symbol
-    pub fn is_function(&self) -> bool {
+    // Helper wrappers
+    #[pyo3(name = "display_name")]
+    fn display_name_py(&self) -> String {
+        self.demangled.clone().unwrap_or_else(|| self.name.clone())
+    }
+    #[pyo3(name = "is_function")]
+    fn is_function_py(&self) -> bool {
         self.kind == SymbolKind::Function
     }
-
-    /// Check if this is a data object symbol
-    pub fn is_object(&self) -> bool {
+    #[pyo3(name = "is_object")]
+    fn is_object_py(&self) -> bool {
         self.kind == SymbolKind::Object
     }
-
-    /// Check if this is an imported symbol
-    pub fn is_import(&self) -> bool {
+    #[pyo3(name = "is_import")]
+    fn is_import_py(&self) -> bool {
         self.kind == SymbolKind::Import
     }
-
-    /// Check if this is an exported symbol
-    pub fn is_export(&self) -> bool {
+    #[pyo3(name = "is_export")]
+    fn is_export_py(&self) -> bool {
         self.kind == SymbolKind::Export
     }
-
-    /// Check if this is a global symbol
-    pub fn is_global(&self) -> bool {
+    #[pyo3(name = "is_global")]
+    fn is_global_py(&self) -> bool {
         self.binding == Some(SymbolBinding::Global)
     }
-
-    /// Check if this is a local symbol
-    pub fn is_local(&self) -> bool {
+    #[pyo3(name = "is_local")]
+    fn is_local_py(&self) -> bool {
         self.binding == Some(SymbolBinding::Local)
     }
-
-    /// Check if this is a weak symbol
-    pub fn is_weak(&self) -> bool {
+    #[pyo3(name = "is_weak")]
+    fn is_weak_py(&self) -> bool {
         self.binding == Some(SymbolBinding::Weak)
     }
-
-    /// Get a human-readable description
-    pub fn description(&self) -> String {
-        let display_name = self.display_name();
-        let kind_str = format!("{}", self.kind);
+    #[pyo3(name = "description")]
+    fn description_py(&self) -> String {
+        let display_name = self.demangled.as_deref().unwrap_or(&self.name);
         let binding_str = self
             .binding
-            .as_ref()
-            .map(|b| format!(" {}", b))
+            .map(|b| format!(", binding: {}", b))
             .unwrap_or_default();
-
-        let address_str = self
+        let addr_str = self
             .address
             .as_ref()
-            .map(|addr| format!(" at {}", addr))
+            .map(|a| format!(" at {}", a))
             .unwrap_or_default();
-
         format!(
-            "Symbol '{}' ({}{}{})",
-            display_name, kind_str, binding_str, address_str
+            "Symbol '{}' (kind: {}{}, id: {}){}",
+            display_name, self.kind, binding_str, self.id, addr_str
         )
     }
 }

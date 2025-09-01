@@ -71,11 +71,14 @@ impl<R: Read> Read for BoundedReader<R> {
 
         let n = self.inner.read(read_buf)?;
         self.bytes_read += n as u64;
-        
+
         if self.bytes_read >= self.limit {
-            warn!("BoundedReader limit reached after reading {} bytes", self.bytes_read);
+            warn!(
+                "BoundedReader limit reached after reading {} bytes",
+                self.bytes_read
+            );
         }
-        
+
         Ok(n)
     }
 }
@@ -146,17 +149,22 @@ impl SafeFileReader {
     pub fn open<P: AsRef<Path>>(path: P, limits: IOLimits) -> io::Result<Self> {
         let path = path.as_ref();
         info!("Opening file for safe reading: {:?}", path);
-        
+
         let file = File::open(path)?;
         let metadata = file.metadata()?;
         let size = metadata.len();
 
-        debug!("File size: {} bytes, limits: max_file={}, max_read={}", 
-               size, limits.max_file_size, limits.max_read_bytes);
+        debug!(
+            "File size: {} bytes, limits: max_file={}, max_read={}",
+            size, limits.max_file_size, limits.max_read_bytes
+        );
 
         // Check file size limit
         if size > limits.max_file_size {
-            warn!("File too large: {} bytes (limit: {})", size, limits.max_file_size);
+            warn!(
+                "File too large: {} bytes (limit: {})",
+                size, limits.max_file_size
+            );
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(

@@ -4,12 +4,13 @@
 //! for different disassembler backends (Capstone, Zydis, custom implementations, etc.).
 //! It also includes error types for disassembly operations.
 
-use std::fmt;
 #[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use crate::core::address::Address;
+use crate::core::binary::Endianness;
 use crate::core::instruction::Instruction;
 
 /// Errors that can occur during disassembly operations
@@ -56,7 +57,7 @@ pub type DisassemblerResult<T> = Result<T, DisassemblerError>;
 
 /// Architecture types supported by disassemblers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "python-ext", pyclass)]
+#[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum Architecture {
     /// x86 (32-bit)
     X86,
@@ -113,6 +114,18 @@ impl Architecture {
     fn __str__(&self) -> String {
         format!("{}", self)
     }
+
+    /// Address size in bits
+    #[pyo3(name = "address_bits")]
+    fn address_bits_py(&self) -> u8 {
+        self.address_bits()
+    }
+
+    /// True if this is a 64-bit architecture
+    #[pyo3(name = "is_64_bit")]
+    fn is_64_bit_py(&self) -> bool {
+        self.is_64_bit()
+    }
 }
 
 impl fmt::Display for Architecture {
@@ -133,33 +146,7 @@ impl fmt::Display for Architecture {
     }
 }
 
-/// Endianness for disassembly
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "python-ext", pyclass)]
-pub enum Endianness {
-    /// Little endian (x86, ARM)
-    Little,
-    /// Big endian (PowerPC, MIPS in some cases)
-    Big,
-}
-
-#[cfg(feature = "python-ext")]
-#[pymethods]
-impl Endianness {
-    /// String representation for display
-    fn __str__(&self) -> String {
-        format!("{}", self)
-    }
-}
-
-impl fmt::Display for Endianness {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Endianness::Little => write!(f, "Little"),
-            Endianness::Big => write!(f, "Big"),
-        }
-    }
-}
+// Endianness type is unified from core::binary::Endianness
 
 /// Core disassembler trait that provides a common interface for instruction decoding
 pub trait Disassembler {
@@ -194,11 +181,17 @@ pub trait Disassembler {
         match (self.architecture(), address.kind) {
             (Architecture::X86 | Architecture::X86_64, crate::core::address::AddressKind::VA)
             | (Architecture::X86 | Architecture::X86_64, crate::core::address::AddressKind::RVA)
-            | (Architecture::X86 | Architecture::X86_64, crate::core::address::AddressKind::FileOffset)
+            | (
+                Architecture::X86 | Architecture::X86_64,
+                crate::core::address::AddressKind::FileOffset,
+            )
             | (Architecture::ARM | Architecture::ARM64, crate::core::address::AddressKind::VA)
             | (Architecture::MIPS | Architecture::MIPS64, crate::core::address::AddressKind::VA)
             | (Architecture::PPC | Architecture::PPC64, crate::core::address::AddressKind::VA)
-            | (Architecture::RISCV | Architecture::RISCV64, crate::core::address::AddressKind::VA) => {
+            | (
+                Architecture::RISCV | Architecture::RISCV64,
+                crate::core::address::AddressKind::VA,
+            ) => {
                 // Check if address bits match architecture
                 address.bits == self.architecture().address_bits()
             }
@@ -260,7 +253,24 @@ impl DisassemblerConfig {
 
     /// String representation for display
     fn __str__(&self) -> String {
-        format!("DisassemblerConfig(arch={}, endian={})", self.architecture, self.endianness)
+        format!(
+            "DisassemblerConfig(arch={}, endian={})",
+            self.architecture, self.endianness
+        )
+    }
+
+    // Property getters for Python
+    #[getter]
+    fn architecture(&self) -> Architecture {
+        self.architecture
+    }
+    #[getter]
+    fn endianness(&self) -> Endianness {
+        self.endianness
+    }
+    #[getter]
+    fn options(&self) -> std::collections::HashMap<String, String> {
+        self.options.clone()
     }
 }
 
@@ -271,11 +281,26 @@ mod tests {
 
     #[test]
     fn test_disassembler_error_display() {
-        assert_eq!(format!("{}", DisassemblerError::InvalidInstruction()), "InvalidInstruction");
-        assert_eq!(format!("{}", DisassemblerError::InvalidAddress()), "InvalidAddress");
-        assert_eq!(format!("{}", DisassemblerError::InsufficientBytes()), "InsufficientBytes");
-        assert_eq!(format!("{}", DisassemblerError::UnsupportedInstruction()), "UnsupportedInstruction");
-        assert_eq!(format!("{}", DisassemblerError::InternalError("test".to_string())), "InternalError: test");
+        assert_eq!(
+            format!("{}", DisassemblerError::InvalidInstruction()),
+            "InvalidInstruction"
+        );
+        assert_eq!(
+            format!("{}", DisassemblerError::InvalidAddress()),
+            "InvalidAddress"
+        );
+        assert_eq!(
+            format!("{}", DisassemblerError::InsufficientBytes()),
+            "InsufficientBytes"
+        );
+        assert_eq!(
+            format!("{}", DisassemblerError::UnsupportedInstruction()),
+            "UnsupportedInstruction"
+        );
+        assert_eq!(
+            format!("{}", DisassemblerError::InternalError("test".to_string())),
+            "InternalError: test"
+        );
     }
 
     #[test]
@@ -323,7 +348,8 @@ mod tests {
         let mut options = std::collections::HashMap::new();
         options.insert("syntax".to_string(), "intel".to_string());
 
-        let config = DisassemblerConfig::new(Architecture::X86_64, Endianness::Little, Some(options));
+        let config =
+            DisassemblerConfig::new(Architecture::X86_64, Endianness::Little, Some(options));
         assert_eq!(config.architecture, Architecture::X86_64);
         assert_eq!(config.endianness, Endianness::Little);
         assert_eq!(config.options.get("syntax"), Some(&"intel".to_string()));
@@ -337,7 +363,11 @@ mod tests {
         }
 
         impl Disassembler for MockDisassembler {
-            fn disassemble_instruction(&self, _address: &Address, _bytes: &[u8]) -> DisassemblerResult<Instruction> {
+            fn disassemble_instruction(
+                &self,
+                _address: &Address,
+                _bytes: &[u8],
+            ) -> DisassemblerResult<Instruction> {
                 Err(DisassemblerError::UnsupportedInstruction())
             }
 
@@ -354,8 +384,12 @@ mod tests {
             }
         }
 
-        let x86_disasm = MockDisassembler { arch: Architecture::X86 };
-        let x64_disasm = MockDisassembler { arch: Architecture::X86_64 };
+        let x86_disasm = MockDisassembler {
+            arch: Architecture::X86,
+        };
+        let x64_disasm = MockDisassembler {
+            arch: Architecture::X86_64,
+        };
 
         // Test valid addresses
         let va32 = Address::new(AddressKind::VA, 0x1000, 32, None, None).unwrap();

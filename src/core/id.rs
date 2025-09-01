@@ -53,8 +53,12 @@ impl fmt::Display for IdKind {
 }
 
 impl Id {
-    pub fn new(value: String, kind: IdKind) -> Self { Id { value, kind } }
-    pub fn is_valid(&self) -> bool { !self.value.is_empty() }
+    pub fn new(value: String, kind: IdKind) -> Self {
+        Id { value, kind }
+    }
+    pub fn is_valid(&self) -> bool {
+        !self.value.is_empty()
+    }
 }
 
 /// A stable identifier for entities in the binary analysis system.
@@ -79,7 +83,7 @@ impl Id {
     /// Returns:
     ///     Id: A new Id instance
     #[new]
-    fn new(value: String, kind: IdKind) -> Self {
+    fn new_py(value: String, kind: IdKind) -> Self {
         Id { value, kind }
     }
 
@@ -105,9 +109,10 @@ impl Id {
         format!("Id('{}', IdKind.{:?})", self.value, self.kind)
     }
 
-    /// Check if this ID is valid (non-empty).
-    fn is_valid(&self) -> bool {
-        !self.value.is_empty()
+    // is_valid is provided in the pure-Rust impl below.
+    #[pyo3(name = "is_valid")]
+    fn is_valid_py(&self) -> bool {
+        self.is_valid()
     }
 }
 
@@ -147,27 +152,46 @@ impl IdGenerator {
         let hash = hasher.finalize();
         let hash_hex = hex::encode(hash);
         let value = format!("bin:sha256:{}", hash_hex);
-        Id { value, kind: IdKind::Binary }
+        Id {
+            value,
+            kind: IdKind::Binary,
+        }
     }
 
     pub fn binary_from_uuid(uuid: String) -> Id {
         let value = format!("bin:uuid:{}", uuid);
-        Id { value, kind: IdKind::Binary }
+        Id {
+            value,
+            kind: IdKind::Binary,
+        }
     }
 
     pub fn function(binary_id: &str, address: &str) -> Id {
         let value = format!("func:{}:{}", binary_id, address);
-        Id { value, kind: IdKind::Function }
+        Id {
+            value,
+            kind: IdKind::Function,
+        }
     }
 
     pub fn basic_block(binary_id: &str, address: &str) -> Id {
         let value = format!("bb:{}:{}", binary_id, address);
-        Id { value, kind: IdKind::BasicBlock }
+        Id {
+            value,
+            kind: IdKind::BasicBlock,
+        }
     }
 
     pub fn symbol(name: &str, address: Option<String>) -> Id {
-        let value = if let Some(addr) = address { format!("sym:{}:{}", name, addr) } else { format!("sym:{}", name) };
-        Id { value, kind: IdKind::Symbol }
+        let value = if let Some(addr) = address {
+            format!("sym:{}:{}", name, addr)
+        } else {
+            format!("sym:{}", name)
+        };
+        Id {
+            value,
+            kind: IdKind::Symbol,
+        }
     }
 
     pub fn section(name: Option<String>, index: Option<u32>) -> Id {
@@ -177,7 +201,10 @@ impl IdGenerator {
             (None, Some(i)) => format!("sect:idx:{}", i),
             (None, None) => "sect:unknown".to_string(),
         };
-        Id { value, kind: IdKind::Section }
+        Id {
+            value,
+            kind: IdKind::Section,
+        }
     }
 
     pub fn segment(name: Option<String>, index: Option<u32>) -> Id {
@@ -187,12 +214,18 @@ impl IdGenerator {
             (None, Some(i)) => format!("seg:idx:{}", i),
             (None, None) => "seg:unknown".to_string(),
         };
-        Id { value, kind: IdKind::Segment }
+        Id {
+            value,
+            kind: IdKind::Segment,
+        }
     }
 
     pub fn instruction(address: &str) -> Id {
         let value = format!("insn:{}", address);
-        Id { value, kind: IdKind::Instruction }
+        Id {
+            value,
+            kind: IdKind::Instruction,
+        }
     }
 
     pub fn variable(context: &str, name: Option<String>, offset: Option<i64>) -> Id {
@@ -202,7 +235,10 @@ impl IdGenerator {
             (None, Some(o)) => format!("var:{}:offset:{}", context, o),
             (None, None) => format!("var:{}:unnamed", context),
         };
-        Id { value, kind: IdKind::Variable }
+        Id {
+            value,
+            kind: IdKind::Variable,
+        }
     }
 
     pub fn data_type(name: Option<String>, content_hash: Option<String>) -> Id {
@@ -212,12 +248,18 @@ impl IdGenerator {
             (None, Some(h)) => format!("type:anon:{}", h),
             (None, None) => "type:unknown".to_string(),
         };
-        Id { value, kind: IdKind::DataType }
+        Id {
+            value,
+            kind: IdKind::DataType,
+        }
     }
 
     pub fn entity(entity_type: &str, identifier: &str) -> Id {
         let value = format!("{}:{}", entity_type, identifier);
-        Id { value, kind: IdKind::Entity }
+        Id {
+            value,
+            kind: IdKind::Entity,
+        }
     }
 
     pub fn uuid(kind: IdKind) -> Id {
@@ -248,7 +290,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A content-based binary ID
     #[staticmethod]
-    fn binary_from_content(content: &[u8], path: Option<String>) -> Id {
+    #[pyo3(name = "binary_from_content")]
+    fn binary_from_content_py(content: &[u8], path: Option<String>) -> Id {
         let mut hasher = Sha256::new();
         hasher.update(content);
 
@@ -275,7 +318,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A UUID-based binary ID
     #[staticmethod]
-    fn binary_from_uuid(uuid: String) -> Id {
+    #[pyo3(name = "binary_from_uuid")]
+    fn binary_from_uuid_py(uuid: String) -> Id {
         let value = format!("bin:uuid:{}", uuid);
         Id {
             value,
@@ -292,7 +336,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A deterministic function ID
     #[staticmethod]
-    fn function(binary_id: &str, address: &str) -> Id {
+    #[pyo3(name = "function")]
+    fn function_py(binary_id: &str, address: &str) -> Id {
         let value = format!("func:{}:{}", binary_id, address);
         Id {
             value,
@@ -309,7 +354,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A deterministic basic block ID
     #[staticmethod]
-    fn basic_block(binary_id: &str, address: &str) -> Id {
+    #[pyo3(name = "basic_block")]
+    fn basic_block_py(binary_id: &str, address: &str) -> Id {
         let value = format!("bb:{}:{}", binary_id, address);
         Id {
             value,
@@ -326,7 +372,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A symbol ID
     #[staticmethod]
-    fn symbol(name: &str, address: Option<String>) -> Id {
+    #[pyo3(name = "symbol")]
+    fn symbol_py(name: &str, address: Option<String>) -> Id {
         let value = if let Some(addr) = address {
             format!("sym:{}:{}", name, addr)
         } else {
@@ -347,7 +394,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A section ID
     #[staticmethod]
-    fn section(name: Option<String>, index: Option<u32>) -> Id {
+    #[pyo3(name = "section")]
+    fn section_py(name: Option<String>, index: Option<u32>) -> Id {
         let value = match (name, index) {
             (Some(n), Some(i)) => format!("sect:{}:{}", n, i),
             (Some(n), None) => format!("sect:{}", n),
@@ -369,7 +417,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A segment ID
     #[staticmethod]
-    fn segment(name: Option<String>, index: Option<u32>) -> Id {
+    #[pyo3(name = "segment")]
+    fn segment_py(name: Option<String>, index: Option<u32>) -> Id {
         let value = match (name, index) {
             (Some(n), Some(i)) => format!("seg:{}:{}", n, i),
             (Some(n), None) => format!("seg:{}", n),
@@ -390,7 +439,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: An instruction ID
     #[staticmethod]
-    fn instruction(address: &str) -> Id {
+    #[pyo3(name = "instruction")]
+    fn instruction_py(address: &str) -> Id {
         let value = format!("insn:{}", address);
         Id {
             value,
@@ -408,7 +458,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A variable ID
     #[staticmethod]
-    fn variable(context: &str, name: Option<String>, offset: Option<i64>) -> Id {
+    #[pyo3(name = "variable")]
+    fn variable_py(context: &str, name: Option<String>, offset: Option<i64>) -> Id {
         let value = match (name, offset) {
             (Some(n), Some(o)) => format!("var:{}:{}:{}", context, n, o),
             (Some(n), None) => format!("var:{}:{}", context, n),
@@ -430,7 +481,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A data type ID
     #[staticmethod]
-    fn data_type(name: Option<String>, content_hash: Option<String>) -> Id {
+    #[pyo3(name = "data_type")]
+    fn data_type_py(name: Option<String>, content_hash: Option<String>) -> Id {
         let value = match (name, content_hash) {
             (Some(n), Some(h)) => format!("type:{}:{}", n, h),
             (Some(n), None) => format!("type:{}", n),
@@ -452,7 +504,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A generic entity ID
     #[staticmethod]
-    fn entity(entity_type: &str, identifier: &str) -> Id {
+    #[pyo3(name = "entity")]
+    fn entity_py(entity_type: &str, identifier: &str) -> Id {
         let value = format!("{}:{}", entity_type, identifier);
         Id {
             value,
@@ -468,7 +521,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A UUID-based ID
     #[staticmethod]
-    fn uuid(kind: IdKind) -> Id {
+    #[pyo3(name = "uuid")]
+    fn uuid_py(kind: IdKind) -> Id {
         let uuid = Uuid::new_v4();
         let value = format!("{}:uuid:{}", kind.to_string().to_lowercase(), uuid);
         Id { value, kind }
@@ -483,7 +537,8 @@ impl IdGenerator {
     /// Returns:
     ///     Id: A hash-based ID
     #[staticmethod]
-    fn hash(kind: IdKind, content: &str) -> Id {
+    #[pyo3(name = "hash")]
+    fn hash_py(kind: IdKind, content: &str) -> Id {
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
         let hash = hasher.finalize();

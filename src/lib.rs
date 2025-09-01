@@ -60,10 +60,9 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::core::register::Register>()?;
     m.add_class::<crate::core::disassembler::DisassemblerError>()?;
     m.add_class::<crate::core::disassembler::Architecture>()?;
-    m.add_class::<crate::core::disassembler::Endianness>()?;
+    // Endianness is exported from core::binary to avoid name collisions
     m.add_class::<crate::core::disassembler::DisassemblerConfig>()?;
-    // TODO: Fix BasicBlock compilation issues
-    // m.add_class::<crate::core::basic_block::BasicBlock>()?;
+    m.add_class::<crate::core::basic_block::BasicBlock>()?;
     m.add_class::<crate::core::pattern::MetadataValue>()?;
     m.add_class::<crate::core::pattern::PatternType>()?;
     m.add_class::<crate::core::pattern::YaraMatch>()?;

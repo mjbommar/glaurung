@@ -189,22 +189,43 @@ impl ToolMetadata {
         )
     }
 
-    /// Check if the tool metadata is valid.
-    ///
-    /// # Returns
-    /// true if valid, false otherwise
-    pub fn is_valid(&self) -> bool {
-        self.validate().is_ok()
+    // Expose validation helper with Python name
+    #[pyo3(name = "is_valid")]
+    pub fn is_valid_py(&self) -> bool {
+        self.is_valid()
     }
 
-    // Parameter helpers exposed in pure Rust impl below
+    // Parameter helpers are exposed in the pure-Rust impl below
+
+    // Python-accessible parameter helpers
+    #[pyo3(name = "parameter_count")]
+    pub fn parameter_count_py(&self) -> usize {
+        self.parameter_count()
+    }
+    #[pyo3(name = "has_parameters")]
+    pub fn has_parameters_py(&self) -> bool {
+        self.has_parameters()
+    }
+    #[pyo3(name = "get_parameter")]
+    pub fn get_parameter_py(&self, key: &str) -> Option<String> {
+        self.get_parameter(key).cloned()
+    }
+    #[pyo3(name = "set_parameter")]
+    pub fn set_parameter_py(&mut self, key: String, value: String) {
+        self.set_parameter(key, value)
+    }
+    #[pyo3(name = "remove_parameter")]
+    pub fn remove_parameter_py(&mut self, key: &str) -> Option<String> {
+        self.remove_parameter(key)
+    }
 
     /// Serialize to JSON string.
     ///
     /// # Returns
     /// JSON string representation
     pub fn to_json(&self) -> PyResult<String> {
-        self.to_json_string().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+        self.to_json_string()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Deserialize from JSON string.
@@ -226,7 +247,8 @@ impl ToolMetadata {
     /// # Returns
     /// Binary representation as bytes
     pub fn to_binary(&self) -> PyResult<Vec<u8>> {
-        self.to_bincode().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+        self.to_bincode()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Deserialize from binary data.
@@ -238,7 +260,8 @@ impl ToolMetadata {
     /// Deserialized ToolMetadata instance
     #[staticmethod]
     pub fn from_binary(data: Vec<u8>) -> PyResult<Self> {
-        Self::from_bincode(&data).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+        Self::from_bincode(&data)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 }
 
@@ -298,37 +321,56 @@ impl ToolMetadata {
         Ok(())
     }
 
-    pub fn is_valid(&self) -> bool { self.validate().is_ok() }
-    pub fn get_parameter(&self, key: &str) -> Option<&String> { self.parameters.as_ref()?.get(key) }
-    pub fn set_parameter(&mut self, key: String, value: String) {
-        self.parameters.get_or_insert_with(HashMap::new).insert(key, value);
+    pub fn is_valid(&self) -> bool {
+        self.validate().is_ok()
     }
-    pub fn remove_parameter(&mut self, key: &str) -> Option<String> { self.parameters.as_mut()?.remove(key) }
-    pub fn parameter_count(&self) -> usize { self.parameters.as_ref().map_or(0, |p| p.len()) }
-    pub fn has_parameters(&self) -> bool { self.parameters.as_ref().is_some_and(|p| !p.is_empty()) }
+    pub fn get_parameter(&self, key: &str) -> Option<&String> {
+        self.parameters.as_ref()?.get(key)
+    }
+    pub fn set_parameter(&mut self, key: String, value: String) {
+        self.parameters
+            .get_or_insert_with(HashMap::new)
+            .insert(key, value);
+    }
+    pub fn remove_parameter(&mut self, key: &str) -> Option<String> {
+        self.parameters.as_mut()?.remove(key)
+    }
+    pub fn parameter_count(&self) -> usize {
+        self.parameters.as_ref().map_or(0, |p| p.len())
+    }
+    pub fn has_parameters(&self) -> bool {
+        self.parameters.as_ref().is_some_and(|p| !p.is_empty())
+    }
 
     /// Serialize to JSON string (pure Rust version).
     pub fn to_json_string(&self) -> Result<String, crate::error::GlaurungError> {
-        serde_json::to_string(self)
-            .map_err(|e| crate::error::GlaurungError::Serialization(format!("JSON serialization error: {}", e)))
+        serde_json::to_string(self).map_err(|e| {
+            crate::error::GlaurungError::Serialization(format!("JSON serialization error: {}", e))
+        })
     }
 
     /// Deserialize from JSON string (pure Rust version).
     pub fn from_json_str(json_str: &str) -> Result<Self, crate::error::GlaurungError> {
-        serde_json::from_str(json_str)
-            .map_err(|e| crate::error::GlaurungError::Serialization(format!("JSON deserialization error: {}", e)))
+        serde_json::from_str(json_str).map_err(|e| {
+            crate::error::GlaurungError::Serialization(format!("JSON deserialization error: {}", e))
+        })
     }
 
     /// Serialize to binary data (pure Rust version).
     pub fn to_bincode(&self) -> Result<Vec<u8>, crate::error::GlaurungError> {
-        bincode::serialize(self)
-            .map_err(|e| crate::error::GlaurungError::Serialization(format!("Binary serialization error: {}", e)))
+        bincode::serialize(self).map_err(|e| {
+            crate::error::GlaurungError::Serialization(format!("Binary serialization error: {}", e))
+        })
     }
 
     /// Deserialize from binary data (pure Rust version).
     pub fn from_bincode(data: &[u8]) -> Result<Self, crate::error::GlaurungError> {
-        bincode::deserialize(data)
-            .map_err(|e| crate::error::GlaurungError::Serialization(format!("Binary deserialization error: {}", e)))
+        bincode::deserialize(data).map_err(|e| {
+            crate::error::GlaurungError::Serialization(format!(
+                "Binary deserialization error: {}",
+                e
+            ))
+        })
     }
 }
 
@@ -396,7 +438,8 @@ mod tests {
     fn test_tool_metadata_validation() {
         // Valid metadata
         let valid =
-            ToolMetadata::new_pure("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
+            ToolMetadata::new_pure("test.tool".to_string(), "1.0.0".to_string(), None, None)
+                .unwrap();
         assert!(valid.is_valid());
 
         // Invalid: empty name
@@ -443,7 +486,8 @@ mod tests {
     #[test]
     fn test_parameter_operations() {
         let mut metadata =
-            ToolMetadata::new_pure("test.tool".to_string(), "1.0.0".to_string(), None, None).unwrap();
+            ToolMetadata::new_pure("test.tool".to_string(), "1.0.0".to_string(), None, None)
+                .unwrap();
 
         // Initially no parameters
         assert!(!metadata.has_parameters());
