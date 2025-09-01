@@ -20,6 +20,7 @@ impl Default for ScoreEngine {
         signal_weights.insert("entropy_normal".into(), 0.10);
         signal_weights.insert("strings_present".into(), 0.10);
         signal_weights.insert("architecture_match".into(), 0.10);
+        signal_weights.insert("endianness_match".into(), 0.05);
 
         let mut error_penalties = HashMap::new();
         error_penalties.insert(TriageErrorKind::SnifferMismatch, 0.10);
@@ -120,6 +121,45 @@ impl ScoreEngine {
             signals.push(ConfidenceSignal::new("sniffer_match".into(), 1.0, None));
         }
 
+        // Heuristic: architecture match
+        if let Some(arch_guesses) = &artifact.heuristic_arch {
+            if let Some((top_arch, conf)) = arch_guesses.first() {
+                let mut score = 0.0f32;
+                if verdict.arch == *top_arch {
+                    score = (*conf).clamp(0.0, 1.0);
+                } else {
+                    // family equivalence: x86 <-> x86_64
+                    use crate::core::binary::Arch;
+                    let fam_match =
+                        (verdict.arch == Arch::X86 && *top_arch == Arch::X86_64)
+                            || (verdict.arch == Arch::X86_64 && *top_arch == Arch::X86);
+                    if fam_match {
+                        score = (*conf).min(0.7).clamp(0.0, 1.0);
+                    }
+                }
+                if score > 0.0 {
+                    signals.push(ConfidenceSignal::new(
+                        "architecture_match".into(),
+                        score,
+                        None,
+                    ));
+                }
+            }
+        }
+
+        // Heuristic: endianness match (from byte pattern guess or UTF-16 prevalence)
+        if let Some((e_guess, e_conf)) = artifact.heuristic_endianness {
+            if verdict.endianness == e_guess {
+                signals.push(ConfidenceSignal::new(
+                    "endianness_match".into(),
+                    e_conf.clamp(0.0, 1.0),
+                    None,
+                ));
+            } else {
+                // Soft hint: if strings suggest opposite, do nothing; negative scoring is handled by errors
+            }
+        }
+
         signals
     }
 
@@ -145,4 +185,54 @@ impl ScoreEngine {
 pub fn score(artifact: &TriagedArtifact) -> Vec<TriageVerdict> {
     let engine = ScoreEngine::default();
     engine.score_artifact(artifact)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::binary::{Arch, Endianness, Format};
+    use crate::core::triage::{Budgets, EntropySummary, TriageHint, TriageVerdict, TriagedArtifact};
+
+    #[test]
+    fn heuristics_contribute_expected_signals() {
+        // A simple verdict consistent with heuristics
+        let verdict = TriageVerdict::try_new(
+            Format::ELF,
+            Arch::X86_64,
+            64,
+            Endianness::Little,
+            0.6,
+            None,
+        )
+        .unwrap();
+        let artifact = TriagedArtifact::new(
+            "id".into(),
+            "<mem>".into(),
+            128,
+            None,
+            vec![] as Vec<TriageHint>,
+            vec![verdict],
+            Some(EntropySummary::new(Some(6.5), Some(4096), None)),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Budgets::new(0, 0, 0)),
+            None,
+            Some((Endianness::Little, 0.9)),
+            Some(vec![(Arch::X86_64, 0.85)]),
+        );
+        let ranked = score(&artifact);
+        assert!(!ranked.is_empty());
+        let sigs = ranked[0]
+            .signals
+            .clone()
+            .unwrap_or_else(|| Vec::new())
+            .into_iter()
+            .map(|s| s.name)
+            .collect::<Vec<_>>();
+        assert!(sigs.iter().any(|n| n == "architecture_match"));
+        assert!(sigs.iter().any(|n| n == "endianness_match"));
+    }
 }

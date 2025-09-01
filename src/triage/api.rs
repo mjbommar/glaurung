@@ -26,6 +26,8 @@ use crate::triage::recurse::RecursionEngine;
 #[cfg(feature = "python-ext")]
 use crate::triage::score;
 #[cfg(feature = "python-ext")]
+use crate::triage::heuristics::{architecture, endianness};
+#[cfg(feature = "python-ext")]
 use crate::triage::sniffers::CombinedSniffer;
 #[cfg(feature = "python-ext")]
 use chrono::Utc;
@@ -83,10 +85,10 @@ pub(crate) fn derive_format_from_hint(h: &TriageHint) -> Option<Format> {
     // Extension-based mapping
     if let Some(ext) = &h.extension {
         let e = ext.to_ascii_lowercase();
-        if e == "exe" {
+        if e == "exe" || e == "dll" {
             return Some(Format::PE);
         }
-        if e == "elf" {
+        if e == "elf" || e == "so" {
             return Some(Format::ELF);
         }
         if e == "wasm" {
@@ -105,7 +107,10 @@ pub(crate) fn derive_format_from_hint(h: &TriageHint) -> Option<Format> {
         if m.contains("application/x-elf") {
             return Some(Format::ELF);
         }
-        if m.contains("application/x-dosexec") || m.contains("application/x-pe") {
+        if m.contains("application/x-dosexec")
+            || m.contains("application/x-pe")
+            || m.contains("application/x-msdownload")
+        {
             return Some(Format::PE);
         }
         if m.contains("application/wasm") || m.contains("application/wasm") {
@@ -113,6 +118,9 @@ pub(crate) fn derive_format_from_hint(h: &TriageHint) -> Option<Format> {
         }
         if m.contains("python") {
             return Some(Format::PythonBytecode);
+        }
+        if m.contains("x-sharedlib") {
+            return Some(Format::ELF);
         }
     }
     None
@@ -206,6 +214,9 @@ fn build_artifact_from_buffers(
     let ecfg = EntropyConfig::default();
     let ea = analyze_entropy(heur_buf, &ecfg);
     let entropy = Some(ea.summary.clone());
+    debug!(phase = "heuristics", "endianness and arch");
+    let (e_guess, e_conf) = endianness::guess(heur_buf);
+    let arch_guesses = architecture::infer(heur_buf);
     debug!(phase = "strings", "extract with language detection");
     let strings = {
         // Use language-aware string extraction
@@ -280,6 +291,8 @@ fn build_artifact_from_buffers(
         },
         Some(Budgets::new(size_bytes as u64, 0, 0)),
         merged_errors.clone(),
+        Some((e_guess, e_conf)),
+        Some(arch_guesses.clone()),
     );
     // Score and rank verdicts
     let ranked = score::score(&prelim);
@@ -298,6 +311,8 @@ fn build_artifact_from_buffers(
         prelim.parse_status,
         prelim.budgets,
         merged_errors,
+        prelim.heuristic_endianness,
+        prelim.heuristic_arch,
     );
     info!("complete");
     art
@@ -309,6 +324,8 @@ mod tests {
     use crate::triage::sniffers::CombinedSniffer;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use crate::triage::recurse::RecursionEngine;
+    use crate::core::triage::Budgets;
 
     #[test]
     fn header_vs_sniffer_mismatch_on_elf_with_exe_extension() {
@@ -330,6 +347,49 @@ mod tests {
         assert!(errs
             .iter()
             .any(|e| e.kind == TriageErrorKind::SnifferMismatch));
+    }
+
+    #[test]
+    fn container_hint_exemption_for_zip_with_exe_extension() {
+        // Use a real ZIP from samples; pretend it's named .exe to trigger extension conflict
+        let path = PathBuf::from("samples/containers/zip/hello-cpp-g++-O0.zip");
+        let data = match fs::read(&path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let sniff_buf = &data[..data.len().min(crate::triage::io::MAX_SNIFF_SIZE as usize)];
+        let header_buf = &data[..data.len().min(crate::triage::io::MAX_HEADER_SIZE as usize)];
+        let sn = CombinedSniffer::sniff(sniff_buf, Some(Path::new("fake.exe")));
+        let hdr = crate::triage::headers::validate(header_buf);
+        let header_formats: Vec<Format> = hdr.candidates.iter().map(|v| v.format).collect();
+        // Discover containers to feed exemptions
+        let engine = RecursionEngine::default();
+        let mut tmp_budget = Budgets::new(data.len() as u64, 0, 0);
+        let containers = engine.discover_children(&data, &mut tmp_budget, 0);
+        let container_labels: Vec<String> = containers.into_iter().map(|c| c.type_name).collect();
+        let errs = compute_sniffer_header_mismatches(&sn.hints, &header_formats, &container_labels);
+        // With no validated headers and a matching container hint, do not emit a mismatch
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn non_binary_png_classifies_safely() {
+        let path = PathBuf::from("assets/glaurung-original.png");
+        let data = match fs::read(&path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let sniff_buf = &data[..data.len().min(crate::triage::io::MAX_SNIFF_SIZE as usize)];
+        let header_buf = &data[..data.len().min(crate::triage::io::MAX_HEADER_SIZE as usize)];
+        let sn = CombinedSniffer::sniff(sniff_buf, Some(&path));
+        // Expect an image/png label
+        assert!(sn.hints.iter().any(|h| h.mime.as_deref() == Some("image/png")));
+        let hdr = crate::triage::headers::validate(header_buf);
+        // Expect no executable header candidates
+        assert!(hdr.candidates.is_empty());
+        // No mismatches computed if there are no headers
+        let errs = compute_sniffer_header_mismatches(&sn.hints, &[], &[]);
+        assert!(errs.is_empty());
     }
 }
 

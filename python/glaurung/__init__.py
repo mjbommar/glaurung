@@ -174,3 +174,14 @@ __all__ = [
     # Triage submodule
     "triage",
 ]
+
+# Expose logging config from native and Python wrapper
+LogLevel = _native.LogLevel
+init_logging = _native.init_logging
+log_message = _native.log_message
+
+__all__ += [
+    "LogLevel",
+    "init_logging",
+    "log_message",
+]

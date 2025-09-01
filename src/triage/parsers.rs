@@ -103,4 +103,37 @@ mod tests {
             assert!(results.iter().any(|r| r.parser == ParserKind::Goblin));
         }
     }
+
+    #[test]
+    fn parse_object_on_real_pe() {
+        // Use a real PE if available in samples; skip if absent
+        let path_candidates = [
+            "samples/binaries/platforms/windows/amd64/export/native/msvc/O0/hello-msvc-O0.exe",
+            "samples/binaries/platforms/windows/amd64/export/native/msvc/debug/hello-msvc-debug.exe",
+        ];
+        let mut data: Option<Vec<u8>> = None;
+        for p in &path_candidates {
+            if let Ok(d) = fs::read(p) {
+                data = Some(d);
+                break;
+            }
+        }
+        let Some(bytes) = data else { return }; // skip if missing
+        let results = parse(&bytes);
+        assert!(!results.is_empty());
+        assert!(results
+            .iter()
+            .any(|r| r.parser == ParserKind::Object && (r.ok || r.error.is_some())));
+        // Extras (if enabled) should include goblin and/or pelite results bearing ParserMismatch errors on failure
+        #[cfg(feature = "triage-parsers-extra")]
+        {
+            assert!(results.iter().any(|r| r.parser == ParserKind::Goblin));
+            assert!(results.iter().any(|r| r.parser == ParserKind::PELite));
+            for r in results {
+                if !r.ok {
+                    assert!(matches!(r.error.as_ref().map(|e| e.kind), Some(TriageErrorKind::ParserMismatch)));
+                }
+            }
+        }
+    }
 }

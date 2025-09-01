@@ -204,6 +204,7 @@ class TriagedArtifact:
         hints: list[TriageHint] = ...,
         verdicts: list[TriageVerdict] = ...,
         entropy: Optional[EntropySummary] = ...,
+        entropy_analysis: Optional[EntropyAnalysis] = ...,
         strings: Optional[StringsSummary] = ...,
         packers: Optional[list[PackerMatch]] = ...,
         containers: Optional[list[ContainerChild]] = ...,

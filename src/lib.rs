@@ -104,6 +104,7 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     triage.add_class::<crate::core::triage::StringsSummary>()?;
     triage.add_class::<crate::core::triage::PackerMatch>()?;
     triage.add_class::<crate::core::triage::ContainerChild>()?;
+    triage.add_class::<crate::core::triage::ContainerMetadata>()?;
     triage.add_class::<crate::core::triage::Budgets>()?;
     triage.add_class::<crate::core::triage::TriageVerdict>()?;
     triage.add_class::<crate::core::triage::TriagedArtifact>()?;

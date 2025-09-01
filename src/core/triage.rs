@@ -707,6 +707,8 @@ pub struct ContainerChild {
     pub type_name: String,
     pub offset: u64,
     pub size: u64,
+    /// Optional container metadata (e.g., counts, sizes)
+    pub metadata: Option<ContainerMetadata>,
 }
 
 #[cfg(feature = "python-ext")]
@@ -718,11 +720,54 @@ impl ContainerChild {
             type_name,
             offset,
             size,
+            metadata: None,
         }
     }
     #[getter]
     fn type_name(&self) -> String {
         self.type_name.clone()
+    }
+    #[getter]
+    fn offset(&self) -> u64 {
+        self.offset
+    }
+    #[getter]
+    fn size(&self) -> u64 {
+        self.size
+    }
+    #[getter]
+    fn metadata(&self) -> Option<ContainerMetadata> {
+        self.metadata.clone()
+    }
+}
+
+/// Optional metadata extracted from container formats without full extraction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "python-ext", pyclass)]
+pub struct ContainerMetadata {
+    /// Number of entries/files if known
+    pub file_count: Option<u32>,
+    /// Total uncompressed size if known
+    pub total_uncompressed_size: Option<u64>,
+    /// Total compressed size if known (archives may not expose this cheaply)
+    pub total_compressed_size: Option<u64>,
+}
+
+#[cfg(feature = "python-ext")]
+#[pymethods]
+impl ContainerMetadata {
+    #[new]
+    #[pyo3(signature = (file_count=None, total_uncompressed_size=None, total_compressed_size=None))]
+    pub fn new_py(
+        file_count: Option<u32>,
+        total_uncompressed_size: Option<u64>,
+        total_compressed_size: Option<u64>,
+    ) -> Self {
+        Self {
+            file_count,
+            total_uncompressed_size,
+            total_compressed_size,
+        }
     }
 }
 
@@ -925,6 +970,7 @@ impl ContainerChild {
             type_name,
             offset,
             size,
+            metadata: None,
         }
     }
 }
@@ -995,6 +1041,8 @@ impl TriagedArtifact {
         parse_status: Option<Vec<ParserResult>>,
         budgets: Option<Budgets>,
         errors: Option<Vec<TriageError>>,
+        heuristic_endianness: Option<(Endianness, f32)>,
+        heuristic_arch: Option<Vec<(Arch, f32)>>,
     ) -> Self {
         Self {
             id,
@@ -1011,6 +1059,8 @@ impl TriagedArtifact {
             parse_status,
             budgets,
             errors,
+            heuristic_endianness,
+            heuristic_arch,
         }
     }
 
@@ -1050,6 +1100,9 @@ pub struct TriagedArtifact {
     pub parse_status: Option<Vec<ParserResult>>,
     pub budgets: Option<Budgets>,
     pub errors: Option<Vec<TriageError>>,
+    /// Heuristic guesses (for scoring)
+    pub heuristic_endianness: Option<(Endianness, f32)>,
+    pub heuristic_arch: Option<Vec<(Arch, f32)>>,
 }
 
 #[cfg(feature = "python-ext")]
@@ -1071,7 +1124,9 @@ impl TriagedArtifact {
         containers=None,
         parse_status=None,
         budgets=None,
-        errors=None
+        errors=None,
+        heuristic_endianness=None,
+        heuristic_arch=None
     ))]
     pub fn new_py(
         id: String,
@@ -1088,6 +1143,8 @@ impl TriagedArtifact {
         parse_status: Option<Vec<ParserResult>>,
         budgets: Option<Budgets>,
         errors: Option<Vec<TriageError>>,
+        heuristic_endianness: Option<(Endianness, f32)>,
+        heuristic_arch: Option<Vec<(Arch, f32)>>,
     ) -> Self {
         Self {
             id,
@@ -1104,6 +1161,8 @@ impl TriagedArtifact {
             parse_status,
             budgets,
             errors,
+            heuristic_endianness,
+            heuristic_arch,
         }
     }
 
@@ -1179,6 +1238,14 @@ impl TriagedArtifact {
     fn errors(&self) -> Option<Vec<TriageError>> {
         self.errors.clone()
     }
+    #[getter]
+    fn heuristic_endianness(&self) -> Option<(Endianness, f32)> {
+        self.heuristic_endianness
+    }
+    #[getter]
+    fn heuristic_arch(&self) -> Option<Vec<(Arch, f32)>> {
+        self.heuristic_arch.clone()
+    }
 }
 
 #[cfg(test)]
@@ -1221,6 +1288,8 @@ mod tests {
             None,
             Some(vec![ParserResult::new(ParserKind::Object, true, None)]),
             Some(Budgets::new(8192, 10, 0)),
+            None,
+            None,
             None,
         );
         let json = artifact.to_json_string().unwrap();

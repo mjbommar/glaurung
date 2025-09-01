@@ -21,9 +21,14 @@ def main(argv=None):
         if args.json:
             print(art.to_json())
         else:
-            print(
-                f"path: {art.path}\nsize: {art.size_bytes} bytes\nverdicts: {len(art.verdicts)}"
-            )
+            summary = f"path: {art.path}\nsize: {art.size_bytes} bytes\nverdicts: {len(art.verdicts)}"
+            if art.verdicts:
+                top = art.verdicts[0]
+                summary += (
+                    f"\n_top_: format={top.format} arch={top.arch} {top.bits}-bit endianness={top.endianness}"
+                    f" confidence={top.confidence:.2f}"
+                )
+            print(summary)
         return 0
 
     return 1
