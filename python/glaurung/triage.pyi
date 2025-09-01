@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 
 class SnifferSource:
     Infer: SnifferSource
@@ -155,6 +155,18 @@ class ContainerChild:
     size: int
     def __init__(self, type_name: str, offset: int, size: int) -> None: ...
 
+class ContainerMetadata:
+    """Metadata about container contents."""
+    file_count: Optional[int]
+    total_uncompressed_size: Optional[int]
+    total_compressed_size: Optional[int]
+    def __init__(
+        self,
+        file_count: Optional[int] = None,
+        total_uncompressed_size: Optional[int] = None,
+        total_compressed_size: Optional[int] = None,
+    ) -> None: ...
+
 class Budgets:
     bytes_read: int
     time_ms: int
@@ -215,3 +227,38 @@ class TriagedArtifact:
     def to_json(self) -> str: ...
     @staticmethod
     def from_json(json_str: str) -> TriagedArtifact: ...
+
+# Triage analysis functions
+def analyze_path(path: str, _max_read_bytes: int = ..., _max_file_size: int = ..., _max_recursion_depth: int = ...) -> TriagedArtifact: ...(
+    path: str,
+    max_read_bytes: int = 10_485_760,
+    max_file_size: int = 104_857_600,
+) -> TriagedArtifact:
+    """
+    Analyze a file at the given path.
+    
+    Args:
+        path: Path to the file to analyze
+        max_read_bytes: Maximum bytes to read for analysis (default 10MB)
+        max_file_size: Maximum file size to analyze (default 100MB)
+    
+    Returns:
+        TriagedArtifact containing analysis results
+    """
+    ...
+
+def analyze_bytes(data: bytes, _max_read_bytes: int = ..., _max_recursion_depth: int = ...) -> TriagedArtifact: ...(
+    data: bytes,
+    max_read_bytes: int = 10_485_760,
+) -> TriagedArtifact:
+    """
+    Analyze raw bytes.
+    
+    Args:
+        data: Bytes to analyze
+        max_read_bytes: Maximum bytes to read for analysis (default 10MB)
+    
+    Returns:
+        TriagedArtifact containing analysis results
+    """
+    ...
