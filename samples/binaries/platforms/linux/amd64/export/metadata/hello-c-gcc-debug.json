@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/hello.c",
+  "compiler": "gcc",
+  "output_file": "/workspace/binaries/native/gcc/debug/hello-c-gcc-debug",
+  "compilation_flags": "-O0 -g -Wall -Wextra",
+  "description": "GCC debug build",
+  "timestamp": "2025-09-01T11:31:50+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

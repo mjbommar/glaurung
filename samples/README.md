@@ -11,16 +11,17 @@ Layout
 ```
 samples/
 ├── source/                     # sample sources
-│   ├── c/                     # C samples
-│   ├── cpp/                   # C++ samples
+│   ├── asm/                    # Assembly samples (x86_64, ARM64, RISC-V, Win64)
+│   ├── c/                      # C samples
+│   ├── cpp/                    # C++ samples
 │   ├── fortran/                # Fortran samples
 │   ├── java/                   # Java samples
 │   ├── python/                 # Python samples
 │   ├── csharp/                 # C# samples
-│   ├── lua/                    # Lua samples (NEW)
-│   ├── go/                     # Go samples (NEW)
-│   ├── rust/                   # Rust samples (NEW)
-│   └── library/                # Shared/static library samples (NEW)
+│   ├── lua/                    # Lua samples
+│   ├── go/                     # Go samples
+│   ├── rust/                   # Rust samples
+│   └── library/                # Shared/static library samples
 ├── docker/                     # per-OS/arch Dockerfiles and build scripts
 │   ├── linux/Dockerfile.{amd64,arm64,armhf,i386,riscv64}
 │   ├── windows/Dockerfile.{amd64,i386}
@@ -29,7 +30,13 @@ samples/
 │   ├── collect-kernel-modules.sh  # kernel module collector (NEW)
 │   └── platforms.json          # platform matrix + toolchains
 ├── build-multiplatform.sh      # orchestrates builds and extraction
+├── build-all-platforms.sh      # builds all available platforms
+├── build-packed.sh             # creates UPX-packed binaries
+├── build-compressed.sh         # creates compressed containers (tar, zip, etc.)
+├── test_python_multi_version.sh # tests Python multi-version bytecode
 ├── docker-compose.yml          # optional: run specific services
+├── packed/                     # UPX-packed binaries
+├── containers/                 # Compressed archives (tar, zip, gzip, bzip2, xz, zstd)
 └── binaries/
     ├── platforms/<os>/<arch>/export/
     │   ├── native/             # Native C/C++ builds
@@ -48,16 +55,19 @@ samples/
 ```
 
 Naming conventions
+- Assembly: `native/asm/hello-asm-{gas,nasm}-O{N}`, `cross/arm64/hello-asm-arm64-as`, `cross/riscv64/hello-asm-riscv64-as`, `cross/windows-x86_64/hello-asm-windows-x86_64-nasm.exe`.
 - Native C/C++: `native/gcc/O{0..3}/hello-gcc-O{N}`, `native/clang/debug/hello-clang-debug`, `native/gcc/debug/hello-gcc-stripped`.
 - Cross C/C++: `cross/<target>/{hello-<target>-gcc, hello-<target>-g++}`, e.g. `cross/arm64/hello-arm64-gcc`, `cross/windows-x86_64/hello-c-x86_64-mingw.exe`.
 - Fortran: `fortran/hello-gfortran-O{N}`, `fortran/hello-gfortran-debug`.
 - Java: default `java/HelloWorld.{class,jar}` plus per‑JDK variants under `java/jdk{version}/HelloWorld.{class,jar}` (e.g., jdk11, jdk17, jdk21).
-- Python: `python/hello.{pyc,opt.pyc}`.
+- Python: `python/hello.{pyc,opt.pyc}`, plus versioned `python/hello-python{3.8,3.9,3.10,3.11,3.12,3.13}.{pyc,opt.pyc}`.
 - Lua: `lua/hello-{lua5.1,lua5.2,lua5.3,lua5.4,luajit}.luac` - bytecode for each Lua version.
 - Go: `go/hello-go`, `go/hello-go-static`, `go/hello-go-debug` - standard, static (CGO_ENABLED=0), and debug builds.
 - Rust: `rust/hello-rust-{debug,release,musl}` - debug, optimized, and static musl builds.
 - Libraries: `libraries/shared/libmathlib.so`, `libraries/shared/mathlib.dll`, `libraries/static/libmathlib.a`.
 - Kernel Modules: `kernel-modules/<category>/*.ko` - collected from host system.
+- Packed: `packed/hello-{binary}.upx9` - UPX-packed versions of binaries.
+- Containers: `containers/{tar,zip,gzip,bzip2,xz,zstd}/hello-{binary}.{tar,zip,gz,bz2,xz,zst}` - compressed archives.
 
 Build/Collect
 - Quick path: `cd samples && ./build-multiplatform.sh linux/amd64`.

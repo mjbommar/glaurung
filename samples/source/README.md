@@ -4,6 +4,12 @@ This directory contains source code samples for building various binary formats 
 
 ## Languages
 
+### Assembly
+- **x86_64** (`asm/x86_64/`) - Intel/AMD 64-bit assembly (GAS and NASM)
+- **ARM64** (`asm/arm64/`) - ARM 64-bit assembly
+- **RISC-V** (`asm/riscv64/`) - RISC-V 64-bit assembly
+- **Windows x64** (`asm/win64/`) - Windows x86_64 assembly (NASM)
+
 ### Native Compiled
 - **C** (`c/hello.c`) - Standard C with functions, globals, static variables
 - **C++** (`cpp/hello.cpp`) - C++ with classes, templates, STL usage

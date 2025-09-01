@@ -1,0 +1,11 @@
+{
+  "source_file": "/workspace/source/asm/riscv64/hello_gas.s",
+  "compiler": "riscv64-linux-gnu-as",
+  "linker": "riscv64-linux-gnu-gcc",
+  "output_file": "/workspace/binaries/cross/riscv64/hello-asm-riscv64-as",
+  "compilation_flags": "",
+  "description": "RISC-V GAS assembled and linked (cross)",
+  "timestamp": "2025-09-01T03:19:09+00:00",
+  "platform": "linux",
+  "architecture": "riscv64"
+}

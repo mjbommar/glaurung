@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/python/hello.py",
+  "compiler": "python3 -O",
+  "output_file": "/workspace/binaries/python/hello.opt.pyc",
+  "compilation_flags": "-O",
+  "description": "Python optimized bytecode",
+  "timestamp": "2025-09-01T03:21:15+00:00",
+  "platform": "linux",
+  "architecture": "aarch64"
+}

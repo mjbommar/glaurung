@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/hello.c",
+  "compiler": "gcc",
+  "output_file": "/workspace/binaries/native/gcc/O3/hello-c-gcc-O3",
+  "compilation_flags": "-O3 -Wall -Wextra",
+  "description": "GCC compiled with -O3",
+  "timestamp": "2025-09-01T03:17:28+00:00",
+  "platform": "linux",
+  "architecture": "aarch64"
+}

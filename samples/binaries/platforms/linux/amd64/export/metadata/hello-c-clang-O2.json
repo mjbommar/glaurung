@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/hello.c",
+  "compiler": "clang",
+  "output_file": "/workspace/binaries/native/clang/O2/hello-c-clang-O2",
+  "compilation_flags": "-O2 -Wall -Wextra",
+  "description": "Clang 15 compiled with -O2",
+  "timestamp": "2025-09-01T11:31:51+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

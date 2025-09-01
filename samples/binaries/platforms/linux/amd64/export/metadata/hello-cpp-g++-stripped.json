@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/cpp/hello.cpp",
+  "compiler": "g++",
+  "output_file": "/workspace/binaries/native/gcc/debug/hello-cpp-g++-stripped",
+  "compilation_flags": "-O2 -s",
+  "description": "GCC stripped build",
+  "timestamp": "2025-09-01T11:31:55+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}
