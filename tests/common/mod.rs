@@ -2,6 +2,8 @@
 //!
 //! This module provides shared functionality for both unit tests and integration tests.
 
+pub mod test_utils;
+
 use std::path::Path;
 
 /// Test helper for checking if sample files exist
@@ -50,6 +52,7 @@ pub mod file_utils {
     use std::path::Path;
 
     /// Read a file with error context
+    #[allow(dead_code)]
     pub fn read_file_with_context<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, String> {
         let path_ref = path.as_ref();
         fs::read(path_ref).map_err(|e| format!("Failed to read file {:?}: {}", path_ref, e))

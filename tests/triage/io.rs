@@ -75,7 +75,7 @@ fn test_file_size_limit_enforcement() {
     };
 
     let mut reader = SafeFileReader::open(&path, small_limits.clone()).unwrap();
-    let file_size = reader.size();
+    let _file_size = reader.size();
 
     // Test reading all (should be limited)
     let data = reader.read_all().unwrap();
@@ -148,5 +148,5 @@ fn test_missing_file_handling() {
     let result = SafeFileReader::open(nonexistent_path, limits);
 
     assert!(result.is_err(), "Should fail to open nonexistent file");
-    assert!(IOUtils::is_regular_file(nonexistent_path) == false);
+    assert!(!IOUtils::is_regular_file(nonexistent_path));
 }

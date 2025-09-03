@@ -3,6 +3,7 @@
 //! These tests validate the triage system end-to-end using real sample files
 //! and focus on integration between components rather than isolated unit testing.
 
+mod budgets;
 mod io;
 mod real_files;
 mod sniffers;

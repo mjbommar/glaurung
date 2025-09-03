@@ -7,7 +7,6 @@ use glaurung::triage::io::{IOLimits, SafeFileReader};
 use glaurung::triage::sniffers::CombinedSniffer;
 use std::path::Path;
 
-use crate::common::file_utils::*;
 use crate::common::test_data::*;
 use crate::common::{sample_file_exists, sample_file_path};
 
