@@ -81,8 +81,22 @@ PatternType = _native.PatternType
 YaraMatch = _native.YaraMatch
 MetadataValue = _native.MetadataValue
 
+# Data types and variables
+DataType = _native.DataType
+DataTypeKind = _native.DataTypeKind
+Field = _native.Field
+EnumMember = _native.EnumMember
+TypeData = _native.TypeData
+Variable = _native.Variable
+StorageLocation = _native.StorageLocation
+
 # Expose triage submodule from the native extension
 triage = _native.triage
+
+# Expose a top-level symbols package provided by the native extension
+symbols = _native.symbols
+strings = _native.strings
+from . import similarity as similarity
 
 # Graph types (CFG and CallGraph)
 ControlFlowGraph = _native.ControlFlowGraph
@@ -155,6 +169,14 @@ __all__ = [
     "PatternType",
     "YaraMatch",
     "MetadataValue",
+    # Data types and variables
+    "DataType",
+    "DataTypeKind",
+    "Field",
+    "EnumMember",
+    "TypeData",
+    "Variable",
+    "StorageLocation",
     # Graphs
     "ControlFlowGraph",
     "ControlFlowEdge",
@@ -173,6 +195,12 @@ __all__ = [
     "ReferenceTarget",
     # Triage submodule
     "triage",
+    # Top-level symbols module
+    "symbols",
+    # Top-level strings module
+    "strings",
+    # Top-level similarity module
+    "similarity",
 ]
 
 # Expose logging config from native and Python wrapper

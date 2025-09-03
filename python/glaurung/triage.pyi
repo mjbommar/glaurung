@@ -143,6 +143,11 @@ class SymbolSummary:
     rpaths: Optional[List[str]]
     runpaths: Optional[List[str]]
 
+class SimilaritySummary:
+    imphash: Optional[str]
+    ctph: Optional[str]
+    def __init__(self, imphash: Optional[str] = ..., ctph: Optional[str] = ...) -> None: ...
+
 class OverlayFormat:
     ZIP: OverlayFormat
     CAB: OverlayFormat
@@ -217,6 +222,13 @@ class PackerMatch:
     confidence: float
     def __init__(self, name: str, confidence: float) -> None: ...
 
+class PackerConfig:
+    scan_limit: int
+    upx_detection_weight: float
+    upx_version_weight: float
+    packer_signal_weight: float
+    def __init__(self) -> None: ...
+
 class ContainerChild:
     type_name: str
     offset: int
@@ -245,6 +257,14 @@ class Budgets:
     max_recursion_depth: Optional[int]
     hit_byte_limit: bool
     def __init__(self, bytes_read: int, time_ms: int, recursion_depth: int) -> None: ...
+
+class TriageConfig:
+    """Configuration wrapper used by analyze_* to control behavior."""
+    def __init__(self) -> None: ...
+    @property
+    def packers(self) -> PackerConfig: ...
+    @packers.setter
+    def packers(self, cfg: PackerConfig) -> None: ...
 
 class TriageVerdict:
     from glaurung import Format, Arch, Endianness
@@ -276,6 +296,7 @@ class TriagedArtifact:
     entropy_analysis: Optional[EntropyAnalysis]
     strings: Optional[StringsSummary]
     symbols: Optional[SymbolSummary]
+    similarity: Optional[SimilaritySummary]
     packers: Optional[List[PackerMatch]]
     containers: Optional[List[ContainerChild]]
     overlay: Optional[OverlayAnalysis]
@@ -304,6 +325,7 @@ class TriagedArtifact:
     def to_json(self) -> str: ...
     @staticmethod
     def from_json(json_str: str) -> TriagedArtifact: ...
+    def ctph_similarity(self, other: TriagedArtifact) -> Optional[float]: ...
 
 # Note: symbols API is now exposed at top-level: glaurung.symbols
 
@@ -320,6 +342,7 @@ def analyze_path(
     enable_classification: bool = True,
     max_classify: int = 200,
     max_ioc_per_string: int = 16,
+    config: Optional[TriageConfig] = None,
 ) -> TriagedArtifact:
     """
     Analyze a file at the given path.
@@ -345,6 +368,7 @@ def analyze_bytes(
     enable_classification: bool = True,
     max_classify: int = 200,
     max_ioc_per_string: int = 16,
+    config: Optional[TriageConfig] = None,
 ) -> TriagedArtifact:
     """
     Analyze raw bytes.
