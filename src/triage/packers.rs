@@ -1,7 +1,6 @@
 use crate::core::triage::PackerMatch;
-use crate::triage::config::EntropyConfig;
+use crate::triage::config::{EntropyConfig, PackerConfig};
 use crate::triage::entropy::{analyze_entropy, entropy_of_slice};
-use crate::triage::config::PackerConfig;
 
 fn bump_match(out: &mut Vec<PackerMatch>, name: &str, base_if_absent: f32, delta: f32) {
     if let Some(m) = out.iter_mut().find(|m| m.name.eq_ignore_ascii_case(name)) {
@@ -11,10 +10,10 @@ fn bump_match(out: &mut Vec<PackerMatch>, name: &str, base_if_absent: f32, delta
     }
 }
 
-pub fn detect_packers(data: &[u8]) -> Vec<PackerMatch> {
+pub fn detect_packers(data: &[u8], cfg: &PackerConfig) -> Vec<PackerMatch> {
     let mut out = Vec::new();
     // Respect scan_limit from PackerConfig (default) to bound scanning cost
-    let scan_limit = PackerConfig::default().scan_limit;
+    let scan_limit = cfg.scan_limit;
     let hay = if data.len() > scan_limit { &data[..scan_limit] } else { data };
 
     // UPX
@@ -36,7 +35,6 @@ pub fn detect_packers(data: &[u8]) -> Vec<PackerMatch> {
     }
     if upx > 0.0 {
         // Calibrate lightly using config weights without hard-coding
-        let cfg = PackerConfig::default();
         let conf = (upx * cfg.upx_detection_weight.max(0.5)).min(1.0);
         out.push(PackerMatch::new("UPX".to_string(), conf));
     }
@@ -147,7 +145,7 @@ pub fn detect_packers(data: &[u8]) -> Vec<PackerMatch> {
             }
         }
         if packed_score > 0.5 {
-            bump_match(&mut out, "Packed", packed_score.min(0.95), 0.0);
+            bump_match(&mut out, "Packed", (packed_score * cfg.packer_signal_weight).min(0.95), 0.0);
         }
     }
 
@@ -168,7 +166,7 @@ mod tests {
         ];
         for p in candidates {
             if let Ok(d) = fs::read(p) {
-                let v = detect_packers(&d);
+                let v = detect_packers(&d, &PackerConfig::default());
                 assert!(v.iter().any(|m| m.name == "UPX"));
             }
         }
@@ -185,7 +183,7 @@ mod tests {
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
             data.push((rng >> 32) as u8);
         }
-        let v = detect_packers(&data);
+        let v = detect_packers(&data, &PackerConfig::default());
         // Expect a generic packed signal based on entropy heuristics
         assert!(v.iter().any(|m| m.name.eq_ignore_ascii_case("Packed")));
         let p = v.iter().find(|m| m.name.eq_ignore_ascii_case("Packed")).unwrap();
