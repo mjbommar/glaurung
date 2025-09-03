@@ -11,6 +11,7 @@ def test_overlay_analysis_creation():
         id="test",
         path="/test/path",
         size_bytes=1024,
+        schema_version="1.0.0",
         overlay=None,  # Test that None is accepted
     )
 

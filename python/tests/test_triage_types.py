@@ -37,6 +37,7 @@ def test_artifact_round_trip():
         id="id1",
         path="/tmp/x",
         size_bytes=123,
+        schema_version="1.0.0",  # Add required schema_version
         sha256="a" * 64,
         hints=[hint],
         verdicts=[verdict],
