@@ -1,0 +1,52 @@
+[package]
+name = "glaurung-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.glaurung]
+path = ".."
+default-features = false
+features = ["triage-core", "triage-heuristics", "triage-containers"]
+
+[[bin]]
+name = "headers_validate"
+path = "fuzz_targets/headers_validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "containers_detect"
+path = "fuzz_targets/containers_detect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sniffers_sniff"
+path = "fuzz_targets/sniffers_sniff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parsers_parse"
+path = "fuzz_targets/parsers_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "entropy_analyze"
+path = "fuzz_targets/entropy_analyze.rs"
+test = false
+doc = false
+bench = false
+
