@@ -18,9 +18,10 @@ fn parse_zip_metadata(data: &[u8]) -> Option<ContainerMetadata> {
             }
             // fields: skip 4 sig + 2 disk + 2 cd_start_disk
             let total_entries = u16::from_le_bytes([tail[i + 10], tail[i + 11]]) as u32;
-            let cd_size = u32::from_le_bytes([tail[i + 12], tail[i + 13], tail[i + 14], tail[i + 15]]) as u64;
+            let cd_size =
+                u32::from_le_bytes([tail[i + 12], tail[i + 13], tail[i + 14], tail[i + 15]]) as u64;
             return Some(ContainerMetadata {
-                file_count: Some(total_entries as u32),
+                file_count: Some(total_entries),
                 total_uncompressed_size: None,
                 total_compressed_size: Some(cd_size),
             });
@@ -85,7 +86,7 @@ fn parse_tar_metadata(data: &[u8]) -> Option<ContainerMetadata> {
             total = total.saturating_add(size);
         }
         // Advance by header + file content rounded up to 512-byte boundary
-        let file_blocks = ((size + (BLOCK as u64 - 1)) / BLOCK as u64) as usize;
+        let file_blocks = size.div_ceil(BLOCK as u64) as usize;
         off = off.saturating_add(BLOCK + file_blocks * BLOCK);
         if off >= data.len() {
             break;

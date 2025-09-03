@@ -131,7 +131,10 @@ mod tests {
             assert!(results.iter().any(|r| r.parser == ParserKind::PELite));
             for r in results {
                 if !r.ok {
-                    assert!(matches!(r.error.as_ref().map(|e| e.kind), Some(TriageErrorKind::ParserMismatch)));
+                    assert!(matches!(
+                        r.error.as_ref().map(|e| e.kind),
+                        Some(TriageErrorKind::ParserMismatch)
+                    ));
                 }
             }
         }

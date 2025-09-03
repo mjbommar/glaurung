@@ -102,6 +102,7 @@ impl ScoreEngine {
         if let Some(strings) = &artifact.strings {
             let total = strings
                 .ascii_count
+                .saturating_add(strings.utf8_count)
                 .saturating_add(strings.utf16le_count)
                 .saturating_add(strings.utf16be_count);
             if total > 10 {
@@ -130,9 +131,8 @@ impl ScoreEngine {
                 } else {
                     // family equivalence: x86 <-> x86_64
                     use crate::core::binary::Arch;
-                    let fam_match =
-                        (verdict.arch == Arch::X86 && *top_arch == Arch::X86_64)
-                            || (verdict.arch == Arch::X86_64 && *top_arch == Arch::X86);
+                    let fam_match = (verdict.arch == Arch::X86 && *top_arch == Arch::X86_64)
+                        || (verdict.arch == Arch::X86_64 && *top_arch == Arch::X86);
                     if fam_match {
                         score = (*conf).min(0.7).clamp(0.0, 1.0);
                     }
@@ -163,19 +163,65 @@ impl ScoreEngine {
         signals
     }
 
+    /// Compute penalties and explanatory signals for abnormal flag combinations.
+    fn abnormal_penalties(
+        &self,
+        artifact: &TriagedArtifact,
+        verdict: &TriageVerdict,
+    ) -> (f32, Vec<ConfidenceSignal>) {
+        let mut penalty = 0.0f32;
+        let mut signals: Vec<ConfidenceSignal> = Vec::new();
+        if let Some(sym) = &artifact.symbols {
+            if let (Some(nx), Some(aslr)) = (sym.nx, sym.aslr) {
+                if !nx && !aslr {
+                    penalty += 0.10;
+                    signals.push(ConfidenceSignal::new(
+                        "abnormal_flags".into(),
+                        0.0,
+                        Some("NX/ASLR both disabled".into()),
+                    ));
+                }
+            }
+            if let Some(relro) = sym.relro {
+                if !relro && verdict.format == crate::core::binary::Format::ELF {
+                    penalty += 0.05;
+                    signals.push(ConfidenceSignal::new(
+                        "abnormal_flags".into(),
+                        0.0,
+                        Some("RELRO disabled".into()),
+                    ));
+                }
+            }
+            if let Some(pie) = sym.pie {
+                if !pie && verdict.format == crate::core::binary::Format::ELF {
+                    penalty += 0.05;
+                    signals.push(ConfidenceSignal::new(
+                        "abnormal_flags".into(),
+                        0.0,
+                        Some("PIE disabled".into()),
+                    ));
+                }
+            }
+        }
+        (penalty.clamp(0.0, 0.25), signals)
+    }
+
     /// Score an entire artifact and return ranked verdicts.
     pub fn score_artifact(&self, artifact: &TriagedArtifact) -> Vec<TriageVerdict> {
         let mut verdicts = artifact.verdicts.clone();
         for v in &mut verdicts {
             let signals = self.signals_for_verdict(artifact, v);
             let base = self.calculate_confidence(&signals);
-            let with_penalties = match &artifact.errors {
+            let with_errors = match &artifact.errors {
                 Some(errs) => self.apply_penalties(base, errs),
                 None => base,
             };
-            v.confidence = with_penalties;
+            let (abn_pen, abn_sigs) = self.abnormal_penalties(artifact, v);
+            let mut all_sigs = signals;
+            all_sigs.extend(abn_sigs);
+            v.confidence = (with_errors - abn_pen).clamp(0.0, 1.0);
             // Store per-verdict signal breakdown for reporting
-            v.signals = Some(signals);
+            v.signals = Some(all_sigs);
         }
         self.rank_verdicts(verdicts)
     }
@@ -191,20 +237,16 @@ pub fn score(artifact: &TriagedArtifact) -> Vec<TriageVerdict> {
 mod tests {
     use super::*;
     use crate::core::binary::{Arch, Endianness, Format};
-    use crate::core::triage::{Budgets, EntropySummary, TriageHint, TriageVerdict, TriagedArtifact};
+    use crate::core::triage::{
+        Budgets, EntropySummary, TriageHint, TriageVerdict, TriagedArtifact,
+    };
 
     #[test]
     fn heuristics_contribute_expected_signals() {
         // A simple verdict consistent with heuristics
-        let verdict = TriageVerdict::try_new(
-            Format::ELF,
-            Arch::X86_64,
-            64,
-            Endianness::Little,
-            0.6,
-            None,
-        )
-        .unwrap();
+        let verdict =
+            TriageVerdict::try_new(Format::ELF, Arch::X86_64, 64, Endianness::Little, 0.6, None)
+                .unwrap();
         let artifact = TriagedArtifact::new(
             "id".into(),
             "<mem>".into(),
@@ -213,11 +255,13 @@ mod tests {
             vec![] as Vec<TriageHint>,
             vec![verdict],
             Some(EntropySummary::new(Some(6.5), Some(4096), None)),
-            None,
-            None,
-            None,
-            None,
-            None,
+            None, // entropy_analysis
+            None, // strings
+            None, // symbols
+            None, // packers
+            None, // containers
+            None, // overlay
+            None, // parse_status
             Some(Budgets::new(0, 0, 0)),
             None,
             Some((Endianness::Little, 0.9)),
@@ -228,7 +272,7 @@ mod tests {
         let sigs = ranked[0]
             .signals
             .clone()
-            .unwrap_or_else(|| Vec::new())
+            .unwrap_or_default()
             .into_iter()
             .map(|s| s.name)
             .collect::<Vec<_>>();

@@ -6,7 +6,9 @@ use crate::core::triage::{
 use crate::core::triage::{TriageError, TriageErrorKind, TriageHint};
 use crate::strings::StringsConfig;
 use crate::symbols::{self, BudgetCaps};
-use crate::triage::config::EntropyConfig;
+use crate::triage::config::{EntropyConfig, PackerConfig, SimilarityConfig};
+#[cfg(feature = "python-ext")]
+use crate::triage::config::TriageConfig;
 use crate::triage::entropy::analyze_entropy;
 use crate::triage::format_detection::{derive_format_from_hint, is_container_hint};
 use crate::triage::headers;
@@ -145,16 +147,9 @@ fn discover_containers_and_packers(
         )
     };
 
-    // Packer detection
-    let packers = {
-        let p_cfg = crate::triage::config::PackerConfig::default();
-        let v = detect_packers(heur_buf, &p_cfg);
-        if v.is_empty() {
-            None
-        } else {
-            Some(v)
-        }
-    };
+    // Packer detection is performed in build_artifact_from_buffers where we have access to config
+    // Return None here; actual packer results will be computed later with the provided config.
+    let packers = None;
 
     (containers, rec_depth, packers)
 }
@@ -252,6 +247,8 @@ fn build_artifact_from_buffers(
     declared_max_recursion: usize,
     hit_byte_limit: bool,
     strings_cfg: &StringsConfig,
+    packer_cfg: &PackerConfig,
+    sim_cfg: &SimilarityConfig,
 ) -> TriagedArtifact {
     let t0 = Instant::now();
     let id = generate_id(None, size_bytes);
@@ -277,8 +274,18 @@ fn build_artifact_from_buffers(
     // Phase 5: Parser probes and container/packer discovery
     debug!(phase = "parsers", "structured parse probes");
     let parser_results = parsers::parse(heur_buf);
-    let (containers, rec_depth, packers) =
+    let (mut containers, rec_depth, _packers_placeholder) =
         discover_containers_and_packers(heur_buf, &hints, max_recursion_depth);
+    // Compute packers here with provided config
+    let packers = {
+        let v = detect_packers(heur_buf, packer_cfg);
+        if v.is_empty() { None } else { Some(v) }
+    };
+
+    // Ensure deterministic ordering of children if present
+    if let Some(ref mut vv) = containers {
+        vv.sort_by(|a, b| a.offset.cmp(&b.offset).then(a.type_name.cmp(&b.type_name)));
+    }
 
     // Phase 6: Error merging
     let container_labels: Vec<String> = containers
@@ -310,8 +317,59 @@ fn build_artifact_from_buffers(
         .first()
         .and_then(|fmt| crate::triage::overlay::detect_overlay(heur_buf, *fmt));
 
+    // Compute similarity summary (CTPH for all; imphash for PE if available)
+    let similarity = {
+        // imphash only for PE, else None
+        let imphash = if header_formats.first().copied() == Some(crate::core::binary::Format::PE) {
+            crate::symbols::analysis::imphash::pe_imphash(heur_buf)
+        } else { None };
+        // CTPH over bounded heuristics buffer, if enabled
+        let ctph = if sim_cfg.enable_ctph {
+            let (w, d, p) = if sim_cfg.window_size == 0 || sim_cfg.digest_size == 0 {
+                if heur_buf.len() < 16 * 1024 { (8usize, 4usize, 8u8) }
+                else if heur_buf.len() < 1 * 1024 * 1024 { (16usize, 5usize, 16u8) }
+                else { (32usize, 6usize, 16u8) }
+            } else { (sim_cfg.window_size, sim_cfg.digest_size, sim_cfg.precision) };
+            let cfg = crate::similarity::CtphConfig { window_size: w, digest_size: d, precision: p };
+            Some(crate::similarity::ctph_hash(heur_buf, &cfg))
+        } else { None };
+        Some(crate::core::triage::SimilaritySummary { imphash, ctph })
+    };
+
+    // Signing summary: surface high-level presence bits
+    let signing = {
+        use crate::triage::signing::SigningSummary;
+        let pe_auth = if header_formats.first().copied() == Some(crate::core::binary::Format::PE) {
+            // Heuristic: overlay contains a signature blob
+            overlay.as_ref().map(|o| o.has_signature).unwrap_or(false)
+        } else { false };
+        let macho_sig = if header_formats.first().copied() == Some(crate::core::binary::Format::MachO) {
+            if let Some(env) = crate::symbols::analysis::macho_env::analyze_macho_env(heur_buf) {
+                env.code_signature
+            } else { false }
+        } else { false };
+        let macho_ent = if header_formats.first().copied() == Some(crate::core::binary::Format::MachO) {
+            if let Some(env) = crate::symbols::analysis::macho_env::analyze_macho_env(heur_buf) {
+                // Lightweight heuristic: if rpaths mention entitlements or codesign present and plist markers exist in image
+                macho_sig && std::str::from_utf8(heur_buf).map(|s| s.contains("Entitlements")).unwrap_or(false)
+            } else { false }
+        } else { false };
+        Some(SigningSummary { pe_authenticode_present: pe_auth, macho_code_signature_present: macho_sig, macho_entitlements_present: macho_ent, overlay_has_signature: overlay.as_ref().map(|o| o.has_signature).unwrap_or(false) })
+    };
+
     // Build preliminary artifact (pre-scoring) so scoring can consider context
+    let recursion_summary = {
+        let total = containers.as_ref().map(|v| v.len() as u32).unwrap_or(0);
+        let danger = packers.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+        Some(crate::triage::recurse::RecursionSummary {
+            total_children: total,
+            max_depth: rec_depth,
+            dangerous_child_present: danger,
+        })
+    };
+
     let prelim = TriagedArtifact::builder()
+        .with_schema_version("1.2")
         .with_id(id)
         .with_path(path)
         .with_size_bytes(size_bytes as u64)
@@ -322,8 +380,11 @@ fn build_artifact_from_buffers(
         .with_entropy_analysis(Some(ea))
         .with_strings(strings.clone())
         .with_symbols(symbols_sum)
+        .with_similarity(similarity)
+        .with_signing(signing)
         .with_packers(packers)
         .with_containers(containers)
+        .with_recursion_summary(recursion_summary)
         .with_overlay(overlay)
         .with_parse_status(if parser_results.is_empty() {
             None
@@ -367,6 +428,7 @@ fn build_artifact_from_buffers(
         .with_entropy(prelim.entropy)
         .with_entropy_analysis(prelim.entropy_analysis)
         .with_strings(strings)
+        .with_similarity(prelim.similarity)
         .with_symbols(prelim.symbols)
         .with_packers(prelim.packers)
         .with_containers(prelim.containers)
@@ -524,7 +586,8 @@ mod tests_inner {
     _max_lang_detect=100,
     _enable_classification=true,
     _max_classify=200,
-    _max_ioc_per_string=16
+    _max_ioc_per_string=16,
+    _config=None
 ))]
 pub fn analyze_path_py(
     path: String,
@@ -538,6 +601,7 @@ pub fn analyze_path_py(
     _enable_classification: bool,
     _max_classify: usize,
     _max_ioc_per_string: usize,
+    _config: Option<TriageConfig>,
 ) -> PyResult<TriagedArtifact> {
     let p = Path::new(&path);
     let limits = IOLimits {
@@ -582,6 +646,14 @@ pub fn analyze_path_py(
         max_ioc_per_string: _max_ioc_per_string,
         max_ioc_samples: 50,
     };
+    let packer_cfg: PackerConfig = _config
+        .as_ref()
+        .map(|c| c.packers.clone())
+        .unwrap_or_else(PackerConfig::default);
+    let sim_cfg: SimilarityConfig = _config
+        .as_ref()
+        .map(|c| c.similarity.clone())
+        .unwrap_or_else(SimilarityConfig::default);
     Ok(build_artifact_from_buffers(
         path,
         reader.size() as usize,
@@ -594,6 +666,8 @@ pub fn analyze_path_py(
         _max_recursion_depth,
         hit_byte_limit,
         &strings_cfg,
+        &packer_cfg,
+        &sim_cfg,
     ))
 }
 
@@ -610,7 +684,8 @@ pub fn analyze_path_py(
     max_lang_detect=100,
     enable_classification=true,
     max_classify=200,
-    max_ioc_per_string=16
+    max_ioc_per_string=16,
+    config=None
 ))]
 pub fn analyze_bytes_py(
     data: Vec<u8>,
@@ -623,6 +698,7 @@ pub fn analyze_bytes_py(
     enable_classification: bool,
     max_classify: usize,
     max_ioc_per_string: usize,
+    config: Option<TriageConfig>,
 ) -> PyResult<TriagedArtifact> {
     if data.is_empty() {
         return Err(pyo3::exceptions::PyValueError::new_err("Empty data"));
@@ -653,6 +729,14 @@ pub fn analyze_bytes_py(
         max_ioc_per_string,
         max_ioc_samples: 50,
     };
+    let packer_cfg: PackerConfig = config
+        .as_ref()
+        .map(|c| c.packers.clone())
+        .unwrap_or_else(PackerConfig::default);
+    let sim_cfg: SimilarityConfig = config
+        .as_ref()
+        .map(|c| c.similarity.clone())
+        .unwrap_or_else(SimilarityConfig::default);
     Ok(build_artifact_from_buffers(
         "<memory>".to_string(),
         data.len(),
@@ -665,6 +749,8 @@ pub fn analyze_bytes_py(
         max_recursion_depth,
         hit_byte_limit,
         &strings_cfg,
+        &packer_cfg,
+        &sim_cfg,
     ))
 }
 
@@ -707,6 +793,8 @@ pub fn analyze_path<P: AsRef<Path>>(
         1,
         hit_byte_limit,
         &strings_cfg,
+        &PackerConfig::default(),
+        &SimilarityConfig::default(),
     ))
 }
 
@@ -745,5 +833,7 @@ pub fn analyze_bytes(data: &[u8], limits: &IOLimits) -> std::io::Result<TriagedA
         1,
         hit_byte_limit,
         &strings_cfg,
+        &PackerConfig::default(),
+        &SimilarityConfig::default(),
     ))
 }
