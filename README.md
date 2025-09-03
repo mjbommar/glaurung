@@ -1,5 +1,9 @@
 # Glaurung
 
+<p align="center">
+  <img src="assets/glaurung-512.png" alt="Glaurung Logo" width="256">
+</p>
+
 A modern reverse engineering framework designed to replace Ghidra with first-class AI integration throughout the analysis pipeline.
 
 ## Vision
