@@ -4,7 +4,7 @@
 //! commonly used for self-extracting archives, installers, and digital signatures.
 
 use crate::core::binary::Format;
-use crate::triage::entropy::entropy_of_slice;
+use crate::entropy::shannon_entropy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -70,7 +70,7 @@ impl OverlayAnalysis {
     fn from_data(offset: u64, data: &[u8]) -> Self {
         let size = data.len() as u64;
         let entropy = if !data.is_empty() {
-            entropy_of_slice(data) as f32
+            shannon_entropy(data) as f32
         } else {
             0.0
         };

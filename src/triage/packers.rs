@@ -1,6 +1,7 @@
 use crate::core::triage::PackerMatch;
 use crate::triage::config::{EntropyConfig, PackerConfig};
-use crate::triage::entropy::{analyze_entropy, entropy_of_slice};
+use crate::triage::entropy::analyze_entropy;
+use crate::entropy::shannon_entropy;
 
 fn bump_match(out: &mut Vec<PackerMatch>, name: &str, base_if_absent: f32, delta: f32) {
     if let Some(m) = out.iter_mut().find(|m| m.name.eq_ignore_ascii_case(name)) {
@@ -101,7 +102,7 @@ pub fn detect_packers(data: &[u8], cfg: &PackerConfig) -> Vec<PackerMatch> {
             packed_score += 0.15;
         }
     } else {
-        let overall = entropy_of_slice(hay);
+        let overall = shannon_entropy(hay);
         if overall > 7.3 {
             packed_score += 0.15;
         }
@@ -137,7 +138,7 @@ pub fn detect_packers(data: &[u8], cfg: &PackerConfig) -> Vec<PackerMatch> {
             // Section entropy heuristic
             if let Ok(bytes) = sec.data() {
                 if bytes.len() >= 4096 {
-                    let h = entropy_of_slice(bytes) as f32;
+                    let h = shannon_entropy(bytes) as f32;
                     if h > 7.3 {
                         packed_score += 0.05; // small nudge per high-entropy section
                     }

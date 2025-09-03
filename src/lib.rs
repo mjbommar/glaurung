@@ -23,6 +23,9 @@ pub mod strings;
 /// Similarity and fuzzy hashing (CTPH)
 pub mod similarity;
 
+/// High-performance entropy calculation and analysis
+pub mod entropy;
+
 #[cfg(feature = "python-ext")]
 use pyo3::{prelude::*, wrap_pyfunction};
 
