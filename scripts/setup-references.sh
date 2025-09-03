@@ -15,10 +15,12 @@ declare -A SUBMODULES=(
     ["reference/radare2"]="https://github.com/radareorg/radare2.git"
     ["reference/rizin"]="https://github.com/rizinorg/rizin.git"
     ["reference/REDasm"]="https://github.com/REDasmOrg/REDasm.git"
+    ["reference/miasm"]="https://github.com/cea-sec/miasm.git"
 
     # Disassembly / Assembly
     ["reference/capstone"]="https://github.com/capstone-engine/capstone.git"
     ["reference/keystone"]="https://github.com/keystone-engine/keystone.git"
+    ["reference/zydis"]="https://github.com/zyantific/zydis.git"
 
     # Binary instrumentation and emulation
     ["reference/LIEF"]="https://github.com/lief-project/LIEF.git"
@@ -31,6 +33,9 @@ declare -A SUBMODULES=(
     # Debug Info and Symbolication
     ["reference/symbolic"]="https://github.com/getsentry/symbolic.git"
     ["reference/object"]="https://github.com/gimli-rs/object.git"
+
+    # Decompilers
+    ["reference/pycdc"]="https://github.com/zrax/pycdc.git"
 
     # Constraint solvers
     ["reference/z3"]="https://github.com/Z3Prover/z3.git"
