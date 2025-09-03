@@ -38,6 +38,7 @@ glaurung = "glaurung.cli:main"
 [project.optional-dependencies]
 tests = [
     "pytest",
+    "pytest-benchmark",
 ]
 [tool.maturin]
 python-source = "python"
@@ -51,4 +52,5 @@ module-name = "glaurung._native"
 [dependency-groups]
 dev = [
     "pytest>=8.4.1",
+    "pytest-benchmark>=5.1.0",
 ]
