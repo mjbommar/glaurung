@@ -27,6 +27,9 @@ ContainerChild = _native.triage.ContainerChild
 Budgets = _native.triage.Budgets
 TriageVerdict = _native.triage.TriageVerdict
 TriagedArtifact = _native.triage.TriagedArtifact
+# Overlay detection types
+OverlayAnalysis = _native.triage.OverlayAnalysis
+OverlayFormat = _native.triage.OverlayFormat
 
 IOConfig = _native.triage.IOConfig
 EntropyConfig = _native.triage.EntropyConfig
@@ -198,6 +201,8 @@ __all__ = [
     "Budgets",
     "TriageVerdict",
     "TriagedArtifact",
+    "OverlayAnalysis",
+    "OverlayFormat",
     # Configs
     "TriageConfig",
     "IOConfig",
