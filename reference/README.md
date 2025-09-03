@@ -21,6 +21,7 @@ This directory contains git submodules of reference implementations that inform 
 
 ## Debug Info and Symbolication
 - **symbolic**: Debug info and symbolication library (ELF/PE/Mach-O, DWARF/PDB), demangling, symcache
+- **object**: A unified object file parser for ELF, Mach-O, PE/COFF, and more.
 
 ## Disassembly and Assembly
 - **capstone**: Lightweight, multi-architecture disassembly engine

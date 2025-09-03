@@ -27,7 +27,10 @@ declare -A SUBMODULES=(
 
     # Symbolic execution
     ["reference/manticore"]="https://github.com/trailofbits/manticore.git"
+
+    # Debug Info and Symbolication
     ["reference/symbolic"]="https://github.com/getsentry/symbolic.git"
+    ["reference/object"]="https://github.com/gimli-rs/object.git"
 
     # Constraint solvers
     ["reference/z3"]="https://github.com/Z3Prover/z3.git"

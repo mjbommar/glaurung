@@ -70,3 +70,48 @@
 [submodule "reference/retdec"]
 	path = reference/retdec
 	url = https://github.com/avast/retdec.git
+[submodule "reference/object"]
+	path = reference/object
+	url = https://github.com/gimli-rs/object.git
+[submodule "scripts/demangle-mode"]
+	path = scripts/demangle-mode
+	url = https://github.com/liblit/demangle-mode.git
+[submodule "reference/demangle-mode"]
+	path = reference/demangle-mode
+	url = https://github.com/liblit/demangle-mode.git
+[submodule "reference/zydis"]
+	path = reference/zydis
+	url = https://github.com/zyantific/zydis.git
+[submodule "reference/xed"]
+	path = reference/xed
+	url = https://github.com/intelxed/xed.git
+[submodule "reference/reko"]
+	path = reference/reko
+	url = https://github.com/uxmal/reko.git
+[submodule "reference/b2r2"]
+	path = reference/b2r2
+	url = https://github.com/B2R2-org/B2R2.git
+[submodule "reference/spirv-tools"]
+	path = reference/spirv-tools
+	url = https://github.com/KhronosGroup/SPIRV-Tools.git
+[submodule "reference/ilspy"]
+	path = reference/ilspy
+	url = https://github.com/icsharpcode/ILSpy.git
+[submodule "reference/wabt"]
+	path = reference/wabt
+	url = https://github.com/WebAssembly/wabt.git
+[submodule "reference/bddisasm"]
+	path = reference/bddisasm
+	url = https://github.com/bitdefender/bddisasm.git
+[submodule "reference/iced"]
+	path = reference/iced
+	url = https://github.com/icedland/iced.git
+[submodule "reference/snowman"]
+	path = reference/snowman
+	url = https://github.com/x64dbg/snowman.git
+[submodule "reference/miasm"]
+	path = reference/miasm
+	url = https://github.com/cea-sec/miasm.git
+[submodule "reference/pycdc"]
+	path = reference/pycdc
+	url = https://github.com/zrax/pycdc.git
