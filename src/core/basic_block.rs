@@ -4,6 +4,7 @@
 //! containing a sequence of instructions with a single entry point and
 //! potentially multiple exit points.
 
+use bincode::{Decode, Encode};
 #[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,7 @@ use crate::core::address::Address;
 // Note: ID types are handled as Strings here to avoid cross-feature coupling
 
 /// BasicBlock represents a straight-line code region (basic block) in control flow analysis
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct BasicBlock {
     /// Unique identifier for this basic block (deterministic: binary_id + start_address)

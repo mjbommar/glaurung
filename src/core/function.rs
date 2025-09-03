@@ -2,6 +2,7 @@ use crate::core::address::Address;
 use crate::core::address_range::AddressRange;
 use crate::core::basic_block::BasicBlock;
 use crate::error::GlaurungError;
+use bincode::{config, Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -9,7 +10,7 @@ use std::collections::HashSet;
 use pyo3::prelude::*;
 
 /// Kind of function in binary analysis
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub enum FunctionKind {
     /// Normal function defined in the binary
@@ -40,7 +41,7 @@ impl FunctionKind {
 }
 
 /// Function flags as bitflags
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 pub struct FunctionFlags(u32);
 
 impl FunctionFlags {
@@ -72,7 +73,7 @@ impl std::ops::BitAnd for FunctionFlags {
 }
 
 /// Represents a function in binary analysis
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Function {
     /// Function name
@@ -299,12 +300,17 @@ impl Function {
 
     /// Serialize to binary
     pub fn to_bincode(&self) -> Result<Vec<u8>, GlaurungError> {
-        bincode::serialize(self).map_err(|e| GlaurungError::Serialization(e.to_string()))
+        let config = config::standard();
+        bincode::encode_to_vec(self, config)
+            .map_err(|e| GlaurungError::Serialization(e.to_string()))
     }
 
     /// Deserialize from binary
     pub fn from_bincode(data: &[u8]) -> Result<Self, GlaurungError> {
-        bincode::deserialize(data).map_err(|e| GlaurungError::Serialization(e.to_string()))
+        let config = config::standard();
+        let (decoded, _len): (Self, usize) = bincode::decode_from_slice(data, config)
+            .map_err(|e| GlaurungError::Serialization(e.to_string()))?;
+        Ok(decoded)
     }
 }
 
@@ -600,6 +606,19 @@ impl Function {
     fn from_binary_py(data: Vec<u8>) -> PyResult<Self> {
         Self::from_bincode(&data)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.name == other.name && self.entry_point == other.entry_point && self.kind == other.kind
+    }
+
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.name.hash(&mut hasher);
+        self.entry_point.hash(&mut hasher);
+        self.kind.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

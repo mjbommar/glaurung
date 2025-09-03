@@ -5,13 +5,14 @@
 
 use crate::core::address::Address;
 use crate::error::GlaurungError;
+use bincode::{config, Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 
 /// Enum representing the kind of unresolved reference target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub enum UnresolvedReferenceKind {
     /// Dynamic reference resolved at runtime
@@ -36,7 +37,7 @@ impl UnresolvedReferenceKind {
 }
 
 /// Enum representing the target of a reference.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub enum ReferenceTarget {
     /// Resolved target with an Address
@@ -69,7 +70,7 @@ impl ReferenceTarget {
 }
 
 /// Enum representing the kind of a reference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub enum ReferenceKind {
     /// Function call reference
@@ -109,7 +110,7 @@ impl ReferenceKind {
 }
 
 /// Represents a cross-reference between code or data locations.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Reference {
     /// Stable identifier for the reference
@@ -256,12 +257,17 @@ impl Reference {
 
     /// Serialize to binary
     pub fn to_bincode(&self) -> Result<Vec<u8>, GlaurungError> {
-        bincode::serialize(self).map_err(|e| GlaurungError::Serialization(e.to_string()))
+        let config = config::standard();
+        bincode::encode_to_vec(self, config)
+            .map_err(|e| GlaurungError::Serialization(e.to_string()))
     }
 
     /// Deserialize from binary
     pub fn from_bincode(data: &[u8]) -> Result<Self, GlaurungError> {
-        bincode::deserialize(data).map_err(|e| GlaurungError::Serialization(e.to_string()))
+        let config = config::standard();
+        let (decoded, _len): (Self, usize) = bincode::decode_from_slice(data, config)
+            .map_err(|e| GlaurungError::Serialization(e.to_string()))?;
+        Ok(decoded)
     }
 }
 

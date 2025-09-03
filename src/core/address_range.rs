@@ -5,6 +5,7 @@
 //! functions, and other binary constructs.
 
 use crate::core::address::Address;
+use bincode::{Decode, Encode};
 #[cfg(feature = "python-ext")]
 use pyo3::exceptions::PyValueError;
 #[cfg(feature = "python-ext")]
@@ -18,7 +19,7 @@ use std::fmt;
 /// (inclusive) and extending for a given size (exclusive). This is the
 /// fundamental building block for representing segments, sections, functions,
 /// and other binary constructs that occupy contiguous memory regions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct AddressRange {
     /// The starting address of the range (inclusive)

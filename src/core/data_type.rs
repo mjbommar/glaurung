@@ -4,13 +4,13 @@
 //! primitive types, complex structures, pointers, arrays, and function signatures
 //! as encountered in binary analysis and decompilation.
 
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "pyo3")]
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Represents the different kinds of data types in the system.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "pyo3", pyclass)]
+#[cfg_attr(feature = "pyo3", pyclass(eq, eq_int))]
 pub enum DataTypeKind {
     /// Primitive types like int32, float64, char, etc.
     Primitive,
@@ -127,7 +127,13 @@ pub struct DataType {
 
 impl DataType {
     /// Create a new primitive data type.
-    pub fn new_primitive(id: String, name: String, size: u64, alignment: Option<u64>, source: Option<String>) -> Self {
+    pub fn new_primitive(
+        id: String,
+        name: String,
+        size: u64,
+        alignment: Option<u64>,
+        source: Option<String>,
+    ) -> Self {
         Self {
             id,
             name,
@@ -252,6 +258,7 @@ impl DataType {
     }
 
     /// Create a new function data type.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_function(
         id: String,
         name: String,
@@ -310,7 +317,8 @@ impl DataType {
         }
 
         // Check size is reasonable (allow 0 for void-like types)
-        if self.size > 1_000_000 { // 1MB max
+        if self.size > 1_000_000 {
+            // 1MB max
             return false;
         }
 
@@ -327,12 +335,11 @@ impl DataType {
                 // Primitive types should have reasonable sizes
                 matches!(self.size, 1 | 2 | 4 | 8 | 16)
             }
-            TypeData::Pointer { base_type_id, .. } => {
-                !base_type_id.trim().is_empty()
-            }
-            TypeData::Array { base_type_id, count } => {
-                !base_type_id.trim().is_empty() && *count > 0
-            }
+            TypeData::Pointer { base_type_id, .. } => !base_type_id.trim().is_empty(),
+            TypeData::Array {
+                base_type_id,
+                count,
+            } => !base_type_id.trim().is_empty() && *count > 0,
             TypeData::Struct { fields } | TypeData::Union { fields } => {
                 // Check field names are unique and offsets are valid
                 let mut names = std::collections::HashSet::new();
@@ -353,7 +360,10 @@ impl DataType {
                 }
                 true
             }
-            TypeData::Enum { underlying_type_id, members } => {
+            TypeData::Enum {
+                underlying_type_id,
+                members,
+            } => {
                 if underlying_type_id.trim().is_empty() {
                     return false;
                 }
@@ -367,13 +377,13 @@ impl DataType {
                 }
                 true
             }
-            TypeData::Function { parameter_type_ids, .. } => {
+            TypeData::Function {
+                parameter_type_ids, ..
+            } => {
                 // Check all parameter type IDs are non-empty
                 parameter_type_ids.iter().all(|id| !id.trim().is_empty())
             }
-            TypeData::Typedef { base_type_id } => {
-                !base_type_id.trim().is_empty()
-            }
+            TypeData::Typedef { base_type_id } => !base_type_id.trim().is_empty(),
         }
     }
 
@@ -426,7 +436,9 @@ impl DataType {
     /// Get the parameter types if this is a function.
     pub fn parameter_types(&self) -> Option<&[String]> {
         match &self.type_data {
-            TypeData::Function { parameter_type_ids, .. } => Some(parameter_type_ids),
+            TypeData::Function {
+                parameter_type_ids, ..
+            } => Some(parameter_type_ids),
             _ => None,
         }
     }
@@ -546,25 +558,13 @@ mod tests {
 
     #[test]
     fn test_invalid_empty_id() {
-        let dt = DataType::new_primitive(
-            "".to_string(),
-            "test".to_string(),
-            4,
-            None,
-            None,
-        );
+        let dt = DataType::new_primitive("".to_string(), "test".to_string(), 4, None, None);
         assert!(!dt.is_valid());
     }
 
     #[test]
     fn test_invalid_empty_name() {
-        let dt = DataType::new_primitive(
-            "test".to_string(),
-            "".to_string(),
-            4,
-            None,
-            None,
-        );
+        let dt = DataType::new_primitive("test".to_string(), "".to_string(), 4, None, None);
         assert!(!dt.is_valid());
     }
 
@@ -650,7 +650,7 @@ impl DataType {
 
         if !dt.is_valid() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid DataType parameters"
+                "Invalid DataType parameters",
             ));
         }
 
@@ -658,109 +658,182 @@ impl DataType {
     }
 
     #[staticmethod]
-    fn primitive(id: String, name: String, size: u64, alignment: Option<u64>, source: Option<String>) -> PyResult<Self> {
+    fn primitive(
+        id: String,
+        name: String,
+        size: u64,
+        alignment: Option<u64>,
+        source: Option<String>,
+    ) -> PyResult<Self> {
         let dt = Self::new_primitive(id, name, size, alignment, source);
         if !dt.is_valid() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid primitive type parameters"
+                "Invalid primitive type parameters",
             ));
         }
         Ok(dt)
     }
 
     #[staticmethod]
-    fn pointer(id: String, name: String, size: u64, alignment: Option<u64>,
-               base_type_id: String, attributes: Vec<String>, source: Option<String>) -> PyResult<Self> {
+    fn pointer(
+        id: String,
+        name: String,
+        size: u64,
+        alignment: Option<u64>,
+        base_type_id: String,
+        attributes: Vec<String>,
+        source: Option<String>,
+    ) -> PyResult<Self> {
         let dt = Self::new_pointer(id, name, size, alignment, base_type_id, attributes, source);
         if !dt.is_valid() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid pointer type parameters"
+                "Invalid pointer type parameters",
             ));
         }
         Ok(dt)
     }
 
     #[staticmethod]
-    fn array(id: String, name: String, size: u64, alignment: Option<u64>,
-             base_type_id: String, count: u64, source: Option<String>) -> PyResult<Self> {
+    fn array(
+        id: String,
+        name: String,
+        size: u64,
+        alignment: Option<u64>,
+        base_type_id: String,
+        count: u64,
+        source: Option<String>,
+    ) -> PyResult<Self> {
         let dt = Self::new_array(id, name, size, alignment, base_type_id, count, source);
         if !dt.is_valid() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid array type parameters"
+                "Invalid array type parameters",
             ));
         }
         Ok(dt)
     }
 
     #[staticmethod]
-    fn struct_(id: String, name: String, size: u64, alignment: Option<u64>,
-               fields: Vec<Field>, source: Option<String>) -> PyResult<Self> {
+    fn struct_(
+        id: String,
+        name: String,
+        size: u64,
+        alignment: Option<u64>,
+        fields: Vec<Field>,
+        source: Option<String>,
+    ) -> PyResult<Self> {
         let dt = Self::new_struct(id, name, size, alignment, fields, source);
         if !dt.is_valid() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid struct type parameters"
+                "Invalid struct type parameters",
             ));
         }
         Ok(dt)
     }
 
     #[staticmethod]
-    fn union(id: String, name: String, size: u64, alignment: Option<u64>,
-             fields: Vec<Field>, source: Option<String>) -> PyResult<Self> {
+    fn union(
+        id: String,
+        name: String,
+        size: u64,
+        alignment: Option<u64>,
+        fields: Vec<Field>,
+        source: Option<String>,
+    ) -> PyResult<Self> {
         let dt = Self::new_union(id, name, size, alignment, fields, source);
         if !dt.is_valid() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid union type parameters"
+                "Invalid union type parameters",
             ));
         }
         Ok(dt)
     }
 
     #[staticmethod]
-    fn enum_(id: String, name: String, size: u64, alignment: Option<u64>,
-             underlying_type_id: String, members: Vec<EnumMember>, source: Option<String>) -> PyResult<Self> {
-        let dt = Self::new_enum(id, name, size, alignment, underlying_type_id, members, source);
+    fn enum_(
+        id: String,
+        name: String,
+        size: u64,
+        alignment: Option<u64>,
+        underlying_type_id: String,
+        members: Vec<EnumMember>,
+        source: Option<String>,
+    ) -> PyResult<Self> {
+        let dt = Self::new_enum(
+            id,
+            name,
+            size,
+            alignment,
+            underlying_type_id,
+            members,
+            source,
+        );
         if !dt.is_valid() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid enum type parameters"
+                "Invalid enum type parameters",
             ));
         }
         Ok(dt)
     }
 
     #[staticmethod]
-    fn function(id: String, name: String, size: u64, alignment: Option<u64>,
-                return_type_id: Option<String>, parameter_type_ids: Vec<String>,
-                variadic: bool, source: Option<String>) -> PyResult<Self> {
-        let dt = Self::new_function(id, name, size, alignment, return_type_id, parameter_type_ids, variadic, source);
+    fn function(
+        id: String,
+        name: String,
+        size: u64,
+        alignment: Option<u64>,
+        return_type_id: Option<String>,
+        parameter_type_ids: Vec<String>,
+        variadic: bool,
+        source: Option<String>,
+    ) -> PyResult<Self> {
+        let dt = Self::new_function(
+            id,
+            name,
+            size,
+            alignment,
+            return_type_id,
+            parameter_type_ids,
+            variadic,
+            source,
+        );
         if !dt.is_valid() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid function type parameters"
+                "Invalid function type parameters",
             ));
         }
         Ok(dt)
     }
 
     #[staticmethod]
-    fn typedef(id: String, name: String, size: u64, alignment: Option<u64>,
-               base_type_id: String, source: Option<String>) -> PyResult<Self> {
+    fn typedef(
+        id: String,
+        name: String,
+        size: u64,
+        alignment: Option<u64>,
+        base_type_id: String,
+        source: Option<String>,
+    ) -> PyResult<Self> {
         let dt = Self::new_typedef(id, name, size, alignment, base_type_id, source);
         if !dt.is_valid() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Invalid typedef parameters"
+                "Invalid typedef parameters",
             ));
         }
         Ok(dt)
     }
 
     fn __str__(&self) -> String {
-        format!("DataType(id={}, name={}, kind={:?}, size={})",
-                self.id, self.name, self.kind, self.size)
+        format!(
+            "DataType(id={}, name={}, kind={:?}, size={})",
+            self.id, self.name, self.kind, self.size
+        )
     }
 
     fn __repr__(&self) -> String {
-        format!("DataType(id={:?}, name={:?}, kind={:?}, size={}, alignment={:?})",
-                self.id, self.name, self.kind, self.size, self.alignment)
+        format!(
+            "DataType(id={:?}, name={:?}, kind={:?}, size={}, alignment={:?})",
+            self.id, self.name, self.kind, self.size, self.alignment
+        )
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -864,15 +937,25 @@ impl DataTypeKind {
 impl Field {
     #[new]
     fn new(name: String, type_id: String, offset: u64) -> Self {
-        Self { name, type_id, offset }
+        Self {
+            name,
+            type_id,
+            offset,
+        }
     }
 
     fn __str__(&self) -> String {
-        format!("Field(name={}, type_id={}, offset={})", self.name, self.type_id, self.offset)
+        format!(
+            "Field(name={}, type_id={}, offset={})",
+            self.name, self.type_id, self.offset
+        )
     }
 
     fn __repr__(&self) -> String {
-        format!("Field(name={:?}, type_id={:?}, offset={})", self.name, self.type_id, self.offset)
+        format!(
+            "Field(name={:?}, type_id={:?}, offset={})",
+            self.name, self.type_id, self.offset
+        )
     }
 
     #[getter]

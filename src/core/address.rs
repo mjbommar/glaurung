@@ -3,6 +3,7 @@
 //! This module provides the fundamental Address and AddressKind types
 //! that serve as the foundation for all location references in Glaurung.
 
+use bincode::{config, Decode, Encode};
 #[cfg(feature = "python-ext")]
 use pyo3::exceptions::PyValueError;
 #[cfg(feature = "python-ext")]
@@ -12,7 +13,9 @@ use serde_json;
 use std::fmt;
 
 /// The kind of address representation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord, Encode, Decode,
+)]
 #[cfg_attr(feature = "python-ext", pyclass(eq, eq_int))]
 pub enum AddressKind {
     /// Virtual Address (runtime memory address)
@@ -54,7 +57,7 @@ impl AddressKind {
 /// Addresses can represent different kinds of locations (virtual addresses,
 /// file offsets, symbolic references, etc.) and include metadata about
 /// the address space and bit width.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "python-ext", pyclass)]
 pub struct Address {
     /// The kind of address this represents
@@ -465,12 +468,16 @@ impl Address {
 
     /// Serialize to binary format.
     pub fn to_binary(&self) -> Result<Vec<u8>, String> {
-        bincode::serialize(self).map_err(|e| e.to_string())
+        let config = config::standard();
+        bincode::encode_to_vec(self, config).map_err(|e| e.to_string())
     }
 
     /// Deserialize from binary format.
     pub fn from_binary(data: &[u8]) -> Result<Self, String> {
-        bincode::deserialize(data).map_err(|e| e.to_string())
+        let config = config::standard();
+        let (decoded, _len): (Address, usize) =
+            bincode::decode_from_slice(data, config).map_err(|e| e.to_string())?;
+        Ok(decoded)
     }
 }
 
