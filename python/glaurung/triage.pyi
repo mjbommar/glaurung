@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 
 class SnifferSource:
     Infer: SnifferSource
@@ -84,8 +84,8 @@ class EntropyClass:
 class EntropyAnomaly:
     index: int
     from_value: float  # Renamed from 'from' to avoid Python keyword conflict
-    to_value: float    # Renamed for consistency
-    to: float          # Also available for backward compatibility
+    to_value: float  # Renamed for consistency
+    to: float  # Also available for backward compatibility
     delta: float
 
 class PackedIndicators:
@@ -116,15 +116,69 @@ class EntropyAnalysis:
     classification: EntropyClass
     packed_indicators: PackedIndicators
     anomalies: list[EntropyAnomaly]
+    classification_kind: str
     def __init__(self) -> None: ...
+
+class SymbolSummary:
+    imports_count: int
+    exports_count: int
+    libs_count: int
+    import_names: Optional[List[str]]
+    export_names: Optional[List[str]]
+    demangled_import_names: Optional[List[str]]
+    demangled_export_names: Optional[List[str]]
+    stripped: bool
+    tls_used: bool
+    tls_callback_count: Optional[int]
+    tls_callback_vas: Optional[List[int]]
+    debug_info_present: bool
+    suspicious_imports: Optional[List[str]]
+    entry_section: Optional[str]
+    nx: Optional[bool]
+    aslr: Optional[bool]
+    relro: Optional[bool]
+    pie: Optional[bool]
+    cfg: Optional[bool]
+    relocations_present: Optional[bool]
+    rpaths: Optional[List[str]]
+    runpaths: Optional[List[str]]
+
+class OverlayFormat:
+    ZIP: OverlayFormat
+    CAB: OverlayFormat
+    SevenZip: OverlayFormat
+    RAR: OverlayFormat
+    NSIS: OverlayFormat
+    InnoSetup: OverlayFormat
+    Certificate: OverlayFormat
+    AppImage: OverlayFormat
+    SquashFS: OverlayFormat
+    ISO9660: OverlayFormat
+    Unknown: OverlayFormat
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+
+class OverlayAnalysis:
+    offset: int
+    size: int
+    entropy: float
+    header: List[int]
+    detected_format: Optional[OverlayFormat]
+    has_signature: bool
+    is_archive: bool
+    sha256: str
+    def __repr__(self) -> str: ...
 
 class StringsSummary:
     ascii_count: int
+    utf8_count: int
     utf16le_count: int
     utf16be_count: int
     strings: Optional[List[DetectedString]]
     language_counts: Optional[Dict[str, int]]
     script_counts: Optional[Dict[str, int]]
+    ioc_counts: Optional[Dict[str, int]]
+    ioc_samples: Optional[List[IocSample]]
     samples: Optional[List[str]]
     def __init__(
         self,
@@ -143,6 +197,20 @@ class DetectedString:
     script: Optional[str]
     confidence: Optional[float]
     offset: Optional[int]
+    def __init__(
+        self,
+        text: str,
+        encoding: str,
+        language: Optional[str] = ...,
+        script: Optional[str] = ...,
+        confidence: Optional[float] = ...,
+        offset: Optional[int] = ...,
+    ) -> None: ...
+
+class IocSample:
+    kind: str
+    text: str
+    offset: Optional[int]
 
 class PackerMatch:
     name: str
@@ -157,6 +225,7 @@ class ContainerChild:
 
 class ContainerMetadata:
     """Metadata about container contents."""
+
     file_count: Optional[int]
     total_uncompressed_size: Optional[int]
     total_compressed_size: Optional[int]
@@ -171,6 +240,10 @@ class Budgets:
     bytes_read: int
     time_ms: int
     recursion_depth: int
+    limit_bytes: Optional[int]
+    limit_time_ms: Optional[int]
+    max_recursion_depth: Optional[int]
+    hit_byte_limit: bool
     def __init__(self, bytes_read: int, time_ms: int, recursion_depth: int) -> None: ...
 
 class TriageVerdict:
@@ -202,8 +275,10 @@ class TriagedArtifact:
     entropy: Optional[EntropySummary]
     entropy_analysis: Optional[EntropyAnalysis]
     strings: Optional[StringsSummary]
+    symbols: Optional[SymbolSummary]
     packers: Optional[List[PackerMatch]]
     containers: Optional[List[ContainerChild]]
+    overlay: Optional[OverlayAnalysis]
     parse_status: Optional[List[ParserResult]]
     budgets: Optional[Budgets]
     errors: Optional[List[TriageError]]
@@ -212,14 +287,16 @@ class TriagedArtifact:
         id: str,
         path: str,
         size_bytes: int,
-    sha256: Optional[str] = ...,
+        sha256: Optional[str] = ...,
         hints: list[TriageHint] = ...,
         verdicts: list[TriageVerdict] = ...,
         entropy: Optional[EntropySummary] = ...,
         entropy_analysis: Optional[EntropyAnalysis] = ...,
         strings: Optional[StringsSummary] = ...,
+        symbols: Optional[SymbolSummary] = ...,
         packers: Optional[list[PackerMatch]] = ...,
         containers: Optional[list[ContainerChild]] = ...,
+        overlay: Optional[OverlayAnalysis] = ...,
         parse_status: Optional[list[ParserResult]] = ...,
         budgets: Optional[Budgets] = ...,
         errors: Optional[list[TriageError]] = ...,
@@ -228,37 +305,62 @@ class TriagedArtifact:
     @staticmethod
     def from_json(json_str: str) -> TriagedArtifact: ...
 
+# Note: symbols API is now exposed at top-level: glaurung.symbols
+
 # Triage analysis functions
-def analyze_path(path: str, _max_read_bytes: int = ..., _max_file_size: int = ..., _max_recursion_depth: int = ...) -> TriagedArtifact: ...(
+def analyze_path(
     path: str,
     max_read_bytes: int = 10_485_760,
     max_file_size: int = 104_857_600,
+    max_recursion_depth: int = 1,
+    min_string_length: int = 4,
+    max_string_samples: int = 40,
+    enable_language: bool = True,
+    max_lang_detect: int = 100,
+    enable_classification: bool = True,
+    max_classify: int = 200,
+    max_ioc_per_string: int = 16,
 ) -> TriagedArtifact:
     """
     Analyze a file at the given path.
-    
+
     Args:
         path: Path to the file to analyze
         max_read_bytes: Maximum bytes to read for analysis (default 10MB)
         max_file_size: Maximum file size to analyze (default 100MB)
-    
+
     Returns:
         TriagedArtifact containing analysis results
     """
     ...
 
-def analyze_bytes(data: bytes, _max_read_bytes: int = ..., _max_recursion_depth: int = ...) -> TriagedArtifact: ...(
+def analyze_bytes(
     data: bytes,
     max_read_bytes: int = 10_485_760,
+    max_recursion_depth: int = 1,
+    min_string_length: int = 4,
+    max_string_samples: int = 40,
+    enable_language: bool = True,
+    max_lang_detect: int = 100,
+    enable_classification: bool = True,
+    max_classify: int = 200,
+    max_ioc_per_string: int = 16,
 ) -> TriagedArtifact:
     """
     Analyze raw bytes.
-    
+
     Args:
         data: Bytes to analyze
         max_read_bytes: Maximum bytes to read for analysis (default 10MB)
-    
+
     Returns:
         TriagedArtifact containing analysis results
     """
     ...
+
+# Convenience passthrough for symbols listing
+def list_symbols(
+    path: str,
+    max_read_bytes: int = 10_485_760,
+    max_file_size: int = 104_857_600,
+) -> tuple[list[str], list[str], list[str], list[str], list[str]]: ...
