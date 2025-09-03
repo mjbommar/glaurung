@@ -476,3 +476,7 @@ Mapping Notes (how proposals informed this plan)
 Summary
 This unified plan balances a pragmatic, minimal core with a comprehensive long‑term vision: accurate structural modeling; strong graphs for control‑ and call‑flow; a typed pipeline with provenance and caching; and a semantic layer for reasoning, AI insights, and advanced detection. The result is an extensible platform that supports today’s reverse‑engineering workflows and tomorrow’s knowledge‑driven analysis.
 
+---
+
+See also
+- Disassembly & Decompiler Foundations — Data Model and Capabilities: docs/data-model/disassembly_decompiler_foundations.md
