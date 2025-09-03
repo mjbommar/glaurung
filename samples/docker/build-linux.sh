@@ -521,6 +521,8 @@ main() {
     # Build C/C++ samples
     [ -f "$SOURCE_DIR/c/hello.c" ] && build_native_variants "$SOURCE_DIR/c/hello.c" c && build_cross_variants "$SOURCE_DIR/c/hello.c" c
     [ -f "$SOURCE_DIR/cpp/hello.cpp" ] && build_native_variants "$SOURCE_DIR/cpp/hello.cpp" cpp && build_cross_variants "$SOURCE_DIR/cpp/hello.cpp" cpp
+    # C2 demo example with hardcoded IOCs
+    [ -f "$SOURCE_DIR/c/c2_demo.c" ] && build_native_variants "$SOURCE_DIR/c/c2_demo.c" c && build_cross_variants "$SOURCE_DIR/c/c2_demo.c" c
     # Suspicious examples: Linux and Windows cross
     [ -f "$SOURCE_DIR/c/suspicious_linux.c" ] && build_native_variants "$SOURCE_DIR/c/suspicious_linux.c" c
     [ -f "$SOURCE_DIR/c/suspicious_win.c" ] && build_cross_variants "$SOURCE_DIR/c/suspicious_win.c" c
