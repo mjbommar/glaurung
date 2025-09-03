@@ -26,6 +26,10 @@ This directory contains git submodules of reference implementations that inform 
 ## Disassembly and Assembly
 - **capstone**: Lightweight, multi-architecture disassembly engine
 - **keystone**: Lightweight, multi-architecture assembler engine
+- **zydis**: Fast and lightweight x86/x64 disassembler library
+- **xed**: Intel x86 encoder-decoder library (official Intel reference)
+- **bddisasm**: High-performance x86 disassembler with zero memory allocation
+- **iced**: Blazing fast x86/x64 disassembler, assembler, and instruction decoder
 
 ## Malware Analysis and Detection
 - **capa**: FLARE tool to identify capabilities in executable files
@@ -36,6 +40,17 @@ This directory contains git submodules of reference implementations that inform 
 - **pwndbg**: GDB plugin for exploit development
 - **HyperDbg**: Hypervisor-based debugger
 - **unicorn**: Lightweight CPU emulator engine
+
+## Decompilers
+- **retdec**: Machine code to high-level language decompiler
+- **reko**: Open source decompiler for machine code binaries
+- **b2r2**: Binary analysis framework with advanced IR lifting and decompilation
+- **snowman**: Native code to C/C++ decompiler
+- **ilspy**: Cross-platform .NET decompiler and assembly browser
+
+## Bytecode and Specialized Tools
+- **wabt**: WebAssembly Binary Toolkit (wasm2wat, wasm-decompile)
+- **spirv-tools**: Official Khronos SPIR-V tools for GPU shader analysis
 
 ## Constraint Solvers
 - **z3**: SMT solver used for symbolic reasoning and constraint solving

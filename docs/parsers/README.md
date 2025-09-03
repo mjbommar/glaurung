@@ -94,9 +94,9 @@ pub trait SymbolParser {
 ### Native Executables
 | Format | Triage | Basic Parse | Full Parse | Symbols | Relocations | Resources |
 |--------|--------|-------------|------------|---------|-------------|-----------|
-| ELF    | ✅     | 🚧         | ⏳         | ⏳      | ⏳          | N/A       |
-| PE     | ✅     | 🚧         | ⏳         | ⏳      | ⏳          | ⏳        |
-| Mach-O | ✅     | 🚧         | ⏳         | ⏳      | ⏳          | N/A       |
+| ELF    | ✅     | ✅         | ⏳         | ⏳      | ⏳          | N/A       |
+| PE     | ✅     | ✅         | ⏳         | ⏳      | ⏳          | ⏳        |
+| Mach-O | ✅     | ✅         | ⏳         | ⏳      | ⏳          | N/A       |
 
 ### Bytecode Formats
 | Format  | Triage | Header | Disassembly | Decompile | Obfuscation | Metadata |

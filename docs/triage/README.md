@@ -72,7 +72,13 @@ Step‑By‑Step Plan
   - Quick scan for ASCII and UTF‑16LE/BE strings; presence of PE section names, "This program cannot be run in DOS mode", "ELF" in error strings, etc., informs scoring.
 - Output: candidate list (format, arch, endianness, bits) with confidence scores.
 
-6) Stage 4 — Entropy + Packers/Obfuscators
+6) Stage 4 — Structured Parsers (Multi‑Strategy)
+- Primary: Rust "object" crate for portable parsing (ELF/PE/Mach‑O/COFF/Wasm) with bounds.
+- Secondary: "goblin"/"pelite" for cross‑validation or fallback on oddities.
+- Triager headers via "nom": implement tiny, resilient header parsers for ELF/PE/Mach‑O (just enough to validate invariants) that fail fast with precise errors.
+- Record success/failure per parser with reasons; never trust a single signal.
+
+7) Stage 5 — Entropy + Packers/Obfuscators
 - Compute overall and sliding‑window Shannon entropy (e.g., 4–16 KiB windows).
 - Heuristics:
   - Very high uniform entropy across most of the file suggests compression/encryption.
@@ -80,19 +86,13 @@ Step‑By‑Step Plan
 - Packer signature checks (fast): UPX header/section names, ASPack, Petite, etc.
 - If a known packer is detected, record it and optionally schedule unpack (UPX) under sandbox rules (later phase).
 
-7) Stage 5 — Structured Parsers (Multi‑Strategy)
-- Primary: Rust "object" crate for portable parsing (ELF/PE/Mach‑O/COFF/Wasm) with bounds.
-- Secondary: "goblin"/"pelite" for cross‑validation or fallback on oddities.
-- Triager headers via "nom": implement tiny, resilient header parsers for ELF/PE/Mach‑O (just enough to validate invariants) that fail fast with precise errors.
-- Record success/failure per parser with reasons; never trust a single signal.
-
 8) Stage 6 — Embedded/Layered Payload Discovery
 - FAT/universal binaries (Mach‑O fat): iterate architectures.
 - Scanning for secondary signatures in overlays/trailers (appended data beyond last section) and within common sections (e.g., .rsrc, UPX overlay, zip at EOF).
 - Extract child payloads (bounded size/count) and recurse triage with reduced budgets.
 - Maintain a DAG of artifacts (parent/child with offsets and container type).
 
-8) Stage 7 — Scoring, Classification, and Reporting
+9) Stage 7 — Scoring, Classification, and Reporting
 - Combine signals: signature strength, header coherence, parser success, heuristic scores, entropy, packer hits.
 - Produce a ranked verdict list with confidence (0–1), plus a preferred (best) classification.
 - Emit a structured TriagedArtifact JSON:
@@ -105,13 +105,13 @@ Step‑By‑Step Plan
   - parse_status: per‑parser results with errors
   - budgets: bytes_read, time_ms, recursion_depth
 
-9) Stage 8 — Safety, Performance, and Limits
+10) Stage 8 — Safety, Performance, and Limits
 - Hard limits: max bytes read per stage, max recursion depth, global deadline.
 - Memory limits: avoid full‑file mmap on very large inputs; stream reads; align reads to headers.
 - No execution: never run user code; any unpacking must be pure userspace transforms (e.g., UPX decompressor library), not process exec.
 - Graceful degradation: on timeout or limit, return partial triage with reason=BudgetExceeded.
 
-10) Interfaces and Integration
+11) Interfaces and Integration
 - Rust API: `triage::triage_bytes(&[u8], Budgets) -> TriagedArtifact` and `triage_path(Path) -> TriagedArtifact`.
 - Python: `glaurung.triage.analyze(path|bytes, deep=False, json=False)` via pyo3 bindings.
 - CLI: `glaurung triage <path> [--json] [--deep] [--max-depth N] [--timeout MS]`.
@@ -139,7 +139,7 @@ sequenceDiagram
   Report-->>CLI: TriagedArtifact
 ```
 
-11) Libraries and Techniques
+12) Libraries and Techniques
 - Parsing:
   - `object` (primary multi‑format), `goblin`, `pelite` (PE specialization), `scroll` for endian reads.
   - `nom` for custom resilient header parsers and partial/streaming parsing.
@@ -159,7 +159,7 @@ Sniffer Integration Policy (infer/mime_guess)
 - Never trust extensions: any extension‑only classification must not bypass header checks; mismatches are recorded and reduce confidence.
 - Omit `file_type` for now: revisit if coverage or maintenance benefits emerge versus `infer`.
 
-12) Error Taxonomy and Confidence Model
+13) Error Taxonomy and Confidence Model
 - Error kinds: ShortRead, BadMagic, IncoherentFields, UnsupportedVariant, Truncated, BudgetExceeded, ParserMismatch, SnifferMismatch.
 - Confidence calculation:
   - Content sniffer match (infer): +0.15 (general) to +0.25 (specific container/program); extension hint (mime_guess): +0.05 (weak).
@@ -167,7 +167,7 @@ Sniffer Integration Policy (infer/mime_guess)
   - Penalize mismatches: sniffer/header disagreement −0.10; extension/header disagreement −0.15.
   - Adjust classification if entropy/packer signals dominate (e.g., “packed PE”). Normalize to [0,1] and report per‑signal breakdown.
 
-13) Testing Strategy
+14) Testing Strategy
 - Corpus: curated set from `samples/binaries/platforms/**/export` for ELF/PE/Mach‑O/Wasm; include packed (UPX) and archives.
 - Unit tests: header parsers (nom) with corrupt/truncated buffers.
 - Integration tests: CLI triage on small matrix; assert verdicts and key fields.
@@ -176,7 +176,7 @@ Sniffer Integration Policy (infer/mime_guess)
 - Differential: compare we classify like `file(1)`/`libmagic` on the corpus (informational).
 - Sniffer edge cases: files with deceptive extensions (e.g., `.jpg` that are actually PE), extensionless binaries, and archives with embedded executables; assert `SnifferMismatch` and confidence adjustments.
 
-14) Incremental Delivery Roadmap
+15) Incremental Delivery Roadmap
 - MVP (Week 1–2): Stage 0/1/2/7 + basic entropy; object‑based parse for ELF/PE/Mach‑O; CLI triage with JSON; tests on a small matrix.
 - Heuristics (Week 3): Endianness/arch scoring, strings summary, sliding entropy; confidence model v1.
 - Containers/Recursion (Week 4): archive/compression detection, limited extraction, nested triage with budgets.
