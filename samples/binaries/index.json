@@ -1,6 +1,6 @@
 {
   "root": "/home/mjbommar/src/glaurung/samples/binaries",
-  "generated_at": "2025-08-30T19:07:33-04:00",
+  "generated_at": "2025-09-02T20:53:36-04:00",
   "host": "mobile4",
   "tools": {
     "gcc": "gcc (Ubuntu 14.2.0-19ubuntu2) 14.2.0",
@@ -14,88 +14,10 @@
   },
   "files": [
     {
-      "path": "cross/windows-x86_64/hello-c-x86_64-mingw.exe",
-      "size": 249226,
-      "sha256": "04ea300eec872e9a7076b1cf7db2633ab66303e131feefb8535705c3d476f2c2",
-      "type": "PE32+ executable (console) x86-64, for MS Windows, 19 sections"
-    },
-    {
-      "path": "cross/windows-x86_64/hello-cpp-x86_64-mingw.exe",
-      "size": 126535,
-      "sha256": "f1f8aaa07824ae08ed7d5c377669c34ff5e7ff60eeea501b3d8b3a0a3a1b1c31",
-      "type": "PE32+ executable (console) x86-64, for MS Windows, 19 sections"
-    },
-    {
-      "path": "cross/windows-x86_64/hello-x86_64-mingw.exe",
-      "size": 126535,
-      "sha256": "f06fff116dc1386af45c4ecc1c5abe82362d859c7a6f411ec5161c51bd6b33a9",
-      "type": "PE32+ executable (console) x86-64, for MS Windows, 19 sections"
-    },
-    {
-      "path": "cross/x86_32/hello-x86_32-g++",
-      "size": 16904,
-      "sha256": "9a8b2a611dde57c6162807a1cfb7485e9c4d9fe6ab64614b0bf0ffb341745ac1",
-      "type": "ELF 32-bit LSB pie executable, Intel 80386, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux.so.2, BuildID[sha1]=291d235af683178335c28c1a5f8d6f84c237ec39, for GNU/Linux 3.2.0, not stripped"
-    },
-    {
-      "path": "cross/x86_32/hello-x86_32-gcc",
-      "size": 15116,
-      "sha256": "a992f265eed94a6f25c2c4b800b06913876d5572bec125cd6577b251a95a412f",
-      "type": "ELF 32-bit LSB pie executable, Intel 80386, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux.so.2, BuildID[sha1]=648f2e40802553d6762246416b3d89b65ce500dc, for GNU/Linux 3.2.0, not stripped"
-    },
-    {
-      "path": "fortran/hello-gfortran-O0",
-      "size": 16672,
-      "sha256": "6d2bbad790e0cb5c5ef4a2b260140c787a14c5bb6503f4d735f096b6ca8236a3",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=803ad621b4055c524d505e9ff6bec74571606bbd, for GNU/Linux 3.2.0, not stripped"
-    },
-    {
-      "path": "fortran/hello-gfortran-O1",
-      "size": 16632,
-      "sha256": "1ca566eb93580b34bb18fb92ad32d3838a5f8a7d92d83eeb8feab4d7ac72df88",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=6add8d24c906cebff0882123cfcd3e9a12165fd2, for GNU/Linux 3.2.0, not stripped"
-    },
-    {
-      "path": "fortran/hello-gfortran-O2",
-      "size": 16632,
-      "sha256": "1b6ae9025aec82accd3774ce63c0d895404bf60af5de581a807c959537b5b25c",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=2a9c1b3c7b9ac7fd89f1be18121ee5ca63490a80, for GNU/Linux 3.2.0, not stripped"
-    },
-    {
-      "path": "fortran/hello-gfortran-O3",
-      "size": 16632,
-      "sha256": "1b6ae9025aec82accd3774ce63c0d895404bf60af5de581a807c959537b5b25c",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=2a9c1b3c7b9ac7fd89f1be18121ee5ca63490a80, for GNU/Linux 3.2.0, not stripped"
-    },
-    {
-      "path": "fortran/hello-gfortran-debug",
-      "size": 18768,
-      "sha256": "de80012777295cf11e80bf823950e6f8621e8552c977fd7d5645b83d4578a9d0",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=1dcf154077e3b5074b4813f82eeb22fbc824a294, for GNU/Linux 3.2.0, with debug_info, not stripped"
-    },
-    {
       "path": "index.json",
-      "size": 35697,
-      "sha256": "1c9ca82d64e264a31eadf310cb297e06e52a752045967b4127c8b9239130adce",
+      "size": 37885,
+      "sha256": "a5bc61a5344a7e9e9cb31ed5589f04ac32b22aa357fb872e89f7043a06f7e557",
       "type": "JSON text data"
-    },
-    {
-      "path": "java/HelloWorld.class",
-      "size": 1726,
-      "sha256": "d80c8e09080c1c25b9f9c73767ee31341fc83e5a85c7a2bf8e7fb7ec50abeace",
-      "type": "compiled Java class data, version 65.0"
-    },
-    {
-      "path": "java/HelloWorld.jar",
-      "size": 1461,
-      "sha256": "6fdf4f3eb0c9590f1b72acfbed59c2dd01eef141e081fcf0fc06efb950339759",
-      "type": "Java archive data (JAR)"
-    },
-    {
-      "path": "java/manifest.txt",
-      "size": 23,
-      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
-      "type": "ASCII text"
     },
     {
       "path": "metadata/HelloWorld-jar.json",
@@ -158,12 +80,6 @@
       "type": "ASCII text"
     },
     {
-      "path": "metadata/hello-c-x86_64-mingw.exe.json",
-      "size": 409,
-      "sha256": "ae93be50d7dd3797db2a868c4e474e2051ccf7f54a251d923c3ad51ce7ec7773",
-      "type": "ASCII text, with very long lines (408)"
-    },
-    {
       "path": "metadata/hello-clang-O0.json",
       "size": 372,
       "sha256": "e41ab4232002790c7e53131c330ae531542b9cb5c5a75e40778d837493e00e49",
@@ -210,12 +126,6 @@
       "size": 371,
       "sha256": "a561296e58338ba82cc244c9932b133ef342653cd6efbffdeff16a603e70a6d3",
       "type": "ASCII text, with very long lines (370)"
-    },
-    {
-      "path": "metadata/hello-cpp-x86_64-mingw.exe.json",
-      "size": 415,
-      "sha256": "344f30abd17ab90206dacea240c7c2d9cb98a263443f811807c3fea3fc9d8e5a",
-      "type": "ASCII text, with very long lines (414)"
     },
     {
       "path": "metadata/hello-gcc-O0.json",
@@ -306,18 +216,6 @@
       "size": 329,
       "sha256": "42b4a1ed938763bc437f4982cf22374f0cbaf7727a0465262937a88a9cd50b9b",
       "type": "ASCII text, with very long lines (328)"
-    },
-    {
-      "path": "metadata/hello-x86_32-g++.json",
-      "size": 349,
-      "sha256": "f8ec62ddc8cb3649e3779f0075724f6414a01882d13972d97abaabc4fe656143",
-      "type": "ASCII text, with very long lines (348)"
-    },
-    {
-      "path": "metadata/hello-x86_32-gcc.json",
-      "size": 345,
-      "sha256": "d799c54aa09b6144d39b6139bf728b0178d6e784593914ae59f567a229fbdc41",
-      "type": "ASCII text, with very long lines (344)"
     },
     {
       "path": "metadata/hello-x86_64-mingw.exe.json",
@@ -500,334 +398,2932 @@
       "type": "ASCII text"
     },
     {
-      "path": "native/clang/O0/hello-clang-O0",
-      "size": 16360,
-      "sha256": "4880a507765d6ceb1f8a5f9da2093cec1937723b701222a1030203fb2e16527d",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=e2f7fcc1c86e423a5fbe8e60cfdeb70d2513722d, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/arm64/hello-arm64-g++",
+      "size": 15520,
+      "sha256": "5303ea4da3c441cf6cbcb9fa81cc3d5181f45bef186e804124e48eb8bcbb8ff2",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=bdc4cbf9aa9d41d9eda74d49e10a41342cd5f4ac, for GNU/Linux 3.7.0, not stripped"
     },
     {
-      "path": "native/clang/O1/hello-clang-O1",
-      "size": 16368,
-      "sha256": "c59009b9aedac4ef1932ac3b49261e1a022a3728f990309bf7a0f155d7e89e65",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=8f01966bf1da7c3d386e33f5f3a32ea178e6704c, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/arm64/hello-arm64-gcc",
+      "size": 9144,
+      "sha256": "a994f16aee64dd621574617e93a0fcee2da66f59fd06a28ddde90a735fbaaa3b",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=7067b02c019c021f51b0c626ba0eabc54d97a856, for GNU/Linux 3.7.0, not stripped"
     },
     {
-      "path": "native/clang/O2/hello-clang-O2",
-      "size": 16368,
-      "sha256": "c59009b9aedac4ef1932ac3b49261e1a022a3728f990309bf7a0f155d7e89e65",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=8f01966bf1da7c3d386e33f5f3a32ea178e6704c, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/arm64/hello-asm-arm64-as",
+      "size": 8864,
+      "sha256": "9a68971539a3236b3042d365a03274f1ef55df2e9800606315bb3ab66b661d4a",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=317db324383901da1a347e4a42db06d08cfe39ac, for GNU/Linux 3.7.0, not stripped"
     },
     {
-      "path": "native/clang/O2/hello-clang-O2-nofp",
-      "size": 18680,
-      "sha256": "023bcc9b246c63bcaf76c08040d3af8e31595abfe5224bd94679222fabba285b",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d4608d1217ee376d6a854e71f19d8e5d4cba63f2, for GNU/Linux 3.2.0, with debug_info, not stripped"
+      "path": "platforms/linux/amd64/export/cross/arm64/suspicious_win-arm64-gcc",
+      "size": 8816,
+      "sha256": "9100bcfbf435387aeacf262af6e154ce99c047cdb1629a52aa513328004f43fc",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=2baa754dad439da2042947fb69b28c1bf1fa873f, for GNU/Linux 3.7.0, not stripped"
     },
     {
-      "path": "native/clang/O3/hello-clang-O3",
-      "size": 16368,
-      "sha256": "c59009b9aedac4ef1932ac3b49261e1a022a3728f990309bf7a0f155d7e89e65",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=8f01966bf1da7c3d386e33f5f3a32ea178e6704c, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/armhf/hello-armhf-g++",
+      "size": 14272,
+      "sha256": "2f32f5a360c5f7205cd0279166676b8ebcd88f28932d3b514be7e8cc9499e53e",
+      "type": "ELF 32-bit LSB pie executable, ARM, EABI5 version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-armhf.so.3, BuildID[sha1]=cb10d7910f2b3928c4da20875b18a399ae0c2e61, for GNU/Linux 3.2.0, not stripped"
     },
     {
-      "path": "native/clang/O3/hello-clang-O3-lto",
-      "size": 16280,
-      "sha256": "14ba865f28af2110c7563b7cdfa8380b90fef4068538e6f1869cb1b1d0dc0b0c",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=bea528a15dc7e39a62121c88dbcf0fc72d21d766, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/armhf/hello-armhf-gcc",
+      "size": 8068,
+      "sha256": "54599556e5f073c9f0a29293eb393801f8b4bbe49243f3318c1b2746e17fb0bb",
+      "type": "ELF 32-bit LSB pie executable, ARM, EABI5 version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-armhf.so.3, BuildID[sha1]=23891cf1b9ed2462a9fe09fb9b3864dac690d303, for GNU/Linux 3.2.0, not stripped"
     },
     {
-      "path": "native/clang/debug/hello-clang-debug",
-      "size": 18040,
-      "sha256": "dd246e15c996537e3d92bd54acabdd737340d0c4f69117a54c5c35ccfdb7e5c9",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=88fcd1b62ad8f26d3627507a2ec162d497b97c25, for GNU/Linux 3.2.0, with debug_info, not stripped"
+      "path": "platforms/linux/amd64/export/cross/armhf/suspicious_win-armhf-gcc",
+      "size": 7756,
+      "sha256": "2d53b2f17c402b12ead5e445c50fc585f398fc0ce340547ad560c24fda6cea2d",
+      "type": "ELF 32-bit LSB pie executable, ARM, EABI5 version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-armhf.so.3, BuildID[sha1]=c711263385b978426c05233764e7d24c3068385e, for GNU/Linux 3.2.0, not stripped"
     },
     {
-      "path": "native/clang/debug/hello-clang-stripped",
-      "size": 14672,
-      "sha256": "79237e8e1f4b793076345ce603b3d5cc36fa27adfd8d31f46a55e35218d3db21",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=07c469d689fc41f088cda00058e8f5dc23e87b5f, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/cross/riscv64/hello-asm-riscv64-as",
+      "size": 8480,
+      "sha256": "b13d42e7a21f33835b6f30bce5c83968998ef1a02637e205da86235d5f1dd7ab",
+      "type": "ELF 64-bit LSB pie executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-riscv64-lp64d.so.1, BuildID[sha1]=0d12259cfa32454f931614f375825bcf695b60a0, for GNU/Linux 4.15.0, not stripped"
     },
     {
-      "path": "native/gcc/O0/hello-gcc-O0",
-      "size": 42080,
-      "sha256": "d5e17ea3aabc77f1ebab61b75acca21fceee5263bfeb878140a68da43f7db009",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=0caf12cddbe4f349fe541909d7284972ee48c9e9, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/riscv64/hello-riscv64-g++",
+      "size": 15192,
+      "sha256": "9d0edd64c551dc266dc0e96efbec3e67463138c9ebeb6261cd9722c24b2933d3",
+      "type": "ELF 64-bit LSB pie executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-riscv64-lp64d.so.1, BuildID[sha1]=81a9259970dcc7b404b25ec9b98144f2efdfafe1, for GNU/Linux 4.15.0, not stripped"
     },
     {
-      "path": "native/gcc/O1/hello-gcc-O1",
-      "size": 18472,
-      "sha256": "7a8e8febf69540f496ecae11ea807ac14965ddc099f299b6c430404dc1665830",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=95f36e03ccf713fc884b23cfe3dd369c2ec396fd, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/riscv64/hello-riscv64-gcc",
+      "size": 8712,
+      "sha256": "32bb9ec63c54cd012eeb4e7f172cfcb5c2fb128c85480f16f4c4b479900beecc",
+      "type": "ELF 64-bit LSB pie executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-riscv64-lp64d.so.1, BuildID[sha1]=f3e33f6074c39afa6effaff77e187e6e38fda6e5, for GNU/Linux 4.15.0, not stripped"
     },
     {
-      "path": "native/gcc/O2/hello-gcc-O2",
-      "size": 18232,
-      "sha256": "b48ceb04173c2f90454c12532592e80cb4385d4723862591c9fe5d4605e1d1ca",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=bf4624eb35aa61086294a1e53b82d99fcd367b34, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/riscv64/suspicious_win-riscv64-gcc",
+      "size": 8424,
+      "sha256": "039bde5d911bdfbfbb26019495358273c01581b59f059fdb7fe51460b675201a",
+      "type": "ELF 64-bit LSB pie executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-riscv64-lp64d.so.1, BuildID[sha1]=da0ffd177c20e165ad735aaa58c900c863de555a, for GNU/Linux 4.15.0, not stripped"
     },
     {
-      "path": "native/gcc/O2/hello-gcc-O2-nofp",
-      "size": 154240,
-      "sha256": "35968af2b6750c6f4055ebae363795ae406f6a4eb2ee56a8ad75224443185f6d",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=3e9b52c236268ff5d999e3266f9a4a142761c090, for GNU/Linux 3.2.0, with debug_info, not stripped"
+      "path": "platforms/linux/amd64/export/cross/windows-x86_64/hello-asm-windows-x86_64-nasm.exe",
+      "size": 296815,
+      "sha256": "5e08611ca521d1009fae6e58ac63ab7bb871492548825de4643b671ffad52330",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
     },
     {
-      "path": "native/gcc/O3/hello-gcc-O3",
-      "size": 18320,
-      "sha256": "d83419238094a7ad834f131bdba1356c75bf131dd65ba6faff31b7094f35b73f",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=dd2e2fbaa5817222b44d6796a3e921279dad0476, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe",
+      "size": 498922,
+      "sha256": "67cb2dcda8529344e0dbc726f1f45bd7429426f210987e0e13d907722fe93819",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
     },
     {
-      "path": "native/gcc/O3/hello-gcc-O3-lto",
-      "size": 17976,
-      "sha256": "f3921c8535ca2100c03f001099f359e477542505d08a01b11db6a73fd1dd9888",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=141354eb53efa5e103dd192eca7a06abced7599f, for GNU/Linux 3.2.0, not stripped"
+      "path": "platforms/linux/amd64/export/cross/windows-x86_64/hello-cpp-x86_64-mingw.exe",
+      "size": 305148,
+      "sha256": "d4f76eb2ca5ca4cb1f2dcc0faa4cff8941bb046bd28fdb882eebc20679971129",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
     },
     {
-      "path": "native/gcc/debug/hello-gcc-debug",
-      "size": 158048,
-      "sha256": "c478066767ac250042163828565093755ac8e006690abfca77b833cb2b8ae49c",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=46d431e66221e2c0f98b0dba843b5d111f4f431b, for GNU/Linux 3.2.0, with debug_info, not stripped"
+      "path": "platforms/linux/amd64/export/cross/windows-x86_64/pe_tls_callbacks-x86_64-mingw.exe",
+      "size": 296976,
+      "sha256": "bb8a9d766f3bd1c35bd8d845560a276b555abcbd565cacfcd1fb7a97a6358374",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
     },
     {
-      "path": "native/gcc/debug/hello-gcc-stripped",
-      "size": 14640,
-      "sha256": "d64c70f433609199647b1f47b936480f808e258d7ed3105f881a30672fe5bc72",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ada975f1b9622b6905e2e73c6af7619c8e69d39b, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/cross/windows-x86_64/suspicious_win-c-x86_64-mingw.exe",
+      "size": 499855,
+      "sha256": "0bfb7bcc0cd40bda72b242dba061b8c2a416dd18c3b0e3c9fe0dc07e8498c16c",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
     },
     {
-      "path": "native/system/awk",
-      "size": 195416,
-      "sha256": "9f11bee2561b60b79397c67086c58734334cee3d7382a275ab40530c9dc9e9b7",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=8dc98288693c39369a2935c15bab49dce48a2074, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/dotnet/mono/Hello-mono.exe",
+      "size": 3072,
+      "sha256": "d999bd5ab3d31aa0ab09ed93d1b1f2821fee6fa90e7da446b33513bd448ccac0",
+      "type": "PE32 executable (console) Intel 80386 Mono/.Net assembly, for MS Windows, 3 sections"
     },
     {
-      "path": "native/system/bash",
-      "size": 1740896,
-      "sha256": "a30137eaadfc4a97cfa75eb5d39e5fd657cead2edf5c2836d96826fbe3add925",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=809f4a6b6cc88a02450914e06641aff486da0d09, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/fortran/hello-gfortran-O0",
+      "size": 16536,
+      "sha256": "cadb4dc22bb42e50edfd8ecd8e8e92d6ea00f61198259bd7a09efa2310ecae2c",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=2273bef30c369127833ac3b47ac21c0e747f8bdd, for GNU/Linux 3.2.0, not stripped"
     },
     {
-      "path": "native/system/cat",
-      "size": 43560,
-      "sha256": "cc04cc7e727e5a812d8558bf9875183d6e0004af9bcd09b2f0911a72c4f91fd9",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=af19919d4fb9b134011c1479b03ee75615da5823, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/fortran/hello-gfortran-O1",
+      "size": 16496,
+      "sha256": "86591cdd0d9661e4bc8c42d4eb8deb583ddf0a45a8de2d82249656ab3659f2e8",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=dd3d0c679d751efabe2804ad9979ca2efd8b8260, for GNU/Linux 3.2.0, not stripped"
     },
     {
-      "path": "native/system/clang-20",
-      "size": 132528,
-      "sha256": "c6406eec90d81881563fffe604bc30560521e9a125690677ccb9daf9a22297f9",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=3f50d43835c9f1c57eef4be562e478d18f5a37a1, stripped"
+      "path": "platforms/linux/amd64/export/fortran/hello-gfortran-O2",
+      "size": 16496,
+      "sha256": "e77d14f1266cb736f8ac539b2f7b38d25c16b7cac5723eca0eacc93725ce5ac0",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=660b91b0395d409291e4b222a448a53be3e99507, for GNU/Linux 3.2.0, not stripped"
     },
     {
-      "path": "native/system/config-6.14.0-28-generic",
-      "size": 296778,
-      "sha256": "0b5a5ee9e6f4b3d2ba0385b7bb9a47568080c9d6d84ba1b161df303c5945e704",
-      "type": "Linux make config build file, ASCII text"
+      "path": "platforms/linux/amd64/export/fortran/hello-gfortran-O3",
+      "size": 16496,
+      "sha256": "659132f8247828407a0df8a580847a9fac829d6123079b0fe94b84e5d2cfcbe5",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=e7be704c2e5131a11cbe1f23ffbde6e78e440905, for GNU/Linux 3.2.0, not stripped"
     },
     {
-      "path": "native/system/config-6.14.0-29-generic",
-      "size": 296778,
-      "sha256": "d350d4aa9a7f7094d368f7804e2e96566eab4412e9c99a4c237064ad9fd5677c",
-      "type": "Linux make config build file, ASCII text"
+      "path": "platforms/linux/amd64/export/fortran/hello-gfortran-debug",
+      "size": 18352,
+      "sha256": "8b725143a5ef3b79fa08e5079b3a4579ec1b63aecb6f2bc36ff8af5d99b30d42",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=e708883cdfd1923dad045a5d91ba7ba885940c8b, for GNU/Linux 3.2.0, with debug_info, not stripped"
     },
     {
-      "path": "native/system/gcc",
-      "size": 1186944,
-      "sha256": "3350fa3007259def5975d41adcf3de4236266ac1d4f7871f60647ed7316faa7b",
-      "type": "ELF 64-bit LSB executable, x86-64, version 1 (GNU/Linux), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ed4be9f7a252a270c32527d029018ded28c6b4b2, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/go/hello-go",
+      "size": 1425560,
+      "sha256": "99531323125a1184f41de081220e985992f2475c14f05a563c6cf7ca009110ac",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=_MNoXSivWLKBjjCAORgb/qX9lCEmUD5wxPlbFoWbu/uFKWi9tvwcKX-1JoH49O/7bp7aRo25jsgzkQau8bl, stripped"
     },
     {
-      "path": "native/system/grep",
-      "size": 186824,
-      "sha256": "20a35a4c18f2fe9e6305c1cbf866b9c0fcc3f957132ae66028c99ec353bb0a80",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=94e89ce001d1bd1b0067229744810d2e56c9b020, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/go/hello-go-debug",
+      "size": 2139695,
+      "sha256": "262c83b3da0d25eea4a3da4f13040851edbf3e7b797cf6c6797c7af81c434b48",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=R2RBbxczBHg0wjUlybw5/RLHs4dmtlpskg0Yq346G/8aqzJqEOsM3iHYK9tViV/7n1-asp6skohBFVWQmW7, with debug_info, not stripped"
     },
     {
-      "path": "native/system/initrd.img",
-      "size": 86237512,
-      "sha256": "d8a8e423eb538ddd08ca5cc9976187265cf0fbf860191351bbc7b030815bb9f2",
-      "type": "ASCII cpio archive (SVR4 with no CRC)"
+      "path": "platforms/linux/amd64/export/go/hello-go-static",
+      "size": 1425560,
+      "sha256": "99531323125a1184f41de081220e985992f2475c14f05a563c6cf7ca009110ac",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=_MNoXSivWLKBjjCAORgb/qX9lCEmUD5wxPlbFoWbu/uFKWi9tvwcKX-1JoH49O/7bp7aRo25jsgzkQau8bl, stripped"
     },
     {
-      "path": "native/system/initrd.img-6.14.0-15-generic",
-      "size": 75800851,
-      "sha256": "bfa858898085f2458b3333ec9394a8f6edd84818f9d4e7efb236c7ed79bb7c60",
-      "type": "ASCII cpio archive (SVR4 with no CRC)"
+      "path": "platforms/linux/amd64/export/java/HelloWorld.class",
+      "size": 1726,
+      "sha256": "3bc627c112c136058e2c7f347797089fc6d8dc9267393d820bc7f8014a724452",
+      "type": "compiled Java class data, version 61.0 (Java SE 17)"
     },
     {
-      "path": "native/system/initrd.img-6.14.0-28-generic",
-      "size": 86235079,
-      "sha256": "f17c7f469944ec077dfcdda4a7e9f09472cf41a729a133a2f4145a07f4345ebf",
-      "type": "ASCII cpio archive (SVR4 with no CRC)"
+      "path": "platforms/linux/amd64/export/java/HelloWorld.jar",
+      "size": 1482,
+      "sha256": "fe9204511d8ef831fd12cb83685b22aa1fc967831a784bd45e9e5eeddffd71b8",
+      "type": "Java archive data (JAR)"
     },
     {
-      "path": "native/system/initrd.img-6.14.0-29-generic",
-      "size": 86237512,
-      "sha256": "d8a8e423eb538ddd08ca5cc9976187265cf0fbf860191351bbc7b030815bb9f2",
-      "type": "ASCII cpio archive (SVR4 with no CRC)"
+      "path": "platforms/linux/amd64/export/java/jdk11/HelloWorld.class",
+      "size": 1726,
+      "sha256": "2c1f97a89281230d092100b03026e749a5aab11102f4a266aa982133656883da",
+      "type": "compiled Java class data, version 55.0 (Java SE 11)"
     },
     {
-      "path": "native/system/initrd.img.old",
-      "size": 86235079,
-      "sha256": "f17c7f469944ec077dfcdda4a7e9f09472cf41a729a133a2f4145a07f4345ebf",
-      "type": "ASCII cpio archive (SVR4 with no CRC)"
+      "path": "platforms/linux/amd64/export/java/jdk11/HelloWorld.jar",
+      "size": 1479,
+      "sha256": "fa53cda848613d1ea767694d40e2cdb3b6aa943987a102750fa36f7d387eef5c",
+      "type": "Java archive data (JAR)"
     },
     {
-      "path": "native/system/libs/libLLVM.so.20.1",
-      "size": 143762968,
-      "sha256": "3fdd6ebc0b2b54d89e0a69e14d10403e0826fc3b6a7af742684a76ee5c6d23a0",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, BuildID[sha1]=b856c61f98abf0989f157f153740fe0fadfbb760, stripped"
+      "path": "platforms/linux/amd64/export/java/jdk11/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
     },
     {
-      "path": "native/system/libs/libacl.so.1",
-      "size": 38984,
-      "sha256": "534d062c6b873081a5f5623627bdeb7d8339087c434be758493ad87c87e257ab",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=d9d62bfcf3954b996c05fc268332a15c3df94f4d, stripped"
+      "path": "platforms/linux/amd64/export/java/jdk17/HelloWorld.class",
+      "size": 1726,
+      "sha256": "3bc627c112c136058e2c7f347797089fc6d8dc9267393d820bc7f8014a724452",
+      "type": "compiled Java class data, version 61.0 (Java SE 17)"
     },
     {
-      "path": "native/system/libs/libbsd.so.0",
-      "size": 101528,
-      "sha256": "72d20619e98297935804c36aceda5fbb1526286952a9601dc37ceed9fa3a10f7",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=7b3571b91f7caf5e21fc10439c5318239a8dc413, stripped"
+      "path": "platforms/linux/amd64/export/java/jdk17/HelloWorld.jar",
+      "size": 1482,
+      "sha256": "77cba0732ef791cc4b4cc91a0a56d427317a3ba1b8b2bb9a090fb12dec3e8af5",
+      "type": "Java archive data (JAR)"
     },
     {
-      "path": "native/system/libs/libc.so.6",
-      "size": 2178688,
-      "sha256": "244a94af71d9e7aba6b172fefd1a1cff43cc6a11ddffb5eff15ddb6a979a31fd",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=f399e8592f739c5a422ebb62b955d2deebdf1e06, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/java/jdk17/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
     },
     {
-      "path": "native/system/libs/libcap.so.2",
-      "size": 55712,
-      "sha256": "846915421788e109e15e7ecd687b1af48382fc9d06603316c477838c460977f3",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d9f6c8f8bebb833b4dcdd98a6f99e86d123bee4c, stripped"
+      "path": "platforms/linux/amd64/export/java/jdk21/HelloWorld.class",
+      "size": 1726,
+      "sha256": "d80c8e09080c1c25b9f9c73767ee31341fc83e5a85c7a2bf8e7fb7ec50abeace",
+      "type": "compiled Java class data, version 65.0"
     },
     {
-      "path": "native/system/libs/libclang-cpp.so.20.1",
-      "size": 67068240,
-      "sha256": "7d3fc9a8ef8698c7a152bf9fd3f122368f86866e8452394bf9bcea7a469cbf7b",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, BuildID[sha1]=6e434d731b33cf8da6922b099cee3dbe14125d2a, stripped"
+      "path": "platforms/linux/amd64/export/java/jdk21/HelloWorld.jar",
+      "size": 1461,
+      "sha256": "54b37317cb96fa9badde656a2cbae82e839df77a3c0418f101dbf19870c8e807",
+      "type": "Java archive data (JAR)"
     },
     {
-      "path": "native/system/libs/libedit.so.2",
-      "size": 261512,
-      "sha256": "28f0fcb19d3a8ce54405ee1ce8636b9f9e6b699b1ca572a477016dd2ed931fbf",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=5459459ecf5238bedcbd78bd1c2287a00697495e, stripped"
+      "path": "platforms/linux/amd64/export/java/jdk21/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
     },
     {
-      "path": "native/system/libs/libexpat.so.1",
-      "size": 186704,
-      "sha256": "84683025e1ce187ce323e36c5b79fd92e22e07e64768fe5813feac05c7e352e0",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=64f9953f9fc94ee0065c44a92408823cf39acb31, stripped"
+      "path": "platforms/linux/amd64/export/java/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
     },
     {
-      "path": "native/system/libs/libffi.so.8",
-      "size": 47752,
-      "sha256": "e489f7e3ee064c1707520e6aaf887a6367363aed70308b9845802070472b723b",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=b333556ac4b88a74231f70f9d622db34ea4502b1, stripped"
+      "path": "platforms/linux/amd64/export/libraries/shared/libmathlib.so",
+      "size": 16552,
+      "sha256": "b9bc149aa7a5f7f8ad2893c388a01e48f1f62111015b38a9324998c2954f6a57",
+      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=5d60544dd9e4dfe8aadb8c28784b20ac608317d0, not stripped"
     },
     {
-      "path": "native/system/libs/libgcc_s.so.1",
-      "size": 178928,
-      "sha256": "3838d5d14692b5fd8a1e6908886b0cb8e9ecc272bf10c9e17031c7017c9cfd33",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=9cdd77c77b882c82f6fd23309a5c6ea0f5842ca6, stripped"
+      "path": "platforms/linux/amd64/export/libraries/shared/mathlib.dll",
+      "size": 236500,
+      "sha256": "efe8fa7e1b96ac80f860d4e8539b97446b37d8651252a5973c7b376adf87c127",
+      "type": "PE32+ executable (DLL) (console) x86-64, for MS Windows, 19 sections"
     },
     {
-      "path": "native/system/libs/liblzma.so.5",
-      "size": 260320,
-      "sha256": "d35cd2f47d0ff1c7e65fe3347e38b3a5ba80a942b939898049c3e53e86e771a0",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=03a0a2530bf6dea9d45a20755f59565638e14f95, stripped"
+      "path": "platforms/linux/amd64/export/libraries/static/libmathlib.a",
+      "size": 6524,
+      "sha256": "7651d1f094dfaaade4df6c370a9546e882b9b4a26ff95728f1dcbdb20b45ea3f",
+      "type": "current ar archive"
     },
     {
-      "path": "native/system/libs/libm.so.6",
-      "size": 1010032,
-      "sha256": "24693874ec8b6166ed5e111b06d9f48f4b0a003e00f2827da5dbe51d964de72c",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, BuildID[sha1]=8e3690d86c0ef2e43343d19e43b424b2dfeda7c7, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/libraries/test_mathlib",
+      "size": 17000,
+      "sha256": "2adfbbb07d33c59d9cb81427b2f8d9afd0bdf1f7a6e1267979b7c424a037d5a1",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=97d7f3f16d26db31290815760dd49a4fa629c8ba, for GNU/Linux 3.2.0, not stripped"
     },
     {
-      "path": "native/system/libs/libmd.so.0",
-      "size": 55608,
-      "sha256": "40e0911a5f1282e6957613710bc08a68a6160aa46462314c070bda47db65ddae",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=dcce6821dff854686eb5e437aea388b0b4161e7f, stripped"
+      "path": "platforms/linux/amd64/export/lua/hello-lua5.1.luac",
+      "size": 2703,
+      "sha256": "f2c4b6c855b82790a7eb13aebb4cd8503a1414a33bfa77b98ae0e3c633de193a",
+      "type": "Lua bytecode, version 5.3"
     },
     {
-      "path": "native/system/libs/libpcre2-8.so.0",
-      "size": 776880,
-      "sha256": "dd07e2d518038af445782b3fafb7ed9422e633c7701623430ba09583535a0978",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=a8c5a8cf6051d431be785db4db284a736e387b37, stripped"
+      "path": "platforms/linux/amd64/export/lua/hello-lua5.2.luac",
+      "size": 2703,
+      "sha256": "f2c4b6c855b82790a7eb13aebb4cd8503a1414a33bfa77b98ae0e3c633de193a",
+      "type": "Lua bytecode, version 5.3"
     },
     {
-      "path": "native/system/libs/libselinux.so.1",
-      "size": 195032,
-      "sha256": "9db8010842e31949e486108e31d7b5b8fc60c4a6c72e16a5d79c67ba10d5a71f",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=15dd288e9c6abbbd8fcaecec40f0dc057aa4596d, stripped"
+      "path": "platforms/linux/amd64/export/lua/hello-lua5.3.luac",
+      "size": 2703,
+      "sha256": "f2c4b6c855b82790a7eb13aebb4cd8503a1414a33bfa77b98ae0e3c633de193a",
+      "type": "Lua bytecode, version 5.3"
     },
     {
-      "path": "native/system/libs/libstdc++.so.6",
-      "size": 2653696,
-      "sha256": "9fb7d85e8aa687d1d8b27d5c189f3d938579a29e75af9d4651db4d33218fb401",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked, BuildID[sha1]=8d4f2235ec34ae33c412aa436c18ef4618f2efa6, stripped"
+      "path": "platforms/linux/amd64/export/lua/hello-lua5.4.luac",
+      "size": 2703,
+      "sha256": "f2c4b6c855b82790a7eb13aebb4cd8503a1414a33bfa77b98ae0e3c633de193a",
+      "type": "Lua bytecode, version 5.3"
     },
     {
-      "path": "native/system/libs/libtinfo.so.6",
-      "size": 224792,
-      "sha256": "e60f876bb5e3ba4126478b78a1ce2e16aafafdb0c017b65f5a937621ed975422",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=9ab43738db1efaa6e3e248a2ce1a4ab1f9a76e2f, stripped"
+      "path": "platforms/linux/amd64/export/lua/hello-luajit.luac",
+      "size": 1180,
+      "sha256": "3332168afe1c3953d2ba1e8d45d57cee8f16e4152fa937801a71a0a41c9f75b6",
+      "type": "data"
     },
     {
-      "path": "native/system/libs/libxml2.so.2",
-      "size": 2012552,
-      "sha256": "21b068d5b3871f402bf2cc35b2c70b3d497025a82aba501d614cf4c28db2759e",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=a66a6a1d9737cedb8482718af9a8e01d6c01a056, stripped"
+      "path": "platforms/linux/amd64/export/metadata/Hello-mono.json",
+      "size": 323,
+      "sha256": "df8f3a9f6a0a32ea7aa85be32807bf10ccf1c77934127ecbeb8df257b5a9d7f3",
+      "type": "JSON text data"
     },
     {
-      "path": "native/system/libs/libz.so.1",
-      "size": 121272,
-      "sha256": "103d30dafcda2d0e0375d3a17c82508ddf47d9617a1c09edde79092c3fe17929",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=3c688d12a2c0a9a584c64ca482d208defac6f88e, stripped"
+      "path": "platforms/linux/amd64/export/metadata/HelloWorld-jar-jdk11.json",
+      "size": 450,
+      "sha256": "6c146d8f209967506f78b786768e232fbdc4fa828f8783b8e43dfdc339855d36",
+      "type": "JSON text data"
     },
     {
-      "path": "native/system/libs/libzstd.so.1",
-      "size": 985240,
-      "sha256": "4cdaa615582c374a774506480b7bcaa408cc36368e04d2eae3ea30094c060c55",
-      "type": "ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=cb0411f6a6ba051787fa6b1936e379852aa76aaa, stripped"
+      "path": "platforms/linux/amd64/export/metadata/HelloWorld-jar-jdk17.json",
+      "size": 450,
+      "sha256": "114b9af03ffd4e710696d0dc0b1cbb4b7f0eafbf0546fc4fbd347087bc40944c",
+      "type": "JSON text data"
     },
     {
-      "path": "native/system/ls",
-      "size": 158744,
-      "sha256": "373bc3a244af5119628b60f105864718aec8698325b18fbe76d28453494924ad",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=61ba10380519e44d3a68b348a69179b636cea85e, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/metadata/HelloWorld-jar-jdk21.json",
+      "size": 381,
+      "sha256": "7ccaac375b70630c6a6418166bb5ad03769c332643ef398c428f1ddf636c7d06",
+      "type": "JSON text data"
     },
     {
-      "path": "native/system/python3",
-      "size": 6820416,
-      "sha256": "e1e34309094145dd50841f35b202dd7b3a52a41c41db3ba0b33c0ac460ca9164",
-      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ec18d81c0062a22c70cbed665f9010b77b033578, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/metadata/HelloWorld-jar.json",
+      "size": 300,
+      "sha256": "71532f646d63b4f3c27819eaf79b0e247117bf7febe99f42810417aaf661618d",
+      "type": "JSON text data"
     },
     {
-      "path": "native/system/sed",
-      "size": 113224,
-      "sha256": "db67d4895f868617bfd19786247ebda7c2f50f4cb3857a987f732a2c267a799e",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=4f9c756ce484ca69572253d0790f456810e4c931, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/metadata/HelloWorld-javac-jdk11.json",
+      "size": 465,
+      "sha256": "9d17a8091f855a98ddb4c4411ac0df581e537665d84cd1f41f5ed0411522f913",
+      "type": "JSON text data"
     },
     {
-      "path": "native/system/sh",
-      "size": 150368,
-      "sha256": "ba8b1117205141c0fb9381585bd2b74e5cf5459406687f39f09bf5905812c96f",
-      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=072153eef38f6a0354bf1bfab3dbb41a27a42f19, for GNU/Linux 3.2.0, stripped"
+      "path": "platforms/linux/amd64/export/metadata/HelloWorld-javac-jdk17.json",
+      "size": 465,
+      "sha256": "d04f46c946ff116f5181441bfd875cec080d2aec1a706cd7b9a87c050f669c79",
+      "type": "JSON text data"
     },
     {
-      "path": "python/hello.opt.pyc",
+      "path": "platforms/linux/amd64/export/metadata/HelloWorld-javac-jdk21.json",
+      "size": 396,
+      "sha256": "97a3552de47c3edb3fee09d693f8da143c52891ed61bdd31e94ae5772cccfa6c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/HelloWorld-javac.json",
+      "size": 315,
+      "sha256": "d893f1e65f21a534c8a89c8305b908d0b8763ed5b61d746269240c93b0c8053f",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-arm64-g++.json",
+      "size": 335,
+      "sha256": "fd425eca658b4feddf6a5ef861cc05e5c49c53aa298fbe0ff5821a92b3861a49",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-arm64-gcc.json",
+      "size": 331,
+      "sha256": "5ec2f5c48cb1f6b837e68ca18dbc62b9df81b20085003e380737a18957d2ef83",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-armhf-g++.json",
+      "size": 342,
+      "sha256": "86318028decde480de59e78e05c4c9476a69e56733ad2d5bfea0a62930682917",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-armhf-gcc.json",
+      "size": 338,
+      "sha256": "5810aff0e031c2d3be06eb3556425500994c302e7764f6b0ba3540f088d80890",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-arm64-as.json",
+      "size": 391,
+      "sha256": "72fac542f9565f3299c1ed123b825ce7c44ac0e096b6f4144f52f6dee4c6183f",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-gas-O0.json",
+      "size": 378,
+      "sha256": "b00d924865569aa63e54708e4f4340f4b9ddebbf5c63d99f4e222a3d0e33dfb7",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-gas-O1.json",
+      "size": 378,
+      "sha256": "3c4440689a9656b68fbffb18bb19a23fb62041254954d3b51ce87e5d97d5ec5b",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-gas-O2.json",
+      "size": 378,
+      "sha256": "7cf14643c9b6da9c45c8089354279cff04d3d8a0c1e2d19823695f4ef438c89c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-gas-O3.json",
+      "size": 378,
+      "sha256": "6f0d918f253c6c5c2550f7a2ad39ac2c657635a2bf80595323f7b7d1fcb619df",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-gas-debug.json",
+      "size": 357,
+      "sha256": "996b346840698ad1177615f0def78d0e2150a5feb9844d0e66386198e96139a8",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-nasm-O0.json",
+      "size": 395,
+      "sha256": "42926f21b784c394b19767f4aaecc2dea2983de3f513141581bfba7c2294da85",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-nasm-O1.json",
+      "size": 395,
+      "sha256": "bcff7ed74ea2b3a9dd610e21acebe3f5447893c1a9a0f64a323741f0f721e9b1",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-nasm-O2.json",
+      "size": 395,
+      "sha256": "f534c93312144223c0c1661827830da45f43825ea7ddbddcfdd2ab014919980c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-nasm-O3.json",
+      "size": 395,
+      "sha256": "6a453d1428c8dbe7a18c551fd153e58b7786414879b9f3d257b481a56636087f",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-nasm-debug.json",
+      "size": 382,
+      "sha256": "fc7fcfc5efa376ae1ea5d81e41c68dc93abd4786182ba314f02ea99af6c41769",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-riscv64-as.json",
+      "size": 398,
+      "sha256": "d064787ac1ce4e08ad5c3745c786b01bf8b708a521f014b43b8b7e842728de14",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-asm-windows-x86_64-nasm.exe.json",
+      "size": 437,
+      "sha256": "c6d3c515733d27f2193d75c415ff39fa29f59dee5831dcf4c9687ca349b77804",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-clang-O0.json",
+      "size": 333,
+      "sha256": "6de672b76727c0e24334a492f21613f2a9c16a511fb6929c8c7b62699bd3dce9",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-clang-O1.json",
+      "size": 333,
+      "sha256": "6b4288d3790403d239c0fa2b4284b0ab9ab14b0b152aefd7285ae40dc6a0daa3",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-clang-O2.json",
+      "size": 333,
+      "sha256": "604fa914b98ca9418c00e0f86721cbca1599a9597f20ace18f86cc78ded68afc",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-clang-O3.json",
+      "size": 333,
+      "sha256": "0c5812a8174adc968c36862995b73e576a18ccaf387ec8918bc61d73d528be65",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-clang-debug.json",
+      "size": 336,
+      "sha256": "9af8df0a6fcdcfc7d57272585837f08d99430102edbf6ebc2969a3ca3d9a48e6",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-clang-stripped.json",
+      "size": 332,
+      "sha256": "beb0f6e1bf9ab0d5a8ad05f6596c6f15442c75008835220b15fdf54eaea5b8ae",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-gcc-O0.json",
+      "size": 322,
+      "sha256": "8f6d94e626b3618f9c160a66a00e799af759ce4e9da5ac214ef9b34f3286971b",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-gcc-O1.json",
+      "size": 322,
+      "sha256": "8eae09545a76129c8029463eaddbdeda7aa60f56277eb53969c09145bced9d6e",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-gcc-O2.json",
+      "size": 322,
+      "sha256": "0c5d9918fcc0da8cf4155bd0582ae29cbf43fa053b0a3016d54f08b868034c59",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-gcc-O3.json",
+      "size": 322,
+      "sha256": "6474300524104bfdb3220fd42903a137bece331032716ae05e722d60394d4b4a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-gcc-debug.json",
+      "size": 325,
+      "sha256": "2e74c97aa4e0e9381ac958ae2cd073f3875180b8f17b6e22c4c7699a54917b5c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-gcc-stripped.json",
+      "size": 317,
+      "sha256": "71e2329714aabd195c54c2fe1252390b7007ad545a24ef8d6de40ec37f142996",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-c-x86_64-mingw.exe.json",
+      "size": 377,
+      "sha256": "8a73f4e8e645d7c5bad0d8fc3b3a9521ab0a5950cb6ef2affdb16c8e3d757f32",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-clang-O0.json",
+      "size": 337,
+      "sha256": "9f72be43142ff74333b8a8c723969a50ed8235faa233c721cbecb4bad46c748b",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-clang-O1.json",
+      "size": 337,
+      "sha256": "392333e7942f691eed2e822839256f7f470759cac8ccb4039a88671083ec8043",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-clang-O2.json",
+      "size": 337,
+      "sha256": "ec20c5303cc04af530cb0645b5a65b380cb818da981608de2f4d0f9cc687040c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-clang-O3.json",
+      "size": 337,
+      "sha256": "7e5d168b8944f0d22e84c86458c60ce9a18fef5de9604ebc66ea1fd4b0f6d4bc",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-clang-debug.json",
+      "size": 340,
+      "sha256": "463c8be854d7daa7f94ac5a71e83f877fed7e49a4b0df2199172a1d64f854a12",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-clang-rpath.json",
+      "size": 352,
+      "sha256": "ca0beaec6d2a905b677614d4cbd6823d3dc7746a28df76858725979525e3b64a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-clang-runpath.json",
+      "size": 381,
+      "sha256": "2eea0ffb6e6571d9572db86cbfce0363815ef0f8b12a8b71813106823da923c9",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-clang-stripped.json",
+      "size": 336,
+      "sha256": "1292711f6b63386857c8d738c1a8e531f4d4350a86067bf98f34ef30e960ff81",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-clang++-O0.json",
+      "size": 343,
+      "sha256": "a873863a91dc3adee75fcb4092876b1ede62837f4935e8e766b70d388545f097",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-clang++-O1.json",
+      "size": 343,
+      "sha256": "71606dc259b17ca7bd13d5423a88916db19bfce436f0e4ab675e291312b63f44",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-clang++-O2.json",
+      "size": 343,
+      "sha256": "2aba712d8be53b13c953dd768e188dd2e61a5017b15a0db2b35fa0213fa6d1dd",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-clang++-O3.json",
+      "size": 343,
+      "sha256": "4578c3068e73b26042d3983ffbf9d939485d7f65a0ccbc6dc358213a99d8a11d",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-clang++-debug.json",
+      "size": 346,
+      "sha256": "0273fde4070680af8fdc3dc029cca92ee7a9e5d309e3e0a78f887f6cc795ef36",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-clang++-stripped.json",
+      "size": 342,
+      "sha256": "4fa49f7be0b818ec39d51851f5ec7004eefa894e63e2a2fa6ba48552b0d325c3",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-g++-O0.json",
+      "size": 328,
+      "sha256": "49981aaf041bd3b6a42c789b82994da5fc995c15ec83696dc3b1117bf8df2827",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-g++-O1.json",
+      "size": 328,
+      "sha256": "9ea64347731500e96875468cb9e48a310f7d0c4f8538a1b3b43ca46651df158b",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-g++-O2.json",
+      "size": 328,
+      "sha256": "612f49e9a0347c21f9de6b5d472734406cda2df7dfa00045bc607d453af00e0a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-g++-O3.json",
+      "size": 328,
+      "sha256": "6c788ce2a1a6a5e60781fd125eb3513be41792c463d99296bd7ddb696513b924",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-g++-debug.json",
+      "size": 331,
+      "sha256": "f2709e395be52cf1f6ab343909d39159bce4f2534d72bb23f6b1c25b440db564",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-g++-stripped.json",
+      "size": 323,
+      "sha256": "48df377501e6fe6e2f6e9d43231b0caf9c5b3668664c2e9a90cc089462c82173",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-cpp-x86_64-mingw.exe.json",
+      "size": 383,
+      "sha256": "7d5540307c5ec2b279b217241c4dd44aeb2a03e9fa3c839df6eb4ceede6db0f0",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gcc-O0.json",
+      "size": 324,
+      "sha256": "59c5d001c30a2dd5350ece8104cfb2cc108a9fffe9a90d8f43107f6dc6bca772",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gcc-O1.json",
+      "size": 324,
+      "sha256": "cbd885388e5bede893927a363e574738c3832ca0390ab291bbc31586393343d7",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gcc-O2.json",
+      "size": 324,
+      "sha256": "ce9b81131a66d14404dfdad6f223a7e5217fdc264c5f630f78e3223f1d6dc684",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gcc-O3.json",
+      "size": 324,
+      "sha256": "8d683023322be63c5d2e052e0cdeffa4466a31ed4310c8c1d46a92aa5f55a085",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gcc-debug.json",
+      "size": 327,
+      "sha256": "da197ba8025a0785e915492ba8a743bb5729b385ac6e06d3ed88c29e97ed40b3",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gcc-rpath.json",
+      "size": 342,
+      "sha256": "d151d8da64d97d2fea31bbae73ffc74f90aa939f125f3c2a90ab46364f8e5612",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gcc-runpath.json",
+      "size": 371,
+      "sha256": "89675abc087cc35a2de0856118ad48dde5273667d51625d4e200daeb0b393405",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gcc-stripped.json",
+      "size": 319,
+      "sha256": "38c76ae4b16ffcdfa8324c21838ae39da9b937c3b17424a5d1114f35b4cb3277",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gfortran-O0.json",
+      "size": 329,
+      "sha256": "d7d0ddc297669dc55abf4ebe0174cf21e09ba2e61e50218d2b9a22b602652e32",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gfortran-O1.json",
+      "size": 329,
+      "sha256": "d91665de796481486932cfd0513756664ab85567eb689e801344e29c85e24896",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gfortran-O2.json",
+      "size": 329,
+      "sha256": "2f41d22aa45b8bfba16855e873b6e5d878b5d5d1b5afe302082b50c93edd67ff",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gfortran-O3.json",
+      "size": 329,
+      "sha256": "9e72ac5c06ad8b5eb432c72e222ac37b3b449bcda301f7d858700ad89484cf50",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-gfortran-debug.json",
+      "size": 349,
+      "sha256": "fb42eec7a3bd48564705fa4e4f9b4524667dc6581d90579c2f34091bbc11a2ce",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-go-static.json",
+      "size": 384,
+      "sha256": "7294597b9e23b5590cebaa569b1b4dd8323bc1c50acbe6d1486b5cfddefc495e",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-go.json",
+      "size": 372,
+      "sha256": "d2a679b3243600dffeda0360e7edadf01f7fc6bb13fbfe2ef42fe08c1417ae52",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-lua5.1.json",
+      "size": 341,
+      "sha256": "5370112c2fddfbfa68d60a56afae73e62e97e1b0238dd5521a39c024530d2487",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-lua5.2.json",
+      "size": 341,
+      "sha256": "ab8f9a00901d547b5baa2c7bf59f8ea34f23ee751f5c67cc8c42f66dc2c0ea53",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-lua5.3.json",
+      "size": 341,
+      "sha256": "29578e171110c9a683ef2bc9ff77bc2d80db3ef1cfbf988967f6a2afadc5cc68",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-lua5.4.json",
+      "size": 341,
+      "sha256": "5710d75bc866ab759a7a16de7f42776bf1ef5cf0f42e6070822ab54d70f12254",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-luajit.json",
+      "size": 352,
+      "sha256": "4157bafd40eefe25f622d5336ce48cbe9139cfa6680d769cad12faf45f9541ca",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python-opt.json",
+      "size": 316,
+      "sha256": "7be5c0c2351c0957d1b0d0c2990c1f05697ac51a17f58b378efaa11c365a2207",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python.json",
+      "size": 297,
+      "sha256": "a0955ab8f78b540f345dadd97aee230b55b0101013c50cf560933c6695aed1c3",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.10-opt.json",
+      "size": 359,
+      "sha256": "2647248499a92c33e8cc71beefc3b6db7ed9198c7ab80736db427b7093a6885d",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.10.json",
+      "size": 340,
+      "sha256": "5fc9924603070ad46009bb99f52a17b7a7d5f1964601cc0596f4b2afc70f0b57",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.11-opt.json",
+      "size": 359,
+      "sha256": "c193370c43809cac1b757c095521da45b31c65dc0dd9f9354f2b0b9b6c4190a2",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.11.json",
+      "size": 340,
+      "sha256": "604885d56423b3fd5800a015b0ce9dd7686b06a10036e57da1c77a1cdf7ee261",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.12-opt.json",
+      "size": 359,
+      "sha256": "04d4e761458375e781ce1ef5ce183d5ed36a063eee26a3b9a9990eda382bed99",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.12.json",
+      "size": 340,
+      "sha256": "a9ac069759a0a4ab891e9eef6e154cae7db9df2c628cbc19a02a09194a0b1240",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.13-opt.json",
+      "size": 359,
+      "sha256": "50982182c422944cd6439fcb78f14fb58316ba4bbb71d277df4031629df70a7c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.13.json",
+      "size": 340,
+      "sha256": "8eb70870f8d01031cb128a7be3ff56af8f7ff5bc5ba40b098989a1ace441a4e4",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.8-opt.json",
+      "size": 355,
+      "sha256": "2e32997ae02af5bd275a0f57260f6005c5536f2da9df4b2b6c5892ae24b9fa8d",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.8.json",
+      "size": 336,
+      "sha256": "cb04d1d76e1dfb1bd90bb884880ee58ac4cd56cf0c88419235016fb2708e21f0",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.9-opt.json",
+      "size": 355,
+      "sha256": "df718e626c9e18cf76cfa8f2685b45231b9f64dbf3847483d8fd60b38a4c042e",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-python3.9.json",
+      "size": 336,
+      "sha256": "3e98d036be84776e36edb5518965ced2dd1d1b5c5c5256f55a84f35b3e5732b1",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-riscv64-g++.json",
+      "size": 343,
+      "sha256": "c19f309f0c50103db44770b702945ae0aebb008894564e5cfe8d9386f668673a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-riscv64-gcc.json",
+      "size": 339,
+      "sha256": "1ff6d815240854bc744eecf835f53fa48ab2b73972d458d00cf80912a249c8d6",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-rust-debug.json",
+      "size": 358,
+      "sha256": "4762f69747d355e94aa78a6ac1e8c5e83dbab18e24d4a2a337568ae2d943b09e",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/hello-rust-release.json",
+      "size": 364,
+      "sha256": "f506df0b7cc8746a7d3a7bbe2bcca1de59458501e91481f131be321b5aeeade3",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/libmathlib-so.json",
+      "size": 331,
+      "sha256": "5b91e2afa5b3162afd188d1cf9e95ae67abc9402396bf2d62358a373fa02e4d6",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/pe_tls_callbacks-x86_64-mingw.exe.json",
+      "size": 379,
+      "sha256": "0b0e138c82a58d5cd20e944735c39a2b6c80e4887b1cf77698e8dbc85cadace1",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-clang-O0.json",
+      "size": 353,
+      "sha256": "c478c0302c9edd7fafe3afedd3636643aa54c334111bc1ce963ff418440d6f66",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-clang-O1.json",
+      "size": 353,
+      "sha256": "07a58c5f2f8c18e96897fc85b3a7a377230e7879c8ab9cc27cf6a12a90f0ebf7",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-clang-O2.json",
+      "size": 353,
+      "sha256": "f8bab81c932ea7f589f954f180459e3121b1ab9ec7ea0415585d86b5879b8fd6",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-clang-O3.json",
+      "size": 353,
+      "sha256": "91d95be07c3f6747a67aae524bede0d083073c5119ba2eb76969f1003c58fb63",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-clang-debug.json",
+      "size": 356,
+      "sha256": "8d8634759bd4ee578e95c84f56b6fd65faeaf21b380d3e5905cc3bb3a3cbb996",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-clang-rpath.json",
+      "size": 368,
+      "sha256": "a829deef20874f936473c281fc1b6c55375e92b186a2e548a4670682c51f2515",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-clang-runpath.json",
+      "size": 397,
+      "sha256": "680481c88006c3d6831c74cca6f5753f4d71c788abc3535acb0202ec698188dd",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-clang-stripped.json",
+      "size": 352,
+      "sha256": "5a9d42e72659a2272a00686b081193db456831d0e07c5e75eaf5193b4b7480f3",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-gcc-O0.json",
+      "size": 342,
+      "sha256": "0de67d561fb48e0362419f7707d6b212c6ffe95f406413abc913064c15b8085e",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-gcc-O1.json",
+      "size": 342,
+      "sha256": "ac6b43cc8ee34f894890a7b14e0a78c61c5a59ab92664397daa2a3cc9cafb02a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-gcc-O2.json",
+      "size": 342,
+      "sha256": "6a08832e2a30cc56fe12a9138b86fc7b02e72c43be40359b2725be53c3f7f36d",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-gcc-O3.json",
+      "size": 342,
+      "sha256": "afd510576fe3ce578ea06d5d66d4e44c32e4f3faf8a7c94a25e7b832b1956c5b",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-gcc-debug.json",
+      "size": 345,
+      "sha256": "c43763aec17d9c807febf6bbb9e28d41a9e9d44d5c77b3b5b102d6412406e4c7",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-gcc-rpath.json",
+      "size": 360,
+      "sha256": "4932dcc2c61cfa4396f86e4044e03dcf676a59be327ac0e16c09db83a7e13055",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-gcc-runpath.json",
+      "size": 389,
+      "sha256": "fa246ee2ffb7cc464cf2c883246fff41b8cf3ec0c327590e9e9af27efc490ed4",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_linux-gcc-stripped.json",
+      "size": 337,
+      "sha256": "36b6087169dafdfcdc00f204ce84c2f9b60de5581c139ed4904c8222189ae6a7",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_win-arm64-gcc.json",
+      "size": 349,
+      "sha256": "65223a4058af5825e77ee590329c6071f6f41da8563fe331e3b5a2524031df9f",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_win-armhf-gcc.json",
+      "size": 356,
+      "sha256": "dfc1e52258839634cdd1ee0512eb5728ee22f6847bd97efc190d65d6c0622336",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_win-c-x86_64-mingw.exe.json",
+      "size": 395,
+      "sha256": "77b0361d1b56226250bb469a19c9e50be11bd7b28d01c67894f08ca477774087",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/metadata/suspicious_win-riscv64-gcc.json",
+      "size": 357,
+      "sha256": "1b20c7f3d1be0dc0958bd34c11e65c87b5aebd33d412cb835ff76e1db3da463c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0",
+      "size": 15856,
+      "sha256": "59977660e66b0cea6dadf1965717195dacb82ff0765c2449d256e4e51dd63698",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=93543996d495b38c44d6fea58cd9b464c4a8be99, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/gas/O1/hello-asm-gas-O1",
+      "size": 15856,
+      "sha256": "59977660e66b0cea6dadf1965717195dacb82ff0765c2449d256e4e51dd63698",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=93543996d495b38c44d6fea58cd9b464c4a8be99, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/gas/O2/hello-asm-gas-O2",
+      "size": 15856,
+      "sha256": "59977660e66b0cea6dadf1965717195dacb82ff0765c2449d256e4e51dd63698",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=93543996d495b38c44d6fea58cd9b464c4a8be99, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/gas/O3/hello-asm-gas-O3",
+      "size": 15856,
+      "sha256": "59977660e66b0cea6dadf1965717195dacb82ff0765c2449d256e4e51dd63698",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=93543996d495b38c44d6fea58cd9b464c4a8be99, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/gas/debug/hello-asm-gas-debug",
+      "size": 16520,
+      "sha256": "bd9c8cb3379e43b95cd9e8bc5f84a0575822f6a3b5188d0ad3c1b53fae989872",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=cb29c4cdb5d2d71ceb63dde460db58e7ad225263, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/nasm/O0/hello-asm-nasm-O0",
+      "size": 15880,
+      "sha256": "ca26a5b7db9d7aec0a752a4a0db8684dc3e7f9894b9dc7231832fdc9f56605dc",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d96461ee129c184e62bae383dda8878798be85b6, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/nasm/O1/hello-asm-nasm-O1",
+      "size": 15880,
+      "sha256": "ca26a5b7db9d7aec0a752a4a0db8684dc3e7f9894b9dc7231832fdc9f56605dc",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d96461ee129c184e62bae383dda8878798be85b6, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/nasm/O2/hello-asm-nasm-O2",
+      "size": 15880,
+      "sha256": "ca26a5b7db9d7aec0a752a4a0db8684dc3e7f9894b9dc7231832fdc9f56605dc",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d96461ee129c184e62bae383dda8878798be85b6, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/nasm/O3/hello-asm-nasm-O3",
+      "size": 15880,
+      "sha256": "ca26a5b7db9d7aec0a752a4a0db8684dc3e7f9894b9dc7231832fdc9f56605dc",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d96461ee129c184e62bae383dda8878798be85b6, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/asm/nasm/debug/hello-asm-nasm-debug",
+      "size": 16472,
+      "sha256": "3e408b061bd3cf9023decb064a20b850197d72c1cac34d1bc9e78d4caf280a25",
+      "type": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=081e4cbf9390888c730efee662976bfb629de677, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O0/hello-c-clang-O0",
+      "size": 16248,
+      "sha256": "1bffdff8568f24a38da77e69f08f5be826763666f1a1bbca07aca8655b08d8c3",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=2f30876efbe0dbd333b758064fac9696f4d0901b, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O0/hello-clang-O0",
+      "size": 35720,
+      "sha256": "07d0fa20e8f53c2c4fffa3bd32afa367ca46837dc19665f4ce5d0e37ddb3e74e",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=f7c77c575ec37d90b24cc658ce0faaf2101f3759, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O0/hello-cpp-clang++-O0",
+      "size": 35720,
+      "sha256": "07d0fa20e8f53c2c4fffa3bd32afa367ca46837dc19665f4ce5d0e37ddb3e74e",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=f7c77c575ec37d90b24cc658ce0faaf2101f3759, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O0/suspicious_linux-clang-O0",
+      "size": 16272,
+      "sha256": "7824e6994fffa8b9bacdb6dde6a70d55d3a195ce0d346567bfc8f0d60030236c",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=a764162e276ca0afbc9087a634c62725e3db8760, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O1/hello-c-clang-O1",
+      "size": 16256,
+      "sha256": "f2fa0a083f7fd03d26061cd7dc8765bb92a27b7f49c58cfead491bf01d03a16e",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=40c3b1ff1b9bd270b4ffbfaa5e0de17cffaf8326, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O1/hello-clang-O1",
+      "size": 18400,
+      "sha256": "d39a80cddc1c749d9cbb0887f2c27c272d1dd883c12e5814b468bceaf3c15be3",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=0f6747e18e4c2caa198cc88ddb762baf53c17b90, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O1/hello-cpp-clang++-O1",
+      "size": 18400,
+      "sha256": "d39a80cddc1c749d9cbb0887f2c27c272d1dd883c12e5814b468bceaf3c15be3",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=0f6747e18e4c2caa198cc88ddb762baf53c17b90, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O1/suspicious_linux-clang-O1",
+      "size": 16272,
+      "sha256": "a49055254ae7ad4c83020faa6b544ad072c1ceb9ee7baa05845befb64977d87d",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=7e50f889785974a2b0762174afbc062b68fa54fd, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O2/hello-c-clang-O2",
+      "size": 16256,
+      "sha256": "41444eafb804e000d00aac7ab7ce187edeb42f68e8ef5fa460438aac4ae29362",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=40dd613603069ed895922ccde50c6a0842b21b52, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O2/hello-clang-O2",
+      "size": 18400,
+      "sha256": "e80af0f413daaa8b0746258e28b5a1844923ed9c954792499e8425db4ee202a2",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=f4203ce126d9cb7748ed621a80dde921526ad12d, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O2/hello-cpp-clang++-O2",
+      "size": 18400,
+      "sha256": "e80af0f413daaa8b0746258e28b5a1844923ed9c954792499e8425db4ee202a2",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=f4203ce126d9cb7748ed621a80dde921526ad12d, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O2/suspicious_linux-clang-O2",
+      "size": 16272,
+      "sha256": "a49055254ae7ad4c83020faa6b544ad072c1ceb9ee7baa05845befb64977d87d",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=7e50f889785974a2b0762174afbc062b68fa54fd, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O3/hello-c-clang-O3",
+      "size": 16256,
+      "sha256": "41444eafb804e000d00aac7ab7ce187edeb42f68e8ef5fa460438aac4ae29362",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=40dd613603069ed895922ccde50c6a0842b21b52, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O3/hello-clang-O3",
+      "size": 18344,
+      "sha256": "554458f35d3aaf4eb278a8d61d19ced0299ff3a6fae0ae2e75fd4e15676dd13f",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=a17dd728446b422c46ae3f24a7d7ead89df4f33b, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O3/hello-cpp-clang++-O3",
+      "size": 18344,
+      "sha256": "554458f35d3aaf4eb278a8d61d19ced0299ff3a6fae0ae2e75fd4e15676dd13f",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=a17dd728446b422c46ae3f24a7d7ead89df4f33b, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/O3/suspicious_linux-clang-O3",
+      "size": 16272,
+      "sha256": "a49055254ae7ad4c83020faa6b544ad072c1ceb9ee7baa05845befb64977d87d",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=7e50f889785974a2b0762174afbc062b68fa54fd, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug",
+      "size": 17680,
+      "sha256": "3153a5787894be524871bd49db115d09551863b744f4c2531ee69b5dab792788",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=1dbd570e45cb92dbeeeeb8a8eed9016506a2a286, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/debug/hello-c-clang-stripped",
+      "size": 14568,
+      "sha256": "c8f6b46429511d892a21ca4e6cd6f59beb9c8c489d7c9cad2ddca4f9dccd3807",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d30a7971463bc36d5390495ab817de682b33213f, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/debug/hello-clang-debug",
+      "size": 92600,
+      "sha256": "f3e397ade064bdc2c09ef9b89e7d31d7c25b9e4c4d852a237ad639fd98a0be3a",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=0c70602c40cee67ead4e1212067e184d32db76aa, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/debug/hello-clang-stripped",
+      "size": 14792,
+      "sha256": "d30c021c32993f02ce0734973690a93c0585c884d80366a3c387bbf9edf3f0e2",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=84d88b731cf829b11f260f9c5aa74c34d16c79a8, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/debug/hello-cpp-clang++-debug",
+      "size": 92600,
+      "sha256": "f3e397ade064bdc2c09ef9b89e7d31d7c25b9e4c4d852a237ad639fd98a0be3a",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=0c70602c40cee67ead4e1212067e184d32db76aa, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/debug/hello-cpp-clang++-stripped",
+      "size": 14792,
+      "sha256": "d30c021c32993f02ce0734973690a93c0585c884d80366a3c387bbf9edf3f0e2",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=84d88b731cf829b11f260f9c5aa74c34d16c79a8, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/debug/suspicious_linux-clang-debug",
+      "size": 18728,
+      "sha256": "22d005ded0199a6faf7dc9f7ab6d3cfb1850ff4903a4ffd5d1caa739d90f9d59",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=5bfc4108ee4bbeec753f415786221621eb233a4c, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/debug/suspicious_linux-clang-stripped",
+      "size": 14648,
+      "sha256": "2d68828c92984e30367e2bb29c90ece7a7b4bd62e1c72ab307da21c5bf4186e1",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=fcefb5add0dd5b3d24018018829775246ae8b1f1, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/rpath/hello-clang-rpath",
+      "size": 18400,
+      "sha256": "31f61a1108938a1cbddb03bcabc192fba289553ed3b129a764a2ae323baf0ee9",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d4be7890e947d23ec063474ae70af377e283c5a3, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/rpath/suspicious_linux-clang-rpath",
+      "size": 16272,
+      "sha256": "6f873872be5297abbc548c60ea98e355f6a09584110780d01bdc73586b0bfe17",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=0b23ad1bbb2b26c5b6c16e69bcd489cf82aef75b, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/runpath/hello-clang-runpath",
+      "size": 18400,
+      "sha256": "31f61a1108938a1cbddb03bcabc192fba289553ed3b129a764a2ae323baf0ee9",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d4be7890e947d23ec063474ae70af377e283c5a3, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/clang/runpath/suspicious_linux-clang-runpath",
+      "size": 16272,
+      "sha256": "6f873872be5297abbc548c60ea98e355f6a09584110780d01bdc73586b0bfe17",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=0b23ad1bbb2b26c5b6c16e69bcd489cf82aef75b, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O0/hello-c-gcc-O0",
+      "size": 16208,
+      "sha256": "61d4638ccc9dce0540c6b97e41bc6f24ce4d134fd3862b779d0f6de4e1bb18cd",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=491f45be8b962530db45309bd7238c5e3379eb76, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O0/hello-cpp-g++-O0",
+      "size": 44104,
+      "sha256": "ecb06722e4db3fc9cd9c0071bbc698a426a0195b84bbbd33e5548ec1c0e1fff5",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d455a4eda6771eb973518663e66bebb73d7bc403, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O0/hello-cpp-g++-O0.upx9",
+      "size": 14280,
+      "sha256": "7bfdd95dbf2fae3be69bf82c0d78ea3590d050fc23a88e6207b019c3d23a163f",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), statically linked, no section header"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0",
+      "size": 44104,
+      "sha256": "ecb06722e4db3fc9cd9c0071bbc698a426a0195b84bbbd33e5548ec1c0e1fff5",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d455a4eda6771eb973518663e66bebb73d7bc403, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O0/suspicious_linux-gcc-O0",
+      "size": 16152,
+      "sha256": "40adc7cc01d4da69fe2d948fd1f0dc28087c5651d144b5f47291347de4f435d1",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=bb4c9c5ea7664c0b52e0c99d5b86d6da77bf124b, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O1/hello-c-gcc-O1",
+      "size": 16168,
+      "sha256": "030df0eed2b6f5ad7cd97fb1c22a7f70521f6fdc27c8bb5d418927a969a184ea",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=acebb9b961bb39e866287b8b1cd43bcbd7983b53, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O1/hello-cpp-g++-O1",
+      "size": 18464,
+      "sha256": "3529997b55621e3c8526bbe67657803d5fe562210f9185a3eac2f497eff694dc",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ac34f5f1dcc7eb32d50341fbea6196d0f8410d67, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O1/hello-gcc-O1",
+      "size": 18464,
+      "sha256": "3529997b55621e3c8526bbe67657803d5fe562210f9185a3eac2f497eff694dc",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ac34f5f1dcc7eb32d50341fbea6196d0f8410d67, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O1/suspicious_linux-gcc-O1",
+      "size": 16152,
+      "sha256": "b1446f261e85f5b8d905f21c7915452207d38931809629f4dbfca34746bc10a3",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=5d5e84165c2493f9c05ba94527428146e846f699, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O2/hello-c-gcc-O2",
+      "size": 16168,
+      "sha256": "983e99f731a6a4f2bbae047c27171f59ce5636336c8cf20fc6b59e76d87eb212",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=e17457a3495f9f735dee0d3b96e57d32c85adcb3, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2",
+      "size": 18248,
+      "sha256": "707f4a65a36cd8299658781a3f617b03531e20b3990ad909b39e848fbebcf6b6",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d41d7d7748fb36f27ad33c67dffd6dae52b2973d, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
+      "size": 18248,
+      "sha256": "707f4a65a36cd8299658781a3f617b03531e20b3990ad909b39e848fbebcf6b6",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=d41d7d7748fb36f27ad33c67dffd6dae52b2973d, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O2/suspicious_linux-gcc-O2",
+      "size": 16152,
+      "sha256": "29155fc14c04b21dec41b00dca7b5aec08ca05372500beb9d01207439bd4f4d5",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=c971e12c6e93324e95c7cb2fc3437587dc3416b2, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O3/hello-c-gcc-O3",
+      "size": 16168,
+      "sha256": "42a9f71d20d29bffb2ee168792a04d421a87eeaf473705a195e90c1801a6095a",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=45aae08e999e1c9ea13b1fe30bdc8040b147a7b0, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O3/hello-cpp-g++-O3",
+      "size": 18360,
+      "sha256": "6dcdf2f930901b0e95818354da5b32c6c65967d24dc09fca899deed7a071ee08",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=5d777a788899e6502a2f6bbe9d5f34aecf6e6b5f, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O3/hello-gcc-O3",
+      "size": 18360,
+      "sha256": "6dcdf2f930901b0e95818354da5b32c6c65967d24dc09fca899deed7a071ee08",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=5d777a788899e6502a2f6bbe9d5f34aecf6e6b5f, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/O3/suspicious_linux-gcc-O3",
+      "size": 16152,
+      "sha256": "29155fc14c04b21dec41b00dca7b5aec08ca05372500beb9d01207439bd4f4d5",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=c971e12c6e93324e95c7cb2fc3437587dc3416b2, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/debug/hello-c-gcc-debug",
+      "size": 18064,
+      "sha256": "dcd31748ed39b73208dc70f5a88ab7dcf6aab960331c53ff50b0ba9a9ada831d",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=6688e5dc621a797d03d5476b2b142f12de70b2b8, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/debug/hello-c-gcc-stripped",
+      "size": 14480,
+      "sha256": "2f5af5ca20bb77e35e2e19a848d18c4d147683351971f10d72fbf3b3394fa2f1",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=6bc15c4ec6918188906ca8f4995be91a6edd6b2f, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/debug/hello-cpp-g++-debug",
+      "size": 159560,
+      "sha256": "93d153229fb1d0e165ccc865f77a3272529b08477a1e6a4d1fc3443480034682",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=3e6a2d5da31b6180d7a93647347a795c4ac913a4, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/debug/hello-cpp-g++-stripped",
+      "size": 14576,
+      "sha256": "b60ce5cd07800679ff380ecd26d04dd2c3e2a6eeec2f7842ee1f0245afb762cc",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=299c3a689d064632c60df0a041738b4eb34696c9, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/debug/hello-gcc-debug",
+      "size": 159560,
+      "sha256": "93d153229fb1d0e165ccc865f77a3272529b08477a1e6a4d1fc3443480034682",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=3e6a2d5da31b6180d7a93647347a795c4ac913a4, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/debug/hello-gcc-stripped",
+      "size": 14576,
+      "sha256": "b60ce5cd07800679ff380ecd26d04dd2c3e2a6eeec2f7842ee1f0245afb762cc",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=299c3a689d064632c60df0a041738b4eb34696c9, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/debug/suspicious_linux-gcc-debug",
+      "size": 19040,
+      "sha256": "165e15920347417db6bde9fabd17be7003de356dca1031539edd4367c2acfd10",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=35baa479a6790feb7517384064bc99d7d8fef368, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/debug/suspicious_linux-gcc-stripped",
+      "size": 14472,
+      "sha256": "b8b354504a3227770d503738a4e2b7bf2e42611e69f46e5c38b83b2fce937631",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=be05b91a593099ad332cf42eeb752e417c9985f8, for GNU/Linux 3.2.0, stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/rpath/hello-gcc-rpath",
+      "size": 18248,
+      "sha256": "02242ebd97ca644a0ae2a062b366ec4909b00186e0bebba15b7c1daa1113d372",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=34dfbca23bd85021c1057db9b1dc10edd9ead6c9, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/rpath/suspicious_linux-gcc-rpath",
+      "size": 16152,
+      "sha256": "d2e80d4da24ce9f2700724c7361622f43423afb3cd66a6e22b135fce47cfb056",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=e6c5ad9c2462daa9b00fa427d4f2d8394191e841, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/runpath/hello-gcc-runpath",
+      "size": 18248,
+      "sha256": "02242ebd97ca644a0ae2a062b366ec4909b00186e0bebba15b7c1daa1113d372",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=34dfbca23bd85021c1057db9b1dc10edd9ead6c9, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/native/gcc/runpath/suspicious_linux-gcc-runpath",
+      "size": 16152,
+      "sha256": "d2e80d4da24ce9f2700724c7361622f43423afb3cd66a6e22b135fce47cfb056",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=e6c5ad9c2462daa9b00fa427d4f2d8394191e841, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.10.opt.pyc",
+      "size": 1943,
+      "sha256": "536ca5ced76dcfd156a4dbdb1cec64ef41b91fc140421e9a941cc676007a0488",
+      "type": "Byte-compiled Python module for CPython 3.10, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.10.pyc",
+      "size": 1943,
+      "sha256": "536ca5ced76dcfd156a4dbdb1cec64ef41b91fc140421e9a941cc676007a0488",
+      "type": "Byte-compiled Python module for CPython 3.10, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.11.opt.pyc",
+      "size": 3092,
+      "sha256": "23d2483d3c40ed5548225953335262cb5763196958557a1357d027c7e5d6f228",
+      "type": "Byte-compiled Python module for CPython 3.11, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.11.pyc",
+      "size": 3092,
+      "sha256": "23d2483d3c40ed5548225953335262cb5763196958557a1357d027c7e5d6f228",
+      "type": "Byte-compiled Python module for CPython 3.11, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.12.opt.pyc",
+      "size": 2716,
+      "sha256": "21d0bbb841fb63dd49bf8b891fa2cb077003fa921f3dbb7ba7bd826f394e7e4c",
+      "type": "Byte-compiled Python module for CPython 3.12 or newer, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.12.pyc",
+      "size": 2716,
+      "sha256": "21d0bbb841fb63dd49bf8b891fa2cb077003fa921f3dbb7ba7bd826f394e7e4c",
+      "type": "Byte-compiled Python module for CPython 3.12 or newer, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.13.opt.pyc",
+      "size": 2788,
+      "sha256": "ea7f0f6fffafb82fe2be7b1fbeb527f3639c59a45685331f8eb937f72b5a2606",
+      "type": "Byte-compiled Python module for CPython 3.12 or newer, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.13.pyc",
+      "size": 2788,
+      "sha256": "ea7f0f6fffafb82fe2be7b1fbeb527f3639c59a45685331f8eb937f72b5a2606",
+      "type": "Byte-compiled Python module for CPython 3.12 or newer, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.8.opt.pyc",
+      "size": 1931,
+      "sha256": "fbb9c7ca9c997d34e12360dc1ef7cd925bb813ae77cf1bebf1982e75111217f4",
+      "type": "Byte-compiled Python module for CPython 3.8, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.8.pyc",
+      "size": 1931,
+      "sha256": "fbb9c7ca9c997d34e12360dc1ef7cd925bb813ae77cf1bebf1982e75111217f4",
+      "type": "Byte-compiled Python module for CPython 3.8, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.9.opt.pyc",
+      "size": 1927,
+      "sha256": "2d6708d81ffb59abe79123862e9ef5142d25097c6bacd1670a37880b428a9e73",
+      "type": "Byte-compiled Python module for CPython 3.9, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello-py3.9.pyc",
+      "size": 1927,
+      "sha256": "2d6708d81ffb59abe79123862e9ef5142d25097c6bacd1670a37880b428a9e73",
+      "type": "Byte-compiled Python module for CPython 3.9, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello.opt.pyc",
+      "size": 1943,
+      "sha256": "4791dcde2e28a25a8e1c6a01a37416f0cfe0ddec1281fe06a90066ddf220511f",
+      "type": "Byte-compiled Python module for CPython 3.10, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/python/hello.pyc",
+      "size": 1920,
+      "sha256": "b7988d3ae683c1469361ad9cc6899522c3bdf660266bc486c35aa144d7f8b1ea",
+      "type": "Byte-compiled Python module for CPython 3.8, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/linux/amd64/export/rust/hello-rust-debug",
+      "size": 4524528,
+      "sha256": "2219a0c882b3694c412cd016f5e20648f6d20b707935799259a74ac60cc9ec87",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ccf654ccb6abdcd217906b76a40ed47a821f27a8, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/rust/hello-rust-musl",
+      "size": 4093760,
+      "sha256": "d0a0c72b92e0c4a6c45bc828d0eee1148cf9920e543aa94670b3d92ed38faf5d",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, BuildID[sha1]=0048bfc1798850172fd53a2e957b0effe6ef0c6e, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/amd64/export/rust/hello-rust-release",
+      "size": 3902488,
+      "sha256": "ab4f679954bc61d6556436c7b77901d87741ec788829f408caefd72d90f2fb27",
+      "type": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=e3365a9b9b8dda88cce32312d57053a0267af726, for GNU/Linux 3.2.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/arm64/hello-arm64-g++",
+      "size": 15520,
+      "sha256": "759a41b794df5682a5af3262b9b6802a9ccacf3e562e4216ac3b98ba4539f6da",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=68fb9b460992766eb508fda2a65cafd155928b81, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc",
+      "size": 9152,
+      "sha256": "7aa1fc72da7c097c090a2e25ba7e10f1060617ef4bbb53b4aa998e18a4b33f61",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=dfb804901a9e09ea5ccb7f0f8d0848b7ada4a1e7, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/arm64/hello-asm-arm64-as",
+      "size": 8864,
+      "sha256": "b69eef0430633b5d36b131b1637ee62346715b04a4f74d891d891da809f0b095",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=cab7e7a85d31ec5f42f1b7d184794269d7254fbb, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/armhf/hello-armhf-g++",
+      "size": 14272,
+      "sha256": "2f32f5a360c5f7205cd0279166676b8ebcd88f28932d3b514be7e8cc9499e53e",
+      "type": "ELF 32-bit LSB pie executable, ARM, EABI5 version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-armhf.so.3, BuildID[sha1]=cb10d7910f2b3928c4da20875b18a399ae0c2e61, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/armhf/hello-armhf-gcc",
+      "size": 8068,
+      "sha256": "54599556e5f073c9f0a29293eb393801f8b4bbe49243f3318c1b2746e17fb0bb",
+      "type": "ELF 32-bit LSB pie executable, ARM, EABI5 version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-armhf.so.3, BuildID[sha1]=23891cf1b9ed2462a9fe09fb9b3864dac690d303, for GNU/Linux 3.2.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/riscv64/hello-asm-riscv64-as",
+      "size": 8480,
+      "sha256": "b13d42e7a21f33835b6f30bce5c83968998ef1a02637e205da86235d5f1dd7ab",
+      "type": "ELF 64-bit LSB pie executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-riscv64-lp64d.so.1, BuildID[sha1]=0d12259cfa32454f931614f375825bcf695b60a0, for GNU/Linux 4.15.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/riscv64/hello-riscv64-g++",
+      "size": 15192,
+      "sha256": "9d0edd64c551dc266dc0e96efbec3e67463138c9ebeb6261cd9722c24b2933d3",
+      "type": "ELF 64-bit LSB pie executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-riscv64-lp64d.so.1, BuildID[sha1]=81a9259970dcc7b404b25ec9b98144f2efdfafe1, for GNU/Linux 4.15.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/riscv64/hello-riscv64-gcc",
+      "size": 8712,
+      "sha256": "32bb9ec63c54cd012eeb4e7f172cfcb5c2fb128c85480f16f4c4b479900beecc",
+      "type": "ELF 64-bit LSB pie executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-riscv64-lp64d.so.1, BuildID[sha1]=f3e33f6074c39afa6effaff77e187e6e38fda6e5, for GNU/Linux 4.15.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe",
+      "size": 498922,
+      "sha256": "6f9040b53002abbdc05fb16cf7bd3fec96f6370f7386d26bcdc79fa0e83c5d1c",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/linux/arm64/export/cross/windows-x86_64/hello-cpp-x86_64-mingw.exe",
+      "size": 305148,
+      "sha256": "071e8e11ab35f67eefc1837a691f4cd3a75906dc56f03e34a3a0a5eeca9e9a5c",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/linux/arm64/export/dotnet/mono/Hello-mono.exe",
+      "size": 3072,
+      "sha256": "d999bd5ab3d31aa0ab09ed93d1b1f2821fee6fa90e7da446b33513bd448ccac0",
+      "type": "PE32 executable (console) Intel 80386 Mono/.Net assembly, for MS Windows, 3 sections"
+    },
+    {
+      "path": "platforms/linux/arm64/export/fortran/hello-gfortran-O0",
+      "size": 13640,
+      "sha256": "2e7f4b4b73a2ebc1933ff3c5b2438dc33426c179c08e24b3d9d606c7a1fb669a",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=65dd7579b1250c39e10277a2f81095e2590d6cff, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/fortran/hello-gfortran-O1",
+      "size": 13624,
+      "sha256": "25aa7a8ac494888235883a4fd1dafdc056909544e3cf963d42d31fe380e45227",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=46adb1c045a72b06127d22ebd1d0bdd4f4ca2d32, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/fortran/hello-gfortran-O2",
+      "size": 13648,
+      "sha256": "2fafbff1e5d564f801124eace79083f6d1ecf5eda449a7ce14d82646062c2c3b",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=ac8b7f323d3425474262a60c5ba139d6f990ee67, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/fortran/hello-gfortran-O3",
+      "size": 13672,
+      "sha256": "e719f54950e9c581215073164d639d50a5ba905b6f37c08f637a4691bde95995",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=2257be75b9ef0fb660ac30814d6dd434803f8dc3, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/fortran/hello-gfortran-debug",
+      "size": 15568,
+      "sha256": "0339eed57ca96416e913366dfd0190ba67cf3795e91c7ab5a3077dc8dfe9c3c3",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=0fdf1a0101c26062aa17850481a22761a212fc66, for GNU/Linux 3.7.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/java/jdk11/HelloWorld.class",
+      "size": 1726,
+      "sha256": "2c1f97a89281230d092100b03026e749a5aab11102f4a266aa982133656883da",
+      "type": "compiled Java class data, version 55.0 (Java SE 11)"
+    },
+    {
+      "path": "platforms/linux/arm64/export/java/jdk11/HelloWorld.jar",
+      "size": 1479,
+      "sha256": "3c5f4fe262c5793496ea63f0e8d1008dfd6bca2d14fc3eb3521f9a188d9f1552",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/linux/arm64/export/java/jdk11/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/linux/arm64/export/java/jdk17/HelloWorld.class",
+      "size": 1726,
+      "sha256": "3bc627c112c136058e2c7f347797089fc6d8dc9267393d820bc7f8014a724452",
+      "type": "compiled Java class data, version 61.0 (Java SE 17)"
+    },
+    {
+      "path": "platforms/linux/arm64/export/java/jdk17/HelloWorld.jar",
+      "size": 1482,
+      "sha256": "8f6a79dff44d1441575bf95c9cb1bbfecd91332beb2a398a32a3482a2b64006b",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/linux/arm64/export/java/jdk17/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/linux/arm64/export/java/jdk21/HelloWorld.class",
+      "size": 1726,
+      "sha256": "d80c8e09080c1c25b9f9c73767ee31341fc83e5a85c7a2bf8e7fb7ec50abeace",
+      "type": "compiled Java class data, version 65.0"
+    },
+    {
+      "path": "platforms/linux/arm64/export/java/jdk21/HelloWorld.jar",
+      "size": 1461,
+      "sha256": "d05cbddfa45488a4279b3faf4d2261a7b0db5a9c1ec8f5965207fa0b9bb8078e",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/linux/arm64/export/java/jdk21/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/linux/arm64/export/libraries/shared/libmathlib.so",
+      "size": 13360,
+      "sha256": "be0acbb021c9b3292e8443771b51602e7ab26d4f1bfc9109776986f87e1a8cf4",
+      "type": "ELF 64-bit LSB shared object, ARM aarch64, version 1 (SYSV), dynamically linked, BuildID[sha1]=7c5cd4309cbb287490b6c2cf771722dd5d582d92, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/libraries/shared/mathlib.dll",
+      "size": 236500,
+      "sha256": "2fbebc5803fe8f682227b96090f1761fddbe72cfd1990ca38c82eb42b7fdadbf",
+      "type": "PE32+ executable (DLL) (console) x86-64, for MS Windows, 19 sections"
+    },
+    {
+      "path": "platforms/linux/arm64/export/libraries/static/libmathlib.a",
+      "size": 7668,
+      "sha256": "b588dc65d533d6c6a4af5e18ca12e4591e7418ce491101338adb8d0e37aa2d64",
+      "type": "current ar archive"
+    },
+    {
+      "path": "platforms/linux/arm64/export/libraries/test_mathlib",
+      "size": 14112,
+      "sha256": "a9ebfc3dc33f06cedaf146e6c80b1f7531be7cb34c7f8fd6b1d2173b135835e5",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=aabac2067fd4dcf3f3aae41539d0e7ad3febf661, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/Hello-mono.json",
+      "size": 324,
+      "sha256": "568d83938148c7aeb3b0ad6f30821b49087303402317d26e6d64cc15bc0653bf",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/HelloWorld-jar-jdk11.json",
+      "size": 443,
+      "sha256": "c226e403d18bf500ae9b3890043fb0f162e6d3985b96d2ec0416993c611f950c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/HelloWorld-jar-jdk17.json",
+      "size": 443,
+      "sha256": "95fb980b2e9589c07280909fd57f3b161f9c770ef8b4384e85d80a746ef19470",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/HelloWorld-jar-jdk21.json",
+      "size": 382,
+      "sha256": "b7b881fc78a29ccec412ec1dba6bd772d0971bdd4143c180a1de99158047662a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/HelloWorld-javac-jdk11.json",
+      "size": 458,
+      "sha256": "02d91137ae1fa07d2cfa63ed8f271a1161b42f2e91e0093dc3d990ab1d9c0ce5",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/HelloWorld-javac-jdk17.json",
+      "size": 458,
+      "sha256": "14ff9f7491ea73291ab126cbcf669492a6f953b73bfa9c1bc564931e02b12de8",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/HelloWorld-javac-jdk21.json",
+      "size": 397,
+      "sha256": "162ad48883019e212fe590755539a5206f122ed93bb2fc2a43dc5b9eba20795a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-arm64-g++.json",
+      "size": 336,
+      "sha256": "cc811b868851ae1234e928d6625007e259ae4c69b5949d626ec19d88fbba6503",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-arm64-gcc.json",
+      "size": 332,
+      "sha256": "5d2de0a517e99cb48a819a79f6e0846ac9ed86804fb93ce1b6048007a5bf7a0e",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-armhf-g++.json",
+      "size": 343,
+      "sha256": "706c2152383fb79226ea0821e5f28e66e2fe77580d53c063e8f39f624539870e",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-armhf-gcc.json",
+      "size": 339,
+      "sha256": "5ca631e67de27dc941bf19c17d9ea123ac5f256b797e0c5c9044df5d892bfbac",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-asm-arm64-as.json",
+      "size": 391,
+      "sha256": "dca93aecd9464dc5709772cf8b4966f032070e7c3b9de781eca68e8085f3ca82",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-asm-riscv64-as.json",
+      "size": 398,
+      "sha256": "696dcd6ba08ee5ab6787cdd2a37c427d426f0efcca546db5411641d9ac150849",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-clang-O0.json",
+      "size": 334,
+      "sha256": "710d06fb51dd3effd6c499cd496d6ca73fa6a2db9136fc332356cfa9703ea861",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-clang-O1.json",
+      "size": 334,
+      "sha256": "d683d1a07b000cc51a72b42b87e120c4885fee4b7555bc40d3ab2372f45a7e05",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-clang-O2.json",
+      "size": 334,
+      "sha256": "bdf3ae6d499e9ef65705f51c9fcc8d3281e0eac6f634079aab6a526c7eb016e9",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-clang-O3.json",
+      "size": 334,
+      "sha256": "b7559382660d43893d6bcab6a65a350921105b9da49a3d6b576a76bb94d6604c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-clang-debug.json",
+      "size": 337,
+      "sha256": "8b3f563be8a4e9a7e995fbfa0c69cd92a18050efd33c3bdf162acb023c7af94c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-clang-stripped.json",
+      "size": 333,
+      "sha256": "b1d26bc90750508dfd12e8c6a2cff4a18c2051ea2b79d0926e97488ec7a63ac4",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-gcc-O0.json",
+      "size": 323,
+      "sha256": "03fd88720d791b35db9fc18748d4006f2131a347c18a4ecac227d5d5f2b4b5d2",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-gcc-O1.json",
+      "size": 323,
+      "sha256": "202aeeae0dc8bc7b4776fb798d3afadd861ee7f93fa08d5358be92d29b1ca70a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-gcc-O2.json",
+      "size": 323,
+      "sha256": "77348fdbc9e43375d252c0ab9fb6d6d29b3df9206027d91c9cf780d465b74bdc",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-gcc-O3.json",
+      "size": 323,
+      "sha256": "b0dc4e0a1a8bb1878fad30950e4c3bfe77b453ed24f252e493806db376182433",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-gcc-debug.json",
+      "size": 326,
+      "sha256": "a9a55d616656b34ab8c172e4f8f9c4e074feee51197b7dc39d67d40c16dc7b55",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-gcc-stripped.json",
+      "size": 318,
+      "sha256": "bd016f814a21eabcde86d5f752f87717793b54337682db11603b18b00b81b932",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-c-x86_64-mingw.exe.json",
+      "size": 378,
+      "sha256": "8d4ac06dbd1f2f27c01d79c04f72f58aed3e3c2df13ff55d0a6b29a806eba5d2",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-clang++-O0.json",
+      "size": 344,
+      "sha256": "eb3b0c7db87e3094fe968fd0dc1c4c1a68405cfd5ab37c181498f004cdcebdd5",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-clang++-O1.json",
+      "size": 344,
+      "sha256": "76d5d50fa5065991ec2cf4fab710c4497fa74cb3f3e6697a27c833851d4fa00b",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-clang++-O2.json",
+      "size": 344,
+      "sha256": "0dad09e3a4e8683be696ce09b2082d14a68f807ed915aec65e6b7bc11a03cf51",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-clang++-O3.json",
+      "size": 344,
+      "sha256": "724a098c8ac35a28afdc059175fac4b7d16df7edfc25b1dde06da152d4ec1bab",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-clang++-debug.json",
+      "size": 347,
+      "sha256": "57ed55df4402e186bf23393f634c4d1f3d6a2c0b5511ef7eacb55257c0e6d573",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-clang++-stripped.json",
+      "size": 343,
+      "sha256": "1042af1cf21596e9d81542dfbc874fddb76ac477ecff3bd5a3318c66ced5cd5d",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-g++-O0.json",
+      "size": 329,
+      "sha256": "89c7dad6af6a2c72448060125169811ea8662999c79db8218efaa5de54703be5",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-g++-O1.json",
+      "size": 329,
+      "sha256": "675e880247a88d10ddf60ab56bbe9350abc4af80ab252f3277eba237fc8ba8f9",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-g++-O2.json",
+      "size": 329,
+      "sha256": "c071317e7610dae38dd1784b0d5ad3c11f63f3db90e259b9159d20cec8bee269",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-g++-O3.json",
+      "size": 329,
+      "sha256": "06ae3e5b3252934dfba3f2411edf782eadfd14e77869a863f1362b9f27c87cfe",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-g++-debug.json",
+      "size": 332,
+      "sha256": "b803cb44160b55d3f6806e79ed8649ff292eb60a0b640c682579f004c5b8d593",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-g++-stripped.json",
+      "size": 324,
+      "sha256": "5e805131f882a2318ded1ab15e7544d8b7b7094da13abb08dbcc086424ee2a9f",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-cpp-x86_64-mingw.exe.json",
+      "size": 384,
+      "sha256": "c13c2af0491bb1c47dd54b0f3d83c9c4d196c069dc52d6f119110a8b4596383c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-gfortran-O0.json",
+      "size": 330,
+      "sha256": "470238e4018f0cff49ff8d85a27be2849f945cd3744f6054a81038ae5e33cf85",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-gfortran-O1.json",
+      "size": 330,
+      "sha256": "793a68579fdf1d4f34f4a971171b7d039afb9aac56645f8e76b65791039b9c6c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-gfortran-O2.json",
+      "size": 330,
+      "sha256": "2e4a1452c17e9d1e29054cd7669b77b6dac804deb5a996d1599a54e40d40bd09",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-gfortran-O3.json",
+      "size": 330,
+      "sha256": "4c1e30eab2ca579d4012e19d8b65b49b6fba227f6133c196546f75289a468425",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-gfortran-debug.json",
+      "size": 350,
+      "sha256": "5aecf04eda4db3be38a49e86ff6bc099af499501ef8aa754ff24eab08e922a64",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-python-opt.json",
+      "size": 317,
+      "sha256": "3864c993331e7e3702abfe70e0e98bc809b0523e72acdbbb501c8094b591190e",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-python.json",
+      "size": 298,
+      "sha256": "19da9a7eee092b33de3f6cf97821f6c3ff680d04b18748ad55ad2dad9e7838db",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-riscv64-g++.json",
+      "size": 344,
+      "sha256": "9c937e6e7d9b2011deab20f7df8f73e0008df8c6f80e2aef45a6d122c6330ba4",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/hello-riscv64-gcc.json",
+      "size": 340,
+      "sha256": "e4c0ab136a1984b3e29c7f22e9db2090b8ae9fc0292ed330d864784ff7fb258b",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/metadata/libmathlib-so.json",
+      "size": 332,
+      "sha256": "b1a317626ad8815300748aa5ceef1b93383485ab74e5ea062f738f678d19e639",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/O0/hello-c-clang-O0",
+      "size": 9368,
+      "sha256": "78120cd20b64ce0107bc5e99feec1713fbcb6fee5e08ada76a69c6b1c5675385",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=8386fb826db5e4bf1d733578f4d2ec5d89af5546, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/O0/hello-cpp-clang++-O0",
+      "size": 35936,
+      "sha256": "631b7934296425a204cacefc834ffd5d9e4c7be65bec4c04dd85f804922134c7",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=b2bc229ac0d5a8b5d5abf31156d8e1736a0f2e52, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/O1/hello-c-clang-O1",
+      "size": 9376,
+      "sha256": "69bf028b02b2665f416f63b854038ab407b6eb968a95ef0fab922e59ddc0317b",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=7014e3016e3865f17952a93be178be8e44c8bf2e, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/O1/hello-cpp-clang++-O1",
+      "size": 16000,
+      "sha256": "3c1d6c1364bc60be784fad7dd1a78f04e5bb47ad2a83a1d1857bc979784dbe64",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=25e208617b6497bfbc6ddc03b28a7cf0991b619a, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/O2/hello-c-clang-O2",
+      "size": 9376,
+      "sha256": "e22f314c376a48744af47067abcdd5e347f6dd64e08ff7ca7b32f5bf3613a38f",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=42b294daea8987ddaba68e9c6f265489ad24cd38, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/O2/hello-cpp-clang++-O2",
+      "size": 16000,
+      "sha256": "e69b7c8bad4cb97790cb3ec9a5ef2b0fbff1318c2d7ec9702de8a342d8d0f6cc",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=14ac46e05e9681a09dd05a8b0dd9d788d7a9bd51, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/O3/hello-c-clang-O3",
+      "size": 9376,
+      "sha256": "e22f314c376a48744af47067abcdd5e347f6dd64e08ff7ca7b32f5bf3613a38f",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=42b294daea8987ddaba68e9c6f265489ad24cd38, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/O3/hello-cpp-clang++-O3",
+      "size": 15920,
+      "sha256": "fb7ee38783c6a13ff2ae64fc38a442af64c63609eba8e520441fa2513b6c43d1",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=22b0d7e872f879ce750258490536f1a6d4881386, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/debug/hello-c-clang-debug",
+      "size": 11216,
+      "sha256": "6a8fd7101d182e43c35a76a66f5977feb450cb1f7421749873a15c1db6cc3251",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=503d26341fe89b448e1b5d31f4289b6adfd2d513, for GNU/Linux 3.7.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/debug/hello-c-clang-stripped",
+      "size": 6232,
+      "sha256": "59e5c0097cdc84ca3fbb97f2e2e0a97419ee4da25470fa905765d506c536b609",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=5b7d18edd6f81e9ccfc6dcccb96e9b7c32517712, for GNU/Linux 3.7.0, stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/debug/hello-cpp-clang++-debug",
+      "size": 93312,
+      "sha256": "d5e95efafa763cf31fc1b2aebe632dfcc9b85c341692c6b81993bf753312bef6",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=a20d78044ebebf99029693283f6e99c4e04f7e5a, for GNU/Linux 3.7.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/clang/debug/hello-cpp-clang++-stripped",
+      "size": 10568,
+      "sha256": "6348a810b66ea10adc4cef9257aaf3cdbfeff69e79a5134358750f2d7626ccbb",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=649b75f0dd8b336e74a9d6025c6b384e2f0af7e9, for GNU/Linux 3.7.0, stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/O0/hello-c-gcc-O0",
+      "size": 9168,
+      "sha256": "d94aba96d13bc9ed9e8cce3c3d347143feee38994d61acf01605526ba560ea9a",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=e1e7b2ce52769bd39d94174b32fc7aba03bdf2d0, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/O0/hello-cpp-g++-O0",
+      "size": 43568,
+      "sha256": "c97e650d00e833085825935ef917b87c63195f5e59eee7d34ab49da27b513656",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=3309f39ef8e9b68057927a03e9cbb7504a252508, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/O1/hello-c-gcc-O1",
+      "size": 9128,
+      "sha256": "e60692a780ec534825758c86d2c01ceed0e087d7701a8d04350b9c3f634dc684",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=779d180f747408db10f5ba32aee788e5f99ddacd, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/O1/hello-cpp-g++-O1",
+      "size": 15792,
+      "sha256": "54adb6ee406e2d3d8a46f3cb3219fa3b85850c36541d19642bc833609dc6769a",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=05ca6c34cbac622e0c394d6c504623581cfb39a5, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/O2/hello-c-gcc-O2",
+      "size": 9152,
+      "sha256": "7aa1fc72da7c097c090a2e25ba7e10f1060617ef4bbb53b4aa998e18a4b33f61",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=dfb804901a9e09ea5ccb7f0f8d0848b7ada4a1e7, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/O2/hello-cpp-g++-O2",
+      "size": 15520,
+      "sha256": "759a41b794df5682a5af3262b9b6802a9ccacf3e562e4216ac3b98ba4539f6da",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=68fb9b460992766eb508fda2a65cafd155928b81, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/O3/hello-c-gcc-O3",
+      "size": 9152,
+      "sha256": "4edd3a761d73ad483c0b57a29292b7e6a9bdffe6567447ac3682c51d40aeff74",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=29341cbc7c04d528e8dc6f35830f813894d2b821, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/O3/hello-cpp-g++-O3",
+      "size": 19800,
+      "sha256": "e91e34f899f71d6bb1d6c0283235f50aec676ea1ffa54f20916550da6f880055",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=d8aab51437dabad990ec546fffdfb864588148f3, for GNU/Linux 3.7.0, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/debug/hello-c-gcc-debug",
+      "size": 11144,
+      "sha256": "08dd4f34728feb922222fbab92cb19b5f695e0ba080d367bfc2f74a0ae33d9f9",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=916f140af895c15c20527481ce48cd2ec9eb5e5d, for GNU/Linux 3.7.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/debug/hello-c-gcc-stripped",
+      "size": 6064,
+      "sha256": "c1c2470c0da60ea7313e978e09d6a2cc8f8378a5292520d23f8ffda01e664555",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=81c74340958d6610596c49e5a9fa8ce2e0d3c52d, for GNU/Linux 3.7.0, stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/debug/hello-cpp-g++-debug",
+      "size": 159064,
+      "sha256": "ec1a6a6572228fef3bdae7d9699f10306d96c09953fa95d1e5688e0b52b8ba70",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=10b09606d711b34aa5f6b6992649e7030bcb8d4a, for GNU/Linux 3.7.0, with debug_info, not stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/native/gcc/debug/hello-cpp-g++-stripped",
+      "size": 10256,
+      "sha256": "05c0c2a1341c4f921ae7d12a3e565fd3f3fc11297761776963ad12a7f4a268e4",
+      "type": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=8ea3d984132a0404d7a9604249288ad891aef5cd, for GNU/Linux 3.7.0, stripped"
+    },
+    {
+      "path": "platforms/linux/arm64/export/python/hello.opt.pyc",
       "size": 2813,
       "sha256": "4f25eed982c87c206ff7e9c173df024574846abb6ccb955e295e722c40828bad",
       "type": "Byte-compiled Python module for CPython 3.12 or newer, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
     },
     {
-      "path": "python/hello.pyc",
+      "path": "platforms/linux/arm64/export/python/hello.pyc",
       "size": 2813,
       "sha256": "4f25eed982c87c206ff7e9c173df024574846abb6ccb955e295e722c40828bad",
       "type": "Byte-compiled Python module for CPython 3.12 or newer, timestamp-based, .py timestamp: Sat Aug 30 21:57:09 2025 UTC, .py size: 1369 bytes"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/HelloWorld.class",
+      "size": 1726,
+      "sha256": "d80c8e09080c1c25b9f9c73767ee31341fc83e5a85c7a2bf8e7fb7ec50abeace",
+      "type": "compiled Java class data, version 65.0"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/HelloWorld.jar",
+      "size": 1461,
+      "sha256": "0ff032c100ef149a46dfd98e1cc154fe390fbb6dca60bad03eeee1155809e115",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/jdk11/HelloWorld.class",
+      "size": 1726,
+      "sha256": "2c1f97a89281230d092100b03026e749a5aab11102f4a266aa982133656883da",
+      "type": "compiled Java class data, version 55.0 (Java SE 11)"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/jdk11/HelloWorld.jar",
+      "size": 1479,
+      "sha256": "06a63539f8561980e4ee72271b5179edefd2c5d52359d2032ffa5d70c3e8f1b3",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/jdk11/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/jdk17/HelloWorld.class",
+      "size": 1726,
+      "sha256": "3bc627c112c136058e2c7f347797089fc6d8dc9267393d820bc7f8014a724452",
+      "type": "compiled Java class data, version 61.0 (Java SE 17)"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/jdk17/HelloWorld.jar",
+      "size": 1482,
+      "sha256": "373c55a13337f642d6787d324f0d65a1baad47597f570c35506b6a2d94f78030",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/jdk17/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/jdk21/HelloWorld.class",
+      "size": 1726,
+      "sha256": "d80c8e09080c1c25b9f9c73767ee31341fc83e5a85c7a2bf8e7fb7ec50abeace",
+      "type": "compiled Java class data, version 65.0"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/jdk21/HelloWorld.jar",
+      "size": 1461,
+      "sha256": "f53cad49910f93e52746ebac0bf0aa909bbc0d86e231e871dc3fcf0aa926c560",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/jdk21/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/windows/amd64/export/java/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/Hello-mono-windows.json",
+      "size": 346,
+      "sha256": "ed578476cd63d21ed7f257a25e30031f6a21c3d2bd65141ff3c67acf9a1eea91",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/HelloWorld-jar-jdk11.json",
+      "size": 452,
+      "sha256": "9bac314c7dd689acf0923a0db12c8112c0c04f99e80771e544b05125944c9c1f",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/HelloWorld-jar-jdk17.json",
+      "size": 452,
+      "sha256": "166b84f066142114d717b2e4d056ab60dad6c28696662252f384f3dda30cc7e5",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/HelloWorld-jar-jdk21.json",
+      "size": 383,
+      "sha256": "2354e0e9b0adc0273ddb1073ea26c19f783f23d03c5efb23e7135cd43b7137bf",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/HelloWorld-javac-jdk11.json",
+      "size": 467,
+      "sha256": "8503019bc5e2527921cb9bcc3bce7afc40e2f67f8e9451057ea3253dddea47ea",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/HelloWorld-javac-jdk17.json",
+      "size": 467,
+      "sha256": "f3e17cd71b6eca1c00878ab13d3f30482015ded7d666e0b84ecd1c6d53c0aacc",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/HelloWorld-javac-jdk21.json",
+      "size": 398,
+      "sha256": "d3aca119e6fe0ad35bff1f6d17bbc217a1b9ba1575019a5a5ef73ec864ab050a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw32-O0.exe.json",
+      "size": 372,
+      "sha256": "60942634ad7bba0f8ed615c01fcc7253138529d7aa79fc86c292795209c3151a",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw32-O1.exe.json",
+      "size": 372,
+      "sha256": "9f549fdb3ee555564e400f9f9d19ea7731aab3b21d407c66d137e8719bbac710",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw32-O2.exe.json",
+      "size": 372,
+      "sha256": "c0e8e68d197777053e69c249fbc238b220b30398881eb39c7f24ba304797e684",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw32-O3.exe.json",
+      "size": 372,
+      "sha256": "37a6aab919435c742381fceb6f7b691faa09f0c4aa6757459eb36c5e8700e847",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw32-debug.exe.json",
+      "size": 383,
+      "sha256": "257e595df3144907468cf351cd806de1099120f7a997b74fd0f49824c3ccd1d0",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw32-release.exe.json",
+      "size": 375,
+      "sha256": "a141f07a81c279d3c13a9c7f73f5bc949ce2ce2056a85c2f0f4115c72666b71b",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw64-O0.exe.json",
+      "size": 380,
+      "sha256": "ad232c3959d6169038fdb969762ed4266a171ed0d449cc9031c6d6e4423c9ee7",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw64-O1.exe.json",
+      "size": 380,
+      "sha256": "d2c747ef5434bbb6730d3c592d1e9b773edf81639aac366a7647e38ebf745b65",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw64-O2.exe.json",
+      "size": 380,
+      "sha256": "c9395435db742eea0f67f689fd9802e8336b0b237eeb1a186225022abfa8cdce",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw64-O3.exe.json",
+      "size": 380,
+      "sha256": "1cd65eda51a0f923e8b0f9592d8ed71a08a14462eeb61bce943de9acd220975c",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw64-debug.exe.json",
+      "size": 391,
+      "sha256": "9ea8b280fe8ab3f5fc3c7bd76b9759b63f636f93876e7863863632a8a6eb421b",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-c-mingw64-release.exe.json",
+      "size": 383,
+      "sha256": "98000230e129b0a6e3c8e94ec45e8bb8c490c3d8fefe895de2b40a53e3293ce7",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw32-O0.exe.json",
+      "size": 378,
+      "sha256": "83c4ee16376abeb4efde774be9f17549f7a9f1822f366eed999c57f4e54d8a3d",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw32-O1.exe.json",
+      "size": 378,
+      "sha256": "15d0b0255258e270e20d22341e27747e465cd290024e9184be5aa4cd0fd02cda",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw32-O2.exe.json",
+      "size": 378,
+      "sha256": "34675fe9a777fca1a816c4d1b8057a3c9205299beeae8b44b5b1be8c4706aaf9",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw32-O3.exe.json",
+      "size": 378,
+      "sha256": "7491e76cfb687a5a6a9c39214e7d42aab3bb23505ac32dd28c5d51e19ebb7365",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw32-debug.exe.json",
+      "size": 389,
+      "sha256": "4325de85d5d1d8227d9e9c92eb4b4abb7cdee75f4c441619913b2c864335d27f",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw32-release.exe.json",
+      "size": 381,
+      "sha256": "87bcb3dbc73390b2e5312e023ae9051644caa6181a35f98c223cf2c388dfbe0e",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw64-O0.exe.json",
+      "size": 386,
+      "sha256": "24bfa8fb504c91a3b80a580e8540aca930ea8f4f1c205e4696747d5f95855600",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw64-O1.exe.json",
+      "size": 386,
+      "sha256": "171442e0784c536b0e7e1de1cdcdf3e4c856ba89f2e88ee64c01740afe137cc8",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw64-O2.exe.json",
+      "size": 386,
+      "sha256": "b256b71421aa4422553851b3e6b634f65c68c79ef93c1d45aa361164f9b41723",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw64-O3.exe.json",
+      "size": 386,
+      "sha256": "f5207c1b897bbe3947b2e077f0acae7abe87e8f305041d875945b9e72aed52a0",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw64-debug.exe.json",
+      "size": 397,
+      "sha256": "90bc9096ce8e298d980a34a2adf9cb324865bed0d90eea69b010c31187de86ec",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/metadata/hello-cpp-mingw64-release.exe.json",
+      "size": 389,
+      "sha256": "9f19daaab5582af766ec82dbeed47418992a83c688131cbcb99d94ef61a35bde",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/dotnet/mono/Hello-mono.exe",
+      "size": 3072,
+      "sha256": "d999bd5ab3d31aa0ab09ed93d1b1f2821fee6fa90e7da446b33513bd448ccac0",
+      "type": "PE32 executable (console) Intel 80386 Mono/.Net assembly, for MS Windows, 3 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/O0/hello-c-mingw32-O0.exe",
+      "size": 475401,
+      "sha256": "0a728c1eaa27b2bb228e20e040848bcd8c510430c9bc8f54e55328e8a96465e6",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/O0/hello-cpp-mingw32-O0.exe",
+      "size": 322478,
+      "sha256": "b6be8e28414f5909ba0c24ea44a487f90ae291d55c07e6cfb701038eb374c5b5",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/O1/hello-c-mingw32-O1.exe",
+      "size": 475366,
+      "sha256": "5bdaa7dce1555503af049005c7d5dd3dc56df9f32a22d9e6fc049ca0ffc18409",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/O1/hello-cpp-mingw32-O1.exe",
+      "size": 286430,
+      "sha256": "4a4cf0c16092ba4081c24530b321b33b54990890fa54e98acabe18e5d7e735e0",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/O2/hello-c-mingw32-O2.exe",
+      "size": 475402,
+      "sha256": "a56e835bb4150c81781fcb7ead5ba0d12eac7e3228a5b7ce6030101c9f23246f",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/O2/hello-cpp-mingw32-O2.exe",
+      "size": 285708,
+      "sha256": "03e97ffb50d6cfac3e0de7cb12ada3959afa9cf77e12b4a789d6da270f07e942",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/O3/hello-c-mingw32-O3.exe",
+      "size": 475402,
+      "sha256": "c108baf9a6f92d49f2f7f4ef8bd86d0e6215619ba831184776854d8b6c6ef0cb",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/O3/hello-cpp-mingw32-O3.exe",
+      "size": 286137,
+      "sha256": "253a1134357b1153b804fd746166e136e15d6ee8a51098c97afbac96f520e783",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/debug/hello-c-mingw32-debug.exe",
+      "size": 476605,
+      "sha256": "095430801e079420e5294af69526fb0fb58c46eb45fef7651ac1714907174916",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/debug/hello-cpp-mingw32-debug.exe",
+      "size": 419974,
+      "sha256": "dd3b79dcbe02eb54d5b161599e51cff61acada575ad150a116c035556ee336d4",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/release/hello-c-mingw32-release.exe",
+      "size": 38400,
+      "sha256": "f72e24b87c22e0ef7cc1b98d4aa6e219c44181f8e8019fc2a7f5b51907b00550",
+      "type": "PE32 executable (console) Intel 80386 (stripped to external PDB), for MS Windows, 9 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/i686/release/hello-cpp-mingw32-release.exe",
+      "size": 16896,
+      "sha256": "922788f50f1bd3ebb57c6b3569fe97b365ec6cab910d187ac0a7eb6478b97a16",
+      "type": "PE32 executable (console) Intel 80386 (stripped to external PDB), for MS Windows, 9 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/O0/hello-c-mingw64-O0.exe",
+      "size": 498848,
+      "sha256": "cdc42b0df2b38b7177a7ec259e87b929b5b6b6feda315548398450e13a5d762e",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/O0/hello-cpp-mingw64-O0.exe",
+      "size": 350514,
+      "sha256": "d6ba2dc031dccfb2f1f9d7fa7e475610ea72f11f7662d8b0c5863f161ad1fcd8",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/O1/hello-c-mingw64-O1.exe",
+      "size": 498814,
+      "sha256": "edb0ddb457bb25c2e5d535d43fa5c22150aa7718b663d0f9436e07caf22788a9",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/O1/hello-cpp-mingw64-O1.exe",
+      "size": 306050,
+      "sha256": "1c284db1574b8f2270944b406aa7a51a4a0b38b89b7218a9795b1b76675ef400",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/O2/hello-c-mingw64-O2.exe",
+      "size": 498922,
+      "sha256": "d7a283db32df8d04ca95bfec4e942313cb670c0125304afd9b3c20aa6f4b4810",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/O2/hello-cpp-mingw64-O2.exe",
+      "size": 305148,
+      "sha256": "002631e8205a23fd55a91f1e9ba7133dc89589a7f66d5f4bc7817031e2360bbc",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/O3/hello-c-mingw64-O3.exe",
+      "size": 498922,
+      "sha256": "7dea9729baf446a5f0ca8790825b313e4e103daae01a32e8f8d88110fab0b8e0",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/O3/hello-cpp-mingw64-O3.exe",
+      "size": 305085,
+      "sha256": "e7802b5b3a283af55fd7b709bedb56e656758eb1c9b0e76cfcad516f9dde068b",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/debug/hello-c-mingw64-debug.exe",
+      "size": 500088,
+      "sha256": "1d394118477c25f03dbff9576a36a682bc6c017383f5de927a7c943f462bd399",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/debug/hello-cpp-mingw64-debug.exe",
+      "size": 454702,
+      "sha256": "f3b8c8672a9a5915fe71220c194159dbc11283fb91abfc638ec02b773f786629",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/release/hello-c-mingw64-release.exe",
+      "size": 39424,
+      "sha256": "f37b07daeb2b776a0a5fd3b7a61de969bb29fcce01564bc4d4e56a0a771572f7",
+      "type": "PE32+ executable (console) x86-64 (stripped to external PDB), for MS Windows, 10 sections"
+    },
+    {
+      "path": "platforms/windows/amd64/export/windows/x86_64/release/hello-cpp-mingw64-release.exe",
+      "size": 18944,
+      "sha256": "29ebe6deb8c5f55a60beb7e25c6e5bbcb8195f0792ac810b02000601c3585a56",
+      "type": "PE32+ executable (console) x86-64 (stripped to external PDB), for MS Windows, 10 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/HelloWorld.class",
+      "size": 1726,
+      "sha256": "d80c8e09080c1c25b9f9c73767ee31341fc83e5a85c7a2bf8e7fb7ec50abeace",
+      "type": "compiled Java class data, version 65.0"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/HelloWorld.jar",
+      "size": 1461,
+      "sha256": "638ad3cdcc4b6d960f3d4998bb73724ced9d75b95a219dbafb84cca54a0ad6f8",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/jdk11/HelloWorld.class",
+      "size": 1726,
+      "sha256": "2c1f97a89281230d092100b03026e749a5aab11102f4a266aa982133656883da",
+      "type": "compiled Java class data, version 55.0 (Java SE 11)"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/jdk11/HelloWorld.jar",
+      "size": 1479,
+      "sha256": "d39b17b311ecd2c7bc62f63f8839c8430e66713c084d134db1780afbdb781f56",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/jdk11/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/jdk17/HelloWorld.class",
+      "size": 1726,
+      "sha256": "3bc627c112c136058e2c7f347797089fc6d8dc9267393d820bc7f8014a724452",
+      "type": "compiled Java class data, version 61.0 (Java SE 17)"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/jdk17/HelloWorld.jar",
+      "size": 1482,
+      "sha256": "c74948861ce37f0c693db95e47e77e68a09638cb673fc7e1f7f3553fe24d4ad3",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/jdk17/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/jdk21/HelloWorld.class",
+      "size": 1726,
+      "sha256": "d80c8e09080c1c25b9f9c73767ee31341fc83e5a85c7a2bf8e7fb7ec50abeace",
+      "type": "compiled Java class data, version 65.0"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/jdk21/HelloWorld.jar",
+      "size": 1461,
+      "sha256": "f0744a3b48f041c05a42f1df12f0a82e7d101b044b50a7a4f53f93eb00e525dd",
+      "type": "Java archive data (JAR)"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/jdk21/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/windows/i386/export/java/manifest.txt",
+      "size": 23,
+      "sha256": "a16def47ed19b87a76e1eefd01fcf79ca6ff9f1c5e9a94723a2dfa80b072c302",
+      "type": "ASCII text"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/HelloWorld-jar-jdk11.json",
+      "size": 452,
+      "sha256": "c7eae28bf4866964378657c901f3ce6ef9666d35504ef3f81aaeb0c3582689db",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/HelloWorld-jar-jdk17.json",
+      "size": 452,
+      "sha256": "1a181c9f92eb8271f10e00d200129f212d392ed3c762af5ceea3787fed884a28",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/HelloWorld-jar-jdk21.json",
+      "size": 383,
+      "sha256": "fe73948e75a99c42a348c6f06773a71605c5aac67b25cc6fa997e48aba1fb2d4",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/HelloWorld-javac-jdk11.json",
+      "size": 467,
+      "sha256": "111f8c7485d4a2d075ce73c0bd430f394e8beb76fa0881f5e589ddfc691055c9",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/HelloWorld-javac-jdk17.json",
+      "size": 467,
+      "sha256": "85741e135b2bd9c2e93f9bf8329fd0b92614e65e995abdc1132d62db2a169d00",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/HelloWorld-javac-jdk21.json",
+      "size": 398,
+      "sha256": "66c48b1b1b4d5aae06070341c8471f8e8c4e1fcbcedd9d825bef20a3b105e7b4",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw32-O0.exe.json",
+      "size": 372,
+      "sha256": "ee49c665c1e01f940b0e989c718f3bb454927b0200ebb1b3a0055c4183635ea3",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw32-O1.exe.json",
+      "size": 372,
+      "sha256": "7893a5404f4948ea94b330d47bbdfffaa2834ec82efa30cf2348eed510534e75",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw32-O2.exe.json",
+      "size": 372,
+      "sha256": "ffa781ea32fd3b40f96fe38097fd9dda9b931bfaf2560c5e8f8e3cd559752d90",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw32-O3.exe.json",
+      "size": 372,
+      "sha256": "e8a847fbb082e2c11a0da3906b4f186471488dc33a5374331d7c7388e00c1fdd",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw32-debug.exe.json",
+      "size": 383,
+      "sha256": "2d8c2f3f2a2c5f7a1bd652c263b5cfd7e2981ab9932127caafc3354a67e6c848",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw32-release.exe.json",
+      "size": 375,
+      "sha256": "9d78e125478a1c5ece6050b0a97a676c2637f2e08e782bc4c47fe5563e906060",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw64-O0.exe.json",
+      "size": 380,
+      "sha256": "d3c67537d3bd20d305daf72264ca609f1cfe848337a7b369eb5817857a5d3d5d",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw64-O1.exe.json",
+      "size": 380,
+      "sha256": "453c60e7273f9c8947ca66ec5299122f77ad6d0d9e2bee158298def52ffa4e00",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw64-O2.exe.json",
+      "size": 380,
+      "sha256": "5be59693442d1a8d51c8c9847be2cf782c7259309c3c5b8ad58f29d38cd2366f",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw64-O3.exe.json",
+      "size": 380,
+      "sha256": "efc4e69fb4ea7277dfd58ab28e96109084f700365483dc516d095f937c572326",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw64-debug.exe.json",
+      "size": 391,
+      "sha256": "2978e96f81c70dc3f58c615b41271dbb75fe6bb0969a22d93636f329b7a94fc8",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-c-mingw64-release.exe.json",
+      "size": 383,
+      "sha256": "1ddf2a1147b67fbefafcad4018fa73ce920b3b50ee597b04b13910eae66856f5",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw32-O0.exe.json",
+      "size": 378,
+      "sha256": "a5e62736e199e82bc32b8eb0ffeb489e970908a1447925f1bbe4d833197d85aa",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw32-O1.exe.json",
+      "size": 378,
+      "sha256": "891c57f4247227320b98b9f6fde585ee587456f55a229cca781a504061885bd3",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw32-O2.exe.json",
+      "size": 378,
+      "sha256": "e557bdc07cfd30699f49c0da91d518cdbddb72cc69a74ee44b6108a9c8486614",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw32-O3.exe.json",
+      "size": 378,
+      "sha256": "75fd4f57e626da13e97caa6dbed4e7c76a817979f01178652d7a903123998dad",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw32-debug.exe.json",
+      "size": 389,
+      "sha256": "92bdbc5affb2ad7e518017c6189b446c2189960f814a08fc43a256f05c0f6f57",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw32-release.exe.json",
+      "size": 381,
+      "sha256": "8916d7ad3cb39c989346c961dffcd862bf5f912f738a629a96868187ec801e67",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw64-O0.exe.json",
+      "size": 386,
+      "sha256": "be9b7b62f9eff9420d468a3e4b465bd34469193cd3b90d019e940564bef0c9ec",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw64-O1.exe.json",
+      "size": 386,
+      "sha256": "67642d174895a87e79ae27539f161fe14bf6dd5638954689a55e752f2f97e0ce",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw64-O2.exe.json",
+      "size": 386,
+      "sha256": "286a204ea414e7d48a232bb8367824262450a761d01e04e4614f4030245f0ba8",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw64-O3.exe.json",
+      "size": 386,
+      "sha256": "b85d26350c071fd2c342de462b1d21de6de3287e14a062655048c2efd77a19a1",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw64-debug.exe.json",
+      "size": 397,
+      "sha256": "254084f451678f6c29568fece156994ffa1d410698b9e85168cb4e153b118193",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/metadata/hello-cpp-mingw64-release.exe.json",
+      "size": 389,
+      "sha256": "f58bd8a597dc93eaea8affc152137992d61dca4f87ae87f95db7bb244c741d34",
+      "type": "JSON text data"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/O0/hello-c-mingw32-O0.exe",
+      "size": 475401,
+      "sha256": "a631ed0043bb86bb6e3184960f79745c697d623731ccde822f163571a6c5ffbd",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/O0/hello-cpp-mingw32-O0.exe",
+      "size": 322478,
+      "sha256": "7525c86db1cbccd2d5ac6fcb5ec6e0c85df663875d70a656ad1ca56d7f689adf",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/O1/hello-c-mingw32-O1.exe",
+      "size": 475366,
+      "sha256": "0439d08cda2dafaaee908cc4c925b9482b68aaf818b45130b715f35f10eb3ffc",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/O1/hello-cpp-mingw32-O1.exe",
+      "size": 286430,
+      "sha256": "63b2e1eb849ac7941245cb8becd07cc8d502050929e31d2058bc67e050af240b",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/O2/hello-c-mingw32-O2.exe",
+      "size": 475402,
+      "sha256": "7b9ddfa01b4eab543c0cfda9265abe2427db84cd53576e59e512dfb7d08c09f5",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/O2/hello-cpp-mingw32-O2.exe",
+      "size": 285708,
+      "sha256": "2dbdb686a245090e89fd146f5428531a11aeb65e33c5f9551588244ce44daa63",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/O3/hello-c-mingw32-O3.exe",
+      "size": 475402,
+      "sha256": "7b9ddfa01b4eab543c0cfda9265abe2427db84cd53576e59e512dfb7d08c09f5",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/O3/hello-cpp-mingw32-O3.exe",
+      "size": 286137,
+      "sha256": "dd40568500076951e2443745928a281d2ee0463ce37d7a5d83de674be7b38ee4",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/debug/hello-c-mingw32-debug.exe",
+      "size": 476605,
+      "sha256": "b9d5b747331caf043384cb4a4dc4ffd88d0be46a97095e071b15189e0fb3a5a7",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/debug/hello-cpp-mingw32-debug.exe",
+      "size": 419974,
+      "sha256": "49a0946dbfdde42dda9ad5e8d6a7f7fec773f48b4dd48ea75c633c8cd3c9ffa1",
+      "type": "PE32 executable (console) Intel 80386, for MS Windows, 17 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/release/hello-c-mingw32-release.exe",
+      "size": 38400,
+      "sha256": "d1ff0b84f653d1c9cfeff00067d63d0c08e72e63278c21c4bff723b601910ee2",
+      "type": "PE32 executable (console) Intel 80386 (stripped to external PDB), for MS Windows, 9 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/i686/release/hello-cpp-mingw32-release.exe",
+      "size": 16896,
+      "sha256": "389519785cd016d6198e7726ebbb50ae5117cbd45a134037122c2a2882501d2a",
+      "type": "PE32 executable (console) Intel 80386 (stripped to external PDB), for MS Windows, 9 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/O0/hello-c-mingw64-O0.exe",
+      "size": 498848,
+      "sha256": "2e29eecc24b180941669014de685f03e34a91ab8489b95cf421658247380b59e",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/O0/hello-cpp-mingw64-O0.exe",
+      "size": 350514,
+      "sha256": "e508d1c064565a8815ca717b3f62a5fd180e01a4c7d7cd373a139003bda1ec1c",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/O1/hello-c-mingw64-O1.exe",
+      "size": 498814,
+      "sha256": "d33f9a5f0053bb9eda608b2ad1eb101bd75fd42fd504116903a5c8654d297e94",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/O1/hello-cpp-mingw64-O1.exe",
+      "size": 306050,
+      "sha256": "a712cdb6cbf33f323201f5d85cad4e605e1c155878e511119b6b35febb94ebaa",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/O2/hello-c-mingw64-O2.exe",
+      "size": 498922,
+      "sha256": "68e5faca596e88c0535c39065378f505f1d7458ddd35e8bf0009b3bf3dba2f32",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/O2/hello-cpp-mingw64-O2.exe",
+      "size": 305148,
+      "sha256": "b173d35ce656bfb130500de696f0b781aca71c199d7bf5a87855c33da1a8119c",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/O3/hello-c-mingw64-O3.exe",
+      "size": 498922,
+      "sha256": "637721cacf1a971ee5c8de115d0980d755803ce8d80afce14346c611014aefe7",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/O3/hello-cpp-mingw64-O3.exe",
+      "size": 305085,
+      "sha256": "6766cee1a73d8e6bc9974c5499c9ab250564553b87a92f6d49d40a8d8bc3b836",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/debug/hello-c-mingw64-debug.exe",
+      "size": 500088,
+      "sha256": "8cad21db8937eff671ac30be300e913de3a758477f384e94b0c0cba94c086e93",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/debug/hello-cpp-mingw64-debug.exe",
+      "size": 454702,
+      "sha256": "d723dfa9159420966abb9f3f03208727f690340f25738f41af8855a7b5c49ead",
+      "type": "PE32+ executable (console) x86-64, for MS Windows, 18 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/release/hello-c-mingw64-release.exe",
+      "size": 39424,
+      "sha256": "e1dc403041dbf9abefd1d139a1006830b99779a3833e717fe0465d89a514fbf2",
+      "type": "PE32+ executable (console) x86-64 (stripped to external PDB), for MS Windows, 10 sections"
+    },
+    {
+      "path": "platforms/windows/i386/export/windows/x86_64/release/hello-cpp-mingw64-release.exe",
+      "size": 18944,
+      "sha256": "f47d44c64ebac590424bcea6dc568e3cba6f14c2263b2b9980d576f14c0b0056",
+      "type": "PE32+ executable (console) x86-64 (stripped to external PDB), for MS Windows, 10 sections"
     }
   ]
 }

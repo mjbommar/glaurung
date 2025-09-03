@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/suspicious_linux.c",
+  "compiler": "clang",
+  "output_file": "/workspace/binaries/native/clang/debug/suspicious_linux-clang-debug",
+  "compilation_flags": "-O0 -g -Wall -Wextra",
+  "description": "Clang 15 debug build",
+  "timestamp": "2025-09-03T00:52:14+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

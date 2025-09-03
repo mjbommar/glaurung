@@ -5,7 +5,7 @@
   "output_file": "/workspace/binaries/lua/hello-luajit.luac",
   "compilation_flags": "",
   "description": "Lua bytecode compiled with luajit",
-  "timestamp": "2025-08-31T20:55:48+00:00",
+  "timestamp": "2025-09-03T00:52:26+00:00",
   "platform": "linux",
   "architecture": "x86_64"
 }

@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/suspicious_win.c",
+  "compiler": "riscv64-linux-gnu-gcc",
+  "output_file": "/workspace/binaries/cross/riscv64/suspicious_win-riscv64-gcc",
+  "compilation_flags": "-O2 -Wall",
+  "description": "GCC cross RISC-V 64 (gcc)",
+  "timestamp": "2025-09-03T00:52:15+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

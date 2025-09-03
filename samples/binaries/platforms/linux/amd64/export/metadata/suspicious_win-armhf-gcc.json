@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/suspicious_win.c",
+  "compiler": "arm-linux-gnueabihf-gcc",
+  "output_file": "/workspace/binaries/cross/armhf/suspicious_win-armhf-gcc",
+  "compilation_flags": "-O2 -Wall",
+  "description": "GCC cross ARM 32-bit (gcc)",
+  "timestamp": "2025-09-03T00:52:15+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/suspicious_linux.c",
+  "compiler": "gcc",
+  "output_file": "/workspace/binaries/native/gcc/debug/suspicious_linux-gcc-stripped",
+  "compilation_flags": "-O2 -s",
+  "description": "GCC stripped build",
+  "timestamp": "2025-09-03T00:52:14+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/cpp/hello.cpp",
+  "compiler": "clang++",
+  "output_file": "/workspace/binaries/native/clang/runpath/hello-clang-runpath",
+  "compilation_flags": "-O2 -Wl,-rpath,/opt/test -Wl,--enable-new-dtags",
+  "description": "Clang with RUNPATH (/opt/test)",
+  "timestamp": "2025-09-03T00:52:10+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

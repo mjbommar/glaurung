@@ -1,0 +1,10 @@
+Visit our portal at https://example.com/path?query=1 and http://test.example.org.
+Contact admin@example.org or support@sub.domain.co.uk for help.
+IPv4 test: 192.168.1.10, 10.0.0.5
+IPv6 test: 2001:0db8:85a3:0000:0000:8a2e:0370:7334 and 2001:db8::1
+POSIX path: /usr/local/bin/python3
+Windows path: C:\Windows\System32\cmd.exe
+UNC path: \\server\share\folder\file.txt
+Registry key: HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run
+Java classpath: com/example/app/Main.class
+Domain-like string: foo.example

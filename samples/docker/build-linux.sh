@@ -96,6 +96,18 @@ build_native_variants() {
         "${basename}-clang-debug" "-O0 -g -Wall -Wextra" "Clang 15 debug build" || warn "clang debug failed"
     compile_binary "$source_file" "$clang" "$BINARIES_DIR/native/clang/debug" \
         "${basename}-clang-stripped" "-O2 -Wl,-s" "Clang 15 stripped build" || warn "clang stripped failed"
+
+    # Additional linker-path variants (ELF): RPATH and RUNPATH
+    # GCC variants
+    compile_binary "$source_file" "$cc" "$BINARIES_DIR/native/gcc/rpath" \
+        "${basename}-gcc-rpath" "-O2 -Wl,-rpath,/opt/test" "GCC with RPATH (/opt/test)" || warn "gcc rpath failed"
+    compile_binary "$source_file" "$cc" "$BINARIES_DIR/native/gcc/runpath" \
+        "${basename}-gcc-runpath" "-O2 -Wl,-rpath,/opt/test -Wl,--enable-new-dtags" "GCC with RUNPATH (/opt/test)" || warn "gcc runpath failed"
+    # Clang variants
+    compile_binary "$source_file" "$clang" "$BINARIES_DIR/native/clang/rpath" \
+        "${basename}-clang-rpath" "-O2 -Wl,-rpath,/opt/test" "Clang with RPATH (/opt/test)" || warn "clang rpath failed"
+    compile_binary "$source_file" "$clang" "$BINARIES_DIR/native/clang/runpath" \
+        "${basename}-clang-runpath" "-O2 -Wl,-rpath,/opt/test -Wl,--enable-new-dtags" "Clang with RUNPATH (/opt/test)" || warn "clang runpath failed"
 }
 
 build_cross_variants() {
@@ -509,6 +521,9 @@ main() {
     # Build C/C++ samples
     [ -f "$SOURCE_DIR/c/hello.c" ] && build_native_variants "$SOURCE_DIR/c/hello.c" c && build_cross_variants "$SOURCE_DIR/c/hello.c" c
     [ -f "$SOURCE_DIR/cpp/hello.cpp" ] && build_native_variants "$SOURCE_DIR/cpp/hello.cpp" cpp && build_cross_variants "$SOURCE_DIR/cpp/hello.cpp" cpp
+    # Suspicious examples: Linux and Windows cross
+    [ -f "$SOURCE_DIR/c/suspicious_linux.c" ] && build_native_variants "$SOURCE_DIR/c/suspicious_linux.c" c
+    [ -f "$SOURCE_DIR/c/suspicious_win.c" ] && build_cross_variants "$SOURCE_DIR/c/suspicious_win.c" c
 
     # Build other languages
     [ -f "$SOURCE_DIR/fortran/hello.f90" ] && build_fortran_variants "$SOURCE_DIR/fortran/hello.f90"
@@ -523,6 +538,12 @@ main() {
     
     # Build libraries
     build_library_variants
+
+    # Build PE with TLS callback (MinGW) if source present
+    if [ -f "$SOURCE_DIR/c/pe_tls.c" ] && command -v x86_64-w64-mingw32-gcc &> /dev/null; then
+        compile_binary "$SOURCE_DIR/c/pe_tls.c" x86_64-w64-mingw32-gcc "$BINARIES_DIR/cross/windows-x86_64" \
+            "pe_tls_callbacks-x86_64-mingw.exe" "-O2 -Wall" "Windows PE with TLS callback (MinGW-w64)"
+    fi
 
     log "Linux builds completed successfully"
 }
