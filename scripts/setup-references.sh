@@ -54,6 +54,9 @@ declare -A SUBMODULES=(
 
     # Other tools
     ["reference/pharos"]="https://github.com/cmu-sei/pharos.git"
+
+    # Preprocessing pipeline
+    ["reference/alea-preprocess"]="https://github.com/alea-institute/alea-preprocess.git"
 )
 
 # Function to add a submodule if it doesn't exist

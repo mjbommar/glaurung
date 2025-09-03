@@ -7,6 +7,7 @@
 [submodule "reference/LIEF"]
 	path = reference/LIEF
 	url = https://github.com/lief-project/LIEF.git
+	ignore = untracked
 [submodule "reference/cle"]
 	path = reference/cle
 	url = https://github.com/angr/cle.git
@@ -115,3 +116,6 @@
 [submodule "reference/pycdc"]
 	path = reference/pycdc
 	url = https://github.com/zrax/pycdc.git
+[submodule "reference/alea-preprocess"]
+	path = reference/alea-preprocess
+	url = https://github.com/alea-institute/alea-preprocess.git
