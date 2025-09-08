@@ -37,6 +37,7 @@ declare -A SUBMODULES=(
 
     # Decompilers
     ["reference/pycdc"]="https://github.com/zrax/pycdc.git"
+    ["reference/falcon"]="https://github.com/falconre/falcon.git"
 
     # Constraint solvers
     ["reference/z3"]="https://github.com/Z3Prover/z3.git"

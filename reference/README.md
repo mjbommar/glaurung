@@ -47,6 +47,7 @@ This directory contains git submodules of reference implementations that inform 
 - **b2r2**: Binary analysis framework with advanced IR lifting and decompilation
 - **snowman**: Native code to C/C++ decompiler
 - **ilspy**: Cross-platform .NET decompiler and assembly browser
+- **falcon**: Pure Rust binary analysis framework with IR lifting and decompilation
 
 ## Bytecode and Specialized Tools
 - **wabt**: WebAssembly Binary Toolkit (wasm2wat, wasm-decompile)

@@ -128,3 +128,6 @@
 [submodule "reference/lingua-rs"]
 	path = reference/lingua-rs
 	url = https://github.com/pemistahl/lingua-rs.git
+[submodule "reference/falcon"]
+	path = reference/falcon
+	url = https://github.com/falconre/falcon.git
