@@ -127,6 +127,8 @@ pub fn detect_suspicious_imports(names: &[String], max_out: usize) -> Vec<String
             }
         }
     }
+    // Ensure deterministic order irrespective of input order
+    out.sort();
     out
 }
 
@@ -144,7 +146,11 @@ pub fn set_extra_apis<I: IntoIterator<Item = String>>(iter: I, clear: bool) -> u
 
 /// Load suspicious API names from a capa rules directory or file.
 /// This performs a lightweight line scan for `api:` or `import:` features.
-pub fn load_capa_apis_from_path(path: &std::path::Path, limit: usize, clear: bool) -> std::io::Result<usize> {
+pub fn load_capa_apis_from_path(
+    path: &std::path::Path,
+    limit: usize,
+    clear: bool,
+) -> std::io::Result<usize> {
     let mut acc: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<std::path::PathBuf> = VecDeque::new();
     if path.is_dir() {
@@ -156,7 +162,9 @@ pub fn load_capa_apis_from_path(path: &std::path::Path, limit: usize, clear: boo
                 if p.is_dir() {
                     queue.push_back(p);
                 } else if let Some(ext) = p.extension() {
-                    if ext == "yml" || ext == "yaml" { acc.insert(p.to_string_lossy().into_owned()); }
+                    if ext == "yml" || ext == "yaml" {
+                        acc.insert(p.to_string_lossy().into_owned());
+                    }
                 }
             }
         }
@@ -165,22 +173,30 @@ pub fn load_capa_apis_from_path(path: &std::path::Path, limit: usize, clear: boo
     }
     let mut names: HashSet<String> = HashSet::new();
     for file in acc.into_iter() {
-        if names.len() >= limit { break; }
+        if names.len() >= limit {
+            break;
+        }
         if let Ok(text) = std::fs::read_to_string(&file) {
             for line in text.lines() {
                 let l = line.trim();
                 if l.starts_with("api:") || l.starts_with("- api:") {
                     if let Some(idx) = l.find(':') {
-                        let val = l[idx+1..].trim().trim_matches('"').trim_matches('\'');
-                        if !val.is_empty() { names.insert(normalize_api_name(val)); }
+                        let val = l[idx + 1..].trim().trim_matches('"').trim_matches('\'');
+                        if !val.is_empty() {
+                            names.insert(normalize_api_name(val));
+                        }
                     }
                 } else if l.starts_with("import:") || l.starts_with("- import:") {
                     if let Some(idx) = l.find(':') {
-                        let val = l[idx+1..].trim().trim_matches('"').trim_matches('\'');
-                        if !val.is_empty() { names.insert(normalize_api_name(val)); }
+                        let val = l[idx + 1..].trim().trim_matches('"').trim_matches('\'');
+                        if !val.is_empty() {
+                            names.insert(normalize_api_name(val));
+                        }
                     }
                 }
-                if names.len() >= limit { break; }
+                if names.len() >= limit {
+                    break;
+                }
             }
         }
     }

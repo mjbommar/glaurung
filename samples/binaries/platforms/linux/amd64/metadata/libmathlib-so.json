@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/library/mathlib.c",
+  "compiler": "gcc",
+  "output_file": "/workspace/binaries/libraries/shared/libmathlib.so",
+  "compilation_flags": "-shared -fPIC -O2",
+  "description": "Shared library (.so)",
+  "timestamp": "2025-09-04T02:17:02+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

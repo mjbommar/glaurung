@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/pe_tls.c",
+  "compiler": "x86_64-w64-mingw32-gcc",
+  "output_file": "/workspace/binaries/cross/windows-x86_64/pe_tls_callbacks-x86_64-mingw.exe",
+  "compilation_flags": "-O2 -Wall",
+  "description": "Windows PE with TLS callback (MinGW-w64)",
+  "timestamp": "2025-09-04T02:17:02+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

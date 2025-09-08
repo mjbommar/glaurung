@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/suspicious_linux.c",
+  "compiler": "clang",
+  "output_file": "/workspace/binaries/native/clang/O1/suspicious_linux-clang-O1",
+  "compilation_flags": "-O1 -Wall -Wextra",
+  "description": "Clang 15 compiled with -O1",
+  "timestamp": "2025-09-04T02:16:44+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

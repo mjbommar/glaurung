@@ -16,6 +16,16 @@ pub struct StringsConfig {
     pub max_lang_detect: usize,
     /// Minimum string length required to attempt language detection
     pub min_len_for_detect: usize,
+    /// Maximum string length (in characters) to use lingua; longer strings use whatlang
+    pub max_len_for_lingua: usize,
+    /// Minimum confidence required to accept a language prediction
+    pub min_lang_confidence: f64,
+    /// Minimum confidence when both engines agree; below this keep script only
+    pub min_lang_confidence_agree: f64,
+    /// Apply stricter heuristic filtering for language eligibility
+    pub texty_strict: bool,
+    /// Use fast language detection mode optimized for malware analysis
+    pub use_fast_detection: bool,
     /// Whether to perform IOC classification
     pub enable_classification: bool,
     /// Maximum number of strings to classify
@@ -35,7 +45,12 @@ impl Default for StringsConfig {
             time_guard_ms: 10,
             enable_language: true,
             max_lang_detect: 100,
-            min_len_for_detect: 10,
+            min_len_for_detect: 4,
+            max_len_for_lingua: 32,
+            min_lang_confidence: 0.65,
+            min_lang_confidence_agree: 0.55,
+            texty_strict: false,
+            use_fast_detection: true, // Default to fast mode for performance
             enable_classification: true,
             max_classify: 200,
             max_ioc_per_string: 16,

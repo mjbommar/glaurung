@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/c2_demo.c",
+  "compiler": "clang",
+  "output_file": "/workspace/binaries/native/clang/O0/c2_demo-clang-O0",
+  "compilation_flags": "-O0 -Wall -Wextra",
+  "description": "Clang 15 compiled with -O0",
+  "timestamp": "2025-09-04T02:16:43+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

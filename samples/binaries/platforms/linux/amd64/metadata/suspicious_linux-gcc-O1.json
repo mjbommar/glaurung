@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/suspicious_linux.c",
+  "compiler": "gcc",
+  "output_file": "/workspace/binaries/native/gcc/O1/suspicious_linux-gcc-O1",
+  "compilation_flags": "-O1 -Wall -Wextra",
+  "description": "GCC compiled with -O1",
+  "timestamp": "2025-09-04T02:16:43+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

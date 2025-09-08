@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/fortran/hello.f90",
+  "compiler": "gfortran-11",
+  "output_file": "/workspace/binaries/fortran/hello-gfortran-O1",
+  "compilation_flags": "-O1 -Wall -Wextra",
+  "description": "GFortran 11 -O1",
+  "timestamp": "2025-09-04T02:16:45+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

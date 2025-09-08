@@ -4,8 +4,8 @@ use crate::core::triage::StringsSummary;
 
 /// Detect language for a single string (for legacy callers).
 pub fn detect_string_language(text: &str) -> (Option<String>, Option<String>, Option<f64>) {
-    // Use the shared detector (no local min-length check; caller can decide)
-    crate::strings::detect::detect_string_language(text)
+    // Use ensemble with default thresholds: min_size=4, disagree=0.5, agree=0.4
+    crate::strings::detect::detect_string_language_ensemble(text, 4, 0.5, 0.4)
 }
 
 /// Extract strings with language detection (legacy call site).

@@ -1,8 +1,8 @@
 //! Recursive discovery of nested artifacts with budget control.
 
 use crate::core::triage::{Budgets, ContainerChild};
-use serde::{Deserialize, Serialize};
 use crate::triage::containers::detect_containers;
+use serde::{Deserialize, Serialize};
 
 /// Recursion engine for discovering nested payloads with depth accounting.
 pub struct RecursionEngine {
@@ -262,12 +262,29 @@ impl RecursionEngine {
         children.extend(self.detect_fat_macho(data));
         // Embedded container (overlay) heuristics
         children.extend(self.detect_embedded_containers(data));
-        // Deterministic ordering: by offset, then type_name, then label (if present)
-        children.sort_by(|a, b| {
-            a.offset
-                .cmp(&b.offset)
-                .then(a.type_name.cmp(&b.type_name))
-        });
+        // Deterministic ordering: by offset, then type_name
+        children.sort_by(|a, b| a.offset.cmp(&b.offset).then(a.type_name.cmp(&b.type_name)));
+        // If allowed, recurse into each child's slice to build a tree
+        if depth + 1 < self.max_depth {
+            for ch in children.iter_mut() {
+                let off = ch.offset as usize;
+                let sz = ch.size as usize;
+                if off >= data.len() {
+                    continue;
+                }
+                let end = off.saturating_add(sz).min(data.len());
+                if end <= off {
+                    continue;
+                }
+                let slice = &data[off..end];
+                let mut sub_b = Budgets::new(slice.len() as u64, 0, 0);
+                let mut grandkids = self.discover_children(slice, &mut sub_b, depth + 1);
+                if !grandkids.is_empty() {
+                    // children already sorted deterministically by inner call
+                    ch.children = Some(std::mem::take(&mut grandkids));
+                }
+            }
+        }
         children
     }
 }

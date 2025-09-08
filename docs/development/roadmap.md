@@ -19,10 +19,10 @@ Notes
 Outcome: strict time/byte/depth budgets, deterministic results, clear truncation semantics.
 
 Core
-- [ ] Define `TriageBudgets` config (max-read-bytes, max-file-size, max-depth, per-pass time budgets, global time budget)
+- [x] Define `TriageBudgets` config (max-read-bytes, max-file-size, max-depth, per-pass time budgets, global time budget)
 - [x] Thread budgets through core passes (sniffers, parsers, recursion, entropy, strings)
 - [x] Enforce byte ceilings with short reads; propagate partial status to outputs
-- [ ] Determinism audit (no RNG; stable iteration orders; stable JSON key ordering)
+- [x] Determinism audit (no RNG; stable iteration orders; stable JSON key ordering)
 - [x] Truncation visibility (bytes/time/depth counters + `hit_byte_limit` flag; include `limit_bytes`, `max_recursion_depth`)
 - [x] Time guards in hot loops (coarse checks in strings extraction)
 - [x] CLI flags for budgets with sane defaults; document trade-offs (CLI supports `--max-read-bytes`, `--max-file-size`, `--max-depth`; budgets printed)
@@ -34,12 +34,13 @@ Errors/Logging
 Validation
 - [x] Unit tests for budget enforcement (bytes/time/depth and byte-limit flag)
 - [x] Integration test for budget error taxonomy (BudgetExceeded in errors)
-- [ ] Integration tests on large/packed samples (graceful truncation)
+- [x] Integration tests on large/packed samples (graceful truncation)
+- [x] JSON determinism test for stable outputs
 - [x] Criterion perf baseline for core passes (existing benches for entropy/triage)
 
 Docs
-- [ ] Document budgets and determinism guarantees in triage README
-- [ ] Add CLI examples showing truncation indicators
+- [x] Document budgets and determinism guarantees in triage README
+- [x] Add CLI examples showing truncation indicators
 
 ---
 
@@ -73,16 +74,16 @@ Cross-Format Summary Fields
 - [x] `imports_count`, `exports_count`, `libs_count`
 - [x] `stripped:boolean`, `tls_used:boolean`, `debug_info_present:boolean`
 - [x] `suspicious_imports[]` (normalized API names)
-- [ ] `entry_section`
+- [x] `entry_section`
 
 PE
 - [x] Import table parse (normal + delay-load)
 - [x] Export table summary (count; names captured, capped)
 - [x] TLS presence bit (directory present)
-- [ ] TLS callbacks enumeration
-- [ ] Relocations presence; timestamp sanity check
+- [x] TLS callbacks enumeration
+- [x] Relocations presence; timestamp sanity check
 - [x] Debug directory presence
-- [ ] RSDS/PDB path extraction (optional)
+- [x] RSDS/PDB path extraction (optional)
  - [x] NX/ASLR/CFG flags (DllCharacteristics)
 
 ELF
@@ -115,11 +116,11 @@ Docs
 Outcome: nested children-of-children discovery with safe budgets; clearer packer signals.
 
 Recursion
-- [ ] Represent children as a tree with offsets/sizes and format hints
-- [ ] Depth-first with budgets; cycle/overlap guards
-- [ ] Detect overlays and non-zero-offset embeddings (ZIP/GZIP/TAR/XZ/BZIP2/ZSTD; extendable)
-- [ ] Output rollups: total_children, max_depth, dangerous_child_present
-- [ ] CLI tree view (budgeted)
+- [x] Represent children as a tree with offsets/sizes and format hints
+- [x] Depth-first with budgets; cycle/overlap guards
+- [x] Detect overlays and non-zero-offset embeddings (ZIP/GZIP/TAR/XZ/BZIP2/ZSTD; extendable)
+- [x] Output rollups: total_children, max_depth, dangerous_child_present
+- [x] CLI tree view (budgeted)
 
 Packers/Compression
 - [ ] Signature-based hints (UPX/ASPack section names; PE characteristics)
@@ -127,11 +128,11 @@ Packers/Compression
 - [ ] Clear score contribution with explanation strings
 
 Validation
-- [ ] Integration tests with nested samples (ZIP-in-PE, PE-in-ZIP, overlays)
+- [x] Integration tests with nested samples (ZIP-in-PE, PE-in-ZIP, overlays)
 - [ ] Fuzz recursive discovery on adversarial containers
 
 Docs
-- [ ] Recursion behavior, limits, and examples
+- [x] Recursion behavior, limits, and examples
 
 ---
 
@@ -160,7 +161,7 @@ Docs
 Outcome: tiny entrypoint probe for a few high-value heuristics; off by default.
 
 Design
-- [ ] iced-x86 (or arch-appropriate) decode N instructions at entrypoint
+- [x] Basic x86/x64 entrypoint probe (bounded)
 - [ ] Compute: jump density, anti-debug idioms, suspicious API thunks, decoder loops
 - [ ] Strict budgets: max N instructions and ≤10 ms per sample
 - [ ] Feature flag; disabled by default
@@ -170,7 +171,7 @@ Integration
 - [ ] CLI `--enable-mini-disasm`; JSON fields gated by flag
 
 Validation
-- [ ] Unit tests on curated tiny functions
+- [x] Unit tests on curated tiny functions
 - [ ] Benchmarks to ensure budget adherence
 
 Docs

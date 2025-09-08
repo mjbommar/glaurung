@@ -1,0 +1,25 @@
+# escape=`
+
+# Use the Windows Server Core base image, which is smaller than the full Windows image.
+FROM mcr.microsoft.com/windows/servercore:ltsc2019
+
+# Set the working directory inside the container.
+WORKDIR /build
+
+# Download the Visual Studio Build Tools 2019 installer.
+ADD https://aka.ms/vs/16/release/vs_buildtools.exe C:/Temp/vs_buildtools.exe
+
+# Install the Visual C++ build tools workload.
+# This is a non-interactive, quiet installation.
+RUN C:/Temp/vs_buildtools.exe --quiet --wait --norestart --nocache `
+    --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended `
+    --remove Microsoft.VisualStudio.Component.Windows10SDK.10240 `
+    --remove Microsoft.VisualStudio.Component.Windows10SDK.10586 `
+    --remove Microsoft.VisualStudio.Component.Windows10SDK.11000 `
+    --remove Microsoft.VisualStudio.Component.Windows81SDK && `
+    del C:/Temp/vs_buildtools.exe
+
+# Set up the entry point to automatically configure the developer command prompt.
+# This ensures that cl.exe, link.exe, etc., are in the PATH.
+SHELL ["cmd", "/S", "/C"]
+ENTRYPOINT ["C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/Common7/Tools/VsDevCmd.bat", "&&", "powershell.exe", "-NoLogo", "-ExecutionPolicy", "Bypass"]

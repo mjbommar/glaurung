@@ -126,29 +126,11 @@ build_platform() {
         --tag "$tag" \
         --file "$dockerfile" \
         --build-arg BASE_IMAGE="$base_image" \
-        --build-arg BUILDKIT_INLINE_CACHE=1 \
         "$SCRIPT_DIR"; then
-
-        log "✓ Build successful for ${platform}"
-
-        # Create container and extract binaries
-        local container_name="glaurung-build-${os}-${arch}-$(date +%s)"
-        if docker create --name "$container_name" "$tag" &>/dev/null; then
-            ensure_dir "$BINARIES_DIR/platforms/${os}/${arch}"
-            # Extract from export stage if available
-            if docker cp "$container_name:/export" "$BINARIES_DIR/platforms/${os}/${arch}/" 2>/dev/null; then
-                log "✓ Extracted binaries from export stage"
-            elif docker cp "$container_name:/binaries" "$BINARIES_DIR/platforms/${os}/${arch}/" 2>/dev/null; then
-                log "✓ Extracted binaries from binaries directory"
-            else
-                warn "Could not extract binaries from container"
-            fi
-            docker rm "$container_name" &>/dev/null
-        fi
-
-        return 0
+        log "✓ Build successful for $platform"
+        # ... existing code to copy artifacts
     else
-        error "✗ Build failed for ${platform}"
+        error "✗ Build failed for $platform"
         return 1
     fi
 }

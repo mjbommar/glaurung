@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/suspicious_linux.c",
+  "compiler": "gcc",
+  "output_file": "/workspace/binaries/native/gcc/rpath/suspicious_linux-gcc-rpath",
+  "compilation_flags": "-O2 -Wl,-rpath,/opt/test",
+  "description": "GCC with RPATH (/opt/test)",
+  "timestamp": "2025-09-04T02:16:44+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

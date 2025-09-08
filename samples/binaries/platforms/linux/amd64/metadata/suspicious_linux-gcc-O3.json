@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/suspicious_linux.c",
+  "compiler": "gcc",
+  "output_file": "/workspace/binaries/native/gcc/O3/suspicious_linux-gcc-O3",
+  "compilation_flags": "-O3 -Wall -Wextra",
+  "description": "GCC compiled with -O3",
+  "timestamp": "2025-09-04T02:16:43+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

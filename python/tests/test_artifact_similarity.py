@@ -15,4 +15,3 @@ def test_artifact_ctph_similarity_on_bytes():
     s12 = a1.ctph_similarity(a2)
     assert s12 is not None and 0.0 <= s12 <= 1.0
     assert s12 <= s11
-

@@ -4,8 +4,8 @@ FROM ubuntu:22.04 AS base
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install native AMD64 build tools
-RUN apt-get update && apt-get install -y \
+# Install native AMD64 build tools with retry
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
     g++ \

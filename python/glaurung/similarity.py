@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List, Tuple
+from typing import Iterable, List
 
 import glaurung._native as _native  # type: ignore
 

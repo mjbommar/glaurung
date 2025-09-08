@@ -3,6 +3,7 @@
 #[cfg(feature = "python-ext")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A single IOC match sample
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -123,12 +124,12 @@ pub struct StringsSummary {
     pub utf16be_count: u32,
     /// Detected strings with language information
     pub strings: Option<Vec<DetectedString>>,
-    /// Summary of detected languages and their counts
-    pub language_counts: Option<std::collections::HashMap<String, u32>>,
-    /// Summary of detected scripts and their counts
-    pub script_counts: Option<std::collections::HashMap<String, u32>>,
-    /// IOC counts (e.g., ipv4, ipv6, url, domain, email, path_* , registry)
-    pub ioc_counts: Option<std::collections::HashMap<String, u32>>,
+    /// Summary of detected languages and their counts (deterministic order)
+    pub language_counts: Option<BTreeMap<String, u32>>,
+    /// Summary of detected scripts and their counts (deterministic order)
+    pub script_counts: Option<BTreeMap<String, u32>>,
+    /// IOC counts (e.g., ipv4, ipv6, url, domain, email, path_* , registry) in deterministic order
+    pub ioc_counts: Option<BTreeMap<String, u32>>,
     /// Optional IOC samples with offsets
     pub ioc_samples: Option<Vec<IocSample>>,
 }
@@ -143,8 +144,8 @@ impl StringsSummary {
         utf16le_count: u32,
         utf16be_count: u32,
         strings: Option<Vec<DetectedString>>,
-        language_counts: Option<std::collections::HashMap<String, u32>>,
-        script_counts: Option<std::collections::HashMap<String, u32>>,
+        language_counts: Option<BTreeMap<String, u32>>,
+        script_counts: Option<BTreeMap<String, u32>>,
     ) -> Self {
         Self {
             ascii_count,
@@ -186,17 +187,23 @@ impl StringsSummary {
 
     #[getter]
     fn language_counts(&self) -> Option<std::collections::HashMap<String, u32>> {
-        self.language_counts.clone()
+        self.language_counts
+            .as_ref()
+            .map(|btree| btree.iter().map(|(k, v)| (k.clone(), *v)).collect())
     }
 
     #[getter]
     fn script_counts(&self) -> Option<std::collections::HashMap<String, u32>> {
-        self.script_counts.clone()
+        self.script_counts
+            .as_ref()
+            .map(|btree| btree.iter().map(|(k, v)| (k.clone(), *v)).collect())
     }
 
     #[getter]
     fn ioc_counts(&self) -> Option<std::collections::HashMap<String, u32>> {
-        self.ioc_counts.clone()
+        self.ioc_counts
+            .as_ref()
+            .map(|btree| btree.iter().map(|(k, v)| (k.clone(), *v)).collect())
     }
 
     #[getter]
@@ -263,8 +270,8 @@ impl StringsSummary {
         utf16le_count: u32,
         utf16be_count: u32,
         strings: Option<Vec<DetectedString>>,
-        language_counts: Option<std::collections::HashMap<String, u32>>,
-        script_counts: Option<std::collections::HashMap<String, u32>>,
+        language_counts: Option<BTreeMap<String, u32>>,
+        script_counts: Option<BTreeMap<String, u32>>,
     ) -> Self {
         Self {
             ascii_count,

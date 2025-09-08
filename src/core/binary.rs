@@ -108,6 +108,25 @@ impl Arch {
         format!("Arch.{}", self.__str__())
     }
 
+    /// Enable using `Arch` as dict keys in Python by providing a stable hash.
+    /// Python disables hashing when equality is defined, so we add `__hash__` explicitly.
+    fn __hash__(&self) -> isize {
+        use Arch::*;
+        match self {
+            X86 => 1,
+            X86_64 => 2,
+            ARM => 3,
+            AArch64 => 4,
+            MIPS => 5,
+            MIPS64 => 6,
+            PPC => 7,
+            PPC64 => 8,
+            RISCV => 9,
+            RISCV64 => 10,
+            Unknown => 0,
+        }
+    }
+
     // Python-visible wrappers that forward to pure-Rust helpers
     #[pyo3(name = "is_64_bit")]
     fn is_64_bit_py(&self) -> bool {

@@ -45,6 +45,8 @@ pub struct SymbolSummary {
     /// Virtual addresses of TLS callbacks, when enumerated (PE-specific)
     pub tls_callback_vas: Option<Vec<u64>>,
     pub debug_info_present: bool,
+    /// Optional CodeView RSDS PDB path (PE-specific, best-effort)
+    pub pdb_path: Option<String>,
     pub suspicious_imports: Option<Vec<String>>,
     pub entry_section: Option<String>,
     pub nx: Option<bool>,
@@ -113,6 +115,7 @@ impl SymbolSummary {
             tls_callback_count: None,
             tls_callback_vas: None,
             debug_info_present,
+            pdb_path: None,
             suspicious_imports,
             entry_section,
             nx,

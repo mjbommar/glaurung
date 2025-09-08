@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/c2_demo.c",
+  "compiler": "clang",
+  "output_file": "/workspace/binaries/native/clang/runpath/c2_demo-clang-runpath",
+  "compilation_flags": "-O2 -Wl,-rpath,/opt/test -Wl,--enable-new-dtags",
+  "description": "Clang with RUNPATH (/opt/test)",
+  "timestamp": "2025-09-04T02:16:43+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

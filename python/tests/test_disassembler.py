@@ -8,6 +8,7 @@ from glaurung import (
     Address,
     AddressKind,
 )
+import pytest
 
 
 class TestDisassemblerEnums:
@@ -102,6 +103,15 @@ class TestDisassemblerConfig:
         assert config.options == options
         assert config.options["syntax"] == "intel"
         assert config.options["detail"] == "true"
+
+    def test_engine_override_rejects_incompatible_arch(self):
+        """Requesting iced for ARM64 should raise ValueError (unsupported arch)."""
+        with pytest.raises(ValueError):
+            _ = __import__("glaurung").glaurung.disasm.PyDisassembler(
+                DisassemblerConfig(
+                    Architecture.ARM64, Endianness.Little, {"engine": "iced"}
+                )
+            )
 
     def test_disassembler_config_display(self):
         """Test string representation of DisassemblerConfig."""

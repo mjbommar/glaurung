@@ -1,0 +1,11 @@
+{
+  "source_file": "/workspace/source/lua/hello.lua",
+  "compiler": "luajit -b",
+  "lua_version": "2.1.0-beta3",
+  "output_file": "/workspace/binaries/lua/hello-luajit.luac",
+  "compilation_flags": "",
+  "description": "Lua bytecode compiled with luajit",
+  "timestamp": "2025-09-04T02:16:50+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

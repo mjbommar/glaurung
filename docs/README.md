@@ -26,6 +26,7 @@ Analysis subsystem documentation.
 - `symbols/` - Symbol extraction and analysis
 - `disassembly/` - Multi-engine disassembly architecture
 - `decompiler/` - Decompilation pipeline and AI integration
+ - `interpreted/` - Interpreted & VM bytecode (Python/Java/DEX) analysis plan
 
 ### `formats/`
 Technical reference documentation for binary formats.
@@ -50,6 +51,7 @@ Experimental features and proposals.
 **Understanding the data model?** → `architecture/data-model/`  
 **Setting up development?** → `development/setup.md`  
 **Looking for compiler signatures?** → `formats/compiler-artifacts.md`
+**Planning interpreted/VM support?** → `analysis/interpreted/`
 
 ## Documentation Standards
 

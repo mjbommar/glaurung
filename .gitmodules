@@ -56,6 +56,9 @@
 [submodule "reference/capstone"]
 	path = reference/capstone
 	url = https://github.com/capstone-engine/capstone.git
+[submodule "reference/capstone-rs"]
+	path = reference/capstone-rs
+	url = https://github.com/capstone-rust/capstone-rs.git
 [submodule "reference/z3"]
 	path = reference/z3
 	url = https://github.com/Z3Prover/z3.git
@@ -107,6 +110,9 @@
 [submodule "reference/iced"]
 	path = reference/iced
 	url = https://github.com/icedland/iced.git
+[submodule "scripts/capstone-rs"]
+	path = scripts/capstone-rs
+	url = https://github.com/capstone-rust/capstone-rs.git
 [submodule "reference/snowman"]
 	path = reference/snowman
 	url = https://github.com/x64dbg/snowman.git
@@ -119,3 +125,6 @@
 [submodule "reference/alea-preprocess"]
 	path = reference/alea-preprocess
 	url = https://github.com/alea-institute/alea-preprocess.git
+[submodule "reference/lingua-rs"]
+	path = reference/lingua-rs
+	url = https://github.com/pemistahl/lingua-rs.git

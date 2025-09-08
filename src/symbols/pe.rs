@@ -474,14 +474,22 @@ pub fn summarize_pe(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
                             } else {
                                 read_u32_le(data, cb_off).unwrap_or(0) as u64
                             };
-                            if val == 0 { break; }
+                            if val == 0 {
+                                break;
+                            }
                             cnt = cnt.saturating_add(1);
                             cb_off += step;
                         }
                         Some(cnt)
-                    } else { None }
-                } else { None }
-            } else { None }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         },
         tls_callback_vas: {
             if let Some(tls_off) = if tls_dd.rva != 0 {
@@ -503,7 +511,9 @@ pub fn summarize_pe(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
                         let mut list: Vec<u64> = Vec::new();
                         let step = if is_pe32_plus { 8 } else { 4 };
                         for _ in 0..1024u32 {
-                            if cb_off + step > data.len() { break; }
+                            if cb_off + step > data.len() {
+                                break;
+                            }
                             let val = if is_pe32_plus {
                                 let lo = read_u32_le(data, cb_off).unwrap_or(0) as u64;
                                 let hi = read_u32_le(data, cb_off + 4).unwrap_or(0) as u64;
@@ -511,17 +521,69 @@ pub fn summarize_pe(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
                             } else {
                                 read_u32_le(data, cb_off).unwrap_or(0) as u64
                             };
-                            if val == 0 { break; }
+                            if val == 0 {
+                                break;
+                            }
                             list.push(val);
                             cb_off += step;
-                            if list.len() >= 1024 { break; }
+                            if list.len() >= 1024 {
+                                break;
+                            }
                         }
-                        if list.is_empty() { None } else { Some(list) }
-                    } else { None }
-                } else { None }
-            } else { None }
+                        if list.is_empty() {
+                            None
+                        } else {
+                            Some(list)
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         },
         debug_info_present,
+        pdb_path: {
+            // Best-effort CodeView RSDS scan for PDB path; prefer scanning debug directory if present
+            // RSDS format: 'RSDS' (4) + GUID (16) + Age (4) + UTF-8 path (NUL-terminated)
+            let mut found: Option<String> = None;
+            // Try to locate the debug dir first
+            let search_ranges: Vec<(usize, usize)> =
+                if let Some(off) = rva_to_offset(debug_dd.rva, &sections) {
+                    let sz = (debug_dd.size as usize).min(64 * 1024); // bound
+                    let end = (off + sz).min(data.len());
+                    vec![(off, end)]
+                } else {
+                    // Fallback: scan first 64 KiB
+                    vec![(0usize, data.len().min(64 * 1024))]
+                };
+            for (start, end) in search_ranges {
+                let hay = &data[start..end];
+                if let Some(pos) = memchr::memmem::find(hay, b"RSDS") {
+                    let base = start + pos;
+                    let path_off = base.saturating_add(24);
+                    if path_off < data.len() {
+                        let mut p = path_off;
+                        let max = (p + 512).min(data.len());
+                        while p < max && data[p] != 0 {
+                            p += 1;
+                        }
+                        if p > path_off {
+                            if let Ok(s) = std::str::from_utf8(&data[path_off..p]) {
+                                if !s.is_empty() {
+                                    found = Some(s.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            found
+        },
         suspicious_imports: suspicious_list,
         entry_section,
         nx: Some(pe_nx),

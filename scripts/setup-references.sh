@@ -21,6 +21,7 @@ declare -A SUBMODULES=(
     ["reference/capstone"]="https://github.com/capstone-engine/capstone.git"
     ["reference/keystone"]="https://github.com/keystone-engine/keystone.git"
     ["reference/zydis"]="https://github.com/zyantific/zydis.git"
+    ["reference/capstone-rs"]="https://github.com/capstone-rust/capstone-rs.git"
 
     # Binary instrumentation and emulation
     ["reference/LIEF"]="https://github.com/lief-project/LIEF.git"
@@ -59,6 +60,11 @@ declare -A SUBMODULES=(
     ["reference/alea-preprocess"]="https://github.com/alea-institute/alea-preprocess.git"
 )
 
+# Optional script-level submodules (tools, helpers)
+declare -A OPTIONAL_SCRIPT_SUBMODULES=(
+    ["scripts/capstone-rs"]="https://github.com/capstone-rust/capstone-rs.git"
+)
+
 # Function to add a submodule if it doesn't exist
 add_submodule() {
     local path=$1
@@ -92,6 +98,11 @@ for path in "${!SUBMODULES[@]}"; do
     add_submodule "$path" "${SUBMODULES[$path]}"
 done
 
+# Add optional script submodules (ignore failures if not desired)
+for path in "${!OPTIONAL_SCRIPT_SUBMODULES[@]}"; do
+    add_submodule "$path" "${OPTIONAL_SCRIPT_SUBMODULES[$path]}" || true
+done
+
 echo ""
 echo "Initializing and updating submodules..."
 git submodule update --init --recursive
@@ -101,6 +112,9 @@ echo "✅ Reference implementations setup complete!"
 echo ""
 echo "Submodules added:"
 for path in "${!SUBMODULES[@]}"; do
+    echo "  - $path"
+done
+for path in "${!OPTIONAL_SCRIPT_SUBMODULES[@]}"; do
     echo "  - $path"
 done
 

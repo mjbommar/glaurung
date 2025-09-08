@@ -92,3 +92,13 @@ services:
     profiles: ["darwin", "arm64"]
 
   # Note: multi-platform orchestration is handled by ./build-multiplatform.sh
+
+  # Windows MSVC builds (requires Windows container host)
+  windows-msvc:
+    build:
+      context: .
+      dockerfile: docker/windows/Dockerfile.msvc
+    volumes:
+      - ./binaries/platforms/windows/amd64:/workspace/binaries
+      - ./source:/workspace/source
+    profiles: ["msvc"]

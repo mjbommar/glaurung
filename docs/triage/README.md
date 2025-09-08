@@ -176,6 +176,17 @@ Sniffer Integration Policy (infer/mime_guess)
 - Differential: compare we classify like `file(1)`/`libmagic` on the corpus (informational).
 - Sniffer edge cases: files with deceptive extensions (e.g., `.jpg` that are actually PE), extensionless binaries, and archives with embedded executables; assert `SnifferMismatch` and confidence adjustments.
 
+15) Budgets and Determinism
+- Budgets: all I/O is bounded by `max_read_bytes`, `max_file_size`, and recursion `max_depth`. These limits are surfaced in `budgets` with:
+  - `bytes_read`, `time_ms`, `recursion_depth`, `limit_bytes`, `max_recursion_depth`, and `hit_byte_limit`.
+- Determinism: outputs are stable for identical inputs and configs.
+  - Map-like data uses deterministic key ordering (BTreeMap) for `language_counts`, `script_counts`, and `ioc_counts`.
+  - Children and various vectors are sorted deterministically.
+  - A `schema_version` field is included in all JSON outputs.
+- CLI Examples:
+  - `glaurung triage file --max-read-bytes 4096 --json` shows truncation; `budgets.hit_byte_limit` will be true and `budgets.limit_bytes` will be present.
+  - `glaurung triage file --max-depth 3 --tree` prints a recursion tree under depth budget.
+
 15) Incremental Delivery Roadmap
 - MVP (Week 1–2): Stage 0/1/2/7 + basic entropy; object‑based parse for ELF/PE/Mach‑O; CLI triage with JSON; tests on a small matrix.
 - Heuristics (Week 3): Endianness/arch scoring, strings summary, sliding entropy; confidence model v1.

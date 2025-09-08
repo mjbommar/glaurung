@@ -318,7 +318,12 @@ mod tests {
             time_guard_ms: 1_000, // generous to avoid flakiness
             enable_language: false,
             max_lang_detect: 0,
-            min_len_for_detect: 10,
+            min_len_for_detect: 4,
+            max_len_for_lingua: 32,
+            min_lang_confidence: 0.65,
+            min_lang_confidence_agree: 0.55,
+            texty_strict: false,
+            use_fast_detection: true,
             enable_classification: false,
             max_classify: 0,
             max_ioc_per_string: 0,

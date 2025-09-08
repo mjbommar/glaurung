@@ -21,7 +21,10 @@ fn pe_entry_section_and_tls_if_present() {
         "samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/pe_tls_callbacks-x86_64-mingw.exe",
     ]);
     let Some(path) = pe else { return }; // skip if absent
-    let data = match fs::read(path) { Ok(d) => d, Err(_) => return };
+    let data = match fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
     let caps = BudgetCaps::default();
     let sum = symbols::pe::summarize_pe(&data, &caps);
     // Entry section should generally be identified

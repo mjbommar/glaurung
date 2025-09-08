@@ -5,7 +5,7 @@
   "output_file": "/workspace/binaries/go/hello-go-static",
   "compilation_flags": "CGO_ENABLED=0 GOOS=linux",
   "description": "Static Go binary without CGO",
-  "timestamp": "2025-09-03T00:52:31+00:00",
+  "timestamp": "2025-09-04T01:41:46+00:00",
   "platform": "linux",
   "architecture": "x86_64"
 }

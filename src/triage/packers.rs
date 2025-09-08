@@ -1,13 +1,16 @@
 use crate::core::triage::PackerMatch;
+use crate::entropy::shannon_entropy;
 use crate::triage::config::{EntropyConfig, PackerConfig};
 use crate::triage::entropy::analyze_entropy;
-use crate::entropy::shannon_entropy;
 
 fn bump_match(out: &mut Vec<PackerMatch>, name: &str, base_if_absent: f32, delta: f32) {
     if let Some(m) = out.iter_mut().find(|m| m.name.eq_ignore_ascii_case(name)) {
         m.confidence = (m.confidence + delta).clamp(0.0, 1.0);
     } else if base_if_absent > 0.0 {
-        out.push(PackerMatch::new(name.to_string(), base_if_absent.clamp(0.0, 1.0)));
+        out.push(PackerMatch::new(
+            name.to_string(),
+            base_if_absent.clamp(0.0, 1.0),
+        ));
     }
 }
 
@@ -15,7 +18,11 @@ pub fn detect_packers(data: &[u8], cfg: &PackerConfig) -> Vec<PackerMatch> {
     let mut out = Vec::new();
     // Respect scan_limit from PackerConfig (default) to bound scanning cost
     let scan_limit = cfg.scan_limit;
-    let hay = if data.len() > scan_limit { &data[..scan_limit] } else { data };
+    let hay = if data.len() > scan_limit {
+        &data[..scan_limit]
+    } else {
+        data
+    };
 
     // UPX
     let mut upx = 0.0f32;
@@ -146,7 +153,12 @@ pub fn detect_packers(data: &[u8], cfg: &PackerConfig) -> Vec<PackerMatch> {
             }
         }
         if packed_score > 0.5 {
-            bump_match(&mut out, "Packed", (packed_score * cfg.packer_signal_weight).min(0.95), 0.0);
+            bump_match(
+                &mut out,
+                "Packed",
+                (packed_score * cfg.packer_signal_weight).min(0.95),
+                0.0,
+            );
         }
     }
 
@@ -178,7 +190,7 @@ mod tests {
         // Construct a buffer with low-entropy header and high-entropy body
         let mut data = Vec::new();
         data.extend(std::iter::repeat(b'\x00').take(8192)); // low-entropy header
-        // High-entropy body (pseudo-random)
+                                                            // High-entropy body (pseudo-random)
         let mut rng: u64 = 0xdead_beef_cafe_babe;
         for _ in 0..(64 * 1024) {
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -187,7 +199,10 @@ mod tests {
         let v = detect_packers(&data, &PackerConfig::default());
         // Expect a generic packed signal based on entropy heuristics
         assert!(v.iter().any(|m| m.name.eq_ignore_ascii_case("Packed")));
-        let p = v.iter().find(|m| m.name.eq_ignore_ascii_case("Packed")).unwrap();
+        let p = v
+            .iter()
+            .find(|m| m.name.eq_ignore_ascii_case("Packed"))
+            .unwrap();
         assert!(p.confidence >= 0.5);
     }
 }

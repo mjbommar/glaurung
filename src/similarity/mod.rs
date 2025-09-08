@@ -15,7 +15,11 @@ mod rolling {
     }
     impl RollingHash8 {
         pub fn new(window_size: usize) -> Self {
-            Self { window_size, window: std::collections::VecDeque::with_capacity(window_size), hash: 0 }
+            Self {
+                window_size,
+                window: std::collections::VecDeque::with_capacity(window_size),
+                hash: 0,
+            }
         }
         pub fn update(&mut self, byte: u8) {
             if self.window.len() == self.window_size {
@@ -25,7 +29,9 @@ mod rolling {
             self.window.push_back(byte);
             self.hash = self.hash.wrapping_add(byte).rotate_left(1);
         }
-        pub fn hash(&self) -> u8 { self.hash }
+        pub fn hash(&self) -> u8 {
+            self.hash
+        }
     }
 
     pub struct RollingHash16 {
@@ -35,7 +41,11 @@ mod rolling {
     }
     impl RollingHash16 {
         pub fn new(window_size: usize) -> Self {
-            Self { window_size, window: std::collections::VecDeque::with_capacity(window_size), hash: 0 }
+            Self {
+                window_size,
+                window: std::collections::VecDeque::with_capacity(window_size),
+                hash: 0,
+            }
         }
         pub fn update(&mut self, byte: u16) {
             if self.window.len() == self.window_size {
@@ -45,7 +55,9 @@ mod rolling {
             self.window.push_back(byte);
             self.hash = self.hash.wrapping_add(byte).rotate_left(1);
         }
-        pub fn hash(&self) -> u16 { self.hash }
+        pub fn hash(&self) -> u16 {
+            self.hash
+        }
     }
 
     pub struct RollingHash32 {
@@ -55,7 +67,11 @@ mod rolling {
     }
     impl RollingHash32 {
         pub fn new(window_size: usize) -> Self {
-            Self { window_size, window: std::collections::VecDeque::with_capacity(window_size), hash: 0 }
+            Self {
+                window_size,
+                window: std::collections::VecDeque::with_capacity(window_size),
+                hash: 0,
+            }
         }
         pub fn update(&mut self, byte: u32) {
             if self.window.len() == self.window_size {
@@ -65,7 +81,9 @@ mod rolling {
             self.window.push_back(byte);
             self.hash = self.hash.wrapping_add(byte).rotate_left(1);
         }
-        pub fn hash(&self) -> u32 { self.hash }
+        pub fn hash(&self) -> u32 {
+            self.hash
+        }
     }
 
     pub struct RollingHash64 {
@@ -75,7 +93,11 @@ mod rolling {
     }
     impl RollingHash64 {
         pub fn new(window_size: usize) -> Self {
-            Self { window_size, window: std::collections::VecDeque::with_capacity(window_size), hash: 0 }
+            Self {
+                window_size,
+                window: std::collections::VecDeque::with_capacity(window_size),
+                hash: 0,
+            }
         }
         pub fn update(&mut self, byte: u64) {
             if self.window.len() == self.window_size {
@@ -85,7 +107,9 @@ mod rolling {
             self.window.push_back(byte);
             self.hash = self.hash.wrapping_add(byte).rotate_left(1);
         }
-        pub fn hash(&self) -> u64 { self.hash }
+        pub fn hash(&self) -> u64 {
+            self.hash
+        }
     }
 
     // keep types private to this module; exposed via CTPH API
@@ -99,7 +123,11 @@ pub struct CtphConfig {
 }
 impl Default for CtphConfig {
     fn default() -> Self {
-        Self { window_size: 8, digest_size: 4, precision: 8 }
+        Self {
+            window_size: 8,
+            digest_size: 4,
+            precision: 8,
+        }
     }
 }
 
@@ -127,7 +155,9 @@ fn ctph_with8(cfg: &CtphConfig, data: &[u8]) -> String {
             blocks.last_mut().unwrap().push_str(&piece);
             cur.clear();
             triggers += 1;
-            if triggers % cfg.digest_size == 0 { blocks.push(String::new()); }
+            if triggers % cfg.digest_size == 0 {
+                blocks.push(String::new());
+            }
         }
     }
     if !cur.is_empty() {
@@ -135,7 +165,12 @@ fn ctph_with8(cfg: &CtphConfig, data: &[u8]) -> String {
         blocks.last_mut().unwrap().push_str(&piece);
     }
     blocks.retain(|b| !b.is_empty());
-    format!("{}:{}:{}", cfg.window_size, cfg.digest_size, blocks.join(":"))
+    format!(
+        "{}:{}:{}",
+        cfg.window_size,
+        cfg.digest_size,
+        blocks.join(":")
+    )
 }
 
 fn ctph_with16(cfg: &CtphConfig, data: &[u8]) -> String {
@@ -154,7 +189,9 @@ fn ctph_with16(cfg: &CtphConfig, data: &[u8]) -> String {
             blocks.last_mut().unwrap().push_str(&piece);
             cur.clear();
             triggers += 1;
-            if triggers % cfg.digest_size == 0 { blocks.push(String::new()); }
+            if triggers % cfg.digest_size == 0 {
+                blocks.push(String::new());
+            }
         }
     }
     if !cur.is_empty() {
@@ -162,7 +199,12 @@ fn ctph_with16(cfg: &CtphConfig, data: &[u8]) -> String {
         blocks.last_mut().unwrap().push_str(&piece);
     }
     blocks.retain(|b| !b.is_empty());
-    format!("{}:{}:{}", cfg.window_size, cfg.digest_size, blocks.join(":"))
+    format!(
+        "{}:{}:{}",
+        cfg.window_size,
+        cfg.digest_size,
+        blocks.join(":")
+    )
 }
 
 fn ctph_with32(cfg: &CtphConfig, data: &[u8]) -> String {
@@ -181,7 +223,9 @@ fn ctph_with32(cfg: &CtphConfig, data: &[u8]) -> String {
             blocks.last_mut().unwrap().push_str(&piece);
             cur.clear();
             triggers += 1;
-            if triggers % cfg.digest_size == 0 { blocks.push(String::new()); }
+            if triggers % cfg.digest_size == 0 {
+                blocks.push(String::new());
+            }
         }
     }
     if !cur.is_empty() {
@@ -189,7 +233,12 @@ fn ctph_with32(cfg: &CtphConfig, data: &[u8]) -> String {
         blocks.last_mut().unwrap().push_str(&piece);
     }
     blocks.retain(|b| !b.is_empty());
-    format!("{}:{}:{}", cfg.window_size, cfg.digest_size, blocks.join(":"))
+    format!(
+        "{}:{}:{}",
+        cfg.window_size,
+        cfg.digest_size,
+        blocks.join(":")
+    )
 }
 
 fn ctph_with64(cfg: &CtphConfig, data: &[u8]) -> String {
@@ -208,7 +257,9 @@ fn ctph_with64(cfg: &CtphConfig, data: &[u8]) -> String {
             blocks.last_mut().unwrap().push_str(&piece);
             cur.clear();
             triggers += 1;
-            if triggers % cfg.digest_size == 0 { blocks.push(String::new()); }
+            if triggers % cfg.digest_size == 0 {
+                blocks.push(String::new());
+            }
         }
     }
     if !cur.is_empty() {
@@ -216,7 +267,12 @@ fn ctph_with64(cfg: &CtphConfig, data: &[u8]) -> String {
         blocks.last_mut().unwrap().push_str(&piece);
     }
     blocks.retain(|b| !b.is_empty());
-    format!("{}:{}:{}", cfg.window_size, cfg.digest_size, blocks.join(":"))
+    format!(
+        "{}:{}:{}",
+        cfg.window_size,
+        cfg.digest_size,
+        blocks.join(":")
+    )
 }
 
 /// Compute CTPH digest for data with the given configuration.
@@ -233,14 +289,22 @@ pub fn ctph_hash(data: &[u8], cfg: &CtphConfig) -> String {
 pub fn ctph_similarity(a: &str, b: &str) -> f64 {
     let at: Vec<&str> = a.split(':').collect();
     let bt: Vec<&str> = b.split(':').collect();
-    if at.len() < 3 || bt.len() < 3 { return 0.0; }
-    if at[0] != bt[0] || at[1] != bt[1] { return 0.0; }
+    if at.len() < 3 || bt.len() < 3 {
+        return 0.0;
+    }
+    if at[0] != bt[0] || at[1] != bt[1] {
+        return 0.0;
+    }
     use std::collections::HashSet;
     let as_: HashSet<&str> = at[2..].iter().copied().collect();
     let bs: HashSet<&str> = bt[2..].iter().copied().collect();
     let inter = as_.intersection(&bs).count() as f64;
     let union = (as_.len() + bs.len()).saturating_sub(inter as usize) as f64;
-    if union == 0.0 { 0.0 } else { inter / union }
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
 }
 
 #[cfg(test)]
@@ -257,7 +321,11 @@ mod tests {
 
     #[test]
     fn test_ctph_similarity_is_symmetric_and_bounded() {
-        let cfg = CtphConfig { window_size: 8, digest_size: 4, precision: 16 };
+        let cfg = CtphConfig {
+            window_size: 8,
+            digest_size: 4,
+            precision: 16,
+        };
         let a = ctph_hash(b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", &cfg);
         let b = ctph_hash(b"AAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAA", &cfg);
         let s1 = ctph_similarity(&a, &b);

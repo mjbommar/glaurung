@@ -261,11 +261,13 @@ mod tests {
             None, // packers
             None, // containers
             None, // overlay
+            None, // format_specific
             None, // parse_status
             Some(Budgets::new(0, 0, 0)),
-            None,
+            None, // errors
             Some((Endianness::Little, 0.9)),
             Some(vec![(Arch::X86_64, 0.85)]),
+            None, // disasm_preview
         );
         let ranked = score(&artifact);
         assert!(!ranked.is_empty());

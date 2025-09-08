@@ -106,3 +106,6 @@ uv.lock
 
 # Reference implementations are managed as git submodules
 # See scripts/setup-references.sh to initialize them
+
+# Temporary files
+tmp/

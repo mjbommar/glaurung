@@ -25,6 +25,8 @@ pub enum DisassemblerError {
     InsufficientBytes(),
     /// Unsupported architecture or instruction
     UnsupportedInstruction(),
+    /// Unsupported architecture for the selected backend
+    UnsupportedArchitecture(),
     /// Internal disassembler error with message
     InternalError(String),
 }
@@ -45,6 +47,7 @@ impl fmt::Display for DisassemblerError {
             DisassemblerError::InvalidAddress() => write!(f, "InvalidAddress"),
             DisassemblerError::InsufficientBytes() => write!(f, "InsufficientBytes"),
             DisassemblerError::UnsupportedInstruction() => write!(f, "UnsupportedInstruction"),
+            DisassemblerError::UnsupportedArchitecture() => write!(f, "UnsupportedArchitecture"),
             DisassemblerError::InternalError(msg) => write!(f, "InternalError: {}", msg),
         }
     }
@@ -126,6 +129,24 @@ impl Architecture {
     fn is_64_bit_py(&self) -> bool {
         self.is_64_bit()
     }
+
+    /// Enable hashing in Python so `Architecture` can be used as dict keys.
+    fn __hash__(&self) -> isize {
+        use Architecture::*;
+        match self {
+            X86 => 1,
+            X86_64 => 2,
+            ARM => 3,
+            ARM64 => 4,
+            MIPS => 5,
+            MIPS64 => 6,
+            PPC => 7,
+            PPC64 => 8,
+            RISCV => 9,
+            RISCV64 => 10,
+            Unknown => 0,
+        }
+    }
 }
 
 impl fmt::Display for Architecture {
@@ -147,6 +168,45 @@ impl fmt::Display for Architecture {
 }
 
 // Endianness type is unified from core::binary::Endianness
+
+// Bridge types between `core::binary::Arch` and disassembler `Architecture`.
+impl From<crate::core::binary::Arch> for Architecture {
+    fn from(a: crate::core::binary::Arch) -> Self {
+        use crate::core::binary::Arch as B;
+        match a {
+            B::X86 => Architecture::X86,
+            B::X86_64 => Architecture::X86_64,
+            B::ARM => Architecture::ARM,
+            B::AArch64 => Architecture::ARM64,
+            B::MIPS => Architecture::MIPS,
+            B::MIPS64 => Architecture::MIPS64,
+            B::PPC => Architecture::PPC,
+            B::PPC64 => Architecture::PPC64,
+            B::RISCV => Architecture::RISCV,
+            B::RISCV64 => Architecture::RISCV64,
+            B::Unknown => Architecture::Unknown,
+        }
+    }
+}
+
+impl From<Architecture> for crate::core::binary::Arch {
+    fn from(a: Architecture) -> Self {
+        use crate::core::binary::Arch as B;
+        match a {
+            Architecture::X86 => B::X86,
+            Architecture::X86_64 => B::X86_64,
+            Architecture::ARM => B::ARM,
+            Architecture::ARM64 => B::AArch64,
+            Architecture::MIPS => B::MIPS,
+            Architecture::MIPS64 => B::MIPS64,
+            Architecture::PPC => B::PPC,
+            Architecture::PPC64 => B::PPC64,
+            Architecture::RISCV => B::RISCV,
+            Architecture::RISCV64 => B::RISCV64,
+            Architecture::Unknown => B::Unknown,
+        }
+    }
+}
 
 /// Core disassembler trait that provides a common interface for instruction decoding
 pub trait Disassembler {

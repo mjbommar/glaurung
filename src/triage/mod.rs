@@ -7,6 +7,7 @@ pub mod api;
 pub mod compiler_detection;
 pub mod config;
 pub mod containers;
+pub mod disasm_mini;
 pub mod entropy;
 pub mod format_detection;
 pub mod headers;
@@ -17,10 +18,10 @@ pub mod overlay;
 pub mod packers;
 pub mod parsers;
 pub mod recurse;
-pub mod signing;
 pub mod rich_header;
 pub mod score;
 pub mod signatures;
+pub mod signing;
 pub mod sniffers;
 
 // Re-export key types from core for convenience

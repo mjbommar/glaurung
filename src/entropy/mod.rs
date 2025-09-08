@@ -39,8 +39,8 @@ pub mod window;
 
 // Re-export main functionality
 pub use self::core::{shannon_entropy, Histogram};
-pub use self::stats::{Stats, calculate_median, find_outliers, detect_anomalies_zscore};
-pub use self::window::{analyze_windows, analyze_chunks, WindowConfig, WindowAnalysis};
+pub use self::stats::{calculate_median, detect_anomalies_zscore, find_outliers, Stats};
+pub use self::window::{analyze_chunks, analyze_windows, WindowAnalysis, WindowConfig};
 
 // Backwards compatibility aliases
 pub use self::core::shannon_entropy as calculate;
@@ -64,42 +64,42 @@ pub fn sliding_window(data: &[u8], window_size: usize, step: usize) -> Vec<f64> 
 /// Returns (overall_entropy, min_window, max_window, mean_window)
 pub fn quick_summary(data: &[u8], window_size: usize) -> (f64, f64, f64, f64) {
     let overall = shannon_entropy(data);
-    
+
     if data.len() <= window_size {
         return (overall, overall, overall, overall);
     }
-    
+
     let config = WindowConfig {
         window_size,
         step_size: window_size,
         max_windows: 256,
     };
     let analysis = analyze_windows(data, &config);
-    
+
     let min = analysis.min().unwrap_or(0.0);
     let max = analysis.max().unwrap_or(0.0);
     let mean = analysis.mean().unwrap_or(0.0);
-    
+
     (overall, min, max, mean)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_quick_summary() {
         let mut data = vec![0u8; 1024];
         data.extend_from_slice(&(0..=255).cycle().take(1024).collect::<Vec<u8>>());
-        
+
         let (overall, min, max, mean) = quick_summary(&data, 256);
-        
-        assert!(overall > 3.0 && overall < 5.0);  // Mixed entropy
-        assert!(min < 0.1);  // Zeros have low entropy
-        assert!(max > 7.0);  // Random has high entropy
+
+        assert!(overall > 3.0 && overall < 5.0); // Mixed entropy
+        assert!(min < 0.1); // Zeros have low entropy
+        assert!(max > 7.0); // Random has high entropy
         assert!(mean > min && mean < max);
     }
-    
+
     #[test]
     fn test_backwards_compat_sliding_window() {
         let data = vec![0u8; 512];

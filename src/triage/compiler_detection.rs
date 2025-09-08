@@ -42,18 +42,18 @@ pub enum SourceLanguage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "python-ext", pyo3::pyclass)]
 pub enum CompilerVendor {
-    Gnu,        // GCC, G++
-    Llvm,       // Clang, Clang++
-    Microsoft,  // MSVC, Visual Studio
-    Intel,      // ICC, ICX
-    Rustc,      // Rust compiler
-    Go,         // Go compiler (gc)
-    Swift,      // Swift compiler
-    MinGW,      // MinGW-w64
-    Borland,    // Legacy Borland C++
-    Watcom,     // OpenWatcom
-    Tcc,        // Tiny C Compiler
-    Pcc,        // Portable C Compiler
+    Gnu,       // GCC, G++
+    Llvm,      // Clang, Clang++
+    Microsoft, // MSVC, Visual Studio
+    Intel,     // ICC, ICX
+    Rustc,     // Rust compiler
+    Go,        // Go compiler (gc)
+    Swift,     // Swift compiler
+    MinGW,     // MinGW-w64
+    Borland,   // Legacy Borland C++
+    Watcom,    // OpenWatcom
+    Tcc,       // Tiny C Compiler
+    Pcc,       // Portable C Compiler
     Unknown,
 }
 
@@ -81,19 +81,19 @@ pub struct LanguageEvidence {
     pub swift_symbols: u32,
     pub objc_symbols: u32,
     pub plain_c_symbols: u32,
-    
+
     // Runtime library evidence
     pub libstdcpp_imports: u32,
     pub libcpp_imports: u32,
     pub msvcrt_imports: u32,
     pub rust_std_imports: u32,
     pub go_runtime_refs: u32,
-    
+
     // String content evidence
     pub cpp_error_strings: u32,
     pub rust_panic_strings: u32,
     pub go_error_strings: u32,
-    
+
     // Metadata evidence
     pub has_rich_header: bool,
     pub has_go_buildid: bool,
@@ -116,7 +116,7 @@ pub struct LanguageDetectionResult {
 /// Detect language from symbol name patterns
 pub fn detect_language_from_symbols(symbols: &[String]) -> LanguageEvidence {
     let mut evidence = LanguageEvidence::default();
-    
+
     for symbol in symbols {
         // Rust symbols often have specific patterns even when using legacy mangling
         // Check for Rust-specific patterns first
@@ -125,7 +125,8 @@ pub fn detect_language_from_symbols(symbols: &[String]) -> LanguageEvidence {
            symbol.contains("$LT$") || symbol.contains("$GT$") || // Rust's < and > encoding
            symbol.contains("$u20$") || symbol.contains("$u27$") || // Rust's space and quote encoding
            symbol.starts_with("anon.") || // Anonymous symbols in Rust
-           rustc_demangle::try_demangle(symbol).is_ok() {
+           rustc_demangle::try_demangle(symbol).is_ok()
+        {
             evidence.rust_symbols += 1;
         }
         // C++ name mangling patterns (Itanium: _Z... but not Rust patterns)
@@ -135,13 +136,15 @@ pub fn detect_language_from_symbols(symbols: &[String]) -> LanguageEvidence {
             evidence.cpp_msvc_symbols += 1;
         }
         // Go symbols (dot notation)
-        else if (symbol.contains(".") && 
-                (symbol.starts_with("main.") || 
-                 symbol.starts_with("runtime.") ||
-                 symbol.starts_with("fmt.") ||
-                 symbol.starts_with("net.") ||
-                 symbol.starts_with("os."))) ||
-                symbol.contains("·") { // Go middle dot
+        else if (symbol.contains(".")
+            && (symbol.starts_with("main.")
+                || symbol.starts_with("runtime.")
+                || symbol.starts_with("fmt.")
+                || symbol.starts_with("net.")
+                || symbol.starts_with("os.")))
+            || symbol.contains("·")
+        {
+            // Go middle dot
             evidence.go_symbols += 1;
         }
         // Swift mangling
@@ -149,28 +152,42 @@ pub fn detect_language_from_symbols(symbols: &[String]) -> LanguageEvidence {
             evidence.swift_symbols += 1;
         }
         // Objective-C
-        else if symbol.starts_with("+[") || symbol.starts_with("-[") || 
-                symbol.starts_with("objc_") || symbol.contains("NSObject") {
+        else if symbol.starts_with("+[")
+            || symbol.starts_with("-[")
+            || symbol.starts_with("objc_")
+            || symbol.contains("NSObject")
+        {
             evidence.objc_symbols += 1;
         }
         // Plain C (no mangling, standard library functions)
-        else if matches!(symbol.as_str(), 
-            "malloc" | "free" | "printf" | "scanf" | "memcpy" | "strlen" |
-            "fopen" | "fclose" | "main" | "exit" | "abort") {
+        else if matches!(
+            symbol.as_str(),
+            "malloc"
+                | "free"
+                | "printf"
+                | "scanf"
+                | "memcpy"
+                | "strlen"
+                | "fopen"
+                | "fclose"
+                | "main"
+                | "exit"
+                | "abort"
+        ) {
             evidence.plain_c_symbols += 1;
         }
     }
-    
+
     evidence
 }
 
 /// Detect runtime libraries from imports/dependencies
 pub fn detect_runtime_libraries(libraries: &[String]) -> LanguageEvidence {
     let mut evidence = LanguageEvidence::default();
-    
+
     for lib in libraries {
         let lib_lower = lib.to_lowercase();
-        
+
         // C++ standard libraries
         if lib_lower.contains("libstdc++") || lib_lower.contains("stdc++") {
             evidence.libstdcpp_imports += 1;
@@ -188,45 +205,50 @@ pub fn detect_runtime_libraries(libraries: &[String]) -> LanguageEvidence {
             evidence.rust_std_imports += 1;
         }
     }
-    
+
     evidence
 }
 
 /// Detect language from string content patterns
 pub fn detect_language_from_strings(strings: &[String]) -> LanguageEvidence {
     let mut evidence = LanguageEvidence::default();
-    
+
     for s in strings {
         // Rust panic messages
-        if s.contains("panicked at") || 
-           s.contains("called `Option::unwrap()` on a `None` value") ||
-           s.contains("called `Result::unwrap()` on an `Err` value") ||
-           s.contains("attempt to ") && (s.contains("overflow") || s.contains("divide by zero")) {
+        if s.contains("panicked at")
+            || s.contains("called `Option::unwrap()` on a `None` value")
+            || s.contains("called `Result::unwrap()` on an `Err` value")
+            || s.contains("attempt to ") && (s.contains("overflow") || s.contains("divide by zero"))
+        {
             evidence.rust_panic_strings += 1;
         }
         // Go runtime errors
-        else if s.contains("runtime error:") ||
-                s.contains("goroutine") ||
-                s.contains("fatal error:") && s.contains("runtime:") ||
-                s.contains("sync.") ||
-                s.contains("syscall.") {
+        else if s.contains("runtime error:")
+            || s.contains("goroutine")
+            || s.contains("fatal error:") && s.contains("runtime:")
+            || s.contains("sync.")
+            || s.contains("syscall.")
+        {
             evidence.go_error_strings += 1;
         }
         // C++ STL exceptions
-        else if s.contains("std::") ||
-                s.contains("bad_alloc") ||
-                s.contains("out_of_range") ||
-                s.contains("logic_error") ||
-                s.contains("runtime_error") {
+        else if s.contains("std::")
+            || s.contains("bad_alloc")
+            || s.contains("out_of_range")
+            || s.contains("logic_error")
+            || s.contains("runtime_error")
+        {
             evidence.cpp_error_strings += 1;
         }
     }
-    
+
     evidence
 }
 
 /// Parse compiler info from PE Rich Header
-pub fn detect_from_rich_header(rich_header: &crate::triage::rich_header::RichHeader) -> Option<CompilerInfo> {
+pub fn detect_from_rich_header(
+    rich_header: &crate::triage::rich_header::RichHeader,
+) -> Option<CompilerInfo> {
     // Map Visual Studio versions from Rich Header product IDs
     for entry in &rich_header.entries {
         let (product_name, major, minor) = match entry.product_id {
@@ -243,7 +265,7 @@ pub fn detect_from_rich_header(rich_header: &crate::triage::rich_header::RichHea
             0xd7..=0xda => ("Visual C++ 2022", 14, 3),
             _ => continue,
         };
-        
+
         return Some(CompilerInfo {
             vendor: CompilerVendor::Microsoft,
             product_name: product_name.to_string(),
@@ -254,13 +276,13 @@ pub fn detect_from_rich_header(rich_header: &crate::triage::rich_header::RichHea
             target_triple: None,
         });
     }
-    
+
     None
 }
 
 /// Parse compiler info from ELF comment section
 pub fn detect_from_elf_comment(comment: &str) -> Option<CompilerInfo> {
-    // Check for Clang first - it's more specific and Clang binaries 
+    // Check for Clang first - it's more specific and Clang binaries
     // often contain both GCC and clang strings
     if let Some(pos) = comment.find("clang version ") {
         let version_str = &comment[pos + 14..];
@@ -278,7 +300,7 @@ pub fn detect_from_elf_comment(comment: &str) -> Option<CompilerInfo> {
             });
         }
     }
-    
+
     // rustc version string: "rustc version 1.65.0"
     if comment.contains("rustc") {
         if let Some(pos) = comment.find("rustc ") {
@@ -298,7 +320,7 @@ pub fn detect_from_elf_comment(comment: &str) -> Option<CompilerInfo> {
             }
         }
     }
-    
+
     // GCC version string: "GCC: (GNU) 11.2.0" or "GCC: (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0"
     // Only check GCC if clang wasn't found (since clang binaries often have GCC strings too)
     if let Some(pos) = comment.find("GCC: ") {
@@ -325,7 +347,7 @@ pub fn detect_from_elf_comment(comment: &str) -> Option<CompilerInfo> {
             });
         }
     }
-    
+
     None
 }
 
@@ -334,12 +356,12 @@ pub fn detect_bytecode_format(data: &[u8]) -> Option<SourceLanguage> {
     if data.len() < 4 {
         return None;
     }
-    
+
     // Java class file: 0xCAFEBABE
     if data[0..4] == [0xCA, 0xFE, 0xBA, 0xBE] {
         return Some(SourceLanguage::Java);
     }
-    
+
     // Python compiled bytecode: varies by version but has common patterns
     // Python 3.8+: 0x550D0D0A
     // Python 3.7: 0x420D0D0A
@@ -347,12 +369,12 @@ pub fn detect_bytecode_format(data: &[u8]) -> Option<SourceLanguage> {
     if data.len() >= 4 && data[1..4] == [0x0D, 0x0D, 0x0A] {
         return Some(SourceLanguage::Python);
     }
-    
+
     // Lua bytecode: 0x1B4C7561 (ESC "Lua")
     if data[0..4] == [0x1B, 0x4C, 0x75, 0x61] {
         return Some(SourceLanguage::Unknown); // We don't have Lua enum yet
     }
-    
+
     // .NET/C# PE files often have specific CLI headers
     // Check for "BSJB" signature in CLR metadata
     if data.len() > 0x100 {
@@ -362,7 +384,7 @@ pub fn detect_bytecode_format(data: &[u8]) -> Option<SourceLanguage> {
             }
         }
     }
-    
+
     None
 }
 
@@ -383,7 +405,7 @@ pub fn detect_packer(data: &[u8]) -> Option<PackerType> {
     if data.windows(4).any(|w| w == b"UPX!") {
         return Some(PackerType::UPX);
     }
-    
+
     // UPX alternate signatures
     if data.windows(3).any(|w| w == b"UPX") {
         // Additional check for UPX0, UPX1, UPX2 section names
@@ -393,29 +415,29 @@ pub fn detect_packer(data: &[u8]) -> Option<PackerType> {
             }
         }
     }
-    
+
     // ASPack signature
     if data.windows(8).any(|w| w == b".aspack\x00") {
         return Some(PackerType::ASPack);
     }
-    
+
     // PECompact signature
     if data.windows(9).any(|w| w == b"PECompact") {
         return Some(PackerType::PECompact);
     }
-    
+
     // Themida/WinLicense signatures
-    if data.windows(7).any(|w| w == b"Themida") ||
-       data.windows(10).any(|w| w == b"WinLicense") {
+    if data.windows(7).any(|w| w == b"Themida") || data.windows(10).any(|w| w == b"WinLicense") {
         return Some(PackerType::Themida);
     }
-    
+
     // VMProtect signatures
-    if data.windows(8).any(|w| w == b".vmp0\x00\x00\x00") ||
-       data.windows(8).any(|w| w == b".vmp1\x00\x00\x00") {
+    if data.windows(8).any(|w| w == b".vmp0\x00\x00\x00")
+        || data.windows(8).any(|w| w == b".vmp1\x00\x00\x00")
+    {
         return Some(PackerType::VMProtect);
     }
-    
+
     None
 }
 
@@ -423,23 +445,24 @@ pub fn detect_packer(data: &[u8]) -> Option<PackerType> {
 pub fn is_likely_stripped(symbols: &[String]) -> bool {
     // Stripped binaries typically have very few symbols
     // Usually just dynamic symbols like _start, main (if exported), and plt entries
-    
+
     if symbols.is_empty() {
         return true;
     }
-    
+
     // Count non-dynamic symbols
-    let non_dynamic_symbols = symbols.iter()
+    let non_dynamic_symbols = symbols
+        .iter()
         .filter(|s| {
-            !s.starts_with("_DYNAMIC") &&
-            !s.starts_with("_GLOBAL_OFFSET_TABLE") &&
-            !s.starts_with("__libc_") &&
-            !s.starts_with("_IO_stdin_used") &&
-            !s.contains("@plt") &&
-            !s.contains("@GLIBC")
+            !s.starts_with("_DYNAMIC")
+                && !s.starts_with("_GLOBAL_OFFSET_TABLE")
+                && !s.starts_with("__libc_")
+                && !s.starts_with("_IO_stdin_used")
+                && !s.contains("@plt")
+                && !s.contains("@GLIBC")
         })
         .count();
-    
+
     // If we have very few real symbols, likely stripped
     non_dynamic_symbols < 10
 }
@@ -463,10 +486,10 @@ pub fn guess_language_from_compiler(compiler: &CompilerInfo) -> SourceLanguage {
 
 /// Check if file appears to be a shared library
 pub fn is_shared_library(path: &str) -> bool {
-    path.ends_with(".so") || 
-    path.contains(".so.") ||
-    path.ends_with(".dll") ||
-    path.ends_with(".dylib")
+    path.ends_with(".so")
+        || path.contains(".so.")
+        || path.ends_with(".dll")
+        || path.ends_with(".dylib")
 }
 
 /// Check for Go build ID in ELF notes
@@ -474,18 +497,22 @@ pub fn has_go_buildid(data: &[u8]) -> bool {
     // Look for Go build info markers
     // 1. "Go buildinf:" marker in the binary
     let go_buildinf_marker = b"Go buildinf:";
-    if data.windows(go_buildinf_marker.len())
-        .any(|window| window == go_buildinf_marker) {
+    if data
+        .windows(go_buildinf_marker.len())
+        .any(|window| window == go_buildinf_marker)
+    {
         return true;
     }
-    
+
     // 2. .note.go.buildid ELF section (starts with "Go\0\0" in note name)
     let go_note_marker = b"Go\x00";
-    if data.windows(go_note_marker.len())
-        .any(|window| window == go_note_marker) {
+    if data
+        .windows(go_note_marker.len())
+        .any(|window| window == go_note_marker)
+    {
         return true;
     }
-    
+
     false
 }
 
@@ -493,14 +520,14 @@ pub fn has_go_buildid(data: &[u8]) -> bool {
 pub fn extract_go_version(data: &[u8]) -> Option<String> {
     // Look for "go1.XX.YY" pattern after "Go buildinf:" marker
     let go_buildinf = b"Go buildinf:";
-    
+
     for (i, window) in data.windows(go_buildinf.len()).enumerate() {
         if window == go_buildinf {
             // Look for go version pattern in next 100 bytes
             let start = i + go_buildinf.len();
             let end = (start + 100).min(data.len());
             let search_area = &data[start..end];
-            
+
             // Find "go1." pattern
             if let Some(go_pos) = search_area.windows(4).position(|w| &w[0..4] == b"go1.") {
                 // Extract version string (e.g., "go1.23.5")
@@ -515,7 +542,8 @@ pub fn extract_go_version(data: &[u8]) -> Option<String> {
                     }
                 }
                 if version_end > version_start + 4 {
-                    return String::from_utf8(search_area[version_start..version_end].to_vec()).ok();
+                    return String::from_utf8(search_area[version_start..version_end].to_vec())
+                        .ok();
                 }
             }
         }
@@ -554,12 +582,12 @@ pub fn detect_language_and_compiler_with_path(
     file_path: Option<&str>,
 ) -> LanguageDetectionResult {
     let mut evidence = LanguageEvidence::default();
-    
+
     // Collect evidence from all sources
     let symbol_evidence = detect_language_from_symbols(symbols);
     let runtime_evidence = detect_runtime_libraries(libraries);
     let string_evidence = detect_language_from_strings(strings);
-    
+
     // Merge evidence
     evidence.cpp_itanium_symbols = symbol_evidence.cpp_itanium_symbols;
     evidence.cpp_msvc_symbols = symbol_evidence.cpp_msvc_symbols;
@@ -568,23 +596,23 @@ pub fn detect_language_and_compiler_with_path(
     evidence.swift_symbols = symbol_evidence.swift_symbols;
     evidence.objc_symbols = symbol_evidence.objc_symbols;
     evidence.plain_c_symbols = symbol_evidence.plain_c_symbols;
-    
+
     evidence.libstdcpp_imports = runtime_evidence.libstdcpp_imports;
     evidence.libcpp_imports = runtime_evidence.libcpp_imports;
     evidence.msvcrt_imports = runtime_evidence.msvcrt_imports;
     evidence.rust_std_imports = runtime_evidence.rust_std_imports;
-    
+
     evidence.cpp_error_strings = string_evidence.cpp_error_strings;
     evidence.rust_panic_strings = string_evidence.rust_panic_strings;
     evidence.go_error_strings = string_evidence.go_error_strings;
-    
+
     // Check metadata
     evidence.has_rich_header = rich_header.is_some();
     evidence.has_go_buildid = has_go_buildid(binary_data);
-    
+
     // Extract Go version if present
     let go_version = extract_go_version(binary_data);
-    
+
     // Check for bytecode formats first (they have specific magic numbers)
     if let Some(bytecode_lang) = detect_bytecode_format(binary_data) {
         return LanguageDetectionResult {
@@ -595,7 +623,7 @@ pub fn detect_language_and_compiler_with_path(
             evidence_summary: format!("{:?} bytecode magic number detected", bytecode_lang),
         };
     }
-    
+
     // Check for packed binaries
     if let Some(packer) = detect_packer(binary_data) {
         return LanguageDetectionResult {
@@ -606,7 +634,7 @@ pub fn detect_language_and_compiler_with_path(
             evidence_summary: format!("Packed with {:?} - original language unknown", packer),
         };
     }
-    
+
     // Detect compiler from metadata
     let mut compiler_info = None;
     if let Some(rh) = rich_header {
@@ -614,66 +642,70 @@ pub fn detect_language_and_compiler_with_path(
     } else if let Some(comment) = elf_comment {
         compiler_info = detect_from_elf_comment(comment);
     }
-    
+
     // Calculate language scores
     let mut scores = HashMap::new();
-    
+
     // C++ evidence
-    let cpp_score = 
-        (evidence.cpp_itanium_symbols as f32 * 2.0) +
-        (evidence.cpp_msvc_symbols as f32 * 2.0) +
-        (evidence.libstdcpp_imports as f32 * 1.5) +
-        (evidence.libcpp_imports as f32 * 1.5) +
-        (evidence.msvcrt_imports as f32 * 1.0) +
-        (evidence.cpp_error_strings as f32 * 0.5);
+    let cpp_score = (evidence.cpp_itanium_symbols as f32 * 2.0)
+        + (evidence.cpp_msvc_symbols as f32 * 2.0)
+        + (evidence.libstdcpp_imports as f32 * 1.5)
+        + (evidence.libcpp_imports as f32 * 1.5)
+        + (evidence.msvcrt_imports as f32 * 1.0)
+        + (evidence.cpp_error_strings as f32 * 0.5);
     if cpp_score > 0.0 {
         scores.insert(SourceLanguage::Cpp, cpp_score);
     }
-    
+
     // Rust evidence - boost score if we have many Rust symbols
-    let rust_boost = if evidence.rust_symbols > 10 { 10.0 } else { 0.0 };
-    let rust_score = 
-        (evidence.rust_symbols as f32 * 2.0) +
-        (evidence.rust_std_imports as f32 * 1.5) +
-        (evidence.rust_panic_strings as f32 * 1.0) +
-        rust_boost;
+    let rust_boost = if evidence.rust_symbols > 10 {
+        10.0
+    } else {
+        0.0
+    };
+    let rust_score = (evidence.rust_symbols as f32 * 2.0)
+        + (evidence.rust_std_imports as f32 * 1.5)
+        + (evidence.rust_panic_strings as f32 * 1.0)
+        + rust_boost;
     if rust_score > 0.0 {
         scores.insert(SourceLanguage::Rust, rust_score);
     }
-    
-    // Go evidence  
-    let go_score = 
-        (evidence.go_symbols as f32 * 2.0) +
-        (evidence.go_runtime_refs as f32 * 1.5) +
-        (evidence.go_error_strings as f32 * 1.0) +
-        (if evidence.has_go_buildid { 5.0 } else { 0.0 });
+
+    // Go evidence
+    let go_score = (evidence.go_symbols as f32 * 2.0)
+        + (evidence.go_runtime_refs as f32 * 1.5)
+        + (evidence.go_error_strings as f32 * 1.0)
+        + (if evidence.has_go_buildid { 5.0 } else { 0.0 });
     if go_score > 0.0 {
         scores.insert(SourceLanguage::Go, go_score);
     }
-    
+
     // C evidence (if no C++ indicators)
     if cpp_score == 0.0 && evidence.plain_c_symbols > 0 {
         let c_score = evidence.plain_c_symbols as f32 * 1.5;
         scores.insert(SourceLanguage::C, c_score);
     }
-    
+
     // Swift evidence
     if evidence.swift_symbols > 0 {
         scores.insert(SourceLanguage::Swift, evidence.swift_symbols as f32 * 2.0);
     }
-    
+
     // Objective-C evidence
     if evidence.objc_symbols > 0 {
-        scores.insert(SourceLanguage::ObjectiveC, evidence.objc_symbols as f32 * 2.0);
+        scores.insert(
+            SourceLanguage::ObjectiveC,
+            evidence.objc_symbols as f32 * 2.0,
+        );
     }
-    
+
     // Find the highest scoring language
     let (mut detected_language, mut max_score) = scores
         .iter()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .map(|(lang, score)| (*lang, *score))
         .unwrap_or((SourceLanguage::Unknown, 0.0));
-    
+
     // Override compiler info for language-specific cases
     if detected_language == SourceLanguage::Go && compiler_info.is_none() {
         compiler_info = Some(CompilerInfo {
@@ -681,21 +713,18 @@ pub fn detect_language_and_compiler_with_path(
             product_name: "gc".to_string(),
             version_major: go_version.as_ref().and_then(|v| {
                 // Parse "go1.23.5" -> major = 1
-                v.strip_prefix("go").and_then(|s| {
-                    s.split('.').next().and_then(|n| n.parse().ok())
-                })
+                v.strip_prefix("go")
+                    .and_then(|s| s.split('.').next().and_then(|n| n.parse().ok()))
             }),
             version_minor: go_version.as_ref().and_then(|v| {
                 // Parse "go1.23.5" -> minor = 23
-                v.strip_prefix("go").and_then(|s| {
-                    s.split('.').nth(1).and_then(|n| n.parse().ok())
-                })
+                v.strip_prefix("go")
+                    .and_then(|s| s.split('.').nth(1).and_then(|n| n.parse().ok()))
             }),
             version_patch: go_version.as_ref().and_then(|v| {
                 // Parse "go1.23.5" -> patch = 5
-                v.strip_prefix("go").and_then(|s| {
-                    s.split('.').nth(2).and_then(|n| n.parse().ok())
-                })
+                v.strip_prefix("go")
+                    .and_then(|s| s.split('.').nth(2).and_then(|n| n.parse().ok()))
             }),
             build_number: None,
             target_triple: None,
@@ -705,13 +734,13 @@ pub fn detect_language_and_compiler_with_path(
             vendor: CompilerVendor::Rustc,
             product_name: "rustc".to_string(),
             version_major: None,
-            version_minor: None, 
+            version_minor: None,
             version_patch: None,
             build_number: None,
             target_triple: None,
         });
     }
-    
+
     // Fallback for stripped binaries: Use compiler info to guess language
     if detected_language == SourceLanguage::Unknown && is_likely_stripped(symbols) {
         if let Some(ref compiler) = compiler_info {
@@ -722,7 +751,7 @@ pub fn detect_language_and_compiler_with_path(
             }
         }
     }
-    
+
     // Fallback for shared libraries: Default to C if only basic symbols
     if detected_language == SourceLanguage::Unknown {
         if let Some(path) = file_path {
@@ -732,14 +761,14 @@ pub fn detect_language_and_compiler_with_path(
             }
         }
     }
-    
+
     // Calculate confidence (normalize score)
     let confidence = if max_score > 0.0 {
         (max_score / 100.0).min(1.0) // Cap at 1.0
     } else {
         0.0
     };
-    
+
     // Get alternative languages
     let mut alternatives: Vec<(SourceLanguage, f32)> = scores
         .into_iter()
@@ -748,11 +777,14 @@ pub fn detect_language_and_compiler_with_path(
         .collect();
     alternatives.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
     alternatives.truncate(3); // Top 3 alternatives
-    
+
     // Build evidence summary
     let mut summary_parts = Vec::new();
     if evidence.cpp_itanium_symbols > 0 {
-        summary_parts.push(format!("{} C++ symbols (Itanium ABI)", evidence.cpp_itanium_symbols));
+        summary_parts.push(format!(
+            "{} C++ symbols (Itanium ABI)",
+            evidence.cpp_itanium_symbols
+        ));
     }
     if evidence.cpp_msvc_symbols > 0 {
         summary_parts.push(format!("{} C++ symbols (MSVC)", evidence.cpp_msvc_symbols));
@@ -769,7 +801,7 @@ pub fn detect_language_and_compiler_with_path(
     if evidence.has_rich_header {
         summary_parts.push("PE Rich Header (MSVC)".to_string());
     }
-    
+
     // Add additional diagnostic info
     if is_likely_stripped(symbols) {
         summary_parts.push("Binary appears stripped".to_string());
@@ -777,7 +809,7 @@ pub fn detect_language_and_compiler_with_path(
     if file_path.map_or(false, |p| is_shared_library(p)) {
         summary_parts.push("Shared library".to_string());
     }
-    
+
     let evidence_summary = if summary_parts.is_empty() {
         if is_likely_stripped(symbols) && compiler_info.is_some() {
             "Stripped binary - language guessed from compiler".to_string()
@@ -787,7 +819,7 @@ pub fn detect_language_and_compiler_with_path(
     } else {
         summary_parts.join(", ")
     };
-    
+
     LanguageDetectionResult {
         language: detected_language,
         compiler: compiler_info,
@@ -800,19 +832,19 @@ pub fn detect_language_and_compiler_with_path(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_cpp_symbol_detection() {
         let symbols = vec![
             "_ZN3std6vectorIiE9push_backEi".to_string(),
             "_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEED1Ev".to_string(),
         ];
-        
+
         let evidence = detect_language_from_symbols(&symbols);
         assert_eq!(evidence.cpp_itanium_symbols, 2);
         assert_eq!(evidence.cpp_msvc_symbols, 0);
     }
-    
+
     #[test]
     fn test_go_symbol_detection() {
         let symbols = vec![
@@ -820,38 +852,38 @@ mod tests {
             "runtime.newobject".to_string(),
             "fmt.Println".to_string(),
         ];
-        
+
         let evidence = detect_language_from_symbols(&symbols);
         assert_eq!(evidence.go_symbols, 3);
     }
-    
+
     #[test]
     fn test_rust_panic_string_detection() {
         let strings = vec![
             "panicked at 'index out of bounds', src/main.rs:42:5".to_string(),
             "called `Option::unwrap()` on a `None` value".to_string(),
         ];
-        
+
         let evidence = detect_language_from_strings(&strings);
         assert_eq!(evidence.rust_panic_strings, 2);
     }
-    
+
     #[test]
     fn test_gcc_version_detection() {
         let comment = "GCC: (GNU) 11.2.0 20211203";
         let info = detect_from_elf_comment(comment).unwrap();
-        
+
         assert_eq!(info.vendor, CompilerVendor::Gnu);
         assert_eq!(info.version_major, Some(11));
         assert_eq!(info.version_minor, Some(2));
         assert_eq!(info.version_patch, Some(0));
     }
-    
+
     #[test]
     fn test_clang_version_detection() {
         let comment = "clang version 14.0.6 (https://github.com/llvm/llvm-project)";
         let info = detect_from_elf_comment(comment).unwrap();
-        
+
         assert_eq!(info.vendor, CompilerVendor::Llvm);
         assert_eq!(info.version_major, Some(14));
         assert_eq!(info.version_minor, Some(0));

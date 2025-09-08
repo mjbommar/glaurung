@@ -273,6 +273,7 @@ pub fn summarize_macho(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
         tls_callback_count: None,
         tls_callback_vas: None,
         debug_info_present: false,
+        pdb_path: None,
         suspicious_imports: suspicious_list,
         entry_section: None,
         nx: None,

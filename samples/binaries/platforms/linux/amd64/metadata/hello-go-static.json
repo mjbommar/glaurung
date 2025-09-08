@@ -1,0 +1,11 @@
+{
+  "source_file": "/workspace/source/go/hello.go",
+  "compiler": "go build",
+  "go_version": "go version go1.23.5 linux/amd64",
+  "output_file": "/workspace/binaries/go/hello-go-static",
+  "compilation_flags": "CGO_ENABLED=0 GOOS=linux",
+  "description": "Static Go binary without CGO",
+  "timestamp": "2025-09-04T02:16:54+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

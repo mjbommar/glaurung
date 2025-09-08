@@ -31,6 +31,10 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
     "structlog>=25.4.0",
+    "pydantic>=2.11.7",
+    "pydantic-ai-slim[anthropic,google,openai]>=0.8.1",
+    "rich>=14.1.0",
+    "pydantic-ai>=0.8.1",
 ]
 
 [project.scripts]
@@ -52,5 +56,6 @@ module-name = "glaurung._native"
 [dependency-groups]
 dev = [
     "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
     "pytest-benchmark>=5.1.0",
 ]

@@ -18,13 +18,18 @@ pub mod symbols;
 
 /// Symbol name demangling helpers
 pub mod demangle;
-/// Cross-platform string scanning and language detection
-pub mod strings;
 /// Similarity and fuzzy hashing (CTPH)
 pub mod similarity;
+/// Cross-platform string scanning and language detection
+pub mod strings;
 
 /// High-performance entropy calculation and analysis
 pub mod entropy;
+
+/// Analysis-time program and memory views
+pub mod analysis;
+/// Disassembly engines and adapters
+pub mod disasm;
 
 #[cfg(feature = "python-ext")]
 use pyo3::{prelude::*, wrap_pyfunction};
@@ -257,10 +262,7 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         &triage
     )?)?;
     // Back-compat: symbols helpers under triage
-    triage.add_function(wrap_pyfunction!(
-        crate::symbols::list_symbols_py,
-        &triage
-    )?)?;
+    triage.add_function(wrap_pyfunction!(crate::symbols::list_symbols_py, &triage)?)?;
     triage.add_function(wrap_pyfunction!(
         crate::symbols::list_symbols_demangled_py,
         &triage
@@ -278,6 +280,67 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         crate::triage::entropy::analyze_entropy_bytes_py,
         &triage
     )?)?;
+    // Language detection helper for debugging
+    #[pyfunction]
+    #[pyo3(name = "detect_language")]
+    #[pyo3(signature = (text, min_size=4, min_conf=0.5, agree_conf=0.4))]
+    fn detect_language_py(
+        text: &str,
+        min_size: usize,
+        min_conf: f64,
+        agree_conf: f64,
+    ) -> (Option<String>, Option<String>, Option<f64>) {
+        // Use the redesigned router with supplied floors where possible
+        let cfg = {
+            let mut c = crate::strings::StringsConfig::default();
+            c.min_len_for_detect = min_size;
+            c.min_lang_confidence = min_conf;
+            c.min_lang_confidence_agree = agree_conf;
+            c
+        };
+        let router = crate::strings::detect::LanguageRouter::from_cfg(&cfg);
+        router.detect(text).tuple()
+    }
+    triage.add_function(wrap_pyfunction!(detect_language_py, &triage)?)?;
+    // Raw engine accessors for experiments
+    #[pyfunction]
+    #[pyo3(name = "detect_language_whatlang")]
+    #[pyo3(signature = (text))]
+    fn detect_language_whatlang_py(text: &str) -> (Option<String>, Option<String>, Option<f64>) {
+        crate::strings::detect::detect_with_whatlang(text)
+    }
+    triage.add_function(wrap_pyfunction!(detect_language_whatlang_py, &triage)?)?;
+
+    #[pyfunction]
+    #[pyo3(name = "detect_language_lingua")]
+    #[pyo3(signature = (text))]
+    fn detect_language_lingua_py(text: &str) -> (Option<String>, Option<String>, Option<f64>) {
+        crate::strings::detect::detect_with_lingua(text)
+    }
+    triage.add_function(wrap_pyfunction!(detect_language_lingua_py, &triage)?)?;
+
+    // Batch ensemble detection with Rayon
+    #[pyfunction]
+    #[pyo3(name = "detect_languages")]
+    #[pyo3(signature = (texts, min_size=4, min_conf=0.5, agree_conf=0.4))]
+    fn detect_languages_py(
+        texts: Vec<String>,
+        min_size: usize,
+        min_conf: f64,
+        agree_conf: f64,
+    ) -> Vec<(Option<String>, Option<String>, Option<f64>)> {
+        use rayon::prelude::*;
+        let cfg = {
+            let mut c = crate::strings::StringsConfig::default();
+            c.min_len_for_detect = min_size;
+            c.min_lang_confidence = min_conf;
+            c.min_lang_confidence_agree = agree_conf;
+            c
+        };
+        let router = crate::strings::detect::LanguageRouter::from_cfg(&cfg);
+        texts.par_iter().map(|s| router.detect(s).tuple()).collect()
+    }
+    triage.add_function(wrap_pyfunction!(detect_languages_py, &triage)?)?;
     // Add triage submodule
     m.add_submodule(&triage)?;
 
@@ -532,6 +595,23 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     strings_mod.add_function(wrap_pyfunction!(demangle_list_py, &strings_mod)?)?;
     m.add_submodule(&strings_mod)?;
 
+    // Top-level submodule: disasm
+    let disasm_mod = pyo3::types::PyModule::new(py, "disasm")?;
+    disasm_mod.add_class::<crate::disasm::py_api::PyDisassembler>()?;
+    disasm_mod.add_function(wrap_pyfunction!(
+        crate::disasm::py_api::disassembler_for_path_py,
+        &disasm_mod
+    )?)?;
+    disasm_mod.add_function(wrap_pyfunction!(
+        crate::disasm::py_api::disassemble_window_py,
+        &disasm_mod
+    )?)?;
+    disasm_mod.add_function(wrap_pyfunction!(
+        crate::disasm::py_api::disassemble_window_at_py,
+        &disasm_mod
+    )?)?;
+    m.add_submodule(&disasm_mod)?;
+
     // Top-level submodule: symbols
     let sym_mod = pyo3::types::PyModule::new(py, "symbols")?;
     sym_mod.add_function(wrap_pyfunction!(crate::symbols::list_symbols_py, &sym_mod)?)?;
@@ -569,6 +649,194 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     sym_mod.add_function(wrap_pyfunction!(load_capa_apis_py, &sym_mod)?)?;
     m.add_submodule(&sym_mod)?;
 
+    // Top-level submodule: analysis (function discovery, CFG)
+    let analysis_mod = pyo3::types::PyModule::new(py, "analysis")?;
+    // Entry detection helpers
+    #[pyfunction]
+    #[pyo3(name = "detect_entry_bytes")]
+    fn detect_entry_bytes_py(data: &[u8]) -> Option<(String, String, String, u64, Option<usize>)> {
+        if let Some(info) = crate::analysis::entry::detect_entry(data) {
+            let fmt = format!("{}", info.format);
+            let arch = format!("{}", info.arch);
+            let end = format!("{}", info.endianness);
+            return Some((fmt, arch, end, info.entry_va, info.file_offset));
+        }
+        None
+    }
+    #[pyfunction]
+    #[pyo3(name = "detect_entry_path")]
+    #[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+    fn detect_entry_path_py(
+        path: String,
+        max_read_bytes: u64,
+        max_file_size: u64,
+    ) -> PyResult<Option<(String, String, String, u64, Option<usize>)>> {
+        let limit = std::cmp::min(max_read_bytes, max_file_size);
+        let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+        Ok(detect_entry_bytes_py(&data))
+    }
+    #[pyfunction]
+    #[pyo3(name = "analyze_functions_bytes")]
+    #[pyo3(signature = (data, max_functions=16usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64))]
+    fn analyze_functions_bytes_py(
+        data: &[u8],
+        max_functions: usize,
+        max_blocks: usize,
+        max_instructions: usize,
+        timeout_ms: u64,
+    ) -> (
+        Vec<crate::core::function::Function>,
+        crate::core::call_graph::CallGraph,
+    ) {
+        let budgets = crate::analysis::cfg::Budgets {
+            max_functions,
+            max_blocks,
+            max_instructions,
+            timeout_ms,
+        };
+        crate::analysis::cfg::analyze_functions_bytes(data, &budgets)
+    }
+    #[pyfunction]
+    #[pyo3(name = "analyze_functions_path")]
+    #[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64, max_functions=16usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64))]
+    fn analyze_functions_path_py(
+        path: String,
+        max_read_bytes: u64,
+        max_file_size: u64,
+        max_functions: usize,
+        max_blocks: usize,
+        max_instructions: usize,
+        timeout_ms: u64,
+    ) -> PyResult<(
+        Vec<crate::core::function::Function>,
+        crate::core::call_graph::CallGraph,
+    )> {
+        let limit = std::cmp::min(max_read_bytes, max_file_size);
+        let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+        let budgets = crate::analysis::cfg::Budgets {
+            max_functions,
+            max_blocks,
+            max_instructions,
+            timeout_ms,
+        };
+        Ok(crate::analysis::cfg::analyze_functions_bytes(
+            &data, &budgets,
+        ))
+    }
+    analysis_mod.add_function(wrap_pyfunction!(detect_entry_bytes_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(detect_entry_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(analyze_functions_bytes_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(analyze_functions_path_py, &analysis_mod)?)?;
+    // Map VA to file offset for a given file
+    // Map VA to file offset for a given file
+    #[pyfunction]
+    #[pyo3(name = "va_to_file_offset_path")]
+    #[pyo3(signature = (path, va, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+    fn va_to_file_offset_path_py(
+        path: String,
+        va: u64,
+        max_read_bytes: u64,
+        max_file_size: u64,
+    ) -> PyResult<Option<usize>> {
+        let limit = std::cmp::min(max_read_bytes, max_file_size);
+        let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+        Ok(crate::analysis::entry::va_to_file_offset(&data, va))
+    }
+    analysis_mod.add_function(wrap_pyfunction!(va_to_file_offset_path_py, &analysis_mod)?)?;
+    // ELF PLT map helper
+    #[pyfunction]
+    #[pyo3(name = "elf_plt_map_path")]
+    #[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+    fn elf_plt_map_path_py(
+        path: String,
+        max_read_bytes: u64,
+        max_file_size: u64,
+    ) -> PyResult<Vec<(u64, String)>> {
+        let limit = std::cmp::min(max_read_bytes, max_file_size);
+        let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+        Ok(crate::analysis::elf_plt::elf_plt_map(&data))
+    }
+    analysis_mod.add_function(wrap_pyfunction!(elf_plt_map_path_py, &analysis_mod)?)?;
+    // ELF GOT map helper
+    #[pyfunction]
+    #[pyo3(name = "elf_got_map_path")]
+    #[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+    fn elf_got_map_path_py(
+        path: String,
+        max_read_bytes: u64,
+        max_file_size: u64,
+    ) -> PyResult<Vec<(u64, String)>> {
+        let limit = std::cmp::min(max_read_bytes, max_file_size);
+        let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+        Ok(crate::analysis::elf_got::elf_got_map(&data))
+    }
+    analysis_mod.add_function(wrap_pyfunction!(elf_got_map_path_py, &analysis_mod)?)?;
+    // PE IAT map helper
+    #[pyfunction]
+    #[pyo3(name = "pe_iat_map_path")]
+    #[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+    fn pe_iat_map_path_py(
+        path: String,
+        max_read_bytes: u64,
+        max_file_size: u64,
+    ) -> PyResult<Vec<(u64, String)>> {
+        let limit = std::cmp::min(max_read_bytes, max_file_size);
+        let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+        Ok(crate::analysis::pe_iat::pe_iat_map(&data))
+    }
+    analysis_mod.add_function(wrap_pyfunction!(pe_iat_map_path_py, &analysis_mod)?)?;
+    m.add_submodule(&analysis_mod)?;
+
+    // Top-level helper: symbol address map for a file
+    #[pyfunction]
+    #[pyo3(name = "symbol_address_map")]
+    #[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+    fn symbol_address_map_py(
+        path: String,
+        max_read_bytes: u64,
+        max_file_size: u64,
+    ) -> PyResult<Vec<(u64, String)>> {
+        use object::read::Object;
+        use object::ObjectSymbol;
+        let limit = std::cmp::min(max_read_bytes, max_file_size);
+        let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+        let mut out: Vec<(u64, String)> = Vec::new();
+        if let Ok(obj) = object::read::File::parse(&data[..]) {
+            for sym in obj.symbols() {
+                if sym.is_definition() {
+                    if let (Ok(name), addr) = (sym.name(), sym.address()) {
+                        let s = name.to_string();
+                        if !s.is_empty() {
+                            out.push((addr, s));
+                        }
+                    }
+                }
+            }
+            for sym in obj.dynamic_symbols() {
+                if sym.is_definition() {
+                    if let (Ok(name), addr) = (sym.name(), sym.address()) {
+                        let s = name.to_string();
+                        if !s.is_empty() {
+                            out.push((addr, s));
+                        }
+                    }
+                }
+            }
+        }
+        // Dedup by address, keep first name
+        out.sort_by_key(|(a, _)| *a);
+        out.dedup_by_key(|(a, _)| *a);
+        Ok(out)
+    }
+    m.add_function(wrap_pyfunction!(symbol_address_map_py, m)?)?;
+
     // Top-level submodule: similarity (CTPH fuzzy hashing)
     let similarity_mod = pyo3::types::PyModule::new(py, "similarity")?;
     // CTPH wrappers
@@ -581,7 +849,11 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         digest_size: usize,
         precision: u8,
     ) -> String {
-        let cfg = crate::similarity::CtphConfig { window_size, digest_size, precision };
+        let cfg = crate::similarity::CtphConfig {
+            window_size,
+            digest_size,
+            precision,
+        };
         crate::similarity::ctph_hash(data, &cfg)
     }
 
@@ -599,7 +871,11 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         let limit = std::cmp::min(max_read_bytes, max_file_size);
         let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
-        let cfg = crate::similarity::CtphConfig { window_size, digest_size, precision };
+        let cfg = crate::similarity::CtphConfig {
+            window_size,
+            digest_size,
+            precision,
+        };
         Ok(crate::similarity::ctph_hash(&data, &cfg))
     }
 
@@ -631,7 +907,9 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         let mut count = 0usize;
         for i in 0..n {
             for j in (i + 1)..n {
-                if count >= max_pairs { return out; }
+                if count >= max_pairs {
+                    return out;
+                }
                 let s = crate::similarity::ctph_similarity(&digests[i], &digests[j]);
                 out.push((i, j, s));
                 count += 1;
@@ -652,9 +930,13 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     ) -> Vec<(String, f64)> {
         let mut scored: Vec<(String, f64)> = Vec::new();
         for (idx, c) in candidates.into_iter().enumerate() {
-            if idx >= max_candidates { break; }
+            if idx >= max_candidates {
+                break;
+            }
             let s = crate::similarity::ctph_similarity(query_digest, &c);
-            if s >= min_score { scored.push((c, s)); }
+            if s >= min_score {
+                scored.push((c, s));
+            }
         }
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k);
@@ -664,7 +946,10 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     similarity_mod.add_function(wrap_pyfunction!(ctph_hash_bytes_py, &similarity_mod)?)?;
     similarity_mod.add_function(wrap_pyfunction!(ctph_hash_path_py, &similarity_mod)?)?;
     similarity_mod.add_function(wrap_pyfunction!(ctph_similarity_py, &similarity_mod)?)?;
-    similarity_mod.add_function(wrap_pyfunction!(ctph_recommended_params_py, &similarity_mod)?)?;
+    similarity_mod.add_function(wrap_pyfunction!(
+        ctph_recommended_params_py,
+        &similarity_mod
+    )?)?;
     similarity_mod.add_function(wrap_pyfunction!(ctph_pairwise_matrix_py, &similarity_mod)?)?;
     similarity_mod.add_function(wrap_pyfunction!(ctph_top_k_py, &similarity_mod)?)?;
     m.add_submodule(&similarity_mod)?;

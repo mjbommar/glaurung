@@ -1,4 +1,6 @@
 use crate::core::binary::{Arch, Endianness, Format};
+use crate::core::disassembler::Disassembler;
+use crate::core::triage::formats::{FormatSpecificTriage, PeTriageInfo};
 use crate::core::triage::{
     Budgets, ContainerChild, EntropyAnalysis, PackerMatch, StringsSummary, TriageVerdict,
     TriagedArtifact,
@@ -6,9 +8,9 @@ use crate::core::triage::{
 use crate::core::triage::{TriageError, TriageErrorKind, TriageHint};
 use crate::strings::StringsConfig;
 use crate::symbols::{self, BudgetCaps};
-use crate::triage::config::{EntropyConfig, PackerConfig, SimilarityConfig};
 #[cfg(feature = "python-ext")]
 use crate::triage::config::TriageConfig;
+use crate::triage::config::{EntropyConfig, PackerConfig, SimilarityConfig};
 use crate::triage::entropy::analyze_entropy;
 use crate::triage::format_detection::{derive_format_from_hint, is_container_hint};
 use crate::triage::headers;
@@ -28,6 +30,64 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::time::Instant;
 use tracing::{debug, info};
+
+fn compute_disasm_preview(
+    data: &[u8],
+    arch_guesses: &[(Arch, f32)],
+    e_guess: Endianness,
+    max_instructions: usize,
+    max_bytes: usize,
+    max_time_ms: u64,
+) -> Option<Vec<String>> {
+    use crate::core::disassembler::Architecture as DArch;
+    let (barch, _conf) = arch_guesses.first().cloned()?;
+    let darch: DArch = barch.into();
+    let backend = crate::disasm::registry::for_arch(darch, e_guess)?;
+    let bits = darch.address_bits();
+    let addr = crate::core::address::Address::new(
+        crate::core::address::AddressKind::VA,
+        0,
+        bits,
+        None,
+        None,
+    )
+    .ok()?;
+    let mut out = Vec::new();
+    let mut off = 0usize;
+    let limit = data.len().min(max_bytes);
+    let t0 = std::time::Instant::now();
+    for _ in 0..max_instructions {
+        if off >= limit {
+            break;
+        }
+        if t0.elapsed().as_millis() as u64 > max_time_ms {
+            break;
+        }
+        let cur = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            addr.value.saturating_add(off as u64),
+            bits,
+            None,
+            None,
+        )
+        .ok()?;
+        match backend.disassemble_instruction(&cur, &data[off..limit]) {
+            Ok(ins) => {
+                if ins.length == 0 {
+                    break;
+                }
+                out.push(ins.disassembly());
+                off += ins.length as usize;
+            }
+            Err(_) => break,
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
 
 fn generate_id(path: Option<&Path>, size: usize) -> String {
     let mut hasher = Sha256::new();
@@ -279,7 +339,11 @@ fn build_artifact_from_buffers(
     // Compute packers here with provided config
     let packers = {
         let v = detect_packers(heur_buf, packer_cfg);
-        if v.is_empty() { None } else { Some(v) }
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
     };
 
     // Ensure deterministic ordering of children if present
@@ -307,6 +371,24 @@ fn build_artifact_from_buffers(
     let looks_exec =
         !header_formats.is_empty() || hints.iter().any(|h| derive_format_from_hint(h).is_some());
 
+    // Optional disassembly preview (bounded, budgeted): only if likely executable
+    let disasm_preview = if looks_exec {
+        compute_disasm_preview(heur_buf, &arch_guesses, e_guess, 32, 512, 5)
+    } else {
+        None
+    };
+
+    // Format-specific analysis
+    let format_specific = if header_formats.first().copied() == Some(Format::PE) {
+        let rich_header = crate::triage::rich_header::parse_rich_header(heur_buf);
+        Some(FormatSpecificTriage {
+            pe: Some(PeTriageInfo { rich_header }),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
     // Compute symbol summary, using heuristics buffer (bounded to MAX_ENTROPY_SIZE)
     let symbols_sum = header_formats
         .first()
@@ -322,17 +404,31 @@ fn build_artifact_from_buffers(
         // imphash only for PE, else None
         let imphash = if header_formats.first().copied() == Some(crate::core::binary::Format::PE) {
             crate::symbols::analysis::imphash::pe_imphash(heur_buf)
-        } else { None };
+        } else {
+            None
+        };
         // CTPH over bounded heuristics buffer, if enabled
         let ctph = if sim_cfg.enable_ctph {
             let (w, d, p) = if sim_cfg.window_size == 0 || sim_cfg.digest_size == 0 {
-                if heur_buf.len() < 16 * 1024 { (8usize, 4usize, 8u8) }
-                else if heur_buf.len() < 1 * 1024 * 1024 { (16usize, 5usize, 16u8) }
-                else { (32usize, 6usize, 16u8) }
-            } else { (sim_cfg.window_size, sim_cfg.digest_size, sim_cfg.precision) };
-            let cfg = crate::similarity::CtphConfig { window_size: w, digest_size: d, precision: p };
+                if heur_buf.len() < 16 * 1024 {
+                    (8usize, 4usize, 8u8)
+                } else if heur_buf.len() < 1 * 1024 * 1024 {
+                    (16usize, 5usize, 16u8)
+                } else {
+                    (32usize, 6usize, 16u8)
+                }
+            } else {
+                (sim_cfg.window_size, sim_cfg.digest_size, sim_cfg.precision)
+            };
+            let cfg = crate::similarity::CtphConfig {
+                window_size: w,
+                digest_size: d,
+                precision: p,
+            };
             Some(crate::similarity::ctph_hash(heur_buf, &cfg))
-        } else { None };
+        } else {
+            None
+        };
         Some(crate::core::triage::SimilaritySummary { imphash, ctph })
     };
 
@@ -342,19 +438,40 @@ fn build_artifact_from_buffers(
         let pe_auth = if header_formats.first().copied() == Some(crate::core::binary::Format::PE) {
             // Heuristic: overlay contains a signature blob
             overlay.as_ref().map(|o| o.has_signature).unwrap_or(false)
-        } else { false };
-        let macho_sig = if header_formats.first().copied() == Some(crate::core::binary::Format::MachO) {
+        } else {
+            false
+        };
+        let macho_sig = if header_formats.first().copied()
+            == Some(crate::core::binary::Format::MachO)
+        {
             if let Some(env) = crate::symbols::analysis::macho_env::analyze_macho_env(heur_buf) {
                 env.code_signature
-            } else { false }
-        } else { false };
-        let macho_ent = if header_formats.first().copied() == Some(crate::core::binary::Format::MachO) {
-            if let Some(env) = crate::symbols::analysis::macho_env::analyze_macho_env(heur_buf) {
-                // Lightweight heuristic: if rpaths mention entitlements or codesign present and plist markers exist in image
-                macho_sig && std::str::from_utf8(heur_buf).map(|s| s.contains("Entitlements")).unwrap_or(false)
-            } else { false }
-        } else { false };
-        Some(SigningSummary { pe_authenticode_present: pe_auth, macho_code_signature_present: macho_sig, macho_entitlements_present: macho_ent, overlay_has_signature: overlay.as_ref().map(|o| o.has_signature).unwrap_or(false) })
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let macho_ent =
+            if header_formats.first().copied() == Some(crate::core::binary::Format::MachO) {
+                if crate::symbols::analysis::macho_env::analyze_macho_env(heur_buf).is_some() {
+                    // Lightweight heuristic: if rpaths mention entitlements or codesign present and plist markers exist in image
+                    macho_sig
+                        && std::str::from_utf8(heur_buf)
+                            .map(|s| s.contains("Entitlements"))
+                            .unwrap_or(false)
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+        Some(SigningSummary {
+            pe_authenticode_present: pe_auth,
+            macho_code_signature_present: macho_sig,
+            macho_entitlements_present: macho_ent,
+            overlay_has_signature: overlay.as_ref().map(|o| o.has_signature).unwrap_or(false),
+        })
     };
 
     // Build preliminary artifact (pre-scoring) so scoring can consider context
@@ -386,6 +503,7 @@ fn build_artifact_from_buffers(
         .with_containers(containers)
         .with_recursion_summary(recursion_summary)
         .with_overlay(overlay)
+        .with_format_specific(format_specific.clone())
         .with_parse_status(if parser_results.is_empty() {
             None
         } else {
@@ -429,10 +547,12 @@ fn build_artifact_from_buffers(
         .with_entropy_analysis(prelim.entropy_analysis)
         .with_strings(strings)
         .with_similarity(prelim.similarity)
+        .with_disasm_preview(disasm_preview)
         .with_symbols(prelim.symbols)
         .with_packers(prelim.packers)
         .with_containers(prelim.containers)
         .with_overlay(prelim.overlay)
+        .with_format_specific(prelim.format_specific)
         .with_parse_status(prelim.parse_status)
         .with_budgets(Some(Budgets {
             bytes_read: initial_bytes_read,
@@ -640,7 +760,12 @@ pub fn analyze_path_py(
         time_guard_ms: 10,
         enable_language: _enable_language,
         max_lang_detect: _max_lang_detect,
-        min_len_for_detect: 10,
+        min_len_for_detect: 4,
+        max_len_for_lingua: 32,
+        min_lang_confidence: 0.5,
+        min_lang_confidence_agree: 0.4,
+        texty_strict: false,
+        use_fast_detection: true,
         enable_classification: _enable_classification,
         max_classify: _max_classify,
         max_ioc_per_string: _max_ioc_per_string,
@@ -723,7 +848,12 @@ pub fn analyze_bytes_py(
         time_guard_ms: 10,
         enable_language,
         max_lang_detect,
-        min_len_for_detect: 10,
+        min_len_for_detect: 4,
+        max_len_for_lingua: 32,
+        min_lang_confidence: 0.5,
+        min_lang_confidence_agree: 0.4,
+        texty_strict: false,
+        use_fast_detection: true,
         enable_classification,
         max_classify,
         max_ioc_per_string,

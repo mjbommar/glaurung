@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/c2_demo.c",
+  "compiler": "aarch64-linux-gnu-gcc",
+  "output_file": "/workspace/binaries/cross/arm64/c2_demo-arm64-gcc",
+  "compilation_flags": "-O2 -Wall",
+  "description": "GCC cross ARM64 (gcc)",
+  "timestamp": "2025-09-04T01:41:33+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

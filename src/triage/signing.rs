@@ -15,4 +15,3 @@ pub struct SigningSummary {
     /// Overlay signature indicator (e.g., PKCS#7)
     pub overlay_has_signature: bool,
 }
-

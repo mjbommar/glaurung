@@ -135,7 +135,12 @@ pub struct SimilarityConfig {
 
 impl Default for SimilarityConfig {
     fn default() -> Self {
-        Self { enable_ctph: true, window_size: 8, digest_size: 4, precision: 8 }
+        Self {
+            enable_ctph: true,
+            window_size: 8,
+            digest_size: 4,
+            precision: 8,
+        }
     }
 }
 
@@ -143,27 +148,45 @@ impl Default for SimilarityConfig {
 #[pymethods]
 impl SimilarityConfig {
     #[new]
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     #[getter]
-    pub fn get_enable_ctph(&self) -> bool { self.enable_ctph }
+    pub fn get_enable_ctph(&self) -> bool {
+        self.enable_ctph
+    }
     #[setter]
-    pub fn set_enable_ctph(&mut self, v: bool) { self.enable_ctph = v; }
+    pub fn set_enable_ctph(&mut self, v: bool) {
+        self.enable_ctph = v;
+    }
 
     #[getter]
-    pub fn get_window_size(&self) -> usize { self.window_size }
+    pub fn get_window_size(&self) -> usize {
+        self.window_size
+    }
     #[setter]
-    pub fn set_window_size(&mut self, v: usize) { self.window_size = v; }
+    pub fn set_window_size(&mut self, v: usize) {
+        self.window_size = v;
+    }
 
     #[getter]
-    pub fn get_digest_size(&self) -> usize { self.digest_size }
+    pub fn get_digest_size(&self) -> usize {
+        self.digest_size
+    }
     #[setter]
-    pub fn set_digest_size(&mut self, v: usize) { self.digest_size = v; }
+    pub fn set_digest_size(&mut self, v: usize) {
+        self.digest_size = v;
+    }
 
     #[getter]
-    pub fn get_precision(&self) -> u8 { self.precision }
+    pub fn get_precision(&self) -> u8 {
+        self.precision
+    }
     #[setter]
-    pub fn set_precision(&mut self, v: u8) { self.precision = v; }
+    pub fn set_precision(&mut self, v: u8) {
+        self.precision = v;
+    }
 }
 
 /// I/O configuration for file reading and buffering.

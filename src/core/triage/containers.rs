@@ -13,6 +13,8 @@ pub struct ContainerChild {
     pub size: u64,
     /// Optional container metadata (e.g., counts, sizes)
     pub metadata: Option<ContainerMetadata>,
+    /// Optional nested children (recursion tree)
+    pub children: Option<Vec<ContainerChild>>,
 }
 
 #[cfg(feature = "python-ext")]
@@ -25,6 +27,7 @@ impl ContainerChild {
             offset,
             size,
             metadata: None,
+            children: None,
         }
     }
     #[getter]
@@ -42,6 +45,11 @@ impl ContainerChild {
     #[getter]
     fn metadata(&self) -> Option<ContainerMetadata> {
         self.metadata.clone()
+    }
+
+    #[getter]
+    fn children(&self) -> Option<Vec<ContainerChild>> {
+        self.children.clone()
     }
 }
 
@@ -83,6 +91,7 @@ impl ContainerChild {
             offset,
             size,
             metadata: None,
+            children: None,
         }
     }
 }

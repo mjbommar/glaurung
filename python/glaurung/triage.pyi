@@ -146,7 +146,9 @@ class SymbolSummary:
 class SimilaritySummary:
     imphash: Optional[str]
     ctph: Optional[str]
-    def __init__(self, imphash: Optional[str] = ..., ctph: Optional[str] = ...) -> None: ...
+    def __init__(
+        self, imphash: Optional[str] = ..., ctph: Optional[str] = ...
+    ) -> None: ...
 
 class OverlayFormat:
     ZIP: OverlayFormat
@@ -257,6 +259,20 @@ class Budgets:
     max_recursion_depth: Optional[int]
     hit_byte_limit: bool
     def __init__(self, bytes_read: int, time_ms: int, recursion_depth: int) -> None: ...
+
+# Language detection helpers
+def detect_language(
+    text: str, min_size: int = 4, min_conf: float = 0.5, agree_conf: float = 0.4
+) -> tuple[Optional[str], Optional[str], Optional[float]]: ...
+def detect_language_whatlang(
+    text: str,
+) -> tuple[Optional[str], Optional[str], Optional[float]]: ...
+def detect_language_lingua(
+    text: str,
+) -> tuple[Optional[str], Optional[str], Optional[float]]: ...
+def detect_languages(
+    texts: list[str], min_size: int = 4, min_conf: float = 0.5, agree_conf: float = 0.4
+) -> list[tuple[Optional[str], Optional[str], Optional[float]]]: ...
 
 class TriageConfig:
     """Configuration wrapper used by analyze_* to control behavior."""

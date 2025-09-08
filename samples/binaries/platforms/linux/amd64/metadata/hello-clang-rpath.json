@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/cpp/hello.cpp",
+  "compiler": "clang++",
+  "output_file": "/workspace/binaries/native/clang/rpath/hello-clang-rpath",
+  "compilation_flags": "-O2 -Wl,-rpath,/opt/test",
+  "description": "Clang with RPATH (/opt/test)",
+  "timestamp": "2025-09-04T02:16:40+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

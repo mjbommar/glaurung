@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/c2_demo.c",
+  "compiler": "x86_64-w64-mingw32-gcc",
+  "output_file": "/workspace/binaries/cross/windows-x86_64/c2_demo-c-x86_64-mingw.exe",
+  "compilation_flags": "-O2 -Wall",
+  "description": "MinGW-w64 PE (x86_64) via x86_64-w64-mingw32-gcc",
+  "timestamp": "2025-09-04T01:41:33+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

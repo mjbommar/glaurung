@@ -1,6 +1,3 @@
-import os
-import tempfile
-
 import glaurung as g
 
 
@@ -43,6 +40,7 @@ def test_ctph_recommended_params():
 
 def test_ctph_matrix_and_topk():
     import random
+
     base = bytearray(b"A" * 4096)
     digests = []
     for i in range(6):

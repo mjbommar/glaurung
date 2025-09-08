@@ -8,6 +8,7 @@ use super::packers::PackerMatch;
 use super::parsers::ParserResult;
 use super::strings::StringsSummary;
 use crate::core::binary::{Arch, Endianness, Format};
+use crate::core::triage::formats::FormatSpecificTriage;
 use crate::error::GlaurungError;
 use crate::symbols::SymbolSummary;
 #[cfg(feature = "python-ext")]
@@ -33,9 +34,13 @@ impl SimilaritySummary {
     }
 
     #[getter]
-    pub fn get_imphash(&self) -> Option<String> { self.imphash.clone() }
+    pub fn get_imphash(&self) -> Option<String> {
+        self.imphash.clone()
+    }
     #[getter]
-    pub fn get_ctph(&self) -> Option<String> { self.ctph.clone() }
+    pub fn get_ctph(&self) -> Option<String> {
+        self.ctph.clone()
+    }
 }
 
 /// Resource usage and safety budgets.
@@ -196,6 +201,8 @@ pub struct TriagedArtifact {
     pub recursion_summary: Option<crate::triage::recurse::RecursionSummary>,
     /// Optional overlay analysis (data appended after official end of binary)
     pub overlay: Option<crate::triage::overlay::OverlayAnalysis>,
+    /// Format-specific triage information.
+    pub format_specific: Option<FormatSpecificTriage>,
 
     /// Parser outcomes and budgets
     pub parse_status: Option<Vec<ParserResult>>,
@@ -204,6 +211,8 @@ pub struct TriagedArtifact {
     /// Heuristic guesses (for scoring)
     pub heuristic_endianness: Option<(Endianness, f32)>,
     pub heuristic_arch: Option<Vec<(Arch, f32)>>,
+    /// Optional bounded disassembly preview (rendered lines)
+    pub disasm_preview: Option<Vec<String>>,
 }
 
 #[cfg(feature = "python-ext")]
@@ -229,11 +238,13 @@ impl TriagedArtifact {
         containers=None,
         recursion_summary=None,
         overlay=None,
+        format_specific=None,
         parse_status=None,
         budgets=None,
         errors=None,
         heuristic_endianness=None,
-        heuristic_arch=None
+        heuristic_arch=None,
+        disasm_preview=None
     ))]
     pub fn new_py(
         schema_version: String,
@@ -253,11 +264,13 @@ impl TriagedArtifact {
         containers: Option<Vec<ContainerChild>>,
         recursion_summary: Option<crate::triage::recurse::RecursionSummary>,
         overlay: Option<crate::triage::overlay::OverlayAnalysis>,
+        format_specific: Option<FormatSpecificTriage>,
         parse_status: Option<Vec<ParserResult>>,
         budgets: Option<Budgets>,
         errors: Option<Vec<TriageError>>,
         heuristic_endianness: Option<(Endianness, f32)>,
         heuristic_arch: Option<Vec<(Arch, f32)>>,
+        disasm_preview: Option<Vec<String>>,
     ) -> Self {
         Self {
             schema_version,
@@ -277,25 +290,21 @@ impl TriagedArtifact {
             containers,
             recursion_summary,
             overlay,
+            format_specific,
             parse_status,
             budgets,
             errors,
             heuristic_endianness,
             heuristic_arch,
+            disasm_preview,
         }
     }
 
     /// Compute CTPH-based similarity against another artifact, if both
     /// contain a CTPH digest. Returns None if missing.
     pub fn ctph_similarity(&self, other: &TriagedArtifact) -> Option<f64> {
-        let a = self
-            .similarity
-            .as_ref()
-            .and_then(|s| s.ctph.as_ref())?;
-        let b = other
-            .similarity
-            .as_ref()
-            .and_then(|s| s.ctph.as_ref())?;
+        let a = self.similarity.as_ref().and_then(|s| s.ctph.as_ref())?;
+        let b = other.similarity.as_ref().and_then(|s| s.ctph.as_ref())?;
         Some(crate::similarity::ctph_similarity(a, b))
     }
 
@@ -332,7 +341,9 @@ impl TriagedArtifact {
         self.sha256.clone()
     }
     #[getter]
-    fn schema_version(&self) -> &str { &self.schema_version }
+    fn schema_version(&self) -> &str {
+        &self.schema_version
+    }
     #[getter]
     fn hints(&self) -> Vec<TriageHint> {
         self.hints.clone()
@@ -380,6 +391,10 @@ impl TriagedArtifact {
     #[getter]
     fn overlay(&self) -> Option<crate::triage::overlay::OverlayAnalysis> {
         self.overlay.clone()
+    }
+    #[getter]
+    fn format_specific(&self) -> Option<FormatSpecificTriage> {
+        self.format_specific.clone()
     }
     #[getter]
     fn parse_status(&self) -> Option<Vec<ParserResult>> {
@@ -543,11 +558,13 @@ pub struct TriagedArtifactBuilder {
     containers: Option<Vec<ContainerChild>>,
     recursion_summary: Option<crate::triage::recurse::RecursionSummary>,
     overlay: Option<crate::triage::overlay::OverlayAnalysis>,
+    format_specific: Option<FormatSpecificTriage>,
     parse_status: Option<Vec<ParserResult>>,
     budgets: Option<Budgets>,
     errors: Option<Vec<TriageError>>,
     heuristic_endianness: Option<(Endianness, f32)>,
     heuristic_arch: Option<Vec<(Arch, f32)>>,
+    disasm_preview: Option<Vec<String>>,
 }
 
 impl TriagedArtifactBuilder {
@@ -635,10 +652,7 @@ impl TriagedArtifactBuilder {
     }
 
     /// Sets the signing summary.
-    pub fn with_signing(
-        mut self,
-        signing: Option<crate::triage::signing::SigningSummary>,
-    ) -> Self {
+    pub fn with_signing(mut self, signing: Option<crate::triage::signing::SigningSummary>) -> Self {
         self.signing = signing;
         self
     }
@@ -670,6 +684,12 @@ impl TriagedArtifactBuilder {
         overlay: Option<crate::triage::overlay::OverlayAnalysis>,
     ) -> Self {
         self.overlay = overlay;
+        self
+    }
+
+    /// Sets the format-specific triage information.
+    pub fn with_format_specific(mut self, format_specific: Option<FormatSpecificTriage>) -> Self {
+        self.format_specific = format_specific;
         self
     }
 
@@ -706,6 +726,12 @@ impl TriagedArtifactBuilder {
         self
     }
 
+    /// Sets the disassembly preview lines.
+    pub fn with_disasm_preview(mut self, preview: Option<Vec<String>>) -> Self {
+        self.disasm_preview = preview;
+        self
+    }
+
     /// Builds the TriagedArtifact. Returns an error if required fields are missing.
     pub fn build(self) -> Result<TriagedArtifact, String> {
         let id = self.id.ok_or("id is required")?;
@@ -731,11 +757,13 @@ impl TriagedArtifactBuilder {
             containers: self.containers,
             recursion_summary: self.recursion_summary,
             overlay: self.overlay,
+            format_specific: self.format_specific,
             parse_status: self.parse_status,
             budgets: self.budgets,
             errors: self.errors,
             heuristic_endianness: self.heuristic_endianness,
             heuristic_arch: self.heuristic_arch,
+            disasm_preview: self.disasm_preview,
         })
     }
 }
@@ -761,11 +789,13 @@ impl TriagedArtifact {
         packers: Option<Vec<PackerMatch>>,
         containers: Option<Vec<ContainerChild>>,
         overlay: Option<crate::triage::overlay::OverlayAnalysis>,
+        format_specific: Option<FormatSpecificTriage>,
         parse_status: Option<Vec<ParserResult>>,
         budgets: Option<Budgets>,
         errors: Option<Vec<TriageError>>,
         heuristic_endianness: Option<(Endianness, f32)>,
         heuristic_arch: Option<Vec<(Arch, f32)>>,
+        disasm_preview: Option<Vec<String>>,
     ) -> Self {
         // Use the builder internally for consistency
         TriagedArtifact::builder()
@@ -784,11 +814,13 @@ impl TriagedArtifact {
             .with_packers(packers)
             .with_containers(containers)
             .with_overlay(overlay)
+            .with_format_specific(format_specific)
             .with_parse_status(parse_status)
             .with_budgets(budgets)
             .with_errors(errors)
             .with_heuristic_endianness(heuristic_endianness)
             .with_heuristic_arch(heuristic_arch)
+            .with_disasm_preview(disasm_preview)
             .build()
             .expect("All required fields should be provided in new()")
     }

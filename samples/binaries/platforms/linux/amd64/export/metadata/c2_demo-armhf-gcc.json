@@ -1,0 +1,10 @@
+{
+  "source_file": "/workspace/source/c/c2_demo.c",
+  "compiler": "arm-linux-gnueabihf-gcc",
+  "output_file": "/workspace/binaries/cross/armhf/c2_demo-armhf-gcc",
+  "compilation_flags": "-O2 -Wall",
+  "description": "GCC cross ARM 32-bit (gcc)",
+  "timestamp": "2025-09-04T01:41:33+00:00",
+  "platform": "linux",
+  "architecture": "x86_64"
+}

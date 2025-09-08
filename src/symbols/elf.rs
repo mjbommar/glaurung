@@ -207,7 +207,13 @@ pub fn summarize_elf(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
     // - Otherwise, treat no .symtab as stripped
     let has_symtab = symtab_count > 0;
     let has_dynsym = dynsym_count > 0;
-    let stripped = decide_stripped(has_symtab, has_dynsym, debug_info_present, has_debuglink, has_build_id);
+    let stripped = decide_stripped(
+        has_symtab,
+        has_dynsym,
+        debug_info_present,
+        has_debuglink,
+        has_build_id,
+    );
 
     // DT_NEEDED from SHT_DYNAMIC
     let mut libs: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -439,6 +445,7 @@ pub fn summarize_elf(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
         tls_callback_count: None,
         tls_callback_vas: None,
         debug_info_present,
+        pdb_path: None,
         suspicious_imports: suspicious_list,
         entry_section: None,
         nx,

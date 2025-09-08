@@ -7,6 +7,7 @@
 mod classify;
 mod config;
 pub mod detect;
+pub mod detect_fast;
 pub mod normalize;
 pub mod patterns;
 mod scan;
@@ -16,8 +17,12 @@ pub mod similarity;
 pub use config::StringsConfig;
 
 use crate::core::triage::{DetectedString, IocSample, StringsSummary};
+use crate::strings::detect::LanguageRouter;
 use crate::strings::search::{MatchKind, SearchBudget};
-use std::collections::HashMap;
+use rayon::prelude::*;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// Extract strings summary from raw bytes using the provided configuration.
 ///
@@ -34,94 +39,178 @@ pub fn extract_summary(data: &[u8], cfg: &StringsConfig) -> StringsSummary {
     let mut language_counts: HashMap<String, u32> = HashMap::new();
     let mut script_counts: HashMap<String, u32> = HashMap::new();
 
-    // Helper closure: annotate with language when enabled and within budget
-    let mut lang_budget_remaining = cfg.max_lang_detect;
-    let mut annotate = |text: &str| -> (Option<String>, Option<String>, Option<f64>) {
-        if cfg.enable_language
-            && lang_budget_remaining > 0
-            && text.len() >= cfg.min_len_for_detect
-            && detect::is_texty_for_lang(text)
-        {
-            lang_budget_remaining = lang_budget_remaining.saturating_sub(1);
-            let (l, s, c) = detect::detect_string_language(text);
-            if let Some(conf) = c {
-                if conf >= 0.5 {
-                    return (l, s, Some(conf));
-                }
-            }
-            (None, None, None)
-        } else {
-            (None, None, None)
+    // Parallelize language detection with a shared atomic budget.
+    const PAR_THRESHOLD: usize = 128;
+    let budget = Arc::new(AtomicUsize::new(cfg.max_lang_detect));
+
+    // Language router derived from config
+    let router = LanguageRouter::from_cfg(cfg);
+
+    // Helper to process a batch for a given encoding label
+    let mut process_batch = |label: &str,
+                             items: &[(String, usize)]|
+     -> (
+        Vec<DetectedString>,
+        HashMap<String, u32>,
+        HashMap<String, u32>,
+    ) {
+        if items.is_empty() {
+            return (Vec::new(), HashMap::new(), HashMap::new());
         }
+        let results: Vec<(Option<String>, Option<String>, Option<f64>)> =
+            if items.len() >= PAR_THRESHOLD {
+                items
+                    .par_iter()
+                    .map(|(text, _off)| {
+                        if cfg.enable_language
+                            && text.len() >= cfg.min_len_for_detect
+                            && detect::is_texty_for_lang_with_policy(text, cfg.texty_strict)
+                        {
+                            // Attempt budget decrement
+                            let mut ok = false;
+                            loop {
+                                let cur = budget.load(Ordering::Relaxed);
+                                if cur == 0 {
+                                    break;
+                                }
+                                if budget
+                                    .compare_exchange_weak(
+                                        cur,
+                                        cur - 1,
+                                        Ordering::SeqCst,
+                                        Ordering::Relaxed,
+                                    )
+                                    .is_ok()
+                                {
+                                    ok = true;
+                                    break;
+                                }
+                            }
+                            if ok {
+                                router.detect(text).tuple()
+                            } else {
+                                (None, None, None)
+                            }
+                        } else {
+                            (None, None, None)
+                        }
+                    })
+                    .collect()
+            } else {
+                items
+                    .iter()
+                    .map(|(text, _off)| {
+                        if cfg.enable_language
+                            && budget.load(Ordering::Relaxed) > 0
+                            && text.len() >= cfg.min_len_for_detect
+                            && detect::is_texty_for_lang_with_policy(text, cfg.texty_strict)
+                        {
+                            let mut ok = false;
+                            loop {
+                                let cur = budget.load(Ordering::Relaxed);
+                                if cur == 0 {
+                                    break;
+                                }
+                                if budget
+                                    .compare_exchange_weak(
+                                        cur,
+                                        cur - 1,
+                                        Ordering::SeqCst,
+                                        Ordering::Relaxed,
+                                    )
+                                    .is_ok()
+                                {
+                                    ok = true;
+                                    break;
+                                }
+                            }
+                            if ok {
+                                router.detect(text).tuple()
+                            } else {
+                                (None, None, None)
+                            }
+                        } else {
+                            (None, None, None)
+                        }
+                    })
+                    .collect()
+            };
+
+        let mut batch_ds: Vec<DetectedString> = Vec::with_capacity(items.len());
+        let mut lang_local: HashMap<String, u32> = HashMap::new();
+        let mut script_local: HashMap<String, u32> = HashMap::new();
+        for ((text, off), (language, script, confidence)) in items.iter().zip(results.into_iter()) {
+            if let Some(ref l) = language {
+                *lang_local.entry(l.clone()).or_insert(0) += 1;
+            }
+            if let Some(ref s) = script {
+                *script_local.entry(s.clone()).or_insert(0) += 1;
+            }
+            batch_ds.push(DetectedString::new(
+                text.clone(),
+                label.to_string(),
+                language,
+                script,
+                confidence,
+                Some(*off as u64),
+            ));
+        }
+        (batch_ds, lang_local, script_local)
     };
 
-    // Select ASCII first
-    for (text, offset) in scanned
+    // Prepare capped batches and process in order (ASCII, UTF-16LE, UTF-16BE)
+    let cap_ascii = cfg.max_samples.saturating_sub(detected_strings.len());
+    let ascii_items: Vec<(String, usize)> = scanned
         .ascii_strings
         .iter()
-        .take(cfg.max_samples.saturating_sub(detected_strings.len()))
+        .take(cap_ascii)
+        .cloned()
+        .collect();
     {
-        let (language, script, confidence) = annotate(text);
-        if let Some(ref l) = language {
-            *language_counts.entry(l.clone()).or_insert(0) += 1;
+        let (mut v, lc, sc) = process_batch("ascii", &ascii_items);
+        detected_strings.append(&mut v);
+        for (k, v) in lc {
+            *language_counts.entry(k).or_insert(0) += v;
         }
-        if let Some(ref s) = script {
-            *script_counts.entry(s.clone()).or_insert(0) += 1;
+        for (k, v) in sc {
+            *script_counts.entry(k).or_insert(0) += v;
         }
-        detected_strings.push(DetectedString::new(
-            text.clone(),
-            "ascii".to_string(),
-            language,
-            script,
-            confidence,
-            Some(*offset as u64),
-        ));
     }
 
-    // Then UTF-16LE
-    for (text, offset) in scanned
+    let cap_u16le = cfg.max_samples.saturating_sub(detected_strings.len());
+    let u16le_items: Vec<(String, usize)> = scanned
         .utf16le_strings
         .iter()
-        .take(cfg.max_samples.saturating_sub(detected_strings.len()))
+        .take(cap_u16le)
+        .cloned()
+        .collect();
     {
-        let (language, script, confidence) = annotate(text);
-        if let Some(ref l) = language {
-            *language_counts.entry(l.clone()).or_insert(0) += 1;
+        let (mut v, lc, sc) = process_batch("utf16le", &u16le_items);
+        detected_strings.append(&mut v);
+        for (k, v) in lc {
+            *language_counts.entry(k).or_insert(0) += v;
         }
-        if let Some(ref s) = script {
-            *script_counts.entry(s.clone()).or_insert(0) += 1;
+        for (k, v) in sc {
+            *script_counts.entry(k).or_insert(0) += v;
         }
-        detected_strings.push(DetectedString::new(
-            text.clone(),
-            "utf16le".to_string(),
-            language,
-            script,
-            confidence,
-            Some(*offset as u64),
-        ));
     }
 
-    // Finally UTF-16BE
-    for (text, offset) in scanned
+    let cap_u16be = cfg.max_samples.saturating_sub(detected_strings.len());
+    let u16be_items: Vec<(String, usize)> = scanned
         .utf16be_strings
         .iter()
-        .take(cfg.max_samples.saturating_sub(detected_strings.len()))
+        .take(cap_u16be)
+        .cloned()
+        .collect();
     {
-        let (language, script, confidence) = annotate(text);
-        if let Some(ref l) = language {
-            *language_counts.entry(l.clone()).or_insert(0) += 1;
+        let (mut v, lc, sc) = process_batch("utf16be", &u16be_items);
+        detected_strings.append(&mut v);
+        for (k, v) in lc {
+            *language_counts.entry(k).or_insert(0) += v;
         }
-        if let Some(ref s) = script {
-            *script_counts.entry(s.clone()).or_insert(0) += 1;
+        for (k, v) in sc {
+            *script_counts.entry(k).or_insert(0) += v;
         }
-        detected_strings.push(DetectedString::new(
-            text.clone(),
-            "utf16be".to_string(),
-            language,
-            script,
-            confidence,
-            Some(*offset as u64),
-        ));
     }
 
     // Optional: classify IOCs across detected strings under budget
@@ -149,7 +238,12 @@ pub fn extract_summary(data: &[u8], cfg: &StringsConfig) -> StringsSummary {
         let counts_opt = if counts.is_empty() {
             None
         } else {
-            Some(counts)
+            // Convert to BTreeMap for stable serialization order
+            let mut bt: BTreeMap<String, u32> = BTreeMap::new();
+            for (k, v) in counts.into_iter() {
+                bt.insert(k, v);
+            }
+            Some(bt)
         };
 
         // Gather a few IOC samples with offsets for downstream tooling
@@ -203,6 +297,26 @@ pub fn extract_summary(data: &[u8], cfg: &StringsConfig) -> StringsSummary {
     };
 
     // Build summary with new fields
+    // Convert language/script counters into deterministic order maps
+    let lang_counts_bt = if language_counts.is_empty() {
+        None
+    } else {
+        let mut bt: BTreeMap<String, u32> = BTreeMap::new();
+        for (k, v) in language_counts.into_iter() {
+            bt.insert(k, v);
+        }
+        Some(bt)
+    };
+    let script_counts_bt = if script_counts.is_empty() {
+        None
+    } else {
+        let mut bt: BTreeMap<String, u32> = BTreeMap::new();
+        for (k, v) in script_counts.into_iter() {
+            bt.insert(k, v);
+        }
+        Some(bt)
+    };
+
     StringsSummary {
         ascii_count: scanned.ascii_count,
         utf8_count: scanned.utf8_count,
@@ -213,16 +327,8 @@ pub fn extract_summary(data: &[u8], cfg: &StringsConfig) -> StringsSummary {
         } else {
             Some(detected_strings)
         },
-        language_counts: if language_counts.is_empty() {
-            None
-        } else {
-            Some(language_counts)
-        },
-        script_counts: if script_counts.is_empty() {
-            None
-        } else {
-            Some(script_counts)
-        },
+        language_counts: lang_counts_bt,
+        script_counts: script_counts_bt,
         ioc_counts,
         ioc_samples,
     }

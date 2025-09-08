@@ -15,6 +15,9 @@ This directory contains comprehensive documentation for GLAURUNG's binary format
 - **[.NET/CLR](./dotnet/)** - .NET assemblies and CLI metadata
 - **[Android](./android/)** - DEX bytecode and APK packages
 - **[WebAssembly](./wasm/)** - WebAssembly binary format
+  
+See also:
+- Design plan for interpreted/VM bytecode (Python/Java/DEX): ../analysis/interpreted/README.md
 
 ### Container & Archive Formats (Priority 3)
 - **[Archive](./archive/)** - ZIP, TAR, AR, and other archive formats

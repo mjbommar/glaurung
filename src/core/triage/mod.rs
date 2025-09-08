@@ -3,6 +3,7 @@
 pub mod containers;
 pub mod entropy;
 pub mod errors;
+pub mod formats;
 pub mod hints;
 pub mod packers;
 pub mod parsers;
@@ -19,4 +20,6 @@ pub use hints::{ConfidenceSignal, SnifferSource, TriageHint};
 pub use packers::PackerMatch;
 pub use parsers::{ParserKind, ParserResult};
 pub use strings::{DetectedString, IocSample, StringsSummary};
-pub use verdict::{Budgets, SimilaritySummary, TriageVerdict, TriagedArtifact, TriagedArtifactBuilder};
+pub use verdict::{
+    Budgets, SimilaritySummary, TriageVerdict, TriagedArtifact, TriagedArtifactBuilder,
+};
