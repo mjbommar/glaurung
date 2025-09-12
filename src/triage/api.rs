@@ -2,10 +2,13 @@ use crate::core::binary::{Arch, Endianness, Format};
 use crate::core::disassembler::Disassembler;
 use crate::core::triage::formats::{FormatSpecificTriage, PeTriageInfo};
 use crate::core::triage::{
-    Budgets, ContainerChild, EntropyAnalysis, PackerMatch, StringsSummary, TriageVerdict,
-    TriagedArtifact,
+    Budgets, ContainerChild, EntropyAnalysis, EntropySummary, PackerMatch, SimilaritySummary,
+    StringsSummary, TriageVerdict, TriagedArtifact,
 };
 use crate::core::triage::{TriageError, TriageErrorKind, TriageHint};
+
+use crate::symbols::SymbolSummary;
+
 use crate::strings::StringsConfig;
 use crate::symbols::{self, BudgetCaps};
 #[cfg(feature = "python-ext")]
@@ -22,6 +25,7 @@ use crate::triage::packers::detect_packers;
 use crate::triage::parsers;
 use crate::triage::recurse::RecursionEngine;
 use crate::triage::score;
+use crate::triage::signing::SigningSummary;
 use crate::triage::sniffers::CombinedSniffer;
 use chrono::Utc;
 #[cfg(feature = "python-ext")]
@@ -294,48 +298,75 @@ pub(crate) fn compute_sniffer_header_mismatches(
     errors
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_artifact_from_buffers(
-    path: String,
-    size_bytes: usize,
+/// Perform initial content analysis including sniffing, header validation, heuristics, and string extraction
+fn perform_content_analysis(
     sniff_buf: &[u8],
     header_buf: &[u8],
     heur_buf: &[u8],
-    max_recursion_depth: usize,
-    initial_bytes_read: u64,
-    limit_bytes: u64,
-    declared_max_recursion: usize,
-    hit_byte_limit: bool,
+    path: &str,
     strings_cfg: &StringsConfig,
-    packer_cfg: &PackerConfig,
-    sim_cfg: &SimilarityConfig,
-) -> TriagedArtifact {
-    let t0 = Instant::now();
-    let id = generate_id(None, size_bytes);
-    let span =
-        tracing::info_span!("triage", triage_id = %id, path = %path, size_bytes = size_bytes);
-    let _g = span.enter();
-    info!("start");
-
+) -> (
+    Vec<TriageHint>,
+    Vec<TriageError>,
+    Vec<TriageVerdict>,
+    Vec<TriageError>,
+    Vec<Format>,
+    EntropyAnalysis,
+    f64,
+    Endianness,
+    f64,
+    Vec<(Arch, f32)>,
+    Option<EntropySummary>,
+    Option<StringsSummary>,
+) {
     // Phase 1: Content sniffing
-    let (hints, sniff_errors) = sniff_content(sniff_buf, &path);
+    let (hints, sniff_errors) = sniff_content(sniff_buf, path);
 
     // Phase 2: Header validation
     let (verdicts, header_errors) = validate_headers(header_buf);
     let header_formats: Vec<Format> = verdicts.iter().map(|v| v.format).collect();
 
     // Phase 3: Heuristic analysis (entropy, endianness, architecture)
-    let (ea, entropy_overall, (e_guess, e_conf), arch_guesses) = analyze_heuristics(heur_buf);
+    let (ea, entropy_overall_opt, (e_guess, e_conf), arch_guesses) = analyze_heuristics(heur_buf);
+    let entropy_overall = entropy_overall_opt.unwrap_or(0.0);
     let entropy = Some(ea.summary.clone());
 
     // Phase 4: String extraction
-    let strings = extract_strings(heur_buf, strings_cfg, &hints, entropy_overall);
+    let strings = extract_strings(heur_buf, strings_cfg, &hints, Some(entropy_overall));
 
-    // Phase 5: Parser probes and container/packer discovery
+    (
+        hints,
+        sniff_errors,
+        verdicts,
+        header_errors,
+        header_formats,
+        ea,
+        entropy_overall,
+        e_guess,
+        e_conf as f64,
+        arch_guesses,
+        entropy,
+        strings,
+    )
+}
+
+/// Perform parser probes and container/packer discovery
+fn perform_parser_discovery(
+    heur_buf: &[u8],
+    hints: &[TriageHint],
+    max_recursion_depth: usize,
+    packer_cfg: &PackerConfig,
+) -> (
+    Vec<crate::core::triage::ParserResult>,
+    Option<Vec<ContainerChild>>,
+    usize,
+    Option<Vec<PackerMatch>>,
+) {
     debug!(phase = "parsers", "structured parse probes");
     let parser_results = parsers::parse(heur_buf);
     let (mut containers, rec_depth, _packers_placeholder) =
-        discover_containers_and_packers(heur_buf, &hints, max_recursion_depth);
+        discover_containers_and_packers(heur_buf, hints, max_recursion_depth);
+
     // Compute packers here with provided config
     let packers = {
         let v = detect_packers(heur_buf, packer_cfg);
@@ -351,33 +382,21 @@ fn build_artifact_from_buffers(
         vv.sort_by(|a, b| a.offset.cmp(&b.offset).then(a.type_name.cmp(&b.type_name)));
     }
 
-    // Phase 6: Error merging
-    let container_labels: Vec<String> = containers
-        .as_ref()
-        .map(|v| v.iter().map(|c| c.type_name.clone()).collect())
-        .unwrap_or_default();
-    let merged_errors = merge_errors(
-        sniff_errors,
-        header_errors,
-        &hints,
-        &header_formats,
-        &container_labels,
-        hit_byte_limit,
-        limit_bytes,
-        initial_bytes_read,
-    );
+    (parser_results, containers, rec_depth as usize, packers)
+}
 
-    // Phase 7: Artifact construction and scoring
-    let looks_exec =
-        !header_formats.is_empty() || hints.iter().any(|h| derive_format_from_hint(h).is_some());
-
-    // Optional disassembly preview (bounded, budgeted): only if likely executable
-    let disasm_preview = if looks_exec {
-        compute_disasm_preview(heur_buf, &arch_guesses, e_guess, 32, 512, 5)
-    } else {
-        None
-    };
-
+/// Perform format-specific analysis including symbols, overlay, similarity, and signing
+fn perform_format_analysis(
+    heur_buf: &[u8],
+    header_formats: &[Format],
+    sim_cfg: &SimilarityConfig,
+) -> (
+    Option<FormatSpecificTriage>,
+    Option<SymbolSummary>,
+    Option<crate::triage::overlay::OverlayAnalysis>,
+    Option<SimilaritySummary>,
+    Option<crate::triage::signing::SigningSummary>,
+) {
     // Format-specific analysis
     let format_specific = if header_formats.first().copied() == Some(Format::PE) {
         let rich_header = crate::triage::rich_header::parse_rich_header(heur_buf);
@@ -412,7 +431,7 @@ fn build_artifact_from_buffers(
             let (w, d, p) = if sim_cfg.window_size == 0 || sim_cfg.digest_size == 0 {
                 if heur_buf.len() < 16 * 1024 {
                     (8usize, 4usize, 8u8)
-                } else if heur_buf.len() < 1 * 1024 * 1024 {
+                } else if heur_buf.len() < 1024 * 1024 {
                     (16usize, 5usize, 16u8)
                 } else {
                     (32usize, 6usize, 16u8)
@@ -474,58 +493,93 @@ fn build_artifact_from_buffers(
         })
     };
 
+    (format_specific, symbols_sum, overlay, similarity, signing)
+}
+
+/// Build and finalize the triaged artifact with scoring and ranking
+#[allow(clippy::too_many_arguments)]
+fn build_and_finalize_artifact(
+    id: String,
+    path: String,
+    size_bytes: usize,
+    t0: Instant,
+    hints: &[TriageHint],
+    verdicts: &[TriageVerdict],
+    entropy: &Option<EntropySummary>,
+    ea: &EntropyAnalysis,
+    strings: &Option<StringsSummary>,
+    symbols_sum: &Option<SymbolSummary>,
+    similarity: &Option<SimilaritySummary>,
+    signing: &Option<SigningSummary>,
+    packers: &Option<Vec<PackerMatch>>,
+    containers: &Option<Vec<ContainerChild>>,
+    rec_depth: usize,
+    overlay: &Option<crate::triage::overlay::OverlayAnalysis>,
+    format_specific: &Option<FormatSpecificTriage>,
+    parser_results: &[crate::core::triage::ParserResult],
+    initial_bytes_read: u64,
+    limit_bytes: u64,
+    declared_max_recursion: usize,
+    hit_byte_limit: bool,
+    merged_errors: &[TriageError],
+    looks_exec: bool,
+    e_guess: Endianness,
+    e_conf: f64,
+    arch_guesses: &[(Arch, f32)],
+    disasm_preview: Option<Vec<String>>,
+) -> TriagedArtifact {
     // Build preliminary artifact (pre-scoring) so scoring can consider context
     let recursion_summary = {
         let total = containers.as_ref().map(|v| v.len() as u32).unwrap_or(0);
         let danger = packers.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
         Some(crate::triage::recurse::RecursionSummary {
             total_children: total,
-            max_depth: rec_depth,
+            max_depth: rec_depth as u32,
             dangerous_child_present: danger,
         })
     };
 
     let prelim = TriagedArtifact::builder()
         .with_schema_version("1.2")
-        .with_id(id)
-        .with_path(path)
+        .with_id(id.clone())
+        .with_path(path.clone())
         .with_size_bytes(size_bytes as u64)
         .with_sha256(None::<String>)
-        .with_hints(hints)
-        .with_verdicts(verdicts)
-        .with_entropy(entropy)
-        .with_entropy_analysis(Some(ea))
+        .with_hints(hints.to_vec())
+        .with_verdicts(verdicts.to_vec())
+        .with_entropy(entropy.clone())
+        .with_entropy_analysis(Some(ea.clone()))
         .with_strings(strings.clone())
-        .with_symbols(symbols_sum)
-        .with_similarity(similarity)
-        .with_signing(signing)
-        .with_packers(packers)
-        .with_containers(containers)
+        .with_symbols(symbols_sum.clone())
+        .with_similarity(similarity.clone())
+        .with_signing(signing.clone())
+        .with_packers(packers.clone())
+        .with_containers(containers.clone())
         .with_recursion_summary(recursion_summary)
-        .with_overlay(overlay)
+        .with_overlay(overlay.clone())
         .with_format_specific(format_specific.clone())
         .with_parse_status(if parser_results.is_empty() {
             None
         } else {
-            Some(parser_results.clone())
+            Some(parser_results.to_vec())
         })
         .with_budgets(Some(Budgets {
             bytes_read: initial_bytes_read,
             time_ms: t0.elapsed().as_millis() as u64,
-            recursion_depth: rec_depth,
+            recursion_depth: rec_depth as u32,
             limit_bytes: Some(limit_bytes),
             limit_time_ms: None,
             max_recursion_depth: Some(declared_max_recursion as u32),
             hit_byte_limit,
         }))
-        .with_errors(merged_errors.clone())
+        .with_errors(Some(merged_errors.to_vec()))
         .with_heuristic_endianness(if looks_exec {
-            Some((e_guess, e_conf))
+            Some((e_guess, e_conf as f32))
         } else {
             None
         })
         .with_heuristic_arch(if looks_exec {
-            Some(arch_guesses.clone())
+            Some(arch_guesses.to_vec())
         } else {
             None
         })
@@ -536,46 +590,158 @@ fn build_artifact_from_buffers(
     let ranked = score::score(&prelim);
 
     // Build final artifact with ranked verdicts
-    let art = TriagedArtifact::builder()
-        .with_id(prelim.id)
-        .with_path(prelim.path)
-        .with_size_bytes(prelim.size_bytes)
-        .with_sha256(prelim.sha256)
-        .with_hints(prelim.hints)
+    TriagedArtifact::builder()
+        .with_id(id)
+        .with_path(path)
+        .with_size_bytes(size_bytes as u64)
+        .with_sha256(None::<String>)
+        .with_hints(hints.to_vec())
         .with_verdicts(ranked)
-        .with_entropy(prelim.entropy)
-        .with_entropy_analysis(prelim.entropy_analysis)
-        .with_strings(strings)
-        .with_similarity(prelim.similarity)
+        .with_entropy(entropy.clone())
+        .with_entropy_analysis(Some(ea.clone()))
+        .with_strings(strings.clone())
+        .with_similarity(similarity.clone())
         .with_disasm_preview(disasm_preview)
-        .with_symbols(prelim.symbols)
-        .with_packers(prelim.packers)
-        .with_containers(prelim.containers)
-        .with_overlay(prelim.overlay)
-        .with_format_specific(prelim.format_specific)
-        .with_parse_status(prelim.parse_status)
+        .with_symbols(symbols_sum.clone())
+        .with_packers(packers.clone())
+        .with_containers(containers.clone())
+        .with_overlay(overlay.clone())
+        .with_format_specific(format_specific.clone())
+        .with_parse_status(if parser_results.is_empty() {
+            None
+        } else {
+            Some(parser_results.to_vec())
+        })
         .with_budgets(Some(Budgets {
             bytes_read: initial_bytes_read,
             time_ms: t0.elapsed().as_millis() as u64,
-            recursion_depth: rec_depth,
+            recursion_depth: rec_depth as u32,
             limit_bytes: Some(limit_bytes),
             limit_time_ms: None,
             max_recursion_depth: Some(declared_max_recursion as u32),
             hit_byte_limit,
         }))
-        .with_errors(merged_errors)
+        .with_errors(Some(merged_errors.to_vec()))
         .with_heuristic_endianness(if looks_exec {
-            prelim.heuristic_endianness
+            Some((e_guess, e_conf as f32))
         } else {
             None
         })
         .with_heuristic_arch(if looks_exec {
-            prelim.heuristic_arch
+            Some(arch_guesses.to_vec())
         } else {
             None
         })
         .build()
-        .expect("All required fields are provided");
+        .expect("All required fields are provided")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_artifact_from_buffers(
+    path: String,
+    size_bytes: usize,
+    sniff_buf: &[u8],
+    header_buf: &[u8],
+    heur_buf: &[u8],
+    max_recursion_depth: usize,
+    initial_bytes_read: u64,
+    limit_bytes: u64,
+    declared_max_recursion: usize,
+    hit_byte_limit: bool,
+    strings_cfg: &StringsConfig,
+    packer_cfg: &PackerConfig,
+    sim_cfg: &SimilarityConfig,
+) -> TriagedArtifact {
+    let t0 = Instant::now();
+    let id = generate_id(None, size_bytes);
+    let span =
+        tracing::info_span!("triage", triage_id = %id, path = %path, size_bytes = size_bytes);
+    let _g = span.enter();
+    info!("start");
+
+    // Perform initial content analysis
+    let (
+        hints,
+        sniff_errors,
+        verdicts,
+        header_errors,
+        header_formats,
+        ea,
+        _entropy_overall,
+        e_guess,
+        e_conf,
+        arch_guesses,
+        entropy,
+        strings,
+    ) = perform_content_analysis(sniff_buf, header_buf, heur_buf, &path, strings_cfg);
+
+    // Perform parser probes and container/packer discovery
+    let (parser_results, containers, rec_depth, packers) =
+        perform_parser_discovery(heur_buf, &hints, max_recursion_depth, packer_cfg);
+
+    // Phase 6: Error merging
+    let container_labels: Vec<String> = containers
+        .as_ref()
+        .map(|v| v.iter().map(|c| c.type_name.clone()).collect())
+        .unwrap_or_default();
+    let merged_errors_vec = merge_errors(
+        sniff_errors,
+        header_errors,
+        &hints,
+        &header_formats,
+        &container_labels,
+        hit_byte_limit,
+        limit_bytes,
+        initial_bytes_read,
+    )
+    .unwrap_or_default();
+
+    // Phase 7: Artifact construction and scoring
+    let looks_exec =
+        !header_formats.is_empty() || hints.iter().any(|h| derive_format_from_hint(h).is_some());
+
+    // Optional disassembly preview (bounded, budgeted): only if likely executable
+    let disasm_preview = if looks_exec {
+        compute_disasm_preview(heur_buf, &arch_guesses, e_guess, 32, 512, 5)
+    } else {
+        None
+    };
+
+    // Perform format-specific analysis
+    let (format_specific, symbols_sum, overlay, similarity, signing) =
+        perform_format_analysis(heur_buf, &header_formats, sim_cfg);
+
+    // Build and finalize the artifact
+    let art = build_and_finalize_artifact(
+        id,
+        path,
+        size_bytes,
+        t0,
+        &hints,
+        &verdicts,
+        &entropy,
+        &ea,
+        &strings,
+        &symbols_sum,
+        &similarity,
+        &signing,
+        &packers,
+        &containers,
+        rec_depth,
+        &overlay,
+        &format_specific,
+        &parser_results,
+        initial_bytes_read,
+        limit_bytes,
+        declared_max_recursion,
+        hit_byte_limit,
+        &merged_errors_vec,
+        looks_exec,
+        e_guess,
+        e_conf,
+        &arch_guesses,
+        disasm_preview,
+    );
 
     info!("complete");
     art

@@ -60,34 +60,50 @@ def test_bytecode_detection():
         (
             "samples/binaries/platforms/linux/amd64/export/java/jdk21/HelloWorld.class",
             "Java",
+            b"\xca\xfe\xba\xbe",
         ),
         (
             "samples/binaries/platforms/linux/amd64/export/python/hello-python.pyc",
             "Python",
+            None,  # Python has variable magic numbers
         ),
-        ("samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.4.luac", "Lua"),
+        ("samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.4.luac", "Lua", b"\x1bLua"),
     ]
 
-    for path_str, expected_lang in bytecode_files:
+    tested_any = False
+    for path_str, expected_lang, expected_magic in bytecode_files:
         path = Path(path_str)
         if not path.exists():
             continue
 
         with open(path, "rb") as f:
-            data = f.read(4)
+            data = f.read(16)  # Read more bytes to detect corruption
+
+        # Check for corrupted samples (they contain text instead of bytecode)
+        if data.startswith(b"version https://"):
+            raise RuntimeError(
+                f"Sample {path_str} appears to be a Git LFS pointer file. "
+                "Run 'git lfs pull' or 'git lfs install && git lfs pull' to download the actual binary content."
+            )
+
+        # Use first 4 bytes for magic number check
+        magic_data = data[:4]
 
         # Test magic number detection
-        if expected_lang == "Java":
-            assert data == b"\xca\xfe\xba\xbe", (
-                "Java class file should start with CAFEBABE"
+        if expected_magic is not None:
+            assert magic_data.startswith(expected_magic), (
+                f"{expected_lang} bytecode should start with {expected_magic.hex()}"
             )
-        elif expected_lang == "Lua":
-            assert data[:4] == b"\x1bLua", "Lua bytecode should start with ESC-Lua"
-        # Python has various magic numbers depending on version
 
         result = triage.analyze_path(str(path))
         assert result is not None
         print(f"{expected_lang} bytecode: Triaged successfully")
+        tested_any = True
+
+    # If no valid bytecode samples were found, skip the test
+    if not tested_any:
+        import pytest
+        pytest.skip("No valid bytecode samples available for testing")
 
 
 def test_comprehensive_detection_rate():

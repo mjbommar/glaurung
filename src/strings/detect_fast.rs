@@ -40,7 +40,7 @@ fn calculate_shannon_entropy(s: &str) -> f64 {
 pub fn should_detect_language(s: &str) -> bool {
     // Length filter
     let char_count = s.chars().count();
-    if char_count < MIN_STRING_LENGTH || char_count > MAX_STRING_LENGTH {
+    if !(MIN_STRING_LENGTH..=MAX_STRING_LENGTH).contains(&char_count) {
         return false;
     }
 
@@ -102,7 +102,7 @@ pub fn should_detect_language(s: &str) -> bool {
 
     // Entropy check (do this last as it's more expensive)
     let entropy = calculate_shannon_entropy(s);
-    if entropy < MIN_ENTROPY || entropy > MAX_ENTROPY {
+    if !(MIN_ENTROPY..=MAX_ENTROPY).contains(&entropy) {
         return false;
     }
 
@@ -191,10 +191,7 @@ pub fn detect_languages_smart_sample(
 
     for (idx, s) in strings.iter().enumerate() {
         let bucket = (s.len() / 10) * 10; // 10-char buckets
-        length_buckets
-            .entry(bucket)
-            .or_insert_with(Vec::new)
-            .push(idx);
+        length_buckets.entry(bucket).or_default().push(idx);
     }
 
     // Sample proportionally from each bucket

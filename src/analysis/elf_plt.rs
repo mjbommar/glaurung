@@ -75,7 +75,7 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
             let entsize = 24usize; // Elf64_Sym
             let count = dynsym.len() / entsize;
             // Helper for name
-            let mut name_for_index = |idx: u32| -> Option<String> {
+            let name_for_index = |idx: u32| -> Option<String> {
                 let i = idx as usize;
                 if i >= count {
                     return None;

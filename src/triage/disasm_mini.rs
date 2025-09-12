@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Summary statistics from a mini disassembly probe.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct MiniDisasmSummary {
     pub bytes_scanned: usize,
     pub instructions_seen: usize,
@@ -15,19 +15,6 @@ pub struct MiniDisasmSummary {
     pub calls: usize,
     pub rets: usize,
     pub nops: usize,
-}
-
-impl Default for MiniDisasmSummary {
-    fn default() -> Self {
-        Self {
-            bytes_scanned: 0,
-            instructions_seen: 0,
-            jumps: 0,
-            calls: 0,
-            rets: 0,
-            nops: 0,
-        }
-    }
 }
 
 /// Probe x86/x86_64 bytes and compute coarse control-flow statistics.

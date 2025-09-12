@@ -12,10 +12,10 @@ pub enum SimilarityAlgo {
 pub fn score(algo: SimilarityAlgo, a: &str, b: &str) -> f64 {
     use SimilarityAlgo::*;
     match algo {
-        Jaro => strsim::jaro(a, b) as f64,
-        JaroWinkler => strsim::jaro_winkler(a, b) as f64,
-        NormalizedDamerauLevenshtein => strsim::normalized_damerau_levenshtein(a, b) as f64,
-        SorensenDice => strsim::sorensen_dice(a, b) as f64,
+        Jaro => strsim::jaro(a, b),
+        JaroWinkler => strsim::jaro_winkler(a, b),
+        NormalizedDamerauLevenshtein => strsim::normalized_damerau_levenshtein(a, b),
+        SorensenDice => strsim::sorensen_dice(a, b),
     }
 }
 
@@ -32,12 +32,10 @@ where
     I: IntoIterator<Item = &'a str>,
 {
     let mut best: Option<(&'a str, f64)> = None;
-    let mut seen = 0usize;
-    for cand in candidates.into_iter() {
+    for (seen, cand) in candidates.into_iter().enumerate() {
         if seen >= max_candidates {
             break;
         }
-        seen += 1;
         // Bound quadratic algorithms; skip too-long pairs
         if query.len().max(cand.len()) > max_len {
             continue;
@@ -68,12 +66,10 @@ where
     I: IntoIterator<Item = &'a str>,
 {
     let mut scored: Vec<(&'a str, f64)> = Vec::new();
-    let mut seen = 0usize;
-    for cand in candidates.into_iter() {
+    for (seen, cand) in candidates.into_iter().enumerate() {
         if seen >= max_candidates {
             break;
         }
-        seen += 1;
         if query.len().max(cand.len()) > max_len {
             continue;
         }

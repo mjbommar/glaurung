@@ -179,14 +179,9 @@ pub fn load_capa_apis_from_path(
         if let Ok(text) = std::fs::read_to_string(&file) {
             for line in text.lines() {
                 let l = line.trim();
-                if l.starts_with("api:") || l.starts_with("- api:") {
-                    if let Some(idx) = l.find(':') {
-                        let val = l[idx + 1..].trim().trim_matches('"').trim_matches('\'');
-                        if !val.is_empty() {
-                            names.insert(normalize_api_name(val));
-                        }
-                    }
-                } else if l.starts_with("import:") || l.starts_with("- import:") {
+                if (l.starts_with("api:") || l.starts_with("- api:"))
+                    || (l.starts_with("import:") || l.starts_with("- import:"))
+                {
                     if let Some(idx) = l.find(':') {
                         let val = l[idx + 1..].trim().trim_matches('"').trim_matches('\'');
                         if !val.is_empty() {
@@ -200,7 +195,7 @@ pub fn load_capa_apis_from_path(
             }
         }
     }
-    let count = set_extra_apis(names.into_iter(), clear);
+    let count = set_extra_apis(names, clear);
     Ok(count)
 }
 

@@ -1,8 +1,6 @@
 #![cfg(feature = "python-ext")]
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-// Bring object::Object trait into scope for segments()/sections()
-use object::Object;
 
 use crate::core::address::Address;
 use crate::core::disassembler::{Architecture, Disassembler, DisassemblerConfig};

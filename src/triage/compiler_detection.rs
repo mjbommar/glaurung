@@ -193,11 +193,11 @@ pub fn detect_runtime_libraries(libraries: &[String]) -> LanguageEvidence {
             evidence.libstdcpp_imports += 1;
         } else if lib_lower.contains("libc++") || lib_lower.contains("c++abi") {
             evidence.libcpp_imports += 1;
-        } else if lib_lower.starts_with("msvcp") || lib_lower.starts_with("vcruntime") {
-            evidence.msvcrt_imports += 1;
-        }
-        // Microsoft C runtime
-        else if lib_lower.starts_with("msvcr") || lib_lower.starts_with("ucrtbase") {
+        } else if lib_lower.starts_with("msvcp")
+            || lib_lower.starts_with("vcruntime")
+            || lib_lower.starts_with("msvcr")
+            || lib_lower.starts_with("ucrtbase")
+        {
             evidence.msvcrt_imports += 1;
         }
         // Rust standard library (usually statically linked, but may have deps)
@@ -292,7 +292,7 @@ pub fn detect_from_elf_comment(comment: &str) -> Option<CompilerInfo> {
             return Some(CompilerInfo {
                 vendor: CompilerVendor::Llvm,
                 product_name: "Clang".to_string(),
-                version_major: version_parts.get(0).and_then(|s| s.parse().ok()),
+                version_major: version_parts.first().and_then(|s| s.parse().ok()),
                 version_minor: version_parts.get(1).and_then(|s| s.parse().ok()),
                 version_patch: version_parts.get(2).and_then(|s| s.parse().ok()),
                 build_number: None,
@@ -311,7 +311,7 @@ pub fn detect_from_elf_comment(comment: &str) -> Option<CompilerInfo> {
                 return Some(CompilerInfo {
                     vendor: CompilerVendor::Rustc,
                     product_name: "rustc".to_string(),
-                    version_major: version_parts.get(0).and_then(|s| s.parse().ok()),
+                    version_major: version_parts.first().and_then(|s| s.parse().ok()),
                     version_minor: version_parts.get(1).and_then(|s| s.parse().ok()),
                     version_patch: version_parts.get(2).and_then(|s| s.parse().ok()),
                     build_number: None,
@@ -339,7 +339,7 @@ pub fn detect_from_elf_comment(comment: &str) -> Option<CompilerInfo> {
             return Some(CompilerInfo {
                 vendor: CompilerVendor::Gnu,
                 product_name: "GCC".to_string(),
-                version_major: version_parts.get(0).and_then(|s| s.parse().ok()),
+                version_major: version_parts.first().and_then(|s| s.parse().ok()),
                 version_minor: version_parts.get(1).and_then(|s| s.parse().ok()),
                 version_patch: version_parts.get(2).and_then(|s| s.parse().ok()),
                 build_number: None,
@@ -806,7 +806,7 @@ pub fn detect_language_and_compiler_with_path(
     if is_likely_stripped(symbols) {
         summary_parts.push("Binary appears stripped".to_string());
     }
-    if file_path.map_or(false, |p| is_shared_library(p)) {
+    if file_path.is_some_and(is_shared_library) {
         summary_parts.push("Shared library".to_string());
     }
 

@@ -24,8 +24,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
- "const-random",
- "getrandom 0.3.3",
  "once_cell",
  "version_check",
  "zerocopy",
@@ -38,21 +36,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e60d3430d3a69478ad0993f19238d2df97c507009a52b3c10addcd7f6bcb916"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "alloc-no-stdlib"
-version = "2.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
-
-[[package]]
-name = "alloc-stdlib"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94fb8275041c72129eb51b7d0322c29b8387a0386127718b096429201a5d6ece"
-dependencies = [
- "alloc-no-stdlib",
 ]
 
 [[package]]
@@ -176,27 +159,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "brotli"
-version = "8.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bd8b9603c7aa97359dbd97ecf258968c95f3adddd6db2f7e7a5bef101c84560"
-dependencies = [
- "alloc-no-stdlib",
- "alloc-stdlib",
- "brotli-decompressor",
-]
-
-[[package]]
-name = "brotli-decompressor"
-version = "5.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "874bb8112abecc98cbd6d81ea4fa7e94fb9449648c93cc89aa40c81c24d7de03"
-dependencies = [
- "alloc-no-stdlib",
- "alloc-stdlib",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -239,15 +201,6 @@ name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
-
-[[package]]
-name = "castaway"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dec551ab6e7578819132c713a93c022a05d60159dc86e7a7050223577484c55a"
-dependencies = [
- "rustversion",
-]
 
 [[package]]
 name = "cc"
@@ -344,40 +297,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
-name = "compact_str"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fdb1325a1cece981e8a296ab8f0f9b63ae357bd0784a9faaf548cc7b480707a"
-dependencies = [
- "castaway",
- "cfg-if",
- "itoa",
- "rustversion",
- "ryu",
- "static_assertions",
-]
-
-[[package]]
-name = "const-random"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87e00182fe74b066627d63b85fd550ac2998d4b0bd86bfed477a0ae4c7c71359"
-dependencies = [
- "const-random-macro",
-]
-
-[[package]]
-name = "const-random-macro"
-version = "0.1.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9d839f2a20b0aee515dc581a6172f2321f96cab76c1a38a4c584a194955390e"
-dependencies = [
- "getrandom 0.2.16",
- "once_cell",
- "tiny-keccak",
-]
-
-[[package]]
 name = "constant_time_eq"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -427,7 +346,7 @@ dependencies = [
  "ciborium",
  "clap",
  "criterion-plot",
- "itertools 0.13.0",
+ "itertools",
  "num-traits",
  "oorandom",
  "regex",
@@ -444,7 +363,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b1bcc0dc7dfae599d84ad0b1a55f80cde8af3725da8313b528da95ef783e338"
 dependencies = [
  "cast",
- "itertools 0.13.0",
+ "itertools",
 ]
 
 [[package]]
@@ -486,20 +405,6 @@ checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
  "generic-array",
  "typenum",
-]
-
-[[package]]
-name = "dashmap"
-version = "6.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
-dependencies = [
- "cfg-if",
- "crossbeam-utils",
- "hashbrown",
- "lock_api",
- "once_cell",
- "parking_lot_core",
 ]
 
 [[package]]
@@ -581,16 +486,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
-name = "fraction"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f158e3ff0a1b334408dc9fb811cd99b446986f4d8b741bb08f9df1604085ae7"
-dependencies = [
- "lazy_static",
- "num",
-]
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -598,17 +493,6 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
-]
-
-[[package]]
-name = "getrandom"
-version = "0.2.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "335ff9f135e4384c8150d6f27c6daed433577f86b4750418338c01a1a2528592"
-dependencies = [
- "cfg-if",
- "libc",
- "wasi 0.11.1+wasi-snapshot-preview1",
 ]
 
 [[package]]
@@ -648,7 +532,6 @@ dependencies = [
  "hex",
  "iced-x86",
  "infer",
- "lingua",
  "md5",
  "memchr",
  "memmap2",
@@ -751,25 +634,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "include_dir"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
-dependencies = [
- "include_dir_macros",
-]
-
-[[package]]
-name = "include_dir_macros"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
 name = "indoc"
 version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -805,15 +669,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -842,654 +697,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
 
 [[package]]
-name = "lingua"
-version = "1.7.2"
-dependencies = [
- "ahash",
- "brotli",
- "compact_str",
- "dashmap",
- "fraction",
- "include_dir",
- "itertools 0.14.0",
- "lingua-afrikaans-language-model",
- "lingua-albanian-language-model",
- "lingua-arabic-language-model",
- "lingua-armenian-language-model",
- "lingua-azerbaijani-language-model",
- "lingua-basque-language-model",
- "lingua-belarusian-language-model",
- "lingua-bengali-language-model",
- "lingua-bokmal-language-model",
- "lingua-bosnian-language-model",
- "lingua-bulgarian-language-model",
- "lingua-catalan-language-model",
- "lingua-chinese-language-model",
- "lingua-croatian-language-model",
- "lingua-czech-language-model",
- "lingua-danish-language-model",
- "lingua-dutch-language-model",
- "lingua-english-language-model",
- "lingua-esperanto-language-model",
- "lingua-estonian-language-model",
- "lingua-finnish-language-model",
- "lingua-french-language-model",
- "lingua-ganda-language-model",
- "lingua-georgian-language-model",
- "lingua-german-language-model",
- "lingua-greek-language-model",
- "lingua-gujarati-language-model",
- "lingua-hebrew-language-model",
- "lingua-hindi-language-model",
- "lingua-hungarian-language-model",
- "lingua-icelandic-language-model",
- "lingua-indonesian-language-model",
- "lingua-irish-language-model",
- "lingua-italian-language-model",
- "lingua-japanese-language-model",
- "lingua-kazakh-language-model",
- "lingua-korean-language-model",
- "lingua-latin-language-model",
- "lingua-latvian-language-model",
- "lingua-lithuanian-language-model",
- "lingua-macedonian-language-model",
- "lingua-malay-language-model",
- "lingua-maori-language-model",
- "lingua-marathi-language-model",
- "lingua-mongolian-language-model",
- "lingua-nynorsk-language-model",
- "lingua-persian-language-model",
- "lingua-polish-language-model",
- "lingua-portuguese-language-model",
- "lingua-punjabi-language-model",
- "lingua-romanian-language-model",
- "lingua-russian-language-model",
- "lingua-serbian-language-model",
- "lingua-shona-language-model",
- "lingua-slovak-language-model",
- "lingua-slovene-language-model",
- "lingua-somali-language-model",
- "lingua-sotho-language-model",
- "lingua-spanish-language-model",
- "lingua-swahili-language-model",
- "lingua-swedish-language-model",
- "lingua-tagalog-language-model",
- "lingua-tamil-language-model",
- "lingua-telugu-language-model",
- "lingua-thai-language-model",
- "lingua-tsonga-language-model",
- "lingua-tswana-language-model",
- "lingua-turkish-language-model",
- "lingua-ukrainian-language-model",
- "lingua-urdu-language-model",
- "lingua-vietnamese-language-model",
- "lingua-welsh-language-model",
- "lingua-xhosa-language-model",
- "lingua-yoruba-language-model",
- "lingua-zulu-language-model",
- "maplit",
- "rayon",
- "regex",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "strum",
- "strum_macros",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "lingua-afrikaans-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-albanian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-arabic-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-armenian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-azerbaijani-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-basque-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-belarusian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-bengali-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-bokmal-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-bosnian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-bulgarian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-catalan-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-chinese-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-croatian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-czech-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-danish-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-dutch-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-english-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-esperanto-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-estonian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-finnish-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-french-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-ganda-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-georgian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-german-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-greek-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-gujarati-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-hebrew-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-hindi-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-hungarian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-icelandic-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-indonesian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-irish-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-italian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-japanese-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-kazakh-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-korean-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-latin-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-latvian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-lithuanian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-macedonian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-malay-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-maori-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-marathi-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-mongolian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-nynorsk-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-persian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-polish-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-portuguese-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-punjabi-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-romanian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-russian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-serbian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-shona-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-slovak-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-slovene-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-somali-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-sotho-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-spanish-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-swahili-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-swedish-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-tagalog-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-tamil-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-telugu-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-thai-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-tsonga-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-tswana-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-turkish-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-ukrainian-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-urdu-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-vietnamese-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-welsh-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-xhosa-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-yoruba-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
-name = "lingua-zulu-language-model"
-version = "1.2.0"
-dependencies = [
- "include_dir",
-]
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd945864f07fe9f5371a27ad7b52a172b4b499999f1d97574c9fa68373937e12"
 
 [[package]]
-name = "lock_api"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96936507f153605bddfcda068dd804796c84324ed2510809e5b2a624c81da765"
-dependencies = [
- "autocfg",
- "scopeguard",
-]
-
-[[package]]
 name = "log"
 version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
-
-[[package]]
-name = "maplit"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 
 [[package]]
 name = "matchers"
@@ -1591,70 +808,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
-dependencies = [
- "num-bigint",
- "num-complex",
- "num-integer",
- "num-iter",
- "num-rational",
- "num-traits",
-]
-
-[[package]]
-name = "num-bigint"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
-dependencies = [
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-complex"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "num-integer"
-version = "0.1.46"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "num-iter"
-version = "0.1.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1429034a0490724d0075ebb2bc9e875d6503c3cf69e235a8941aa757d83ef5bf"
-dependencies = [
- "autocfg",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-rational"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
-dependencies = [
- "num-bigint",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1694,19 +847,6 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
-
-[[package]]
-name = "parking_lot_core"
-version = "0.9.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc838d2a56b5b1a6c25f55575dfc605fabb63bb2365f6c2353ef9159aa69e4a5"
-dependencies = [
- "cfg-if",
- "libc",
- "redox_syscall",
- "smallvec",
- "windows-targets 0.52.6",
-]
 
 [[package]]
 name = "pelite"
@@ -1851,15 +991,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redox_syscall"
-version = "0.5.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5407465600fb0548f1442edf71dd20683c6ed326200ace4b1ef0763521bb3b77"
-dependencies = [
- "bitflags",
-]
-
-[[package]]
 name = "regex"
 version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1938,12 +1069,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scopeguard"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
 name = "scroll"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1970,17 +1095,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f0e2c6ed6606019b4e29e69dbaba95b11854410e5347d525002456dbbb786b6"
 dependencies = [
  "serde_derive",
-]
-
-[[package]]
-name = "serde-wasm-bindgen"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
-dependencies = [
- "js-sys",
- "serde",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2045,34 +1159,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
-name = "static_assertions"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "strum"
-version = "0.27.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
-
-[[package]]
-name = "strum_macros"
-version = "0.27.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "syn"
@@ -2098,7 +1188,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "15b61f8f20e3a6f7e0649d825294eaf317edce30f82cf6026e7e4cb9222a7d1e"
 dependencies = [
  "fastrand",
- "getrandom 0.3.3",
+ "getrandom",
  "once_cell",
  "rustix",
  "windows-sys 0.60.2",
@@ -2131,15 +1221,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "tiny-keccak"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
-dependencies = [
- "crunchy",
 ]
 
 [[package]]
@@ -2294,7 +1375,7 @@ version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
 dependencies = [
- "getrandom 0.3.3",
+ "getrandom",
  "js-sys",
  "wasm-bindgen",
 ]

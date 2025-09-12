@@ -5,7 +5,7 @@ use crate::core::disassembler::{
 };
 use crate::core::instruction::{Access, Instruction, Operand};
 use capstone::arch::arm::ArmOperandType;
-use capstone::arch::arm64::{Arm64OperandType, Arm64Reg};
+use capstone::arch::arm64::Arm64OperandType;
 use capstone::prelude::*;
 use capstone::{Arch, Capstone, Endian, Mode, NO_EXTRA_MODE};
 
@@ -113,9 +113,9 @@ impl CapstoneDisassembler {
                         continue;
                     }
                     // immediate like #0x10 or 0x10 or -16
-                    let mut s = part.trim_start_matches('#');
-                    if s.starts_with("0x") {
-                        if let Ok(v) = i64::from_str_radix(&s[2..], 16) {
+                    let s = part.trim_start_matches('#');
+                    if let Some(stripped) = s.strip_prefix("0x") {
+                        if let Ok(v) = i64::from_str_radix(stripped, 16) {
                             disp = Some(v);
                         }
                     } else if let Ok(v) = s.parse::<i64>() {
@@ -136,8 +136,8 @@ impl CapstoneDisassembler {
                 };
                 let mut disp: Option<i64> = None;
                 let b = before.trim_start_matches('#');
-                if b.starts_with("0x") {
-                    if let Ok(v) = i64::from_str_radix(&b[2..], 16) {
+                if let Some(stripped) = b.strip_prefix("0x") {
+                    if let Ok(v) = i64::from_str_radix(stripped, 16) {
                         disp = Some(v);
                     }
                 } else if let Ok(v) = b.parse::<i64>() {
@@ -177,7 +177,7 @@ impl Disassembler for CapstoneDisassembler {
         // Disassemble a single instruction
         let insns = self
             .cs
-            .disasm_all(bytes, address.value as u64)
+            .disasm_all(bytes, address.value)
             .map_err(|_| DisassemblerError::InvalidInstruction())?;
         if insns.is_empty() {
             return Err(DisassemblerError::InvalidInstruction());
@@ -187,36 +187,27 @@ impl Disassembler for CapstoneDisassembler {
         let mnemonic = insn.mnemonic().unwrap_or("").to_string();
         // Try detailed operands when available (ARM64 focus)
         let mut operands: Vec<Operand> = Vec::new();
-        if let Ok(detail) = self.cs.insn_detail(&insn) {
+        if let Ok(detail) = self.cs.insn_detail(insn) {
             match self.arch {
                 Architecture::ARM64 => {
                     if let Some(ad) = detail.arch_detail().arm64() {
                         for op in ad.operands() {
                             match op.op_type {
                                 Arm64OperandType::Reg(r) => {
-                                    let name =
-                                        self.cs.reg_name(r).unwrap_or_else(|| "".to_string());
+                                    let name = self.cs.reg_name(r).unwrap_or_default();
                                     operands.push(Operand::register(name, 0, Access::Read));
                                 }
                                 Arm64OperandType::Imm(i) => {
-                                    operands.push(Operand::immediate(i as i64, 0));
+                                    operands.push(Operand::immediate(i, 0));
                                 }
                                 Arm64OperandType::Mem(m) => {
                                     let base = if m.base().0 != 0 {
-                                        Some(
-                                            self.cs
-                                                .reg_name(m.base())
-                                                .unwrap_or_else(|| "".to_string()),
-                                        )
+                                        Some(self.cs.reg_name(m.base()).unwrap_or_default())
                                     } else {
                                         None
                                     };
                                     let index = if m.index().0 != 0 {
-                                        Some(
-                                            self.cs
-                                                .reg_name(m.index())
-                                                .unwrap_or_else(|| "".to_string()),
-                                        )
+                                        Some(self.cs.reg_name(m.index()).unwrap_or_default())
                                     } else {
                                         None
                                     };
@@ -245,8 +236,7 @@ impl Disassembler for CapstoneDisassembler {
                         for op in ad.operands() {
                             match op.op_type {
                                 ArmOperandType::Reg(r) => {
-                                    let name =
-                                        self.cs.reg_name(r).unwrap_or_else(|| "".to_string());
+                                    let name = self.cs.reg_name(r).unwrap_or_default();
                                     operands.push(Operand::register(name, 0, Access::Read));
                                 }
                                 ArmOperandType::Imm(i) => {
@@ -254,20 +244,12 @@ impl Disassembler for CapstoneDisassembler {
                                 }
                                 ArmOperandType::Mem(m) => {
                                     let base = if m.base().0 != 0 {
-                                        Some(
-                                            self.cs
-                                                .reg_name(m.base())
-                                                .unwrap_or_else(|| "".to_string()),
-                                        )
+                                        Some(self.cs.reg_name(m.base()).unwrap_or_default())
                                     } else {
                                         None
                                     };
                                     let index = if m.index().0 != 0 {
-                                        Some(
-                                            self.cs
-                                                .reg_name(m.index())
-                                                .unwrap_or_else(|| "".to_string()),
-                                        )
+                                        Some(self.cs.reg_name(m.index()).unwrap_or_default())
                                     } else {
                                         None
                                     };

@@ -7,11 +7,12 @@ use std::sync::Mutex;
 use whatlang::{detect, Lang, Script};
 
 // Optional lingua detector for short texts
-static LINGUA_DETECTOR: Lazy<lingua::LanguageDetector> = Lazy::new(|| {
-    lingua::LanguageDetectorBuilder::from_all_languages()
-        .with_preloaded_language_models()
-        .build()
-});
+// TODO: Re-enable lingua when lingua-rs dependency is available
+// static LINGUA_DETECTOR: Lazy<lingua::LanguageDetector> = Lazy::new(|| {
+//     lingua::LanguageDetectorBuilder::from_all_languages()
+//         .with_preloaded_language_models()
+//         .build()
+// });
 
 // Defaults; the configurable version is exposed via
 // detect_string_language_with_thresholds. This fallback keeps
@@ -49,12 +50,7 @@ impl<V: Clone> SimpleLru<V> {
         self.tick = self.tick.wrapping_add(1);
         if self.map.len() >= self.cap && !self.map.contains_key(&k) {
             // Evict least-recently-used (min tick)
-            if let Some((&old_k, _)) = self
-                .map
-                .iter()
-                .min_by_key(|(_, (_, t))| *t)
-                .map(|(k, v)| (k, v))
-            {
+            if let Some((&old_k, _)) = self.map.iter().min_by_key(|(_, (_, t))| *t) {
                 self.map.remove(&old_k);
             }
         }
@@ -65,8 +61,9 @@ impl<V: Clone> SimpleLru<V> {
 static WHATLANG_CACHE: Lazy<Mutex<SimpleLru<DetectTuple>>> =
     Lazy::new(|| Mutex::new(SimpleLru::new(LRU_CAPACITY_PER_ENGINE)));
 
-static LINGUA_CACHE: Lazy<Mutex<SimpleLru<DetectTuple>>> =
-    Lazy::new(|| Mutex::new(SimpleLru::new(LRU_CAPACITY_PER_ENGINE)));
+// TODO: Re-enable lingua when lingua-rs dependency is available
+// static LINGUA_CACHE: Lazy<Mutex<SimpleLru<DetectTuple>>> =
+//     Lazy::new(|| Mutex::new(SimpleLru::new(LRU_CAPACITY_PER_ENGINE)));
 
 fn text_hash(s: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -186,32 +183,33 @@ fn script_to_string(script: Script) -> String {
     format!("{:?}", script)
 }
 
-fn lingua_lang_to_iso639_3_lower(lang: &lingua::Language) -> String {
-    // Lingua returns uppercase codes; normalize to lowercase
-    lang.iso_code_639_3().to_string().to_lowercase()
-}
-
-fn lingua_script_for(lang: &lingua::Language) -> Option<String> {
-    // Only report script if language uniquely maps to one script to avoid misleading info
-    use lingua::Language as L;
-    let single = L::all_with_single_unique_script();
-    if !single.contains(lang) {
-        return None;
-    }
-    if L::all_with_latin_script().contains(lang) {
-        return Some("Latin".to_string());
-    }
-    if L::all_with_cyrillic_script().contains(lang) {
-        return Some("Cyrillic".to_string());
-    }
-    if L::all_with_devanagari_script().contains(lang) {
-        return Some("Devanagari".to_string());
-    }
-    if L::all_with_arabic_script().contains(lang) {
-        return Some("Arabic".to_string());
-    }
-    None
-}
+// TODO: Re-enable lingua functions when lingua-rs dependency is available
+// fn lingua_lang_to_iso639_3_lower(lang: &lingua::Language) -> String {
+//     // Lingua returns uppercase codes; normalize to lowercase
+//     lang.iso_code_639_3().to_string().to_lowercase()
+// }
+//
+// fn lingua_script_for(lang: &lingua::Language) -> Option<String> {
+//     // Only report script if language uniquely maps to one script to avoid misleading info
+//     use lingua::Language as L;
+//     let single = L::all_with_single_unique_script();
+//     if !single.contains(lang) {
+//         return None;
+//     }
+//     if L::all_with_latin_script().contains(lang) {
+//         return Some("Latin".to_string());
+//     }
+//     if L::all_with_cyrillic_script().contains(lang) {
+//         return Some("Cyrillic".to_string());
+//     }
+//     if L::all_with_devanagari_script().contains(lang) {
+//         return Some("Devanagari".to_string());
+//     }
+//     if L::all_with_arabic_script().contains(lang) {
+//         return Some("Arabic".to_string());
+//     }
+//     None
+// }
 
 /// Detect language for a single string.
 /// Returns (lang_iso639_3, script, confidence)
@@ -265,12 +263,9 @@ pub fn detect_string_language_ensemble(
         return (None, None, None);
     }
 
-    // Length-aware routing: skip lingua for long strings to save time
-    let (l_lang, l_script, l_conf) = if len <= MAX_LINGUA_LEN {
-        detect_with_lingua_cached(text)
-    } else {
-        (None, None, None)
-    };
+    // TODO: Re-enable lingua when lingua-rs dependency is available
+    // For now, just use whatlang
+    let (l_lang, l_script, l_conf) = (None::<String>, None::<String>, None::<f64>);
     let (w_lang, w_script, w_conf) = detect_with_whatlang_cached(text);
 
     match (l_lang.clone(), w_lang.clone()) {
@@ -344,7 +339,7 @@ pub fn is_texty_for_lang_with_policy(s: &str, strict: bool) -> bool {
     }
     // Alpha+space ratio threshold for Latin-like text
     let alpha_space = letters + spaces;
-    if alpha_space < (len as usize * 7 / 10) {
+    if alpha_space < (len * 7 / 10) {
         // < 70%
         return false;
     }
@@ -387,26 +382,17 @@ pub fn detect_with_whatlang_cached(text: &str) -> (Option<String>, Option<String
 }
 
 /// Direct lingua detection (no thresholds). Returns (iso639_3_lower, script_if_unambiguous, confidence).
-pub fn detect_with_lingua(text: &str) -> (Option<String>, Option<String>, Option<f64>) {
-    if let Some(lang) = LINGUA_DETECTOR.detect_language_of(text) {
-        let code = lingua_lang_to_iso639_3_lower(&lang);
-        let script = lingua_script_for(&lang);
-        let conf = LINGUA_DETECTOR.compute_language_confidence(text, lang);
-        (Some(code), script, Some(conf))
-    } else {
-        (None, None, None)
-    }
+/// TODO: Re-enable lingua when lingua-rs dependency is available
+pub fn detect_with_lingua(_text: &str) -> (Option<String>, Option<String>, Option<f64>) {
+    // Temporarily disabled due to missing lingua-rs dependency
+    (None, None, None)
 }
 
 /// Cached lingua detection
+/// TODO: Re-enable lingua when lingua-rs dependency is available
 pub fn detect_with_lingua_cached(text: &str) -> (Option<String>, Option<String>, Option<f64>) {
-    let key = text_hash(text);
-    if let Some(v) = LINGUA_CACHE.lock().unwrap().get(&key) {
-        return v;
-    }
-    let v = detect_with_lingua(text);
-    LINGUA_CACHE.lock().unwrap().put(key, v.clone());
-    v
+    // Temporarily disabled due to missing lingua-rs dependency
+    detect_with_lingua(text)
 }
 
 /// Heuristic filter: treat only "texty" strings as eligible for language detection.

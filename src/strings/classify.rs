@@ -165,13 +165,12 @@ fn is_valid_network_ipv4(ip: &Ipv4Addr) -> bool {
     let octets = ip.octets();
 
     // Reject version-like patterns (x.0.0.y, x.y.0.0, etc.)
-    if (octets[1] == 0 && octets[2] == 0)
+    if ((octets[1] == 0 && octets[2] == 0)
         || (octets[2] == 0 && octets[3] == 0)
-        || (octets[3] == 0 && octets[0] < 10)
+        || (octets[3] == 0 && octets[0] < 10))
+        && octets[0] < 10
     {
-        if octets[0] < 10 {
-            return false;
-        }
+        return false;
     }
 
     // Reject sequential patterns (1.2.3.4, 2.3.4.5, etc.)
@@ -602,7 +601,7 @@ static RE_HEX_64: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\b[a-f0-9]{64}\b")
 
 fn plausible_hex_hash(s: &str) -> bool {
     // Reject trivial repeats and very low diversity
-    let mut unique: std::collections::HashSet<char> = s.chars().collect();
+    let unique: std::collections::HashSet<char> = s.chars().collect();
     if unique.len() < 4 {
         return false;
     }

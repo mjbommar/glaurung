@@ -58,7 +58,7 @@ pub fn elf_got_map(data: &[u8]) -> Vec<(u64, String)> {
     let entsize64 = 24usize; // Elf64_Sym
     let entsize32 = 16usize; // Elf32_Sym
     let name_for_index = |idx: u32| -> Option<String> {
-        let (entsize, need64) = if class == 2 {
+        let (entsize, _need64) = if class == 2 {
             (entsize64, true)
         } else {
             (entsize32, false)

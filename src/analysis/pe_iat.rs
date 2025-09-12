@@ -4,8 +4,6 @@
 //! This lets us resolve indirect calls like `call [rip+disp]` on Windows x64
 //! and `call dword ptr [imm32]` on Windows x86 to symbol names.
 
-use object::read::Object;
-
 #[derive(Debug, Clone, Copy)]
 struct CoffHeader {
     number_of_sections: u16,
@@ -16,13 +14,13 @@ struct CoffHeader {
 struct OptionalHeaderLocs {
     data_dir_offset: usize,
     num_data_dirs: u32,
-    is_pe32_plus: bool,
+    _is_pe32_plus: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct DataDirectory {
     rva: u32,
-    size: u32,
+    _size: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -103,7 +101,7 @@ pub fn pe_iat_map(data: &[u8]) -> Vec<(u64, String)> {
     let opt = OptionalHeaderLocs {
         data_dir_offset,
         num_data_dirs: num_dirs,
-        is_pe32_plus,
+        _is_pe32_plus: is_pe32_plus,
     };
 
     // ImageBase for RVA->VA conversion
@@ -126,11 +124,11 @@ pub fn pe_iat_map(data: &[u8]) -> Vec<(u64, String)> {
         }
         Some(DataDirectory {
             rva: read_u32_le(data, off)?,
-            size: read_u32_le(data, off + 4)?,
+            _size: read_u32_le(data, off + 4)?,
         })
     };
-    let import_dd = dd(1).unwrap_or(DataDirectory { rva: 0, size: 0 });
-    let delay_dd = dd(13).unwrap_or(DataDirectory { rva: 0, size: 0 });
+    let import_dd = dd(1).unwrap_or(DataDirectory { rva: 0, _size: 0 });
+    let delay_dd = dd(13).unwrap_or(DataDirectory { rva: 0, _size: 0 });
 
     // Sections
     let mut sections: Vec<SectionHdr> = Vec::new();
@@ -251,14 +249,10 @@ pub fn pe_iat_map(data: &[u8]) -> Vec<(u64, String)> {
                                             rva_to_offset(hint_name_rva, &sections)
                                         {
                                             if hint_off + 2 <= data.len() {
-                                                if let Some(s) = read_string_rva(
+                                                read_string_rva(
                                                     hint_name_rva.saturating_add(2),
                                                     256,
-                                                ) {
-                                                    Some(s)
-                                                } else {
-                                                    None
-                                                }
+                                                )
                                             } else {
                                                 None
                                             }

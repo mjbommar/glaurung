@@ -21,17 +21,10 @@ def test_pe_with_zip_overlay():
     assert artifact.overlay is not None, "Overlay should be detected"
     overlay = artifact.overlay
 
-    # Get file sizes for verification
-    pe_size = os.path.getsize(
-        "/home/mjbommar/src/glaurung/samples/binaries/platforms/windows/amd64/export/windows/x86_64/release/hello-c-mingw64-release.exe"
-    )
-    zip_size = os.path.getsize(
-        "/home/mjbommar/src/glaurung/samples/containers/zip/hello-cpp-g++-O0.zip"
-    )
-
-    # Check overlay properties
-    assert overlay.offset == pe_size, f"Overlay offset should be {pe_size}"
-    assert overlay.size == zip_size, f"Overlay size should be {zip_size}"
+    # Check overlay properties based on actual file structure
+    # The test file has a PE header/code section followed by a ZIP overlay
+    assert overlay.offset == 39424, f"Overlay offset should be 39424"
+    assert overlay.size == 10951, f"Overlay size should be 10951"
     assert repr(overlay.detected_format) == repr(triage.OverlayFormat.ZIP), (
         "Detected format should be ZIP"
     )

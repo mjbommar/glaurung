@@ -5,7 +5,6 @@
 /// pieces and emits short BLAKE3-XOF substrings per piece. The final digest is a
 /// string "<window>:<digest>:<block1>:<block2>:..." suitable for Jaccard-based
 /// comparisons. It avoids GPL encumbrances from ssdeep/sdhash.
-
 /// Rolling hash functions (8/16/32/64-bit) used by CTPH.
 mod rolling {
     pub struct RollingHash8 {
@@ -155,7 +154,7 @@ fn ctph_with8(cfg: &CtphConfig, data: &[u8]) -> String {
             blocks.last_mut().unwrap().push_str(&piece);
             cur.clear();
             triggers += 1;
-            if triggers % cfg.digest_size == 0 {
+            if triggers.is_multiple_of(cfg.digest_size) {
                 blocks.push(String::new());
             }
         }
@@ -189,7 +188,7 @@ fn ctph_with16(cfg: &CtphConfig, data: &[u8]) -> String {
             blocks.last_mut().unwrap().push_str(&piece);
             cur.clear();
             triggers += 1;
-            if triggers % cfg.digest_size == 0 {
+            if triggers.is_multiple_of(cfg.digest_size) {
                 blocks.push(String::new());
             }
         }
@@ -223,7 +222,7 @@ fn ctph_with32(cfg: &CtphConfig, data: &[u8]) -> String {
             blocks.last_mut().unwrap().push_str(&piece);
             cur.clear();
             triggers += 1;
-            if triggers % cfg.digest_size == 0 {
+            if triggers.is_multiple_of(cfg.digest_size) {
                 blocks.push(String::new());
             }
         }
@@ -257,7 +256,7 @@ fn ctph_with64(cfg: &CtphConfig, data: &[u8]) -> String {
             blocks.last_mut().unwrap().push_str(&piece);
             cur.clear();
             triggers += 1;
-            if triggers % cfg.digest_size == 0 {
+            if triggers.is_multiple_of(cfg.digest_size) {
                 blocks.push(String::new());
             }
         }

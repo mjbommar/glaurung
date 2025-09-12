@@ -1,5 +1,6 @@
 //! Analysis utilities for symbols (suspicious patterns, forwarding, integrity, etc.)
 
+pub mod env;
 pub mod export;
 pub mod imphash;
 pub mod macho_env;

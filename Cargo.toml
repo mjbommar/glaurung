@@ -44,7 +44,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Async runtime for timeouts
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 whatlang = "0.16.4"
-lingua = { path = "reference/lingua-rs" }
+# lingua = { path = "reference/lingua-rs" }  # TODO: Re-enable when lingua-rs is available
 memmap2 = "0.9.4"
 bytes = "1.6.1"
 blake3 = "1.5.1"

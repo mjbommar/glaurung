@@ -42,7 +42,7 @@ impl Default for Budgets {
 struct ExecRegion {
     start: u64, // VA
     end: u64,   // VA exclusive
-    file_off_start: u64,
+    _file_off_start: u64,
 }
 
 fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Option<Address>) {
@@ -91,7 +91,7 @@ fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Optio
             regions.push(ExecRegion {
                 start: addr,
                 end: addr.saturating_add(size),
-                file_off_start: file,
+                _file_off_start: file,
             });
         }
 
@@ -111,7 +111,7 @@ fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Optio
                     refined.push(ExecRegion {
                         start: addr,
                         end: addr.saturating_add(size),
-                        file_off_start: foff,
+                        _file_off_start: foff,
                     });
                 }
             }
@@ -133,9 +133,9 @@ fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Optio
         regions.push(ExecRegion {
             start: 0,
             end: data.len() as u64,
-            file_off_start: 0,
+            _file_off_start: 0,
         });
-        let bits = if arch.is_64_bit() { 64 } else { 64 };
+        let bits = 64;
         entry = Address::new(AddressKind::VA, 0, bits, None, None).ok();
     }
     (regions, arch, endian, entry)
@@ -330,9 +330,7 @@ fn discover_function(
             // Continue linear sweep in this block
         }
         // For blocks that didn't terminate with explicit CF change, ensure end recorded
-        if !blocks.contains_key(&start_va) {
-            blocks.insert(start_va, (cur_va, instrs));
-        }
+        blocks.entry(start_va).or_insert((cur_va, instrs));
     }
 
     // Build Function object
@@ -442,7 +440,7 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         // Ensure entrypoint first
         seeds.retain(|a| a.value != ep.value);
         let mut ordered = vec![ep];
-        ordered.extend(seeds.into_iter());
+        ordered.extend(seeds);
         seeds = ordered;
     }
 

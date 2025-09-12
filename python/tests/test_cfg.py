@@ -1,11 +1,12 @@
 import pathlib
 import pytest
+import pathlib
 
 
 def sample_path():
-    return pathlib.Path(
-        "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
-    )
+    import os
+    test_dir = os.path.dirname(__file__)
+    return pathlib.Path(os.path.join(test_dir, "../../samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O2"))
 
 
 def test_detect_entry_and_cfg_if_sample_present():

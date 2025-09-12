@@ -120,7 +120,7 @@ pub fn scan_text(text: &str, budget: &SearchBudget) -> Vec<TextMatch> {
         } else if text.contains("\\")
             && text
                 .chars()
-                .nth(0)
+                .next()
                 .map(|c| c.is_ascii_alphabetic())
                 .unwrap_or(false)
         {

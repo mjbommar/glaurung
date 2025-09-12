@@ -5,8 +5,8 @@ use std::borrow::Cow;
 /// Normalize common defanging schemes in a conservative way.
 /// - hxxp:// -> http:// ; hxxps:// -> https://
 /// - [.] and (.) -> .
-/// The input may be large; if it's longer than `max_len`, we return it as-is
-/// to avoid quadratic work.
+///   The input may be large; if it's longer than `max_len`, we return it as-is
+///   to avoid quadratic work.
 pub fn normalize_defanged<'a>(s: &'a str, max_len: usize) -> Cow<'a, str> {
     if s.len() > max_len {
         return Cow::Borrowed(s);

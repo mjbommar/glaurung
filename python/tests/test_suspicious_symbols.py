@@ -64,6 +64,16 @@ def find_suspicious_binaries(limit: int = 8) -> List[Path]:
 def test_suspicious_symbols_if_present(path: Path):
     if not Path(path).exists():
         pytest.skip(f"sample not present: {path}")
+
+    # Check if sample is corrupted (contains text instead of binary)
+    with open(path, "rb") as f:
+        data = f.read(16)
+    if data.startswith(b"version https://"):
+        raise RuntimeError(
+            f"Sample {path} appears to be a Git LFS pointer file. "
+            "Run 'git lfs pull' or 'git lfs install && git lfs pull' to download the actual binary content."
+        )
+
     art = T.analyze_path(str(path))
     symbols = getattr(art, "symbols", None)
     assert symbols is not None

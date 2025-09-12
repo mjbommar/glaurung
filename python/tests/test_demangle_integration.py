@@ -9,9 +9,9 @@ import glaurung as g
     "path",
     [
         Path(
-            "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2"
+            "../samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0"
         ),
-        Path("samples/binaries/platforms/linux/amd64/export/rust/hello-rust-release"),
+        Path("../samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"),
     ],
 )
 def test_symbol_summary_includes_demangled_names_if_present(path: Path) -> None:

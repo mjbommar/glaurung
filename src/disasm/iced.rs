@@ -104,7 +104,7 @@ impl Disassembler for IcedDisassembler {
             return Err(DisassemblerError::UnsupportedInstruction());
         }
         let mut decoder = Decoder::new(self.bits, bytes, DecoderOptions::NONE);
-        decoder.set_ip(address.value as u64);
+        decoder.set_ip(address.value);
 
         let instr = decoder.decode();
         if instr.is_invalid() {
