@@ -79,13 +79,13 @@ def test_no_hallucination_possible():
 
     # Verify specific validations
     assert validated[0].value == "192.168.1.1"
-    assert validated[0].is_valid == False
+    assert not validated[0].is_valid
 
     assert validated[1].value == "google.com"
-    assert validated[1].is_valid == True
+    assert validated[1].is_valid
 
     assert validated[2].value == "1.2.3.4"
-    assert validated[2].is_valid == False
+    assert not validated[2].is_valid
 
 
 def test_hallucination_detection_raises_error():
@@ -123,7 +123,7 @@ def test_hallucination_detection_raises_error():
         # Should treat missing validation as false positive
         assert len(validated) == 1
         assert validated[0].value == "test.com"
-        assert validated[0].is_valid == False  # No decision = false positive
+        assert not validated[0].is_valid  # No decision = false positive
 
 
 def test_duplicate_index_validation():
@@ -250,7 +250,7 @@ def test_missing_decision_treated_as_false_positive():
     assert fp == 2
 
     # First should be valid
-    assert validated[0].is_valid == True
+    assert validated[0].is_valid
     # Others should be false positives
-    assert validated[1].is_valid == False
-    assert validated[2].is_valid == False
+    assert not validated[1].is_valid
+    assert not validated[2].is_valid

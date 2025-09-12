@@ -11,6 +11,7 @@ import glaurung as g  # noqa: F401 - ensure native extension is importable
 # Try to import LLM evidence module, skip tests if dependencies not available
 try:
     from glaurung.llm.evidence import annotate_functions_path, AnnotateBudgets
+
     HAS_LLM_DEPS = True
 except ImportError:
     HAS_LLM_DEPS = False
@@ -108,7 +109,7 @@ def test_elf_got_map_and_arm64_evidence():
         )
 
     # GOT map should be callable and return a list (possibly empty)
-    if hasattr(g, 'analysis'):
+    if hasattr(g, "analysis"):
         got = g.analysis.elf_got_map_path(str(arm_sample))
         assert isinstance(got, list)
     else:

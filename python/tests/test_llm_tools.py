@@ -100,7 +100,7 @@ class TestDisasmAndAgent:
         empty_artifact.symbols = None
 
         AnalysisContext = MemoryContext
-        context = AnalysisContext(
+        AnalysisContext(
             file_path="/test", artifact=empty_artifact, session_id="test"
         )
         # Should return empty results: no triage strings / symbols available

@@ -34,6 +34,9 @@ pub mod analysis;
 /// Disassembly engines and adapters
 pub mod disasm;
 
+/// Binary format parsers
+pub mod formats;
+
 /// Python bindings module
 #[cfg(feature = "python-ext")]
 pub mod python_bindings;

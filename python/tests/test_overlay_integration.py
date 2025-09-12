@@ -23,8 +23,8 @@ def test_pe_with_zip_overlay():
 
     # Check overlay properties based on actual file structure
     # The test file has a PE header/code section followed by a ZIP overlay
-    assert overlay.offset == 39424, f"Overlay offset should be 39424"
-    assert overlay.size == 10951, f"Overlay size should be 10951"
+    assert overlay.offset == 39424, "Overlay offset should be 39424"
+    assert overlay.size == 10951, "Overlay size should be 10951"
     assert repr(overlay.detected_format) == repr(triage.OverlayFormat.ZIP), (
         "Detected format should be ZIP"
     )

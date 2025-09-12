@@ -91,7 +91,7 @@ class StringsFormatter(BaseFormatter):
             return {"count": len(strings), "stats": None, "histogram": None}
 
         # Build histogram from 0..8
-        width = max(1, bins)
+        max(1, bins)
         # Using integer bins across [0,8], last bin 8+
         bucket_counts = defaultdict(int)
         for v in ent_values:

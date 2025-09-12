@@ -46,7 +46,9 @@ SAMPLE_ELF_CLANG = (
     "binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"
 )
 # Note: No working PE samples available, using another ELF as fallback
-SAMPLE_PE_EXE = "binaries/platforms/linux/amd64/export/native/asm/nasm/O0/hello-asm-nasm-O0"
+SAMPLE_PE_EXE = (
+    "binaries/platforms/linux/amd64/export/native/asm/nasm/O0/hello-asm-nasm-O0"
+)
 SAMPLE_JAR = "binaries/platforms/linux/amd64/export/java/jdk21/HelloWorld.jar"
 SAMPLE_JAVA_CLASS = "binaries/platforms/linux/amd64/export/java/jdk21/HelloWorld.class"
 SAMPLE_PYTHON_PYC = "binaries/platforms/linux/amd64/export/python/hello.pyc"

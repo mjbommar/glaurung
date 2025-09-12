@@ -67,7 +67,11 @@ def test_bytecode_detection():
             "Python",
             None,  # Python has variable magic numbers
         ),
-        ("samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.4.luac", "Lua", b"\x1bLua"),
+        (
+            "samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.4.luac",
+            "Lua",
+            b"\x1bLua",
+        ),
     ]
 
     tested_any = False
@@ -103,6 +107,7 @@ def test_bytecode_detection():
     # If no valid bytecode samples were found, skip the test
     if not tested_any:
         import pytest
+
         pytest.skip("No valid bytecode samples available for testing")
 
 

@@ -217,7 +217,7 @@ def test_filter_iocs_from_artifact():
     )
 
     # Use test model
-    test_model = TestModel(custom_output_args=expected_result)
+    TestModel(custom_output_args=expected_result)
 
     # Mock the validator creation to use test model
     from unittest.mock import patch
