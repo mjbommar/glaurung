@@ -25,8 +25,9 @@ Analysis subsystem documentation.
 - `language-detection/` - Programming language and compiler detection
 - `symbols/` - Symbol extraction and analysis
 - `disassembly/` - Multi-engine disassembly architecture
+- `lifting/` - Binary lifting to intermediate representations (LLVM IR, VEX)
 - `decompiler/` - Decompilation pipeline and AI integration
- - `interpreted/` - Interpreted & VM bytecode (Python/Java/DEX) analysis plan
+- `interpreted/` - Interpreted & VM bytecode (Python/Java/DEX) analysis plan
 
 ### `formats/`
 Technical reference documentation for binary formats.
@@ -45,11 +46,12 @@ Experimental features and proposals.
 
 ## Quick Reference
 
-**Working on triage?** → `triage/`  
-**Adding a new parser?** → `parsers/[format]/`  
-**Improving language detection?** → `analysis/language-detection/`  
-**Understanding the data model?** → `architecture/data-model/`  
-**Setting up development?** → `development/setup.md`  
+**Working on triage?** → `triage/`
+**Adding a new parser?** → `parsers/[format]/`
+**Improving language detection?** → `analysis/language-detection/`
+**Binary lifting to IR?** → `analysis/lifting/`
+**Understanding the data model?** → `architecture/data-model/`
+**Setting up development?** → `development/setup.md`
 **Looking for compiler signatures?** → `formats/compiler-artifacts.md`
 **Planning interpreted/VM support?** → `analysis/interpreted/`
 
