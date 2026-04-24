@@ -6,6 +6,7 @@
 pub mod analysis;
 pub mod core_types;
 pub mod disasm;
+pub mod ir;
 pub mod similarity;
 pub mod strings;
 pub mod symbols;
@@ -28,6 +29,7 @@ pub fn register_python_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRe
     symbols::register_symbols_bindings(py, m)?;
     disasm::register_disasm_bindings(py, m)?;
     similarity::register_similarity_bindings(py, m)?;
+    ir::register_ir_bindings(py, m)?;
 
     Ok(())
 }

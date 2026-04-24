@@ -11,10 +11,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LLMConfig:
-    default_model: str = field(default="openai:gpt-4.1-mini")
-    summarizer_model: str = field(default="openai:gpt-4.1-mini")
-    risk_scorer_model: str = field(default="openai:gpt-4.1-mini")
-    ioc_model: str = field(default="openai:gpt-4.1-mini")
+    # Primary default: Anthropic's Claude Opus 4.7 — strongest current model
+    # for long-context reverse-engineering tasks. Fallback: OpenAI's GPT-5.5
+    # when the Anthropic key is missing or the call fails.
+    default_model: str = field(default="anthropic:claude-opus-4-7")
+    fallback_model: str = field(default="openai:gpt-5.5")
+    summarizer_model: str = field(default="anthropic:claude-opus-4-7")
+    risk_scorer_model: str = field(default="anthropic:claude-opus-4-7")
+    ioc_model: str = field(default="openai:gpt-5.5")
 
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
@@ -76,6 +80,22 @@ class LLMConfig:
                 or os.getenv("GEMINI_API_KEY")
             ),
         }
+
+    def preferred_model(self) -> str:
+        """Return the best model available given current credentials.
+
+        Anthropic Claude Opus 4.7 is preferred; we fall back to OpenAI's
+        GPT-5.5 when the Anthropic key is missing. Returns the configured
+        ``default_model`` when neither provider is available so callers
+        that only want to *construct* an Agent (e.g. tests) still get a
+        sensible value.
+        """
+        avail = self.available_models()
+        if avail.get("anthropic"):
+            return self.default_model
+        if avail.get("openai"):
+            return self.fallback_model
+        return self.default_model
 
 
 _config: Optional[LLMConfig] = None

@@ -1,5 +1,62 @@
 # LLM Integration Roadmap for Glaurung (Pydantic AI Based)
 
+> **Status (2026-04-24):** The sections below describe the *original design*.
+> The implementation has diverged in several places — in particular, the agent
+> architecture became **memory-first** (a shared `KnowledgeBase` of Nodes/Edges
+> in `kb/`) rather than output-model-per-agent. The canonical entry point is
+> `agents/memory_agent.py`. Use the status table below, not the section plan
+> in §1, as the source of truth for what actually exists.
+>
+> **Default models (updated):** Anthropic **Claude Opus 4.7** is the primary
+> default; OpenAI **GPT-5.5** is the fallback when the Anthropic key isn't
+> set. Both are wired through `pydantic_ai.Agent(model="provider:name")`.
+> The config layer (`llm/config.py`) exposes `preferred_model()` which picks
+> the right one given the credentials present in the environment.
+
+## Implementation Status
+
+### Built
+
+| Area | Location | Notes |
+|---|---|---|
+| Framework | pydantic-ai | In use across all agents |
+| Config / model selection | `llm/config.py` | `available_models()`, `default_model` |
+| Shared context | `llm/context.py` | `MemoryContext`, `Budgets` |
+| Knowledge base (Node/Edge) | `llm/kb/` | `models.py`, `store.py`, `adapters.py::import_triage` |
+| Memory-first agent | `llm/agents/memory_agent.py` | Primary agent; uses atomic tools over KB |
+| Atomic tools (22) | `llm/tools/` | hash_file, view_{hex,strings,entry,disassembly,function,entropy,symbols}, search_{kb,strings,symbols}, map_{elf_plt,elf_got,pe_iat,symbol_addresses}, annotate_binary, import_triage, kb_add_note, list_functions, suggest_function_name |
+| IOC validator | `llm/agents/ioc_validator{,_v2}.py` | Two generations; `_v2` is current |
+| Function naming | `llm/agents/function_name.py` + `tools/suggest_function_name.py` | Heuristic fallback when no LLM or inside running event loop |
+| Iterative / single-pass agents | `agents/{single_pass,iterative,iterative_refinement,summary_memory}.py` | Workflow variants |
+| Evidence bundles | `llm/evidence.py` | |
+| Agent factory / base | `llm/agents/{factory,base,memory_foundation}.py` | |
+
+### Not built (vs. §7 plan)
+
+| Item | Status |
+|---|---|
+| `agents/binary.py` with `BinaryAnalysis` output model | Not implemented — replaced by memory-first approach |
+| `agents/decompile.py` | Blocked on decompiler itself (Phase 3) |
+| `agents/vulnerability.py` | Not started |
+| Dedicated `agents/symbols.py` / `agents/strings.py` | Exist as tools, not standalone agents |
+| Logfire observability | Not wired up |
+| Streaming responses | Not wired up |
+| Rate limiting | Not wired up |
+| Batch processing | Not wired up |
+| Report generation | Not wired up |
+
+### Diverged from plan
+
+- `§1` proposes top-level `models/`, `dependencies.py`. Reality: `context.py` + `kb/`
+  take the place of `dependencies.py`; per-agent `models/` modules were not needed
+  because most outputs are structured via pydantic-ai's `output_type` directly in
+  the agent file or written as KB nodes.
+- Tools are flat under `llm/tools/` (one file per tool) rather than bucketed into
+  `disassembly.py` / `database.py` / `search.py`. The flat layout has proven
+  easier to register/discover.
+- `IOCValidator` is the only multi-generation agent (v1, v2). Future agents
+  should follow the v2 pattern (structured output + KB writes).
+
 ## Executive Summary
 
 This roadmap outlines the design and implementation strategy for integrating Large Language Models (LLMs) into Glaurung's binary analysis pipeline using **Pydantic AI** as the foundation. Pydantic AI provides a production-ready agent framework with built-in support for OpenAI, Anthropic, and Google Gemini, along with powerful features like dependency injection, structured outputs, and type-safe tool integration. This approach significantly reduces boilerplate while maintaining flexibility and type safety.

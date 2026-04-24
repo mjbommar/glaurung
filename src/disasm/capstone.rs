@@ -90,6 +90,25 @@ impl CapstoneDisassembler {
         })
     }
 
+    /// Switch a 32-bit ARM disassembler between classic ARM and Thumb modes.
+    ///
+    /// No-op and `Ok(())` for non-ARM architectures. Callers that detect a
+    /// Thumb target (e.g. address with LSB set, mapping-symbol `$t`) should
+    /// invoke this before disassembling a window so that 16/32-bit Thumb
+    /// encodings are decoded correctly.
+    pub fn set_thumb_mode(
+        &mut self,
+        thumb: bool,
+    ) -> Result<(), DisassemblerError> {
+        if !matches!(self.arch, Architecture::ARM) {
+            return Ok(());
+        }
+        let new_mode = if thumb { Mode::Thumb } else { Mode::Arm };
+        self.cs
+            .set_mode(new_mode)
+            .map_err(|_| DisassemblerError::UnsupportedArchitecture())
+    }
+
     fn parse_operands_simple(op_str: &str) -> Vec<Operand> {
         let mut out = Vec::new();
         for tok in op_str
@@ -191,6 +210,17 @@ impl Disassembler for CapstoneDisassembler {
             match self.arch {
                 Architecture::ARM64 => {
                     if let Some(ad) = detail.arch_detail().arm64() {
+                        // Track writeback so pre-indexed forms (`[sp,
+                        // #-0x30]!`) can be distinguished from non-
+                        // writeback forms downstream. When writeback is
+                        // set, we zero the memory operand's disp and
+                        // append an explicit Immediate operand carrying
+                        // that disp — which makes pre-indexed look exactly
+                        // like post-indexed in our operand form. The
+                        // ARM64 lifter then adds the base writeback in
+                        // both cases.
+                        let writeback = ad.writeback();
+                        let mut pending_writeback: Option<i64> = None;
                         for op in ad.operands() {
                             match op.op_type {
                                 Arm64OperandType::Reg(r) => {
@@ -212,22 +242,35 @@ impl Disassembler for CapstoneDisassembler {
                                         None
                                     };
                                     let scale = None;
-                                    let disp = if m.disp() != 0 {
-                                        Some(m.disp() as i64)
-                                    } else {
-                                        Some(0)
-                                    };
+                                    let disp = m.disp() as i64;
                                     operands.push(Operand::memory(
                                         0,
                                         Access::Read,
-                                        disp,
+                                        Some(disp),
                                         base,
                                         index,
                                         scale,
                                     ));
+                                    // Pre-indexed writeback: surface the
+                                    // non-zero disp as a trailing Imm so
+                                    // the lifter emits a matching base-
+                                    // adjust. Loads/stores themselves use
+                                    // [base + disp], which is the post-
+                                    // writeback effective address —
+                                    // equivalent to sp_new + 0.
+                                    if writeback && disp != 0 {
+                                        pending_writeback = Some(disp);
+                                    }
                                 }
                                 _ => {}
                             }
+                        }
+                        // Surface the writeback displacement as a trailing
+                        // Immediate operand so the ARM64 lifter sees a
+                        // uniform shape for pre- and post-indexed LDP/STP/
+                        // LDR.
+                        if let Some(wb) = pending_writeback {
+                            operands.push(Operand::immediate(wb, 0));
                         }
                     }
                 }
@@ -318,5 +361,69 @@ impl Disassembler for CapstoneDisassembler {
     }
     fn name(&self) -> &str {
         "capstone"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::address::{Address, AddressKind};
+
+    fn va(v: u64) -> Address {
+        Address::new(AddressKind::VA, v, 32, None, None).unwrap()
+    }
+
+    #[test]
+    fn arm_mode_decodes_arm_encoding() {
+        // `mov r0, r0` — ARM encoding, 4 bytes, little-endian: E1 A0 00 00
+        let cs = CapstoneDisassembler::new(Architecture::ARM, Endianness::Little)
+            .expect("capstone arm backend");
+        let ins = cs
+            .disassemble_instruction(&va(0x1000), &[0x00, 0x00, 0xa0, 0xe1])
+            .expect("decode");
+        assert_eq!(ins.length, 4, "ARM instruction must be 4 bytes");
+        assert!(
+            ins.mnemonic == "mov" || ins.mnemonic == "nop",
+            "got {:?}",
+            ins.mnemonic
+        );
+    }
+
+    #[test]
+    fn thumb_mode_decodes_thumb_encoding() {
+        // `nop` — Thumb-2 encoding, 2 bytes: 00 BF
+        let mut cs = CapstoneDisassembler::new(Architecture::ARM, Endianness::Little)
+            .expect("capstone arm backend");
+        cs.set_thumb_mode(true).expect("enable thumb");
+        let ins = cs
+            .disassemble_instruction(&va(0x1000), &[0x00, 0xbf])
+            .expect("decode");
+        assert_eq!(ins.length, 2, "Thumb NOP must be 2 bytes");
+        assert_eq!(ins.mnemonic, "nop");
+    }
+
+    #[test]
+    fn toggling_mode_back_to_arm_works() {
+        let mut cs = CapstoneDisassembler::new(Architecture::ARM, Endianness::Little)
+            .expect("capstone arm backend");
+        cs.set_thumb_mode(true).expect("enable thumb");
+        let t = cs
+            .disassemble_instruction(&va(0), &[0x00, 0xbf])
+            .expect("thumb decode");
+        assert_eq!(t.length, 2);
+        cs.set_thumb_mode(false).expect("disable thumb");
+        let a = cs
+            .disassemble_instruction(&va(0), &[0x00, 0x00, 0xa0, 0xe1])
+            .expect("arm decode");
+        assert_eq!(a.length, 4);
+    }
+
+    #[test]
+    fn set_thumb_mode_is_noop_on_non_arm() {
+        let mut cs = CapstoneDisassembler::new(Architecture::ARM64, Endianness::Little)
+            .expect("capstone arm64 backend");
+        // Must not error and must not affect arm64 decoding.
+        cs.set_thumb_mode(true).expect("no-op on arm64");
+        cs.set_thumb_mode(false).expect("no-op on arm64");
     }
 }

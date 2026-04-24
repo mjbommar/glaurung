@@ -34,6 +34,9 @@ pub mod analysis;
 /// Disassembly engines and adapters
 pub mod disasm;
 
+/// Low-Level Intermediate Representation (Phase 2)
+pub mod ir;
+
 /// Binary format parsers
 pub mod formats;
 

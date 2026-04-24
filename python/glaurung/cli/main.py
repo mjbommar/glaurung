@@ -10,6 +10,8 @@ from .commands.disasm import DisasmCommand
 from .commands.cfg import CFGCommand
 from .commands.ask import AskCommand
 from .commands.strings import StringsCommand
+from .commands.decompile import DecompileCommand
+from .commands.name_func import NameFuncCommand
 
 from .formatters import (
     TriageFormatter,
@@ -19,6 +21,8 @@ from .formatters import (
 )
 from .formatters.ask import AskFormatter
 from .formatters.strings import StringsFormatter
+from .formatters.decompile import DecompileFormatter
+from .formatters.name_func import NameFuncFormatter
 
 
 class GlaurungCLI:
@@ -33,6 +37,8 @@ class GlaurungCLI:
             "disasm": DisasmCommand(),
             "cfg": CFGCommand(),
             "ask": AskCommand(),
+            "decompile": DecompileCommand(),
+            "name-func": NameFuncCommand(),
         }
 
         # Map commands to their formatters
@@ -43,6 +49,8 @@ class GlaurungCLI:
             "disasm": DisasmFormatter,
             "cfg": CFGFormatter,
             "ask": AskFormatter,
+            "decompile": DecompileFormatter,
+            "name-func": NameFuncFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:

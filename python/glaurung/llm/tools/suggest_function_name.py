@@ -138,6 +138,7 @@ class SuggestFunctionNameTool(
                 calls=calls,
                 strings=strings,
                 ctx=ctx,
+                va=int(args.va),
             )
         else:
             # Use heuristics only
@@ -201,8 +202,17 @@ class SuggestFunctionNameTool(
         calls: list[str],
         strings: list[str],
         ctx: MemoryContext,
+        va: int | None = None,
     ) -> SuggestedFunctionName:
-        """Use LLM to suggest a function name based on context."""
+        """Use LLM to suggest a function name based on decompiled pseudocode.
+
+        Richer prompt than the legacy path: when a VA is known, we ask the
+        glaurung decompiler for a C-style rendering of the function and
+        include that as the primary evidence. Falls back to the raw
+        instruction / call / string context when decompilation fails.
+        """
+        import asyncio
+
         from ..config import get_config
 
         cfg = get_config()
@@ -214,37 +224,43 @@ class SuggestFunctionNameTool(
                 original_name, demangled_name, calls, strings, 0
             )
 
-        # Create a simple agent for this task
-        agent = Agent[str, SuggestedFunctionName](
-            model=cfg.default_model,
-            output_type=SuggestedFunctionName,
-            system_prompt=(
-                "You are a reverse engineering assistant that suggests meaningful function names "
-                "based on disassembly analysis. Provide concise, descriptive names that follow "
-                "common naming conventions (snake_case for C, camelCase for Java/JS, etc.). "
-                "Consider the function's behavior, API calls, and string references."
-            ),
+        # If called from within a running event loop (e.g. as a tool inside
+        # another pydantic-ai Agent), Agent.run_sync cannot drive a nested
+        # loop — it will raise and orphan the inner coroutine. Detect this
+        # and use heuristics instead of creating an unawaitable coroutine.
+        try:
+            asyncio.get_running_loop()
+            return self._suggest_with_heuristics(
+                original_name, demangled_name, calls, strings, 0
+            )
+        except RuntimeError:
+            pass
+
+        prompt = build_naming_prompt(
+            ctx=ctx,
+            va=va,
+            original_name=original_name,
+            demangled_name=demangled_name,
+            instructions=instructions,
+            calls=calls,
+            strings=strings,
         )
 
-        # Build context string
-        context_parts = []
-        if demangled_name:
-            context_parts.append(f"Demangled: {demangled_name}")
-        if calls:
-            context_parts.append(f"Calls: {', '.join(calls[:5])}")
-        if strings:
-            context_parts.append(f"Strings: {', '.join(repr(s) for s in strings[:3])}")
-        if instructions:
-            context_parts.append("First instructions:\n" + "\n".join(instructions[:10]))
-
-        context = "\n".join(context_parts) if context_parts else "No additional context"
-
-        prompt = (
-            "Suggest a meaningful function name based on behavior.\n"
-            "Original/mangled names may be misleading; consider them lightly.\n"
-            f"Original: {original_name}\n"
-            f"{context}\n\n"
-            "Return a succinct identifier (snake_case), confidence (0-1), brief summary, and rationale."
+        # Use the best available model — Claude Opus 4.7 preferred, GPT-5.5
+        # fallback. See llm/config.py::preferred_model().
+        agent = Agent[str, SuggestedFunctionName](
+            model=cfg.preferred_model(),
+            output_type=SuggestedFunctionName,
+            system_prompt=(
+                "You are a reverse engineering assistant. You will be shown "
+                "glaurung-decompiled pseudocode for one function. Your task "
+                "is to suggest a concise, descriptive name for that function "
+                "in snake_case. Consider the function's behavior: which "
+                "library functions it calls, which string literals it uses, "
+                "what control flow it performs, and what data it touches. "
+                "Original / mangled names are unreliable — weigh them "
+                "lightly and prefer evidence from the code."
+            ),
         )
 
         try:
@@ -335,6 +351,65 @@ class SuggestFunctionNameTool(
         return SuggestedFunctionName(
             name=name, confidence=confidence, summary=summary, rationale=rationale
         )
+
+
+def build_naming_prompt(
+    ctx: MemoryContext,
+    va: int | None,
+    original_name: str,
+    demangled_name: str | None,
+    instructions: list[str],
+    calls: list[str],
+    strings: list[str],
+) -> str:
+    """Build a naming prompt using decompiled pseudocode as primary evidence.
+
+    Also exposed as a module-level helper so the `glaurung ask name-func`
+    CLI shim can reuse the exact same context-assembly logic.
+    """
+    pseudocode: str | None = None
+    if va is not None and getattr(ctx, "file_path", None):
+        try:
+            pseudocode = g.ir.decompile_at(
+                str(ctx.file_path),
+                int(va),
+                timeout_ms=max(200, int(getattr(ctx.budgets, "timeout_ms", 500) or 500)),
+                style="c",
+            )
+        except Exception:
+            pseudocode = None
+
+    parts: list[str] = []
+    parts.append(f"Original (likely unreliable): {original_name}")
+    if demangled_name and demangled_name != original_name:
+        parts.append(f"Demangled: {demangled_name}")
+
+    if pseudocode:
+        # Cap at ~120 lines to stay within a reasonable prompt budget.
+        lines = pseudocode.splitlines()
+        if len(lines) > 120:
+            lines = lines[:120] + [f"... ({len(pseudocode.splitlines()) - 120} more lines truncated)"]
+        parts.append("Pseudocode (glaurung --style c):\n```\n" + "\n".join(lines) + "\n```")
+    else:
+        # Fall back to the old context shape when decompilation is
+        # unavailable (e.g. unsupported arch, or timeout).
+        if calls:
+            parts.append(f"Calls (resolved): {', '.join(calls[:8])}")
+        if strings:
+            parts.append("Strings:\n" + "\n".join(f"  {s!r}" for s in strings[:5]))
+        if instructions:
+            parts.append(
+                "First instructions:\n" + "\n".join(instructions[:16])
+            )
+
+    prompt = (
+        "Suggest a meaningful snake_case name for the function below.\n\n"
+        + "\n\n".join(parts)
+        + "\n\nReturn the suggested name, a confidence in [0, 1], a one-"
+        "sentence summary, and a short rationale citing specific evidence "
+        "(string literals, called functions, control-flow shape) you used."
+    )
+    return prompt
 
 
 def build_tool() -> MemoryTool[SuggestFunctionNameArgs, SuggestFunctionNameResult]:

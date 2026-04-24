@@ -12,7 +12,8 @@ from glaurung.llm.agents.summary_memory import BinarySummary, create_summarizer_
 def test_llm_config():
     """Test LLM configuration."""
     config = LLMConfig()
-    assert config.default_model == "openai:gpt-4.1-mini"
+    # Default model is now Anthropic Claude Opus 4.7 — see docs/llm/ROADMAP.md.
+    assert config.default_model == "anthropic:claude-opus-4-7"
     assert config.temperature == 0.3
 
     # Test available models detection

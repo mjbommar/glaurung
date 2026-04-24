@@ -80,6 +80,16 @@ impl PyDisassembler {
     pub fn arch(&self) -> Architecture {
         self.backend.architecture()
     }
+
+    /// Switch this disassembler between ARM and Thumb encodings. No-op on
+    /// non-ARM backends. Returns the resulting mode (`"arm"` or `"thumb"`).
+    #[pyo3(name = "set_thumb_mode")]
+    pub fn set_thumb_mode(&mut self, thumb: bool) -> PyResult<&'static str> {
+        self.backend
+            .set_thumb_mode(thumb)
+            .map_err(|e| PyValueError::new_err(format!("{:}", e)))?;
+        Ok(if thumb { "thumb" } else { "arm" })
+    }
 }
 
 #[pyfunction]
@@ -184,7 +194,15 @@ pub fn disassemble_window_at_py(
     max_instructions: usize,
     max_time_ms: u64,
 ) -> PyResult<Vec<crate::core::instruction::Instruction>> {
-    let d = disassembler_for_path_py(path.clone())?;
+    let mut d = disassembler_for_path_py(path.clone())?;
+    // ARM Thumb convention: the Thumb bit (LSB=1) in a code pointer signals
+    // Thumb mode. Hardware clears the bit before fetching, so we do the same
+    // here and switch the backend into Thumb before decoding.
+    let mut start_va = start_va;
+    if matches!(d.backend.architecture(), Architecture::ARM) && (start_va & 1) == 1 {
+        start_va &= !1u64;
+        let _ = d.backend.set_thumb_mode(true);
+    }
     // Read full file and map VA->file offset via shared helper
     let data =
         std::fs::read(&path).map_err(|e| PyValueError::new_err(format!("read error: {}", e)))?;

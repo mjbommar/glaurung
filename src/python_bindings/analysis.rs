@@ -28,6 +28,9 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     // PE-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(pe_iat_map_path_py, &analysis_mod)?)?;
 
+    // Mach-O-specific helpers
+    analysis_mod.add_function(wrap_pyfunction!(macho_stubs_map_path_py, &analysis_mod)?)?;
+
     // Add analysis submodule to main module
     m.add_submodule(&analysis_mod)?;
 
@@ -174,4 +177,19 @@ fn pe_iat_map_path_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     Ok(crate::analysis::pe_iat::pe_iat_map(&data))
+}
+
+/// Get Mach-O stubs/lazy-pointer/non-lazy-pointer map for a file.
+#[pyfunction]
+#[pyo3(name = "macho_stubs_map_path")]
+#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+fn macho_stubs_map_path_py(
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Vec<(u64, String)>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    Ok(crate::analysis::macho_stubs::macho_stubs_map(&data))
 }

@@ -1,5 +1,75 @@
 """Tests for the new memory-first LLM tools and agent."""
 
+from glaurung.llm.tools.suggest_function_name import build_naming_prompt
+
+
+def test_build_naming_prompt_includes_pseudocode_when_decompile_succeeds(tmp_path: "__import__('pathlib').Path"):
+    """build_naming_prompt should embed decompiler output when available."""
+    from pathlib import Path
+    import glaurung as g
+    from glaurung.llm.context import MemoryContext, Budgets
+    from glaurung.llm.kb.adapters import import_triage
+
+    sample = Path("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2")
+    if not sample.exists():
+        import pytest
+        pytest.skip("sample missing")
+
+    art = g.triage.analyze_path(str(sample))
+    ctx = MemoryContext(
+        file_path=str(sample),
+        artifact=art,
+        budgets=Budgets(timeout_ms=500),
+    )
+    import_triage(ctx.kb, art, str(sample))
+
+    # Use the detected entry VA — we know hello-gcc-O2's _start is at 0x1840.
+    entry_info = g.analysis.detect_entry_path(str(sample))
+    assert entry_info is not None
+    va = int(entry_info[3])
+
+    prompt = build_naming_prompt(
+        ctx=ctx,
+        va=va,
+        original_name="_start",
+        demangled_name=None,
+        instructions=[],
+        calls=[],
+        strings=[],
+    )
+    # Prompt must include the pseudocode fence and the function header
+    # the C-style renderer emits.
+    assert "glaurung --style c" in prompt
+    assert "fn _start {" in prompt
+
+
+def test_build_naming_prompt_falls_back_when_decompile_unavailable(tmp_path):
+    """When no VA is given (or decompile fails) the helper uses the legacy
+    context shape."""
+    from glaurung.llm.context import MemoryContext, Budgets
+
+    # MemoryContext without a usable file — decompile will raise and the
+    # helper must fall back.
+    from unittest.mock import MagicMock
+    ctx = MemoryContext(
+        file_path="/nonexistent",
+        artifact=MagicMock(),
+        budgets=Budgets(timeout_ms=100),
+    )
+    prompt = build_naming_prompt(
+        ctx=ctx,
+        va=None,
+        original_name="sub_1234",
+        demangled_name=None,
+        instructions=["mov rax, 0x1", "ret"],
+        calls=["puts@plt"],
+        strings=["hello"],
+    )
+    assert "glaurung --style c" not in prompt
+    assert "puts@plt" in prompt
+    assert "'hello'" in prompt or "\"hello\"" in prompt
+    assert "mov rax" in prompt
+
 from pathlib import Path
 from unittest.mock import Mock
 import pytest

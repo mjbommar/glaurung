@@ -32,9 +32,9 @@ dynamic = ["version"]
 dependencies = [
     "structlog>=25.4.0",
     "pydantic>=2.11.7",
-    "pydantic-ai-slim[anthropic,google,openai]>=0.8.1",
+    "pydantic-ai-slim[anthropic,google,openai]>=1.86.0",
     "rich>=14.1.0",
-    "pydantic-ai>=0.8.1",
+    "pydantic-ai>=1.86.0",
 ]
 
 [project.scripts]

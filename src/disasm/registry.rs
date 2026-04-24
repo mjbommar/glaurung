@@ -47,6 +47,16 @@ impl Disassembler for Backend {
     }
 }
 
+impl Backend {
+    /// Switch to/from Thumb mode on ARM backends. No-op on other arches/backends.
+    pub fn set_thumb_mode(&mut self, thumb: bool) -> Result<(), DisassemblerError> {
+        match self {
+            Backend::Cap(d) => d.set_thumb_mode(thumb),
+            Backend::Iced(_) => Ok(()),
+        }
+    }
+}
+
 /// Select a disassembler backend for the given architecture.
 pub fn for_arch(arch: Architecture, endianness: Endianness) -> Option<Backend> {
     match arch {

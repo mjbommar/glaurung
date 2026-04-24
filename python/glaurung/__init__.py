@@ -104,6 +104,10 @@ _sys.modules[__name__ + ".disasm"] = disasm
 analysis = _native.analysis
 _sys.modules[__name__ + ".analysis"] = analysis
 
+# LLIR (low-level IR) submodule
+ir = _native.ir
+_sys.modules[__name__ + ".ir"] = ir
+
 # Triage module: use native triage, but attach a convenience triage()/analyze_path() wrapper
 _triage_mod = _native.triage
 # Preserve the original native function to avoid recursion when we override attributes
@@ -318,6 +322,8 @@ __all__ = [
     "strings",
     # Top-level similarity module
     "similarity",
+    # LLIR submodule
+    "ir",
 ]
 
 # Expose logging config from native and Python wrapper

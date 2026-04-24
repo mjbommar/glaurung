@@ -58,6 +58,8 @@ class SymbolsSummary(BaseModel):
     sym_va_map: Dict[int, str] = Field(default_factory=dict)
     import_thunk_map: Dict[int, str] = Field(default_factory=dict)
     got_map: Dict[int, str] = Field(default_factory=dict)
+    # Mach-O stubs / lazy / non-lazy pointer entries keyed by VA.
+    macho_stub_map: Dict[int, str] = Field(default_factory=dict)
 
 
 class BinaryEvidence(BaseModel):
@@ -179,6 +181,14 @@ def _collect_symbols(path: str, budgets: AnnotateBudgets) -> SymbolsSummary:
             got_map[int(va)] = str(name)
     except Exception:
         pass
+    macho_stub_map: Dict[int, str] = {}
+    try:
+        for va, name in g.analysis.macho_stubs_map_path(
+            path, budgets.max_read_bytes, budgets.max_file_size
+        ):
+            macho_stub_map[int(va)] = str(name)
+    except Exception:
+        pass
     return SymbolsSummary(
         imports=imports,
         exports=exports,
@@ -187,6 +197,7 @@ def _collect_symbols(path: str, budgets: AnnotateBudgets) -> SymbolsSummary:
         sym_va_map=sym_va_map,
         import_thunk_map=import_thunk_map,
         got_map=got_map,
+        macho_stub_map=macho_stub_map,
     )
 
 
@@ -343,6 +354,8 @@ def _resolve_call_target_name(
         return symbols.import_thunk_map[va]
     if va in symbols.got_map:
         return symbols.got_map[va]
+    if va in symbols.macho_stub_map:
+        return symbols.macho_stub_map[va]
     return None
 
 
