@@ -1,0 +1,63 @@
+{
+  "_version": 2,
+  "entry_va": 6448,
+  "raw_name": "_ZSt4endlIcSt11char_traitsIcEERSt13basic_ostreamIT_T0_ES6_.isra.0",
+  "demangled": "std::basic_ostream<char, std::char_traits<char> >& std::endl<char, std::char_traits<char> >(std::basic_ostream<char, std::char_traits<char> >&) [clone .isra.0]",
+  "short_name": "std_endl_char",
+  "rejected_names": [
+    "ostream_put_newline_and_flush",
+    "endl_widen_dispatch",
+    "endl_char_isra"
+  ],
+  "role": "wrapper",
+  "role_confidence": 0.85,
+  "c_prototype": "std::ostream &std::endl(std::ostream &os);",
+  "docstring": "/**\n * @brief libstdc++ `std::endl` manipulator (char specialization, .isra.0 clone).\n *\n * Inserts a newline character into @p ctx and flushes the stream, matching the\n * semantics of `std::endl<char, std::char_traits<char>>`. The implementation\n * resolves the stream's embedded `ios_base` subobject via the `vtable[-3]`\n * virtual-base offset, retrieves the cached `std::ctype<char>` facet from\n * offset `0xF0`, widens `'\\n'` through that facet (or skips the dispatch on\n * the inline fast-path), and tail-calls the shared insert+flush helper\n * (`sub_11B0`).\n *\n * @param ctx       Pointer to the `std::basic_ostream<char>` to write to.\n *                  The first word must point at a valid ostream vtable so\n *                  that `vtable[-3]` yields the offset of the contained\n *                  `ios_base` subobject.\n * @param expected  Expected address of the `do_widen` vfunc thunk. When the\n *                  cached slot at `*(facet) + 0x30` already matches this\n *                  pointer, the explicit `do_widen('\\n')` call is elided.\n *                  Passed in a caller-saved register by the outer template\n *                  wrapper that performs the widen() check.\n *\n * @return @p ctx, as returned by `sub_11B0` (the ostream_insert + flush\n *         helper). The function never returns a different stream pointer.\n *\n * @retval ctx Always; on the bad_cast path the call to `sub_12b0`\n *             (`__throw_bad_cast`) is `noreturn` so the trailing `return`\n *             is unreachable.\n *\n * @note Throws `std::bad_cast` (via `sub_12b0`) when the `ios_base`\n *       subobject has no cached `ctype<char>` facet at offset `0xF0`.\n * @note On the fast path (`facet+0x38 == NULL`) the widen step is skipped\n *       entirely because the cached newline is already `'\\n'`.\n * @note This is the `.isra.0` interprocedural-SRA clone produced by GCC;\n *       the public symbol\n *       `_ZSt4endlIcSt11char_traitsIcEERSt13basic_ostreamIT_T0_ES6_`\n *       is the outer wrapper that supplies @p expected.\n */",
+  "source": "/*\n * std::endl<char, std::char_traits<char>>(std::ostream&)\n *\n * .isra.0 clone \u2014 the outer template wrapper inlines the widen() check and\n * tail-calls into the ostream_insert + flush helper (sub_11B0).\n *\n * Layout assumptions (libstdc++ ABI):\n *   *(void **)os                       -> ostream vtable\n *   vtable[-3] (i.e. *(ptrdiff_t *)(vtable - 0x18))\n *                                      -> offset to embedded ios_base subobject\n *   *(ctype<char> **)(ios_base + 0xF0) -> cached _M_ctype facet (NULL => bad_cast)\n *   *(void **)(facet + 0x38)           -> do_widen vfunc slot; NULL on the\n *                                          inline fast-path that skips dispatch\n */\nstd_ostream *_ZSt4endlIcSt11char_traitsIcEERSt13basic_ostreamIT_T0_ES6_(\n    std_ostream *ctx, void *expected)\n{\n    char *ios_base;\n    ctype_char *facet;\n    ptrdiff_t vbase_off;\n\n    /* Walk vtable[-3] to find the embedded ios_base subobject. */\n    vbase_off = ((ptrdiff_t *)(*(void **)ctx))[-3];\n    ios_base  = (char *)ctx + vbase_off;\n\n    /* Fetch the cached ctype<char> facet; NULL means no facet installed. */\n    facet = *(ctype_char **)(ios_base + 0xF0);\n    if (facet == NULL) {\n        sub_12b0();                 /* __throw_bad_cast \u2014 noreturn */\n        return ctx;                 /* unreachable */\n    }\n\n    /* Fast inline path: when do_widen is NULL the cached newline is '\\n'\n     * already and we go straight to ostream_insert + flush. */\n    if (*(void **)((char *)facet + 0x38) == NULL) {\n        char nl = '\\n';\n        (void)nl;                   /* widened char passed in caller-saved reg */\n        return sub_11B0(ctx);\n    }\n\n    /* Slow path: prime the facet cache then dispatch through do_widen\n     * unless the cached thunk already matches the expected one. */\n    sub_1290(facet);\n    if (*(void **)(*(char **)facet + 0x30) != expected) {\n        (void)((ctype_char_do_widen_fn)\n               _ZNKSt5ctypeIcE8do_widenEc)(facet, '\\n');\n    }\n    return sub_11B0(ctx);\n}\n",
+  "pseudocode": "fn _ZSt4endlIcSt11char_traitsIcEERSt13basic_ostreamIT_T0_ES6_.isra.0 {\n    push(var0);\n    push(rbp);\n    rsp = (rsp - 8);\n    ret = *&[arg0];\n    ret = *&[ret-0x18];\n    var0 = *&[arg0+ret+0xf0];\n    t0 = var0;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_19a3;\n    }\n    t10 = *&[var0+0x38];\n    %zf = (t10 == 0);\n    rbp = arg0;\n    if (%zf) {\n        goto L_1973;\n    }\n    unknown(movsx);\n    0x11b0();\n    rsp = (rsp + 8);\n    pop(rbp);\n    arg0 = ret;\n    pop(var0);\n    goto L_1200;\n    L_195c:\n    0x11b0(rbp);\n    rsp = (rsp + 8);\n    pop(rbp);\n    arg0 = ret;\n    pop(var0);\n    goto L_1200;\n    L_1973:\n    0x1290(var0);\n    ret = *&[var0];\n    arg1 = 10;\n    ret = *&[ret+0x30];\n    %zf = (ret == arg2);\n    if (%zf) {\n        goto L_195c;\n    }\n    ret(var0, 10, _ZNKSt5ctypeIcE8do_widenEc);\n    unknown(movsx);\n    goto L_195c;\n    L_19a3:\n    0x12b0();\n    nop;\n    nop;\n    return arg1;\n}\n",
+  "assumptions": [
+    "Branch polarity corrected per reviewer feedback: facet[+0x38] == 0 is the inline fast path; non-zero takes the sub_1290 / do_widen slow path.",
+    "sub_12b0 is treated as __throw_bad_cast (noreturn); the trailing return is unreachable but kept so the function type-checks.",
+    "sub_11B0 modelled as the shared '__ostream_insert + flush' tail helper returning std::ostream&; both epilogue blocks (L_195c and the fall-through) are identical tail-calls and collapsed.",
+    "'expected' (arg2) kept as an opaque incoming pointer compared against the ctype vtable's do_widen slot at *(*facet + 0x30); not renamed to a fabricated symbol.",
+    "vtable[-3] expressed as ((ptrdiff_t*)vptr)[-3] rather than the raw '*(ret-0x18)' byte arithmetic.",
+    "Stack push/pop and rsp adjustments dropped as prologue/epilogue artefacts.",
+    "The widened character on the fast path is materialised as a local 'nl' to document the movsx; the actual binary passes it via a caller-saved register to sub_11B0.",
+    "Used hypothetical typedefs (std_ostream, ctype_char, ctype_char_do_widen_fn) since C has no std::ostream; a real rebuild would include the libstdc++ headers.",
+    "None of the listed string literals (ELF_MAGIC_STR, LD_LINUX_X86_64_PATH, STR_GNU, UNKNOWN_BLOB_3B, FUNC_NAME_STRLEN) appear in this function and were not used."
+  ],
+  "rewrite_confidence": 0.55,
+  "equivalence_passed": false,
+  "divergences": [
+    "[high] control_flow: Branch polarity inverted relative to the provided pseudocode. Original: `%zf = (t10 == 0); if (%zf) goto L_1973;` where L_1973 is the sub_1290/do_widen slow path, meaning zero -> slow path, non-zero -> fast inline movsx + sub_11b0. The rewrite treats zero as the fast path and non-zero as the slow path \u2014 the opposite.",
+    "[medium] added_call: Function signature gains a second parameter `expected` (arg2) compared against *(*facet + 0x30). The original pseudocode references arg2 only in the comparison but the std::endl ABI takes a single ostream& argument; introducing it as a formal parameter changes the visible interface and makes the comparison depend on an uncontrolled register value.",
+    "[low] dropped_side_effect: The `unknown(movsx)` side-effect on the fast path is represented only as a dead local; no actual sign-extension or argument is passed to sub_11B0. This is acknowledged in assumptions but means the generated C will not reproduce the register-passed char argument.",
+    "[low] other: Two distinct epilogue blocks (fall-through after movsx and L_195c) are collapsed into one call. They are byte-identical tail calls in the original, so this is a safe fold, but it hides that each path separately performs the pop/ret sequence.",
+    "[medium] dropped_call: On the fast path the original performs `unknown(movsx); 0x11b0();` \u2014 sub_11b0 is called with no ostream argument visible (the rbp=arg0 was set earlier and the epilogue pops rbp before the jump at the non-L_195c path). The rewrite passes `ctx` explicitly. This may or may not be correct depending on the actual ABI but differs from the literal pseudocode which shows `0x11b0()` without arguments on the fast path vs `0x11b0(rbp)` on L_195c."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BLOB_3B",
+    "strlen": "FUNC_NAME_STRLEN"
+  },
+  "variable_names": {
+    "var0": "obj",
+    "arg0": "ctx",
+    "t0": "is_zero",
+    "t10": "flags",
+    "arg1": "ret",
+    "arg2": "expected"
+  },
+  "constant_labels": {
+    "0x11b0": "sub_11B0",
+    "0x12b0": "sub_12b0"
+  },
+  "loop_idioms": [],
+  "lines": 50,
+  "trivial": false,
+  "stdlib": true,
+  "crt": false,
+  "retries": 1
+}

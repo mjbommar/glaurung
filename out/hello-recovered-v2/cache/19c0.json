@@ -1,0 +1,64 @@
+{
+  "_version": 2,
+  "entry_va": 6592,
+  "raw_name": "_ZN10HelloWorld12printMessageEv",
+  "demangled": "HelloWorld::printMessage()",
+  "short_name": "print_message",
+  "rejected_names": [
+    "print_and_count",
+    "write_message_line",
+    "emit_message"
+  ],
+  "role": "other",
+  "role_confidence": 0.55,
+  "c_prototype": "void HelloWorld__printMessage(HelloWorld *this);",
+  "docstring": "/**\n * @brief Writes the object's stored message to std::cout, followed by a newline\n *        flush, and increments the invocation counter.\n *\n * Emits exactly @c this->length bytes from @c this->message via\n * @c std::cout.write, then inserts @c std::endl (which outputs '\\n' and\n * flushes the stream). After the write, @c this->call_count is incremented\n * by one to track how many times this method has been invoked on the\n * instance.\n *\n * @note The compiler inlined the string insertion as a direct\n *       @c std::cout.write(message, length) call, and @c std::endl was\n *       expanded to the fast path that consults\n *       @c std::ctype<char>::_M_table[0x38] before either putting '\\n'\n *       directly or falling back to the virtual @c do_widen path.\n * @note No bounds checking is performed; the caller must ensure\n *       @c message points to at least @c length valid bytes.\n * @note This member mutates @c call_count, so it is not @c const.\n */",
+  "source": "// Note: the binary symbol is the C++ mangled name\n// _ZN10HelloWorld12printMessageEv, so this is really C++.\n// Rendered here in C++ per the original source intent; the requested\n// target language \"c\" cannot faithfully express cout/endl.\n\nstruct HelloWorld {\n    const char *message;   // +0x00\n    std::size_t length;    // +0x08\n    // ... padding / unrecovered members ...\n    int         call_count;// +0x20\n};\n\nvoid HelloWorld::printMessage()\n{\n    // std::cout << message << std::endl;\n    //\n    // The compiler inlined operator<<(ostream&, <string-like>) as a\n    // direct cout.write(message, length) followed by the std::endl\n    // fast path (check ctype<char>::_M_table[0x38] flags; if set, put\n    // '\\n' directly, otherwise call ctype::do_widen virtually and\n    // then put). That whole sequence is just `<< std::endl`.\n    std::cout.write(this->message,\n                    static_cast<std::streamsize>(this->length));\n    std::cout << std::endl;\n\n    ++this->call_count;\n}\n",
+  "pseudocode": "fn _ZN10HelloWorld12printMessageEv {\n    nop;\n    push(var0);\n    push(rbp);\n    push(var1);\n    arg2 = *&[arg0+0x8];\n    var1 = arg0;\n    arg1 = *&[arg0];\n    arg0 = _ZSt4cout;\n    0x1280();\n    rbp = ret;\n    ret = *&[ret];\n    ret = *&[ret-0x18];\n    var0 = *&[rbp+ret+0xf0];\n    t0 = var0;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1a4b;\n    }\n    t10 = *&[var0+0x38];\n    %zf = (t10 == 0);\n    if (%zf) {\n        goto L_1a20;\n    }\n    unknown(movsx);\n    0x11b0(rbp);\n    0x1200(ret);\n    &[var1+0x20] = (*&[var1+0x20] + 1);\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n    L_1a03:\n    0x11b0(rbp);\n    0x1200(ret);\n    &[var1+0x20] = (*&[var1+0x20] + 1);\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n    L_1a20:\n    0x1290(var0);\n    ret = *&[var0];\n    ret = *&[ret+0x30];\n    %zf = (ret == arg2);\n    if (%zf) {\n        goto L_1a03;\n    }\n    ret(var0, 10, _ZNKSt5ctypeIcE8do_widenEc);\n    unknown(movsx);\n    goto L_1a03;\n    L_1a4b:\n    0x12b0();\n    nop;\n    push(var0);\n    var0 = arg0;\n    push(rbp);\n    push(var1);\n    var1 = *&[arg0+0x8];\n    rbp = *&[arg0];\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a97;\n    }\n    nop;\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    L_1a70:\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    ret = stack_0;\n    0x1260();\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    L_1a8a:\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    rbp = *&[var0];\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    L_1a97:\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    arg1 = *&[var0+0x10];\n    pop(var1);\n    arg0 = rbp;\n    arg1 = (arg1 - rbp);\n    pop(rbp);\n    pop(var0);\n    goto L_1260;\n    L_1ab0:\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n}\n",
+  "assumptions": [
+    "Symbol is a C++ mangled name (_ZN10HelloWorld12printMessageEv); emitted C++ despite the requested 'c' target because a C rewrite would misrepresent the code.",
+    "Collapsed the cout.write + ctype-facet-flag fast-path + put('\\n') + flush sequence into the idiomatic `std::cout << std::endl;`. The vtable-slot-0x30 vs length comparison guarding do_widen is not reproduced; assumed equivalent to std::endl for the default locale.",
+    "Struct layout for HelloWorld inferred from field accesses: const char* message @0, size_t length @8, int call_count @0x20. Other members not recovered; padding between length and call_count omitted.",
+    "call_count member name is inferred from the `add [this+0x20], 1` behavior; true name unknown. Width assumed int.",
+    "length typed as size_t; cast to std::streamsize for write().",
+    "Second code block starting at L_1a4b (its own prologue, operates on a vector-of-string-like container, calls sub_12b0 and per-element free via 0x1260) treated as a separate function appended to the disassembly and excluded. If it is actually part of printMessage, destructor/deallocation side effects are dropped.",
+    "Dropped optimizer artefacts: this-pointer spill to var1, TLS/vtable chain reload `*(rbp-0x18)` for ctype facet lookup, and the movsx sign-extension of the widened character \u2014 all folded into std::endl.",
+    "Renamings (obj/expected/pair/offset/tmp/flags) described the endl-inlining scratch values and were elided rather than surfaced as named locals."
+  ],
+  "rewrite_confidence": 0.55,
+  "equivalence_passed": false,
+  "divergences": [
+    "[high] dropped_call: The entire second half of the function (L_1a4b onward) \u2014 which calls 0x12b0(), iterates a container [rbp..var1] in steps of 32 bytes calling 0x1260() on each element whose inline-buffer pointer differs from stack_top, and conditionally frees the container's backing storage via a tail-call to 0x1260 \u2014 is excluded from the rewrite. The rewriter justifies this by assuming it's a separate function, but the original pseudocode presents it as a single fn with fall-through control flow; if it's actually part of printMessage these destructor/deallocation calls (and their side effects on the heap) are silently dropped.",
+    "[medium] control_flow: Original has an explicit branch: if ctype facet pointer (*(rbp+ret+0xf0)) is null, jump to L_1a4b (the dropped block) instead of doing the endl sequence. The rewrite unconditionally emits `<< std::endl`, losing that null-facet fallback path entirely.",
+    "[medium] dropped_call: Original calls 0x1280 with (cout, message, length) which is most likely `std::__ostream_insert` or `operator<<(ostream&, const string&)`, not `ostream::write`. Using write() bypasses the sentry object, width/fill formatting, and exception/badbit handling that the real operator<< performs.",
+    "[low] changed_width: Width of the counter at +0x20 is inferred as int from `add [this+0x20], 1`; the original increments a full word (could be int32 or int64 depending on actual instruction encoding which isn't shown). Name is also a guess.",
+    "[low] other: Padding between length (+0x08) and call_count (+0x20) is omitted; unrecovered members acknowledged by rewriter. Does not affect the emitted code but means the struct is not a faithful layout.",
+    "[low] dropped_side_effect: The sign-extension (movsx) of the widened character and the TLS/vtable chain reload are folded away; acceptable if std::endl substitution is valid, but the exact sequence of virtual calls to ctype::do_widen is no longer visible."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BLOB_3B",
+    "strlen": "FUNC_NAME_STRLEN"
+  },
+  "variable_names": {
+    "var0": "obj",
+    "var1": "obj",
+    "arg2": "expected",
+    "arg0": "pair",
+    "arg1": "offset",
+    "t0": "tmp",
+    "t10": "flags",
+    "stack_0": "ret"
+  },
+  "constant_labels": {
+    "0x12b0": "sub_12b0()"
+  },
+  "loop_idioms": [],
+  "lines": 116,
+  "trivial": false,
+  "stdlib": false,
+  "crt": false,
+  "retries": 1
+}

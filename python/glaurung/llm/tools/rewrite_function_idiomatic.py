@@ -30,7 +30,7 @@ from .base import MemoryTool, ToolMeta
 from ._llm_helpers import run_structured_llm
 
 
-Language = Literal["c", "rust", "go", "python"]
+Language = Literal["c", "cpp", "rust", "go", "python"]
 
 
 class StructDef(BaseModel):

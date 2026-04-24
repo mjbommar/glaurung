@@ -1,0 +1,50 @@
+{
+  "_version": 2,
+  "entry_va": 6368,
+  "raw_name": "__do_global_dtors_aux",
+  "demangled": "__do_global_dtors_aux",
+  "short_name": "do_global_dtors_aux",
+  "rejected_names": [
+    "run_global_destructors",
+    "finalize_module_dtors",
+    "cxa_finalize_once"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.99,
+  "c_prototype": "static void __do_global_dtors_aux(void);",
+  "docstring": "/**\n * @brief CRT shutdown helper that runs global destructors exactly once.\n *\n * Compiler-generated routine emitted into every ELF executable/shared\n * object by GCC. It is registered into the `.fini_array` section and\n * invoked by the dynamic loader/CRT during program (or DSO) teardown.\n *\n * Behavior:\n *  - Returns immediately if the static guard `completed.0` is already\n *    non-zero, ensuring destructors run at most once even if the\n *    finalization path is reached multiple times.\n *  - If `__cxa_finalize` was resolved (non-NULL), it is called with\n *    `__dso_handle` to run any C++ destructors and `atexit`/registered\n *    cleanup callbacks associated with this DSO.\n *  - Calls `deregister_tm_clones()` to undo the transactional-memory\n *    clone table registration performed at startup.\n *  - Sets `completed.0 = 1` so subsequent invocations are no-ops.\n *\n * @note Has no parameters and no return value; this is internal CRT\n *       glue and should never be called directly by user code.\n * @note The companion startup routine is `frame_dummy` /\n *       `register_tm_clones`; the matching guard variable\n *       `completed.0` and `__dso_handle` are also compiler-emitted.\n */",
+  "source": "static void __do_global_dtors_aux(void)\n{\n    if (completed.0)\n        return;\n\n    if (__cxa_finalize != NULL)\n        __cxa_finalize(__dso_handle);\n\n    deregister_tm_clones();\n    completed.0 = 1;\n}\n",
+  "pseudocode": "fn __do_global_dtors_aux {\n    nop;\n    t10 = *&[var0+0x4150];\n    %zf = (t10 == 0);\n    if (%zf) {\n        goto L_1918;\n    }\n    push(rbp);\n    t10 = *&[var0+0x3fd0];\n    %zf = (t10 == 0x3fd000000000);\n    if (%zf) {\n        goto L_1907;\n    }\n    0x11a0(*&[var0+0x4008]);\n    deregister_tm_clones();\n    &[var0+0x4150] = 1;\n    // x86-64 epilogue: restore rbp\n    return;\n    L_1907:\n    deregister_tm_clones();\n    &[var0+0x4150] = 1;\n    // x86-64 epilogue: restore rbp\n    return;\n    L_1918:\n    return;\n}\n",
+  "assumptions": [
+    "This is the standard compiler-generated __do_global_dtors_aux; the guard flag at ctx+0x4150 is the well-known 'completed.0' byte used by GCC.",
+    "The check at ctx+0x3fd0 compared against a non-null value is the weak-symbol test for __cxa_finalize in the GOT; rewrote as `__cxa_finalize != NULL`.",
+    "The indirect call `0x11a0(*&[ctx+0x4008])` passes __dso_handle to __cxa_finalize \u2014 inferred from the canonical pattern emitted by GCC for this function.",
+    "Collapsed the two epilogue branches (L_1907 and fall-through) that both set completed.0 and call deregister_tm_clones() into a single code path; the only difference was whether __cxa_finalize was invoked, which becomes the if-guard.",
+    "Dropped the leading `nop` (endbr/alignment artefact) and the push/pop of rbp (frame setup artefact)."
+  ],
+  "rewrite_confidence": 0.95,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: Original compares *&[var0+0x3fd0] against the constant 0x3fd000000000 (a PIC-relative self-reference pattern produced by GCC for weak symbol tests). Rewriter modeled this as `__cxa_finalize != NULL`, which is the canonical idiom; semantically equivalent under the stated assumption.",
+    "[low] other: Dropped nop/endbr and rbp push/pop frame setup \u2014 these are non-observable artefacts.",
+    "[low] control_flow: Both branches in the original execute deregister_tm_clones() and set completed.0 = 1; merging them into a single tail is behavior-preserving."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BLOB_3B",
+    "strlen": "FUNC_NAME_STRLEN"
+  },
+  "variable_names": {
+    "t10": "flag",
+    "var0": "ctx"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 26,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

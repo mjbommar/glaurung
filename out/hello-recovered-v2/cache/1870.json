@@ -1,0 +1,51 @@
+{
+  "_version": 2,
+  "entry_va": 6256,
+  "raw_name": "deregister_tm_clones",
+  "demangled": "deregister_tm_clones",
+  "short_name": "deregister_tm_clones",
+  "rejected_names": [
+    "deregister_tm_clone_table",
+    "itm_deregister_clones",
+    "tm_clones_cleanup"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.9,
+  "c_prototype": "void deregister_tm_clones(void);",
+  "docstring": "/**\n * @brief Deregister the transactional-memory clone table at shutdown.\n *\n * Compiler-generated CRT helper emitted by GCC into every linked\n * executable/shared object. It is invoked from the module's destructor\n * chain (e.g. `__do_global_dtors_aux`) and is the counterpart to\n * `register_tm_clones`.\n *\n * The function tests the weak symbol `_ITM_deregisterTMCloneTable`. If\n * no GNU TM runtime is linked into the process the symbol resolves to\n * NULL and the routine returns immediately; otherwise the TM runtime\n * is asked to drop the clone table that spans up to `__TMC_END__`.\n *\n * @return None.\n *\n * @note This is boilerplate produced by the toolchain, not user code;\n *       it has no parameters and no observable side effects unless a\n *       transactional-memory runtime is present.\n */",
+  "source": "/* Standard GCC-emitted CRT routine: deregisters TM clone table if the\n * weak symbol _ITM_deregisterTMCloneTable resolved to a non-NULL address. */\n\nextern void __attribute__((weak)) _ITM_deregisterTMCloneTable(void *);\nextern char __TMC_END__[];\n\nvoid deregister_tm_clones(void)\n{\n    if (_ITM_deregisterTMCloneTable == 0)\n        return;\n\n    _ITM_deregisterTMCloneTable(__TMC_END__);\n}\n",
+  "pseudocode": "fn deregister_tm_clones {\n    ret = __TMC_END__;\n    %zf = (ret == arg0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret(__TMC_END__);\n    L_1898:\n    return;\n}\n",
+  "assumptions": [
+    "This is the canonical GCC-emitted deregister_tm_clones CRT routine; rewritten to its idiomatic source form rather than a literal transliteration of the obfuscated PIC-relative pseudocode.",
+    "The first compare (ret == arg0 where ret = __TMC_END__) corresponds to the linker-resolved comparison of __TMC_END__ against itself, which the linker collapses; in source form the meaningful guard is the NULL-check on the weak _ITM_deregisterTMCloneTable symbol.",
+    "The indirect load *&[offset+0x3fe0] is the GOT slot for the weak symbol _ITM_deregisterTMCloneTable; modeled as taking the address of the weak function rather than fabricating a helper.",
+    "The call argument is __TMC_END__ (the symbol/array), matching the load 'ret = __TMC_END__' that is then passed as the sole argument.",
+    "Declared __TMC_END__ as an extern array so that its name decays to its address when passed, matching the pseudocode's use of the symbol value as the argument.",
+    "Removed the trivially-true self-equality early-return branch since it has no source-level meaning."
+  ],
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] control_flow: The original pseudocode has two early-return checks: first comparing __TMC_END__ to arg0, then a NULL check on the GOT slot. The rewrite removes the first (trivially-true at link time per the canonical CRT idiom) and keeps only the NULL check. Behaviorally equivalent in the canonical GCC pattern.",
+    "[low] other: Rewrite passes __TMC_END__ symbol (decayed array address) as the argument. Pseudocode shows 'ret(__TMC_END__)' where ret was loaded from the GOT slot \u2014 the called function pointer is _ITM_deregisterTMCloneTable. Matches canonical pattern."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BLOB_3B",
+    "strlen": "FUNC_NAME_STRLEN"
+  },
+  "variable_names": {
+    "arg0": "expected",
+    "var0": "offset",
+    "t0": "ret"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 16,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 1
+}

@@ -162,16 +162,18 @@ def _is_crt_function(name: str) -> bool:
 
 
 def _language_to_target(lang: Optional[str]) -> str:
+    """Map a detected compiler-level language to the rewriter's target enum.
+
+    C++ binaries get target="cpp" so the rewriter is told to emit real C++
+    class syntax + std::* facilities rather than C-with-C++-smuggled-in
+    (which is what v1 produced when we forced target="c" here).
+    """
     if not lang:
         return "c"
     m = {
-        "c": "c", "c++": "c", "cpp": "c",  # we emit C even for C++ binaries
+        "c": "c", "c++": "cpp", "cpp": "cpp",
         "rust": "rust", "go": "go", "python": "python",
     }
-    # Note: for C++ binaries we still set target="c" because the rewriter
-    # produces C-with-C++-calls rather than real C++ class syntax. The
-    # language detection is used for the *file extension*, which gets
-    # .cpp below so the compile step treats the file as C++.
     return m.get(lang.lower(), "c")
 
 
@@ -579,11 +581,17 @@ def recover_function(
     equivalence_passed = ver_res["passed"]
     divergences = ver_res["divergences"]
 
-    # Fix #129: re-rewrite on assumption pressure.
+    # Fix #129: re-rewrite on assumption pressure — but only when it's
+    # likely to help. Retrying on "too many assumptions" alone is wasteful
+    # when the root cause is systemic (e.g. language mismatch) rather than
+    # something the LLM can fix by looking harder. Trigger only on
+    # *high*-severity divergences (real semantic drift) or a very large
+    # assumption count (≥10, usually indicates the rewriter is floundering).
     retries = 0
-    while retries < 2 and (
-        len(assumptions) >= 5
-        or any("[medium]" in d or "[high]" in d for d in divergences)
+    max_retries = 1  # at most one retry; more isn't helping in practice
+    while retries < max_retries and (
+        len(assumptions) >= 10
+        or any("[high]" in d for d in divergences)
     ):
         _log(f"    retry {retries+1}: {len(assumptions)} assumptions, "
              f"{sum(1 for d in divergences if '[medium]' in d or '[high]' in d)} divergences")

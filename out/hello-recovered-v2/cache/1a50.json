@@ -1,0 +1,59 @@
+{
+  "_version": 2,
+  "entry_va": 6736,
+  "raw_name": "_ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev",
+  "demangled": "std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > >::~vector()",
+  "short_name": "vector_of_strings_destroy",
+  "rejected_names": [
+    "destroy_string_vector",
+    "vector_string_dtor",
+    "free_vector_of_strings"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "void std__vector_string__dtor(void *this);",
+  "docstring": "/**\n * @brief Destructor for std::vector<std::string> (libstdc++ ABI).\n *\n * Iterates over every std::string in the range [_M_start, _M_finish) and\n * destroys it, then releases the vector's underlying element storage via\n * the sized operator delete.\n *\n * For each element, the libstdc++ SSO layout is assumed:\n *   - offset  +0 : char*  _M_dataplus._M_p\n *   - offset  +8 : size_t _M_string_length\n *   - offset +16 : union { char _M_local_buf[16]; size_t _M_allocated_capacity; }\n *\n * A string is considered \"long\" (heap-allocated) when its _M_dataplus pointer\n * does not equal the address of its own local buffer (this+16); in that case\n * the heap buffer is released with operator delete (sub_1260).\n *\n * After destroying all elements, if _M_start is non-null, the element array\n * itself is freed with the sized operator delete, passing the byte size\n * (_M_end_of_storage - _M_start) as the second argument. The free of the\n * element array is a tail call.\n *\n * @param this Pointer to the std::vector<std::string> object to destroy.\n *             Must point to a valid vector whose three pointers\n *             (_M_start, _M_finish, _M_end_of_storage) are consistent.\n *             A null _M_start (empty default-constructed vector) is handled\n *             safely and results in no deallocation.\n *\n * @return None.\n *\n * @note This routine only destroys the elements and frees the storage\n *       buffer; it does not free the vector control block itself.\n * @note Element destruction order is front-to-back, matching the iteration\n *       observed in the disassembly (not the reverse order mandated by the\n *       C++ standard for arrays \u2014 a quirk of the inlined codegen).\n */",
+  "source": "// std::vector<std::string>::~vector()\n//\n// Destroys each std::string element in [begin, end), then frees the\n// underlying storage via operator delete (the tail-call to 0x1260).\n// Each std::string has the libstdc++ SSO layout: { char* _M_dataplus;\n// size_t _M_string_length; union { char _M_local_buf[16]; size_t _M_allocated_capacity; }; }\n// so sizeof(std::string) == 32 and the inline-buffer pointer is at offset +16.\nvoid std__vector_string__dtor(void *this)\n{\n    struct string {\n        char   *dataplus;        // +0\n        size_t  length;          // +8\n        char   *local_buf_or_cap;// +16  (points at &local_buf[0] when SSO)\n        char    local_buf[8];    // +24\n    };\n    struct vector {\n        struct string *begin;       // +0  _M_start\n        struct string *end;         // +8  _M_finish\n        struct string *cap_end;     // +16 _M_end_of_storage\n    };\n\n    struct vector *v   = (struct vector *)this;\n    struct string *end = v->end;\n    struct string *p   = v->begin;\n\n    /* Destroy each element: if the string is not in SSO mode, free its heap buffer. */\n    for (; p != end; ++p) {\n        if (p->dataplus != (char *)&p->local_buf_or_cap) {\n            operator_delete(p->dataplus);   /* call 0x1260 == operator delete */\n        }\n    }\n\n    /* Free the vector's element storage. */\n    struct string *storage = v->begin;\n    if (storage != NULL) {\n        size_t bytes = (size_t)((char *)v->cap_end - (char *)storage);\n        operator_delete(storage, bytes);    /* sized operator delete, tail call */\n    }\n}\n",
+  "pseudocode": "fn _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev {\n    nop;\n    push(var0);\n    var0 = arg0;\n    push(rbp);\n    push(var1);\n    var1 = *&[arg0+0x8];\n    rbp = *&[arg0];\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a97;\n    }\n    nop;\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    L_1a70:\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    ret = stack_0;\n    0x1260();\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    L_1a8a:\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    rbp = *&[var0];\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    L_1a97:\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    arg1 = *&[var0+0x10];\n    pop(var1);\n    arg0 = rbp;\n    arg1 = (arg1 - rbp);\n    pop(rbp);\n    pop(var0);\n    goto L_1260;\n    L_1ab0:\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n}\n",
+  "assumptions": [
+    "Identified the function as the libstdc++ destructor for std::vector<std::basic_string<char>> from the mangled name in the pseudocode label _ZNSt6vector...basic_string...D2Ev.",
+    "Inferred std::string SSO layout (sizeof==32, inline buffer pointer at +16) from the loop stride of 32 and the comparison of the data pointer (offset 0) against (element + 16).",
+    "Replaced the duplicated/peeled loop header (the L_1a70 block appearing twice with identical predicate) with a single canonical for-loop; this is an optimizer artefact of loop rotation/peeling.",
+    "Modeled the indirect call at address 0x1260 as operator delete; its first use takes only the buffer pointer (string destruction), the second use is a sized deallocation passing (end_of_storage - begin) as the byte count, matching libstdc++ _M_deallocate via the global sized operator delete.",
+    "Recovered the vector layout {_M_start, _M_finish, _M_end_of_storage} from offsets 0/8/16 on `this`.",
+    "Removed the canary/stack-cookie pseudocode artefacts (push/pop var1, stack_0) \u2014 these are the compiler's stack-protector prologue/epilogue, not part of the source semantics.",
+    "Treated the second loop's `if (base_ptr == 0) skip dealloc` as the standard libstdc++ guard for an empty vector whose storage was never allocated.",
+    "Renamed `t0` to `storage` / `base_ptr` only conceptually; the value reloaded from *this after the destruction loop is _M_start again (the loop didn't write to it)."
+  ],
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] added_call: The rewrite shows the second 0x1260 call as a two-argument sized operator delete. The pseudocode passes arg0=rbp and arg1=(end_of_storage - rbp) and tail-calls 0x1260, which matches libstdc++ sized operator delete. This is a faithful interpretation, not a behavioural divergence.",
+    "[low] control_flow: The pseudocode contains a duplicated loop header (L_1a70 appears twice with identical predicate) which is a loop-peeling/rotation artifact. The rewrite collapses this into a single for-loop. Behaviour is equivalent.",
+    "[low] dropped_side_effect: The stack canary save/check (push var1, stack_0 reference) was removed. This is a stack-protector artifact added by the compiler; it has no source-level semantic effect.",
+    "[low] other: The struct uses a pointer field at +16 followed by 8 bytes of buffer to total 32 bytes. The original libstdc++ string actually has _M_local_buf[16] at +16 (a 16-byte inline buffer overlapped with capacity). The dtor only reads offset 0 and compares against (element+16), so only the address (this+16) matters, and sizeof==32 is preserved. Functionally equivalent for this dtor.",
+    "[low] other: The pseudocode reloads rbp from *&[var0] after the loop. The rewrite reloads via v->begin, which is the same memory location. Equivalent since the loop did not write to *this."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BLOB_3B",
+    "strlen": "FUNC_NAME_STRLEN"
+  },
+  "variable_names": {
+    "var0": "frame_ptr",
+    "arg0": "ctx",
+    "var1": "canary",
+    "stack_0": "ret",
+    "t0": "base_ptr",
+    "arg1": "offset"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 64,
+  "trivial": false,
+  "stdlib": true,
+  "crt": false,
+  "retries": 0
+}

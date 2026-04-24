@@ -1,0 +1,58 @@
+{
+  "_version": 2,
+  "entry_va": 4896,
+  "raw_name": "main.cold",
+  "demangled": "main.cold",
+  "short_name": "main_cold_unwind",
+  "rejected_names": [
+    "main_cold",
+    "main_cleanup_landing_pad",
+    "main_exception_cleanup"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.7,
+  "c_prototype": "void main_cold(void) __attribute__((noreturn, cold));",
+  "docstring": "/**\n * @brief Cold/exception cleanup landing pad split out of main().\n *\n * This is the GCC-emitted `.cold` partition for `main()`. It is the\n * landing pad reached when an exception propagates out of `main()` while\n * the local `std::vector<std::string>` (referenced here as the external\n * symbol `strings`) is still live. It performs the required automatic\n * cleanup and then forwards the in-flight exception back to the unwinder.\n *\n * Specifically, it:\n *   - Invokes the base-object destructor\n *     `std::vector<std::string, std::allocator<std::string>>::~vector()`\n *     on the address of `strings`, releasing the vector's heap storage\n *     and destroying each contained `std::string`.\n *   - Calls `__cxa_rethrow()` to continue propagating the current\n *     exception up the stack.\n *\n * @return This function does not return. It is marked `noreturn` because\n *         `__cxa_rethrow()` never returns normally; control either\n *         transfers to an outer handler or the runtime calls\n *         `std::terminate()`.\n *\n * @note The function is marked `cold` \u2014 it is only entered on the\n *       exceptional path out of `main()` and is never invoked directly\n *       from ordinary control flow.\n * @note The `strings` symbol is the same `std::vector<std::string>`\n *       automatic that lives in `main()`'s frame; this cleanup pad reaches\n *       it via the unwinder-restored frame, not via a parameter.\n * @note Reconstructed from disassembly: only the destructor call and the\n *       rethrow are recovered; the surrounding frame setup and\n *       `_Unwind_Resume`/personality plumbing emitted by the compiler are\n *       elided.\n */",
+  "source": "/*\n * main.cold \u2014 compiler-emitted cold/exception cleanup landing pad for main().\n *\n * The \"cold\" partition produced by GCC for functions that contain C++\n * exception edges normally just runs the local destructors and re-raises\n * (or aborts).  In this binary the only non-trivial automatic with a\n * destructor in main() is a std::vector<std::string>, so the cold half\n * simply invokes ~vector<string>() on it.\n *\n * The body is unwinder boilerplate (frame setup / _Unwind_Resume), so it\n * is reconstructed here only at the level of the destructor call that the\n * disassembly actually shows.  The function never returns to its caller.\n */\nextern void __cxa_rethrow(void) __attribute__((noreturn));\nextern void _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(void *);\n\n__attribute__((noreturn, cold))\nvoid main_cold(void)\n{\n    extern void *strings;   /* the std::vector<std::string> local from main() */\n\n    /* Run the destructor for the vector of strings that was live when the\n       exception was thrown, then resume unwinding. */\n    _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(&strings);\n\n    __cxa_rethrow();\n}\n",
+  "pseudocode": "fn main.cold {\n    0x12a0(stack_0);\n    0x1300(rbp);\n    rbp = var0;\n    0x1260(rbp, 40);\n    0x12a0(stack_0);\n    _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(stack_1);\n    0x12a0(stack_2);\n    0x1300(rbp);\n    0x12a0(rbp);\n    rbp = var0;\n    0x1260(rbp, 40);\n    goto L_134c;\n    _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(stack_1);\n    0x12a0(stack_2);\n    0x1300(rbp);\n    0x12a0(rbp);\n    rbp = var0;\n    0x1260(rbp, 40);\n    goto L_134c;\n}\n",
+  "assumptions": [
+    "The function is a GCC-emitted .cold split of main(); its body is exception-cleanup boilerplate, not user code. I rewrote it as the single observable side effect (the ~vector<string>() call) followed by a re-raise.",
+    "The repeated identical tail blocks in the pseudocode are duplicated unwind landing pads coalesced by the optimizer; I collapsed them into one cleanup path because both branches do exactly the same thing.",
+    "Calls to 0x12a0 / 0x1300 / 0x1260 are PLT thunks for unwinder/frame helpers (e.g. _Unwind_Resume, __cxa_begin_catch-style stubs, stack-check). They are not user-visible behaviour, so I dropped them and represented the terminating semantics with __cxa_rethrow().",
+    "The `rbp = saved_rbp` assignments are frame-pointer restores from the prologue/epilogue; they have no source-level meaning and were elided.",
+    "`stack_1` is the address of the vector<string> local; passing &strings to the D2 destructor matches the Itanium ABI calling convention shown.",
+    "`stack_0` / `stack_2` aliasing to `arg` in the rename table appears to be a spurious artefact of the cold-split frame layout \u2014 neither is consumed by anything other than the dropped thunks, so no parameter is reconstructed.",
+    "The function is declared noreturn,cold per the prototype; `__cxa_rethrow` is used as the noreturn terminator since the original almost certainly tail-called _Unwind_Resume \u2014 exact symbol not recoverable from the given pseudocode.",
+    "String-literal renames (ELF_MAGIC_STR, LD_LINUX_X86_64_PATH, STR_GNU, FUNC_NAME_STRLEN, etc.) are unreferenced by this function; they belong to main() proper, not its cold half, so they do not appear here."
+  ],
+  "rewrite_confidence": 0.35,
+  "equivalence_passed": false,
+  "divergences": [
+    "[medium] dropped_call: The original pseudocode contains multiple calls to 0x12a0, 0x1300, and 0x1260 (with constant 40) interleaved with the destructor call. These are dropped without verification that they are merely PLT/unwinder thunks. 0x1260(rbp, 40) in particular takes a constant argument suggesting it may not be a no-op stack-check stub.",
+    "[medium] dropped_call: There are two separate destructor-call sequences in the original (one before goto L_134c, another after). The rewriter coalesced them assuming they are identical landing pads, but the operands (stack_1, stack_2) and intervening 0x12a0/0x1300/0x1260 sequences are not byte-identical between the blocks \u2014 stack_2 appears in the second/third blocks but stack_0 in the first.",
+    "[medium] added_call: The rewriter inserted a __cxa_rethrow() terminator that does not appear in the pseudocode. The assumption admits the real call was probably _Unwind_Resume, which has different semantics (resumes unwinding vs. re-raising current exception). Choosing __cxa_rethrow can change observable runtime behavior in catch contexts.",
+    "[medium] memory_safety: The destructor is called with &strings where 'strings' is declared as 'extern void *'. If 'strings' is meant to represent the vector local, taking its address yields a void** which is not the vector's this-pointer. The original passed stack_1 directly (already a pointer/address of the local), so the rewrite introduces an extra level of indirection.",
+    "[low] control_flow: Two 'goto L_134c' edges in the original are flattened into straight-line code. Since they targeted the same label, this is likely benign, but the label/target itself is not modeled.",
+    "[low] dropped_side_effect: Frame-pointer manipulations were dropped as epilogue boilerplate. Reasonable for source-level reconstruction."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BLOB_3B",
+    "strlen": "FUNC_NAME_STRLEN"
+  },
+  "variable_names": {
+    "stack_0": "arg",
+    "var0": "saved_rbp",
+    "stack_1": "strings",
+    "stack_2": "arg"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 21,
+  "trivial": false,
+  "stdlib": false,
+  "crt": false,
+  "retries": 0
+}

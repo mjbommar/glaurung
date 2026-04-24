@@ -1,0 +1,53 @@
+{
+  "_version": 2,
+  "entry_va": 6304,
+  "raw_name": "register_tm_clones",
+  "demangled": "register_tm_clones",
+  "short_name": "register_tm_clones",
+  "rejected_names": [
+    "register_tm_clone_table",
+    "init_tm_clones",
+    "setup_tm_clone_list"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "static void register_tm_clones(void);",
+  "docstring": "/**\n * @brief Register transactional-memory clone table with the ITM runtime.\n *\n * Computes the number of entries in the TM clone table from the\n * linker-defined symbols __TMC_LIST__ and __TMC_END__ (each entry being\n * pointer-sized). If the table is empty, or if the weak symbol\n * _ITM_registerTMCloneTable is not provided by the runtime (NULL), the\n * function returns without doing anything. Otherwise it forwards the\n * table base and entry count to _ITM_registerTMCloneTable so the GCC\n * transactional-memory runtime can track the module's TM clones.\n *\n * This is part of the standard CRT startup glue emitted by GCC\n * (crtbegin.o) and is normally invoked indirectly via .init_array\n * during program initialization; it is not meant to be called directly\n * by user code.\n *\n * @note Has no parameters and no return value. Silently does nothing\n *       when the clone table is empty or the ITM runtime is absent.\n */",
+  "source": "static void register_tm_clones(void)\n{\n    size_t size = ((size_t)__TMC_END__ - (size_t)__TMC_LIST__) / sizeof(void *);\n\n    if (size == 0)\n        return;\n\n    if (_ITM_registerTMCloneTable == NULL)\n        return;\n\n    _ITM_registerTMCloneTable(__TMC_LIST__, size);\n}",
+  "pseudocode": "fn register_tm_clones {\n    arg0 = __TMC_END__;\n    arg1 = __TMC_END__;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret = *&[var0+0x3ff0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret();\n    L_18d8:\n    return;\n}\n",
+  "assumptions": [
+    "This is the standard GCC-emitted register_tm_clones crtstuff routine; rewritten to its canonical source form rather than literal pseudocode.",
+    "The arithmetic '(size + (size>>63)) >> 1' after a '>>3' is the compiler's signed division by 16 (ptrdiff/sizeof(void*[2])); reconstructed as division by sizeof(void*), which matches the conventional source. Treated as size_t element count for clone table.",
+    "The first operand of the subtraction in pseudocode is shown as __TMC_END__ twice; this is a decompiler artefact \u2014 the standard pairing is __TMC_END__ - __TMC_LIST__.",
+    "'ret = *&[var0+0x3ff0]' is a GOT load of the weak symbol _ITM_registerTMCloneTable; the indirect call 'ret()' is the call through that pointer.",
+    "String-literal renames provided (ELF_MAGIC_STR, LD_LINUX_X86_64_PATH, etc.) are unrelated to this function and unused.",
+    "Dropped the dead intermediate temporaries (start/ret reuse) emitted by the decompiler; they have no semantic effect."
+  ],
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] changed_constant: Pseudocode shows '>>3' followed by '(x + (x>>63)) >> 1' which is signed division by 16 (i.e. /sizeof(void*[2])). Rewriter divides by sizeof(void*) (=8) instead of 16. The canonical crtstuff source actually divides by sizeof(void*), so this matches GCC's conventional source form, but it does not literally match the arithmetic in the pseudocode (which shifts by 4 total bits). Marked low because it follows the documented convention/assumption.",
+    "[low] other: Pseudocode literally subtracts __TMC_END__ from __TMC_END__ (decompiler artefact per assumption). Rewriter substitutes __TMC_LIST__ as the second operand. Acceptable per declared assumption.",
+    "[low] other: Original uses signed arithmetic shift right (with sign-bit add for round-toward-zero division); rewrite uses unsigned size_t division which gives identical result for non-negative differences but differs for negative. In practice __TMC_END__ >= __TMC_LIST__ so behavior is equivalent."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BLOB_3B",
+    "strlen": "FUNC_NAME_STRLEN"
+  },
+  "variable_names": {
+    "arg0": "start",
+    "arg1": "size",
+    "var0": "ret",
+    "t0": "ret"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 22,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

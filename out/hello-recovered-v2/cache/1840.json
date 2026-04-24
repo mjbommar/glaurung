@@ -1,0 +1,61 @@
+{
+  "_version": 2,
+  "entry_va": 6208,
+  "raw_name": "_start",
+  "demangled": "_start",
+  "short_name": "start",
+  "rejected_names": [
+    "elf_entry_point",
+    "crt_start",
+    "program_entry"
+  ],
+  "role": "entry_stub",
+  "role_confidence": 0.99,
+  "c_prototype": "void _start(void);",
+  "docstring": "/**\n * @brief ELF program entry point; bootstraps the C runtime and transfers control to main().\n *\n * This is the idiomatic x86-64 System V `_start` stub as emitted by GCC/binutils.\n * It performs the minimal setup required by the C runtime before calling\n * `__libc_start_main`, which in turn invokes `main()` and terminates the process\n * via `exit()` \u2014 it never returns.\n *\n * On entry the kernel/dynamic loader provides:\n *   - `rdx` = pointer to a finalizer function the dynamic loader wants registered\n *             with `atexit()` (may be NULL for statically linked binaries).\n *   - `rsp` = points at `argc`, followed by `argv[]`, `envp[]`, and the auxiliary vector.\n *\n * The inline assembly:\n *   1. Zeroes `rbp` to terminate stack-trace unwinding at the outermost frame.\n *   2. Pops `argc` into `rsi`.\n *   3. Captures `argv` (current `rsp`) into `rdx`.\n *   4. Aligns `rsp` down to a 16-byte boundary as required by the SysV ABI,\n *      pushing a dummy qword and `rsp` itself (the `stack_end` argument).\n *   5. Zeroes `r8` (`rtld_fini`) and `rcx` (`fini`) \u2014 unused here.\n *   6. Loads the address of `main` into `rdi`.\n *   7. Calls `__libc_start_main(main, argc, argv, init, fini, rtld_fini, stack_end)`.\n *\n * The trailing `hlt` and the `__builtin_unreachable()` are guards: control never\n * returns from `__libc_start_main`.\n *\n * @note Takes no C-level parameters and returns no value; arguments are passed\n *       implicitly via the registers and stack laid out by the kernel/loader.\n * @note Must not be called from C code \u2014 it is the raw process entry point and\n *       assumes the kernel-supplied initial stack layout.\n * @note Clobbers memory and most general-purpose registers; the `\"memory\"`\n *       clobber prevents the compiler from caching anything across the asm.\n *\n * @return This function does not return.\n */",
+  "source": "/*\n * ELF entry point. The compiler/linker-generated _start stub sets up the\n * initial stack frame expected by the C runtime, then hands control to\n * __libc_start_main, which is responsible for invoking main() and never\n * returns. The trailing hlt/ret are unreachable guards.\n *\n * This is the idiomatic x86-64 System V _start as emitted by GCC/binutils.\n */\nvoid _start(void)\n{\n    /*\n     * On entry:\n     *   rdx = pointer to a function the dynamic loader wants us to\n     *         register with atexit() (may be NULL when statically linked).\n     *   rsp = argc, argv[], envp[], auxv...\n     *\n     * We clear rbp to terminate stack-trace unwinding, pop argc off the\n     * stack into rsi's partner, set up argv, align the stack to 16 bytes,\n     * and tail-call into __libc_start_main.\n     */\n    register void (*rtld_fini)(void) asm(\"rdx\");\n\n    asm volatile (\n        \"xor   %%ebp, %%ebp          \\n\\t\"  /* mark outermost frame */\n        \"pop   %%rsi                 \\n\\t\"  /* argc */\n        \"mov   %%rsp, %%rdx          \\n\\t\"  /* argv */\n        \"and   $-16, %%rsp           \\n\\t\"  /* align stack to 16 */\n        \"push  %%rax                 \\n\\t\"  /* dummy for alignment */\n        \"push  %%rsp                 \\n\\t\"  /* stack_end */\n        \"xor   %%r8d, %%r8d          \\n\\t\"  /* rtld_fini slot (unused here) */\n        \"xor   %%ecx, %%ecx          \\n\\t\"  /* fini slot */\n        \"lea   main(%%rip), %%rdi    \\n\\t\"\n        \"call  __libc_start_main     \\n\\t\"\n        \"hlt                         \\n\\t\"  /* never reached */\n        : : : \"memory\"\n    );\n\n    __builtin_unreachable();\n}\n",
+  "pseudocode": "fn _start {\n    nop;\n    arg5 = arg2;\n    pop(arg1);\n    arg2 = rsp;\n    rsp = (rsp & 240);\n    push(ret);\n    push(rsp);\n    arg4 = 0;\n    arg3 = 0;\n    __libc_start_main(main);\n    unknown(hlt);\n    nop;\n    ret = __TMC_END__;\n    %zf = (ret == arg0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret(__TMC_END__);\n    L_1898:\n    return;\n}\n",
+  "assumptions": [
+    "Identified the function as the standard GCC/binutils x86-64 _start stub; rewrote it as inline asm because the behavior (stack manipulation, register-passed arguments to __libc_start_main) cannot be expressed in portable C.",
+    "The trailing block in the pseudocode (comparing __TMC_END__ against a slot at offset+0x3FE0 and calling through it if non-null) is the compiler-synthesized __do_global_dtors_aux / deregister_tm_clones fragment that got merged into the disassembly listing. It is not part of _start proper, so it was dropped here; if the reviewer needs it, it belongs in its own function.",
+    "Renamed pseudocode 'arg2 = argc' and 'arg1 = stack_id' map to rsi (argc) and the popped argc respectively \u2014 the rename table was honored semantically rather than literally, because the values are architectural registers.",
+    "'arg4 = 0; arg3 = 0' represent the r8/rcx zeroing for __libc_start_main's init/fini parameters.",
+    "Added __builtin_unreachable() since __libc_start_main never returns; this models the original 'hlt' guard.",
+    "Did not emit references to ELF_MAGIC_STR, LD_LINUX_X86_64_PATH, STR_GNU, UNKNOWN_BLOB_3B, or FUNC_NAME_STRLEN \u2014 these strings live in ELF metadata sections (.interp, .note.gnu.build-id, .dynstr) and are not referenced by _start's code."
+  ],
+  "rewrite_confidence": 0.72,
+  "equivalence_passed": false,
+  "divergences": [
+    "[medium] dropped_call: The original pseudocode contains a trailing block that compares __TMC_END__ against arg0 and, if nonzero, loads a pointer from [var0+0x3fe0] (a GOT/dynamic slot) and calls it via ret(__TMC_END__). The rewriter dropped this entirely claiming it belongs to __do_global_dtors_aux. However, since it was included in the _start pseudocode listing, dropping it removes a potentially-observable indirect call (registering a destructor / calling a dynamic finalizer). If this really is part of _start in the binary, the rewrite loses that side effect.",
+    "[low] control_flow: Original pushes 'ret' (return address register? likely rax which holds something) then 'push(rsp)'. Rewrite pushes rax then rsp. Semantically matches standard _start, likely equivalent.",
+    "[low] added_call: Added to model noreturn behavior of __libc_start_main; does not change runtime behavior since hlt/unreachable are both terminal.",
+    "[low] other: Comments swap the conventional meaning (r8 is typically stack_end / rtld_fini varies by ABI version), but the zeroing matches the original arg4=0; arg3=0.",
+    "[low] dropped_side_effect: Declared but unused; original received rdx as rtld_fini but the inline asm overwrites rdx with argv (matching original arg2=rsp). Consistent with original."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BLOB_3B",
+    "strlen": "FUNC_NAME_STRLEN"
+  },
+  "variable_names": {
+    "arg5": "tmp",
+    "arg2": "argc",
+    "arg1": "stack_id",
+    "arg4": "unused",
+    "arg3": "ret",
+    "arg0": "expected",
+    "var0": "offset",
+    "t0": "ret"
+  },
+  "constant_labels": {
+    "0x3fe0": "0x3FE0"
+  },
+  "loop_idioms": [],
+  "lines": 28,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

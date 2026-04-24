@@ -1,0 +1,51 @@
+{
+  "_version": 2,
+  "entry_va": 6160,
+  "raw_name": "_GLOBAL__sub_I_main",
+  "demangled": "_GLOBAL__sub_I_main",
+  "short_name": "init_iostreams_global",
+  "rejected_names": [
+    "global_static_initializer",
+    "register_iostream_cleanup",
+    "cxx_global_ctor_main"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "static void _GLOBAL__sub_I_main(void);",
+  "docstring": "/**\n * @brief Global static initializer for the C++ iostreams library in this translation unit.\n *\n * Compiler-generated constructor (named `_GLOBAL__sub_I_main` because `main` is\n * the first function with static storage duration in this TU) that runs before\n * `main`. It constructs the translation-unit-local `std::ios_base::Init` sentinel\n * object `_ZStL8__ioinit`, which guarantees that the standard streams\n * (`std::cin`, `std::cout`, `std::cerr`, `std::clog` and their wide\n * counterparts) are initialized before any use.\n *\n * It then registers the matching `std::ios_base::Init::~Init` destructor with\n * `__cxa_atexit`, passing `&_ZStL8__ioinit` as the object pointer and\n * `&__dso_handle` so the destructor is invoked at program termination (or when\n * the shared object containing it is unloaded).\n *\n * @note This function takes no parameters and returns no value. It is emitted\n *       automatically by the compiler whenever a translation unit includes\n *       `<iostream>` (or any header that pulls in the `std::ios_base::Init`\n *       trick), and is invoked by the C++ runtime via the `.init_array` /\n *       `.ctors` section \u2014 it is not intended to be called directly.\n * @note The reference count maintained inside `std::ios_base::Init` ensures\n *       that the standard streams are constructed only once even if multiple\n *       translation units emit their own copy of this initializer.\n */",
+  "source": "static void _GLOBAL__sub_I_main(void)\n{\n    std::ios_base::Init::Init(&_ZStL8__ioinit);\n    __cxa_atexit(std::ios_base::Init::~Init, &_ZStL8__ioinit, &__dso_handle);\n}\n",
+  "pseudocode": "fn _GLOBAL__sub_I_main {\n    nop;\n    push(rbp);\n    rbp = _ZStL8__ioinit;\n    0x12d0(rbp);\n    arg0 = *&[var0+0x3ff8];\n    arg1 = rbp;\n    pop(rbp);\n    arg2 = __dso_handle;\n    goto L_1230;\n}\n",
+  "assumptions": [
+    "Identified the function as the standard libstdc++ static initializer for std::ios_base::Init (the canonical _GLOBAL__sub_I_main emitted when a TU includes <iostream>).",
+    "Mapped the indirect call at offset 0x12d0 on &_ZStL8__ioinit to the std::ios_base::Init constructor based on the standard pattern.",
+    "Mapped the tail-call to L_1230 with (Init dtor, &_ZStL8__ioinit, &__dso_handle) arguments to __cxa_atexit registering the destructor.",
+    "Dropped the stack-canary load/compare residue (var0+0x3ff8 / fs:0x28) \u2014 it is a compiler-generated stack protector artefact with no source-level meaning.",
+    "Dropped the bare `nop`, push/pop rbp prologue/epilogue scaffolding."
+  ],
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: The offset 0x12d0 call is assumed to be the Init constructor; this is the canonical pattern for this symbol and is conventionally correct.",
+    "[low] dropped_side_effect: Stack canary load was dropped, but it's a compiler artifact with no source-level semantics."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BLOB_3B",
+    "strlen": "FUNC_NAME_STRLEN"
+  },
+  "variable_names": {
+    "arg0": "stack_canary",
+    "var0": "frame_base",
+    "arg1": "frame_ptr",
+    "arg2": "dso_handle"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 11,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

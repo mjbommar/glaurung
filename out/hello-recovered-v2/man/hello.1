@@ -1,0 +1,33 @@
+.TH HELLO 1 "" "" "User Commands"
+.SH NAME
+hello \- print a greeting message
+.SH SYNOPSIS
+.B hello
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B hello
+is a minimal command-line program that prints a greeting message to standard
+output and exits.
+.PP
+The sources were recovered from the
+.I hello-gcc-O2
+build artifact, originally compiled from C++ with GCC at optimization level
+.BR -O2 .
+The program is structured around a small entry point
+.RB ( src/main.cpp )
+that delegates to a greeting helper
+.RB ( src/print_message.cpp )
+which is responsible for emitting the message text.
+.PP
+.B hello
+takes no required arguments and produces no output other than the greeting.
+.SH OPTIONS
+.B hello
+does not document any command-line options beyond those implied by its
+.I [OPTIONS]
+synopsis. Invoking the program with no arguments prints the greeting and
+exits successfully.
+.SH SEE ALSO
+.BR cmake (1),
+.BR gcc (1),
+.BR g++ (1)
