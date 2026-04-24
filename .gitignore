@@ -1,3 +1,5 @@
+.claude/scheduled_tasks.lock
+
 # Rust
 /target/
 **/*.rs.bk

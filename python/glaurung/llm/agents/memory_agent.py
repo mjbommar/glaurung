@@ -43,12 +43,62 @@ from ..tools.suggest_function_name import (
     build_tool as build_name_function,
     SuggestFunctionNameResult,
 )
+from ..tools.decompile_function import (
+    build_tool as build_decompile_function,
+    DecompileFunctionResult,
+)
+from ..tools.xrefs import (
+    build_xrefs_to as build_list_xrefs_to,
+    build_xrefs_from as build_list_xrefs_from,
+    XrefResult,
+)
+from ..tools.list_calls import (
+    build_tool as build_list_calls,
+    ListCallsResult,
+)
+from ..tools.get_string_xrefs import (
+    build_tool as build_get_string_xrefs,
+    StringXrefsResult,
+)
+from ..tools.rename_in_kb import (
+    build_tool as build_rename_in_kb,
+    RenameInKBResult,
+)
+from ..tools.search_byte_pattern import (
+    build_tool as build_search_byte_pattern,
+    SearchBytePatternResult,
+)
+from ..tools.list_suspicious_imports import (
+    build_tool as build_list_suspicious_imports,
+    SuspiciousImportsResult,
+)
+from ..tools.identify_compiler_and_runtime import (
+    build_tool as build_identify_compiler,
+    IdentifyCompilerResult,
+)
+from ..tools.detect_crypto_usage import (
+    build_tool as build_detect_crypto,
+    DetectCryptoResult,
+)
+from ..tools.diff_functions import (
+    build_tool as build_diff_functions,
+    DiffFunctionsResult,
+)
+from ..tools.propose_types_for_function import (
+    build_tool as build_propose_types,
+    ProposeTypesResult,
+)
 from .memory_foundation import create_foundation_agent
 
 
-def create_memory_agent(model: str | None = None) -> Agent[MemoryContext, str]:
-    agent = create_foundation_agent(model=model)
+def register_analysis_tools(agent: Agent) -> Agent:
+    """Register glaurung's memory/analysis tools onto an existing Agent.
 
+    Pulled out of :func:`create_memory_agent` so specialised agents
+    (FunctionExplainAgent, VulnerabilityHuntAgent, …) can reuse the
+    exact same tool surface while supplying their own system prompt
+    and output schema.
+    """
     # Wrapper functions expose clear schemas and call atomic tools
 
     async def hash_file(
@@ -275,6 +325,134 @@ def create_memory_agent(model: str | None = None) -> Agent[MemoryContext, str]:
             ),
         )
 
+    async def decompile_function(
+        ctx: RunContext, va: int, style: str = "c", timeout_ms: int = 500
+    ) -> DecompileFunctionResult:
+        tool = build_decompile_function()
+        return tool.run(
+            ctx.deps,
+            ctx.deps.kb,
+            tool.input_model(va=va, style=style, timeout_ms=timeout_ms),
+        )
+
+    async def list_xrefs_to(
+        ctx: RunContext, va: int, max_results: int = 32
+    ) -> XrefResult:
+        tool = build_list_xrefs_to()
+        return tool.run(
+            ctx.deps, ctx.deps.kb, tool.input_model(va=va, max_results=max_results)
+        )
+
+    async def list_xrefs_from(
+        ctx: RunContext, va: int, max_results: int = 32
+    ) -> XrefResult:
+        tool = build_list_xrefs_from()
+        return tool.run(
+            ctx.deps, ctx.deps.kb, tool.input_model(va=va, max_results=max_results)
+        )
+
+    async def list_calls_from_function(
+        ctx: RunContext, func_va: int, max_results: int = 64
+    ) -> ListCallsResult:
+        tool = build_list_calls()
+        return tool.run(
+            ctx.deps,
+            ctx.deps.kb,
+            tool.input_model(func_va=func_va, max_results=max_results),
+        )
+
+    async def get_string_xrefs(
+        ctx: RunContext,
+        query: str,
+        case_sensitive: bool = False,
+        regex: bool = False,
+        max_functions: int = 64,
+    ) -> StringXrefsResult:
+        tool = build_get_string_xrefs()
+        return tool.run(
+            ctx.deps,
+            ctx.deps.kb,
+            tool.input_model(
+                query=query,
+                case_sensitive=case_sensitive,
+                regex=regex,
+                max_functions=max_functions,
+            ),
+        )
+
+    async def rename_in_kb(
+        ctx: RunContext,
+        entry_va: int,
+        new_name: str,
+        rationale: str | None = None,
+    ) -> RenameInKBResult:
+        tool = build_rename_in_kb()
+        return tool.run(
+            ctx.deps,
+            ctx.deps.kb,
+            tool.input_model(
+                entry_va=entry_va, new_name=new_name, rationale=rationale
+            ),
+        )
+
+    async def search_byte_pattern(
+        ctx: RunContext,
+        pattern: str,
+        max_results: int = 64,
+        resolve_va: bool = True,
+    ) -> SearchBytePatternResult:
+        tool = build_search_byte_pattern()
+        return tool.run(
+            ctx.deps,
+            ctx.deps.kb,
+            tool.input_model(
+                pattern=pattern, max_results=max_results, resolve_va=resolve_va
+            ),
+        )
+
+    async def list_suspicious_imports(
+        ctx: RunContext, include_util: bool = False
+    ) -> SuspiciousImportsResult:
+        tool = build_list_suspicious_imports()
+        return tool.run(
+            ctx.deps, ctx.deps.kb, tool.input_model(include_util=include_util)
+        )
+
+    async def identify_compiler_and_runtime(
+        ctx: RunContext,
+    ) -> IdentifyCompilerResult:
+        tool = build_identify_compiler()
+        return tool.run(ctx.deps, ctx.deps.kb, tool.input_model())
+
+    async def detect_crypto_usage(ctx: RunContext) -> DetectCryptoResult:
+        tool = build_detect_crypto()
+        return tool.run(ctx.deps, ctx.deps.kb, tool.input_model())
+
+    async def diff_functions(
+        ctx: RunContext,
+        va_a: int,
+        va_b: int,
+        path_a: str | None = None,
+        path_b: str | None = None,
+        style: str = "c",
+    ) -> DiffFunctionsResult:
+        tool = build_diff_functions()
+        return tool.run(
+            ctx.deps,
+            ctx.deps.kb,
+            tool.input_model(
+                va_a=va_a, va_b=va_b, path_a=path_a, path_b=path_b, style=style
+            ),
+        )
+
+    async def propose_types_for_function(
+        ctx: RunContext, va: int, use_llm: bool = True
+    ) -> ProposeTypesResult:
+        tool = build_propose_types()
+        return tool.run(
+            ctx.deps, ctx.deps.kb, tool.input_model(va=va, use_llm=use_llm)
+        )
+
     # Register canonical, human-friendly names only
     agent.tool(hash_file, name="hash_file")
     agent.tool(annotate_binary, name="annotate_binary")
@@ -296,5 +474,24 @@ def create_memory_agent(model: str | None = None) -> Agent[MemoryContext, str]:
     agent.tool(list_functions, name="list_functions")
     agent.tool(map_symbol_addresses, name="map_symbol_addresses")
     agent.tool(view_function, name="view_function")
+    # Tier-1 analysis additions (xrefs / decompile / pattern-hunt / rename / triage)
+    agent.tool(decompile_function, name="decompile_function")
+    agent.tool(list_xrefs_to, name="list_xrefs_to")
+    agent.tool(list_xrefs_from, name="list_xrefs_from")
+    agent.tool(list_calls_from_function, name="list_calls_from_function")
+    agent.tool(get_string_xrefs, name="get_string_xrefs")
+    agent.tool(rename_in_kb, name="rename_in_kb")
+    agent.tool(search_byte_pattern, name="search_byte_pattern")
+    agent.tool(list_suspicious_imports, name="list_suspicious_imports")
+    agent.tool(identify_compiler_and_runtime, name="identify_compiler_and_runtime")
+    agent.tool(detect_crypto_usage, name="detect_crypto_usage")
+    agent.tool(diff_functions, name="diff_functions")
+    agent.tool(propose_types_for_function, name="propose_types_for_function")
 
     return agent
+
+
+def create_memory_agent(model: str | None = None) -> Agent[MemoryContext, str]:
+    """Foundation string-output agent with every analysis tool registered."""
+    agent = create_foundation_agent(model=model)
+    return register_analysis_tools(agent)
