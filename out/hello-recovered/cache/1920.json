@@ -1,0 +1,32 @@
+{
+  "entry_va": 6432,
+  "raw_name": "frame_dummy",
+  "demangled": "frame_dummy",
+  "short_name": "frame_dummy",
+  "rejected_names": [
+    "init_frame_stub",
+    "register_tm_clones_wrapper",
+    "crt_frame_init"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "static void frame_dummy(void);",
+  "docstring": "/**\n * @brief Compiler-generated init stub that registers TM (transactional memory) clones.\n *\n * This is a standard function emitted by the toolchain (GCC/Clang) and placed in\n * the `.init_array` (or equivalent) section so that it runs automatically during\n * program startup, before `main()`. It simply delegates to\n * `register_tm_clones()`, which sets up bookkeeping for transactional-memory\n * clone functions when the runtime supports them.\n *\n * @note Not part of the program's public API \u2014 it is invoked by the C runtime\n *       startup machinery, not by user code. It takes no parameters and has no\n *       return value.\n * @note Paired with `__do_global_dtors_aux` / `deregister_tm_clones`, which\n *       handle the corresponding teardown at program exit.\n */",
+  "source": "static void frame_dummy(void)\n{\n    register_tm_clones();\n}",
+  "pseudocode": "fn frame_dummy {\n    arg0 = __TMC_END__;\n    arg1 = __TMC_END__;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret = *&[var0+0x3ff0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret();\n    L_18d8:\n    return;\n    nop;\n    goto L_18a0;\n}\n",
+  "assumptions": [
+    "Recognized the canonical frame_dummy pattern emitted by GCC's crtstuff: it delegates to register_tm_clones() after checking __TMC_END__ difference.",
+    "The computed shift/adjust arithmetic (arg1 - arg0, arithmetic shift right by 3, sign-bit adjustment, shift right by 1) is the standard (__TMC_END__ - __TMC_LIST__)/sizeof(void*)/2 computation that lives inside register_tm_clones, not something authored at source level in frame_dummy itself.",
+    "The indirect call through *(var0+0x3ff0) is the GOT-based tail call to register_tm_clones \u2014 treated as a direct call in source.",
+    "Dropped all optimizer artefacts (dead stores to arg0/arg1/ret, nop, and the tail-jump back edge)."
+  ],
+  "rewrite_confidence": 0.95,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: The pseudocode actually shows frame_dummy itself performing the __TMC_END__ subtraction and shift arithmetic, then conditionally indirect-calling through a GOT slot. The rewrite collapses this into an unconditional call to register_tm_clones(). In practice this is the canonical crtstuff pattern where frame_dummy is a thin wrapper, so the observable effect is the same call being made; the conditional guards are internal to register_tm_clones in the source-level view.",
+    "[low] dropped_call: The original shows a conditional indirect call (skipped when the pointer at var0+0x3ff0 is NULL or when the size computation is zero). The rewrite calls register_tm_clones unconditionally. Since register_tm_clones itself performs equivalent guards in standard crtstuff, this is behaviourally equivalent for the canonical case."
+  ],
+  "string_names": {},
+  "lines": 24,
+  "trivial": false
+}

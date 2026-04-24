@@ -1,0 +1,37 @@
+{
+  "entry_va": 6736,
+  "raw_name": "_ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev",
+  "demangled": "std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > >::~vector()",
+  "short_name": "vector_string_dtor",
+  "rejected_names": [
+    "destroy_string_vector",
+    "std_vector_string_destructor",
+    "free_vector_of_strings"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "void _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(std::vector<std::string> *this);",
+  "docstring": "/**\n * @brief Base destructor (D2) for `std::vector<std::string>`.\n *\n * Destroys every `std::string` currently stored in the range\n * `[_M_start, _M_finish)`, then releases the vector's underlying storage.\n *\n * For each element, the small-string-optimisation (SSO) state is inspected:\n * if `_M_dataplus._M_p` does not point at the element's inline `_M_local_buf`,\n * the heap-allocated character buffer is freed via `operator delete`.\n * After all elements have been destroyed, if `_M_start` is non-NULL the\n * storage block of size `_M_end_of_storage - _M_start` bytes is freed via\n * the sized `operator delete`.\n *\n * @param this Pointer to the `std::vector<std::string>` instance to destroy.\n *             Must reference a valid (possibly empty) vector; `_M_start` may\n *             be NULL for a default-constructed / moved-from vector, in which\n *             case no deallocation is performed.\n *\n * @note This is the D2 (base) destructor; it does not invoke any virtual\n *       destructor chain and does not free the `std::vector` object itself.\n * @note Elements whose string data lives in the inline `_M_local_buf` (SSO)\n *       require no heap free; only out-of-line buffers are released.\n */",
+  "source": "/* std::vector<std::string>::~vector() - base destructor (D2) */\nvoid std__vector_string__dtor(std__vector_string *this)\n{\n    std__string *first = this->_M_start;\n    std__string *last  = this->_M_finish;\n\n    /* Destroy each std::string in [first, last). */\n    for (std__string *p = first; p != last; ++p) {\n        /* If the string's _M_dataplus._M_p does not point at the inline\n         * _M_local_buf, the heap buffer must be freed via operator delete. */\n        if (p->_M_dataplus._M_p != p->_M_local_buf) {\n            operator_delete(p->_M_dataplus._M_p);\n        }\n    }\n\n    /* Deallocate the vector's storage. */\n    if (this->_M_start != NULL) {\n        operator_delete(this->_M_start,\n                        (char *)this->_M_end_of_storage - (char *)this->_M_start);\n    }\n}\n",
+  "pseudocode": "fn _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev {\n    nop;\n    push(var0);\n    var0 = arg0;\n    push(rbp);\n    push(var1);\n    var1 = *&[arg0+0x8];\n    rbp = *&[arg0];\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a97;\n    }\n    nop;\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    L_1a70:\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    ret = stack_0;\n    0x1260();\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    L_1a8a:\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    rbp = *&[var0];\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    L_1a97:\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    arg1 = *&[var0+0x10];\n    pop(var1);\n    arg0 = rbp;\n    arg1 = (arg1 - rbp);\n    pop(rbp);\n    pop(var0);\n    goto L_1260;\n    L_1ab0:\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n}\n",
+  "assumptions": [
+    "The call target 0x1260 is assumed to be operator delete (both sized and unsized forms resolve through the same PLT stub in many builds); used for both per-element buffer free and the vector backing store.",
+    "The inner check 'stack_top == rbp+16' is the standard libstdc++ __cxx11 string SSO test: _M_dataplus._M_p compared against the address of _M_local_buf (offset 16 from the string object start). Interpreted as p->_M_dataplus._M_p != &p->_M_local_buf.",
+    "Element stride of 32 bytes matches sizeof(std::__cxx11::basic_string<char>) on 64-bit libstdc++; used as the loop increment.",
+    ">Vector layout taken as the standard { _M_start, _M_finish, _M_end_of_storage } at offsets 0, 8, 16.",
+    "The duplicated loop-head compare blocks (L_1a70 / fall-through) are an optimizer artefact of a single do/while; collapsed into one for loop.",
+    "Dead stack pushes/pops of callee-saved registers omitted as prologue/epilogue noise.",
+    "Third argument to sized operator delete (alignment / allocator) not visible in pseudocode, so only the two-argument form is emitted."
+  ],
+  "rewrite_confidence": 0.86,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: The pseudocode has two duplicated compare-and-branch blocks (L_1a70 fall-through); rewriter collapsed them into a single do/while-style loop. This is a standard optimizer artefact and semantically equivalent when first != last.",
+    "[low] other: Rewriter emits the sized two-argument operator delete form, while the pseudocode just calls 0x1260 with (rbp, size). Both forms go through the same PLT stub in practice; the declared assumption notes this ambiguity.",
+    "[low] other: Per-element free is emitted as unsized operator delete, but the assembly call passes the same stack_0 argument as the outer call (both target 0x1260). The exact ABI form (sized vs. unsized) cannot be distinguished from the pseudocode; semantics of freeing the SSO heap buffer are preserved.",
+    "[low] other: Callee-saved register save/restore dropped as noise; no observable effect."
+  ],
+  "string_names": {},
+  "lines": 64,
+  "trivial": false
+}

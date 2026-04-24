@@ -1,0 +1,40 @@
+{
+  "entry_va": 6448,
+  "raw_name": "_ZSt4endlIcSt11char_traitsIcEERSt13basic_ostreamIT_T0_ES6_.isra.0",
+  "demangled": "std::basic_ostream<char, std::char_traits<char> >& std::endl<char, std::char_traits<char> >(std::basic_ostream<char, std::char_traits<char> >&) [clone .isra.0]",
+  "short_name": "stream_endl",
+  "rejected_names": [
+    "put_newline_and_flush",
+    "write_newline",
+    "widen_newline_flush"
+  ],
+  "role": "wrapper",
+  "role_confidence": 0.85,
+  "c_prototype": "std::ostream &std::endl(std::ostream &__os);",
+  "docstring": "/**\n * @brief Inserts a newline character into an output stream and flushes it.\n *\n * Standard library manipulator equivalent to `std::endl`. Obtains the\n * `std::ctype<char>` facet from the stream's imbued locale (cached in the\n * stream's ctype slot) and uses it to widen `'\\n'` to the stream's character\n * type, then writes the resulting character via `__os.put()` and flushes the\n * stream with `__os.flush()`.\n *\n * The widen operation is performed via the facet's fast-path cache\n * (`_M_widen`) when initialized (`_M_widen_ok`). Otherwise `_M_widen_init()`\n * is called; if the facet's vtable entry for `do_widen` points at the base\n * `ctype<char>::do_widen`, `'\\n'` is used directly, else `do_widen('\\n')`\n * is invoked.\n *\n * @param __os Output stream to write the newline to and flush.\n * @return Reference to @p __os after the newline has been written and the\n *         stream has been flushed.\n *\n * @note Throws `std::bad_cast` (via `std::__throw_bad_cast()`) if the stream\n *       has no `ctype<char>` facet installed (facet pointer is null).\n *\n * @code\n *   std::cout << \"hello\" << std::endl;  // writes '\\n' and flushes\n * @endcode\n */",
+  "source": "std::ostream &std::endl(std::ostream &__os)\n{\n    typedef std::ctype<char> ctype_t;\n    std::basic_ios<char> &ios = __os;\n    std::locale::facet *fac = ios._M_streambuf_state; /* ctype facet slot */\n\n    if (fac == nullptr) {\n        std::__throw_bad_cast();\n    }\n\n    char nl;\n    if (static_cast<ctype_t *>(fac)->_M_widen_ok) {\n        nl = static_cast<ctype_t *>(fac)->_M_widen['\\n'];\n    } else {\n        static_cast<ctype_t *>(fac)->_M_widen_init();\n        if (*(void **)fac /* vtable */ ->do_widen == &ctype_t::do_widen) {\n            nl = '\\n';\n        } else {\n            nl = static_cast<ctype_t *>(fac)->do_widen('\\n');\n        }\n    }\n\n    __os.put(nl);\n    return __os.flush();\n}",
+  "pseudocode": "fn _ZSt4endlIcSt11char_traitsIcEERSt13basic_ostreamIT_T0_ES6_.isra.0 {\n    push(var0);\n    push(rbp);\n    rsp = (rsp - 8);\n    ret = *&[arg0];\n    ret = *&[ret-0x18];\n    var0 = *&[arg0+ret+0xf0];\n    t0 = var0;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_19a3;\n    }\n    t10 = *&[var0+0x38];\n    %zf = (t10 == 0);\n    rbp = arg0;\n    if (%zf) {\n        goto L_1973;\n    }\n    unknown(movsx);\n    0x11b0();\n    rsp = (rsp + 8);\n    pop(rbp);\n    arg0 = ret;\n    pop(var0);\n    goto L_1200;\n    L_195c:\n    0x11b0(rbp);\n    rsp = (rsp + 8);\n    pop(rbp);\n    arg0 = ret;\n    pop(var0);\n    goto L_1200;\n    L_1973:\n    0x1290(var0);\n    ret = *&[var0];\n    arg1 = 10;\n    ret = *&[ret+0x30];\n    %zf = (ret == arg2);\n    if (%zf) {\n        goto L_195c;\n    }\n    ret(var0, 10, _ZNKSt5ctypeIcE8do_widenEc);\n    unknown(movsx);\n    goto L_195c;\n    L_19a3:\n    0x12b0();\n    nop;\n    nop;\n    return arg1;\n}\n",
+  "assumptions": [
+    "This is libstdc++'s std::endl after inlining widen(); the pseudocode walks the basic_ios vtable offset (-0x18) to reach the ios_base subobject, then loads the ctype<char> facet pointer at +0xF0.",
+    "Null-facet branch (L_19a3) calls std::__throw_bad_cast (0x12b0).",
+    "The +0x38 field of ctype<char> is _M_widen_ok; when set, the widened '\\n' is read directly from the cached _M_widen table (inferred from the movsx sign-extension load).",
+    "When _M_widen_ok is false, _M_widen_init() (0x1290) is called, and then the vtable entry for do_widen is compared against ctype<char>::do_widen to decide between the fast identity path and an indirect virtual call.",
+    "Both paths tail-call 0x11b0, which is std::ostream::put(char) followed (via endl's usual body) by flush; represented here as put(nl); return flush();",
+    "Target language was specified as C but the prototype is C++ std::endl \u2014 emitted as C++ since C has no std::ostream. Treating 'c' loosely.",
+    "Register/stack juggling (push var0/rbp, rsp adjustments, pop ret) are pure calling-convention artefacts and were dropped."
+  ],
+  "rewrite_confidence": 0.35,
+  "equivalence_passed": false,
+  "divergences": [
+    "[high] added_call: The pseudocode shows a single tail call to 0x11b0 on each path (both the _M_widen_ok fast path and the slow paths jump to a site that calls 0x11b0 once and returns). The rewrite emits TWO distinct calls: put(nl) followed by flush(). If 0x11b0 is a single combined helper (or just put, with flush elsewhere), this duplicates/adds a call not present in the original.",
+    "[medium] control_flow: In the pseudocode, the null check is on `var0` (the facet pointer loaded from [arg0+ret+0xf0]); when zero, it jumps to L_19a3 which calls 0x12b0 and then returns arg1 (uninitialized/unrelated register). The rewrite assumes 0x12b0 is __throw_bad_cast (noreturn), but the pseudocode falls through to `return arg1` afterward, which suggests 0x12b0 may not be noreturn, or arg1 is the return value path. Behaviour after the call differs.",
+    "[high] other: This expression is not valid C++ and does not clearly correspond to the pseudocode's compare of `*&[var0]` then `+0x30` (a vtable slot load) against _ZNKSt5ctypeIcE8do_widenEc. The operator precedence and member syntax are broken; the comparison target (arg2 in pseudocode, presumably a register holding the function address) is rendered ambiguously.",
+    "[medium] other: The facet is loaded from offset +0xF0 of the ios_base subobject (a _M_fctype cache or facet array slot), not _M_streambuf_state. The named member is incorrect and may mislead about which field is read.",
+    "[medium] control_flow: The pseudocode calls 0x1290 (_M_widen_init) and THEN loads vtable slot and compares \u2014 meaning the fast identity-widen path after _M_widen_init still goes to L_195c which calls 0x11b0(rbp) with the ostream, not with the char. The rewrite sets `nl = '\\n'` and calls put(nl); whether put() is actually invoked here at all versus a different helper at L_195c (which passes rbp/ostream only, no char arg visible) is unclear.",
+    "[low] sign_extension: The pseudocode uses movsx to sign-extend the loaded byte; the rewrite stores into `char nl` which is implementation-defined signedness. Likely equivalent on libstdc++ targets but not explicit.",
+    "[low] dropped_side_effect: The original returns whatever 0x11b0 returns (a single ostream& presumably); adding an explicit flush() call alters the observable side-effect sequence if 0x11b0 isn't the combined put+flush helper."
+  ],
+  "string_names": {},
+  "lines": 50,
+  "trivial": false
+}

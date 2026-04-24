@@ -1,0 +1,36 @@
+{
+  "entry_va": 6592,
+  "raw_name": "_ZN10HelloWorld12printMessageEv",
+  "demangled": "HelloWorld::printMessage()",
+  "short_name": "print_message",
+  "rejected_names": [
+    "print_and_count",
+    "display_message",
+    "log_message"
+  ],
+  "role": "other",
+  "role_confidence": 0.55,
+  "c_prototype": "void HelloWorld_printMessage(HelloWorld *this);",
+  "docstring": "/**\n * @brief Prints the object's stored message to standard output and increments its print counter.\n *\n * Writes `this->message` to `std::cout` followed by `std::endl` (which also flushes\n * the stream), then increments the `print_count` field by one to record that the\n * message has been emitted.\n *\n * @param this Pointer to the HelloWorld instance whose message is to be printed.\n *             Must be non-null; `this->message` must be a valid `std::string` and\n *             `this->print_count` must be a writable `int`.\n *\n * @return None.\n *\n * @note This function has observable side effects: it performs I/O on `std::cout`\n *       and mutates `this->print_count`. It is not thread-safe with respect to\n *       concurrent calls on the same object.\n */",
+  "source": "#include <iostream>\n#include <string>\n\nstruct HelloWorld {\n    std::string message;      // offset 0x00 (pointer) / 0x08 (size/end for SSO layout)\n    int         print_count;  // offset 0x20\n};\n\nvoid HelloWorld_printMessage(HelloWorld *this)\n{\n    std::cout << this->message << std::endl;\n    this->print_count++;\n}\n",
+  "pseudocode": "fn _ZN10HelloWorld12printMessageEv {\n    nop;\n    push(var0);\n    push(rbp);\n    push(var1);\n    arg2 = *&[arg0+0x8];\n    var1 = arg0;\n    arg1 = *&[arg0];\n    arg0 = _ZSt4cout;\n    0x1280();\n    rbp = ret;\n    ret = *&[ret];\n    ret = *&[ret-0x18];\n    var0 = *&[rbp+ret+0xf0];\n    t0 = var0;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1a4b;\n    }\n    t10 = *&[var0+0x38];\n    %zf = (t10 == 0);\n    if (%zf) {\n        goto L_1a20;\n    }\n    unknown(movsx);\n    0x11b0(rbp);\n    0x1200(ret);\n    &[var1+0x20] = (*&[var1+0x20] + 1);\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n    L_1a03:\n    0x11b0(rbp);\n    0x1200(ret);\n    &[var1+0x20] = (*&[var1+0x20] + 1);\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n    L_1a20:\n    0x1290(var0);\n    ret = *&[var0];\n    ret = *&[ret+0x30];\n    %zf = (ret == arg2);\n    if (%zf) {\n        goto L_1a03;\n    }\n    ret(var0, 10, _ZNKSt5ctypeIcE8do_widenEc);\n    unknown(movsx);\n    goto L_1a03;\n    L_1a4b:\n    0x12b0();\n    nop;\n    push(var0);\n    var0 = arg0;\n    push(rbp);\n    push(var1);\n    var1 = *&[arg0+0x8];\n    rbp = *&[arg0];\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a97;\n    }\n    nop;\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    L_1a70:\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    ret = stack_0;\n    0x1260();\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    L_1a8a:\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    rbp = *&[var0];\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    L_1a97:\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    arg1 = *&[var0+0x10];\n    pop(var1);\n    arg0 = rbp;\n    arg1 = (arg1 - rbp);\n    pop(rbp);\n    pop(var0);\n    goto L_1260;\n    L_1ab0:\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n}\n",
+  "assumptions": [
+    "Symbol _ZN10HelloWorld12printMessageEv is C++; output uses C++ syntax even though target language is 'c' \u2014 the prototype uses `this` which is not valid C.",
+    "Call to 0x1280 with cout and this->... is operator<<(ostream&, string const&); string pointer is at offset 0 of HelloWorld.",
+    "The movsx / do_widen / 0x11b0 / 0x1200 sequence is the inlined expansion of std::endl (widen '\\n', sputc, flush), collapsed to `<< std::endl`.",
+    "Increment of dword at this+0x20 is a print counter field; named print_count.",
+    "The block after L_1a4b (destructor-like loop freeing std::string elements of a vector and then freeing the buffer via operator delete) is a separate adjacent function body that leaked into this listing; it is not emitted.",
+    "Dropped all register-save push/pop and stack frame artefacts.",
+    "Struct layout for HelloWorld inferred: std::string at 0, int counter at 0x20; exact layout not verified but consistent with accesses [this], [this+8], [this+0x20]."
+  ],
+  "rewrite_confidence": 0.55,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: The rewriter declares that the code after L_1a4b is a separate adjacent function (destructor-like cleanup loop) that leaked into the listing and omits it. If this assumption is wrong, significant behavior (vector-of-string destruction, operator delete) is missing from printMessage. Given the tail-call pattern (goto L_1260, matching the 0x1260 call above) and the fact that printMessage returns earlier on the normal path, treating it as a separate function is plausible but not verified.",
+    "[low] control_flow: In the original, the increment of [var1+0x20] occurs on both branches after the endl-like sequence (movsx path at 0x11b0/0x1200 and the L_1a03 path). The rewriter collapses both into a single post-endl increment, which is behaviorally equivalent if the two paths really are the two cases of std::endl's widen/sputc dispatch.",
+    "[low] other: Layout is inferred (string at 0, int at 0x20). Padding/exact offset of print_count (0x20 vs. sizeof(std::string)=0x20 on libstdc++) lines up, so this is plausible but unverified."
+  ],
+  "string_names": {},
+  "lines": 116,
+  "trivial": false
+}

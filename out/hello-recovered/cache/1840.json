@@ -1,0 +1,37 @@
+{
+  "entry_va": 6208,
+  "raw_name": "_start",
+  "demangled": "_start",
+  "short_name": "start",
+  "rejected_names": [
+    "elf_entry_point",
+    "crt_start",
+    "program_entry"
+  ],
+  "role": "entry_stub",
+  "role_confidence": 0.99,
+  "c_prototype": "void _start(void);",
+  "docstring": "/**\n * @brief ELF program entry point (crt1 `_start` stub).\n *\n * Prepares the initial execution environment for a dynamically linked\n * program and transfers control to `__libc_start_main`, which in turn\n * invokes `main`. This is the standard glibc `_start` trampoline that\n * the toolchain emits in `crt1.o`; the C body shown is an illustrative\n * rendering of the underlying assembly.\n *\n * The routine performs the following steps:\n *  - Recovers `argc` from `[rsp]` and `argv` from `rsp + 8` as laid out\n *    by the kernel/loader on process start.\n *  - Reads `rtld_fini` from `rdx`, where the dynamic loader places the\n *    dynamic-linker finalizer to be registered by libc.\n *  - Aligns the stack to a 16-byte boundary and pushes sentinel values\n *    for `rbp` and `rsp` to terminate backtraces at this frame.\n *  - Calls `__libc_start_main(main, argc, argv, 0, 0, rtld_fini, argv)`,\n *    passing `NULL` for both the program `init` and `fini` hooks and\n *    reusing `argv` as the `stack_end` marker.\n *\n * Control is not expected to return; if `__libc_start_main` ever does\n * return, the function executes `__builtin_trap()` (a `hlt`) to abort\n * the process rather than continue executing undefined code.\n *\n * @return This function does not return.\n *\n * @note Takes no C-level parameters: all inputs (`argc`, `argv`,\n *       `rtld_fini`) are read directly from registers and the initial\n *       stack frame established by the kernel exec loader.\n * @note `main` must be defined and externally visible for the link step\n *       to resolve the reference embedded in this stub.\n */",
+  "source": "/*\n * ELF entry point. Sets up argc/argv from the stack, aligns the stack,\n * and hands control to __libc_start_main. This is the standard glibc\n * _start stub emitted by the toolchain; it is written in assembly in\n * the real crt1.o. The C rendering below is illustrative only.\n */\nvoid _start(void)\n{\n    /* Extracted by the prologue from the initial stack layout:\n     *     argc   = [rsp]\n     *     argv   = rsp + 8\n     * rtld_fini is passed in rdx by the kernel/loader.\n     */\n    register long rtld_fini __asm__(\"rdx\");\n    int    argc = (int)(long)__builtin_frame_address(0);   /* pop rdi */\n    char **argv = (char **)__builtin_frame_address(0);     /* mov rsi, rsp */\n\n    /* Align stack to 16 bytes and push sentinels (rbp, rsp). */\n\n    __libc_start_main(\n        /* main        */ main,\n        /* argc        */ argc,\n        /* argv        */ argv,\n        /* init        */ 0,\n        /* fini        */ 0,\n        /* rtld_fini   */ rtld_fini,\n        /* stack_end   */ argv);\n\n    __builtin_trap();   /* hlt \u2014 unreachable */\n}\n",
+  "pseudocode": "fn _start {\n    nop;\n    arg5 = arg2;\n    pop(arg1);\n    arg2 = rsp;\n    rsp = (rsp & 240);\n    push(ret);\n    push(rsp);\n    arg4 = 0;\n    arg3 = 0;\n    __libc_start_main(main);\n    unknown(hlt);\n    nop;\n    ret = __TMC_END__;\n    %zf = (ret == arg0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret(__TMC_END__);\n    L_1898:\n    return;\n}\n",
+  "assumptions": [
+    "This is the standard ELF _start stub; in real toolchains it is hand-written assembly in crt1.o, not C. The C rendering is illustrative.",
+    "Mapped register arguments to __libc_start_main by SysV AMD64 ABI: rdi=main, rsi=argc, rdx=argv, rcx=init, r8=fini, r9=rtld_fini, stack_end pushed.",
+    "The tail fragment comparing __TMC_END__ against argv[0x3fe0+GOT] and the conditional tailcall is dead code after __libc_start_main (which never returns); omitted as an optimizer/linker artefact of the hlt + padding.",
+    "'unknown(hlt)' represented as __builtin_trap() to convey the non-returning hlt instruction following __libc_start_main.",
+    "Init/fini function pointers are passed as 0 as shown in the pseudocode (modern PIE crt1 passes NULL for _init/_fini)."
+  ],
+  "rewrite_confidence": 0.4,
+  "equivalence_passed": false,
+  "divergences": [
+    "[medium] dropped_call: The original pseudocode has a tail fragment that checks __TMC_END__ against some GOT slot (*&[var0+0x3fe0]) and, if non-zero, calls it (ret(__TMC_END__)). This is the classic deregister_tm_clones / __cxa_finalize-style tail. The rewrite omits this entirely, justifying it as dead code after __libc_start_main. While __libc_start_main typically does not return, the dropped call is a visible side effect in the original; its omission is a behavioural divergence if that path were ever reached.",
+    "[low] control_flow: Original uses an hlt instruction (unknown(hlt)); __builtin_trap() emits ud2 on x86, not hlt. Semantically both are non-returning trap-like instructions but the exact instruction differs.",
+    "[medium] other: argc is obtained in the original via 'pop(arg1)' from the stack (argc is at [rsp] at entry). The rewrite uses __builtin_frame_address(0) cast to int, which returns the frame pointer, not the value popped from the stack. This does not faithfully reproduce argc extraction; it is illustrative only but not equivalent behaviour.",
+    "[medium] other: Similarly argv should be rsp after the pop (the original does 'arg2 = rsp'), not __builtin_frame_address(0). The rewrite's value would not equal the real argv at runtime.",
+    "[low] added_call: Rewrite passes 'stack_end = argv' as the 7th argument. The original pseudocode pushes rsp (push(rsp)) before the call, which on SysV AMD64 is the stack_end argument passed on the stack. The rewrite's mapping is plausible but the value passed (argv vs rsp at that point) may differ slightly; in crt1 they are typically the same address but conceptually distinct.",
+    "[low] dropped_side_effect: The stack-alignment sentinel pushes (rbp=0 sentinel and rsp) are commented out in the rewrite. These are required by the ABI for backtrace termination but omission is stylistic in an illustrative C rendering."
+  ],
+  "string_names": {},
+  "lines": 28,
+  "trivial": false
+}

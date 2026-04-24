@@ -1,0 +1,32 @@
+{
+  "entry_va": 6160,
+  "raw_name": "_GLOBAL__sub_I_main",
+  "demangled": "_GLOBAL__sub_I_main",
+  "short_name": "init_iostream_globals",
+  "rejected_names": [
+    "global_ctor_main",
+    "register_iostream_cleanup",
+    "static_init_main"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "static void _GLOBAL__sub_I_main(void);",
+  "docstring": "/**\n * @brief Static initializer for the C++ iostream library in this translation unit.\n *\n * Compiler-generated global sub-initializer (name-mangled as\n * `_GLOBAL__sub_I_main`) emitted for any translation unit that includes\n * `<iostream>`. It constructs the file-scope `std::ios_base::Init` sentinel\n * object `_ZStL8__ioinit`, which guarantees that the standard streams\n * (`std::cin`, `std::cout`, `std::cerr`, `std::clog`, and their wide\n * counterparts) are fully constructed before any user code in this TU runs.\n *\n * It then registers `std::ios_base::Init::~Init` with `__cxa_atexit`, bound\n * to the same `_ZStL8__ioinit` instance and the current shared object's\n * `__dso_handle`, so the sentinel is destroyed at program/library shutdown\n * in the correct order.\n *\n * This function is invoked automatically by the C++ runtime (via the\n * `.init_array` / `.ctors` mechanism) before `main()`; it is never called\n * directly from user code.\n *\n * @return None. Has no parameters and no return value.\n *\n * @note The referenced symbols are standard ABI artifacts:\n *       - `_ZStL8__ioinit` \u2014 the TU-local `std::ios_base::Init` object.\n *       - `__dso_handle`  \u2014 the per-DSO handle used by `__cxa_atexit`.\n * @note Safe against multiple TUs: `std::ios_base::Init` uses an internal\n *       reference count so only the first construction performs real work.\n */",
+  "source": "static void _GLOBAL__sub_I_main(void)\n{\n    std::ios_base::Init::Init(&_ZStL8__ioinit);\n    __cxa_atexit(std::ios_base::Init::~Init, &_ZStL8__ioinit, &__dso_handle);\n}\n",
+  "pseudocode": "fn _GLOBAL__sub_I_main {\n    nop;\n    push(rbp);\n    rbp = _ZStL8__ioinit;\n    0x12d0(rbp);\n    arg0 = *&[var0+0x3ff8];\n    arg1 = rbp;\n    pop(rbp);\n    arg2 = __dso_handle;\n    goto L_1230;\n}\n",
+  "assumptions": [
+    "Identified the function as the standard g++-emitted static initializer for <iostream> \u2014 it constructs the global std::ios_base::Init object _ZStL8__ioinit and registers its destructor with __cxa_atexit.",
+    "Call at 0x12d0 mapped to std::ios_base::Init::Init (ctor); tail jump to 0x1230 mapped to __cxa_atexit, with the destructor pointer loaded from the PLT/GOT slot at [rip+...] (the `*&[var0+0x3ff8]` expression).",
+    "Dropped the raw register/stack prologue and epilogue (push rbp / pop rbp / tail-call via goto) as they are calling-convention artefacts.",
+    "Written in C++ syntax (mangled symbol names spelled out) even though target language is tagged 'c', because this is a C++ compiler-synthesized TU-ctor and has no pure-C equivalent."
+  ],
+  "rewrite_confidence": 0.95,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] control_flow: Original uses a tail-call (goto L_1230) to __cxa_atexit after restoring rbp; rewrite uses a normal call then returns. Observable behavior is identical.",
+    "[low] other: The destructor pointer is loaded from a GOT slot (*&[var0+0x3ff8]); rewriter assumes it is the Init dtor. This matches the standard libstdc++ pattern emitted by g++."
+  ],
+  "string_names": {},
+  "lines": 11,
+  "trivial": false
+}

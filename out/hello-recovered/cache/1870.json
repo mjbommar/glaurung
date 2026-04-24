@@ -1,0 +1,32 @@
+{
+  "entry_va": 6256,
+  "raw_name": "deregister_tm_clones",
+  "demangled": "deregister_tm_clones",
+  "short_name": "deregister_tm_clones",
+  "rejected_names": [
+    "unregister_itm_clone_table",
+    "tm_clone_table_fini",
+    "remove_tm_clones"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "void deregister_tm_clones(void);",
+  "docstring": "/**\n * @brief Deregister this module's transactional-memory clone table.\n *\n * CRT helper (paired with register_tm_clones) that is invoked during\n * shared-object/binary teardown to undo any registration performed at\n * load time. It looks up the weakly-referenced GCC TM runtime symbols\n * and, when both are present, hands the module's clone-table address\n * (&__TMC_END__) to the runtime for removal.\n *\n * The function is a no-op when either:\n *   - the weak symbol __TMC_END__ resolves to NULL (i.e. this module\n *     has no transactional-memory clone table), or\n *   - the weak symbol _ITM_deregisterTMCloneTable resolves to NULL\n *     (i.e. no TM runtime is linked into the process).\n *\n * @note Symbols __TMC_END__ and _ITM_deregisterTMCloneTable are\n *       declared with __attribute__((weak)), so unresolved references\n *       compare equal to NULL rather than causing a link failure.\n * @note This is the standard boilerplate emitted by GCC in crtbegin;\n *       it is typically wired up as a destructor and is not meant to\n *       be called from user code.\n */",
+  "source": "static void deregister_tm_clones(void)\n{\n    extern void *__TMC_END__ __attribute__((weak));\n    extern void _ITM_deregisterTMCloneTable(void *) __attribute__((weak));\n\n    if (&__TMC_END__ == /* __TMC_LIST__ */ NULL)\n        return;\n\n    if (_ITM_deregisterTMCloneTable == NULL)\n        return;\n\n    _ITM_deregisterTMCloneTable(&__TMC_END__);\n}\n",
+  "pseudocode": "fn deregister_tm_clones {\n    ret = __TMC_END__;\n    %zf = (ret == arg0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret(__TMC_END__);\n    L_1898:\n    return;\n}\n",
+  "assumptions": [
+    "This is the standard glibc crtstuff.c deregister_tm_clones boilerplate emitted by gcc; reconstructed from the canonical source rather than the decompiled ops.",
+    "arg0 in the pseudocode is actually the address of __TMC_LIST__ (compared against &__TMC_END__ to detect an empty TM clone table); treated as the conventional compiler-emitted comparison.",
+    "The GOT load *&[var0+0x3fe0] is the lazily-resolved weak symbol _ITM_deregisterTMCloneTable; the null check on it is the standard weak-symbol guard.",
+    "`ret(__TMC_END__)` is the indirect call through that weak symbol with &__TMC_END__ as its argument."
+  ],
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: The rewrite compares against NULL via a comment, while the pseudocode compares &__TMC_END__ to arg0 (the __TMC_LIST__ address passed in). This is the canonical crtstuff idiom and semantically identical for the standard boilerplate.",
+    "[low] other: Rewrite declares __TMC_END__ as void* and takes its address; pseudocode uses __TMC_END__ directly as an address. Equivalent under the standard boilerplate convention."
+  ],
+  "string_names": {},
+  "lines": 16,
+  "trivial": false
+}

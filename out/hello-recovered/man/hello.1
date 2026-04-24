@@ -1,0 +1,35 @@
+.TH HELLO 1 "" "" "User Commands"
+.SH NAME
+hello \- print a top-level message
+.SH SYNOPSIS
+.B hello
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B hello
+is a small command-line program that prints a top-level message and exits.
+Its source was recovered from the ELF binary
+.IR hello-gcc-O2 .
+The recovered project is organized as C source files but reflects a
+binary originally linked against the C++ standard library: it contains
+a destructor helper for
+.BR std::vector<std::string> ,
+iostream support shims for stream newline /
+.BR std::endl
+and ctype widening, iostream global initialization, and the usual CRT
+startup and constructor/destructor glue.
+.PP
+Program flow begins in the CRT startup stub, which transfers control to
+the entry point defined in
+.IR src/main.c ;
+that entry point performs the top-level message printing and returns.
+.SH OPTIONS
+.B hello
+does not define any required options. Any
+.I OPTIONS
+shown in the synopsis are accepted only in the generic sense that the
+program is invoked from the command line; no flags are documented by
+the recovered sources.
+.SH SEE ALSO
+.BR cmake (1),
+.BR cc (1),
+.BR ld (1)

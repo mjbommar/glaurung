@@ -1,0 +1,35 @@
+{
+  "entry_va": 4896,
+  "raw_name": "main.cold",
+  "demangled": "main.cold",
+  "short_name": "main_cold_eh_cleanup",
+  "rejected_names": [
+    "main_cold",
+    "main_unwind_resume",
+    "main_exception_landing_pad"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.75,
+  "c_prototype": "void main_cold(void) __attribute__((noreturn, cold));",
+  "docstring": "/**\n * @brief Cold/exception-cleanup landing pad split out of `main()` by GCC.\n *\n * This symbol (`main.cold`) is not hand-written C code \u2014 it is a compiler-\n * emitted partition produced when GCC places the cold/EH-cleanup portion of\n * `main()` into a separate `.text.cold` section. Its body consists of the\n * destructor calls and unwinder invocations (e.g. `_Unwind_Resume`,\n * `std::vector<std::string>::~vector`) that must execute when an exception\n * propagates out of `main()`.\n *\n * Control reaches this routine only via the exception-handling tables\n * attached to `main()`; it is never invoked by an ordinary `call`. It\n * tail-calls `_Unwind_Resume` and therefore never returns to its caller \u2014\n * stack unwinding continues in the runtime.\n *\n * @return This function does not return.\n *\n * @note Declared `noreturn` and `cold`. The C body is a stub containing\n *       `__builtin_unreachable()` because a faithful source-level rewrite\n *       of compiler-synthesized EH cleanup code is not possible.\n * @note Paired with `main()`; do not call directly from user code.\n */",
+  "source": "/*\n * main.cold \u2014 compiler-emitted cold/exception cleanup landing pad for main().\n *\n * GCC splits exception-handling cleanup code out of main() into a separate\n * \".cold\" partition. The body is a sequence of destructor invocations\n * (_Unwind_Resume calls, std::vector<std::string>::~vector, etc.) that runs\n * when an exception propagates out of main. It is marked noreturn because it\n * tail-calls _Unwind_Resume.\n *\n * This function has no C-level source: it is synthesized by the compiler\n * from main()'s cleanup EH tables. A faithful C rewrite is not possible;\n * the stub below documents its role.\n */\n__attribute__((noreturn, cold))\nvoid main_cold(void)\n{\n    __builtin_unreachable();\n}\n",
+  "pseudocode": "fn main.cold {\n    0x12a0(stack_0);\n    0x1300(rbp);\n    rbp = var0;\n    0x1260(rbp, 40);\n    0x12a0(stack_0);\n    _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(stack_1);\n    0x12a0(stack_2);\n    0x1300(rbp);\n    0x12a0(rbp);\n    rbp = var0;\n    0x1260(rbp, 40);\n    goto L_134c;\n    _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(stack_1);\n    0x12a0(stack_2);\n    0x1300(rbp);\n    0x12a0(rbp);\n    rbp = var0;\n    0x1260(rbp, 40);\n    goto L_134c;\n}\n",
+  "assumptions": [
+    "Function identified as a compiler-generated .cold EH cleanup partition of main(), not user code \u2014 GCC's -freorder-blocks-and-partition emits these automatically.",
+    "Calls observed: 0x12a0 likely __cxa_* / _Unwind_Resume thunks, 0x1260 is a stack-adjust/cleanup helper, 0x1300 is another cleanup thunk, and the named mangled symbol is std::vector<std::string>::~vector(). These are destructor chains for locals in main().",
+    "No user-visible semantics to reproduce \u2014 rewritten as a documented noreturn stub rather than fabricating control flow that has no direct C equivalent.",
+    "Dropped the pseudocode's rbp/stack_N reassignments as optimizer/frame-pointer artefacts with no source-level meaning."
+  ],
+  "rewrite_confidence": 0.3,
+  "equivalence_passed": false,
+  "divergences": [
+    "[high] dropped_call: All observed calls (0x12a0 thunks, 0x1300, 0x1260, and the std::vector<std::string>::~vector destructor) are dropped. Even though this is a compiler-generated cold EH partition, the rewrite does not invoke any destructor or unwind function, so no cleanup side effects occur if this function were executed.",
+    "[medium] control_flow: The original has multiple landing-pad entry points with distinct call sequences (one path includes the vector destructor, another skips it; there is branching to L_134c). The rewrite collapses all paths into unreachable, losing the per-landing-pad dispatch that the EH tables rely on.",
+    "[high] dropped_side_effect: The destructor call for std::vector<std::string> is removed entirely. If this cold path ran, the vector's heap-allocated storage and contained std::string objects would leak (or double-free would be avoided but cleanup skipped).",
+    "[low] added_call: Adds a __builtin_unreachable() not present in the original; benign since the function is declared noreturn and the original tail-calls _Unwind_Resume.",
+    "[low] other: C cannot express the '.' in the symbol name; renamed to main_cold. Link-level symbol will differ unless an asm label is applied."
+  ],
+  "string_names": {},
+  "lines": 21,
+  "trivial": false
+}

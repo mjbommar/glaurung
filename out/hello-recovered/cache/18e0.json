@@ -1,0 +1,32 @@
+{
+  "entry_va": 6368,
+  "raw_name": "__do_global_dtors_aux",
+  "demangled": "__do_global_dtors_aux",
+  "short_name": "do_global_dtors_aux",
+  "rejected_names": [
+    "run_global_destructors",
+    "finalize_module_dtors",
+    "cxa_finalize_wrapper"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.99,
+  "c_prototype": "static void __do_global_dtors_aux(void);",
+  "docstring": "/**\n * @brief Module destructor helper that runs global C++/C destructors exactly once.\n *\n * Invoked by the runtime (registered via `.fini_array` / `__do_global_dtors_aux_fini_array_entry`)\n * during shared-object unload or program termination. The function is idempotent: it\n * uses the file-scope guard variable `completed.0` to ensure the cleanup body executes\n * at most once, regardless of how many times it is called.\n *\n * On the first invocation it:\n *  - Calls `__cxa_finalize(__dso_handle)` (when the symbol is resolved, i.e. non-NULL)\n *    so that any destructors registered via `__cxa_atexit` for this DSO are run.\n *  - Calls `deregister_tm_clones()` to tear down transactional-memory clone tables\n *    that were set up by the matching constructor aux routine.\n *  - Sets `completed.0` to 1 to suppress subsequent executions.\n *\n * @note This function is generated automatically by the toolchain (crtbegin/crtend\n *       glue). It takes no parameters and returns no value. It must not be called\n *       directly by user code.\n */",
+  "source": "static void __do_global_dtors_aux(void)\n{\n    if (completed.0)\n        return;\n\n    if (__cxa_finalize != NULL)\n        __cxa_finalize(__dso_handle);\n\n    deregister_tm_clones();\n    completed.0 = 1;\n}\n",
+  "pseudocode": "fn __do_global_dtors_aux {\n    nop;\n    t10 = *&[var0+0x4150];\n    %zf = (t10 == 0);\n    if (%zf) {\n        goto L_1918;\n    }\n    push(rbp);\n    t10 = *&[var0+0x3fd0];\n    %zf = (t10 == 0x3fd000000000);\n    if (%zf) {\n        goto L_1907;\n    }\n    0x11a0(*&[var0+0x4008]);\n    deregister_tm_clones();\n    &[var0+0x4150] = 1;\n    // x86-64 epilogue: restore rbp\n    return;\n    L_1907:\n    deregister_tm_clones();\n    &[var0+0x4150] = 1;\n    // x86-64 epilogue: restore rbp\n    return;\n    L_1918:\n    return;\n}\n",
+  "assumptions": [
+    "Standard GCC-emitted __do_global_dtors_aux boilerplate; recognized flag at [var0+0x4150] as the `completed.0` guard.",
+    "Recognized call to 0x11a0 as PLT stub for __cxa_finalize, passed __dso_handle (loaded from [var0+0x4008]).",
+    "The check against the constant 0x3fd000000000 is the decompiler's misrendering of a NULL test on __cxa_finalize (weak symbol); collapsed both branches which both call deregister_tm_clones and set the flag.",
+    "Dropped push(rbp)/epilogue as pure calling-convention artifacts."
+  ],
+  "rewrite_confidence": 0.95,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: Original compares loaded qword at [var0+0x3fd0] against literal 0x3fd000000000, which is a decompiler rendering artifact of a RIP-relative NULL test on the weak __cxa_finalize symbol. Rewrite treats this as a plain NULL check, which is the semantically correct interpretation.",
+    "[low] dropped_side_effect: push(rbp) and rbp restore dropped \u2014 pure ABI artifacts with no observable effect."
+  ],
+  "string_names": {},
+  "lines": 26,
+  "trivial": false
+}

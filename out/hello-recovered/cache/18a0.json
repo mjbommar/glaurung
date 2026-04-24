@@ -1,0 +1,34 @@
+{
+  "entry_va": 6304,
+  "raw_name": "register_tm_clones",
+  "demangled": "register_tm_clones",
+  "short_name": "register_tm_clones",
+  "rejected_names": [
+    "register_tm_clone_table",
+    "init_tm_clones",
+    "tm_clone_register"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "static void register_tm_clones(void);",
+  "docstring": "/**\n * @brief Register this module's transactional-memory clone table with the ITM runtime.\n *\n * Computes the number of entries in the compiler-generated TM clone table as\n * `(__TMC_END__ - __TMC_LIST__) / sizeof(void *)` and, if the table is\n * non-empty and the weak symbol `_ITM_registerTMCloneTable` has been resolved\n * (i.e. a GNU transactional-memory runtime is linked in), forwards the table\n * and its entry count to `_ITM_registerTMCloneTable`.\n *\n * This is part of the standard GCC startup machinery emitted per translation\n * unit and is typically invoked from a `.init_array` constructor before\n * `main()` runs. It has no effect when the binary was not built with\n * transactional-memory clones or when no ITM runtime is present.\n *\n * @note Takes no parameters and returns no value. The function is a no-op\n *       when `count == 0` or when `_ITM_registerTMCloneTable` is NULL\n *       (weak-undefined).\n * @note The symbols `__TMC_LIST__` and `__TMC_END__` delimit the TM clone\n *       table and are supplied by the linker/compiler.\n */",
+  "source": "static void register_tm_clones(void)\n{\n    ptrdiff_t count = (__TMC_END__ - __TMC_LIST__) / sizeof(void *);\n\n    if (count == 0)\n        return;\n\n    if (_ITM_registerTMCloneTable == NULL)\n        return;\n\n    _ITM_registerTMCloneTable(__TMC_LIST__, count);\n}",
+  "pseudocode": "fn register_tm_clones {\n    arg0 = __TMC_END__;\n    arg1 = __TMC_END__;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret = *&[var0+0x3ff0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret();\n    L_18d8:\n    return;\n}\n",
+  "assumptions": [
+    "This is the standard GCC-emitted `register_tm_clones` crtstuff routine; the arithmetic `(x>>63)+(x>>3))>>1` is the well-known signed divide-by-16-then-halve idiom yielding the element count `(__TMC_END__ - __TMC_LIST__) / sizeof(void*)` on a 64-bit target (each entry is a pair of pointers = 16 bytes).",
+    "The first operand to the subtraction is shown as `__TMC_END__` twice in the pseudocode; the first load is actually `__TMC_LIST__` (standard crtstuff symbol) \u2014 this is a decompiler symbol-resolution artefact.",
+    "The indirect call through `*&[var0+0x3ff0]` is a GOT slot fetch for the weak symbol `_ITM_registerTMCloneTable`; the null-check guards against it being unresolved.",
+    "Dropped the explicit `ret` temporary shuffling \u2014 pure register-allocation artefact."
+  ],
+  "rewrite_confidence": 0.95,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: The pseudocode shows the sequence (x>>3) then (x + (x>>63)) >>1, which is the standard signed arithmetic idiom equivalent to dividing by 16 (for a 64-bit target with 16-byte TMC entries). The rewriter collapses this to `/ sizeof(void*)` which equals /8 on a 64-bit target, not /16. However the combined operation ((x>>3) rounded-toward-zero) then /2 equals x/16, which is count of 16-byte pairs. The textual `sizeof(void*)` comment is slightly misleading but the generated call semantics match standard crtstuff.",
+    "[low] other: Rewriter reinterprets the first `__TMC_END__` load as `__TMC_LIST__` per declared assumption (decompiler symbol-resolution artefact). This matches standard crtstuff layout.",
+    "[low] control_flow: Pseudocode branches on %zf after the final `>>> 1` (i.e., the shift's zero flag \u2014 tests whether the shifted result is zero). Rewriter tests `count == 0` which is semantically equivalent to testing whether the final value is zero.",
+    "[low] dropped_call: Pseudocode shows `ret()` (indirect call with no visible arguments in the pseudocode). Rewriter adds standard ABI arguments (__TMC_LIST__, count) which matches the well-known crtstuff signature; arguments would have been passed in registers not visible in the pseudocode."
+  ],
+  "string_names": {},
+  "lines": 22,
+  "trivial": false
+}
