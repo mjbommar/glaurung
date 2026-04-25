@@ -167,6 +167,69 @@ def language_from_source_path(source_path: Optional[str]) -> Optional[str]:
 
 
 @dataclass
+class TypeKBMetrics:
+    """Counts from the persistent type / xref tables a fresh KB
+    builds when `auto_load_stdlib=True` runs on this binary. Tracks
+    everything #172/#163/#195 produce: stdlib prototypes, propagated
+    slot types, auto-discovered struct candidates."""
+    stdlib_prototypes: int = 0
+    propagated_slots: int = 0
+    auto_struct_candidates: int = 0
+    functions_scanned: int = 0
+
+
+def type_kb_metrics(
+    binary_path: str, funcs, *, max_functions: int = 16
+) -> "TypeKBMetrics":
+    """Open a temp KB with stdlib auto-load, run propagation +
+    struct-discovery on the first `max_functions` named functions,
+    return aggregate counts. All values zero on any internal failure."""
+    try:
+        import tempfile
+        from pathlib import Path as _Path
+
+        from glaurung.llm.kb import type_db as _type_db
+        from glaurung.llm.kb import xref_db as _xref_db
+        from glaurung.llm.kb.persistent import PersistentKnowledgeBase
+
+        named = [f for f in funcs if f.basic_blocks][:max_functions]
+        if not named:
+            return TypeKBMetrics()
+        with tempfile.TemporaryDirectory() as td:
+            db = _Path(td) / "bench-typekb.glaurung"
+            kb = PersistentKnowledgeBase.open(
+                db, binary_path=_Path(binary_path), auto_load_stdlib=True,
+            )
+            stdlib_protos = len(_xref_db.list_function_prototypes(kb))
+            _xref_db.index_callgraph(kb, binary_path)
+
+            propagated = 0
+            auto_structs = 0
+            for f in named:
+                try:
+                    _xref_db.discover_stack_vars(
+                        kb, binary_path, int(f.entry_point.value),
+                    )
+                    propagated += _xref_db.propagate_types_at_callsites(
+                        kb, binary_path, int(f.entry_point.value),
+                    )
+                    auto_structs += _type_db.discover_struct_candidates(
+                        kb, binary_path, int(f.entry_point.value),
+                    )
+                except Exception:
+                    continue
+            kb.close()
+        return TypeKBMetrics(
+            stdlib_prototypes=stdlib_protos,
+            propagated_slots=propagated,
+            auto_struct_candidates=auto_structs,
+            functions_scanned=len(named),
+        )
+    except Exception:
+        return TypeKBMetrics()
+
+
+@dataclass
 class StackFrameMetrics:
     """Counts of stack-frame slots discoverable across the analysed
     functions. Drives a regression signal for #191/#192/#194 — every

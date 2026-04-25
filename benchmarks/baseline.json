@@ -1,5 +1,5 @@
 {
-  "glaurung_commit": "23dff9ef663d0953909f5fd8b4da2c8b82265af7",
+  "glaurung_commit": "a733037f0bd18482850265a22c7f39f29fd4c2ea",
   "schema_version": "1",
   "scorecards": [
     {
@@ -38,11 +38,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 5.1,
+        "analysis_ms": 4.1,
         "debug_info_ms": 0.2,
         "decompile_ms": 11.8,
-        "stack_frame_ms": 2944.6,
-        "triage_ms": 31.1
+        "stack_frame_ms": 5613.9,
+        "triage_ms": 30.8,
+        "type_kb_ms": 214.4
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -61,6 +62,12 @@
         "detected_language": "c",
         "expected_language": "c",
         "language_match": true
+      },
+      "type_kb": {
+        "auto_struct_candidates": 0,
+        "functions_scanned": 7,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     },
     {
@@ -99,11 +106,12 @@
         "with_chunks_gt_one": 1
       },
       "elapsed_ms": {
-        "analysis_ms": 4.8,
-        "debug_info_ms": 0.2,
-        "decompile_ms": 60.7,
-        "stack_frame_ms": 127.2,
-        "triage_ms": 10.7
+        "analysis_ms": 5.0,
+        "debug_info_ms": 0.3,
+        "decompile_ms": 61.8,
+        "stack_frame_ms": 128.4,
+        "triage_ms": 10.2,
+        "type_kb_ms": 387.3
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -122,6 +130,12 @@
         "detected_language": "cpp",
         "expected_language": "cpp",
         "language_match": true
+      },
+      "type_kb": {
+        "auto_struct_candidates": 21,
+        "functions_scanned": 11,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     },
     {
@@ -160,11 +174,12 @@
         "with_chunks_gt_one": 1
       },
       "elapsed_ms": {
-        "analysis_ms": 4.8,
+        "analysis_ms": 5.0,
         "debug_info_ms": 0.2,
-        "decompile_ms": 60.5,
-        "stack_frame_ms": 124.7,
-        "triage_ms": 11.0
+        "decompile_ms": 60.7,
+        "stack_frame_ms": 127.3,
+        "triage_ms": 8.1,
+        "type_kb_ms": 377.6
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -183,6 +198,12 @@
         "detected_language": "cpp",
         "expected_language": "cpp",
         "language_match": true
+      },
+      "type_kb": {
+        "auto_struct_candidates": 21,
+        "functions_scanned": 11,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     },
     {
@@ -221,11 +242,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 2.0,
-        "debug_info_ms": 0.3,
-        "decompile_ms": 17.4,
-        "stack_frame_ms": 83.4,
-        "triage_ms": 12.2
+        "analysis_ms": 2.1,
+        "debug_info_ms": 0.2,
+        "decompile_ms": 17.5,
+        "stack_frame_ms": 81.6,
+        "triage_ms": 12.5,
+        "type_kb_ms": 241.3
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -244,6 +266,12 @@
         "detected_language": "fortran",
         "expected_language": "fortran",
         "language_match": true
+      },
+      "type_kb": {
+        "auto_struct_candidates": 0,
+        "functions_scanned": 7,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     },
     {
@@ -283,10 +311,11 @@
       },
       "elapsed_ms": {
         "analysis_ms": 1.5,
-        "debug_info_ms": 0.3,
+        "debug_info_ms": 0.4,
         "decompile_ms": 13.0,
-        "stack_frame_ms": 76.8,
-        "triage_ms": 9.9
+        "stack_frame_ms": 82.4,
+        "triage_ms": 10.3,
+        "type_kb_ms": 240.6
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -305,6 +334,12 @@
         "detected_language": "c",
         "expected_language": "c",
         "language_match": true
+      },
+      "type_kb": {
+        "auto_struct_candidates": 0,
+        "functions_scanned": 7,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     },
     {
@@ -343,11 +378,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 7.6,
-        "debug_info_ms": 0.3,
-        "decompile_ms": 119.0,
-        "stack_frame_ms": 160.0,
-        "triage_ms": 10.9
+        "analysis_ms": 7.9,
+        "debug_info_ms": 0.2,
+        "decompile_ms": 122.9,
+        "stack_frame_ms": 167.4,
+        "triage_ms": 11.2,
+        "type_kb_ms": 499.4
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -366,6 +402,12 @@
         "detected_language": "cpp",
         "expected_language": "cpp",
         "language_match": true
+      },
+      "type_kb": {
+        "auto_struct_candidates": 21,
+        "functions_scanned": 13,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     },
     {
@@ -404,11 +446,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 16.5,
-        "debug_info_ms": 1.6,
-        "decompile_ms": 386.6,
-        "stack_frame_ms": 592.6,
-        "triage_ms": 32.1
+        "analysis_ms": 16.8,
+        "debug_info_ms": 1.4,
+        "decompile_ms": 382.9,
+        "stack_frame_ms": 609.6,
+        "triage_ms": 32.7,
+        "type_kb_ms": 1796.0
       },
       "error": null,
       "flags": "-O0 -g -Wall -Wextra",
@@ -427,6 +470,12 @@
         "detected_language": "cpp",
         "expected_language": "cpp",
         "language_match": true
+      },
+      "type_kb": {
+        "auto_struct_candidates": 16,
+        "functions_scanned": 16,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     },
     {
@@ -465,11 +514,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 4.1,
+        "analysis_ms": 4.2,
         "debug_info_ms": 0.2,
-        "decompile_ms": 41.1,
-        "stack_frame_ms": 83.8,
-        "triage_ms": 8.8
+        "decompile_ms": 43.9,
+        "stack_frame_ms": 86.1,
+        "triage_ms": 8.9,
+        "type_kb_ms": 254.1
       },
       "error": null,
       "flags": "-O2 -Wl,-s",
@@ -488,6 +538,12 @@
         "detected_language": "cpp",
         "expected_language": "cpp",
         "language_match": true
+      },
+      "type_kb": {
+        "auto_struct_candidates": 16,
+        "functions_scanned": 8,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     },
     {
@@ -526,11 +582,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 1.9,
-        "debug_info_ms": 0.2,
-        "decompile_ms": 29.9,
-        "stack_frame_ms": 150.8,
-        "triage_ms": 8.7
+        "analysis_ms": 2.0,
+        "debug_info_ms": 0.3,
+        "decompile_ms": 30.5,
+        "stack_frame_ms": 153.0,
+        "triage_ms": 6.3,
+        "type_kb_ms": 447.8
       },
       "error": null,
       "flags": null,
@@ -549,6 +606,12 @@
         "detected_language": "c",
         "expected_language": null,
         "language_match": false
+      },
+      "type_kb": {
+        "auto_struct_candidates": 0,
+        "functions_scanned": 14,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     },
     {
@@ -587,11 +650,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 1.1,
+        "analysis_ms": 1.0,
         "debug_info_ms": 0.2,
-        "decompile_ms": 9.0,
+        "decompile_ms": 8.9,
         "stack_frame_ms": 0.1,
-        "triage_ms": 12.9
+        "triage_ms": 9.8,
+        "type_kb_ms": 268.8
       },
       "error": null,
       "flags": null,
@@ -610,6 +674,12 @@
         "detected_language": "c",
         "expected_language": null,
         "language_match": false
+      },
+      "type_kb": {
+        "auto_struct_candidates": 0,
+        "functions_scanned": 9,
+        "propagated_slots": 0,
+        "stdlib_prototypes": 83
       }
     }
   ],
@@ -623,6 +693,7 @@
       "name_match_rate_avg": 0.9
     },
     "totals": {
+      "auto_struct_candidates": 95,
       "cold_orphans": 0,
       "decompiled_failed": 0,
       "decompiled_ok": 103,
@@ -632,8 +703,9 @@
       "functions_named": 94,
       "functions_with_stack_slots": 68,
       "multi_chunk_functions": 2,
+      "propagated_slots": 0,
       "stack_frame_slots": 754
     }
   },
-  "timestamp": "2026-04-25T14:52:38.046637+00:00"
+  "timestamp": "2026-04-25T15:26:29.008179+00:00"
 }

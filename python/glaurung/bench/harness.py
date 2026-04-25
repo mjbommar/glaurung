@@ -22,6 +22,7 @@ from .metrics import (
     FunctionDiscoveryMetrics,
     StackFrameMetrics,
     TriageMetrics,
+    TypeKBMetrics,
     callgraph_metrics,
     debug_info_metrics,
     decompile_metrics,
@@ -29,6 +30,7 @@ from .metrics import (
     language_from_source_path,
     stack_frame_metrics,
     triage_metrics,
+    type_kb_metrics,
 )
 
 # Default per-function decompile timeout. Generous enough to survive a
@@ -57,6 +59,7 @@ class BinaryScorecard:
     decompile: dict
     debug_info: dict = field(default_factory=dict)
     stack_frame: dict = field(default_factory=dict)
+    type_kb: dict = field(default_factory=dict)
 
     elapsed_ms: dict = field(default_factory=dict)
     error: Optional[str] = None
@@ -122,6 +125,10 @@ class BenchSummary:
                 "stack_frame_slots": total_int("stack_frame.total_slots"),
                 "functions_with_stack_slots": total_int(
                     "stack_frame.functions_with_slots"
+                ),
+                "propagated_slots": total_int("type_kb.propagated_slots"),
+                "auto_struct_candidates": total_int(
+                    "type_kb.auto_struct_candidates"
                 ),
             },
             "rates": {
@@ -342,6 +349,10 @@ def run_one_binary(
     sf = stack_frame_metrics(str(binary), funcs_for_metrics)
     stack_ms = (time.perf_counter() - stack_started) * 1000
 
+    typekb_started = time.perf_counter()
+    tkb = type_kb_metrics(str(binary), funcs_for_metrics)
+    typekb_ms = (time.perf_counter() - typekb_started) * 1000
+
     return BinaryScorecard(
         binary_path=str(binary),
         metadata_path=str(meta_path) if meta_path else None,
@@ -356,12 +367,14 @@ def run_one_binary(
         decompile=asdict(dec),
         debug_info=asdict(dbg),
         stack_frame=asdict(sf),
+        type_kb=asdict(tkb),
         elapsed_ms={
             "triage_ms": round(triage_ms, 1),
             "analysis_ms": round(analysis_ms, 1),
             "decompile_ms": round(decompile_ms, 1),
             "debug_info_ms": round(debug_ms, 1),
             "stack_frame_ms": round(stack_ms, 1),
+            "type_kb_ms": round(typekb_ms, 1),
         },
     )
 
@@ -456,6 +469,8 @@ def to_markdown(summary: BenchSummary) -> str:
                      f"(structs with fields: {totals.get('dwarf_structs_with_fields', 0)})")
         lines.append(f"- Stack-frame slots: **{totals.get('stack_frame_slots', 0)}** "
                      f"(across {totals.get('functions_with_stack_slots', 0)} functions)")
+        lines.append(f"- Type-KB lift: **{totals.get('propagated_slots', 0)}** propagated, "
+                     f"**{totals.get('auto_struct_candidates', 0)}** auto-struct candidates")
         lines.append("")
         lines.append("## Rates")
         lines.append(f"- Symbol-name resolution (avg): **{rates.get('name_match_rate_avg', 0):.1%}**")
