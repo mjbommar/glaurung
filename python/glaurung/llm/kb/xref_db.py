@@ -814,6 +814,210 @@ def import_stdlib_prototypes(
     return summary
 
 
+# ---------------------------------------------------------------------------
+# Cross-function type propagation v2 (#195)
+# ---------------------------------------------------------------------------
+
+# x86_64 SysV ABI integer/pointer argument registers, in order. Most
+# of libc/POSIX/WinAPI lives in this calling convention on Linux.
+_SYSV_ARG_REGS_X64: List[Tuple[str, str, str]] = [
+    # (full 64-bit, 32-bit, 8-bit) so we recognize both `mov rdi, ...`
+    # and `mov edi, ...` writes targeting the same logical arg slot.
+    ("rdi", "edi", "dil"),
+    ("rsi", "esi", "sil"),
+    ("rdx", "edx", "dl"),
+    ("rcx", "ecx", "cl"),
+    ("r8",  "r8d", "r8b"),
+    ("r9",  "r9d", "r9b"),
+]
+
+
+def _operand_destination_register(op: str) -> Optional[str]:
+    """For a single operand string, return the canonical 64-bit register
+    name if the operand is one of the SysV arg registers (in any width).
+    Returns None for memory operands or unrelated registers."""
+    s = op.strip().lower()
+    # Reject anything bracketed (memory operand) or with a colon prefix.
+    if "[" in s or "]" in s:
+        return None
+    if ":" in s:
+        s = s.split(":", 1)[-1].strip()
+    s = s.strip()
+    for full, mid, low in _SYSV_ARG_REGS_X64:
+        if s in (full, mid, low):
+            return full
+    return None
+
+
+def _operand_source_frame_offset(op: str) -> Optional[int]:
+    """Reuse the stack-frame parser to extract `[rbp-N]` / `[rsp+N]`
+    from a source operand."""
+    return _parse_frame_offset(op)
+
+
+def propagate_types_at_callsites(
+    kb: PersistentKnowledgeBase,
+    binary_path: str,
+    function_va: int,
+    *,
+    max_lookback: int = 32,
+    max_instructions: int = 1024,
+    window_bytes: int = 8192,
+) -> int:
+    """Walk every call site inside `function_va` and apply each
+    callee's prototype parameter types to the originating stack-frame
+    slots.
+
+    Algorithm:
+        - Disassemble the function.
+        - For each `call` instruction whose target name has a known
+          prototype, iterate backward up to `max_lookback` instructions
+          looking for `mov <arg_reg_i>, <src>` where `src` is a stack
+          slot — for each i ∈ [0, min(6, len(params))).
+        - When found, write the prototype param's c_type onto
+          stack_frame_vars[function_va, slot_offset]. Auto-discovered
+          slots get retyped; manual slots are preserved.
+
+    Returns the number of (slot, param) pairs whose c_type was
+    refined. Fast on small functions; degrades gracefully on
+    optimized code (just finds fewer matches).
+
+    No SSA / no constant propagation in v1: a write to `rdi` between
+    here and the call, or an indirect parameter load via another
+    register, defeats the heuristic. v2 adds those refinements.
+    """
+    _ensure_schema(kb._conn)
+    try:
+        import glaurung as g
+        ins = g.disasm.disassemble_window_at(
+            str(binary_path), int(function_va),
+            window_bytes=window_bytes, max_instructions=max_instructions,
+        )
+    except Exception:
+        return 0
+    if not ins:
+        return 0
+
+    # Pre-build name → prototype lookup (single SQL hit).
+    protos = {p.function_name: p for p in list_function_prototypes(kb)}
+    if not protos:
+        return 0
+
+    # Pre-build name → entry-VA map so we can resolve `call <hex>` to a
+    # known function name when the operand is a literal address. Also
+    # fold in the ELF PLT map: imported libc functions (printf, strlen,
+    # ...) are reached via PLT thunks that don't appear as discovered
+    # Functions, so we wouldn't otherwise resolve them.
+    name_by_va: dict[int, str] = {
+        n.entry_va: n.canonical for n in list_function_names(kb)
+    }
+    try:
+        plt_pairs = g.analysis.elf_plt_map_path(
+            str(binary_path), 100_000_000, 100_000_000,
+        ) or []
+        for va, name in plt_pairs:
+            # Strip the @plt suffix so 'printf@plt' → 'printf' matches
+            # the prototype bundle keys.
+            clean = str(name).split("@", 1)[0]
+            name_by_va.setdefault(int(va), clean)
+    except Exception:
+        pass
+
+    refinements = 0
+    for idx, inst in enumerate(ins):
+        if inst.mnemonic.lower() != "call":
+            continue
+        # Resolve the call target name.
+        target_name = _resolve_call_target_name(inst, name_by_va)
+        if target_name is None:
+            continue
+        # Strip libc PLT decoration (`puts@plt` → `puts`) and demangler
+        # noise so the prototype lookup still hits.
+        clean = target_name.split("@", 1)[0]
+        proto = protos.get(clean) or protos.get(target_name)
+        if proto is None:
+            continue
+
+        params = proto.params[: len(_SYSV_ARG_REGS_X64)]
+        if not params:
+            continue
+
+        # Track which arg registers we've already filled so an inner
+        # `mov rdi, ...` doesn't overwrite an outer `mov rdx, ...` in
+        # later iterations.
+        filled: dict[str, int] = {}
+        lookback_end = max(0, idx - max_lookback)
+        for back_idx in range(idx - 1, lookback_end - 1, -1):
+            prev = ins[back_idx]
+            mnem = prev.mnemonic.lower()
+            if mnem in ("call", "jmp"):
+                # Crossed a basic-block boundary — stop scanning.
+                break
+            if mnem not in ("mov", "lea"):
+                continue
+            if len(prev.operands) < 2:
+                continue
+            dst_reg = _operand_destination_register(str(prev.operands[0]))
+            if dst_reg is None:
+                continue
+            src_off = _operand_source_frame_offset(str(prev.operands[1]))
+            if src_off is None:
+                continue
+            # Match dst_reg to a parameter index.
+            param_idx = next(
+                (i for i, regs in enumerate(_SYSV_ARG_REGS_X64) if regs[0] == dst_reg),
+                None,
+            )
+            if param_idx is None or param_idx >= len(params):
+                continue
+            if dst_reg in filled:
+                # Earlier (= closer to call) write already won.
+                continue
+            filled[dst_reg] = src_off
+
+            # Refine the slot's c_type. Don't touch manual slots.
+            existing = get_stack_var(kb, function_va, src_off)
+            if existing is not None and existing.set_by == "manual":
+                continue
+            param = params[param_idx]
+            set_stack_var(
+                kb, function_va, src_off,
+                name=(existing.name if existing else _default_var_name(src_off)),
+                c_type=param.c_type,
+                use_count=(existing.use_count if existing else 1),
+                set_by="propagated",
+            )
+            refinements += 1
+    return refinements
+
+
+def _resolve_call_target_name(
+    inst, name_by_va: dict
+) -> Optional[str]:
+    """Try several ways the disassembler might encode a call target.
+    Operand strings can be a hex literal (`0x1180`), a register
+    indirection (`rax`), or a symbolic label.
+
+    Returns the resolved name (a string), or None if the target can't
+    be statically pinned down — which is the common case for indirect
+    calls.
+    """
+    if not inst.operands:
+        return None
+    op = str(inst.operands[0]).strip()
+    # Direct call to a literal VA.
+    if op.startswith("0x") or op.startswith("0X"):
+        try:
+            va = int(op, 16)
+        except ValueError:
+            return None
+        return name_by_va.get(va)
+    # Some disassemblers emit a label or symbolic name directly.
+    if op and not op.startswith("[") and " " not in op:
+        return op
+    return None
+
+
 def borrow_symbols_from_donor(
     target_kb: PersistentKnowledgeBase,
     target_binary_path: str,

@@ -316,6 +316,27 @@ class ReplCommand(BaseCommand):
             type_db.add_struct(kb, name, fields, set_by="manual")
             sys.stdout.write(f"  struct {name} ({len(fields)} fields) saved\n")
 
+        def cmd_propagate(argv: List[str]) -> None:
+            """propagate          — run type propagation at current
+            function's call sites: prototype param c_type → originating
+            stack slot. Refines `var_*` slot types to the libc shapes
+            from #172 prototypes (printf's fmt → const char *, etc.)."""
+            here_va = _here()
+            if here_va is None:
+                sys.stdout.write("(set position with `goto` first)\n")
+                return
+            func_va = _enclosing_function_va(here_va)
+            if func_va is None:
+                sys.stdout.write(f"no function contains {here_va:#x}\n")
+                return
+            n = xref_db.propagate_types_at_callsites(
+                kb, str(ctx.file_path), func_va,
+            )
+            sys.stdout.write(
+                f"  refined types on {n} stack slot(s) in fn@{func_va:#x}\n"
+            )
+            kb.save()
+
         def cmd_proto(argv: List[str]) -> None:
             """proto                     — list known function prototypes
             proto <name>              — show one prototype
@@ -576,6 +597,7 @@ class ReplCommand(BaseCommand):
             "label": cmd_label,
             "borrow": cmd_borrow,
             "proto": cmd_proto,
+            "propagate": cmd_propagate,
             "strings": cmd_strings, "s": cmd_strings,
             "ask": cmd_ask,
         }
@@ -715,6 +737,7 @@ glaurung repl commands
     proto                       list loaded function prototypes
     proto <name>                show one prototype (e.g. printf)
     proto set <name> <return> [<param>:<type> ...]   analyst override
+    propagate                   refine slot types from prototype params
     save                        force a save (also automatic on every edit)
 
   Inspection
