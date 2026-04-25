@@ -115,6 +115,33 @@ CREATE TABLE IF NOT EXISTS function_prototypes (
 CREATE INDEX IF NOT EXISTS idx_protos_binary
     ON function_prototypes(binary_id);
 
+-- Evidence log (#200 v0). Every deterministic tool invocation that
+-- produces an answer the agent might quote should land here as a row.
+-- The cite_id is the stable identifier that propagates into the
+-- agent's natural-language output (`...calls recv() at 0x1340 [cite #42]`),
+-- and a chat-UI client renders rows here as expandable evidence panes.
+--
+-- v0 ships the substrate; per-tool migration to populate this is
+-- v2 (#200 follow-up). Pre-existing tools keep working unchanged.
+CREATE TABLE IF NOT EXISTS evidence_log (
+    cite_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    binary_id INTEGER NOT NULL,
+    tool TEXT NOT NULL,             -- e.g. "view_hex", "decompile_function"
+    args_json TEXT NOT NULL,        -- inputs the tool was called with
+    summary TEXT NOT NULL,          -- short human-readable description
+    va_start INTEGER,               -- nullable: VA range this evidence covers
+    va_end INTEGER,                 -- exclusive end
+    file_offset INTEGER,            -- nullable file-offset alternative
+    output_json TEXT,               -- structured output (caller-defined schema)
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_binary
+    ON evidence_log(binary_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_tool
+    ON evidence_log(binary_id, tool);
+CREATE INDEX IF NOT EXISTS idx_evidence_va
+    ON evidence_log(binary_id, va_start);
+
 -- Stack-frame variables (#191). One row per (function, frame offset).
 -- Negative offsets are below rbp (locals); positive are above (saved
 -- regs / spill area / red-zone). Auto-discovery seeds rows with
@@ -1216,6 +1243,157 @@ def _resolve_call_target_name(
     if op and not op.startswith("[") and " " not in op:
         return op
     return None
+
+
+# ---------------------------------------------------------------------------
+# Evidence log (#200 v0)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Evidence:
+    """One row in the evidence_log: a cited tool invocation."""
+    cite_id: int
+    tool: str
+    args: dict
+    summary: str
+    va_start: Optional[int]
+    va_end: Optional[int]
+    file_offset: Optional[int]
+    output: Optional[dict]
+    created_at: int
+
+
+def record_evidence(
+    kb: PersistentKnowledgeBase,
+    tool: str,
+    args: dict,
+    summary: str,
+    *,
+    va_start: Optional[int] = None,
+    va_end: Optional[int] = None,
+    file_offset: Optional[int] = None,
+    output: Optional[dict] = None,
+) -> int:
+    """Persist an evidence row and return its `cite_id`. The cite_id
+    is the stable handle the agent embeds in its natural-language
+    output (`[cite #42]`); the chat UI renders rows here as
+    expandable evidence panes.
+
+    `args`, `output` are dict — JSON-serialised for storage so any
+    pickleable shape is acceptable. Passing complex objects that
+    don't round-trip through json.dumps will raise TypeError; callers
+    are expected to flatten to primitives.
+    """
+    import json
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "INSERT INTO evidence_log "
+        "(binary_id, tool, args_json, summary, va_start, va_end, file_offset, output_json, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            kb.binary_id, tool,
+            json.dumps(args, default=str, sort_keys=True),
+            summary,
+            int(va_start) if va_start is not None else None,
+            int(va_end) if va_end is not None else None,
+            int(file_offset) if file_offset is not None else None,
+            json.dumps(output, default=str, sort_keys=True) if output is not None else None,
+            int(time.time()),
+        ),
+    )
+    cite_id = cur.lastrowid
+    kb._conn.commit()
+    return int(cite_id)
+
+
+def get_evidence(
+    kb: PersistentKnowledgeBase, cite_id: int,
+) -> Optional[Evidence]:
+    import json
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT cite_id, tool, args_json, summary, va_start, va_end, file_offset, output_json, created_at "
+        "FROM evidence_log WHERE binary_id = ? AND cite_id = ?",
+        (kb.binary_id, int(cite_id)),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return Evidence(
+        cite_id=int(row[0]),
+        tool=row[1],
+        args=json.loads(row[2] or "{}"),
+        summary=row[3],
+        va_start=row[4],
+        va_end=row[5],
+        file_offset=row[6],
+        output=json.loads(row[7]) if row[7] else None,
+        created_at=int(row[8]),
+    )
+
+
+def list_evidence(
+    kb: PersistentKnowledgeBase,
+    *,
+    tool: Optional[str] = None,
+    va: Optional[int] = None,
+    limit: int = 256,
+) -> List[Evidence]:
+    """Return evidence rows filtered by tool name and/or by VA range
+    membership. Sorted newest-first so the agent picks up its most
+    recent observations on a re-prompt."""
+    import json
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    sql = (
+        "SELECT cite_id, tool, args_json, summary, va_start, va_end, "
+        "file_offset, output_json, created_at "
+        "FROM evidence_log WHERE binary_id = ?"
+    )
+    params: list = [kb.binary_id]
+    if tool is not None:
+        sql += " AND tool = ?"
+        params.append(tool)
+    if va is not None:
+        # Match rows where va_start <= va < va_end. Rows with NULL
+        # va_start always pass the filter — they're whole-file evidence.
+        sql += " AND (va_start IS NULL OR (va_start <= ? AND va_end > ?))"
+        params.extend([int(va), int(va)])
+    sql += " ORDER BY cite_id DESC LIMIT ?"
+    params.append(int(limit))
+    cur.execute(sql, params)
+    return [
+        Evidence(
+            cite_id=int(r[0]), tool=r[1],
+            args=json.loads(r[2] or "{}"),
+            summary=r[3],
+            va_start=r[4], va_end=r[5], file_offset=r[6],
+            output=json.loads(r[7]) if r[7] else None,
+            created_at=int(r[8]),
+        )
+        for r in cur.fetchall()
+    ]
+
+
+def render_evidence_markdown(evs: List[Evidence], *, max_args_chars: int = 120) -> str:
+    """Compact Markdown rendering for the chat UI. Keeps the args
+    JSON one-line and truncated so the cite pane stays readable."""
+    if not evs:
+        return "_no evidence rows_\n"
+    import json
+    lines = ["| cite | tool | summary | range |", "|---:|---|---|---|"]
+    for e in evs:
+        rng = ""
+        if e.va_start is not None:
+            rng = f"`{e.va_start:#x}…{e.va_end:#x}`" if e.va_end else f"`{e.va_start:#x}`"
+        elif e.file_offset is not None:
+            rng = f"off `{e.file_offset:#x}`"
+        lines.append(
+            f"| #{e.cite_id} | `{e.tool}` | {e.summary} | {rng} |"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def borrow_symbols_from_donor(
