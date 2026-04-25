@@ -10,46 +10,73 @@ A modern reverse engineering framework designed to replace Ghidra with first-cla
 
 Glaurung aims to be what Ghidra would look like if built today: a modern architecture leveraging Rust's performance and safety, Python's accessibility, and AI agents integrated at every level of binary analysis. Not just AI-assisted, but AI-native - from format detection to decompilation.
 
-## At a Glance: High‑Level Comparison + Roadmap
+## At a Glance: Capability Comparison
 
-| Capability | Glaurung (Now) | Roadmap | IDA Pro | Ghidra | Cutter/r2 |
-|---|---|---|---|---|---|
-| Core intent | AI‑native, automation‑first | — | Interactive RE | Interactive RE | Interactive RE |
-| Platforms/arches | Mainstream OS + multi‑arch | Broader parity | Very broad | Broad | Broad |
-| Disassembly | Multi‑arch, bounded | Arch depth/parity | Yes | Yes | Yes |
-| Decompilation | — | Planned (IR → C‑like) | Yes (Hex‑Rays) | Yes | Yes |
-| Analysis depth | Triage, symbols, graphs, names/strings | Types/prototypes | Deep | Deep | Moderate |
-| Automation/API | Python/Rust, JSON/JSONL | Stable plugin API | SDK, IDC/Python | Headless/Java | r2pipe/CLI |
-| AI integration | Built‑in evidence + naming | Typing/vuln agents | Limited/3rd‑party | Limited/3rd‑party | Limited/3rd‑party |
-| Scale/batch | Deterministic budgets | — | Scriptable, heavier | Scriptable | Strong |
-| UI | CLI; UI planned | TUI/HTML, Web | Mature GUI | Mature GUI | Mature GUI |
-| License/Cost | OSS | — | Commercial | OSS | OSS |
-
-Notes
-- “Bounded” means deterministic, time/size‑guarded analysis suited for CI and LLM pipelines.
-- Evidence is a first‑class artifact: compact, structured, and multi‑format (plain/rich/JSON/JSONL).
+| Capability | Glaurung | IDA Pro | Ghidra | Cutter/r2 |
+|---|---|---|---|---|
+| Core intent | AI‑native, automation‑first | Interactive RE | Interactive RE | Interactive RE |
+| Disassembly | x86/x64, ARM64/ARM, RISC‑V | Very broad | Broad | Broad |
+| Function discovery | Heuristic + DWARF + FLIRT‑lite + vtable walker | Yes | Yes | Yes |
+| Function chunks | Native (`<fn>.cold`, `.part.N` auto‑folded) | Yes | Yes | Limited |
+| Decompilation | IR → C‑like pseudocode (rough) | Hex‑Rays (best) | P‑Code (very good) | Yes |
+| Type system | Persistent KB + DWARF + stdlib bundles + auto‑recovery | TIL files | GDT files | Limited |
+| Stack‑frame vars | Persistent + auto‑discovery + propagation | Yes | Yes | Yes |
+| Symbol borrowing | Cross‑binary (FLIRT + sibling‑debug donor) | FLIRT + Lumina | FunctionID + BSim | Limited |
+| Demangler | Itanium / Rust v0+legacy / MSVC | Yes | Yes | Yes |
+| Persistence | SQLite `.glaurung` project files (sessions, names, types, comments, xrefs) | IDB | GZF | Limited |
+| Bench/regression harness | Per‑commit deterministic scorecard (`python -m glaurung.bench`) | — | — | — |
+| AI integration | Built‑in `pydantic-ai` agent with 50+ memory tools | 3rd‑party | 3rd‑party | 3rd‑party |
+| Plugin/scripting | REPL (`glaurung repl`), Python API | SDK, IDC/Python | Headless/Java/Python | r2pipe/CLI |
+| UI | CLI + REPL; UI planned | Mature GUI | Mature GUI | Mature GUI |
+| License/Cost | OSS (MIT) | Commercial | OSS | OSS |
 
 ## Current Status
 
-**This is early work in progress.** The foundation is being built with the triage and analysis pipeline operational, but full disassembly, decompilation, and AI integration are still under development.
+Active development. Foundations and analyst‑facing surface area are largely in place; the active frontier is decompiler quality (control‑flow structuring, type‑aware re‑render).
 
 ### What Works Now
 
+**Static analysis pipeline**
 - Multi‑format triage (ELF/PE/Mach‑O), entry/arch/endian, safe VA mapping
 - Bounded multi‑arch disassembly windows (x86/x64, ARM64/ARM, RISC‑V)
-- Fast function discovery with callgraph/CFG (under budgets)
-- Practical name resolution (symbols + PLT/GOT/IAT) across OS/arch
+- Function discovery with callgraph/CFG, function‑chunk model for non‑contiguous functions (auto‑folds GCC `<fn>.cold` and `.part.N` splits)
+- Symbol resolution: defined symbols + PLT/GOT/IAT + DWARF subprograms (chunk‑aware) + FLIRT prologue match for stripped binaries + vtable walker for virtual methods
+- Demangler pass: Itanium / Rust v0+legacy / MSVC — every persisted name carries both raw and pretty forms
 - Strings + IOC detection, entropy/overlay, similarity (CTPH)
-- LLM‑ready evidence bundles (plain/rich/JSON/JSONL)
-- Python API (Rust core via PyO3)
 
-### What's Coming
+**Persistent knowledge base** (`.glaurung` SQLite project files)
+- Session‑scoped: function names, comments (per‑VA), data labels, struct/enum/typedef definitions, xrefs, stack‑frame vars, function prototypes
+- `set_by` provenance (manual / dwarf / stdlib / flirt / propagated / auto / borrowed) with manual‑always‑wins precedence
+- Schema migrations applied transparently on open
 
-- Mach‑O stubs/lazy pointers → name parity with ELF/PE
-- ARM depth: Thumb mode; AArch64 literal reconstruction (ADRP+MOVZ/MOVK)
-- Decompiler: IR lifting → C‑like output; type/prototype hints
-- Evidence UX: source tags, richer per‑arch annotations
-- UI + Plugins: minimal TUI/HTML, web UI; stable plugin/export APIs
+**Type system**
+- DWARF type ingestion (struct/union/enum/typedef with field bodies and resolved c_type)
+- Standard‑library type bundles ship by default: 75+ canonical libc/POSIX/WinAPI types (`size_t`, `FILE *`, `HANDLE`, `struct stat`, `struct sockaddr`, `errno_e`, …)
+- 77 canonical libc/POSIX function prototypes (printf/strlen/malloc/socket/pthread_*)
+- Auto‑struct recovery from `[reg+offset]` access patterns (no DWARF required)
+- Cross‑function type propagation: callsite arg → callee prototype param → originating stack slot
+
+**Cross‑binary**
+- Symbol borrowing from a debug‑build sibling: `glaurung repl` `borrow <donor>`
+- FLIRT‑style signature library + matcher (default library committed at `data/sigs/glaurung-base.x86_64.flirt.json`)
+
+**LLM tools**
+- 50+ deterministic memory tools registered with the `pydantic-ai` agent: `view_hex`, `search_byte_pattern`, `scan_until_byte`, `decompile_function`, `view_function`, `view_strings`, `list_xrefs_*`, `propose_types_for_function`, `verify_semantic_equivalence`, etc.
+- Source‑recovery orchestrator (`scripts/recover_source.py`) — multi‑LLM pipeline that lifts a binary into idiomatic C/C++/Rust source with audit report
+
+**Operator tooling**
+- `glaurung repl <binary>`: navigation, rename, comment, struct, locals (discover/rename), label, borrow, proto, propagate, recover‑structs, ask
+- `glaurung graph <binary> callgraph | cfg <fn>`: DOT export for any visualizer
+- `python -m glaurung.bench --ci-matrix`: per‑commit scorecard tracking 12 metrics across the sample matrix
+
+### Active Frontier
+
+- **Decompiler readability** (#161 umbrella): control‑flow structuring (gotos→if/while/for), switch reconstruction, type‑aware re‑render
+- **PDB ingestion** (#179): symmetric counterpart to DWARF for Windows/MSVC binaries
+- **More architectures** (#166): MIPS, RISC‑V, PowerPC, WASM
+- **Patch / assembly editor** (#185)
+- **BSim‑equivalent function similarity** (#186)
+- **Headless project management** (#188): multi‑binary projects with cross‑binary symbol resolution
 
 ## Installation
 
