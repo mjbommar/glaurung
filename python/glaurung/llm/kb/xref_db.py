@@ -1377,6 +1377,75 @@ def list_evidence(
     ]
 
 
+def set_function_name_audited(
+    kb: PersistentKnowledgeBase,
+    entry_va: int,
+    name: str,
+    *,
+    set_by: str = "manual",
+    aliases: Optional[List[str]] = None,
+    rationale: Optional[str] = None,
+) -> tuple:
+    """Rename a function and atomically record the change as evidence.
+
+    Returns (cite_id, FunctionName-after). The evidence row's
+    summary captures the before/after names so the chat UI's history
+    pane shows analyst annotation chronologically.
+
+    Behaves identically to ``set_function_name`` when the rename
+    succeeds; the only difference is the evidence row that gets
+    appended to evidence_log. Failures don't write evidence.
+    """
+    old = get_function_name(kb, entry_va)
+    set_function_name(kb, entry_va, name, set_by=set_by, aliases=aliases)
+    new = get_function_name(kb, entry_va)
+
+    old_name = old.canonical if old else f"sub_{entry_va:x}"
+    summary = f"renamed {old_name} → {name}" + (
+        f"  ({rationale})" if rationale else ""
+    )
+    cite_id = record_evidence(
+        kb,
+        tool="rename_function",
+        args={
+            "entry_va": int(entry_va),
+            "old_name": old_name,
+            "new_name": name,
+            "set_by": set_by,
+            "aliases": list(aliases or []),
+            "rationale": rationale,
+        },
+        summary=summary,
+        va_start=int(entry_va),
+        va_end=int(entry_va) + 1,    # representative point; whole fn covered by 0-len range
+        output={
+            "previous_set_by": old.set_by if old else None,
+            "demangled": new.demangled if new else None,
+        },
+    )
+    return cite_id, new
+
+
+def set_comment_audited(
+    kb: PersistentKnowledgeBase,
+    va: int,
+    body: str,
+    *,
+    set_by: str = "manual",
+) -> int:
+    """Add a comment and record it as evidence. Returns cite_id."""
+    set_comment(kb, va, body, set_by=set_by)
+    cite_id = record_evidence(
+        kb,
+        tool="set_comment",
+        args={"va": int(va), "body": body, "set_by": set_by},
+        summary=f"comment @{va:#x}: {body[:80]}",
+        va_start=int(va),
+        va_end=int(va) + 1,
+    )
+    return cite_id
+
+
 def render_evidence_markdown(evs: List[Evidence], *, max_args_chars: int = 120) -> str:
     """Compact Markdown rendering for the chat UI. Keeps the args
     JSON one-line and truncated so the cite pane stays readable."""

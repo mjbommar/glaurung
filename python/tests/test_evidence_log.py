@@ -123,6 +123,54 @@ def test_render_markdown_compact(tmp_path: Path) -> None:
     assert "found null" in md
 
 
+def test_rename_function_audited_records_evidence(tmp_path: Path) -> None:
+    """`set_function_name_audited` should rename the function AND
+    leave a cite-able audit row showing the before/after names."""
+    binary = _need(_HELLO)
+    db = tmp_path / "ev.glaurung"
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+
+    # Pre-populate function_names so we have a "before" name to rename.
+    xref_db.set_function_name(kb, 0x12d0, "sub_12d0", set_by="analyzer")
+
+    cite_id, new = xref_db.set_function_name_audited(
+        kb, 0x12d0, "parse_request",
+        set_by="manual",
+        rationale="calls recv() then strchr('\\n')",
+    )
+    assert cite_id >= 1
+    assert new is not None
+    assert new.canonical == "parse_request"
+    assert new.set_by == "manual"
+
+    # Evidence row recorded with before/after names visible.
+    rec = xref_db.get_evidence(kb, cite_id)
+    assert rec is not None
+    assert rec.tool == "rename_function"
+    assert rec.args["old_name"] == "sub_12d0"
+    assert rec.args["new_name"] == "parse_request"
+    assert rec.args["rationale"]
+    assert rec.va_start == 0x12d0
+    kb.close()
+
+
+def test_set_comment_audited_records_evidence(tmp_path: Path) -> None:
+    binary = _need(_HELLO)
+    db = tmp_path / "ev.glaurung"
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+
+    cite_id = xref_db.set_comment_audited(
+        kb, va=0x12cf, body="stack canary save",
+    )
+    rec = xref_db.get_evidence(kb, cite_id)
+    assert rec is not None
+    assert rec.tool == "set_comment"
+    assert rec.args["body"] == "stack canary save"
+    # Underlying comment table also got the row.
+    assert xref_db.get_comment(kb, 0x12cf) == "stack canary save"
+    kb.close()
+
+
 def test_args_complex_types_round_trip(tmp_path: Path) -> None:
     """Args / output containing nested dicts and lists must round-trip
     through the JSON serialization."""
