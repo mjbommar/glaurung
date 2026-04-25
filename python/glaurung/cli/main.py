@@ -26,6 +26,7 @@ from .commands.frame import FrameCommand
 from .commands.string_xrefs import StringsXrefsCommand
 from .commands.view import ViewCommand
 from .commands.find import FindCommand
+from .commands.bookmark import BookmarkCommand, JournalCommand
 
 from .formatters import (
     TriageFormatter,
@@ -68,6 +69,8 @@ class GlaurungCLI:
             "strings-xrefs": StringsXrefsCommand(),
             "view": ViewCommand(),
             "find": FindCommand(),
+            "bookmark": BookmarkCommand(),
+            "journal": JournalCommand(),
         }
 
         # Map commands to their formatters. The REPL is interactive and
@@ -99,6 +102,8 @@ class GlaurungCLI:
             "strings-xrefs": TriageFormatter,
             "view": TriageFormatter,
             "find": TriageFormatter,
+            "bookmark": TriageFormatter,
+            "journal": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:

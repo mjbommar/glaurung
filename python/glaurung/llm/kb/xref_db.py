@@ -179,6 +179,36 @@ CREATE TABLE IF NOT EXISTS undo_log (
 );
 CREATE INDEX IF NOT EXISTS idx_undo_active
     ON undo_log(binary_id, undone, ts DESC);
+
+-- Bookmarks (#226). The "I'll come back to this" workflow, distinct
+-- from per-VA comments — bookmarks index by id so the analyst can
+-- name/sort them, and they carry a free-form note. Multiple bookmarks
+-- per VA are allowed (different annotations on the same address).
+CREATE TABLE IF NOT EXISTS bookmarks (
+    bookmark_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    binary_id INTEGER NOT NULL,
+    va INTEGER NOT NULL,
+    note TEXT NOT NULL,
+    set_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_binary
+    ON bookmarks(binary_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_va
+    ON bookmarks(binary_id, va);
+
+-- Analyst journal (#226). Project-level dated free-form notes, not
+-- tied to any one VA. Useful for "today I learned X about this
+-- binary" entries that are too broad for a per-VA comment.
+CREATE TABLE IF NOT EXISTS journal (
+    entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    binary_id INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    set_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_journal_binary
+    ON journal(binary_id, created_at DESC);
 """
 
 
@@ -2306,3 +2336,134 @@ def _split_signed(s: str) -> Tuple[str, Optional[str], str]:
         if c in ("+", "-"):
             return s[:i].strip(), c, s[i + 1 :].strip()
     return "", None, ""
+
+
+# ---------------------------------------------------------------------------
+# Bookmarks + journal (#226).
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Bookmark:
+    bookmark_id: int
+    va: int
+    note: str
+    set_by: str
+    created_at: int
+
+
+@dataclass(frozen=True)
+class JournalEntry:
+    entry_id: int
+    body: str
+    set_by: str
+    created_at: int
+
+
+def add_bookmark(
+    kb: PersistentKnowledgeBase, va: int, note: str,
+    *, set_by: str = "manual",
+) -> int:
+    """Add a bookmark at ``va`` with a free-form note. Returns the
+    new bookmark_id so the analyst can reference it later. Multiple
+    bookmarks per VA are allowed."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "INSERT INTO bookmarks (binary_id, va, note, set_by, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (kb.binary_id, int(va), note, set_by, int(time.time())),
+    )
+    bookmark_id = int(cur.lastrowid or 0)
+    kb._conn.commit()
+    return bookmark_id
+
+
+def list_bookmarks(
+    kb: PersistentKnowledgeBase, *, va: Optional[int] = None,
+) -> List[Bookmark]:
+    """Return all bookmarks for the binary, newest first. If ``va``
+    is given, only bookmarks at that exact VA."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    if va is None:
+        cur.execute(
+            "SELECT bookmark_id, va, note, set_by, created_at "
+            "FROM bookmarks WHERE binary_id = ? ORDER BY created_at DESC, bookmark_id DESC",
+            (kb.binary_id,),
+        )
+    else:
+        cur.execute(
+            "SELECT bookmark_id, va, note, set_by, created_at "
+            "FROM bookmarks WHERE binary_id = ? AND va = ? "
+            "ORDER BY created_at DESC, bookmark_id DESC",
+            (kb.binary_id, int(va)),
+        )
+    return [
+        Bookmark(
+            bookmark_id=r[0], va=r[1], note=r[2],
+            set_by=r[3], created_at=r[4],
+        )
+        for r in cur.fetchall()
+    ]
+
+
+def delete_bookmark(kb: PersistentKnowledgeBase, bookmark_id: int) -> bool:
+    """Remove a single bookmark by id. Returns True if a row was
+    deleted, False if the id wasn't found."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "DELETE FROM bookmarks WHERE binary_id = ? AND bookmark_id = ?",
+        (kb.binary_id, int(bookmark_id)),
+    )
+    deleted = cur.rowcount > 0
+    kb._conn.commit()
+    return deleted
+
+
+def add_journal_entry(
+    kb: PersistentKnowledgeBase, body: str,
+    *, set_by: str = "manual",
+) -> int:
+    """Append a journal entry. Returns the new entry_id."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "INSERT INTO journal (binary_id, body, set_by, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        (kb.binary_id, body, set_by, int(time.time())),
+    )
+    entry_id = int(cur.lastrowid or 0)
+    kb._conn.commit()
+    return entry_id
+
+
+def list_journal(
+    kb: PersistentKnowledgeBase, *, limit: int = 50,
+) -> List[JournalEntry]:
+    """Return the N most recent journal entries, newest first."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT entry_id, body, set_by, created_at FROM journal "
+        "WHERE binary_id = ? ORDER BY created_at DESC, entry_id DESC LIMIT ?",
+        (kb.binary_id, limit),
+    )
+    return [
+        JournalEntry(
+            entry_id=r[0], body=r[1], set_by=r[2], created_at=r[3],
+        )
+        for r in cur.fetchall()
+    ]
+
+
+def delete_journal_entry(kb: PersistentKnowledgeBase, entry_id: int) -> bool:
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "DELETE FROM journal WHERE binary_id = ? AND entry_id = ?",
+        (kb.binary_id, int(entry_id)),
+    )
+    deleted = cur.rowcount > 0
+    kb._conn.commit()
+    return deleted
