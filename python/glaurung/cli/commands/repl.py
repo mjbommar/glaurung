@@ -316,6 +316,27 @@ class ReplCommand(BaseCommand):
             type_db.add_struct(kb, name, fields, set_by="manual")
             sys.stdout.write(f"  struct {name} ({len(fields)} fields) saved\n")
 
+        def cmd_recover_structs(argv: List[str]) -> None:
+            """recover-structs    — auto-discover struct candidates at the
+            current function from `[reg+offset]` access patterns. Each
+            unique offset accessed becomes a field; lands as set_by=auto
+            so DWARF / manual entries always win."""
+            here_va = _here()
+            if here_va is None:
+                sys.stdout.write("(set position with `goto` first)\n")
+                return
+            func_va = _enclosing_function_va(here_va)
+            if func_va is None:
+                sys.stdout.write(f"no function contains {here_va:#x}\n")
+                return
+            n = type_db.discover_struct_candidates(
+                kb, str(ctx.file_path), func_va,
+            )
+            sys.stdout.write(
+                f"  added {n} struct candidate(s) for fn@{func_va:#x}\n"
+            )
+            kb.save()
+
         def cmd_propagate(argv: List[str]) -> None:
             """propagate          — run type propagation at current
             function's call sites: prototype param c_type → originating
@@ -598,6 +619,7 @@ class ReplCommand(BaseCommand):
             "borrow": cmd_borrow,
             "proto": cmd_proto,
             "propagate": cmd_propagate,
+            "recover-structs": cmd_recover_structs,
             "strings": cmd_strings, "s": cmd_strings,
             "ask": cmd_ask,
         }
@@ -738,6 +760,7 @@ glaurung repl commands
     proto <name>                show one prototype (e.g. printf)
     proto set <name> <return> [<param>:<type> ...]   analyst override
     propagate                   refine slot types from prototype params
+    recover-structs             auto-discover structs from access patterns
     save                        force a save (also automatic on every edit)
 
   Inspection

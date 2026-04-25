@@ -390,6 +390,200 @@ def render_c_definition(rec: TypeRecord) -> str:
     return f"/* unknown kind: {rec.kind} */"
 
 
+def discover_struct_candidates(
+    kb: PersistentKnowledgeBase,
+    binary_path: str,
+    function_va: int,
+    *,
+    max_instructions: int = 1024,
+    window_bytes: int = 8192,
+    min_field_count: int = 2,
+) -> int:
+    """Auto-struct recovery v1 (#163).
+
+    Scan a function's disassembly for `[reg+offset]` access patterns on
+    SysV argument registers (rdi/rsi/rdx) and emit a struct candidate
+    per (function, arg-register) pair. Each unique offset accessed
+    becomes a field; access size hints at the field's primitive type
+    (`mov rax, [rdi+8]` = 8 bytes = pointer-sized).
+
+    The intuition: when a function accesses `arg0->fld_8`, `arg0->fld_16`,
+    `arg0->fld_24` consistently, those offsets describe the *shape* of
+    whatever struct arg0 points to, even when DWARF/symbols are absent.
+    This is the deterministic counterpart to FLIRT (FLIRT recovers
+    function names; this recovers struct shapes).
+
+    Returns the number of struct candidates added to type_db with
+    `set_by="auto"`. Non-trivial only when min_field_count fields are
+    discovered for a single arg register.
+
+    What v1 deliberately doesn't do (deferred to v2):
+      - Cross-function field-type inference via call-site propagation.
+      - Detecting that `arg0` and `arg1` point to the *same* struct
+        based on overlapping field-access patterns.
+      - Structures-of-structures (`arg0->fld_16->fld_0`).
+      - Picking field names from string-pool literals at the
+        access points.
+    """
+    try:
+        import glaurung as g
+        ins = g.disasm.disassemble_window_at(
+            str(binary_path), int(function_va),
+            window_bytes=window_bytes, max_instructions=max_instructions,
+        )
+    except Exception:
+        return 0
+    if not ins:
+        return 0
+
+    # Map base register → {offset: max_access_size_bytes}
+    # We track max access size so the field's c_type approximates the
+    # widest read/write at that offset.
+    fields_by_reg: dict[str, dict[int, int]] = {}
+
+    # Recognize {64-bit form, 32-bit form} for the candidate base
+    # registers. We exclude rsp/rbp (those are stack-frame, handled by
+    # #191) and rcx (often a counter, not a base pointer in C).
+    arg_regs = {
+        "rdi": "rdi", "edi": "rdi",
+        "rsi": "rsi", "esi": "rsi",
+        "rdx": "rdx", "edx": "rdx",
+    }
+
+    for inst in ins:
+        for op in inst.operands:
+            res = _parse_reg_offset(str(op))
+            if res is None:
+                continue
+            base_str, offset = res
+            base = arg_regs.get(base_str)
+            if base is None:
+                continue
+            # Heuristic access size: 8 if mnemonic uses 64-bit reg or
+            # the operand starts with `qword`; 4 for 32-bit; 1 for byte.
+            size = _guess_access_size(str(op), inst.mnemonic)
+            slot = fields_by_reg.setdefault(base, {})
+            slot[offset] = max(slot.get(offset, 0), size)
+
+    # Resolve function name (so the candidate's name is meaningful).
+    func_name = _resolve_function_name(kb, function_va) or f"sub_{function_va:x}"
+
+    added = 0
+    for reg, fields in fields_by_reg.items():
+        if len(fields) < min_field_count:
+            continue
+        # Skip if all offsets are 0 — that's just a pointer deref, not
+        # a struct.
+        if set(fields.keys()) == {0}:
+            continue
+        struct_name = f"{func_name}_{reg}_t"
+        sf = [
+            StructField(
+                offset=off,
+                name=f"fld_{off:x}" if off >= 0 else f"fld_n{(-off):x}",
+                c_type=_size_to_c_type(size),
+                size=size,
+            )
+            for off, size in sorted(fields.items())
+        ]
+        add_struct(
+            kb, struct_name, sf,
+            total_size=max(off + size for off, size in fields.items()),
+            confidence=0.5, set_by="auto",
+        )
+        added += 1
+    return added
+
+
+def _parse_reg_offset(op: str) -> Optional[tuple]:
+    """Parse `[rdi + 0x10]` / `rax:[rax + 0x18]` → (base, offset).
+    Distinct from xref_db._parse_frame_offset which only accepts
+    rbp/rsp; here we want any general-purpose register.
+
+    Returns (base_register_str, signed_offset) or None.
+    """
+    s = op.strip()
+    lb = s.find("[")
+    rb = s.find("]", lb + 1) if lb >= 0 else -1
+    if lb < 0 or rb < 0:
+        return None
+    inner = s[lb + 1 : rb].strip()
+    # Reject SIB-with-index ([rax + rcx*8 + …] is an array, not struct).
+    if "*" in inner:
+        return None
+    # Find first +/- after position 0.
+    sep_idx = -1
+    sep_char = None
+    for i in range(1, len(inner)):
+        if inner[i] in ("+", "-"):
+            sep_idx = i
+            sep_char = inner[i]
+            break
+    if sep_idx < 0:
+        # No offset → field at 0. Useful when this is the only access
+        # pattern, but we filter that out at the caller.
+        base = inner.strip().lower()
+        if base.replace("e", "r")[:3] in ("rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9"):
+            return (base, 0)
+        return None
+    base = inner[:sep_idx].strip().lower()
+    rest = inner[sep_idx + 1 :].strip()
+    try:
+        if rest.startswith("0x") or rest.startswith("0X"):
+            magnitude = int(rest, 16)
+        else:
+            magnitude = int(rest, 10)
+    except ValueError:
+        return None
+    offset = -magnitude if sep_char == "-" else magnitude
+    return (base, offset)
+
+
+def _guess_access_size(op: str, mnemonic: str) -> int:
+    """Best-effort access-size from operand string + mnemonic. v1 just
+    uses the operand register width; the disassembler's prefix
+    annotations (`qword`/`dword`/`word`/`byte ptr`) win when present."""
+    s = op.lower()
+    if "qword" in s:
+        return 8
+    if "dword" in s:
+        return 4
+    if "word" in s:
+        return 2
+    if "byte" in s:
+        return 1
+    # Mnemonic suffix sometimes carries width.
+    m = mnemonic.lower()
+    if m.endswith("b"):
+        return 1
+    if m.endswith("w"):
+        return 2
+    if m.endswith("l") or m.endswith("d"):
+        return 4
+    if m.endswith("q"):
+        return 8
+    return 8  # default to pointer-width
+
+
+def _size_to_c_type(size: int) -> str:
+    return {
+        1: "char",
+        2: "short",
+        4: "int",
+        8: "void *",
+    }.get(size, "void *")
+
+
+def _resolve_function_name(kb: PersistentKnowledgeBase, function_va: int) -> Optional[str]:
+    """Look up the canonical function name in xref_db.function_names."""
+    try:
+        from . import xref_db as _xref
+        rec = _xref.get_function_name(kb, int(function_va))
+        return rec.canonical if rec is not None else None
+    except Exception:
+        return None
+
+
 def _stdlib_bundle_dir() -> Path:
     """Locate the bundled stdlib type JSON files. Search:
        1. ``GLAURUNG_TYPES_DIR`` env var (single dir).
