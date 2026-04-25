@@ -12,6 +12,7 @@ from .commands.ask import AskCommand
 from .commands.strings import StringsCommand
 from .commands.decompile import DecompileCommand
 from .commands.name_func import NameFuncCommand
+from .commands.repl import ReplCommand
 
 from .formatters import (
     TriageFormatter,
@@ -39,9 +40,12 @@ class GlaurungCLI:
             "ask": AskCommand(),
             "decompile": DecompileCommand(),
             "name-func": NameFuncCommand(),
+            "repl": ReplCommand(),
         }
 
-        # Map commands to their formatters
+        # Map commands to their formatters. The REPL is interactive and
+        # prints directly, so it reuses TriageFormatter as a no-op
+        # placeholder — the formatter is never actually consulted.
         self.formatter_map = {
             "triage": TriageFormatter,
             "strings": StringsFormatter,
@@ -51,6 +55,7 @@ class GlaurungCLI:
             "ask": AskFormatter,
             "decompile": DecompileFormatter,
             "name-func": NameFuncFormatter,
+            "repl": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:
