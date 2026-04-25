@@ -88,6 +88,20 @@ from ..tools.propose_types_for_function import (
     build_tool as build_propose_types,
     ProposeTypesResult,
 )
+from ..tools.extract_archive import (
+    build_enumerate_archive,
+    EnumerateArchiveResult,
+    build_extract_archive_entry,
+    ExtractArchiveEntryResult,
+    build_extract_archive_all,
+    ExtractArchiveAllResult,
+    build_recursive_unpack,
+    RecursiveUnpackResult,
+)
+from ..tools.find_embedded_executables import (
+    build_tool as build_find_embedded_executables,
+    FindEmbeddedExecutablesResult,
+)
 from .memory_foundation import create_foundation_agent
 
 
@@ -487,6 +501,78 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(detect_crypto_usage, name="detect_crypto_usage")
     agent.tool(diff_functions, name="diff_functions")
     agent.tool(propose_types_for_function, name="propose_types_for_function")
+
+    # Embedded-content tools (Sprint 1) — archive extraction + magic scan.
+    async def enumerate_archive(
+        ctx: RunContext, path: str
+    ) -> EnumerateArchiveResult:
+        tool = build_enumerate_archive()
+        return tool.run(ctx.deps, ctx.deps.kb, tool.input_model(path=path))
+
+    async def extract_archive_entry(
+        ctx: RunContext,
+        path: str,
+        entry_name: str,
+        out_path: str | None = None,
+    ) -> ExtractArchiveEntryResult:
+        tool = build_extract_archive_entry()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(path=path, entry_name=entry_name, out_path=out_path),
+        )
+
+    async def extract_archive_all(
+        ctx: RunContext,
+        path: str,
+        out_dir: str,
+        max_files: int = 64,
+        max_bytes: int = 256 * 1024 * 1024,
+    ) -> ExtractArchiveAllResult:
+        tool = build_extract_archive_all()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                path=path, out_dir=out_dir,
+                max_files=max_files, max_bytes=max_bytes,
+            ),
+        )
+
+    async def recursive_unpack(
+        ctx: RunContext,
+        path: str,
+        out_dir: str,
+        max_depth: int = 4,
+        max_total_bytes: int = 256 * 1024 * 1024,
+    ) -> RecursiveUnpackResult:
+        tool = build_recursive_unpack()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                path=path, out_dir=out_dir,
+                max_depth=max_depth, max_total_bytes=max_total_bytes,
+            ),
+        )
+
+    async def find_embedded_executables(
+        ctx: RunContext,
+        path: str,
+        skip_first_match: bool = True,
+        max_results: int = 64,
+    ) -> FindEmbeddedExecutablesResult:
+        tool = build_find_embedded_executables()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                path=path, skip_first_match=skip_first_match,
+                max_results=max_results,
+            ),
+        )
+
+    agent.tool(enumerate_archive, name="enumerate_archive")
+    agent.tool(extract_archive_entry, name="extract_archive_entry")
+    agent.tool(extract_archive_all, name="extract_archive_all")
+    agent.tool(recursive_unpack, name="recursive_unpack")
+    agent.tool(find_embedded_executables, name="find_embedded_executables")
 
     return agent
 
