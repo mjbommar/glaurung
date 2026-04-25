@@ -110,6 +110,15 @@ from ..tools.find_encoded_blobs import (
     build_scan_xor_encoded_strings, ScanXorEncodedStringsResult,
     build_find_compressed_blobs, FindCompressedBlobsResult,
 )
+from ..tools.find_structured_blobs import (
+    build_find_embedded_images, FindEmbeddedImagesResult,
+    build_find_xml_blobs, FindXmlBlobsResult,
+    build_find_json_blobs, FindJsonBlobsResult,
+    build_find_plist_blobs, FindPlistBlobsResult,
+    build_find_ini_blobs, FindIniBlobsResult,
+    build_extract_pe_overlay, ExtractPeOverlayResult,
+    build_extract_elf_section, ExtractElfSectionResult,
+)
 from .memory_foundation import create_foundation_agent
 
 
@@ -652,6 +661,77 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(try_xor_brute, name="try_xor_brute")
     agent.tool(scan_xor_encoded_strings, name="scan_xor_encoded_strings")
     agent.tool(find_compressed_blobs, name="find_compressed_blobs")
+
+    # Embedded-content Sprint 3 — structured-blob + resource extraction
+    async def find_embedded_images(
+        ctx: RunContext, path: str, max_results: int = 32,
+    ) -> FindEmbeddedImagesResult:
+        tool = build_find_embedded_images()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(path=path, max_results=max_results),
+        )
+
+    async def find_xml_blobs(
+        ctx: RunContext, path: str, max_results: int = 16,
+    ) -> FindXmlBlobsResult:
+        tool = build_find_xml_blobs()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(path=path, max_results=max_results),
+        )
+
+    async def find_json_blobs(
+        ctx: RunContext, path: str, min_size: int = 64, max_results: int = 16,
+    ) -> FindJsonBlobsResult:
+        tool = build_find_json_blobs()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(path=path, min_size=min_size, max_results=max_results),
+        )
+
+    async def find_plist_blobs(
+        ctx: RunContext, path: str, max_results: int = 16,
+    ) -> FindPlistBlobsResult:
+        tool = build_find_plist_blobs()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(path=path, max_results=max_results),
+        )
+
+    async def find_ini_blobs(
+        ctx: RunContext, path: str, min_sections: int = 2, max_results: int = 16,
+    ) -> FindIniBlobsResult:
+        tool = build_find_ini_blobs()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                path=path, min_sections=min_sections, max_results=max_results,
+            ),
+        )
+
+    async def extract_pe_overlay(
+        ctx: RunContext, path: str,
+    ) -> ExtractPeOverlayResult:
+        tool = build_extract_pe_overlay()
+        return tool.run(ctx.deps, ctx.deps.kb, tool.input_model(path=path))
+
+    async def extract_elf_section(
+        ctx: RunContext, path: str, section_name: str,
+    ) -> ExtractElfSectionResult:
+        tool = build_extract_elf_section()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(path=path, section_name=section_name),
+        )
+
+    agent.tool(find_embedded_images, name="find_embedded_images")
+    agent.tool(find_xml_blobs, name="find_xml_blobs")
+    agent.tool(find_json_blobs, name="find_json_blobs")
+    agent.tool(find_plist_blobs, name="find_plist_blobs")
+    agent.tool(find_ini_blobs, name="find_ini_blobs")
+    agent.tool(extract_pe_overlay, name="extract_pe_overlay")
+    agent.tool(extract_elf_section, name="extract_elf_section")
 
     return agent
 
