@@ -1,0 +1,301 @@
+{
+  "glaurung_commit": "6b69239705d616be108d62435f0331bbad610324",
+  "schema_version": "1",
+  "scorecards": [
+    {
+      "architecture": "x86_64",
+      "binary_path": "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-c-gcc-O2",
+      "callgraph": {
+        "avg_out_degree": 0.667,
+        "edges": 8,
+        "has_main_node": true,
+        "nodes": 12
+      },
+      "compiler": "gcc",
+      "decompile": {
+        "attempted": 7,
+        "failed": 0,
+        "succeeded": 7,
+        "success_rate": 1.0,
+        "timed_out": 0,
+        "total_pseudocode_lines": 178
+      },
+      "discovery": {
+        "auto_named_sub": 0,
+        "chunk_merge_evidence": 0,
+        "cold_orphans": 0,
+        "name_match_rate": 1.0,
+        "named_from_symbols": 7,
+        "total": 7,
+        "with_basic_blocks": 7,
+        "with_chunks_gt_one": 0
+      },
+      "elapsed_ms": {
+        "analysis_ms": 2.6,
+        "decompile_ms": 9.2,
+        "triage_ms": 28.8
+      },
+      "error": null,
+      "flags": "-O2 -Wall -Wextra",
+      "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-c-gcc-O2.json",
+      "platform": "linux",
+      "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/c/hello.c",
+      "triage": {
+        "detected_arch": "x86_64",
+        "detected_format": "ELF",
+        "detected_language": "c",
+        "expected_language": "c",
+        "language_match": true
+      }
+    },
+    {
+      "architecture": "x86_64",
+      "binary_path": "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2",
+      "callgraph": {
+        "avg_out_degree": 2.528,
+        "edges": 91,
+        "has_main_node": true,
+        "nodes": 36
+      },
+      "compiler": "g++",
+      "decompile": {
+        "attempted": 11,
+        "failed": 0,
+        "succeeded": 11,
+        "success_rate": 1.0,
+        "timed_out": 0,
+        "total_pseudocode_lines": 695
+      },
+      "discovery": {
+        "auto_named_sub": 0,
+        "chunk_merge_evidence": 1,
+        "cold_orphans": 0,
+        "name_match_rate": 1.0,
+        "named_from_symbols": 11,
+        "total": 11,
+        "with_basic_blocks": 11,
+        "with_chunks_gt_one": 1
+      },
+      "elapsed_ms": {
+        "analysis_ms": 3.8,
+        "decompile_ms": 51.7,
+        "triage_ms": 7.8
+      },
+      "error": null,
+      "flags": "-O2 -Wall -Wextra",
+      "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-cpp-g++-O2.json",
+      "platform": "linux",
+      "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/cpp/hello.cpp",
+      "triage": {
+        "detected_arch": "x86_64",
+        "detected_format": "ELF",
+        "detected_language": "cpp",
+        "expected_language": "cpp",
+        "language_match": true
+      }
+    },
+    {
+      "architecture": "x86_64",
+      "binary_path": "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
+      "callgraph": {
+        "avg_out_degree": 2.528,
+        "edges": 91,
+        "has_main_node": true,
+        "nodes": 36
+      },
+      "compiler": "g++",
+      "decompile": {
+        "attempted": 11,
+        "failed": 0,
+        "succeeded": 11,
+        "success_rate": 1.0,
+        "timed_out": 0,
+        "total_pseudocode_lines": 695
+      },
+      "discovery": {
+        "auto_named_sub": 0,
+        "chunk_merge_evidence": 1,
+        "cold_orphans": 0,
+        "name_match_rate": 1.0,
+        "named_from_symbols": 11,
+        "total": 11,
+        "with_basic_blocks": 11,
+        "with_chunks_gt_one": 1
+      },
+      "elapsed_ms": {
+        "analysis_ms": 4.2,
+        "decompile_ms": 52.0,
+        "triage_ms": 8.4
+      },
+      "error": null,
+      "flags": "-O2 -Wall -Wextra",
+      "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-gcc-O2.json",
+      "platform": "linux",
+      "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/cpp/hello.cpp",
+      "triage": {
+        "detected_arch": "x86_64",
+        "detected_format": "ELF",
+        "detected_language": "cpp",
+        "expected_language": "cpp",
+        "language_match": true
+      }
+    },
+    {
+      "architecture": "x86_64",
+      "binary_path": "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O2",
+      "callgraph": {
+        "avg_out_degree": 1.789,
+        "edges": 34,
+        "has_main_node": true,
+        "nodes": 19
+      },
+      "compiler": "gfortran-11",
+      "decompile": {
+        "attempted": 7,
+        "failed": 0,
+        "succeeded": 7,
+        "success_rate": 1.0,
+        "timed_out": 0,
+        "total_pseudocode_lines": 227
+      },
+      "discovery": {
+        "auto_named_sub": 0,
+        "chunk_merge_evidence": 0,
+        "cold_orphans": 0,
+        "name_match_rate": 1.0,
+        "named_from_symbols": 7,
+        "total": 7,
+        "with_basic_blocks": 7,
+        "with_chunks_gt_one": 0
+      },
+      "elapsed_ms": {
+        "analysis_ms": 1.5,
+        "decompile_ms": 13.4,
+        "triage_ms": 10.0
+      },
+      "error": null,
+      "flags": "-O2 -Wall -Wextra",
+      "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-gfortran-O2.json",
+      "platform": "linux",
+      "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/fortran/hello.f90",
+      "triage": {
+        "detected_arch": "x86_64",
+        "detected_format": "ELF",
+        "detected_language": "fortran",
+        "expected_language": "fortran",
+        "language_match": true
+      }
+    },
+    {
+      "architecture": "x86_64",
+      "binary_path": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-c-clang-O2",
+      "callgraph": {
+        "avg_out_degree": 0.833,
+        "edges": 10,
+        "has_main_node": true,
+        "nodes": 12
+      },
+      "compiler": "clang",
+      "decompile": {
+        "attempted": 7,
+        "failed": 0,
+        "succeeded": 7,
+        "success_rate": 1.0,
+        "timed_out": 0,
+        "total_pseudocode_lines": 188
+      },
+      "discovery": {
+        "auto_named_sub": 0,
+        "chunk_merge_evidence": 0,
+        "cold_orphans": 0,
+        "name_match_rate": 1.0,
+        "named_from_symbols": 7,
+        "total": 7,
+        "with_basic_blocks": 7,
+        "with_chunks_gt_one": 0
+      },
+      "elapsed_ms": {
+        "analysis_ms": 1.0,
+        "decompile_ms": 9.5,
+        "triage_ms": 7.5
+      },
+      "error": null,
+      "flags": "-O2 -Wall -Wextra",
+      "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-c-clang-O2.json",
+      "platform": "linux",
+      "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/c/hello.c",
+      "triage": {
+        "detected_arch": "x86_64",
+        "detected_format": "ELF",
+        "detected_language": "c",
+        "expected_language": "c",
+        "language_match": true
+      }
+    },
+    {
+      "architecture": "x86_64",
+      "binary_path": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-cpp-clang++-O2",
+      "callgraph": {
+        "avg_out_degree": 2.833,
+        "edges": 102,
+        "has_main_node": true,
+        "nodes": 36
+      },
+      "compiler": "clang++",
+      "decompile": {
+        "attempted": 13,
+        "failed": 0,
+        "succeeded": 13,
+        "success_rate": 1.0,
+        "timed_out": 0,
+        "total_pseudocode_lines": 1420
+      },
+      "discovery": {
+        "auto_named_sub": 0,
+        "chunk_merge_evidence": 0,
+        "cold_orphans": 0,
+        "name_match_rate": 1.0,
+        "named_from_symbols": 13,
+        "total": 13,
+        "with_basic_blocks": 13,
+        "with_chunks_gt_one": 0
+      },
+      "elapsed_ms": {
+        "analysis_ms": 6.6,
+        "decompile_ms": 109.2,
+        "triage_ms": 8.2
+      },
+      "error": null,
+      "flags": "-O2 -Wall -Wextra",
+      "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-cpp-clang++-O2.json",
+      "platform": "linux",
+      "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/cpp/hello.cpp",
+      "triage": {
+        "detected_arch": "x86_64",
+        "detected_format": "ELF",
+        "detected_language": "cpp",
+        "expected_language": "cpp",
+        "language_match": true
+      }
+    }
+  ],
+  "summary": {
+    "binaries": 6,
+    "errored": 0,
+    "ok": 6,
+    "rates": {
+      "decompile_success_rate_avg": 1.0,
+      "language_match_rate": 1.0,
+      "name_match_rate_avg": 1.0
+    },
+    "totals": {
+      "cold_orphans": 0,
+      "decompiled_failed": 0,
+      "decompiled_ok": 56,
+      "functions_discovered": 56,
+      "functions_named": 56,
+      "multi_chunk_functions": 2
+    }
+  },
+  "timestamp": "2026-04-25T12:17:37.311786+00:00"
+}
