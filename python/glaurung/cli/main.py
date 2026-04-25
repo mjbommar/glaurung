@@ -16,6 +16,7 @@ from .commands.repl import ReplCommand
 from .commands.graph import GraphCommand
 from .commands.detect_packer import DetectPackerCommand
 from .commands.binary_diff import BinaryDiffCommand
+from .commands.kickoff import KickoffCommand
 
 from .formatters import (
     TriageFormatter,
@@ -47,6 +48,7 @@ class GlaurungCLI:
             "graph": GraphCommand(),
             "detect-packer": DetectPackerCommand(),
             "diff": BinaryDiffCommand(),
+            "kickoff": KickoffCommand(),
         }
 
         # Map commands to their formatters. The REPL is interactive and
@@ -67,6 +69,7 @@ class GlaurungCLI:
             "graph": TriageFormatter,
             "detect-packer": TriageFormatter,
             "diff": TriageFormatter,
+            "kickoff": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:
