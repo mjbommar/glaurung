@@ -632,6 +632,121 @@ def remove_data_label(kb: PersistentKnowledgeBase, va: int) -> None:
     kb._conn.commit()
 
 
+def borrow_symbols_from_donor(
+    target_kb: PersistentKnowledgeBase,
+    target_binary_path: str,
+    donor_binary_path: str,
+    *,
+    prologue_len: int = 32,
+) -> dict:
+    """Cross-binary symbol borrowing (#170).
+
+    When two binaries share source code but only one ships with
+    DWARF / symbols (the **donor**), transfer the donor's named
+    functions onto the **target** by prologue-equality match. This is
+    the on-the-fly equivalent of building a FLIRT library from one
+    specific binary — useful when:
+      - Vendor ships a debug build alongside a stripped release.
+      - You compiled the same source twice with -g and -O2 -s.
+      - You're analysing malware variants that share library code with
+        a known-good binary.
+
+    Returns a counts dict: {donor_named, target_subs, matched, applied}.
+    Only renames `sub_*` placeholders in the target; never overwrites
+    a name that DWARF or the symbol table already provided.
+    """
+    _ensure_schema(target_kb._conn)
+    try:
+        import glaurung as g
+    except ImportError:
+        return {"error": "glaurung native unavailable"}
+
+    # Build the donor → {prologue: name} map. We reuse the same
+    # 32-byte exact-equality discipline as FLIRT.
+    try:
+        donor_funcs, _ = g.analysis.analyze_functions_path(donor_binary_path)
+        donor_bytes = open(donor_binary_path, "rb").read()
+    except Exception as e:
+        return {"error": f"donor_read_failed: {e}"}
+
+    def _read_prologue(binary_path: str, va: int, raw: bytes) -> Optional[bytes]:
+        try:
+            off = g.analysis.va_to_file_offset_path(
+                binary_path, int(va), 100_000_000, 100_000_000,
+            )
+        except Exception:
+            return None
+        if off is None:
+            return None
+        off = int(off)
+        if off < 0 or off + prologue_len > len(raw):
+            return None
+        return raw[off : off + prologue_len]
+
+    donor_named = 0
+    by_prologue: dict[bytes, str] = {}
+    ambiguous: set[bytes] = set()
+    for f in donor_funcs:
+        if f.name.startswith("sub_") or not f.basic_blocks:
+            continue
+        donor_named += 1
+        proto = _read_prologue(donor_binary_path, int(f.entry_point.value), donor_bytes)
+        if proto is None or all(b == 0 for b in proto):
+            continue
+        if proto in ambiguous:
+            continue
+        if proto in by_prologue:
+            if by_prologue[proto] != f.name:
+                ambiguous.add(proto)
+                del by_prologue[proto]
+            continue
+        by_prologue[proto] = f.name
+
+    # Now match against the target's sub_* functions.
+    try:
+        target_funcs, _ = g.analysis.analyze_functions_path(target_binary_path)
+        target_bytes = open(target_binary_path, "rb").read()
+    except Exception as e:
+        return {"error": f"target_read_failed: {e}"}
+
+    target_subs = 0
+    matched = 0
+    applied = 0
+    for f in target_funcs:
+        if not f.name.startswith("sub_"):
+            continue
+        target_subs += 1
+        proto = _read_prologue(
+            target_binary_path, int(f.entry_point.value), target_bytes,
+        )
+        if proto is None:
+            continue
+        donor_name = by_prologue.get(proto)
+        if donor_name is None:
+            continue
+        matched += 1
+        # Don't clobber non-`sub_*` names that may already be in the
+        # target's xref_db (DWARF / FLIRT / manual). We only set if
+        # the existing row is `sub_*` or absent.
+        existing = get_function_name(target_kb, int(f.entry_point.value))
+        if existing is not None and not existing.canonical.startswith("sub_") \
+                and existing.set_by != "analyzer":
+            continue
+        set_function_name(
+            target_kb, int(f.entry_point.value), donor_name, set_by="borrowed",
+        )
+        applied += 1
+
+    return {
+        "donor_named": donor_named,
+        "donor_unique_prologues": len(by_prologue),
+        "donor_ambiguous": len(ambiguous),
+        "target_subs": target_subs,
+        "matched": matched,
+        "applied": applied,
+    }
+
+
 def import_data_symbols_from_binary(
     kb: PersistentKnowledgeBase, binary_path: str,
 ) -> int:

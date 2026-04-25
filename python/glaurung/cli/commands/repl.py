@@ -316,6 +316,37 @@ class ReplCommand(BaseCommand):
             type_db.add_struct(kb, name, fields, set_by="manual")
             sys.stdout.write(f"  struct {name} ({len(fields)} fields) saved\n")
 
+        def cmd_borrow(argv: List[str]) -> None:
+            """borrow <donor-binary>  — copy named-function names from
+            a donor binary into the current KB by prologue-equality
+            match. Donor must be the same source compiled with
+            symbols / DWARF; the target is the current binary."""
+            if not argv:
+                sys.stdout.write("borrow <donor-binary-path>\n")
+                return
+            donor = argv[0]
+            from pathlib import Path as _Path
+            if not _Path(donor).exists():
+                sys.stdout.write(f"donor not found: {donor}\n")
+                return
+            summary = xref_db.borrow_symbols_from_donor(
+                kb,
+                target_binary_path=str(ctx.file_path),
+                donor_binary_path=donor,
+            )
+            if summary.get("error"):
+                sys.stdout.write(f"borrow failed: {summary['error']}\n")
+                return
+            sys.stdout.write(
+                f"  donor: {summary['donor_named']} named functions, "
+                f"{summary['donor_unique_prologues']} unique prologues "
+                f"({summary['donor_ambiguous']} ambiguous)\n"
+                f"  target: {summary['target_subs']} sub_* functions, "
+                f"{summary['matched']} matched, "
+                f"{summary['applied']} renamed\n"
+            )
+            kb.save()
+
         def cmd_label(argv: List[str]) -> None:
             """label                       — list all data labels
             label set <addr> <name> [<type>]
@@ -495,6 +526,7 @@ class ReplCommand(BaseCommand):
             "show": cmd_show,
             "locals": cmd_locals, "l": cmd_locals,
             "label": cmd_label,
+            "borrow": cmd_borrow,
             "strings": cmd_strings, "s": cmd_strings,
             "ask": cmd_ask,
         }
@@ -630,6 +662,7 @@ glaurung repl commands
     label set <addr> <name> [<type>]   add or rename a data label
     label remove <addr>         drop a data label
     label import                bootstrap labels from binary symbols
+    borrow <donor>              copy names from a debug-build sibling
     save                        force a save (also automatic on every edit)
 
   Inspection
