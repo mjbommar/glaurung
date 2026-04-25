@@ -19,6 +19,7 @@ from .commands.binary_diff import BinaryDiffCommand
 from .commands.kickoff import KickoffCommand
 from .commands.patch import PatchCommand
 from .commands.verify_recovery import VerifyRecoveryCommand
+from .commands.export import ExportCommand
 
 from .formatters import (
     TriageFormatter,
@@ -53,6 +54,7 @@ class GlaurungCLI:
             "kickoff": KickoffCommand(),
             "patch": PatchCommand(),
             "verify-recovery": VerifyRecoveryCommand(),
+            "export": ExportCommand(),
         }
 
         # Map commands to their formatters. The REPL is interactive and
@@ -76,6 +78,7 @@ class GlaurungCLI:
             "kickoff": TriageFormatter,
             "patch": TriageFormatter,
             "verify-recovery": TriageFormatter,
+            "export": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:
