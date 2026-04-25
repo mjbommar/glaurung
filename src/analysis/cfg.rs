@@ -15,6 +15,7 @@ use crate::core::control_flow_graph::ControlFlowEdgeKind;
 use crate::core::disassembler::Disassembler;
 use crate::core::function::{Function, FunctionFlags, FunctionKind};
 use crate::core::instruction::Instruction;
+use crate::analysis::jump_table::discover_jump_tables;
 use crate::analysis::vtable::discover_vtables;
 use crate::flirt::{apply_flirt_overrides, discover_flirt_seeds, load_default_library, FlirtLibrary};
 use crate::disasm::registry;
@@ -668,6 +669,27 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         }
     }
     let _ = vtable_method_count; // available for telemetry; unused for now.
+
+    // Jump-table discovery (#177). Scans rodata for relative-offset
+    // tables (i32 entries encoding `target_va - table_va`); each entry
+    // is a switch-statement case label and would otherwise be a dead
+    // code branch as far as direct-call discovery is concerned.
+    let regions_for_check2 = regions.clone();
+    let is_executable2 = move |va: u64| -> bool {
+        regions_for_check2.iter().any(|r| va >= r.start && va < r.end)
+    };
+    let jump_tables = discover_jump_tables(data, is_executable2);
+    for jt in &jump_tables {
+        for tgt in &jt.targets {
+            if known.contains(tgt) {
+                continue;
+            }
+            if let Ok(addr) = Address::new(AddressKind::VA, *tgt, bits, None, None) {
+                seeds.push(addr);
+                known.insert(*tgt);
+            }
+        }
+    }
 
     // Discover functions up to budget
     let mut calls_all: Vec<(String, u64)> = Vec::new(); // (caller_name, callee_va)

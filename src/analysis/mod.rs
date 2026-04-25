@@ -13,6 +13,7 @@ pub mod entry;
 pub mod macho_stubs;
 pub mod memory;
 pub mod pe_iat;
+pub mod jump_table;
 pub mod view;
 pub mod vtable;
 pub mod xrefs;
