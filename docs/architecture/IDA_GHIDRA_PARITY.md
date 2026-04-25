@@ -37,7 +37,9 @@ why each gap matters. Updated whenever a roadmap task completes.
 | 182 | Demangler audit + KB-wide pass | ✅ | Itanium/Rust/MSVC; every persisted name carries raw + pretty forms |
 | 195 | Type-propagation v2 (call-site arg matching) | ✅ | regex-based operand parser; SysV x86_64 ABI |
 | 162 | ABI-aware argument recovery (Win64, ARM64) | ✅ | Adds Win64 (rcx/rdx/r8/r9) and AAPCS64 (x0-x7) tables; auto-dispatch from triage |
-| **193** | **Switch-statement reconstruction** | ⏳ | Combines with deferred #177 jump-table walker |
+| 177 | Jump-table walker | ✅ | Detects relative-offset `i32` switch tables in rodata; seeds case bodies as discoverable functions |
+| 184 | Function-level binary diff tool | ✅ | `glaurung diff a b` — pair-wise diff with same/changed/added/removed status per function; Markdown + JSON output |
+| **193** | **Switch-statement reconstruction** | ⏳ | Combines with #177 jump-table walker (now shipped) — next is IR-level construct emission |
 
 ## #161 umbrella — Decompiler polish atoms
 
@@ -64,18 +66,18 @@ why each gap matters. Updated whenever a roadmap task completes.
 | 186 | BSim-equivalent function similarity (canonical PCode hashing) | More robust than FLIRT |
 | 194 | Type-aware re-render of decompiled output | Depends on #172 + #180 + xref_db field-use tracking |
 
-## Tier C — Coverage / polish (pending)
+## Tier C — Coverage / polish (mostly pending)
 
-| # | Task | Notes |
-|---|---|---|
-| 169 | Multi-arch / fat-binary slicing CLI | Mach-O fat, dyld_shared_cache |
-| 171 | Build-and-run verification for source recovery | Closing the loop on `recover_source.py` |
-| 174 | [P] Fortran rewriter: emit complete `gfc_dt` body | Off-track polish |
-| 175 | [Q] Fortran rewriter: emit extern prototypes for libgfortran/MAIN__ | Off-track polish |
-| 187 | Anti-obfuscation primitives (packers, CFG flattening, opaque predicates) | Big surface area |
-| 188 | Headless analyzer + project management (Ghidra-style) | Multi-binary projects |
-| 189 | Debugger integration (gdb/lldb bridge) | Static-only today |
-| 190 | Symbol export to BNDB / IDB / Ghidra archive | Subset of #165 |
+| # | Task | Status | Notes |
+|---|---|---|---|
+| 169 | Multi-arch / fat-binary slicing CLI | ⏳ | Mach-O fat, dyld_shared_cache |
+| 171 | Build-and-run verification for source recovery | ⏳ | Closing the loop on `recover_source.py` |
+| 174 | [P] Fortran rewriter: emit complete `gfc_dt` body | ⏳ | Off-track polish |
+| 175 | [Q] Fortran rewriter: emit extern prototypes for libgfortran/MAIN__ | ⏳ | Off-track polish |
+| 187 | Anti-obfuscation primitives — packer detection v0 | ✅ | Section/string-pool fingerprint match for UPX/Themida/VMProtect/ASPack/MPRESS/PECompact/FSG/Petite/Enigma/Obsidium + generic high-entropy fallback. CLI: `glaurung detect-packer`. v2: CFG flattening, opaque predicates, anti-disassembly stubs. |
+| 188 | Headless analyzer + project management (Ghidra-style) | ⏳ | Multi-binary projects |
+| 189 | Debugger integration (gdb/lldb bridge) | ⏳ | Static-only today |
+| 190 | Symbol export to BNDB / IDB / Ghidra archive | ⏳ | Subset of #165 |
 
 ## Where Glaurung *over-performs* the incumbents
 
