@@ -118,6 +118,118 @@ def test_cli_subcommand_compiles_clean(tmp_path: Path) -> None:
     assert "compile: ✅" in out
 
 
+def test_build_and_run_executes_recovered_source() -> None:
+    """Compile + run a tiny C program; verify stdout / exit-code
+    captured correctly."""
+    _need_compiler()
+    from glaurung.llm.kb.verify_recovery import build_and_run
+
+    src = """
+    #include <stdio.h>
+    int main(int argc, char **argv) {
+        printf("hello %s\\n", argc > 1 ? argv[1] : "world");
+        return 42;
+    }
+    """
+    rr = build_and_run(src, args=["bench"])
+    assert rr.compile_ok
+    assert rr.exit_code == 42
+    assert rr.stdout == "hello bench\n"
+    assert rr.runtime_ms >= 0.0
+
+
+def test_build_and_run_reports_compile_failure() -> None:
+    _need_compiler()
+    from glaurung.llm.kb.verify_recovery import build_and_run
+
+    rr = build_and_run("garbage source")
+    assert not rr.compile_ok
+    assert "compile-failed" in rr.notes
+
+
+def test_build_and_run_runtime_timeout() -> None:
+    """An infinite loop hits the configured timeout and is reported
+    as `run-timeout` rather than hanging the test."""
+    _need_compiler()
+    from glaurung.llm.kb.verify_recovery import build_and_run
+
+    src = "int main(void) { while (1); }"
+    rr = build_and_run(src, timeout_seconds=0.5)
+    assert rr.compile_ok
+    assert "run-timeout" in rr.notes
+
+
+def test_compare_runtime_to_target_reports_agreement() -> None:
+    """Build a small binary; build a "recovered" copy of its source;
+    compare execution. They should agree on every dimension."""
+    _need_compiler()
+    import subprocess
+    import tempfile
+
+    src = """
+    #include <stdio.h>
+    int main(int argc, char **argv) {
+        printf("%d\\n", argc);
+        return 0;
+    }
+    """
+
+    # Build the target binary directly.
+    with tempfile.TemporaryDirectory() as td:
+        src_path = Path(td) / "target.c"
+        bin_path = Path(td) / "target"
+        src_path.write_text(src)
+        proc = subprocess.run(
+            ["gcc", "-O0", "-w", "-o", str(bin_path), str(src_path)],
+            capture_output=True, text=True, check=False,
+        )
+        if proc.returncode != 0:
+            pytest.skip(f"target compile failed: {proc.stderr}")
+
+        from glaurung.llm.kb.verify_recovery import compare_runtime_to_target
+
+        cmp = compare_runtime_to_target(
+            src, str(bin_path), args=["a", "b", "c"],
+        )
+        # Identical sources → identical outputs.
+        assert cmp.same_exit_code
+        assert cmp.same_stdout
+        assert cmp.same_stderr
+        assert cmp.target_run.stdout.strip() == "4"
+        assert cmp.recovered_run.stdout.strip() == "4"
+
+
+def test_compare_runtime_detects_disagreement() -> None:
+    """A "recovered" source that returns a different exit code than
+    the target should produce same_exit_code=False."""
+    _need_compiler()
+    import subprocess
+    import tempfile
+
+    target_src = "int main(void) { return 0; }"
+    recovered_src = "int main(void) { return 7; }"
+
+    with tempfile.TemporaryDirectory() as td:
+        src_path = Path(td) / "target.c"
+        bin_path = Path(td) / "target"
+        src_path.write_text(target_src)
+        proc = subprocess.run(
+            ["gcc", "-O0", "-w", "-o", str(bin_path), str(src_path)],
+            capture_output=True, text=True, check=False,
+        )
+        if proc.returncode != 0:
+            pytest.skip(f"target compile failed: {proc.stderr}")
+
+        from glaurung.llm.kb.verify_recovery import compare_runtime_to_target
+
+        cmp = compare_runtime_to_target(recovered_src, str(bin_path))
+        assert cmp.target_run.exit_code == 0
+        assert cmp.recovered_run.exit_code == 7
+        assert cmp.same_exit_code is False
+        # stdouts both empty → still equal.
+        assert cmp.same_stdout is True
+
+
 def test_cli_subcommand_reports_compile_failure(tmp_path: Path) -> None:
     _need_compiler()
     from glaurung.cli.main import GlaurungCLI

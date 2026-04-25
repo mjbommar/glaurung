@@ -191,6 +191,198 @@ def _function_bytes_from_object(
     return raw
 
 
+@dataclass
+class RunResult:
+    """Outcome of compiling and executing a source snippet."""
+    compile_ok: bool
+    exit_code: int = 0
+    stdout: str = ""
+    stderr: str = ""
+    runtime_ms: float = 0.0
+    notes: List[str] = field(default_factory=list)
+
+
+@dataclass
+class RuntimeComparison:
+    """Side-by-side comparison of recovered vs target binary output
+    on the same input. Used to verify behavioral equivalence."""
+    same_exit_code: bool
+    same_stdout: bool
+    same_stderr: bool
+    target_run: RunResult
+    recovered_run: RunResult
+
+
+def build_and_run(
+    source: str,
+    *,
+    args: Optional[List[str]] = None,
+    stdin: Optional[str] = None,
+    compiler: Optional[str] = None,
+    language: str = "c",
+    flags: Optional[List[str]] = None,
+    timeout_seconds: float = 5.0,
+) -> RunResult:
+    """Compile `source` to an executable, run it, capture I/O.
+
+    Closes the second verification gate (after #202's compile-check):
+    "Does the recovered source actually run, and what does it
+    produce for known inputs?" Pairs with the cited target binary
+    via `compare_runtime_to_target`.
+
+    `args` / `stdin` mirror subprocess conventions. Default flags
+    include `-O0 -fno-stack-protector -w` so the agent's recovered
+    source compiles even when stylistically rough.
+
+    Failures (compile, runtime, timeout) are returned as RunResult
+    with `compile_ok` / `exit_code` / `notes` distinguishing the
+    cause. The caller never sees an exception.
+    """
+    cc = _resolve_compiler(compiler)
+    if cc is None:
+        return RunResult(
+            compile_ok=False, exit_code=-1,
+            stderr="no C/C++ compiler available on PATH",
+            notes=["compiler-missing"],
+        )
+    if flags is None:
+        flags = ["-O0", "-fno-stack-protector", "-w"]
+    lang_flag = "c++" if language in ("cpp", "c++", "cxx") else "c"
+
+    td = Path(tempfile.mkdtemp(prefix="glaurung-run-"))
+    try:
+        src_path = td / ("recovered." + ("cpp" if lang_flag == "c++" else "c"))
+        bin_path = td / "recovered"
+        src_path.write_text(source)
+        compile_argv = [cc, *flags, "-o", str(bin_path), str(src_path)]
+        try:
+            cproc = subprocess.run(
+                compile_argv, capture_output=True, text=True,
+                timeout=15.0, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return RunResult(
+                compile_ok=False, exit_code=-2,
+                stderr="compiler timed out",
+                notes=["compile-timeout"],
+            )
+        if cproc.returncode != 0 or not bin_path.exists():
+            return RunResult(
+                compile_ok=False,
+                exit_code=cproc.returncode,
+                stderr=cproc.stderr,
+                stdout=cproc.stdout,
+                notes=["compile-failed"],
+            )
+
+        run_argv = [str(bin_path), *(args or [])]
+        import time as _time
+        t0 = _time.perf_counter()
+        try:
+            rproc = subprocess.run(
+                run_argv,
+                input=stdin,
+                capture_output=True, text=True,
+                timeout=timeout_seconds, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return RunResult(
+                compile_ok=True, exit_code=-2,
+                stderr=f"runtime exceeded {timeout_seconds}s",
+                notes=["run-timeout"],
+            )
+        runtime_ms = (_time.perf_counter() - t0) * 1000.0
+
+        return RunResult(
+            compile_ok=True,
+            exit_code=rproc.returncode,
+            stdout=rproc.stdout,
+            stderr=rproc.stderr,
+            runtime_ms=round(runtime_ms, 2),
+        )
+    finally:
+        try:
+            shutil.rmtree(td, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def run_target_binary(
+    target_binary: str,
+    *,
+    args: Optional[List[str]] = None,
+    stdin: Optional[str] = None,
+    timeout_seconds: float = 5.0,
+) -> RunResult:
+    """Execute `target_binary` directly (no recompile). Used by
+    `compare_runtime_to_target` to capture the canonical output."""
+    if not Path(target_binary).exists():
+        return RunResult(
+            compile_ok=False, exit_code=-1,
+            stderr=f"target not found: {target_binary}",
+            notes=["target-missing"],
+        )
+    import time as _time
+    t0 = _time.perf_counter()
+    try:
+        proc = subprocess.run(
+            [str(target_binary), *(args or [])],
+            input=stdin,
+            capture_output=True, text=True,
+            timeout=timeout_seconds, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return RunResult(
+            compile_ok=True, exit_code=-2,
+            stderr=f"target exceeded {timeout_seconds}s",
+            notes=["run-timeout"],
+        )
+    runtime_ms = (_time.perf_counter() - t0) * 1000.0
+    return RunResult(
+        compile_ok=True,
+        exit_code=proc.returncode,
+        stdout=proc.stdout,
+        stderr=proc.stderr,
+        runtime_ms=round(runtime_ms, 2),
+    )
+
+
+def compare_runtime_to_target(
+    source: str,
+    target_binary: str,
+    *,
+    args: Optional[List[str]] = None,
+    stdin: Optional[str] = None,
+    compiler: Optional[str] = None,
+    language: str = "c",
+    timeout_seconds: float = 5.0,
+) -> RuntimeComparison:
+    """Run both the target binary and the recovered-source build
+    against the same input; report whether they agreed on
+    exit_code / stdout / stderr.
+
+    The bar an LLM-rewriter should clear: produce source whose
+    compiled output behaves indistinguishably from the reference
+    binary for every input the agent tests. v0 doesn't do
+    differential fuzzing yet — the caller picks the inputs."""
+    target_run = run_target_binary(
+        target_binary, args=args, stdin=stdin,
+        timeout_seconds=timeout_seconds,
+    )
+    recovered_run = build_and_run(
+        source, args=args, stdin=stdin,
+        compiler=compiler, language=language,
+        timeout_seconds=timeout_seconds,
+    )
+    return RuntimeComparison(
+        same_exit_code=(target_run.exit_code == recovered_run.exit_code),
+        same_stdout=(target_run.stdout == recovered_run.stdout),
+        same_stderr=(target_run.stderr == recovered_run.stderr),
+        target_run=target_run,
+        recovered_run=recovered_run,
+    )
+
+
 def byte_similarity_against_target(
     source: str,
     target_binary: str,

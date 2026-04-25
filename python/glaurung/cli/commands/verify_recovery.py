@@ -36,6 +36,27 @@ class VerifyRecoveryCommand(BaseCommand):
             "--function", default=None,
             help="Function name to compare against in the target",
         )
+        parser.add_argument(
+            "--run", action="store_true",
+            help="Compile + run the source. Capture stdout/stderr/exit (#171).",
+        )
+        parser.add_argument(
+            "--compare-runtime", action="store_true",
+            help="Run both the recovered source AND the --target binary "
+                 "with the same args/stdin; report whether outputs match.",
+        )
+        parser.add_argument(
+            "--arg", dest="run_args", action="append", default=[],
+            help="argv to pass to the executable (repeatable). e.g. --arg foo --arg bar",
+        )
+        parser.add_argument(
+            "--stdin", default=None,
+            help="String to feed on stdin to the executable.",
+        )
+        parser.add_argument(
+            "--timeout", type=float, default=5.0,
+            help="Per-execution timeout in seconds (default: 5.0)",
+        )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         if args.source_file == "-":
@@ -49,7 +70,9 @@ class VerifyRecoveryCommand(BaseCommand):
             source = Path(args.source_file).read_text()
 
         from glaurung.llm.kb.verify_recovery import (
+            build_and_run,
             byte_similarity_against_target,
+            compare_runtime_to_target,
             compile_check,
         )
 
@@ -64,6 +87,26 @@ class VerifyRecoveryCommand(BaseCommand):
                 compiler=args.compiler, language=args.language,
             )
             payload["similarity"] = asdict(sim)
+
+        if args.run:
+            run_result = build_and_run(
+                source, args=args.run_args, stdin=args.stdin,
+                compiler=args.compiler, language=args.language,
+                timeout_seconds=args.timeout,
+            )
+            payload["run"] = asdict(run_result)
+
+        if args.compare_runtime:
+            if not args.target:
+                formatter.output_plain("Error: --compare-runtime requires --target")
+                return 2
+            cmp_result = compare_runtime_to_target(
+                source, str(args.target),
+                args=args.run_args, stdin=args.stdin,
+                compiler=args.compiler, language=args.language,
+                timeout_seconds=args.timeout,
+            )
+            payload["compare_runtime"] = asdict(cmp_result)
 
         if formatter.format_type == OutputFormat.JSON:
             formatter.output_json(payload)
@@ -86,5 +129,35 @@ class VerifyRecoveryCommand(BaseCommand):
             )
             for n in sim.get("notes", []):
                 lines.append(f"  note: {n}")
+        run = payload.get("run")
+        if run:
+            lines.append(
+                f"run: exit={run['exit_code']} runtime={run['runtime_ms']:.1f}ms "
+                f"stdout={len(run['stdout'])}b stderr={len(run['stderr'])}b"
+            )
+            for n in run.get("notes", []):
+                lines.append(f"  note: {n}")
+        cmp_run = payload.get("compare_runtime")
+        if cmp_run:
+            agree = (
+                cmp_run["same_exit_code"]
+                and cmp_run["same_stdout"]
+                and cmp_run["same_stderr"]
+            )
+            lines.append(
+                f"runtime-vs-target: "
+                f"exit {'✅' if cmp_run['same_exit_code'] else '❌'}  "
+                f"stdout {'✅' if cmp_run['same_stdout'] else '❌'}  "
+                f"stderr {'✅' if cmp_run['same_stderr'] else '❌'}"
+            )
+            if not agree:
+                tgt = cmp_run["target_run"]
+                rec = cmp_run["recovered_run"]
+                lines.append(
+                    f"  target:    exit={tgt['exit_code']} stdout={tgt['stdout']!r}"
+                )
+                lines.append(
+                    f"  recovered: exit={rec['exit_code']} stdout={rec['stdout']!r}"
+                )
         formatter.output_plain("\n".join(lines))
         return 0 if result.ok else 1
