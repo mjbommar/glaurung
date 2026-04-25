@@ -210,6 +210,27 @@ def _target_extension(lang: Optional[str]) -> str:
     return "c"
 
 
+def _emit_readme_with_fallback(ctx: "MemoryContext", readme_args):
+    """Run WriteReadmeAndManpageTool and return its result; if the tool
+    raises or yields an un-shaped object, drop to the deterministic
+    heuristic so the project never ships without README/manpage (Bug N).
+    """
+    from glaurung.llm.tools.write_readme_and_manpage import (
+        WriteReadmeAndManpageResult, WriteReadmeAndManpageTool, _heuristic,
+    )
+    try:
+        doc = WriteReadmeAndManpageTool().run(ctx, ctx.kb, readme_args)
+    except Exception as e:
+        _log(f"  docs failed: {e}")
+        doc = None
+    if doc is None or not hasattr(getattr(doc, "docs", None), "readme"):
+        _log("  README: using heuristic fallback")
+        doc = WriteReadmeAndManpageResult(
+            docs=_heuristic(readme_args), source="heuristic",
+        )
+    return doc
+
+
 # -----------------------------------------------------------------------------
 # Pseudocode preprocessing
 # -----------------------------------------------------------------------------
@@ -1410,26 +1431,20 @@ def main() -> int:
         ModuleDescription(path=m.name, purpose=m.purpose)
         for m in populated_modules
     ]
-    try:
-        doc = WriteReadmeAndManpageTool().run(
-            ctx, ctx.kb,
-            WriteReadmeAndManpageArgs(
-                project_name=project_name,
-                synopsis=f"{project_name} [OPTIONS]",
-                description=(
-                    f"Source recovered from {Path(binary_path).name} "
-                    f"(language={language}, compiler={compiler})."
-                ),
-                modules=mod_descs,
-                flags=[],
-                build_instructions="cmake -B build && cmake --build build",
-                target_language="c",
-                use_llm=True,
-            ),
-        )
-    except Exception as e:
-        _log(f"  docs failed: {e}")
-        doc = None
+    readme_args = WriteReadmeAndManpageArgs(
+        project_name=project_name,
+        synopsis=f"{project_name} [OPTIONS]",
+        description=(
+            f"Source recovered from {Path(binary_path).name} "
+            f"(language={language}, compiler={compiler})."
+        ),
+        modules=mod_descs,
+        flags=[],
+        build_instructions="cmake -B build && cmake --build build",
+        target_language="c",
+        use_llm=True,
+    )
+    doc = _emit_readme_with_fallback(ctx, readme_args)
 
     # Write source tree.
     _log("writing source tree…")
