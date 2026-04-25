@@ -72,6 +72,11 @@ class KickoffSummary:
     # diagnostic notes the agent can surface
     notes: List[str] = field(default_factory=list)
 
+    # cite_id of the evidence_log row recording this kickoff invocation;
+    # the chat UI quotes the kickoff turn as `[cite #N]` and renders
+    # this row's output as the expandable evidence pane.
+    cite_id: Optional[int] = None
+
 
 def kickoff_analysis(
     binary_path: str,
@@ -229,6 +234,48 @@ def kickoff_analysis(
         timings["per_function_lift_ms"] = round(
             (time.perf_counter() - t0) * 1000, 1
         )
+
+        # Record this whole invocation as a single evidence row so
+        # the chat UI can cite the agent's first-turn summary back
+        # to a structured artifact in the KB. Done before kb.close
+        # so the row commits.
+        try:
+            short_summary = (
+                f"kickoff: {summary.functions_total} fns, "
+                f"{summary.functions_named} named, "
+                f"{summary.stack_slots_discovered} slots, "
+                f"{summary.types_propagated} propagated, "
+                f"{summary.auto_structs_emitted} structs"
+            )
+            cite_id = _xref_db.record_evidence(
+                kb,
+                tool="kickoff_analysis",
+                args={
+                    "binary_path": str(binary),
+                    "max_functions_for_kb_lift": max_functions_for_kb_lift,
+                    "skip_if_packed": skip_if_packed,
+                },
+                summary=short_summary,
+                output={
+                    "functions_total": summary.functions_total,
+                    "functions_named": summary.functions_named,
+                    "stack_slots_discovered": summary.stack_slots_discovered,
+                    "types_propagated": summary.types_propagated,
+                    "auto_structs_emitted": summary.auto_structs_emitted,
+                    "stdlib_prototypes_loaded": summary.stdlib_prototypes_loaded,
+                    "dwarf_types_imported": summary.dwarf_types_imported,
+                    "callgraph_edges": summary.callgraph_edges,
+                    "by_set_by": summary.by_set_by,
+                    "packer": summary.packer,
+                    "format": summary.format,
+                    "arch": summary.arch,
+                    "entry_va": summary.entry_va,
+                },
+            )
+            summary.cite_id = cite_id
+        except Exception:
+            # Evidence-logging is best-effort; never block kickoff.
+            pass
     finally:
         kb.close()
 

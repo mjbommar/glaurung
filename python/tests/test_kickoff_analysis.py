@@ -93,6 +93,31 @@ def test_kickoff_renders_markdown_summary(tmp_path: Path) -> None:
     assert "completed in" in md
 
 
+def test_kickoff_records_evidence_row(tmp_path: Path) -> None:
+    """The kickoff invocation should leave a citable evidence_log row
+    so the chat UI can render the first-turn summary as an
+    expandable pane."""
+    from glaurung.llm.kb import xref_db
+    from glaurung.llm.kb.persistent import PersistentKnowledgeBase
+
+    binary = _need(_C2_DEMO)
+    db = tmp_path / "kickoff-cite.glaurung"
+    summary = kickoff_analysis(str(binary), db_path=str(db))
+    assert summary.cite_id is not None
+    assert summary.cite_id >= 1
+
+    # Reopen the KB and pull the evidence row back.
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+    rec = xref_db.get_evidence(kb, summary.cite_id)
+    assert rec is not None
+    assert rec.tool == "kickoff_analysis"
+    assert "kickoff:" in rec.summary
+    # Output carries the same numbers the summary reports.
+    assert rec.output["functions_total"] == summary.functions_total
+    assert rec.output["stack_slots_discovered"] == summary.stack_slots_discovered
+    kb.close()
+
+
 def test_kickoff_cli_subcommand(tmp_path: Path) -> None:
     """Smoke-test `glaurung kickoff <binary>`."""
     from glaurung.cli.main import GlaurungCLI
