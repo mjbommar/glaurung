@@ -818,24 +818,89 @@ def import_stdlib_prototypes(
 # Cross-function type propagation v2 (#195)
 # ---------------------------------------------------------------------------
 
-# x86_64 SysV ABI integer/pointer argument registers, in order. Most
-# of libc/POSIX/WinAPI lives in this calling convention on Linux.
-_SYSV_ARG_REGS_X64: List[Tuple[str, str, str]] = [
-    # (full 64-bit, 32-bit, 8-bit) so we recognize both `mov rdi, ...`
-    # and `mov edi, ...` writes targeting the same logical arg slot.
-    ("rdi", "edi", "dil"),
-    ("rsi", "esi", "sil"),
-    ("rdx", "edx", "dl"),
-    ("rcx", "ecx", "cl"),
-    ("r8",  "r8d", "r8b"),
-    ("r9",  "r9d", "r9b"),
+# Calling-convention argument-register tables. Each entry is a tuple
+# (full, ...aliases) where `full` is the canonical 64-bit name we
+# normalize to, and the aliases are narrower-width or alternate
+# register names that target the same logical arg slot.
+#
+# x86_64 SysV (Linux/macOS x86_64): integer args 1-6 → rdi/rsi/rdx/rcx/r8/r9.
+_SYSV_ARG_REGS_X64: List[Tuple[str, ...]] = [
+    ("rdi", "edi", "di",  "dil"),
+    ("rsi", "esi", "si",  "sil"),
+    ("rdx", "edx", "dx",  "dl"),
+    ("rcx", "ecx", "cx",  "cl"),
+    ("r8",  "r8d", "r8w", "r8b"),
+    ("r9",  "r9d", "r9w", "r9b"),
+]
+
+# Microsoft x64 (Windows x86_64 MSVC): integer args 1-4 → rcx/rdx/r8/r9.
+# Different ordering vs SysV — rcx is arg0, not arg3 — so an MSVC binary
+# analysed with the SysV table will misattribute every parameter.
+_WIN64_ARG_REGS_X64: List[Tuple[str, ...]] = [
+    ("rcx", "ecx", "cx",  "cl"),
+    ("rdx", "edx", "dx",  "dl"),
+    ("r8",  "r8d", "r8w", "r8b"),
+    ("r9",  "r9d", "r9w", "r9b"),
+]
+
+# AArch64 / ARM64 AAPCS64: integer args 1-8 → x0-x7. Each x-reg has a
+# 32-bit alias w-reg sharing the same logical slot.
+_AAPCS64_ARG_REGS: List[Tuple[str, ...]] = [
+    ("x0", "w0"), ("x1", "w1"), ("x2", "w2"), ("x3", "w3"),
+    ("x4", "w4"), ("x5", "w5"), ("x6", "w6"), ("x7", "w7"),
 ]
 
 
-def _operand_destination_register(op: str) -> Optional[str]:
-    """For a single operand string, return the canonical 64-bit register
-    name if the operand is one of the SysV arg registers (in any width).
-    Returns None for memory operands or unrelated registers."""
+def _select_arg_regs(binary_path: str) -> List[Tuple[str, ...]]:
+    """Pick the right calling-convention table for `binary_path`.
+
+    Decision tree:
+      - PE / EXE on x86_64 → Win64 (rcx/rdx/r8/r9)
+      - ELF/Mach-O on AArch64 → AAPCS64 (x0-x7)
+      - Otherwise → SysV x86_64 (rdi/rsi/rdx/rcx/r8/r9)
+
+    Falls back to SysV for anything we can't classify; the cost is
+    misattribution on Win64/ARM64 binaries that slip past detection,
+    not crashes.
+    """
+    try:
+        import glaurung as g
+        art = g.triage.analyze_path(str(binary_path), 10_000_000, 100_000_000, 1)
+    except Exception:
+        return _SYSV_ARG_REGS_X64
+    verdicts = getattr(art, "verdicts", None) or []
+    if not verdicts:
+        return _SYSV_ARG_REGS_X64
+    v = verdicts[0]
+    fmt = (str(getattr(v, "format", "")) or "").upper()
+    arch = (str(getattr(v, "arch", "")) or "").lower()
+
+    if "aarch64" in arch or "arm64" in arch:
+        return _AAPCS64_ARG_REGS
+    # PE on x86_64 → Microsoft x64 calling convention.
+    # Note: MinGW-built PEs use SysV instead, but the bench (and the
+    # propagation pass) tolerates wrong tables — they just produce
+    # zero matches. The real win is Win64-on-MSVC binaries.
+    if "PE" in fmt and ("x86_64" in arch or "amd64" in arch or "x64" in arch):
+        return _WIN64_ARG_REGS_X64
+    return _SYSV_ARG_REGS_X64
+
+
+def _operand_destination_register(
+    op: str,
+    arg_regs: Optional[List[Tuple[str, ...]]] = None,
+) -> Optional[str]:
+    """For a single operand string, return the canonical (first-element)
+    register name if the operand is one of the calling convention's arg
+    registers in any width. Returns None for memory operands or
+    unrelated registers.
+
+    Defaults to SysV x86_64 when no table is supplied to keep existing
+    callers working; the propagation pass passes the binary-specific
+    table after running `_select_arg_regs`.
+    """
+    if arg_regs is None:
+        arg_regs = _SYSV_ARG_REGS_X64
     s = op.strip().lower()
     # Reject anything bracketed (memory operand) or with a colon prefix.
     if "[" in s or "]" in s:
@@ -843,9 +908,9 @@ def _operand_destination_register(op: str) -> Optional[str]:
     if ":" in s:
         s = s.split(":", 1)[-1].strip()
     s = s.strip()
-    for full, mid, low in _SYSV_ARG_REGS_X64:
-        if s in (full, mid, low):
-            return full
+    for entry in arg_regs:
+        if s in entry:
+            return entry[0]
     return None
 
 
@@ -903,6 +968,14 @@ def propagate_types_at_callsites(
     if not protos:
         return 0
 
+    # Select the calling-convention argument-register table for this
+    # binary. Win64 PE / AAPCS64 / SysV are picked from triage output.
+    arg_regs = _select_arg_regs(str(binary_path))
+    # Branch instruction set: x86 uses `call`, ARM uses `bl`/`blr`.
+    is_arm = arg_regs is _AAPCS64_ARG_REGS
+    call_mnemonics = ("bl", "blr") if is_arm else ("call",)
+    move_mnemonics = ("mov", "lea") if not is_arm else ("mov", "ldr", "ldur", "adrp", "add")
+
     # Pre-build name → entry-VA map so we can resolve `call <hex>` to a
     # known function name when the operand is a literal address. Also
     # fold in the ELF PLT map: imported libc functions (printf, strlen,
@@ -925,7 +998,7 @@ def propagate_types_at_callsites(
 
     refinements = 0
     for idx, inst in enumerate(ins):
-        if inst.mnemonic.lower() != "call":
+        if inst.mnemonic.lower() not in call_mnemonics:
             continue
         # Resolve the call target name.
         target_name = _resolve_call_target_name(inst, name_by_va)
@@ -938,7 +1011,7 @@ def propagate_types_at_callsites(
         if proto is None:
             continue
 
-        params = proto.params[: len(_SYSV_ARG_REGS_X64)]
+        params = proto.params[: len(arg_regs)]
         if not params:
             continue
 
@@ -950,14 +1023,16 @@ def propagate_types_at_callsites(
         for back_idx in range(idx - 1, lookback_end - 1, -1):
             prev = ins[back_idx]
             mnem = prev.mnemonic.lower()
-            if mnem in ("call", "jmp"):
+            if mnem in call_mnemonics or mnem in ("jmp", "b", "br"):
                 # Crossed a basic-block boundary — stop scanning.
                 break
-            if mnem not in ("mov", "lea"):
+            if mnem not in move_mnemonics:
                 continue
             if len(prev.operands) < 2:
                 continue
-            dst_reg = _operand_destination_register(str(prev.operands[0]))
+            dst_reg = _operand_destination_register(
+                str(prev.operands[0]), arg_regs=arg_regs,
+            )
             if dst_reg is None:
                 continue
             src_off = _operand_source_frame_offset(str(prev.operands[1]))
@@ -965,7 +1040,7 @@ def propagate_types_at_callsites(
                 continue
             # Match dst_reg to a parameter index.
             param_idx = next(
-                (i for i, regs in enumerate(_SYSV_ARG_REGS_X64) if regs[0] == dst_reg),
+                (i for i, regs in enumerate(arg_regs) if regs[0] == dst_reg),
                 None,
             )
             if param_idx is None or param_idx >= len(params):
