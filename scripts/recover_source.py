@@ -423,9 +423,18 @@ def _collect_struct_field_accesses(
     return {k: sorted(v) for k, v in type_fields.items()}
 
 
+# Numeric signals must be anchored to FIELD_REF (post-substitution) —
+# otherwise unrelated arithmetic on the same line (e.g. a loop counter
+# `i++` next to `FIELD_REF[i]`, or a literal RHS in `FIELD_REF[0] = 0`)
+# leaks into the int-vote pool and ties out clear pointer signals
+# (Bug O). Each alternative consumes FIELD_REF on the left or right so
+# only operators that actually touch the field count.
 _NUMERIC_OP_NEAR_FIELD_RE = re.compile(
-    r"(\+\+|--|[+\-*/%]=|<<=|>>=|&=|\|=|\^=|\bsizeof|=\s*\d|"
-    r"==\s*\d|!=\s*\d|<\s*\d|>\s*\d|<=\s*\d|>=\s*\d)"
+    r"\bFIELD_REF\s*(\+\+|--|[+\-*/%]=|<<=|>>=|&=|\|=|\^=)"
+    r"|(\+\+|--)\s*\bFIELD_REF\b"
+    r"|\bFIELD_REF\s*(==|!=|<|>|<=|>=|=)\s*-?\d"
+    r"|-?\d+\s*(==|!=|<|>|<=|>=)\s*\bFIELD_REF\b"
+    r"|\bsizeof\s*\(\s*FIELD_REF\s*\)"
 )
 # Pointer-shaped uses we look for AFTER blanking out the access itself:
 # - `*X` immediately before / `[`/`->` after → field is a pointer
