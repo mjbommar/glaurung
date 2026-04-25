@@ -6,12 +6,13 @@
 //! blocks on control flow, and emits `Function`s plus a `CallGraph`.
 
 use crate::core::address::{Address, AddressKind};
+use crate::core::address_range::AddressRange;
 use crate::core::basic_block::BasicBlock;
 use crate::core::binary::{Arch as BArch, Endianness};
 use crate::core::call_graph::{CallGraph, CallGraphEdge, CallType};
 use crate::core::control_flow_graph::ControlFlowEdgeKind;
 use crate::core::disassembler::Disassembler;
-use crate::core::function::{Function, FunctionKind};
+use crate::core::function::{Function, FunctionFlags, FunctionKind};
 use crate::core::instruction::Instruction;
 use crate::disasm::registry;
 use crate::triage::heuristics;
@@ -387,6 +388,28 @@ fn discover_function(
         bb.relationships_known = true;
     }
 
+    // Seed the function's primary chunk from the basic-block extents so
+    // every discovered function has at least one entry in `chunks`. The
+    // chunk-merge pass relies on this — without it, parents that haven't
+    // had `range` set explicitly silently swallow their cold splits but
+    // expose `chunks=[<cold only>]` to consumers.
+    if !func.basic_blocks.is_empty() {
+        let entry_va = func.entry_point.value;
+        let max_end = func
+            .basic_blocks
+            .iter()
+            .map(|bb| bb.end_address.value)
+            .max()
+            .unwrap_or(entry_va);
+        if max_end > entry_va {
+            if let Ok(start) = Address::new(AddressKind::VA, entry_va, bits, None, None) {
+                if let Ok(range) = AddressRange::new(start, max_end - entry_va, None) {
+                    func.add_chunk(range);
+                }
+            }
+        }
+    }
+
     Some((func, call_edges))
 }
 
@@ -423,6 +446,101 @@ fn parse_function_seeds(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec
         .into_iter()
         .filter_map(|va| Address::new(AddressKind::VA, va, bits, None, None).ok())
         .collect()
+}
+
+/// Compiler-emitted suffixes that mark a separate symbol as belonging to
+/// the same logical function as `<base>`. The first match wins per child;
+/// `<base>` is everything before the suffix in the raw symbol name.
+const COMPILER_SPLIT_SUFFIXES: &[&str] = &[
+    ".cold",       // GCC -O2: cold-path split (single)
+    ".cold.0",     // GCC: numbered cold splits when multiple cold paths
+    ".cold.1",
+    ".cold.2",
+    ".cold.3",
+    ".part.0",     // GCC: partial-inlining splits (.part.<n>)
+    ".part.1",
+    ".part.2",
+];
+
+/// Strip a known split suffix from `raw_name` and return the parent name,
+/// or `None` if `raw_name` carries no recognised split suffix.
+fn split_parent_name(raw_name: &str) -> Option<&str> {
+    for suf in COMPILER_SPLIT_SUFFIXES {
+        if let Some(parent) = raw_name.strip_suffix(suf) {
+            if !parent.is_empty() {
+                return Some(parent);
+            }
+        }
+    }
+    None
+}
+
+/// Merge compiler-emitted split children (`main.cold`, `foo.part.0`, ...)
+/// into their parent function's `chunks` list and drop them from the
+/// flat function list. Returns the number of children folded in.
+///
+/// Pass this *after* symbol renaming so child names are already canonical.
+fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usize {
+    use std::collections::HashMap;
+
+    // entry_va → index into `functions` for fast parent lookup.
+    let by_name: HashMap<String, usize> = functions
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.name.clone(), i))
+        .collect();
+
+    let mut to_remove: Vec<usize> = Vec::new();
+    let mut merges: Vec<(usize, usize)> = Vec::new(); // (parent_idx, child_idx)
+
+    for (child_idx, child) in functions.iter().enumerate() {
+        let parent_name = match split_parent_name(&child.name) {
+            Some(n) => n,
+            None => continue,
+        };
+        let parent_idx = match by_name.get(parent_name) {
+            Some(&i) if i != child_idx => i,
+            _ => continue,
+        };
+        merges.push((parent_idx, child_idx));
+        to_remove.push(child_idx);
+    }
+
+    for (parent_idx, child_idx) in &merges {
+        // Take chunks/range from child without removing the child yet — the
+        // post-loop removal pass uses indices, so we can't shift the list
+        // in place here.
+        let child_ranges: Vec<AddressRange> = {
+            let child = &functions[*child_idx];
+            if !child.chunks.is_empty() {
+                child.chunks.clone()
+            } else {
+                child.range.clone().map(|r| vec![r]).unwrap_or_default()
+            }
+        };
+        let parent = &mut functions[*parent_idx];
+        // Ensure the parent's primary range is in chunks before appending.
+        if parent.chunks.is_empty() {
+            if let Some(r) = parent.range.clone() {
+                parent.chunks.push(r);
+            }
+        }
+        for r in child_ranges {
+            parent.add_chunk(r);
+        }
+        if !parent.has_flag(FunctionFlags::HAS_EH) {
+            parent.add_flag(FunctionFlags::HAS_EH);
+        }
+    }
+
+    // Remove children in descending index order so earlier indices stay valid.
+    to_remove.sort_unstable();
+    to_remove.dedup();
+    for idx in to_remove.iter().rev() {
+        functions.remove(*idx);
+    }
+
+    merges.len()
 }
 
 /// Analyze bytes and return discovered functions and a callgraph (best-effort).
@@ -494,6 +612,11 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         }
     }
 
+    // Fold compiler-emitted split chunks (e.g. GCC -O2 `<fn>.cold`) into
+    // their parent function's `chunks` list so downstream consumers see
+    // one logical function instead of N siblings.
+    merge_compiler_split_chunks(&mut functions);
+
     // Build callgraph using discovered functions where possible
     let name_by_va: std::collections::HashMap<u64, String> = functions
         .iter()
@@ -511,4 +634,59 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     }
 
     (functions, cg)
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::*;
+
+    fn _va_range(start: u64, size: u64) -> AddressRange {
+        let s = Address::new(AddressKind::VA, start, 64, None, None).unwrap();
+        AddressRange::new(s, size, None).unwrap()
+    }
+
+    fn _func(name: &str, va: u64, size: u64) -> Function {
+        let entry = Address::new(AddressKind::VA, va, 64, None, None).unwrap();
+        Function::new_full(
+            name.to_string(), entry, FunctionKind::Normal,
+            Some(_va_range(va, size)), FunctionFlags::NONE,
+            None, None, None, None, None, None, None, None, None,
+        ).unwrap()
+    }
+
+    #[test]
+    fn split_parent_name_recognises_known_suffixes() {
+        assert_eq!(split_parent_name("main.cold"), Some("main"));
+        assert_eq!(split_parent_name("foo.cold.0"), Some("foo"));
+        assert_eq!(split_parent_name("bar.part.0"), Some("bar"));
+        assert_eq!(split_parent_name("plain"), None);
+        assert_eq!(split_parent_name(".cold"), None); // empty parent rejected
+    }
+
+    #[test]
+    fn merge_folds_cold_into_parent() {
+        let mut funcs = vec![
+            _func("main", 0x1000, 0x80),
+            _func("main.cold", 0x2000, 0x20),
+            _func("other", 0x3000, 0x40),
+        ];
+        let merged = merge_compiler_split_chunks(&mut funcs);
+        assert_eq!(merged, 1);
+        assert_eq!(funcs.len(), 2, "child symbol should be dropped");
+        let main = funcs.iter().find(|f| f.name == "main").unwrap();
+        assert_eq!(main.chunks.len(), 2);
+        assert_eq!(main.total_size(), 0x80 + 0x20);
+        assert!(main.has_flag(FunctionFlags::HAS_EH));
+        assert!(main.contains_va(0x2010));
+    }
+
+    #[test]
+    fn merge_skips_orphan_cold_with_no_parent() {
+        // `mystery.cold` exists but `mystery` does not — leave the orphan
+        // alone rather than silently dropping data we can't account for.
+        let mut funcs = vec![_func("mystery.cold", 0x4000, 0x20)];
+        let merged = merge_compiler_split_chunks(&mut funcs);
+        assert_eq!(merged, 0);
+        assert_eq!(funcs.len(), 1);
+    }
 }

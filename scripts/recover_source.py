@@ -1412,17 +1412,11 @@ def main() -> int:
         if s["entry_va"] not in module_of_va:
             module_of_va[s["entry_va"]] = default_mod
 
-    # Pair `<fn>.cold` with its parent `<fn>` — GCC -O2 splits the cold
-    # path of a function into a separate symbol, but the two halves
-    # belong in the same source file so an exception path is readable.
-    by_raw_name = {s["raw_name"]: s for s in user_summaries}
-    for s in user_summaries:
-        if not s["raw_name"].endswith(".cold"):
-            continue
-        parent_name = s["raw_name"][: -len(".cold")]
-        parent = by_raw_name.get(parent_name)
-        if parent is not None:
-            module_of_va[s["entry_va"]] = module_of_va[parent["entry_va"]]
+    # Compiler-emitted split chunks (`<fn>.cold`, `<fn>.part.0`, ...) are
+    # now folded into their parent function's `chunks` field by Glaurung's
+    # cfg analyser (#156). Earlier versions of this orchestrator paired
+    # them by name suffix here; that band-aid is no longer needed since
+    # split children never appear in `funcs` in the first place.
 
     def _rewrite_extension(path: str) -> str:
         p = Path(path)

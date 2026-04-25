@@ -132,6 +132,21 @@ pub struct Function {
 
     /// Maximum call depth
     pub max_call_depth: Option<u32>,
+
+    /// All address ranges that belong to this function.
+    ///
+    /// Most functions occupy a single contiguous range — for them this is
+    /// `[range]` (or empty if `range` was never set). Compilers can split a
+    /// function across multiple ranges: GCC `-O2` emits a sibling
+    /// `<fn>.cold` symbol for unlikely branches, MSVC EH funclets live in
+    /// separate sections, and basic-block reordering can fragment a
+    /// function further. When that happens, `chunks[0]` is the primary
+    /// (entry) chunk and `chunks[1..]` are the auxiliary splits.
+    ///
+    /// Consumers that walk function bytes (decompiler, xref indexer, etc.)
+    /// should iterate `all_ranges()` instead of reading `range` directly.
+    #[serde(default)]
+    pub chunks: Vec<AddressRange>,
 }
 
 impl Function {
@@ -161,6 +176,7 @@ impl Function {
             local_vars_size: None,
             saved_regs_size: None,
             max_call_depth: None,
+            chunks: Vec::new(),
         })
     }
 
@@ -190,6 +206,7 @@ impl Function {
         }
 
         let size = range.as_ref().map(|r| r.size);
+        let chunks = range.as_ref().map(|r| vec![r.clone()]).unwrap_or_default();
 
         Ok(Function {
             name,
@@ -211,6 +228,7 @@ impl Function {
             local_vars_size,
             saved_regs_size,
             max_call_depth,
+            chunks,
         })
     }
 
@@ -271,6 +289,52 @@ impl Function {
         }
 
         max_end - min_start
+    }
+
+    /// Add an address-range chunk to this function. The first chunk added
+    /// also seeds the legacy `range` / `size` fields for back-compat with
+    /// consumers that haven't been moved to `all_ranges()` yet.
+    pub fn add_chunk(&mut self, chunk: AddressRange) {
+        if self.chunks.iter().any(|c| c.start.value == chunk.start.value && c.size == chunk.size) {
+            return;
+        }
+        if self.chunks.is_empty() {
+            self.range = Some(chunk.clone());
+            self.size = Some(chunk.size);
+        }
+        self.chunks.push(chunk);
+    }
+
+    /// Every address range owned by this function. If `chunks` was never
+    /// populated, falls back to a single-element view of `range` so callers
+    /// don't have to special-case legacy single-chunk Functions.
+    pub fn all_ranges(&self) -> Vec<AddressRange> {
+        if !self.chunks.is_empty() {
+            return self.chunks.clone();
+        }
+        self.range.clone().map(|r| vec![r]).unwrap_or_default()
+    }
+
+    /// Sum of bytes across every chunk. Differs from `size` (which is the
+    /// span of the primary chunk only) when a function is non-contiguous.
+    pub fn total_size(&self) -> u64 {
+        let ranges = self.all_ranges();
+        if ranges.is_empty() {
+            return self.size.unwrap_or(0);
+        }
+        ranges.iter().map(|r| r.size).sum()
+    }
+
+    /// Whether `va` falls inside any chunk owned by this function.
+    pub fn contains_va(&self, va: u64) -> bool {
+        for r in self.all_ranges() {
+            let start = r.start.value;
+            let end = start.saturating_add(r.size);
+            if va >= start && va < end {
+                return true;
+            }
+        }
+        false
     }
 
     /// Calculate cyclomatic complexity
@@ -409,6 +473,14 @@ impl Function {
         self.range = value.clone();
         if let Some(r) = &self.range {
             self.size = Some(r.size);
+            // Keep chunks consistent: if no chunks set yet, this becomes the
+            // primary chunk; if chunks exist, replace chunks[0] so the two
+            // views never disagree about the primary range.
+            if self.chunks.is_empty() {
+                self.chunks.push(r.clone());
+            } else {
+                self.chunks[0] = r.clone();
+            }
         }
     }
 
@@ -570,6 +642,40 @@ impl Function {
     #[getter]
     fn basic_blocks(&self) -> Vec<BasicBlock> {
         self.basic_blocks.clone()
+    }
+
+    #[getter]
+    fn chunks(&self) -> Vec<AddressRange> {
+        self.chunks.clone()
+    }
+
+    #[setter]
+    fn set_chunks(&mut self, value: Vec<AddressRange>) {
+        self.chunks = value;
+        if let Some(first) = self.chunks.first() {
+            self.range = Some(first.clone());
+            self.size = Some(first.size);
+        }
+    }
+
+    #[pyo3(name = "add_chunk")]
+    fn add_chunk_py(&mut self, chunk: AddressRange) {
+        self.add_chunk(chunk);
+    }
+
+    #[pyo3(name = "all_ranges")]
+    fn all_ranges_py(&self) -> Vec<AddressRange> {
+        self.all_ranges()
+    }
+
+    #[pyo3(name = "total_size")]
+    fn total_size_py(&self) -> u64 {
+        self.total_size()
+    }
+
+    #[pyo3(name = "contains_va")]
+    fn contains_va_py(&self, va: u64) -> bool {
+        self.contains_va(va)
     }
 
     #[getter]
@@ -755,5 +861,60 @@ mod tests {
         assert_eq!(func.name, func2.name);
         assert_eq!(func.entry_point, entry);
         assert_eq!(func.kind, func2.kind);
+    }
+
+    fn _va_range(start: u64, size: u64) -> AddressRange {
+        let s = Address::new(AddressKind::VA, start, 64, None, None).unwrap();
+        AddressRange::new(s, size, None).unwrap()
+    }
+
+    #[test]
+    fn test_chunks_seeded_by_new_full() {
+        let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
+        let primary = _va_range(0x1000, 0x80);
+        let func = Function::new_full(
+            "main".to_string(), entry, FunctionKind::Normal,
+            Some(primary.clone()), FunctionFlags::NONE,
+            None, None, None, None, None, None, None, None, None,
+        ).unwrap();
+        // new_full seeds chunks from `range` so consumers can iterate
+        // `all_ranges()` without checking for a legacy single-chunk shape.
+        assert_eq!(func.chunks.len(), 1);
+        assert_eq!(func.chunks[0].start.value, 0x1000);
+        assert_eq!(func.total_size(), 0x80);
+        assert!(func.contains_va(0x1040));
+        assert!(!func.contains_va(0x2000));
+    }
+
+    #[test]
+    fn test_add_chunk_merges_cold_split() {
+        let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
+        let mut func = Function::new("main".to_string(), entry, FunctionKind::Normal).unwrap();
+        func.add_chunk(_va_range(0x1000, 0x80));   // hot path
+        func.add_chunk(_va_range(0x2000, 0x20));   // .cold split
+        // Re-adding the same chunk is a no-op (idempotent merge).
+        func.add_chunk(_va_range(0x2000, 0x20));
+
+        assert_eq!(func.chunks.len(), 2);
+        assert_eq!(func.total_size(), 0x80 + 0x20);
+        assert!(func.contains_va(0x1010));
+        assert!(func.contains_va(0x2010));
+        assert!(!func.contains_va(0x1100));         // gap between chunks
+        // Primary range tracks chunk[0] for legacy consumers.
+        assert_eq!(func.range.as_ref().unwrap().start.value, 0x1000);
+    }
+
+    #[test]
+    fn test_all_ranges_falls_back_to_legacy_range() {
+        let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
+        let mut func = Function::new("legacy".to_string(), entry, FunctionKind::Normal).unwrap();
+        // Old code path: set `range` directly without going through chunks.
+        func.range = Some(_va_range(0x1000, 0x40));
+        func.size = Some(0x40);
+        // chunks is still empty, but all_ranges() must return the legacy range.
+        let all = func.all_ranges();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].start.value, 0x1000);
+        assert!(func.contains_va(0x1020));
     }
 }
