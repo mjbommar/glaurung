@@ -26,7 +26,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HELLO_C = ROOT / "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
+HELLO_C = ROOT / "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-c-gcc-O2"
 HELLO_CPP = ROOT / "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2"
 OUT_DIR = ROOT / "samples/adversarial/embedded"
 

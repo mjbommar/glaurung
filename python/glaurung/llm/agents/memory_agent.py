@@ -119,6 +119,10 @@ from ..tools.find_structured_blobs import (
     build_extract_pe_overlay, ExtractPeOverlayResult,
     build_extract_elf_section, ExtractElfSectionResult,
 )
+from ..tools.analyze_recursively import (
+    build_tool as build_analyze_recursively,
+    AnalyzeRecursivelyResult,
+)
 from .memory_foundation import create_foundation_agent
 
 
@@ -732,6 +736,29 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(find_ini_blobs, name="find_ini_blobs")
     agent.tool(extract_pe_overlay, name="extract_pe_overlay")
     agent.tool(extract_elf_section, name="extract_elf_section")
+
+    # Embedded-content Sprint 4 — recursive triage orchestrator. Composes
+    # every sprint 1-3 scanner into one "what's actually inside this file?"
+    # walk, returning a tree of triage nodes.
+    async def analyze_recursively(
+        ctx: RunContext,
+        path: str,
+        out_dir: str | None = None,
+        max_depth: int = 4,
+        max_total_bytes: int = 256 * 1024 * 1024,
+        max_nodes: int = 200,
+    ) -> AnalyzeRecursivelyResult:
+        tool = build_analyze_recursively()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                path=path, out_dir=out_dir,
+                max_depth=max_depth, max_total_bytes=max_total_bytes,
+                max_nodes=max_nodes,
+            ),
+        )
+
+    agent.tool(analyze_recursively, name="analyze_recursively")
 
     return agent
 

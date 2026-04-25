@@ -107,13 +107,61 @@ def _jpeg_length(data: bytes, off: int) -> Optional[int]:
 
 
 def _bmp_length(data: bytes, off: int) -> Optional[int]:
-    """BMP's BITMAPFILEHEADER carries the file size at +2."""
-    if off + 6 > len(data):
+    """BMP's BITMAPFILEHEADER carries the file size at +2.
+
+    Validates additional fields (DIB header size, reserved bytes, data
+    offset) so coincidental ``BM`` bytes in arbitrary binary data don't
+    score as embedded BMPs. Real BMPs:
+
+      - reserved fields at +6..+10 are typically zero
+      - DIB header size at +14 is one of {12, 40, 52, 56, 64, 108, 124}
+      - file size sane (≥ 26 to fit smallest possible BMP)
+    """
+    if off + 26 > len(data):
         return None
     size = int.from_bytes(data[off + 2: off + 6], "little")
-    if size < 14 or off + size > len(data):
+    if size < 26 or off + size > len(data):
+        return None
+    reserved = int.from_bytes(data[off + 6: off + 10], "little")
+    if reserved != 0:
+        return None
+    pixel_data_off = int.from_bytes(data[off + 10: off + 14], "little")
+    if pixel_data_off < 26 or pixel_data_off >= size:
+        return None
+    dib_size = int.from_bytes(data[off + 14: off + 18], "little")
+    if dib_size not in (12, 40, 52, 56, 64, 108, 124):
         return None
     return size
+
+
+def _ico_length(data: bytes, off: int) -> Optional[int]:
+    """Validate ICO ICONDIR + walk entries. Without this, the magic
+    ``\\x00\\x00\\x01\\x00`` matches null-byte runs in any binary."""
+    if off + 6 > len(data):
+        return None
+    n_images = int.from_bytes(data[off + 4: off + 6], "little")
+    if n_images == 0 or n_images > 256:
+        return None
+    if off + 6 + n_images * 16 > len(data):
+        return None
+    # Each ICONDIRENTRY is 16 bytes. Validate the first one.
+    e = off + 6
+    width = data[e]
+    height = data[e + 1]
+    if width == 0:
+        width = 256
+    if height == 0:
+        height = 256
+    bpp = int.from_bytes(data[e + 6: e + 8], "little")
+    if bpp not in (0, 1, 4, 8, 16, 24, 32):
+        return None
+    img_size = int.from_bytes(data[e + 8: e + 12], "little")
+    img_off = int.from_bytes(data[e + 12: e + 16], "little")
+    if img_off < 6 + n_images * 16:
+        return None
+    if img_off + img_size > len(data) - off:
+        return None
+    return img_off + img_size
 
 
 _IMAGE_SIGS = [
@@ -123,7 +171,7 @@ _IMAGE_SIGS = [
     (b"GIF89a", "gif", None),
     (b"BM", "bmp", _bmp_length),
     (b"RIFF", "webp", None),  # validated later by 'WEBP' at +8
-    (b"\x00\x00\x01\x00", "ico", None),
+    (b"\x00\x00\x01\x00", "ico", _ico_length),
     (b"II*\x00", "tiff", None),
     (b"MM\x00*", "tiff", None),
 ]
@@ -209,6 +257,11 @@ class FindEmbeddedImagesTool(
                     if s is not None:
                         mime, _ext, label = s
                         confirmed = fmt in mime.lower() or fmt == label
+                # For formats with length walkers (PNG/JPEG/BMP/ICO),
+                # length=None means the structure failed validation —
+                # skip rather than emit a false positive.
+                if length_fn is not None and not length:
+                    continue
                 images.append(
                     EmbeddedImage(
                         format=fmt, offset=pos, length=length or 0,
@@ -408,7 +461,7 @@ def _json_extent(data: bytes, off: int) -> Optional[int]:
                     end_off = p + 1
                     try:
                         json.loads(data[off: end_off])
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
                         return None
                     return end_off - off
         p += 1
