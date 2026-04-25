@@ -34,6 +34,9 @@ pub mod analysis;
 /// Debug-info ingestion (DWARF, PDB)
 pub mod debug;
 
+/// FLIRT-style signature matching for stripped binaries
+pub mod flirt;
+
 /// Disassembly engines and adapters
 pub mod disasm;
 

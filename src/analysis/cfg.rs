@@ -15,6 +15,7 @@ use crate::core::control_flow_graph::ControlFlowEdgeKind;
 use crate::core::disassembler::Disassembler;
 use crate::core::function::{Function, FunctionFlags, FunctionKind};
 use crate::core::instruction::Instruction;
+use crate::flirt::{apply_flirt_overrides, discover_flirt_seeds, load_default_library, FlirtLibrary};
 use crate::disasm::registry;
 use crate::triage::heuristics;
 
@@ -616,6 +617,33 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         seeds = ordered;
     }
 
+    // FLIRT seed augmentation. On stripped binaries (no symbol table),
+    // the seed list is otherwise just the entrypoint, so the analyser
+    // never finds any of the dozens of functions that exist. Scan exec
+    // regions for FLIRT prologue matches and seed those VAs too. A name
+    // mapping is also kept so we can rename `sub_*` → real_name once
+    // discovery completes (see post-processing below).
+    let flirt_lib_for_seeds: Option<FlirtLibrary> = load_default_library();
+    let flirt_seeds: Vec<(u64, String)> = if let Some(ref lib) = flirt_lib_for_seeds {
+        discover_flirt_seeds(data, &functions, lib)
+    } else {
+        Vec::new()
+    };
+    let bits = if arch.is_64_bit() { 64 } else { 32 };
+    let flirt_name_by_va: std::collections::HashMap<u64, String> = flirt_seeds
+        .iter()
+        .cloned()
+        .collect();
+    let known: std::collections::HashSet<u64> = seeds.iter().map(|a| a.value).collect();
+    for (va, _name) in &flirt_seeds {
+        if known.contains(va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, *va, bits, None, None) {
+            seeds.push(addr);
+        }
+    }
+
     // Discover functions up to budget
     let mut calls_all: Vec<(String, u64)> = Vec::new(); // (caller_name, callee_va)
     for seed in seeds.into_iter().take(budgets.max_functions.max(1)) {
@@ -673,6 +701,25 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     // *override* fields that DWARF has hard answers for; heuristic
     // basic-block CFG and edges remain.
     apply_dwarf_overrides(data, &mut functions);
+
+    // FLIRT-style signature matching. Runs *after* DWARF / symbol-rename
+    // so it only touches functions still named `sub_*` — we never
+    // overwrite a name we already trust. Also lifts names from the seed
+    // map computed during the discovery pass (covers FLIRT-discovered
+    // entries that didn't survive symbol-rename for any reason).
+    if !flirt_name_by_va.is_empty() {
+        for f in &mut functions {
+            if !f.name.starts_with("sub_") {
+                continue;
+            }
+            if let Some(name) = flirt_name_by_va.get(&f.entry_point.value) {
+                f.name = name.clone();
+            }
+        }
+    }
+    if let Some(ref lib) = flirt_lib_for_seeds {
+        apply_flirt_overrides(data, &mut functions, lib);
+    }
 
     // Fold compiler-emitted split chunks (e.g. GCC -O2 `<fn>.cold`) into
     // their parent function's `chunks` list so downstream consumers see

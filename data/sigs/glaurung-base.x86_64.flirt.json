@@ -1,0 +1,219 @@
+{
+  "arch": "x86_64",
+  "entries": [
+    {
+      "name": "_GLOBAL__sub_I_hello.cpp",
+      "prologue_hex": "53488d1d512f00004889dfe890ffffff488b3d612e0000488d15222f00004889",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-clang-O2"
+    },
+    {
+      "name": "_GLOBAL__sub_I_main",
+      "prologue_hex": "f30f1efa55488d2d352900004889efe8acfaffff488b3dcd2700004889ee5d48",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2"
+    },
+    {
+      "name": "_ZN10HelloWorld12printMessageEv",
+      "prologue_hex": "41574156534989fe488b37488b5708488b3d82290000e885faffff4989c7488b",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-clang-O2"
+    },
+    {
+      "name": "_ZN10HelloWorldC2ERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE",
+      "prologue_hex": "554889e54883ec2048897df8488975f0488b7df848897de8488b75f0e82ffaff",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
+    },
+    {
+      "name": "_ZN9__gnu_cxxneIPNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESt6vectorIS6_SaIS6_EEEEbRKNS_17__normal_iteratorIT_T0_EESG_",
+      "prologue_hex": "554889e54883ec2048897df8488975f0488b7df8e8370b0000488b00488945e8",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
+    },
+    {
+      "name": "_ZNK10HelloWorld10getCounterEv",
+      "prologue_hex": "f30f1efa554889e548897df8488b45f88b40205dc390f30f1efa554889e54883",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-cpp-g++-O0"
+    },
+    {
+      "name": "_ZNKSt5ctypeIcE8do_widenEc",
+      "prologue_hex": "f30f1efa89f0c3660f1f840000000000f30f1efa41545553488b57084889fb48",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2"
+    },
+    {
+      "name": "_ZNSaINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEEC2Ev",
+      "prologue_hex": "554889e54883ec1048897df8488b7df8e8eb0300004883c4105dc30f1f440000",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
+    },
+    {
+      "name": "_ZNSaINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEED2Ev",
+      "prologue_hex": "554889e54883ec1048897df8488b7df8e84b0300004883c4105dc30f1f440000",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
+    },
+    {
+      "name": "_ZNSt10unique_ptrI10HelloWorldSt14default_deleteIS0_EED2Ev",
+      "prologue_hex": "415653504989fe488b1f4885db7419488b3b488d43104839c77405e880f8ffff",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-clang-O2"
+    },
+    {
+      "name": "_ZNSt11char_traitsIcE6lengthEPKc",
+      "prologue_hex": "f30f1efa554889e54883ec2048897de8488b45e8488945f8b80000000084c074",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-cpp-g++-O0"
+    },
+    {
+      "name": "_ZNSt20__uninitialized_copyILb0EE13__uninit_copyIPPcPNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEEET0_T_SC_SB_",
+      "prologue_hex": "554157415641554154534883ec184989d648897424104839f70f84a300000049",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-clang-O2"
+    },
+    {
+      "name": "_ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EE3endEv",
+      "prologue_hex": "554889e54883ec1048897df0488b75f04883c608488d7df8e8430b0000488b45",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
+    },
+    {
+      "name": "_ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EE5beginEv",
+      "prologue_hex": "554889e54883ec1048897df0488b75f0488d7df8e8770b0000488b45f84883c4",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
+    },
+    {
+      "name": "_ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EEC2IPPcvEET_SB_RKS6_",
+      "prologue_hex": "554889e54883ec6048897df8488975f0488955e848894de0488b7df848897da8",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
+    },
+    {
+      "name": "_ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev",
+      "prologue_hex": "4157415653488b1f4c8b7f084c39fb742e4989feeb13662e0f1f840000000000",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-clang-O2"
+    },
+    {
+      "name": "_ZSt11make_uniqueI10HelloWorldJRA12_KcEENSt9_MakeUniqIT_E15__single_objectEDpOT0_",
+      "prologue_hex": "554157415641554154534883ec284989f44989febf28000000e8f2f9ffff4989",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-clang-O2"
+    },
+    {
+      "name": "_ZSt4endlIcSt11char_traitsIcEERSt13basic_ostreamIT_T0_ES6_.isra.0",
+      "prologue_hex": "4154554883ec08488b07488b40e84c8ba407f00000004d85e4745841807c2438",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2"
+    },
+    {
+      "name": "_ZdlPvS_",
+      "prologue_hex": "f30f1efa554889e548897df8488975f0905dc3f30f1efa554889e54883ec2048",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-cpp-g++-O0"
+    },
+    {
+      "name": "_ZnwmPv",
+      "prologue_hex": "f30f1efa554889e548897df8488975f0488b45f05dc3f30f1efa554889e54889",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-cpp-g++-O0"
+    },
+    {
+      "name": "__clang_call_terminate",
+      "prologue_hex": "50e88af7ffffe875f7ffff0f1f440000554157415641554154534883ec184989",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-clang-O2"
+    },
+    {
+      "name": "__cxx_global_var_init",
+      "prologue_hex": "554889e5488d3d3e4f0000e890ffffff488b3d414e0000488d352b4f0000488d",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
+    },
+    {
+      "name": "__do_global_dtors_aux",
+      "prologue_hex": "f30f1efa803d6d2f000000752b5548833dd22e0000004889e5740c488b3d062f",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/c2_demo-clang-O2"
+    },
+    {
+      "name": "_start",
+      "prologue_hex": "f30f1efa31ed4989d15e4889e24883e4f050544531c031c9488d3dd1000000ff",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/c2_demo-clang-O2"
+    },
+    {
+      "name": "deregister_tm_clones",
+      "prologue_hex": "488d3de12f0000488d05da2f00004839f87415488b05262f00004885c07409ff",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/c2_demo-clang-O2"
+    },
+    {
+      "name": "frame_dummy",
+      "prologue_hex": "f30f1efae977ffffff0f1f8000000000534881ec50010000488d3d8e0f0000e8",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/c2_demo-clang-O2"
+    },
+    {
+      "name": "main",
+      "prologue_hex": "534881ec50010000488d3d8e0f0000e8bcfeffff488b0dd52e00004c8b05ee2e",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/c2_demo-clang-O2"
+    },
+    {
+      "name": "print_sum",
+      "prologue_hex": "89fe488d3d0b0e000031c0e950fefffff30f1efa4883ec084883c408c3000000",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-c-clang-O2"
+    },
+    {
+      "name": "register_tm_clones",
+      "prologue_hex": "488d3db12f0000488d35aa2f00004829fe4889f048c1ee3f48c1f8034801c648",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O2/c2_demo-clang-O2"
+    },
+    {
+      "name": "static_function",
+      "prologue_hex": "554889e58b05362e000083c00189052d2e00008b35272e0000488d3d150e0000",
+      "source_binary": "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-c-clang-O0"
+    }
+  ],
+  "index": {
+    "41545548": [
+      17
+    ],
+    "41565350": [
+      9
+    ],
+    "41574156": [
+      2,
+      15
+    ],
+    "488d3db1": [
+      28
+    ],
+    "488d3de1": [
+      24
+    ],
+    "50e88af7": [
+      20
+    ],
+    "534881ec": [
+      26
+    ],
+    "53488d1d": [
+      0
+    ],
+    "55415741": [
+      11,
+      16
+    ],
+    "554889e5": [
+      3,
+      4,
+      7,
+      8,
+      12,
+      13,
+      14,
+      21,
+      29
+    ],
+    "89fe488d": [
+      27
+    ],
+    "f30f1efa": [
+      1,
+      5,
+      6,
+      10,
+      18,
+      19,
+      22,
+      23,
+      25
+    ]
+  },
+  "prologue_len": 32,
+  "schema_version": "1",
+  "stats": {
+    "binaries_scanned": 42,
+    "dropped_ambiguous": 5,
+    "raw_signatures": 341,
+    "unique_signatures": 30
+  }
+}
