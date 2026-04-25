@@ -68,6 +68,12 @@ from ..tools.scan_until_byte import (
     build_tool as build_scan_until_byte,
     ScanUntilByteResult,
 )
+from ..tools.verify_recovery_tool import (
+    build_verify_compile_tool,
+    build_verify_runtime_tool,
+    VerifyCompileResult,
+    VerifyRuntimeResult,
+)
 from ..tools.search_byte_pattern import (
     build_tool as build_search_byte_pattern,
     SearchBytePatternResult,
@@ -449,6 +455,49 @@ def register_analysis_tools(agent: Agent) -> Agent:
             ),
         )
 
+    async def verify_compile(
+        ctx: RunContext,
+        source: str,
+        language: str = "c",
+        timeout_seconds: float = 15.0,
+    ) -> VerifyCompileResult:
+        """Syntax-check rewritten C/C++ source. First gate after the
+        agent rewrites a decompiled function — if compile fails, fix
+        the rewrite before claiming recovery is complete."""
+        tool = build_verify_compile_tool()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                source=source, language=language,
+                timeout_seconds=timeout_seconds,
+            ),
+        )
+
+    async def verify_runtime(
+        ctx: RunContext,
+        source: str,
+        target_binary: str | None = None,
+        args: list[str] | None = None,
+        stdin: str | None = None,
+        language: str = "c",
+        timeout_seconds: float = 5.0,
+    ) -> VerifyRuntimeResult:
+        """Compile and execute rewritten source. With `target_binary`
+        set, also runs the target on the same input and reports
+        agreement — the behavioral-equivalence gate."""
+        tool = build_verify_runtime_tool()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                source=source,
+                target_binary=target_binary,
+                args=args or [],
+                stdin=stdin,
+                language=language,
+                timeout_seconds=timeout_seconds,
+            ),
+        )
+
     async def kickoff_analysis(
         ctx: RunContext,
         max_functions: int = 64,
@@ -568,6 +617,8 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(search_byte_pattern, name="search_byte_pattern")
     agent.tool(scan_until_byte, name="scan_until_byte")
     agent.tool(kickoff_analysis, name="kickoff_analysis")
+    agent.tool(verify_compile, name="verify_compile")
+    agent.tool(verify_runtime, name="verify_runtime")
     agent.tool(list_suspicious_imports, name="list_suspicious_imports")
     agent.tool(identify_compiler_and_runtime, name="identify_compiler_and_runtime")
     agent.tool(detect_crypto_usage, name="detect_crypto_usage")
