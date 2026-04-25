@@ -316,6 +316,54 @@ class ReplCommand(BaseCommand):
             type_db.add_struct(kb, name, fields, set_by="manual")
             sys.stdout.write(f"  struct {name} ({len(fields)} fields) saved\n")
 
+        def cmd_proto(argv: List[str]) -> None:
+            """proto                     — list known function prototypes
+            proto <name>              — show one prototype
+            proto set <name> <return> <params...>   — analyst override
+            """
+            if not argv:
+                protos = xref_db.list_function_prototypes(kb)
+                sys.stdout.write(f"  {len(protos)} prototypes loaded:\n")
+                for p in protos[:32]:
+                    sys.stdout.write(
+                        f"    {p.render()}  (set_by={p.set_by})\n"
+                    )
+                if len(protos) > 32:
+                    sys.stdout.write(f"    … {len(protos) - 32} more\n")
+                return
+
+            sub = argv[0]
+            if sub == "set":
+                if len(argv) < 3:
+                    sys.stdout.write(
+                        "proto set <name> <return-type> [<param-name>:<c-type> ...]\n"
+                    )
+                    return
+                name = argv[1]
+                ret = argv[2]
+                params: list[xref_db.FunctionParam] = []
+                for p in argv[3:]:
+                    if ":" not in p:
+                        sys.stdout.write(
+                            f"bad param spec {p!r}; expected name:c_type\n"
+                        )
+                        return
+                    pn, _, pt = p.partition(":")
+                    params.append(xref_db.FunctionParam(name=pn, c_type=pt))
+                xref_db.set_function_prototype(
+                    kb, function_name=name, return_type=ret,
+                    params=params, set_by="manual",
+                )
+                sys.stdout.write(f"  set prototype: {name}\n")
+                kb.save()
+                return
+            # Treat single arg as a name lookup.
+            p = xref_db.get_function_prototype(kb, sub)
+            if p is None:
+                sys.stdout.write(f"no prototype for {sub!r}\n")
+                return
+            sys.stdout.write(f"  {p.render()}  (set_by={p.set_by})\n")
+
         def cmd_borrow(argv: List[str]) -> None:
             """borrow <donor-binary>  — copy named-function names from
             a donor binary into the current KB by prologue-equality
@@ -527,6 +575,7 @@ class ReplCommand(BaseCommand):
             "locals": cmd_locals, "l": cmd_locals,
             "label": cmd_label,
             "borrow": cmd_borrow,
+            "proto": cmd_proto,
             "strings": cmd_strings, "s": cmd_strings,
             "ask": cmd_ask,
         }
@@ -663,6 +712,9 @@ glaurung repl commands
     label remove <addr>         drop a data label
     label import                bootstrap labels from binary symbols
     borrow <donor>              copy names from a debug-build sibling
+    proto                       list loaded function prototypes
+    proto <name>                show one prototype (e.g. printf)
+    proto set <name> <return> [<param>:<type> ...]   analyst override
     save                        force a save (also automatic on every edit)
 
   Inspection

@@ -204,6 +204,11 @@ class PersistentKnowledgeBase(KnowledgeBase):
             except Exception:
                 # Stdlib bundles are optional — never block KB open.
                 pass
+            try:
+                from . import xref_db as _xref_db
+                _xref_db.import_stdlib_prototypes(kb)
+            except Exception:
+                pass
         return kb
 
     @staticmethod

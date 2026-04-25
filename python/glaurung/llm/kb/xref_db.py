@@ -98,6 +98,23 @@ CREATE TABLE IF NOT EXISTS data_labels (
 CREATE INDEX IF NOT EXISTS idx_data_labels_binary
     ON data_labels(binary_id);
 
+-- Function prototypes (#172). Keyed by short_name so a stdlib
+-- prototype loaded from a bundle can match every binary's `printf`
+-- regardless of mangling. Demangled-form lookup runs through the
+-- canonical column too (e.g. `Foo::bar` matches a manual entry).
+CREATE TABLE IF NOT EXISTS function_prototypes (
+    binary_id INTEGER NOT NULL,
+    function_name TEXT NOT NULL,
+    return_type TEXT,
+    params_json TEXT NOT NULL DEFAULT '[]',
+    is_variadic INTEGER NOT NULL DEFAULT 0,
+    set_by TEXT,
+    set_at INTEGER,
+    PRIMARY KEY (binary_id, function_name)
+);
+CREATE INDEX IF NOT EXISTS idx_protos_binary
+    ON function_prototypes(binary_id);
+
 -- Stack-frame variables (#191). One row per (function, frame offset).
 -- Negative offsets are below rbp (locals); positive are above (saved
 -- regs / spill area / red-zone). Auto-discovery seeds rows with
@@ -630,6 +647,171 @@ def remove_data_label(kb: PersistentKnowledgeBase, va: int) -> None:
         (kb.binary_id, int(va)),
     )
     kb._conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Function prototypes (#172 v1)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class FunctionParam:
+    name: str
+    c_type: str
+
+
+@dataclass(frozen=True)
+class FunctionPrototype:
+    function_name: str
+    return_type: Optional[str]
+    params: List[FunctionParam]
+    is_variadic: bool
+    set_by: Optional[str]
+
+    def render(self) -> str:
+        """Render the prototype as a one-line C-ish declaration."""
+        ret = self.return_type or "void"
+        ps = [f"{p.c_type} {p.name}".strip() for p in self.params]
+        if self.is_variadic:
+            ps.append("...")
+        param_str = ", ".join(ps) if ps else "void"
+        return f"{ret} {self.function_name}({param_str})"
+
+
+def set_function_prototype(
+    kb: PersistentKnowledgeBase,
+    function_name: str,
+    return_type: Optional[str],
+    params: List[FunctionParam],
+    *,
+    is_variadic: bool = False,
+    set_by: str = "manual",
+) -> None:
+    """Persist a function prototype keyed by short name. Manual entries
+    always win over later automated guesses (consistent with type_db /
+    function_names precedence)."""
+    _ensure_schema(kb._conn)
+    import json
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT set_by FROM function_prototypes "
+        "WHERE binary_id = ? AND function_name = ?",
+        (kb.binary_id, function_name),
+    )
+    row = cur.fetchone()
+    if row is not None and row[0] == "manual" and set_by != "manual":
+        return
+    params_json = json.dumps(
+        [{"name": p.name, "c_type": p.c_type} for p in params]
+    )
+    cur.execute(
+        "INSERT OR REPLACE INTO function_prototypes "
+        "(binary_id, function_name, return_type, params_json, is_variadic, set_by, set_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            kb.binary_id, function_name, return_type, params_json,
+            1 if is_variadic else 0, set_by, int(time.time()),
+        ),
+    )
+    kb._conn.commit()
+
+
+def get_function_prototype(
+    kb: PersistentKnowledgeBase, function_name: str,
+) -> Optional[FunctionPrototype]:
+    _ensure_schema(kb._conn)
+    import json
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT function_name, return_type, params_json, is_variadic, set_by "
+        "FROM function_prototypes "
+        "WHERE binary_id = ? AND function_name = ?",
+        (kb.binary_id, function_name),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    raw_params = json.loads(row[2] or "[]")
+    return FunctionPrototype(
+        function_name=row[0],
+        return_type=row[1],
+        params=[FunctionParam(name=p["name"], c_type=p["c_type"]) for p in raw_params],
+        is_variadic=bool(row[3]),
+        set_by=row[4],
+    )
+
+
+def list_function_prototypes(
+    kb: PersistentKnowledgeBase,
+) -> List[FunctionPrototype]:
+    _ensure_schema(kb._conn)
+    import json
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT function_name, return_type, params_json, is_variadic, set_by "
+        "FROM function_prototypes WHERE binary_id = ? ORDER BY function_name",
+        (kb.binary_id,),
+    )
+    out: List[FunctionPrototype] = []
+    for row in cur.fetchall():
+        raw_params = json.loads(row[2] or "[]")
+        out.append(FunctionPrototype(
+            function_name=row[0], return_type=row[1],
+            params=[FunctionParam(name=p["name"], c_type=p["c_type"]) for p in raw_params],
+            is_variadic=bool(row[3]), set_by=row[4],
+        ))
+    return out
+
+
+def import_stdlib_prototypes(
+    kb: PersistentKnowledgeBase,
+    *,
+    bundles: Optional[List[str]] = None,
+    bundle_dir=None,
+) -> dict:
+    """Load function-prototype bundles (libc/POSIX/WinAPI) into
+    function_prototypes with `set_by="stdlib"`. Default bundles:
+    ["stdlib-libc-protos"]."""
+    import json
+    from pathlib import Path as _Path
+    from . import type_db as _type_db
+
+    if bundles is None:
+        bundles = ["stdlib-libc-protos"]
+    if bundle_dir is None:
+        bundle_dir = _type_db._stdlib_bundle_dir()
+
+    summary: dict = {}
+    for name in bundles:
+        path = _Path(bundle_dir) / f"{name}.json"
+        if not path.exists():
+            summary[name] = {"error": "bundle_missing", "path": str(path)}
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except Exception as e:
+            summary[name] = {"error": f"parse_failed: {e}"}
+            continue
+        set_by = data.get("set_by", "stdlib")
+        bs = {"prototypes": 0, "skipped": 0}
+        for proto in data.get("prototypes", []) or []:
+            if not proto.get("name"):
+                bs["skipped"] += 1
+                continue
+            params = [
+                FunctionParam(name=str(p["name"]), c_type=str(p["c_type"]))
+                for p in proto.get("params", [])
+            ]
+            set_function_prototype(
+                kb,
+                function_name=str(proto["name"]),
+                return_type=str(proto.get("return_type") or "void"),
+                params=params,
+                is_variadic=bool(proto.get("is_variadic", False)),
+                set_by=set_by,
+            )
+            bs["prototypes"] += 1
+        summary[name] = bs
+    return summary
 
 
 def borrow_symbols_from_donor(
