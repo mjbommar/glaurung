@@ -1066,6 +1066,89 @@ def propagate_types_at_callsites(
     return refinements
 
 
+def render_decompile_with_names(
+    kb: PersistentKnowledgeBase,
+    binary_path: str,
+    function_va: int,
+    *,
+    max_blocks: int = 256,
+    max_instructions: int = 10_000,
+    timeout_ms: int = 500,
+    style: str = "c",
+) -> str:
+    """Decompile `function_va` and rewrite frame-offset references
+    (`(rbp - 0x10)`, `(rbp + 8)`, `*&[rbp - 0x40]`, ...) to named
+    stack-frame variables from the persistent KB.
+
+    A user calling this in the REPL sees `argc` instead of `(rbp -
+    0x14)`, and `*request_table` instead of `*&[rbp - 0xa0]`. Cashes in
+    #191 stack-frame discovery + #195 type propagation immediately.
+
+    Falls back gracefully: when no stack vars are populated for the
+    function, returns the raw decompile output unchanged.
+    """
+    import glaurung as g
+    import re
+
+    raw = g.ir.decompile_at(
+        str(binary_path), int(function_va),
+        max_blocks=max_blocks,
+        max_instructions=max_instructions,
+        timeout_ms=timeout_ms,
+        style=style,
+    )
+    slots = list_stack_vars(kb, function_va=function_va)
+    if not slots:
+        return raw
+    name_by_offset: dict[int, str] = {s.offset: s.name for s in slots}
+
+    def _resolve(off_text: str, sign: str) -> Optional[str]:
+        try:
+            n = int(off_text, 16) if off_text.lower().startswith("0x") else int(off_text)
+        except ValueError:
+            return None
+        offset = -n if sign == "-" else n
+        return name_by_offset.get(offset)
+
+    # Match `(rbp - 0x10)`, `(rbp + 0x18)`, `(rbp - 272)`, `(rsp + 8)`.
+    paren_re = re.compile(
+        r"\((?:%?)(?:rbp|ebp|rsp|esp)\s*([+\-])\s*((?:0x)?[0-9a-fA-F]+)\)"
+    )
+    # Match `*&[rbp - 0x40]` and bare `[rbp - 0x40]` forms.
+    bracket_re = re.compile(
+        r"(\*?&?)?\[(?:%?)(?:rbp|ebp|rsp|esp)\s*([+\-])\s*((?:0x)?[0-9a-fA-F]+)\]"
+    )
+
+    out = raw
+
+    def _paren_sub(m: "re.Match[str]") -> str:
+        sign, off = m.group(1), m.group(2)
+        name = _resolve(off, sign)
+        if name is None:
+            return m.group(0)
+        # Mirror C address-of when the original was a parenthesized
+        # frame address (it represents `&local`, not the value).
+        return f"&{name}"
+
+    def _bracket_sub(m: "re.Match[str]") -> str:
+        prefix, sign, off = m.group(1) or "", m.group(2), m.group(3)
+        name = _resolve(off, sign)
+        if name is None:
+            return m.group(0)
+        # `[rbp - N]` is the *value* at that slot (i.e. `local`).
+        # `&[rbp - N]` is the address (`&local`).
+        # `*&[rbp - N]` collapses to `local` again.
+        if "*" in prefix and "&" in prefix:
+            return name
+        if "&" in prefix:
+            return f"&{name}"
+        return name
+
+    out = paren_re.sub(_paren_sub, out)
+    out = bracket_re.sub(_bracket_sub, out)
+    return out
+
+
 def _resolve_call_target_name(
     inst, name_by_va: dict
 ) -> Optional[str]:

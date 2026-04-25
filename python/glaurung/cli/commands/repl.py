@@ -240,10 +240,12 @@ class ReplCommand(BaseCommand):
             if target is None:
                 sys.stdout.write("decomp [<addr>]\n")
                 return
+            # Resolve target → enclosing function so the KB rewrite uses
+            # the right entry VA when looking up stack-frame slots.
+            func_va = _enclosing_function_va(target) or target
             try:
-                text = g.ir.decompile_at(
-                    str(binary_path), target,
-                    timeout_ms=500, style="c",
+                text = xref_db.render_decompile_with_names(
+                    kb, str(ctx.file_path), func_va, timeout_ms=500, style="c",
                 )
             except Exception as e:
                 sys.stdout.write(f"decompile failed: {e}\n")
