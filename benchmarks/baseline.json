@@ -1,5 +1,5 @@
 {
-  "glaurung_commit": "3343395b1adec6b896c747c39bcd5cac3c0f283f",
+  "glaurung_commit": "736d0329f6f8181ad6ade19cac1a37336bb55853",
   "schema_version": "1",
   "scorecards": [
     {
@@ -31,9 +31,9 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 3.0,
-        "decompile_ms": 13.9,
-        "triage_ms": 115.7
+        "analysis_ms": 3.1,
+        "decompile_ms": 12.3,
+        "triage_ms": 28.2
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -78,8 +78,8 @@
       },
       "elapsed_ms": {
         "analysis_ms": 5.0,
-        "decompile_ms": 63.4,
-        "triage_ms": 20.7
+        "decompile_ms": 61.3,
+        "triage_ms": 7.7
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -123,9 +123,9 @@
         "with_chunks_gt_one": 1
       },
       "elapsed_ms": {
-        "analysis_ms": 4.9,
-        "decompile_ms": 61.8,
-        "triage_ms": 7.8
+        "analysis_ms": 5.2,
+        "decompile_ms": 61.3,
+        "triage_ms": 7.9
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -169,9 +169,9 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 2.1,
-        "decompile_ms": 17.0,
-        "triage_ms": 10.0
+        "analysis_ms": 2.3,
+        "decompile_ms": 17.5,
+        "triage_ms": 9.8
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -215,9 +215,9 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 1.3,
-        "decompile_ms": 12.2,
-        "triage_ms": 7.4
+        "analysis_ms": 1.5,
+        "decompile_ms": 13.0,
+        "triage_ms": 7.2
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -261,9 +261,9 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 7.4,
+        "analysis_ms": 7.7,
         "decompile_ms": 120.0,
-        "triage_ms": 8.2
+        "triage_ms": 8.1
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -307,9 +307,9 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 16.3,
-        "decompile_ms": 362.4,
-        "triage_ms": 32.7
+        "analysis_ms": 16.7,
+        "decompile_ms": 385.5,
+        "triage_ms": 31.8
       },
       "error": null,
       "flags": "-O0 -g -Wall -Wextra",
@@ -353,9 +353,9 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 4.1,
-        "decompile_ms": 40.9,
-        "triage_ms": 6.2
+        "analysis_ms": 4.0,
+        "decompile_ms": 41.4,
+        "triage_ms": 6.1
       },
       "error": null,
       "flags": "-O2 -Wl,-s",
@@ -369,25 +369,117 @@
         "expected_language": "cpp",
         "language_match": true
       }
+    },
+    {
+      "architecture": null,
+      "binary_path": "samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual",
+      "callgraph": {
+        "avg_out_degree": 0.421,
+        "edges": 8,
+        "has_main_node": true,
+        "nodes": 19
+      },
+      "compiler": null,
+      "decompile": {
+        "attempted": 14,
+        "failed": 0,
+        "succeeded": 14,
+        "success_rate": 1.0,
+        "timed_out": 0,
+        "total_pseudocode_lines": 256
+      },
+      "discovery": {
+        "auto_named_sub": 0,
+        "chunk_merge_evidence": 0,
+        "cold_orphans": 0,
+        "name_match_rate": 1.0,
+        "named_from_symbols": 14,
+        "total": 14,
+        "with_basic_blocks": 14,
+        "with_chunks_gt_one": 0
+      },
+      "elapsed_ms": {
+        "analysis_ms": 1.9,
+        "decompile_ms": 29.6,
+        "triage_ms": 7.1
+      },
+      "error": null,
+      "flags": null,
+      "metadata_path": null,
+      "platform": null,
+      "source_path": null,
+      "triage": {
+        "detected_arch": "x86_64",
+        "detected_format": "ELF",
+        "detected_language": "c",
+        "expected_language": null,
+        "language_match": false
+      }
+    },
+    {
+      "architecture": null,
+      "binary_path": "samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual-stripped",
+      "callgraph": {
+        "avg_out_degree": 0.0,
+        "edges": 0,
+        "has_main_node": false,
+        "nodes": 9
+      },
+      "compiler": null,
+      "decompile": {
+        "attempted": 9,
+        "failed": 0,
+        "succeeded": 9,
+        "success_rate": 1.0,
+        "timed_out": 0,
+        "total_pseudocode_lines": 62
+      },
+      "discovery": {
+        "auto_named_sub": 9,
+        "chunk_merge_evidence": 0,
+        "cold_orphans": 0,
+        "name_match_rate": 0.0,
+        "named_from_symbols": 0,
+        "total": 9,
+        "with_basic_blocks": 9,
+        "with_chunks_gt_one": 0
+      },
+      "elapsed_ms": {
+        "analysis_ms": 0.9,
+        "decompile_ms": 8.8,
+        "triage_ms": 9.6
+      },
+      "error": null,
+      "flags": null,
+      "metadata_path": null,
+      "platform": null,
+      "source_path": null,
+      "triage": {
+        "detected_arch": "x86_64",
+        "detected_format": "ELF",
+        "detected_language": "c",
+        "expected_language": null,
+        "language_match": false
+      }
     }
   ],
   "summary": {
-    "binaries": 8,
+    "binaries": 10,
     "errored": 0,
-    "ok": 8,
+    "ok": 10,
     "rates": {
       "decompile_success_rate_avg": 1.0,
-      "language_match_rate": 1.0,
-      "name_match_rate_avg": 1.0
+      "language_match_rate": 0.8,
+      "name_match_rate_avg": 0.9
     },
     "totals": {
       "cold_orphans": 0,
       "decompiled_failed": 0,
-      "decompiled_ok": 80,
-      "functions_discovered": 80,
-      "functions_named": 80,
+      "decompiled_ok": 103,
+      "functions_discovered": 103,
+      "functions_named": 94,
       "multi_chunk_functions": 2
     }
   },
-  "timestamp": "2026-04-25T12:56:06.272406+00:00"
+  "timestamp": "2026-04-25T13:03:50.604263+00:00"
 }

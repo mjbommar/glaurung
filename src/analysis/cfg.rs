@@ -15,6 +15,7 @@ use crate::core::control_flow_graph::ControlFlowEdgeKind;
 use crate::core::disassembler::Disassembler;
 use crate::core::function::{Function, FunctionFlags, FunctionKind};
 use crate::core::instruction::Instruction;
+use crate::analysis::vtable::discover_vtables;
 use crate::flirt::{apply_flirt_overrides, discover_flirt_seeds, load_default_library, FlirtLibrary};
 use crate::disasm::registry;
 use crate::triage::heuristics;
@@ -634,15 +635,39 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         .iter()
         .cloned()
         .collect();
-    let known: std::collections::HashSet<u64> = seeds.iter().map(|a| a.value).collect();
+    let mut known: std::collections::HashSet<u64> = seeds.iter().map(|a| a.value).collect();
     for (va, _name) in &flirt_seeds {
         if known.contains(va) {
             continue;
         }
         if let Ok(addr) = Address::new(AddressKind::VA, *va, bits, None, None) {
             seeds.push(addr);
+            known.insert(*va);
         }
     }
+
+    // Vtable discovery (#160 v1). For each rodata-resident array of
+    // code-pointers (>= 3 consecutive pointers, all landing in exec
+    // regions), seed every target VA as a discovery candidate. C++
+    // virtual methods are otherwise unreachable from `_start`/`main`
+    // because they're called indirectly through `this->vtable[N]`.
+    let regions_for_check = regions.clone();
+    let is_executable = |va: u64| -> bool {
+        regions_for_check.iter().any(|r| va >= r.start && va < r.end)
+    };
+    let vtable_entries = discover_vtables(data, is_executable);
+    let mut vtable_method_count = 0usize;
+    for entry in &vtable_entries {
+        if known.contains(&entry.target_va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, entry.target_va, bits, None, None) {
+            seeds.push(addr);
+            known.insert(entry.target_va);
+            vtable_method_count += 1;
+        }
+    }
+    let _ = vtable_method_count; // available for telemetry; unused for now.
 
     // Discover functions up to budget
     let mut calls_all: Vec<(String, u64)> = Vec::new(); // (caller_name, callee_va)

@@ -79,6 +79,11 @@ DEFAULT_CI_MATRIX = [
     # of the same source. The debug version lights up because of #157.
     "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug",
     "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-stripped",
+    # Vtable lift signal: a polymorphic C++ binary, both with symbols and
+    # stripped. The stripped version's named function count moves only
+    # when #160's vtable walker finds the virtual methods.
+    "samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual",
+    "samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual-stripped",
 ]
 
 
