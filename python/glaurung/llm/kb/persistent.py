@@ -143,6 +143,8 @@ class PersistentKnowledgeBase(KnowledgeBase):
         path: str | Path,
         binary_path: str | Path | None = None,
         session: str = "main",
+        *,
+        auto_load_stdlib: bool = False,
     ) -> "PersistentKnowledgeBase":
         """Open or create a glaurung database. When the file does not
         exist, a fresh schema is initialised. ``binary_path`` is
@@ -190,6 +192,18 @@ class PersistentKnowledgeBase(KnowledgeBase):
 
         kb = cls(conn, session_id, binary_id, path)
         kb._load_from_disk()
+        # On first open of a fresh DB, optionally auto-import canonical
+        # stdlib type definitions (libc, WinAPI, ...) so the type system
+        # has baseline knowledge before any analysis runs. Off by default
+        # to keep existing test assertions clean — production callers
+        # (REPL, bench harness, recover_source) pass auto_load_stdlib=True.
+        if first_open and auto_load_stdlib:
+            try:
+                from . import type_db as _type_db
+                _type_db.import_stdlib_types(kb)
+            except Exception:
+                # Stdlib bundles are optional — never block KB open.
+                pass
         return kb
 
     @staticmethod

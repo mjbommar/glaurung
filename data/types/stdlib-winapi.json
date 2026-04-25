@@ -1,0 +1,176 @@
+{
+  "schema_version": "1",
+  "bundle_name": "stdlib-winapi",
+  "description": "Canonical Windows API types — handles, common structs, error codes",
+  "set_by": "stdlib",
+  "confidence": 0.99,
+  "typedefs": [
+    {"name": "BYTE", "target": "unsigned char"},
+    {"name": "WORD", "target": "unsigned short"},
+    {"name": "DWORD", "target": "unsigned long"},
+    {"name": "QWORD", "target": "unsigned long long"},
+    {"name": "BOOL", "target": "int"},
+    {"name": "BOOLEAN", "target": "unsigned char"},
+    {"name": "CHAR", "target": "char"},
+    {"name": "WCHAR", "target": "unsigned short"},
+    {"name": "TCHAR", "target": "char"},
+    {"name": "LONG", "target": "long"},
+    {"name": "ULONG", "target": "unsigned long"},
+    {"name": "LONGLONG", "target": "long long"},
+    {"name": "ULONGLONG", "target": "unsigned long long"},
+    {"name": "LPVOID", "target": "void *"},
+    {"name": "LPCVOID", "target": "const void *"},
+    {"name": "LPSTR", "target": "char *"},
+    {"name": "LPCSTR", "target": "const char *"},
+    {"name": "LPWSTR", "target": "WCHAR *"},
+    {"name": "LPCWSTR", "target": "const WCHAR *"},
+    {"name": "LPTSTR", "target": "TCHAR *"},
+    {"name": "LPCTSTR", "target": "const TCHAR *"},
+    {"name": "LPDWORD", "target": "DWORD *"},
+    {"name": "LPBYTE", "target": "BYTE *"},
+    {"name": "LPBOOL", "target": "BOOL *"},
+    {"name": "HANDLE", "target": "void *"},
+    {"name": "HMODULE", "target": "void *"},
+    {"name": "HINSTANCE", "target": "void *"},
+    {"name": "HKEY", "target": "void *"},
+    {"name": "HWND", "target": "void *"},
+    {"name": "HDC", "target": "void *"},
+    {"name": "HFONT", "target": "void *"},
+    {"name": "HBRUSH", "target": "void *"},
+    {"name": "HMENU", "target": "void *"},
+    {"name": "HICON", "target": "void *"},
+    {"name": "HBITMAP", "target": "void *"},
+    {"name": "SIZE_T", "target": "unsigned long long"},
+    {"name": "SSIZE_T", "target": "long long"},
+    {"name": "DWORD_PTR", "target": "unsigned long long"},
+    {"name": "ULONG_PTR", "target": "unsigned long long"},
+    {"name": "INT_PTR", "target": "long long"},
+    {"name": "LPARAM", "target": "long long"},
+    {"name": "WPARAM", "target": "unsigned long long"},
+    {"name": "LRESULT", "target": "long long"},
+    {"name": "HRESULT", "target": "long"},
+    {"name": "NTSTATUS", "target": "long"},
+    {"name": "ATOM", "target": "WORD"}
+  ],
+  "structs": [
+    {
+      "name": "FILETIME",
+      "byte_size": 8,
+      "fields": [
+        {"offset": 0, "name": "dwLowDateTime", "c_type": "DWORD", "size": 4},
+        {"offset": 4, "name": "dwHighDateTime", "c_type": "DWORD", "size": 4}
+      ]
+    },
+    {
+      "name": "SYSTEMTIME",
+      "byte_size": 16,
+      "fields": [
+        {"offset": 0, "name": "wYear", "c_type": "WORD", "size": 2},
+        {"offset": 2, "name": "wMonth", "c_type": "WORD", "size": 2},
+        {"offset": 4, "name": "wDayOfWeek", "c_type": "WORD", "size": 2},
+        {"offset": 6, "name": "wDay", "c_type": "WORD", "size": 2},
+        {"offset": 8, "name": "wHour", "c_type": "WORD", "size": 2},
+        {"offset": 10, "name": "wMinute", "c_type": "WORD", "size": 2},
+        {"offset": 12, "name": "wSecond", "c_type": "WORD", "size": 2},
+        {"offset": 14, "name": "wMilliseconds", "c_type": "WORD", "size": 2}
+      ]
+    },
+    {
+      "name": "OVERLAPPED",
+      "byte_size": 32,
+      "fields": [
+        {"offset": 0, "name": "Internal", "c_type": "ULONG_PTR", "size": 8},
+        {"offset": 8, "name": "InternalHigh", "c_type": "ULONG_PTR", "size": 8},
+        {"offset": 16, "name": "Offset", "c_type": "DWORD", "size": 4},
+        {"offset": 20, "name": "OffsetHigh", "c_type": "DWORD", "size": 4},
+        {"offset": 24, "name": "hEvent", "c_type": "HANDLE", "size": 8}
+      ]
+    },
+    {
+      "name": "SECURITY_ATTRIBUTES",
+      "byte_size": 24,
+      "fields": [
+        {"offset": 0, "name": "nLength", "c_type": "DWORD", "size": 4},
+        {"offset": 8, "name": "lpSecurityDescriptor", "c_type": "LPVOID", "size": 8},
+        {"offset": 16, "name": "bInheritHandle", "c_type": "BOOL", "size": 4}
+      ]
+    },
+    {
+      "name": "STARTUPINFOA",
+      "byte_size": 104,
+      "fields": [
+        {"offset": 0, "name": "cb", "c_type": "DWORD", "size": 4},
+        {"offset": 8, "name": "lpReserved", "c_type": "LPSTR", "size": 8},
+        {"offset": 16, "name": "lpDesktop", "c_type": "LPSTR", "size": 8},
+        {"offset": 24, "name": "lpTitle", "c_type": "LPSTR", "size": 8},
+        {"offset": 32, "name": "dwX", "c_type": "DWORD", "size": 4},
+        {"offset": 36, "name": "dwY", "c_type": "DWORD", "size": 4},
+        {"offset": 40, "name": "dwXSize", "c_type": "DWORD", "size": 4},
+        {"offset": 44, "name": "dwYSize", "c_type": "DWORD", "size": 4},
+        {"offset": 60, "name": "dwFlags", "c_type": "DWORD", "size": 4},
+        {"offset": 64, "name": "wShowWindow", "c_type": "WORD", "size": 2},
+        {"offset": 80, "name": "hStdInput", "c_type": "HANDLE", "size": 8},
+        {"offset": 88, "name": "hStdOutput", "c_type": "HANDLE", "size": 8},
+        {"offset": 96, "name": "hStdError", "c_type": "HANDLE", "size": 8}
+      ]
+    },
+    {
+      "name": "PROCESS_INFORMATION",
+      "byte_size": 24,
+      "fields": [
+        {"offset": 0, "name": "hProcess", "c_type": "HANDLE", "size": 8},
+        {"offset": 8, "name": "hThread", "c_type": "HANDLE", "size": 8},
+        {"offset": 16, "name": "dwProcessId", "c_type": "DWORD", "size": 4},
+        {"offset": 20, "name": "dwThreadId", "c_type": "DWORD", "size": 4}
+      ]
+    },
+    {
+      "name": "POINT",
+      "byte_size": 8,
+      "fields": [
+        {"offset": 0, "name": "x", "c_type": "LONG", "size": 4},
+        {"offset": 4, "name": "y", "c_type": "LONG", "size": 4}
+      ]
+    },
+    {
+      "name": "RECT",
+      "byte_size": 16,
+      "fields": [
+        {"offset": 0, "name": "left", "c_type": "LONG", "size": 4},
+        {"offset": 4, "name": "top", "c_type": "LONG", "size": 4},
+        {"offset": 8, "name": "right", "c_type": "LONG", "size": 4},
+        {"offset": 12, "name": "bottom", "c_type": "LONG", "size": 4}
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "name": "win32_error_e",
+      "underlying_type": "DWORD",
+      "variants": [
+        {"name": "ERROR_SUCCESS",            "value": 0},
+        {"name": "ERROR_INVALID_FUNCTION",   "value": 1},
+        {"name": "ERROR_FILE_NOT_FOUND",     "value": 2},
+        {"name": "ERROR_PATH_NOT_FOUND",     "value": 3},
+        {"name": "ERROR_ACCESS_DENIED",      "value": 5},
+        {"name": "ERROR_INVALID_HANDLE",     "value": 6},
+        {"name": "ERROR_NOT_ENOUGH_MEMORY",  "value": 8},
+        {"name": "ERROR_BAD_ENVIRONMENT",    "value": 10},
+        {"name": "ERROR_BAD_FORMAT",         "value": 11},
+        {"name": "ERROR_INVALID_PARAMETER",  "value": 87},
+        {"name": "ERROR_INSUFFICIENT_BUFFER","value": 122},
+        {"name": "ERROR_ALREADY_EXISTS",     "value": 183}
+      ]
+    },
+    {
+      "name": "wait_result_e",
+      "underlying_type": "DWORD",
+      "variants": [
+        {"name": "WAIT_OBJECT_0",  "value": 0},
+        {"name": "WAIT_ABANDONED", "value": 128},
+        {"name": "WAIT_TIMEOUT",   "value": 258},
+        {"name": "WAIT_FAILED",    "value": 4294967295}
+      ]
+    }
+  ]
+}

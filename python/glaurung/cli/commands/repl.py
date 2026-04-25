@@ -87,6 +87,7 @@ class ReplCommand(BaseCommand):
 
         kb = PersistentKnowledgeBase.open(
             db_path, binary_path=binary_path, session=args.session,
+            auto_load_stdlib=True,
         )
 
         # One-time indexing on first open. Cheap if already indexed.

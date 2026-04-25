@@ -25,6 +25,7 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Literal, Optional
 
 from .persistent import PersistentKnowledgeBase
@@ -387,6 +388,112 @@ def render_c_definition(rec: TypeRecord) -> str:
     if rec.kind == "function_proto":
         return body.get("c_prototype", f"void {rec.name}(void);")
     return f"/* unknown kind: {rec.kind} */"
+
+
+def _stdlib_bundle_dir() -> Path:
+    """Locate the bundled stdlib type JSON files. Search:
+       1. ``GLAURUNG_TYPES_DIR`` env var (single dir).
+       2. ``data/types/`` under the current working directory.
+       3. ``data/types/`` under the package install root.
+    Returns the *first* directory that exists; the caller filters by
+    file existence.
+    """
+    import os
+    env = os.environ.get("GLAURUNG_TYPES_DIR")
+    if env and Path(env).is_dir():
+        return Path(env)
+    cwd_local = Path.cwd() / "data" / "types"
+    if cwd_local.is_dir():
+        return cwd_local
+    pkg_local = Path(__file__).resolve().parent.parent.parent.parent.parent / "data" / "types"
+    if pkg_local.is_dir():
+        return pkg_local
+    return cwd_local  # canonical default — caller will get FileNotFoundError
+
+
+def import_stdlib_types(
+    kb: PersistentKnowledgeBase,
+    *,
+    bundles: Optional[List[str]] = None,
+    bundle_dir: Optional[Path] = None,
+) -> dict:
+    """Load canonical libc / Windows API type definitions from JSON
+    bundles into the persistent type DB. Each bundle's entries land
+    with `set_by="stdlib"` and `confidence=0.99` — manual overrides
+    still win, but DWARF imports won't clobber a stdlib type because
+    the existing-row check only protects ``manual``.
+
+    Returns a counts dict per bundle: structs / typedefs / enums imported.
+
+    Default bundles when none specified: ``stdlib-libc`` and
+    ``stdlib-winapi``. Pick explicitly to load only what's relevant
+    (e.g. analysing a Linux ELF doesn't need WinAPI types).
+    """
+    if bundles is None:
+        bundles = ["stdlib-libc", "stdlib-winapi"]
+    if bundle_dir is None:
+        bundle_dir = _stdlib_bundle_dir()
+    summary: dict = {}
+    for name in bundles:
+        path = bundle_dir / f"{name}.json"
+        if not path.exists():
+            summary[name] = {"error": "bundle_missing", "path": str(path)}
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except Exception as e:
+            summary[name] = {"error": f"parse_failed: {e}"}
+            continue
+        bs = {"structs": 0, "typedefs": 0, "enums": 0, "skipped": 0}
+        set_by = data.get("set_by", "stdlib")
+        confidence = float(data.get("confidence", 0.95))
+
+        for s in data.get("structs", []) or []:
+            if not s.get("name") or not s.get("fields"):
+                bs["skipped"] += 1
+                continue
+            sf = [
+                StructField(
+                    offset=int(f["offset"]),
+                    name=str(f["name"]),
+                    c_type=str(f["c_type"]),
+                    size=int(f.get("size", 0)),
+                ) for f in s["fields"]
+            ]
+            add_struct(
+                kb, str(s["name"]), sf,
+                total_size=int(s.get("byte_size") or 0),
+                confidence=confidence, set_by=set_by,
+            )
+            bs["structs"] += 1
+        for t in data.get("typedefs", []) or []:
+            if not t.get("name") or not t.get("target"):
+                bs["skipped"] += 1
+                continue
+            add_typedef(
+                kb, str(t["name"]), str(t["target"]),
+                confidence=confidence, set_by=set_by,
+            )
+            bs["typedefs"] += 1
+        for e in data.get("enums", []) or []:
+            if not e.get("name") or not e.get("variants"):
+                bs["skipped"] += 1
+                continue
+            ev = [
+                EnumVariant(
+                    name=str(v["name"]),
+                    value=int(v["value"]),
+                    doc=v.get("doc"),
+                ) for v in e["variants"]
+            ]
+            add_enum(
+                kb, str(e["name"]), ev,
+                underlying_type=str(e.get("underlying_type") or "int"),
+                confidence=confidence, set_by=set_by,
+            )
+            bs["enums"] += 1
+        summary[name] = bs
+    return summary
 
 
 def import_dwarf_types(

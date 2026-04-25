@@ -1,0 +1,273 @@
+{
+  "schema_version": "1",
+  "bundle_name": "stdlib-libc",
+  "description": "Canonical POSIX / libc types most C binaries reference",
+  "set_by": "stdlib",
+  "confidence": 0.99,
+  "typedefs": [
+    {"name": "size_t", "target": "unsigned long"},
+    {"name": "ssize_t", "target": "long"},
+    {"name": "ptrdiff_t", "target": "long"},
+    {"name": "off_t", "target": "long"},
+    {"name": "off64_t", "target": "long long"},
+    {"name": "pid_t", "target": "int"},
+    {"name": "uid_t", "target": "unsigned int"},
+    {"name": "gid_t", "target": "unsigned int"},
+    {"name": "mode_t", "target": "unsigned int"},
+    {"name": "dev_t", "target": "unsigned long long"},
+    {"name": "ino_t", "target": "unsigned long"},
+    {"name": "nlink_t", "target": "unsigned long"},
+    {"name": "blksize_t", "target": "long"},
+    {"name": "blkcnt_t", "target": "long"},
+    {"name": "time_t", "target": "long"},
+    {"name": "clock_t", "target": "long"},
+    {"name": "useconds_t", "target": "unsigned int"},
+    {"name": "suseconds_t", "target": "long"},
+    {"name": "socklen_t", "target": "unsigned int"},
+    {"name": "in_addr_t", "target": "unsigned int"},
+    {"name": "in_port_t", "target": "unsigned short"},
+    {"name": "sa_family_t", "target": "unsigned short"},
+    {"name": "int8_t", "target": "signed char"},
+    {"name": "int16_t", "target": "short"},
+    {"name": "int32_t", "target": "int"},
+    {"name": "int64_t", "target": "long"},
+    {"name": "uint8_t", "target": "unsigned char"},
+    {"name": "uint16_t", "target": "unsigned short"},
+    {"name": "uint32_t", "target": "unsigned int"},
+    {"name": "uint64_t", "target": "unsigned long"},
+    {"name": "intptr_t", "target": "long"},
+    {"name": "uintptr_t", "target": "unsigned long"},
+    {"name": "wchar_t", "target": "int"},
+    {"name": "FILE", "target": "_IO_FILE"},
+    {"name": "DIR", "target": "void"},
+    {"name": "pthread_t", "target": "unsigned long"},
+    {"name": "pthread_key_t", "target": "unsigned int"},
+    {"name": "pthread_once_t", "target": "int"},
+    {"name": "pthread_spinlock_t", "target": "int"}
+  ],
+  "structs": [
+    {
+      "name": "timeval",
+      "byte_size": 16,
+      "fields": [
+        {"offset": 0, "name": "tv_sec", "c_type": "time_t", "size": 8},
+        {"offset": 8, "name": "tv_usec", "c_type": "suseconds_t", "size": 8}
+      ]
+    },
+    {
+      "name": "timespec",
+      "byte_size": 16,
+      "fields": [
+        {"offset": 0, "name": "tv_sec", "c_type": "time_t", "size": 8},
+        {"offset": 8, "name": "tv_nsec", "c_type": "long", "size": 8}
+      ]
+    },
+    {
+      "name": "tm",
+      "byte_size": 56,
+      "fields": [
+        {"offset": 0, "name": "tm_sec", "c_type": "int", "size": 4},
+        {"offset": 4, "name": "tm_min", "c_type": "int", "size": 4},
+        {"offset": 8, "name": "tm_hour", "c_type": "int", "size": 4},
+        {"offset": 12, "name": "tm_mday", "c_type": "int", "size": 4},
+        {"offset": 16, "name": "tm_mon", "c_type": "int", "size": 4},
+        {"offset": 20, "name": "tm_year", "c_type": "int", "size": 4},
+        {"offset": 24, "name": "tm_wday", "c_type": "int", "size": 4},
+        {"offset": 28, "name": "tm_yday", "c_type": "int", "size": 4},
+        {"offset": 32, "name": "tm_isdst", "c_type": "int", "size": 4},
+        {"offset": 40, "name": "tm_gmtoff", "c_type": "long", "size": 8},
+        {"offset": 48, "name": "tm_zone", "c_type": "const char *", "size": 8}
+      ]
+    },
+    {
+      "name": "stat",
+      "byte_size": 144,
+      "fields": [
+        {"offset": 0, "name": "st_dev", "c_type": "dev_t", "size": 8},
+        {"offset": 8, "name": "st_ino", "c_type": "ino_t", "size": 8},
+        {"offset": 16, "name": "st_nlink", "c_type": "nlink_t", "size": 8},
+        {"offset": 24, "name": "st_mode", "c_type": "mode_t", "size": 4},
+        {"offset": 28, "name": "st_uid", "c_type": "uid_t", "size": 4},
+        {"offset": 32, "name": "st_gid", "c_type": "gid_t", "size": 4},
+        {"offset": 40, "name": "st_rdev", "c_type": "dev_t", "size": 8},
+        {"offset": 48, "name": "st_size", "c_type": "off_t", "size": 8},
+        {"offset": 56, "name": "st_blksize", "c_type": "blksize_t", "size": 8},
+        {"offset": 64, "name": "st_blocks", "c_type": "blkcnt_t", "size": 8},
+        {"offset": 72, "name": "st_atim", "c_type": "timespec", "size": 16},
+        {"offset": 88, "name": "st_mtim", "c_type": "timespec", "size": 16},
+        {"offset": 104, "name": "st_ctim", "c_type": "timespec", "size": 16}
+      ]
+    },
+    {
+      "name": "iovec",
+      "byte_size": 16,
+      "fields": [
+        {"offset": 0, "name": "iov_base", "c_type": "void *", "size": 8},
+        {"offset": 8, "name": "iov_len", "c_type": "size_t", "size": 8}
+      ]
+    },
+    {
+      "name": "sockaddr",
+      "byte_size": 16,
+      "fields": [
+        {"offset": 0, "name": "sa_family", "c_type": "sa_family_t", "size": 2},
+        {"offset": 2, "name": "sa_data", "c_type": "char[]", "size": 14}
+      ]
+    },
+    {
+      "name": "sockaddr_in",
+      "byte_size": 16,
+      "fields": [
+        {"offset": 0, "name": "sin_family", "c_type": "sa_family_t", "size": 2},
+        {"offset": 2, "name": "sin_port", "c_type": "in_port_t", "size": 2},
+        {"offset": 4, "name": "sin_addr", "c_type": "in_addr_t", "size": 4},
+        {"offset": 8, "name": "sin_zero", "c_type": "char[]", "size": 8}
+      ]
+    },
+    {
+      "name": "sockaddr_in6",
+      "byte_size": 28,
+      "fields": [
+        {"offset": 0, "name": "sin6_family", "c_type": "sa_family_t", "size": 2},
+        {"offset": 2, "name": "sin6_port", "c_type": "in_port_t", "size": 2},
+        {"offset": 4, "name": "sin6_flowinfo", "c_type": "uint32_t", "size": 4},
+        {"offset": 8, "name": "sin6_addr", "c_type": "char[]", "size": 16},
+        {"offset": 24, "name": "sin6_scope_id", "c_type": "uint32_t", "size": 4}
+      ]
+    },
+    {
+      "name": "addrinfo",
+      "byte_size": 48,
+      "fields": [
+        {"offset": 0, "name": "ai_flags", "c_type": "int", "size": 4},
+        {"offset": 4, "name": "ai_family", "c_type": "int", "size": 4},
+        {"offset": 8, "name": "ai_socktype", "c_type": "int", "size": 4},
+        {"offset": 12, "name": "ai_protocol", "c_type": "int", "size": 4},
+        {"offset": 16, "name": "ai_addrlen", "c_type": "socklen_t", "size": 4},
+        {"offset": 24, "name": "ai_addr", "c_type": "sockaddr *", "size": 8},
+        {"offset": 32, "name": "ai_canonname", "c_type": "char *", "size": 8},
+        {"offset": 40, "name": "ai_next", "c_type": "addrinfo *", "size": 8}
+      ]
+    },
+    {
+      "name": "msghdr",
+      "byte_size": 56,
+      "fields": [
+        {"offset": 0, "name": "msg_name", "c_type": "void *", "size": 8},
+        {"offset": 8, "name": "msg_namelen", "c_type": "socklen_t", "size": 4},
+        {"offset": 16, "name": "msg_iov", "c_type": "iovec *", "size": 8},
+        {"offset": 24, "name": "msg_iovlen", "c_type": "size_t", "size": 8},
+        {"offset": 32, "name": "msg_control", "c_type": "void *", "size": 8},
+        {"offset": 40, "name": "msg_controllen", "c_type": "size_t", "size": 8},
+        {"offset": 48, "name": "msg_flags", "c_type": "int", "size": 4}
+      ]
+    },
+    {
+      "name": "pollfd",
+      "byte_size": 8,
+      "fields": [
+        {"offset": 0, "name": "fd", "c_type": "int", "size": 4},
+        {"offset": 4, "name": "events", "c_type": "short", "size": 2},
+        {"offset": 6, "name": "revents", "c_type": "short", "size": 2}
+      ]
+    },
+    {
+      "name": "rusage",
+      "byte_size": 144,
+      "fields": [
+        {"offset": 0, "name": "ru_utime", "c_type": "timeval", "size": 16},
+        {"offset": 16, "name": "ru_stime", "c_type": "timeval", "size": 16},
+        {"offset": 32, "name": "ru_maxrss", "c_type": "long", "size": 8},
+        {"offset": 56, "name": "ru_minflt", "c_type": "long", "size": 8},
+        {"offset": 64, "name": "ru_majflt", "c_type": "long", "size": 8},
+        {"offset": 80, "name": "ru_inblock", "c_type": "long", "size": 8},
+        {"offset": 88, "name": "ru_oublock", "c_type": "long", "size": 8},
+        {"offset": 96, "name": "ru_msgsnd", "c_type": "long", "size": 8},
+        {"offset": 104, "name": "ru_msgrcv", "c_type": "long", "size": 8},
+        {"offset": 112, "name": "ru_nsignals", "c_type": "long", "size": 8},
+        {"offset": 120, "name": "ru_nvcsw", "c_type": "long", "size": 8},
+        {"offset": 128, "name": "ru_nivcsw", "c_type": "long", "size": 8}
+      ]
+    },
+    {
+      "name": "dirent",
+      "byte_size": 280,
+      "fields": [
+        {"offset": 0, "name": "d_ino", "c_type": "ino_t", "size": 8},
+        {"offset": 8, "name": "d_off", "c_type": "off_t", "size": 8},
+        {"offset": 16, "name": "d_reclen", "c_type": "unsigned short", "size": 2},
+        {"offset": 18, "name": "d_type", "c_type": "unsigned char", "size": 1},
+        {"offset": 19, "name": "d_name", "c_type": "char[]", "size": 256}
+      ]
+    },
+    {
+      "name": "passwd",
+      "byte_size": 56,
+      "fields": [
+        {"offset": 0, "name": "pw_name", "c_type": "char *", "size": 8},
+        {"offset": 8, "name": "pw_passwd", "c_type": "char *", "size": 8},
+        {"offset": 16, "name": "pw_uid", "c_type": "uid_t", "size": 4},
+        {"offset": 20, "name": "pw_gid", "c_type": "gid_t", "size": 4},
+        {"offset": 24, "name": "pw_gecos", "c_type": "char *", "size": 8},
+        {"offset": 32, "name": "pw_dir", "c_type": "char *", "size": 8},
+        {"offset": 40, "name": "pw_shell", "c_type": "char *", "size": 8}
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "name": "errno_e",
+      "underlying_type": "int",
+      "variants": [
+        {"name": "EPERM",  "value": 1, "doc": "Operation not permitted"},
+        {"name": "ENOENT", "value": 2, "doc": "No such file or directory"},
+        {"name": "ESRCH",  "value": 3, "doc": "No such process"},
+        {"name": "EINTR",  "value": 4, "doc": "Interrupted system call"},
+        {"name": "EIO",    "value": 5, "doc": "I/O error"},
+        {"name": "ENXIO",  "value": 6},
+        {"name": "E2BIG",  "value": 7, "doc": "Argument list too long"},
+        {"name": "ENOEXEC","value": 8},
+        {"name": "EBADF",  "value": 9, "doc": "Bad file descriptor"},
+        {"name": "ECHILD", "value": 10},
+        {"name": "EAGAIN", "value": 11, "doc": "Try again / EWOULDBLOCK"},
+        {"name": "ENOMEM", "value": 12, "doc": "Out of memory"},
+        {"name": "EACCES", "value": 13, "doc": "Permission denied"},
+        {"name": "EFAULT", "value": 14, "doc": "Bad address"},
+        {"name": "EBUSY",  "value": 16, "doc": "Device or resource busy"},
+        {"name": "EEXIST", "value": 17, "doc": "File exists"},
+        {"name": "ENODEV", "value": 19},
+        {"name": "ENOTDIR","value": 20},
+        {"name": "EISDIR", "value": 21},
+        {"name": "EINVAL", "value": 22, "doc": "Invalid argument"},
+        {"name": "ENFILE", "value": 23},
+        {"name": "EMFILE", "value": 24, "doc": "Too many open files"},
+        {"name": "ENOSPC", "value": 28, "doc": "No space left on device"},
+        {"name": "EPIPE",  "value": 32, "doc": "Broken pipe"},
+        {"name": "ERANGE", "value": 34, "doc": "Result too large"}
+      ]
+    },
+    {
+      "name": "af_family_e",
+      "underlying_type": "int",
+      "variants": [
+        {"name": "AF_UNSPEC", "value": 0},
+        {"name": "AF_UNIX",   "value": 1, "doc": "Local communication"},
+        {"name": "AF_INET",   "value": 2, "doc": "IPv4"},
+        {"name": "AF_INET6",  "value": 10, "doc": "IPv6"},
+        {"name": "AF_PACKET", "value": 17, "doc": "Low-level packet"},
+        {"name": "AF_NETLINK","value": 16}
+      ]
+    },
+    {
+      "name": "sock_type_e",
+      "underlying_type": "int",
+      "variants": [
+        {"name": "SOCK_STREAM",   "value": 1},
+        {"name": "SOCK_DGRAM",    "value": 2},
+        {"name": "SOCK_RAW",      "value": 3},
+        {"name": "SOCK_RDM",      "value": 4},
+        {"name": "SOCK_SEQPACKET","value": 5}
+      ]
+    }
+  ]
+}
