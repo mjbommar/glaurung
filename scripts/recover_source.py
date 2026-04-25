@@ -179,12 +179,19 @@ def _language_to_target(lang: Optional[str]) -> str:
     C++ binaries get target="cpp" so the rewriter is told to emit real C++
     class syntax + std::* facilities rather than C-with-C++-smuggled-in
     (which is what v1 produced when we forced target="c" here).
+
+    Fortran binaries get target="c" (rewriter has no Fortran enum) but the
+    file extension below preserves "f90" so the recovered tree at least
+    has Fortran-flavoured filenames; the rewriter falls back to producing
+    a C lowering against libgfortran calls, which is what we observed
+    actually works well in practice.
     """
     if not lang:
         return "c"
     m = {
         "c": "c", "c++": "cpp", "cpp": "cpp",
         "rust": "rust", "go": "go", "python": "python",
+        "fortran": "c",  # rewriter emits C lowering of libgfortran calls
     }
     return m.get(lang.lower(), "c")
 
@@ -299,6 +306,144 @@ def _restore_pool_literals(source: str, pool: Dict[str, str]) -> str:
         return f'"{escaped}"'
 
     return _QUOTED_STRING_RE.sub(_replace, source)
+
+
+_TYPE_DECL_RE = re.compile(
+    r"(?:^|\n)(?P<keyword>(?:class|struct|union|typedef\s+struct|enum))"
+    r"\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"\s*\{(?P<body>(?:[^{}]|\{[^{}]*\})*)\}"
+    r"\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*)?"
+    r";",
+    re.MULTILINE,
+)
+
+
+def _extract_type_decls(source: str) -> List[Tuple[str, str, str]]:
+    """Find every ``class/struct/union/enum NAME { ... };`` block in the
+    rewritten source body. Returns (keyword, name, full_decl) tuples.
+
+    Forward declarations like ``class Foo;`` are deliberately excluded —
+    only definitions with a body are collected, since those are what
+    cause cross-function inconsistency.
+    """
+    out: List[Tuple[str, str, str]] = []
+    for m in _TYPE_DECL_RE.finditer(source):
+        out.append((m.group("keyword"), m.group("name"), m.group(0).strip()))
+    return out
+
+
+def _strip_type_decls(source: str) -> str:
+    """Remove every full type declaration from the source body.
+
+    Used after the per-function bodies have been scanned so the merged
+    types.h header is the single source of truth and per-function
+    redeclarations don't fight it.
+    """
+    return _TYPE_DECL_RE.sub("", source)
+
+
+def _merge_type_decls(
+    decls: List[Tuple[str, str, str]],
+) -> Dict[str, str]:
+    """Pick a single canonical declaration per type name.
+
+    When the same struct/class is declared multiple times across
+    different functions with different fields, prefer the *richest*
+    declaration (most fields, longest body). The rewriter occasionally
+    emits empty stubs (``class HelloWorld { public: void f(); };``)
+    alongside richer declarations elsewhere — taking the longest one
+    preserves field information that the per-function rewrites depend on.
+    """
+    by_name: Dict[str, str] = {}
+    by_name_size: Dict[str, int] = {}
+    for kw, name, decl in decls:
+        size = decl.count("\n") * 100 + len(decl)
+        if name not in by_name or size > by_name_size[name]:
+            by_name[name] = decl
+            by_name_size[name] = size
+    return by_name
+
+
+_PARAM_TYPE_RE = re.compile(
+    r"\(\s*(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*(self|this)\s*\)"
+)
+_FIELD_ACCESS_RE = re.compile(r"\b(self|this)\s*->\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _collect_struct_field_accesses(
+    sources: List[str],
+) -> Dict[str, List[str]]:
+    """Walk every function body, find ``Type *self`` / ``Type *this``
+    parameter bindings, then collect every ``self->field`` /
+    ``this->field`` access in that body.
+
+    Returns ``{TypeName: [field1, field2, ...]}``. The orchestrator
+    augments the canonical types.h with any missing fields so the
+    cross-function declaration is complete enough to compile. Fields
+    that already appear in the canonical declaration are not added.
+    """
+    type_fields: Dict[str, set[str]] = {}
+    for src in sources:
+        # Find every (Type *self) or (Type *this) binding in this source.
+        bindings = list(_PARAM_TYPE_RE.finditer(src))
+        if not bindings:
+            continue
+        for b in bindings:
+            ty = b.group(1)
+            self_or_this = b.group(2)
+            # Find the function body following this binding (between the
+            # next `{` and matching `}`). For simplicity we just collect
+            # all field accesses with the matching pronoun anywhere in
+            # the source — same-name ambiguity is unusual.
+            for m in _FIELD_ACCESS_RE.finditer(src):
+                if m.group(1) != self_or_this:
+                    continue
+                type_fields.setdefault(ty, set()).add(m.group(2))
+    return {k: sorted(v) for k, v in type_fields.items()}
+
+
+def _augment_canonical_types(
+    canonical: Dict[str, str],
+    field_accesses: Dict[str, List[str]],
+) -> Dict[str, str]:
+    """Add fields referenced via ``->`` but not present in the merged
+    canonical declarations. Adds them as ``void *FIELD;`` placeholders
+    so the resulting types.h compiles even when the rewriter never
+    declared the field's true type.
+    """
+    out: Dict[str, str] = {}
+    for name, decl in canonical.items():
+        fields = field_accesses.get(name, [])
+        if not fields:
+            out[name] = decl
+            continue
+        # Detect which fields are already declared by string search.
+        missing = [f for f in fields if not re.search(rf"\b{f}\s*[;\[(]", decl)]
+        if not missing:
+            out[name] = decl
+            continue
+        # Inject placeholders before the closing brace of the decl.
+        injection = "\n    /* fields recovered from cross-function uses: */\n"
+        injection += "\n".join(f"    void *{f}; /* TODO: real type */" for f in missing)
+        injection += "\n"
+        # Find the last `}` in the decl and inject before it.
+        idx = decl.rfind("}")
+        if idx < 0:
+            out[name] = decl
+            continue
+        out[name] = decl[:idx] + injection + decl[idx:]
+    # Synthesize declarations for types referenced via -> but never
+    # declared at all.
+    for name, fields in field_accesses.items():
+        if name in out:
+            continue
+        body = "\n".join(f"    void *{f}; /* TODO: real type */" for f in fields)
+        out[name] = (
+            f"struct {name} {{\n"
+            "    /* synthesized from cross-function field accesses */\n"
+            + body + "\n};"
+        )
+    return out
 
 
 _POOL_SYM_RE = re.compile(r"\b([A-Z][A-Z0-9_]{3,})\b")
@@ -1230,6 +1375,29 @@ def main() -> int:
             post = _rewrite_this_to_self(post)
             s["emit_source"] = post
 
+    # Bug J: cross-function type unification. Each function rewrite
+    # tends to redeclare the same `class HelloWorld { ... }` with
+    # slightly different fields, which makes per-function .cpp files
+    # disagree. Collect every type declaration, merge them into a
+    # single canonical types.h, then augment with fields referenced
+    # via `self->`/`this->` from every function body — the rewriter
+    # often uses fields without declaring them.
+    all_type_decls: List[Tuple[str, str, str]] = []
+    for members in grouped.values():
+        for s in members:
+            all_type_decls.extend(_extract_type_decls(s["emit_source"]))
+    canonical_types = _merge_type_decls(all_type_decls)
+    field_accesses = _collect_struct_field_accesses(
+        [s["emit_source"] for members in grouped.values() for s in members]
+    )
+    canonical_types = _augment_canonical_types(canonical_types, field_accesses)
+    if canonical_types:
+        # Strip duplicates from per-function bodies so the header is the
+        # single source of truth.
+        for members in grouped.values():
+            for s in members:
+                s["emit_source"] = _strip_type_decls(s["emit_source"])
+
     # Build pool-symbol → literal map keyed by SCREAMING_SNAKE_CASE name.
     # Walk every emitted source body (post-processed), find references,
     # and emit only the ones actually used into src/strings.h. Bug F.
@@ -1263,6 +1431,27 @@ def main() -> int:
         strings_header_path.write_text("\n".join(h_lines) + "\n")
         strings_header = '#include "strings.h"'
 
+    # Emit canonical types.h (Bug J) when any cross-function type
+    # declarations were found.
+    types_header = ""
+    if canonical_types:
+        types_header_path = out_dir / "src" / "types.h"
+        types_header_path.parent.mkdir(parents=True, exist_ok=True)
+        t_lines = [
+            "// src/types.h",
+            "// Canonical type declarations recovered from binary.",
+            "// Each struct/class/enum is the longest declaration the",
+            "// rewriter emitted across any function — picked by",
+            "// _merge_type_decls so per-function copies don't fight.",
+            "#pragma once",
+            "",
+        ]
+        for name in sorted(canonical_types.keys()):
+            t_lines.append(canonical_types[name])
+            t_lines.append("")
+        types_header_path.write_text("\n".join(t_lines))
+        types_header = '#include "types.h"'
+
     for mod_path, members in grouped.items():
         target = out_dir / mod_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1272,6 +1461,8 @@ def main() -> int:
             "",
             *includes_for_lang,
         ]
+        if types_header and target.parent.name == "src":
+            buf.append(types_header)
         if strings_header and target.parent.name == "src":
             buf.append(strings_header)
         buf.append("")
@@ -1314,10 +1505,14 @@ def main() -> int:
             lines.append("")
             if s.get("docstring"):
                 # Strip Doxygen `/** */` framing for the markdown body.
-                doc = re.sub(r"^\s*/\*+\s*", "", s["docstring"])
-                doc = re.sub(r"\s*\*+/\s*$", "", doc)
-                doc = re.sub(r"^\s*\*\s?", "", doc, flags=re.MULTILINE)
-                lines.append(doc.strip())
+                # Use a distinct name — the outer `doc` is the README/manpage
+                # tool's result and must not be shadowed.
+                docstring_md = re.sub(r"^\s*/\*+\s*", "", s["docstring"])
+                docstring_md = re.sub(r"\s*\*+/\s*$", "", docstring_md)
+                docstring_md = re.sub(
+                    r"^\s*\*\s?", "", docstring_md, flags=re.MULTILINE
+                )
+                lines.append(docstring_md.strip())
                 lines.append("")
             lines.append("```")
             lines.append(s["source"])

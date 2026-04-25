@@ -1,17 +1,17 @@
 ## deregister_tm_clones @ 0x1870 — review note
 
 ### What the pipeline did
-- Recognized this as the **standard GCC CRT stub** `deregister_tm_clones` and rewrote in the canonical source form (early-returns instead of goto/label chain).
-- Renamed the anonymous loaded pointer (`ret`/`t0`) to a single local `deregister` and dropped the redundant `ret = ...; t0 = ret` dead-store chain.
-- Reinterpreted `arg0` as `__dso_handle` — the function is actually `void (void)` at source level; the "arg0" in pseudocode is just whatever was in the first arg register at entry, which GCC's stub doesn't read. The comparison is `__TMC_END__ == __dso_handle`.
-- Modeled `*&[var0+0x3fe0]` as a GOT load via an invented `GOT_BASE` symbol; the underlying weak symbol is `_ITM_deregisterTMCloneTable` but that name is not in the binary.
-- Marked `static` (file-local CRT helper).
+- Recognized this as the standard GCC-emitted CRT stub `deregister_tm_clones` and reshaped it accordingly.
+- Renamed opaque temporaries (`ret`, `t0`) to a single local `deregister` of function-pointer type, eliminating the dead-store chain.
+- Inverted the `goto L_1898` skip pattern into two early `return`s (idiomatic source shape for this stub).
+- Reinterpreted `arg0` (which the pseudocode showed as a parameter) as `__dso_handle` — the function is actually nullary in source; the "arg0" is an artifact of ABI register reuse.
+- Replaced the RIP/PIC-relative load `*&[var0+0x3fe0]` with a symbolic `*(... *)(GOT_BASE + 0x3fe0)` access and named the target as the GOT slot for `_ITM_deregisterTMCloneTable`.
+- Marked the function `static` (file-local CRT helper).
 
-### Unprovable assumptions
-- That this really is the unmodified GCC `deregister_tm_clones` and not a customized variant — only the shape matches; there's no symbol-name evidence in the supplied pseudocode.
-- That `arg0` is genuinely unused at the source level (the stub takes no args). If the caller actually passes something meaningful, the rewrite changes the ABI surface.
-- That `var0+0x3fe0` is a GOT slot for the TM deregister callback rather than some other data pointer.
+### Assumptions not mechanically provable
+- That the function takes no arguments — the pseudocode's `arg0` is assumed to be `__dso_handle` accessed via the ABI's first-arg register coincidentally, not a real parameter.
+- That the loaded slot is specifically `_ITM_deregisterTMCloneTable` (symbol name is not in the binary; identified by pattern only).
+- That `GOT_BASE + 0x3fe0` is the correct symbolic spelling of `var0 + 0x3fe0`; `GOT_BASE` is invented and must resolve to the same slot.
+- That the dead initializer to `__dso_handle_lookup` is acceptable stylistically (it's overwritten before use).
 
-### Stylistic / cosmetic
-- The initializer `= (void (*)(void *))__dso_handle_lookup` is dead (overwritten before use) and the symbol `__dso_handle_lookup` is fabricated; should likely be removed or replaced with `= NULL`.
-- `GOT_BASE` is a placeholder — won't compile as-is unless the build provides it.
+### Reviewer checklist

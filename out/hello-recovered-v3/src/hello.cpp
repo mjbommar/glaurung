@@ -8,6 +8,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include "types.h"
 #include "strings.h"
 
 /**
@@ -56,10 +57,6 @@
 #include <string>
 #include <vector>
 
-class HelloWorld {
-public:
-    void printMessage();
-};
 
 int main(int argc, char **argv)
 {

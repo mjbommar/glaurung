@@ -77,6 +77,14 @@ def run_structured_llm(
         system_prompt=system_prompt,
     )
     try:
-        return agent.run_sync(prompt).output
+        result = agent.run_sync(prompt).output
     except Exception:
         return fallback()
+    # pydantic-ai occasionally returns a raw string instead of the
+    # requested structured output (e.g. when the LLM emits unparseable
+    # JSON or refuses the schema). Validate the result type before
+    # returning so the caller never gets surprised by AttributeError on
+    # the wrong shape.
+    if not isinstance(result, output_type):
+        return fallback()
+    return result

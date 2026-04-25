@@ -177,7 +177,16 @@ class IdentifyCompilerAndRuntimeTool(
 
         all_syms = imports + exports
         language: Optional[str] = None
-        if any("rust_panic" in s or s.startswith("_ZN4core") for s in all_syms):
+        # Fortran: libgfortran symbols (`_gfortran_*`) are unambiguous —
+        # they only ever come from gfortran-compiled code. Checked first
+        # because gfortran-compiled binaries also carry the `GCC:` marker
+        # and the `__libc_start_main` symbol, so any later branch would
+        # mis-classify them.
+        if any(s.startswith("_gfortran_") for s in all_syms):
+            language = "Fortran"
+            compiler = "gfortran"
+            hits += 1
+        elif any("rust_panic" in s or s.startswith("_ZN4core") for s in all_syms):
             language = "Rust"
             compiler = compiler or "rustc"
             hits += 1
