@@ -93,6 +93,28 @@ def test_kickoff_renders_markdown_summary(tmp_path: Path) -> None:
     assert "completed in" in md
 
 
+def test_kickoff_surfaces_iocs_for_malware_demo_target(tmp_path: Path) -> None:
+    """c2_demo-clang-O0 carries hardcoded URLs / IPs / paths; the
+    kickoff summary must surface those IOCs so the agent's first
+    turn can cite them without an extra tool call."""
+    binary = _need(_C2_DEMO)
+    db = tmp_path / "ioc.glaurung"
+    summary = kickoff_analysis(str(binary), db_path=str(db))
+    # Counts present.
+    assert summary.iocs, "expected ioc_counts to surface"
+    assert summary.iocs.get("url", 0) >= 1
+    assert summary.iocs.get("ipv4", 0) >= 1
+    # Samples are flat dicts with kind/text/offset.
+    assert summary.ioc_samples
+    assert all(
+        {"kind", "text", "offset"} <= set(s.keys())
+        for s in summary.ioc_samples
+    )
+    # Markdown render mentions the IOCs section.
+    md = render_kickoff_markdown(summary)
+    assert "IOCs (from string scan)" in md
+
+
 def test_kickoff_records_evidence_row(tmp_path: Path) -> None:
     """The kickoff invocation should leave a citable evidence_log row
     so the chat UI can render the first-turn summary as an

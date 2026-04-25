@@ -50,6 +50,13 @@ class KickoffSummary:
     arch: Optional[str] = None
     entry_va: Optional[int] = None
 
+    # IOCs surfaced from triage's string scan — counts by category
+    # (ipv4 / url / domain / path_posix / registry / hostname / ...)
+    # plus a few representative samples per category. Drives the
+    # agent's first-turn malware-triage answer without extra tool calls.
+    iocs: dict = field(default_factory=dict)
+    ioc_samples: List[dict] = field(default_factory=list)
+
     # analyze_functions_path / index_callgraph
     functions_total: int = 0
     functions_named: int = 0
@@ -143,6 +150,28 @@ def kickoff_analysis(
         ent = g.analysis.detect_entry_path(str(binary))
         if ent:
             summary.entry_va = int(ent[3])
+    except Exception:
+        pass
+
+    # IOC scan — bring forward the triage string-pool IOCs so the
+    # agent's first turn already has them. Categories like ipv4 /
+    # url / domain / registry / path_posix are exactly what a
+    # malware-triage demo wants to surface immediately.
+    try:
+        s = getattr(art, "strings", None)
+        if s is not None:
+            counts = getattr(s, "ioc_counts", None) or {}
+            summary.iocs = dict(counts)
+            samples = getattr(s, "ioc_samples", None) or []
+            for sample in samples[:24]:
+                # Each IocSample exposes kind / text / offset; flatten
+                # to plain dict so the JSON serializer doesn't need a
+                # custom adapter.
+                summary.ioc_samples.append({
+                    "kind": str(getattr(sample, "kind", "")),
+                    "text": str(getattr(sample, "text", ""))[:200],
+                    "offset": int(getattr(sample, "offset", 0) or 0),
+                })
     except Exception:
         pass
 
@@ -328,6 +357,21 @@ def render_kickoff_markdown(summary: KickoffSummary) -> str:
     lines.append(f"- types propagated: **{summary.types_propagated}**")
     lines.append(f"- auto-struct candidates: **{summary.auto_structs_emitted}**")
     lines.append("")
+    if summary.iocs:
+        lines.append("## IOCs (from string scan)")
+        # Sort buckets descending by count for human readability.
+        for kind, count in sorted(
+            summary.iocs.items(), key=lambda kv: -kv[1],
+        ):
+            lines.append(f"- **{kind}**: {count}")
+        # Show up to 6 representative samples — enough to ground the
+        # agent's first-turn claim, not so many that the message bloats.
+        if summary.ioc_samples:
+            lines.append("")
+            lines.append("Examples:")
+            for s in summary.ioc_samples[:6]:
+                lines.append(f"  - `{s['kind']}` `{s['text']}`  (off `{s['offset']:#x}`)")
+        lines.append("")
     if summary.elapsed_ms:
         ms_total = sum(v for v in summary.elapsed_ms.values())
         lines.append(f"_completed in {ms_total:.0f} ms_")
