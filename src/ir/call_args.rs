@@ -241,6 +241,15 @@ fn reads_reg_in_stmt(s: &Stmt, target: &VReg) -> bool {
         }
         Stmt::Push { value } => reads_reg_in_expr(value, target),
         Stmt::Pop { target: t } => t == target,
+        Stmt::Switch { discriminant, cases, default } => {
+            reads_reg_in_expr(discriminant, target)
+                || cases.iter().any(|(_, body)| {
+                    body.iter().any(|s| reads_reg_in_stmt(s, target))
+                })
+                || default.as_ref().is_some_and(|b| {
+                    b.iter().any(|s| reads_reg_in_stmt(s, target))
+                })
+        }
         Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Nop

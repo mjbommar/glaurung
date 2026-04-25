@@ -65,6 +65,15 @@ fn fold_body(body: &mut [Stmt]) {
                 fold_body(body);
             }
             Stmt::Push { value } => fold_expr(value),
+            Stmt::Switch { discriminant, cases, default } => {
+                fold_expr(discriminant);
+                for (_, body) in cases.iter_mut() {
+                    fold_body(body);
+                }
+                if let Some(b) = default {
+                    fold_body(b);
+                }
+            }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)

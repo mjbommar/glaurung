@@ -171,6 +171,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::If { cond, .. } | Stmt::While { cond, .. } => count_reg_uses(cond, target),
         Stmt::Return { value } => value.as_ref().map(|e| count_reg_uses(e, target)).unwrap_or(0),
         Stmt::Push { value } => count_reg_uses(value, target),
+        Stmt::Switch { discriminant, .. } => count_reg_uses(discriminant, target),
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
@@ -258,6 +259,7 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
             }
         }
         Stmt::Push { value } => substitute_in_expr(value, target, with),
+        Stmt::Switch { discriminant, .. } => substitute_in_expr(discriminant, target, with),
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)

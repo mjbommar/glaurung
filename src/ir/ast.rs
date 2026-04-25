@@ -128,6 +128,22 @@ pub enum Stmt {
     Pop {
         target: VReg,
     },
+    /// Reconstructed `switch (discriminant) { case N: <body>; ... }`
+    /// emitted by the structurer when it recognizes a multi-target
+    /// dispatch (typically a jump-table-driven switch). Each case body
+    /// implicitly ends with `break`; the renderer appends one. (#193)
+    Switch {
+        /// The dispatch expression. v0 leaves this as a placeholder
+        /// `dispatch` register reference; later passes will recover the
+        /// original switched value from the index computation.
+        discriminant: Expr,
+        /// Ordered list of (case-label, case-body) pairs. The label is
+        /// the index into the jump table when known, else None for
+        /// "default" / unreachable arms.
+        cases: Vec<(Option<i64>, Vec<Stmt>)>,
+        /// Optional default arm body, executed when no case matches.
+        default: Option<Vec<Stmt>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,6 +357,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => 0,
+        Stmt::Switch { discriminant, .. } => count_reg_uses_in_expr(discriminant, target),
     }
 }
 
@@ -398,6 +415,34 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
             });
             out
         }
+        Region::Switch { dispatch, arms, .. } => {
+            // Lower the dispatch block as the prefix; the last
+            // instruction is the indirect jump itself which we replace
+            // with the structured `switch` statement. v0 emits each
+            // arm with its case index (positional) and an implicit
+            // break at the end.
+            let mut prefix = lower_block(&lf.blocks[*dispatch]);
+            // Drop the trailing Goto/If-Goto if present — the switch
+            // statement encodes the dispatch.
+            while matches!(prefix.last(), Some(Stmt::Goto { .. })
+                | Some(Stmt::If { .. })) {
+                prefix.pop();
+            }
+            let cases: Vec<(Option<i64>, Vec<Stmt>)> = arms
+                .iter()
+                .enumerate()
+                .map(|(i, arm)| (Some(i as i64), lower_region(arm, lf)))
+                .collect();
+            // Discriminant is a placeholder — recovering the original
+            // switched value requires walking the index computation
+            // above the dispatch. Filed as a v1 follow-up.
+            prefix.push(Stmt::Switch {
+                discriminant: Expr::Reg(VReg::Phys(format!("dispatch_{:x}", lf.blocks[*dispatch].start_va))),
+                cases,
+                default: None,
+            });
+            prefix
+        }
         Region::Unstructured(blocks) => {
             let mut out = Vec::new();
             for &bi in blocks {
@@ -454,6 +499,14 @@ fn fold_returns(body: &mut Vec<Stmt>) {
                 }
             }
             Stmt::While { body, .. } => fold_returns(body),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, body) in cases.iter_mut() {
+                    fold_returns(body);
+                }
+                if let Some(b) = default {
+                    fold_returns(b);
+                }
+            }
             _ => {}
         }
     }
@@ -825,6 +878,40 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
             indent(out, level);
             out.push_str("}\n");
         }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            indent(out, level);
+            out.push_str("switch (");
+            write_expr_ctx(discriminant, tm, out);
+            out.push_str(") {\n");
+            for (label, body) in cases {
+                indent(out, level + 1);
+                if let Some(n) = label {
+                    out.push_str(&format!("case {}:\n", n));
+                } else {
+                    out.push_str("case _:\n");
+                }
+                for s in body {
+                    write_stmt_ctx(s, tm, out, level + 2);
+                }
+                indent(out, level + 2);
+                out.push_str("break;\n");
+            }
+            if let Some(def_body) = default {
+                indent(out, level + 1);
+                out.push_str("default:\n");
+                for s in def_body {
+                    write_stmt_ctx(s, tm, out, level + 2);
+                }
+                indent(out, level + 2);
+                out.push_str("break;\n");
+            }
+            indent(out, level);
+            out.push_str("}\n");
+        }
     }
 }
 
@@ -914,7 +1001,8 @@ pub fn compute_frame_size(body: &[Stmt]) -> Option<i64> {
             | Stmt::Return { .. }
             | Stmt::Goto { .. }
             | Stmt::If { .. }
-            | Stmt::While { .. } => break,
+            | Stmt::While { .. }
+            | Stmt::Switch { .. } => break,
             // Register-save stores (e.g. `store %stack_top = %var0`) and
             // unrelated register assigns are part of the prologue and
             // don't change the running frame size — continue walking.
@@ -1186,6 +1274,40 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             out.push_str("pop(");
             write_reg_c(target, out);
             out.push_str(");\n");
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            indent(out, level);
+            out.push_str("switch (");
+            write_expr_c(discriminant, out);
+            out.push_str(") {\n");
+            for (label, body) in cases {
+                indent(out, level + 1);
+                if let Some(n) = label {
+                    let _ = writeln!(out, "case {}:", n);
+                } else {
+                    out.push_str("case _:\n");
+                }
+                for s in body {
+                    write_stmt_c(s, out, level + 2);
+                }
+                indent(out, level + 2);
+                out.push_str("break;\n");
+            }
+            if let Some(def_body) = default {
+                indent(out, level + 1);
+                out.push_str("default:\n");
+                for s in def_body {
+                    write_stmt_c(s, out, level + 2);
+                }
+                indent(out, level + 2);
+                out.push_str("break;\n");
+            }
+            indent(out, level);
+            out.push_str("}\n");
         }
     }
 }

@@ -104,6 +104,15 @@ fn rewrite_body(
                 rewrite_body(body, map, stack_counter, local_counter);
             }
             Stmt::Push { value } => rewrite_expr(value, map, stack_counter, local_counter),
+            Stmt::Switch { discriminant, cases, default } => {
+                rewrite_expr(discriminant, map, stack_counter, local_counter);
+                for (_, body) in cases.iter_mut() {
+                    rewrite_body(body, map, stack_counter, local_counter);
+                }
+                if let Some(b) = default {
+                    rewrite_body(b, map, stack_counter, local_counter);
+                }
+            }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)

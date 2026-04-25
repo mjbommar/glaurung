@@ -220,6 +220,15 @@ fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
         }
         Stmt::Push { value } => expr_reads(value, dst),
         Stmt::Pop { target: t } => t == dst,
+        Stmt::Switch { discriminant, cases, default } => {
+            expr_reads(discriminant, dst)
+                || cases.iter().any(|(_, body)| {
+                    body.iter().any(|s| stmt_reads(s, dst))
+                })
+                || default
+                    .as_ref()
+                    .is_some_and(|b| b.iter().any(|s| stmt_reads(s, dst)))
+        }
         Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Nop

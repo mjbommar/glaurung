@@ -174,6 +174,19 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
                 cb(n);
             }
         }
+        Stmt::Switch { discriminant, cases, default } => {
+            walk_expr_phys(discriminant, cb);
+            for (_, body) in cases {
+                for s in body {
+                    walk_stmt_phys(s, cb);
+                }
+            }
+            if let Some(b) = default {
+                for s in b {
+                    walk_stmt_phys(s, cb);
+                }
+            }
+        }
         Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Nop
@@ -271,6 +284,15 @@ fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
             }
             Stmt::Push { value } => rewrite_expr(value, role),
             Stmt::Pop { target } => rename_vreg(target, role),
+            Stmt::Switch { discriminant, cases, default } => {
+                rewrite_expr(discriminant, role);
+                for (_, body) in cases.iter_mut() {
+                    rewrite_body(body, role);
+                }
+                if let Some(b) = default {
+                    rewrite_body(b, role);
+                }
+            }
             Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Nop

@@ -59,6 +59,15 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
                 resolve_body(body, addr_map);
             }
             Stmt::Push { value } => resolve_expr(value, addr_map),
+            Stmt::Switch { discriminant, cases, default } => {
+                resolve_expr(discriminant, addr_map);
+                for (_, body) in cases.iter_mut() {
+                    resolve_body(body, addr_map);
+                }
+                if let Some(b) = default {
+                    resolve_body(b, addr_map);
+                }
+            }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)

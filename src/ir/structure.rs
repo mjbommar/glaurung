@@ -52,6 +52,15 @@ pub enum Region {
         body: Box<Region>,
         exit: Option<usize>,
     },
+    /// `switch (discriminant) { case 0: <arm>; case 1: <arm>; ... }`
+    /// (#193). The dispatch block has N>=3 successors (typical jump-
+    /// table dispatch); each arm is a sub-region; the join is the
+    /// shared post-dominator if one exists.
+    Switch {
+        dispatch: usize,
+        arms: Vec<Region>,
+        join: Option<usize>,
+    },
     /// Fallback — a set of blocks that didn't fit any recognised pattern.
     Unstructured(Vec<usize>),
 }
@@ -93,6 +102,15 @@ impl Region {
                     walk(body, out);
                     if let Some(e) = exit {
                         out.push(*e);
+                    }
+                }
+                Region::Switch { dispatch, arms, join } => {
+                    out.push(*dispatch);
+                    for a in arms {
+                        walk(a, out);
+                    }
+                    if let Some(j) = join {
+                        out.push(*j);
                     }
                 }
                 Region::Unstructured(bs) => out.extend(bs.iter().copied()),
@@ -234,6 +252,23 @@ fn build(
         if cfg.succs[cur].len() == 2 {
             if let Some((ite, after)) = detect_if_shape(cur, cfg, visited) {
                 parts.push(ite);
+                match after {
+                    Some(next) => {
+                        cur = next;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+        }
+
+        // --- Switch shape (#193) -------------------------------------------
+        // A block with N>=3 successors is almost always a jump-table-driven
+        // switch dispatch. Each successor that's reached only from this
+        // block is an arm; the shared post-dominator (if any) is the join.
+        if cfg.succs[cur].len() >= 3 {
+            if let Some((sw, after)) = detect_switch_shape(cur, cfg, visited) {
+                parts.push(sw);
                 match after {
                     Some(next) => {
                         cur = next;
@@ -475,6 +510,10 @@ fn detect_if_shape(
         }
     }
 
+    // (switch detection lives in detect_switch_shape — invoked by build()
+    // before falling through to the default block path, since this fn is
+    // only called for 2-successor blocks.)
+
     // --- if-then-else where both arms terminate (#192) ---------------------
     // Both arms exit the function; there is no continuation. We emit an
     // IfThenElse with join=None and signal the outer build to stop.
@@ -496,6 +535,91 @@ fn detect_if_shape(
     }
 
     None
+}
+
+/// Recognise a switch dispatch (#193).
+///
+/// Pattern: `cur` has N>=3 successors. Each arm should have `cur` as
+/// either its only predecessor (clean dispatch) or as one of a small
+/// number of preds when other arms fall through. We identify a join
+/// block as the first block reachable from at least one arm that has
+/// >1 predecessors and is dominated by `cur` — this is a coarse
+/// post-dominator approximation that's good enough for typical
+/// switch shapes.
+///
+/// Each arm is then recursively built with `stop_at = join`. Arms
+/// that terminate without reaching the join become Region sub-trees
+/// with their own returns.
+fn detect_switch_shape(
+    dispatch: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+) -> Option<(Region, Option<usize>)> {
+    let arms = cfg.succs[dispatch].clone();
+    if arms.len() < 3 {
+        return None;
+    }
+    // Every arm must be reached only from this dispatch — a stricter
+    // check than the if-shape ones, but jump tables typically produce
+    // dedicated case blocks. Arms that share predecessors (e.g.
+    // fall-through cases) can land in v1.
+    for &a in &arms {
+        if !cfg.preds[a].iter().all(|&p| p == dispatch) {
+            return None;
+        }
+    }
+
+    // Find a candidate join: the first block (in any arm's reachable
+    // set) that has >1 predecessors and is dominated by `dispatch`.
+    let join = find_switch_join(dispatch, &arms, cfg);
+
+    visited.insert(dispatch);
+    let mut sub_arms: Vec<Region> = Vec::new();
+    for &a in &arms {
+        sub_arms.push(build(a, cfg, visited, join));
+    }
+    Some((
+        Region::Switch {
+            dispatch,
+            arms: sub_arms,
+            join,
+        },
+        join,
+    ))
+}
+
+/// Walk reachable blocks from each arm, collect the union, and return
+/// the smallest-index block (in the union) that has >1 preds and is
+/// dominated by `dispatch`. None if no such candidate exists.
+fn find_switch_join(dispatch: usize, arms: &[usize], cfg: &Cfg) -> Option<usize> {
+    use std::collections::VecDeque;
+    let mut reachable: HashSet<usize> = HashSet::new();
+    for &a in arms {
+        let mut q: VecDeque<usize> = VecDeque::new();
+        q.push_back(a);
+        let mut seen: HashSet<usize> = HashSet::new();
+        while let Some(b) = q.pop_front() {
+            if !seen.insert(b) {
+                continue;
+            }
+            reachable.insert(b);
+            for &s in &cfg.succs[b] {
+                if !seen.contains(&s) {
+                    q.push_back(s);
+                }
+            }
+        }
+    }
+    let mut candidates: Vec<usize> = reachable
+        .into_iter()
+        .filter(|&b| {
+            !arms.contains(&b)
+                && cfg.preds[b].len() > 1
+                && cfg.dominates(dispatch, b)
+        })
+        .collect();
+    candidates.sort_unstable();
+    candidates.into_iter().next()
 }
 
 #[cfg(test)]
@@ -773,6 +897,15 @@ mod tests {
                     (c1 + c2, b1 || b2)
                 }
                 Region::While { body, .. } => count_block(body, target),
+                Region::Switch { arms, .. } => {
+                    let mut count = 0;
+                    let mut bad = false;
+                    for a in arms {
+                        let (c, b) = count_block(a, target);
+                        count += c; bad |= b;
+                    }
+                    (count, bad)
+                }
                 Region::Unstructured(_) => (0, true),
             }
         }
@@ -805,6 +938,9 @@ mod tests {
                     assert_no_unstructured(else_r);
                 }
                 Region::While { body, .. } => assert_no_unstructured(body),
+                Region::Switch { arms, .. } => {
+                    arms.iter().for_each(assert_no_unstructured);
+                }
                 Region::Unstructured(bs) => panic!("found Unstructured: {:?}", bs),
             }
         }
@@ -813,6 +949,56 @@ mod tests {
         let blocks: std::collections::HashSet<usize> = r.blocks().into_iter().collect();
         for i in 0..5 {
             assert!(blocks.contains(&i), "block {} missing", i);
+        }
+    }
+
+    #[test]
+    fn switch_shape_with_three_arms_recognized() {
+        //   B0 dispatch → B1, B2, B3 (3 arms)
+        //   B1, B2, B3 each → B4 (join)
+        //   B4: return
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100, 0x1200, 0x1300]),
+            (0x1100, vec![Op::Nop], vec![0x1400]),
+            (0x1200, vec![Op::Nop], vec![0x1400]),
+            (0x1300, vec![Op::Nop], vec![0x1400]),
+            (0x1400, vec![Op::Return], vec![]),
+        ]);
+        let r = recover_for(&lf);
+        match &r {
+            Region::Seq(parts) => {
+                assert!(parts.len() >= 2);
+                match &parts[0] {
+                    Region::Switch { dispatch, arms, join } => {
+                        assert_eq!(*dispatch, 0);
+                        assert_eq!(arms.len(), 3);
+                        assert_eq!(*join, Some(4));
+                    }
+                    other => panic!("expected Switch; got {:?}", other),
+                }
+            }
+            other => panic!("expected Seq; got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn switch_shape_arms_with_terminating_returns() {
+        //   B0 dispatch → B1, B2, B3
+        //   each Bi: return  (no shared join)
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100, 0x1200, 0x1300]),
+            (0x1100, vec![Op::Return], vec![]),
+            (0x1200, vec![Op::Return], vec![]),
+            (0x1300, vec![Op::Return], vec![]),
+        ]);
+        let r = recover_for(&lf);
+        match &r {
+            Region::Switch { dispatch, arms, join } => {
+                assert_eq!(*dispatch, 0);
+                assert_eq!(arms.len(), 3);
+                assert_eq!(*join, None);
+            }
+            other => panic!("expected Switch with join=None; got {:?}", other),
         }
     }
 

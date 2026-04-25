@@ -159,6 +159,15 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 fold_body(body, pool);
             }
             Stmt::Push { value } => fold_expr(value, pool),
+            Stmt::Switch { discriminant, cases, default } => {
+                fold_expr(discriminant, pool);
+                for (_, body) in cases.iter_mut() {
+                    fold_body(body, pool);
+                }
+                if let Some(b) = default {
+                    fold_body(b, pool);
+                }
+            }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)

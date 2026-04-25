@@ -260,6 +260,15 @@ fn rewrite_body(body: &mut [Stmt]) {
                 rewrite_body(body);
             }
             Stmt::Push { value } => rewrite_expr(value),
+            Stmt::Switch { discriminant, cases, default } => {
+                rewrite_expr(discriminant);
+                for (_, body) in cases.iter_mut() {
+                    rewrite_body(body);
+                }
+                if let Some(b) = default {
+                    rewrite_body(b);
+                }
+            }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
