@@ -13,9 +13,10 @@ chat UI launch (#203/#204).
 | Demo | Sample binary | Status |
 |---|---|---|
 | 1. Malware triage | `samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0` | ✅ runnable today |
-| 2. Vulnerability hunting | (synthetic vulnerable parser TBD) | 🚧 sample needed |
+| 2. Vulnerability hunting | `samples/binaries/platforms/linux/amd64/synthetic/vulnparse-c-gcc-O0` | ✅ runnable today |
 | 3. Patch analysis | `samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2{,-v2}` | ✅ runnable today |
 
 See:
 - [`demo-1-malware-triage.md`](./demo-1-malware-triage.md)
+- [`demo-2-vulnerability-hunting.md`](./demo-2-vulnerability-hunting.md)
 - [`demo-3-patch-analysis.md`](./demo-3-patch-analysis.md)
