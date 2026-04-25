@@ -64,6 +64,10 @@ from ..tools.rename_in_kb import (
     build_tool as build_rename_in_kb,
     RenameInKBResult,
 )
+from ..tools.scan_until_byte import (
+    build_tool as build_scan_until_byte,
+    ScanUntilByteResult,
+)
 from ..tools.search_byte_pattern import (
     build_tool as build_search_byte_pattern,
     SearchBytePatternResult,
@@ -445,6 +449,27 @@ def register_analysis_tools(agent: Agent) -> Agent:
             ),
         )
 
+    async def scan_until_byte(
+        ctx: RunContext,
+        va: int | None = None,
+        file_offset: int | None = None,
+        sentinels: list[int] | None = None,
+        max_scan_bytes: int = 4096,
+        include_sentinel: bool = False,
+    ) -> ScanUntilByteResult:
+        tool = build_scan_until_byte()
+        return tool.run(
+            ctx.deps,
+            ctx.deps.kb,
+            tool.input_model(
+                va=va,
+                file_offset=file_offset,
+                sentinels=sentinels if sentinels is not None else [0x00],
+                max_scan_bytes=max_scan_bytes,
+                include_sentinel=include_sentinel,
+            ),
+        )
+
     async def list_suspicious_imports(
         ctx: RunContext, include_util: bool = False
     ) -> SuspiciousImportsResult:
@@ -517,6 +542,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(get_string_xrefs, name="get_string_xrefs")
     agent.tool(rename_in_kb, name="rename_in_kb")
     agent.tool(search_byte_pattern, name="search_byte_pattern")
+    agent.tool(scan_until_byte, name="scan_until_byte")
     agent.tool(list_suspicious_imports, name="list_suspicious_imports")
     agent.tool(identify_compiler_and_runtime, name="identify_compiler_and_runtime")
     agent.tool(detect_crypto_usage, name="detect_crypto_usage")
