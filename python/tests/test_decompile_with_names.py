@@ -97,6 +97,55 @@ def test_decompile_with_names_falls_back_when_no_slots(tmp_path: Path) -> None:
     assert rendered == raw, "no-slots case should pass through unchanged"
 
 
+def test_locals_prelude_lists_typed_slots(tmp_path: Path) -> None:
+    """When propagation has typed slots, the rendered output should
+    include a `// ── locals (from KB)` block at the top of the function
+    body listing each typed slot with its c_type and provenance."""
+    binary = _need(_C2_DEMO)
+    db = tmp_path / "decomp.glaurung"
+    kb = PersistentKnowledgeBase.open(
+        db, binary_path=binary, auto_load_stdlib=True,
+    )
+    xref_db.index_callgraph(kb, str(binary))
+    funcs, _ = g.analysis.analyze_functions_path(str(binary))
+    main = next((f for f in funcs if f.name == "main"), None)
+    if main is None:
+        pytest.skip("main not discovered")
+    xref_db.discover_stack_vars(kb, str(binary), int(main.entry_point.value))
+    xref_db.propagate_types_at_callsites(kb, str(binary), int(main.entry_point.value))
+
+    rendered = xref_db.render_decompile_with_names(
+        kb, str(binary), int(main.entry_point.value),
+    )
+    assert "── locals (from KB)" in rendered
+    # Propagated slots show their set_by tag.
+    assert "// propagated" in rendered
+    kb.close()
+
+
+def test_locals_prelude_can_be_disabled(tmp_path: Path) -> None:
+    binary = _need(_C2_DEMO)
+    db = tmp_path / "decomp.glaurung"
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+    funcs, _ = g.analysis.analyze_functions_path(str(binary))
+    main = next((f for f in funcs if f.name == "main"), None)
+    if main is None:
+        pytest.skip("main not discovered")
+    xref_db.discover_stack_vars(kb, str(binary), int(main.entry_point.value))
+    xref_db.set_stack_var(
+        kb, function_va=int(main.entry_point.value), offset=-0x110,
+        name="my_buf", c_type="char[256]", set_by="manual",
+    )
+    rendered = xref_db.render_decompile_with_names(
+        kb, str(binary), int(main.entry_point.value),
+        include_locals_prelude=False,
+    )
+    assert "── locals (from KB)" not in rendered
+    # But name substitution still happens.
+    assert "my_buf" in rendered
+    kb.close()
+
+
 def test_manual_rename_propagates_to_decompile_output(tmp_path: Path) -> None:
     """When an analyst renames a slot, the rename should appear in the
     next `decomp` invocation — closing the loop on the analyst UX."""

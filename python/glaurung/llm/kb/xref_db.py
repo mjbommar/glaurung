@@ -1075,17 +1075,23 @@ def render_decompile_with_names(
     max_instructions: int = 10_000,
     timeout_ms: int = 500,
     style: str = "c",
+    include_locals_prelude: bool = True,
 ) -> str:
     """Decompile `function_va` and rewrite frame-offset references
     (`(rbp - 0x10)`, `(rbp + 8)`, `*&[rbp - 0x40]`, ...) to named
     stack-frame variables from the persistent KB.
 
-    A user calling this in the REPL sees `argc` instead of `(rbp -
-    0x14)`, and `*request_table` instead of `*&[rbp - 0xa0]`. Cashes in
-    #191 stack-frame discovery + #195 type propagation immediately.
+    With `include_locals_prelude=True` (default), prepend a comment
+    block listing every typed local with its declared c_type and
+    provenance — partial #194 down-payment that gives the analyst /
+    agent a single place to read what the function works with before
+    reading the body. Each declaration carries a `// <set_by>` tag so
+    DWARF-derived types are distinguishable from propagated guesses.
 
-    Falls back gracefully: when no stack vars are populated for the
-    function, returns the raw decompile output unchanged.
+    Cashes in #191 stack-frame discovery + #195 type propagation
+    immediately. Falls back gracefully: when no stack vars are
+    populated for the function, returns the raw decompile output
+    unchanged.
     """
     import glaurung as g
     import re
@@ -1146,7 +1152,43 @@ def render_decompile_with_names(
 
     out = paren_re.sub(_paren_sub, out)
     out = bracket_re.sub(_bracket_sub, out)
+
+    if include_locals_prelude:
+        prelude = _format_locals_prelude(slots)
+        if prelude:
+            # Inject after the first opening brace so the prelude lives
+            # inside the function body. Falls back to prepending if no
+            # `{` is found (defensive — the renderer should always emit one).
+            brace_idx = out.find("{")
+            if brace_idx >= 0:
+                out = out[: brace_idx + 1] + "\n" + prelude + out[brace_idx + 1 :]
+            else:
+                out = prelude + "\n" + out
+
     return out
+
+
+def _format_locals_prelude(slots: List["StackVar"]) -> str:
+    """Build a `// locals (from KB)` comment block listing every named
+    slot with its c_type and provenance. Skips fully-default `var_*`
+    rows with no c_type (no information to surface).
+
+    Output style is C-comment-only so the result still parses as C
+    syntax for downstream tools that don't tolerate analyst metadata
+    inline."""
+    interesting = [
+        s for s in slots
+        if s.c_type or s.set_by in ("manual", "propagated", "dwarf")
+    ]
+    if not interesting:
+        return ""
+    lines = ["    // ── locals (from KB) ─────────────────────────────────"]
+    for s in sorted(interesting, key=lambda s: s.offset):
+        type_str = s.c_type or "(unknown)"
+        tag = f"  // {s.set_by}" if s.set_by else ""
+        lines.append(f"    // {s.offset:+#06x}  {type_str:<24}  {s.name}{tag}")
+    lines.append("    // ─────────────────────────────────────────────────")
+    return "\n".join(lines) + "\n"
 
 
 def _resolve_call_target_name(
