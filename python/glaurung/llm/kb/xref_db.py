@@ -776,7 +776,7 @@ def import_stdlib_prototypes(
     from . import type_db as _type_db
 
     if bundles is None:
-        bundles = ["stdlib-libc-protos"]
+        bundles = ["stdlib-libc-protos", "stdlib-winapi-protos"]
     if bundle_dir is None:
         bundle_dir = _type_db._stdlib_bundle_dir()
 
