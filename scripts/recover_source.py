@@ -1347,6 +1347,37 @@ def main() -> int:
     except Exception as e:
         _log(f"  global naming failed: {e}")
 
+    # Compute the canonical function → module map first. The cluster tool
+    # often invents module paths whose `members` don't match any rewritten
+    # function (Bug M): that produces phantom source files in the build
+    # manifest and README. Filtering down to *populated* modules here
+    # means infer_build_system, the README, and the source-tree writer all
+    # see the same, accurate decomposition.
+    fn_by_va = {s["entry_va"]: s for s in user_summaries}
+    module_of_va: Dict[int, str] = {}
+    for mod in modules:
+        for member in mod.members:
+            for s in user_summaries:
+                if s["short_name"] == member and s["entry_va"] not in module_of_va:
+                    module_of_va[s["entry_va"]] = mod.name
+                    break
+    default_mod = f"src/core.{file_ext}"
+    for s in user_summaries:
+        if s["entry_va"] not in module_of_va:
+            module_of_va[s["entry_va"]] = default_mod
+    populated_paths = set(module_of_va.values())
+    populated_modules = [m for m in modules if m.name in populated_paths]
+    if default_mod in populated_paths and not any(
+        m.name == default_mod for m in populated_modules
+    ):
+        # Synthesize a description for the catch-all module so the build
+        # manifest and README mention it honestly instead of inventing one.
+        from glaurung.llm.tools.cluster_functions_into_modules import Module as _ClusterModule
+        populated_modules.append(_ClusterModule(
+            name=default_mod, purpose="catch-all for unclustered functions",
+            members=[],
+        ))
+
     # Build system.
     _log("inferring build system…")
     try:
@@ -1354,7 +1385,9 @@ def main() -> int:
         binary_imports = list(summary_ext.import_names or [])
     except Exception:
         binary_imports = []
-    module_build = [ModuleBuildInfo(path=m.name, imports=[]) for m in modules]
+    module_build = [
+        ModuleBuildInfo(path=m.name, imports=[]) for m in populated_modules
+    ]
     try:
         bs = InferBuildSystemTool().run(
             ctx, ctx.kb,
@@ -1374,7 +1407,8 @@ def main() -> int:
     # README.
     _log("writing README + manpage…")
     mod_descs = [
-        ModuleDescription(path=m.name, purpose=m.purpose) for m in modules
+        ModuleDescription(path=m.name, purpose=m.purpose)
+        for m in populated_modules
     ]
     try:
         doc = WriteReadmeAndManpageTool().run(
@@ -1399,18 +1433,6 @@ def main() -> int:
 
     # Write source tree.
     _log("writing source tree…")
-    fn_by_va = {s["entry_va"]: s for s in user_summaries}
-    module_of_va: Dict[int, str] = {}
-    for mod in modules:
-        for member in mod.members:
-            for s in user_summaries:
-                if s["short_name"] == member and s["entry_va"] not in module_of_va:
-                    module_of_va[s["entry_va"]] = mod.name
-                    break
-    default_mod = f"src/core.{file_ext}"
-    for s in user_summaries:
-        if s["entry_va"] not in module_of_va:
-            module_of_va[s["entry_va"]] = default_mod
 
     # Compiler-emitted split chunks (`<fn>.cold`, `<fn>.part.0`, ...) are
     # now folded into their parent function's `chunks` field by Glaurung's
@@ -1653,7 +1675,7 @@ def main() -> int:
             AuditRecoveredSourceArgs(
                 project_name=project_name,
                 functions=audit_entries,
-                modules=[m.name for m in modules] + [default_mod],
+                modules=[m.name for m in populated_modules],
                 binary_metadata=BinaryMetadata(
                     imports_count=len(binary_imports),
                     functions_count=len(funcs),

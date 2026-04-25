@@ -1,23 +1,19 @@
-# MAIN__ (gfortran main program) — rewrite notes
+## Reviewer note — `MAIN__` @ 0x11f0 (gfortran main program)
 
-## What the pipeline did
-- **Recognised libgfortran I/O idiom**: the three `stack_0/1/2 =` writes immediately before each `_gfortran_st_write` were folded into a single `st_parameter_dt` struct with fields `common_flags` / `filename` / `line`. The struct layout is **fabricated** to fit the observed writes; offsets were not cross‑checked against real libgfortran headers.
-- **Collapsed the peeled loop**: the optimiser had peeled the first iteration (fall‑through into `L_1290` plus a back‑edge), guarded by an outer `if %sle goto L_12cc`. The rewrite presents this as a single `for (i = 1; i <= nargs; ++i)` loop.
-- **Renamed locals from usage**: `stack_3` → `total_len`, `stack_4`/`var5` → `nargs`, `stack_5`/`ret` → `i`, `var2` slot → `arg_index`, `var4` → `arg_buf[100]`.
-- **Inlined the "subroutine"**: the last two print blocks (lines 40/41) are modelled inline rather than as a separate function, since the binary does not actually `call` anything there.
-- **Dropped ABI scaffolding**: prologue pushes, `rsp -= 664`, epilogue pops were removed.
-- **Synthesised prototypes** for all `_gfortran_*` helpers locally; signatures match call sites but not necessarily libgfortran headers.
+### What the pipeline did
+- **Recognised gfortran I/O idiom**: collapsed the three repeated `stack_0/stack_1/stack_2` writes preceding every `_gfortran_st_write` call into assignments to fields of a single fabricated `st_parameter_dt` struct.
+- **Re-rolled a peeled loop**: the pseudocode's unconditional fall-through into `L_1290` followed by a self-back-edge is the optimiser's peeled first iteration of the argument-walk. Rewriter folded it into one `for (i = 1; i <= nargs; ++i)` loop, gated by the existing outer `if %sle goto L_12cc` guard.
+- **Renamed locals** by usage: `stack_4 → nargs`, `var6/stack_3 → total_len`, `stack_5 → i`, `(rsp+16) → arg_buf[100]`, `(rsp+4) → arg_index`.
+- **Invented symbols** for raw addresses/labels: `0x20c0 → global_counter` (but see divergence), `&[var7+0x4014] → subroutine_invocations`, `call_count.1 → call_count_1` static.
+- **Treated the trailing two print blocks as inlined** rather than synthesising a callee — the binary has no `call` for them.
+- Dropped prologue/epilogue (`push`es, `rsp -= 664`, `pop`s) as ABI scaffolding.
+- Prototyped libgfortran helpers locally with guessed-but-plausible signatures.
 
-## Assumptions not mechanically provable
-- The `st_parameter_dt` field layout (long, char*, int) — guessed from the write pattern, not verified.
-- `0x20c0` is the address of a global `int` named `global_counter`. **The code does not honour this**: it casts the literal `8384` to `void*` instead of taking `&global_counter`. After relocation these are different addresses (see divergence).
-- `&[var7+0x4014]` (a GOT‑relative store) is a distinct counter from `call_count.1`. Both were turned into separate C symbols; address identity with the original is lost.
-- `call_count.1` (a gfortran‑mangled static) is modelled as a file‑static `int`, and `_gfortran_transfer_integer_write` is passed `&call_count_1`. The original pseudocode shows the symbol passed directly, which is consistent with "symbol = address", but worth a glance.
-- `source_path` is a `const char[]` rather than a raw pointer; semantically equivalent for the cookie field.
-- Loop‑skipping when `nargs < 1` is preserved by the `i <= nargs` condition (no separate guard needed).
+### Assumptions not mechanically provable
+- Layout of `st_parameter_dt` (`long; const char*; int; pad[600]`) is **fabricated** to match the three observed stack slots; real libgfortran field offsets were not consulted.
+- `0x20c0` is *assumed* to be `&global_counter`, but the emitted code passes the **integer literal `8384` cast to `void*`** — it does **not** take the address of the declared `global_counter` symbol. After relocation/linking these are different addresses.
+- `&[var7+0x4014]` is modelled as a distinct extern (`subroutine_invocations`) from `call_count.1`; the binary may or may not have these be the same object.
+- Helper prototypes (esp. arg count/order of `_gfortran_get_command_argument_i4`) are inferred from call shapes, not headers.
+- Loop equivalence relies on the outer `nargs >= 1` guard genuinely skipping the body — looks right but worth a second look.
 
-## Known divergences carried forward
-- **medium**: `0x20c0` is emitted as `(void *)8384`, not `&global_counter`. Comment and code disagree; at link time this references VA 8384, not the relocated symbol.
-- **low**: `arg_index` is a fresh local each iteration instead of reusing the `(rsp+4)` slot — same semantics, different storage.
-- **low**: `subroutine_invocations` lacks address identity with the original `var7+0x4014` location.
-- **low**: ABI scaffolding (saves/`rsp` adjust) dropped.
+### Reviewer checklist

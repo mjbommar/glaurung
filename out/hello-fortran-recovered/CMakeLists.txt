@@ -1,25 +1,33 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.13)
 project(hello_gfortran_O2 C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Optimization level matches the original binary (-O2)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Optimization level matching original binary (-O2)
 set(CMAKE_C_FLAGS_RELEASE "-O2")
 
-add_executable(hello_gfortran_O2
+# Source files (already exist in source tree)
+set(SOURCES
     main.c
+    src/core.c
 )
 
-# The binary imports a number of libgfortran runtime symbols
-# (_gfortran_set_args, _gfortran_st_write, _gfortran_iargc, ...)
-# so we must link against gfortran's runtime library.
+add_executable(hello_gfortran_O2 ${SOURCES})
+
+target_include_directories(hello_gfortran_O2 PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+)
+
+# The binary imports gfortran runtime symbols (_gfortran_*).
+# Link against libgfortran (provided by the system gfortran installation).
 if(UNIX AND NOT APPLE)
-    # Try to locate libgfortran via the gfortran compiler driver
+    # Try to locate libgfortran via the gfortran compiler driver.
     find_program(GFORTRAN_EXECUTABLE NAMES gfortran)
     if(GFORTRAN_EXECUTABLE)
         execute_process(
@@ -27,17 +35,12 @@ if(UNIX AND NOT APPLE)
             OUTPUT_VARIABLE LIBGFORTRAN_PATH
             OUTPUT_STRIP_TRAILING_WHITESPACE
         )
+        get_filename_component(LIBGFORTRAN_DIR "${LIBGFORTRAN_PATH}" DIRECTORY)
+        if(LIBGFORTRAN_DIR)
+            target_link_directories(hello_gfortran_O2 PRIVATE ${LIBGFORTRAN_DIR})
+        endif()
     endif()
-
-    if(LIBGFORTRAN_PATH AND EXISTS "${LIBGFORTRAN_PATH}")
-        target_link_libraries(hello_gfortran_O2 PRIVATE ${LIBGFORTRAN_PATH})
-    else()
-        # Fall back to plain -lgfortran; the linker will search default paths.
-        target_link_libraries(hello_gfortran_O2 PRIVATE gfortran)
-    endif()
-
-    # libgfortran typically pulls in libquadmath and libm.
-    target_link_libraries(hello_gfortran_O2 PRIVATE m)
+    target_link_libraries(hello_gfortran_O2 PRIVATE gfortran m)
 else()
     target_link_libraries(hello_gfortran_O2 PRIVATE gfortran m)
 endif()

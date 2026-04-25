@@ -1,21 +1,19 @@
-# frame_dummy — Reviewer Note
+# frame_dummy — review note
 
 ## What the pipeline did
-The rewriter recognized `frame_dummy` as a **GCC CRT-generated stub** (emitted from `crtbegin.o`) and replaced the entire decompiled body with an **empty function definition**. No locals were renamed and no logic was translated; the rewrite is purely a recognition-and-elision pass.
-
-The dropped pseudocode is the canonical pattern:
-- read `completed.0` guard, shift/test for prior execution
-- read a function pointer at `var0 + 0x3fe8` (the legacy `__JCR_LIST__` / Java class registration callback slot)
-- indirect-call it if non-null
+- Recognized the pseudocode as the canonical GCC `frame_dummy` CRT stub: a `completed.0` guard followed by an indirect call through a JCR-table slot at `[rip + 0x3fe8]` (i.e., `__JCR_END__`/`_Jv_RegisterClasses`-style callback).
+- Replaced the entire body with an **empty function definition**, on the assumption that this symbol is provided by `crtbegin.o`/`crtbeginS.o` and will be regenerated automatically when the rewritten source is relinked with a normal CRT.
+- Renamed nothing; no local variables survive.
 
 ## Assumptions not mechanically provable
-1. That this function is genuinely compiler boilerplate and not a hand-written function that happens to resemble the GCC pattern.
-2. That the toolchain re-emits an equivalent `frame_dummy` when this source is recompiled (true for GCC/Clang with standard CRT, but not guaranteed for exotic linker setups).
-3. That `*(var0 + 0x3fe8)` really is the JCR table slot and not a project-specific callback the binary depends on.
-4. That `completed.0` is the standard CRT guard (preventing double-execution) and has no other observers.
+- That this binary's `frame_dummy` is the unmodified GCC stub and not a customized variant (e.g., one that calls a user-provided init hook). The pseudocode shape is consistent with the stock stub, but the indirect target at `var0+0x3fe8` is not resolved here.
+- That the rebuilt artifact will be linked against a CRT that re-supplies `frame_dummy` / the JCR registration logic. If the rewrite is linked `-nostartfiles` or with a custom CRT, the dropped call disappears for real.
+- That `completed.0` (the once-guard) is not observed by any other translated function. If some other rewritten function reads `completed`, dropping the store side-effect here breaks that.
 
-## Divergences (both flagged low)
-- Indirect call through `*(var0+0x3fe8)` is dropped.
-- `completed.0` guard read/update is dropped.
+## Divergences accepted
+- Dropped indirect call through JCR slot (flagged low).
+- Dropped read/update of `completed.0` guard (flagged low).
 
-Both are acceptable **iff** the binary was built with a stock GCC CRT and the function is not referenced from user code.
+Both are acceptable **only** under the "stock GCC CRT" assumption above.
+
+## Reviewer checklist

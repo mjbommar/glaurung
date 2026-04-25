@@ -1,17 +1,18 @@
 ## deregister_tm_clones @ 0x1130 — Rewrite Notes
 
-**What the pipeline did**
-- Recognized this as the canonical compiler-emitted `crtstuff.c` stub that calls `_ITM_deregisterTMCloneTable` from the `.init_array`.
-- Renamed the reloaded GOT value (`t0`/`ret`) to a typed function pointer `deregister`.
-- Replaced `*&[var0+0x3fe0]` with a named symbol `_ITM_deregisterTMCloneTable_ptr` and the comparand with `__TMC_END__`.
-- Collapsed both `goto L_1158` exits into early `return`s.
-- Changed signature from `(arg0)` → `void` (no params), since the canonical stub takes none; the original `arg0` is modeled as `__TMC_END__`.
+### What the pipeline did
+- Recognized this as the **canonical crtstuff stub** the compiler emits and produced the textbook idiomatic form rather than a literal transliteration.
+- **Renamed** `t0`/`ret` → `deregister` to express the function-pointer role.
+- **Collapsed** the two `goto L_1158` jumps into early `return` statements (semantics-preserving).
+- **Abstracted** the raw GOT load `*(base+0x3fe0)` into a named symbol `_ITM_deregisterTMCloneTable_ptr`.
+- **Abstracted** the `arg0` comparison sentinel into `__TMC_END__` and dropped the parameter, changing the signature from `(arg0)` to `(void)`.
+- Preserved the call-site argument as `completed.0` (not `&__TMC_END__`) per prior feedback.
 
-**Assumptions not mechanically provable**
-- The GOT slot at base+0x3fe0 actually corresponds to `_ITM_deregisterTMCloneTable` (offset/symbol mapping not verified against the relocation table).
-- The pseudocode's `arg0` is `__TMC_END__` — true for the standard crt invocation but the rewrite drops the parameter from the signature.
-- Argument type to the resolved callback is `void *` (unconfirmed; canonical prototype takes no args, so this is also a minor deviation).
-- No `completed.0 = 1` (or similar "already ran" flag write) was added, even though the real crtstuff stub typically performs one. The pseudocode does not show it, so it was left out — but this means if the real binary does set the flag, the rewrite is missing a side effect.
+### Assumptions not mechanically provable
+- The GOT slot at `+0x3fe0` is specifically `_ITM_deregisterTMCloneTable`'s entry — based on idiom, not relocation data.
+- The compared sentinel is `__TMC_END__` and matches what the linker-generated init array passes as `arg0`.
+- The callee's signature is `void (*)(void *)`; the pseudocode only shows one argument passed.
+- No `completed.0 = 1` post-call store exists (intentionally not invented; pseudocode doesn't show one, but real crtstuff usually has it).
+- Dropping the function parameter is safe because the only caller is the linker-synthesized init code passing `__TMC_END__`.
 
-**Behavioral risk**
-- Low if this is genuinely the standard stub invoked once from `.init_array`. Higher if (a) the binary sets a completion flag we dropped, or (b) `arg0` is ever something other than `__TMC_END__`.
+### Reviewer checklist

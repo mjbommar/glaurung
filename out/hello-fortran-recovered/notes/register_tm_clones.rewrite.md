@@ -1,21 +1,16 @@
-## register_tm_clones @ 0x1160 — Rewrite Notes
+# register_tm_clones @ 0x1160 — Reviewer Note
 
-### What the pipeline did
-- Recognized this as the **standard GCC-emitted `register_tm_clones` stub** and replaced the decompiled arithmetic with the canonical C idiom.
-- Replaced the strength-reduced signed division `((diff>>3) + (diff>>63)) >> 1` (i.e. `diff / 16`) with `(__TMC_END__ - __TMC_LIST__) / sizeof(void *)` — note this is `/8` on 64-bit, not `/16`.
-- Renamed the GOT slot `*(ret+0x3fe8)` to the weak symbol `_ITM_registerTMCloneTable`.
-- Converted the indirect tail call `ret()` into a named call, inferring its two arguments (`__TMC_LIST__`, count) from the standard ABI/idiom — the args are not visible in the pseudocode.
-- Dropped dead stores on `ret`/`diff` produced by the optimizer.
-- Consolidated the two early-exit branches into two guarded `return` statements.
+## What the pipeline did
+- Recognized the function as the **standard GCC-emitted `register_tm_clones` stub** and rewrote it to canonical C source rather than a literal transcription of the assembly arithmetic.
+- Dropped the strength-reduced signed-division idiom `((diff>>3) + (diff>>63)) >> 1` (i.e. `diff / 16`) and replaced it with `(__TMC_END__ - __TMC_LIST__) / sizeof(void *)`.
+- Replaced the GOT-slot load `*[rip+0x3fe8]` with the named weak symbol `_ITM_registerTMCloneTable`.
+- Rewrote the indirect tail call `ret()` as a direct named call, inferring the two-argument ABI signature `(table, count)` from the GCC convention (the args are not visible in the pseudocode).
+- Consolidated the two zero/NULL checks into early-return form and discarded dead `ret`/`diff` stores.
 
-### Assumptions not mechanically provable
-- That this really is the GCC stub and not a hand-rolled routine that happens to look similar.
-- That the call-site argument list matches the standard `_ITM_registerTMCloneTable(void *, size_t)` signature — pseudocode shows `ret()` with no args.
-- That `__TMC_END__ - __TMC_LIST__` is always a multiple of 16, making the divisor discrepancy (8 vs 16) irrelevant in practice.
+## Assumptions not mechanically provable
+- That this *is* the GCC TM-clones stub (identification by idiom, not proof). If the binary was produced by a different toolchain or the stub was customized, the rewrite is wrong.
+- That `_ITM_registerTMCloneTable`'s second argument is an entry count and that the divisor is `sizeof(void *)`. **The original divides by 16, not 8** — so on a 64-bit target the rewrite passes a different numeric value (see divergence).
+- That the call argument list matches the standard ABI; the pseudocode shows `ret()` with no arguments.
+- That `diff` is always a multiple of 16 in practice, making the original `(diff/16)==0` check equivalent to `diff==0`.
 
-### Known divergences from pseudocode
-- **Divisor mismatch (medium):** original computes `diff/16`, rewrite computes `diff/sizeof(void*)` (=`diff/8`). The numeric argument passed to `_ITM_registerTMCloneTable` differs by a factor of 2 for any non-empty table.
-- **Zero-check scope (low):** original checks `(diff/16) == 0`; rewrite checks `diff == 0`. Differ for `diff ∈ {1..15}`, which shouldn't occur for a well-formed table.
-- **Call args (low):** inferred, not observed.
-
-### Reviewer checklist
+## Reviewer checklist
