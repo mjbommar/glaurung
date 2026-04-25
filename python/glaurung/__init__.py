@@ -108,6 +108,10 @@ _sys.modules[__name__ + ".analysis"] = analysis
 ir = _native.ir
 _sys.modules[__name__ + ".ir"] = ir
 
+# Debug-info ingestion (DWARF, PDB) submodule
+debug = _native.debug
+_sys.modules[__name__ + ".debug"] = debug
+
 # Triage module: use native triage, but attach a convenience triage()/analyze_path() wrapper
 _triage_mod = _native.triage
 # Preserve the original native function to avoid recursion when we override attributes

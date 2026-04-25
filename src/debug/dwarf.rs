@@ -48,6 +48,47 @@ pub struct DwarfRange {
     pub size: u64,
 }
 
+/// One DWARF-discovered struct / enum / typedef.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DwarfType {
+    pub kind: DwarfTypeKind,
+    /// Canonical name (`DW_AT_name`). Anonymous types use a synthetic
+    /// `anon_<offset>` name.
+    pub name: String,
+    /// Total size in bytes (`DW_AT_byte_size`), zero if unknown.
+    pub byte_size: u64,
+    /// Struct fields (offset, name, c_type, size). Empty for non-structs.
+    pub fields: Vec<DwarfField>,
+    /// Enum variants (name, value). Empty for non-enums.
+    pub variants: Vec<DwarfEnumVariant>,
+    /// For typedefs, the alias target's c_type rendering; empty otherwise.
+    pub typedef_target: Option<String>,
+    /// `DW_AT_name` of the surrounding compilation unit.
+    pub source_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DwarfTypeKind {
+    Struct,
+    Union,
+    Enum,
+    Typedef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DwarfField {
+    pub offset: u64,
+    pub name: String,
+    pub c_type: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DwarfEnumVariant {
+    pub name: String,
+    pub value: i64,
+}
+
 /// Read DWARF subprograms from `data` (the full binary bytes). Returns
 /// an empty Vec if the binary has no DWARF or parsing fails — callers
 /// should treat this as "DWARF unavailable, fall back to symbols/heuristics."
@@ -330,6 +371,351 @@ fn collect_ranges(
     Ok(vec![DwarfRange { start: low_pc, size: end - low_pc }])
 }
 
+// ---------------------------------------------------------------------------
+// Type extraction (DW_TAG_structure_type, _enumeration_type, _typedef)
+// ---------------------------------------------------------------------------
+
+/// Read DWARF type definitions from `data`. Returns an empty Vec if the
+/// binary has no DWARF or parsing fails. Like
+/// `extract_dwarf_functions`, this is best-effort — malformed CUs are
+/// silently skipped.
+pub fn extract_dwarf_types(data: &[u8]) -> Vec<DwarfType> {
+    let obj = match object::read::File::parse(data) {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+
+    let endian = if obj.is_little_endian() {
+        gimli::RunTimeEndian::Little
+    } else {
+        gimli::RunTimeEndian::Big
+    };
+
+    let load_section = |id: gimli::SectionId| -> Result<gimli::EndianSlice<'_, gimli::RunTimeEndian>, ()> {
+        let name = id.name();
+        match obj.section_by_name(name) {
+            Some(sec) => match sec.uncompressed_data() {
+                Ok(cow) => {
+                    let buf: &'static [u8] = Box::leak(cow.into_owned().into_boxed_slice());
+                    Ok(gimli::EndianSlice::new(buf, endian))
+                }
+                Err(_) => Ok(gimli::EndianSlice::new(&[], endian)),
+            },
+            None => Ok(gimli::EndianSlice::new(&[], endian)),
+        }
+    };
+
+    let dwarf = match gimli::Dwarf::load(&load_section) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut out: Vec<DwarfType> = Vec::new();
+    let mut iter = dwarf.units();
+    while let Ok(Some(header)) = iter.next() {
+        let unit = match dwarf.unit(header) {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+        let unit_src = unit_name(&dwarf, &unit);
+
+        // Walk DIEs depth-tracked so we can pair fields/variants with
+        // their parent struct/enum.
+        let mut cursor = unit.entries();
+        // Stack of in-progress builders.
+        let mut open: Vec<(DwarfType, isize)> = Vec::new();
+        let mut emitted: Vec<DwarfType> = Vec::new();
+
+        loop {
+            let depth_of_next = cursor.next_depth();
+            match cursor.next_entry() {
+                Ok(true) => {}
+                _ => break,
+            }
+            // Pop builders we've left.
+            while let Some((_t, parent_depth)) = open.last() {
+                if depth_of_next <= *parent_depth {
+                    let (t, _) = open.pop().unwrap();
+                    emitted.push(t);
+                } else {
+                    break;
+                }
+            }
+            let entry = match cursor.current() {
+                Some(e) => e,
+                None => continue,
+            };
+            match entry.tag() {
+                gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => {
+                    if let Some(t) = _build_struct_or_class(&dwarf, &unit, entry, &unit_src, false) {
+                        open.push((t, depth_of_next));
+                    }
+                }
+                gimli::DW_TAG_union_type => {
+                    if let Some(t) = _build_struct_or_class(&dwarf, &unit, entry, &unit_src, true) {
+                        open.push((t, depth_of_next));
+                    }
+                }
+                gimli::DW_TAG_enumeration_type => {
+                    if let Some(t) = _build_enum(&dwarf, &unit, entry, &unit_src) {
+                        open.push((t, depth_of_next));
+                    }
+                }
+                gimli::DW_TAG_typedef => {
+                    if let Some(t) = _build_typedef(&dwarf, &unit, entry, &unit_src) {
+                        // Typedefs have no children we care about, emit immediately.
+                        emitted.push(t);
+                    }
+                }
+                gimli::DW_TAG_member => {
+                    // Add to the most recent open struct/union.
+                    if let Some((parent, parent_depth)) = open.last_mut() {
+                        if depth_of_next == *parent_depth + 1
+                            && matches!(
+                                parent.kind,
+                                DwarfTypeKind::Struct | DwarfTypeKind::Union
+                            )
+                        {
+                            if let Some(field) = _build_field(&dwarf, &unit, entry) {
+                                parent.fields.push(field);
+                            }
+                        }
+                    }
+                }
+                gimli::DW_TAG_enumerator => {
+                    if let Some((parent, parent_depth)) = open.last_mut() {
+                        if depth_of_next == *parent_depth + 1
+                            && matches!(parent.kind, DwarfTypeKind::Enum)
+                        {
+                            if let Some(v) = _build_enum_variant(&dwarf, &unit, entry) {
+                                parent.variants.push(v);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        while let Some((t, _)) = open.pop() {
+            emitted.push(t);
+        }
+        out.extend(emitted);
+    }
+
+    // Dedup by (kind, name) — DWARF often emits the same type in many
+    // CUs. Keep the first seen, which is also the richest with the
+    // current ordering.
+    let mut seen: std::collections::HashSet<(DwarfTypeKind, String)> =
+        std::collections::HashSet::new();
+    out.retain(|t| seen.insert((t.kind, t.name.clone())));
+    out
+}
+
+fn _name_of(
+    dwarf: &gimli::Dwarf<Slice<'_>>,
+    unit: &Unit<'_>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+) -> Option<String> {
+    let v = entry.attr_value(gimli::DW_AT_name)?;
+    let s = dwarf.attr_string(unit, v).ok()?;
+    s.to_string().ok().map(|t| t.to_string())
+}
+
+fn _byte_size_of(
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+) -> u64 {
+    match entry.attr_value(gimli::DW_AT_byte_size) {
+        Some(gimli::AttributeValue::Udata(v)) => v,
+        Some(gimli::AttributeValue::Data1(v)) => v as u64,
+        Some(gimli::AttributeValue::Data2(v)) => v as u64,
+        Some(gimli::AttributeValue::Data4(v)) => v as u64,
+        Some(gimli::AttributeValue::Data8(v)) => v,
+        _ => 0,
+    }
+}
+
+fn _build_struct_or_class(
+    dwarf: &gimli::Dwarf<Slice<'_>>,
+    unit: &Unit<'_>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+    source_file: &Option<String>,
+    is_union: bool,
+) -> Option<DwarfType> {
+    // Skip declaration-only entries.
+    if matches!(
+        entry.attr_value(gimli::DW_AT_declaration),
+        Some(gimli::AttributeValue::Flag(true))
+    ) {
+        return None;
+    }
+    let name = _name_of(dwarf, unit, entry)
+        .unwrap_or_else(|| format!("anon_{:x}", entry.offset().0));
+    let kind = if is_union { DwarfTypeKind::Union } else { DwarfTypeKind::Struct };
+    Some(DwarfType {
+        kind,
+        name,
+        byte_size: _byte_size_of(entry),
+        fields: Vec::new(),
+        variants: Vec::new(),
+        typedef_target: None,
+        source_file: source_file.clone(),
+    })
+}
+
+fn _build_enum(
+    dwarf: &gimli::Dwarf<Slice<'_>>,
+    unit: &Unit<'_>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+    source_file: &Option<String>,
+) -> Option<DwarfType> {
+    if matches!(
+        entry.attr_value(gimli::DW_AT_declaration),
+        Some(gimli::AttributeValue::Flag(true))
+    ) {
+        return None;
+    }
+    let name = _name_of(dwarf, unit, entry)
+        .unwrap_or_else(|| format!("anon_enum_{:x}", entry.offset().0));
+    Some(DwarfType {
+        kind: DwarfTypeKind::Enum,
+        name,
+        byte_size: _byte_size_of(entry),
+        fields: Vec::new(),
+        variants: Vec::new(),
+        typedef_target: None,
+        source_file: source_file.clone(),
+    })
+}
+
+fn _build_typedef(
+    dwarf: &gimli::Dwarf<Slice<'_>>,
+    unit: &Unit<'_>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+    source_file: &Option<String>,
+) -> Option<DwarfType> {
+    let name = _name_of(dwarf, unit, entry)?;
+    let target = entry
+        .attr_value(gimli::DW_AT_type)
+        .and_then(|v| _resolve_type_string(dwarf, unit, v));
+    Some(DwarfType {
+        kind: DwarfTypeKind::Typedef,
+        name,
+        byte_size: _byte_size_of(entry),
+        fields: Vec::new(),
+        variants: Vec::new(),
+        typedef_target: target,
+        source_file: source_file.clone(),
+    })
+}
+
+fn _build_field(
+    dwarf: &gimli::Dwarf<Slice<'_>>,
+    unit: &Unit<'_>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+) -> Option<DwarfField> {
+    let name = _name_of(dwarf, unit, entry).unwrap_or_else(|| String::from("?"));
+    let offset = match entry.attr_value(gimli::DW_AT_data_member_location) {
+        Some(gimli::AttributeValue::Udata(v)) => v,
+        Some(gimli::AttributeValue::Data1(v)) => v as u64,
+        Some(gimli::AttributeValue::Data2(v)) => v as u64,
+        Some(gimli::AttributeValue::Data4(v)) => v as u64,
+        Some(gimli::AttributeValue::Data8(v)) => v,
+        _ => 0,
+    };
+    let c_type = entry
+        .attr_value(gimli::DW_AT_type)
+        .and_then(|v| _resolve_type_string(dwarf, unit, v))
+        .unwrap_or_else(|| String::from("/* unknown */"));
+    Some(DwarfField {
+        offset,
+        name,
+        c_type,
+        size: _byte_size_of(entry),
+    })
+}
+
+fn _build_enum_variant(
+    dwarf: &gimli::Dwarf<Slice<'_>>,
+    unit: &Unit<'_>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+) -> Option<DwarfEnumVariant> {
+    let name = _name_of(dwarf, unit, entry)?;
+    let value = match entry.attr_value(gimli::DW_AT_const_value) {
+        Some(gimli::AttributeValue::Sdata(v)) => v,
+        Some(gimli::AttributeValue::Udata(v)) => v as i64,
+        Some(gimli::AttributeValue::Data1(v)) => v as i64,
+        Some(gimli::AttributeValue::Data2(v)) => v as i64,
+        Some(gimli::AttributeValue::Data4(v)) => v as i64,
+        Some(gimli::AttributeValue::Data8(v)) => v as i64,
+        _ => return None,
+    };
+    Some(DwarfEnumVariant { name, value })
+}
+
+/// Resolve a `DW_AT_type` reference to a printable C-ish type string.
+/// Best-effort: handles base types (DW_TAG_base_type), pointers, refs,
+/// arrays (as `T[]`), const/volatile qualifiers, and forwards to named
+/// types by their `DW_AT_name`. Anonymous / unresolvable types render
+/// as `/* unknown */`.
+fn _resolve_type_string(
+    dwarf: &gimli::Dwarf<Slice<'_>>,
+    unit: &Unit<'_>,
+    type_attr: gimli::AttributeValue<Slice<'_>>,
+) -> Option<String> {
+    let off = match type_attr {
+        gimli::AttributeValue::UnitRef(o) => o,
+        _ => return None,
+    };
+    let entry = unit.entry(off).ok()?;
+    let kind = entry.tag();
+    match kind {
+        gimli::DW_TAG_base_type
+        | gimli::DW_TAG_structure_type
+        | gimli::DW_TAG_union_type
+        | gimli::DW_TAG_class_type
+        | gimli::DW_TAG_enumeration_type
+        | gimli::DW_TAG_typedef => Some(
+            _name_of(dwarf, unit, &entry).unwrap_or_else(|| "/* unknown */".to_string()),
+        ),
+        gimli::DW_TAG_pointer_type => {
+            let inner = entry
+                .attr_value(gimli::DW_AT_type)
+                .and_then(|v| _resolve_type_string(dwarf, unit, v))
+                .unwrap_or_else(|| "void".to_string());
+            Some(format!("{} *", inner))
+        }
+        gimli::DW_TAG_reference_type => {
+            let inner = entry
+                .attr_value(gimli::DW_AT_type)
+                .and_then(|v| _resolve_type_string(dwarf, unit, v))
+                .unwrap_or_else(|| "void".to_string());
+            Some(format!("{} &", inner))
+        }
+        gimli::DW_TAG_const_type => {
+            let inner = entry
+                .attr_value(gimli::DW_AT_type)
+                .and_then(|v| _resolve_type_string(dwarf, unit, v))
+                .unwrap_or_else(|| "void".to_string());
+            Some(format!("const {}", inner))
+        }
+        gimli::DW_TAG_volatile_type => {
+            let inner = entry
+                .attr_value(gimli::DW_AT_type)
+                .and_then(|v| _resolve_type_string(dwarf, unit, v))
+                .unwrap_or_else(|| "void".to_string());
+            Some(format!("volatile {}", inner))
+        }
+        gimli::DW_TAG_array_type => {
+            let inner = entry
+                .attr_value(gimli::DW_AT_type)
+                .and_then(|v| _resolve_type_string(dwarf, unit, v))
+                .unwrap_or_else(|| "void".to_string());
+            Some(format!("{}[]", inner))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +731,30 @@ mod tests {
         // 64 bytes of garbage — should not panic.
         let funcs = extract_dwarf_functions(&[0xAA; 64]);
         assert!(funcs.is_empty());
+    }
+
+    #[test]
+    fn empty_buffer_has_no_types() {
+        assert!(extract_dwarf_types(&[]).is_empty());
+    }
+
+    #[test]
+    fn extracts_struct_with_fields_from_clang_debug() {
+        let path = "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug";
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let types = extract_dwarf_types(&bytes);
+        assert!(!types.is_empty(), "DWARF type reader returned no types");
+        // Must have at least one struct with at least one field.
+        let with_fields = types
+            .iter()
+            .filter(|t| t.kind == DwarfTypeKind::Struct && !t.fields.is_empty())
+            .count();
+        assert!(with_fields >= 1,
+                "expected at least one struct with fields; got 0 of {} types",
+                types.len());
     }
 
     /// End-to-end against a real ELF with DWARF: we expect to recover

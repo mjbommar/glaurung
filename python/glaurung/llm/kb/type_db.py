@@ -389,6 +389,74 @@ def render_c_definition(rec: TypeRecord) -> str:
     return f"/* unknown kind: {rec.kind} */"
 
 
+def import_dwarf_types(
+    kb: PersistentKnowledgeBase, binary_path: str, *, max_types: int = 1000,
+) -> dict:
+    """Pull every struct / enum / typedef out of `binary_path`'s DWARF
+    info and persist them with `set_by="dwarf"` provenance.
+
+    Returns a small summary dict so callers can report stats. Idempotent —
+    relies on `add_struct` / `add_enum` / `add_typedef`'s manual-wins
+    rule, so analyst overrides are preserved across re-imports.
+
+    Skips entries with empty bodies (declaration-only types DWARF emits
+    for incomplete forward references): an empty struct teaches the type
+    db nothing and would just clutter the namespace.
+    """
+    import glaurung as g
+    try:
+        types = g.debug.extract_dwarf_types_path(binary_path)
+    except Exception:
+        return {"imported_struct": 0, "imported_enum": 0, "imported_typedef": 0,
+                "skipped_empty": 0, "error": "extract_failed"}
+
+    counts = {"imported_struct": 0, "imported_enum": 0, "imported_typedef": 0,
+              "skipped_empty": 0}
+    for t in types[:max_types]:
+        kind = t.get("kind")
+        name = t.get("name")
+        if not name:
+            continue
+        if kind == "struct":
+            fields = t.get("fields") or []
+            if not fields:
+                counts["skipped_empty"] += 1
+                continue
+            sf = [
+                StructField(
+                    offset=int(f["offset"]),
+                    name=str(f["name"]),
+                    c_type=str(f["c_type"]),
+                    size=int(f.get("size", 0)),
+                ) for f in fields
+            ]
+            add_struct(
+                kb, name, sf,
+                total_size=int(t.get("byte_size") or 0),
+                confidence=0.95, set_by="dwarf",
+            )
+            counts["imported_struct"] += 1
+        elif kind == "enum":
+            variants = t.get("variants") or []
+            if not variants:
+                counts["skipped_empty"] += 1
+                continue
+            ev = [EnumVariant(name=str(v["name"]), value=int(v["value"]))
+                  for v in variants]
+            add_enum(kb, name, ev, confidence=0.95, set_by="dwarf")
+            counts["imported_enum"] += 1
+        elif kind == "typedef":
+            target = t.get("typedef_target")
+            if not target:
+                counts["skipped_empty"] += 1
+                continue
+            add_typedef(kb, name, str(target), confidence=0.95, set_by="dwarf")
+            counts["imported_typedef"] += 1
+        # union not yet supported by add_struct (different kind in schema);
+        # skip silently. v2 adds union support to type_db.
+    return counts
+
+
 def render_all_as_header(kb: PersistentKnowledgeBase) -> str:
     """Emit every persisted type as a single C header. Used by the
     standard-format exporters (#165)."""
