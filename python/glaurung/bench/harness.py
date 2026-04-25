@@ -17,10 +17,12 @@ import glaurung as g
 
 from .metrics import (
     CallgraphMetrics,
+    DebugInfoMetrics,
     DecompileMetrics,
     FunctionDiscoveryMetrics,
     TriageMetrics,
     callgraph_metrics,
+    debug_info_metrics,
     decompile_metrics,
     discovery_metrics,
     language_from_source_path,
@@ -51,6 +53,7 @@ class BinaryScorecard:
     discovery: dict
     callgraph: dict
     decompile: dict
+    debug_info: dict = field(default_factory=dict)
 
     elapsed_ms: dict = field(default_factory=dict)
     error: Optional[str] = None
@@ -109,6 +112,10 @@ class BenchSummary:
                 "cold_orphans": total_int("discovery.cold_orphans"),
                 "decompiled_ok": total_int("decompile.succeeded"),
                 "decompiled_failed": total_int("decompile.failed"),
+                "dwarf_types": total_int("debug_info.dwarf_types_total"),
+                "dwarf_structs_with_fields": total_int(
+                    "debug_info.dwarf_structs_with_fields"
+                ),
             },
             "rates": {
                 "name_match_rate_avg": avg("discovery.name_match_rate"),
@@ -320,6 +327,10 @@ def run_one_binary(
         total_lines=total_lines,
     )
 
+    debug_started = time.perf_counter()
+    dbg = debug_info_metrics(str(binary))
+    debug_ms = (time.perf_counter() - debug_started) * 1000
+
     return BinaryScorecard(
         binary_path=str(binary),
         metadata_path=str(meta_path) if meta_path else None,
@@ -332,10 +343,12 @@ def run_one_binary(
         discovery=asdict(disc),
         callgraph=asdict(cgm),
         decompile=asdict(dec),
+        debug_info=asdict(dbg),
         elapsed_ms={
             "triage_ms": round(triage_ms, 1),
             "analysis_ms": round(analysis_ms, 1),
             "decompile_ms": round(decompile_ms, 1),
+            "debug_info_ms": round(debug_ms, 1),
         },
     )
 
@@ -426,6 +439,8 @@ def to_markdown(summary: BenchSummary) -> str:
                      f"(cold orphans: {totals.get('cold_orphans', 0)})")
         lines.append(f"- Decompiled OK: **{totals.get('decompiled_ok', 0)}** "
                      f"(failed: {totals.get('decompiled_failed', 0)})")
+        lines.append(f"- DWARF types: **{totals.get('dwarf_types', 0)}** "
+                     f"(structs with fields: {totals.get('dwarf_structs_with_fields', 0)})")
         lines.append("")
         lines.append("## Rates")
         lines.append(f"- Symbol-name resolution (avg): **{rates.get('name_match_rate_avg', 0):.1%}**")

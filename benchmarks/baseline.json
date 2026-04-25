@@ -1,5 +1,5 @@
 {
-  "glaurung_commit": "736d0329f6f8181ad6ade19cac1a37336bb55853",
+  "glaurung_commit": "7f80928fdc2dac35c0cc5ba3678f03fd07d7e516",
   "schema_version": "1",
   "scorecards": [
     {
@@ -12,6 +12,13 @@
         "nodes": 12
       },
       "compiler": "gcc",
+      "debug_info": {
+        "dwarf_enums": 0,
+        "dwarf_structs": 0,
+        "dwarf_structs_with_fields": 0,
+        "dwarf_typedefs": 0,
+        "dwarf_types_total": 0
+      },
       "decompile": {
         "attempted": 7,
         "failed": 0,
@@ -31,9 +38,10 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 3.1,
-        "decompile_ms": 12.3,
-        "triage_ms": 28.2
+        "analysis_ms": 5.6,
+        "debug_info_ms": 0.2,
+        "decompile_ms": 11.9,
+        "triage_ms": 28.4
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -58,6 +66,13 @@
         "nodes": 36
       },
       "compiler": "g++",
+      "debug_info": {
+        "dwarf_enums": 0,
+        "dwarf_structs": 0,
+        "dwarf_structs_with_fields": 0,
+        "dwarf_typedefs": 0,
+        "dwarf_types_total": 0
+      },
       "decompile": {
         "attempted": 11,
         "failed": 0,
@@ -77,9 +92,10 @@
         "with_chunks_gt_one": 1
       },
       "elapsed_ms": {
-        "analysis_ms": 5.0,
+        "analysis_ms": 4.9,
+        "debug_info_ms": 0.3,
         "decompile_ms": 61.3,
-        "triage_ms": 7.7
+        "triage_ms": 7.8
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -104,6 +120,13 @@
         "nodes": 36
       },
       "compiler": "g++",
+      "debug_info": {
+        "dwarf_enums": 0,
+        "dwarf_structs": 0,
+        "dwarf_structs_with_fields": 0,
+        "dwarf_typedefs": 0,
+        "dwarf_types_total": 0
+      },
       "decompile": {
         "attempted": 11,
         "failed": 0,
@@ -123,9 +146,10 @@
         "with_chunks_gt_one": 1
       },
       "elapsed_ms": {
-        "analysis_ms": 5.2,
-        "decompile_ms": 61.3,
-        "triage_ms": 7.9
+        "analysis_ms": 4.9,
+        "debug_info_ms": 0.2,
+        "decompile_ms": 62.0,
+        "triage_ms": 7.8
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -150,6 +174,13 @@
         "nodes": 19
       },
       "compiler": "gfortran-11",
+      "debug_info": {
+        "dwarf_enums": 0,
+        "dwarf_structs": 0,
+        "dwarf_structs_with_fields": 0,
+        "dwarf_typedefs": 0,
+        "dwarf_types_total": 0
+      },
       "decompile": {
         "attempted": 7,
         "failed": 0,
@@ -170,8 +201,9 @@
       },
       "elapsed_ms": {
         "analysis_ms": 2.3,
-        "decompile_ms": 17.5,
-        "triage_ms": 9.8
+        "debug_info_ms": 0.3,
+        "decompile_ms": 17.9,
+        "triage_ms": 9.6
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -196,6 +228,13 @@
         "nodes": 12
       },
       "compiler": "clang",
+      "debug_info": {
+        "dwarf_enums": 0,
+        "dwarf_structs": 0,
+        "dwarf_structs_with_fields": 0,
+        "dwarf_typedefs": 0,
+        "dwarf_types_total": 0
+      },
       "decompile": {
         "attempted": 7,
         "failed": 0,
@@ -216,8 +255,9 @@
       },
       "elapsed_ms": {
         "analysis_ms": 1.5,
-        "decompile_ms": 13.0,
-        "triage_ms": 7.2
+        "debug_info_ms": 0.2,
+        "decompile_ms": 12.4,
+        "triage_ms": 7.4
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -242,6 +282,13 @@
         "nodes": 36
       },
       "compiler": "clang++",
+      "debug_info": {
+        "dwarf_enums": 0,
+        "dwarf_structs": 0,
+        "dwarf_structs_with_fields": 0,
+        "dwarf_typedefs": 0,
+        "dwarf_types_total": 0
+      },
       "decompile": {
         "attempted": 13,
         "failed": 0,
@@ -261,9 +308,10 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 7.7,
-        "decompile_ms": 120.0,
-        "triage_ms": 8.1
+        "analysis_ms": 7.6,
+        "debug_info_ms": 0.4,
+        "decompile_ms": 119.7,
+        "triage_ms": 7.9
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -288,6 +336,13 @@
         "nodes": 54
       },
       "compiler": "clang++",
+      "debug_info": {
+        "dwarf_enums": 1,
+        "dwarf_structs": 48,
+        "dwarf_structs_with_fields": 15,
+        "dwarf_typedefs": 89,
+        "dwarf_types_total": 139
+      },
       "decompile": {
         "attempted": 16,
         "failed": 0,
@@ -307,9 +362,10 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 16.7,
-        "decompile_ms": 385.5,
-        "triage_ms": 31.8
+        "analysis_ms": 16.5,
+        "debug_info_ms": 1.5,
+        "decompile_ms": 384.6,
+        "triage_ms": 32.7
       },
       "error": null,
       "flags": "-O0 -g -Wall -Wextra",
@@ -334,6 +390,13 @@
         "nodes": 23
       },
       "compiler": "clang++",
+      "debug_info": {
+        "dwarf_enums": 0,
+        "dwarf_structs": 0,
+        "dwarf_structs_with_fields": 0,
+        "dwarf_typedefs": 0,
+        "dwarf_types_total": 0
+      },
       "decompile": {
         "attempted": 8,
         "failed": 0,
@@ -353,8 +416,9 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 4.0,
-        "decompile_ms": 41.4,
+        "analysis_ms": 4.2,
+        "debug_info_ms": 0.3,
+        "decompile_ms": 41.0,
         "triage_ms": 6.1
       },
       "error": null,
@@ -380,6 +444,13 @@
         "nodes": 19
       },
       "compiler": null,
+      "debug_info": {
+        "dwarf_enums": 0,
+        "dwarf_structs": 0,
+        "dwarf_structs_with_fields": 0,
+        "dwarf_typedefs": 0,
+        "dwarf_types_total": 0
+      },
       "decompile": {
         "attempted": 14,
         "failed": 0,
@@ -400,8 +471,9 @@
       },
       "elapsed_ms": {
         "analysis_ms": 1.9,
-        "decompile_ms": 29.6,
-        "triage_ms": 7.1
+        "debug_info_ms": 0.3,
+        "decompile_ms": 30.7,
+        "triage_ms": 6.3
       },
       "error": null,
       "flags": null,
@@ -426,6 +498,13 @@
         "nodes": 9
       },
       "compiler": null,
+      "debug_info": {
+        "dwarf_enums": 0,
+        "dwarf_structs": 0,
+        "dwarf_structs_with_fields": 0,
+        "dwarf_typedefs": 0,
+        "dwarf_types_total": 0
+      },
       "decompile": {
         "attempted": 9,
         "failed": 0,
@@ -446,8 +525,9 @@
       },
       "elapsed_ms": {
         "analysis_ms": 0.9,
-        "decompile_ms": 8.8,
-        "triage_ms": 9.6
+        "debug_info_ms": 0.2,
+        "decompile_ms": 9.0,
+        "triage_ms": 9.1
       },
       "error": null,
       "flags": null,
@@ -476,10 +556,12 @@
       "cold_orphans": 0,
       "decompiled_failed": 0,
       "decompiled_ok": 103,
+      "dwarf_structs_with_fields": 15,
+      "dwarf_types": 139,
       "functions_discovered": 103,
       "functions_named": 94,
       "multi_chunk_functions": 2
     }
   },
-  "timestamp": "2026-04-25T13:03:50.604263+00:00"
+  "timestamp": "2026-04-25T14:26:50.057708+00:00"
 }

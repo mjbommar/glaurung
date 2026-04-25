@@ -166,6 +166,46 @@ def language_from_source_path(source_path: Optional[str]) -> Optional[str]:
     return None
 
 
+@dataclass
+class DebugInfoMetrics:
+    """Counts of structured types recoverable from debug info.
+
+    Only DWARF for now (PDB ingestion is a Tier-B follow-up). Zeros
+    are the expected baseline for stripped or non-debug binaries —
+    the metric exists so a future regression that breaks DWARF
+    ingestion shows up immediately.
+    """
+    dwarf_types_total: int = 0
+    dwarf_structs: int = 0
+    dwarf_enums: int = 0
+    dwarf_typedefs: int = 0
+    dwarf_structs_with_fields: int = 0
+
+
+def debug_info_metrics(binary_path: str) -> DebugInfoMetrics:
+    """Pull DWARF type counts via the native bridge. No-op (zeros) if
+    the binary has no debug info or the bridge raises."""
+    try:
+        import glaurung as g
+        types = g.debug.extract_dwarf_types_path(binary_path)
+    except Exception:
+        return DebugInfoMetrics()
+    structs = sum(1 for t in types if t.get("kind") == "struct")
+    enums = sum(1 for t in types if t.get("kind") == "enum")
+    typedefs = sum(1 for t in types if t.get("kind") == "typedef")
+    structs_with_fields = sum(
+        1 for t in types
+        if t.get("kind") == "struct" and t.get("fields")
+    )
+    return DebugInfoMetrics(
+        dwarf_types_total=len(types),
+        dwarf_structs=structs,
+        dwarf_enums=enums,
+        dwarf_typedefs=typedefs,
+        dwarf_structs_with_fields=structs_with_fields,
+    )
+
+
 def triage_metrics(
     artifact, expected_source_path: Optional[str], detected_language: Optional[str]
 ) -> TriageMetrics:
