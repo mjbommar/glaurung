@@ -1385,6 +1385,7 @@ def render_decompile_with_names(
     timeout_ms: int = 500,
     style: str = "c",
     include_locals_prelude: bool = True,
+    include_call_proto_hints: bool = True,
 ) -> str:
     """Decompile `function_va` and rewrite frame-offset references
     (`(rbp - 0x10)`, `(rbp + 8)`, `*&[rbp - 0x40]`, ...) to named
@@ -1492,6 +1493,44 @@ def render_decompile_with_names(
                 + r")(?=\s*\()"
             )
             out = addr_re.sub(lambda m: addr_map[m.group(1)], out)
+
+    # Function-prototype hints (#227): for each call-site line, append a
+    # trailing `// proto: ...` comment showing the prototype if known.
+    # We skip lines that already carry a comment to avoid double-hints
+    # on lines the analyst (or earlier passes) already annotated.
+    if include_call_proto_hints:
+        protos = list_function_prototypes(kb)
+        if protos:
+            proto_by_name: dict[str, "FunctionPrototype"] = {}
+            for p in protos:
+                proto_by_name[p.function_name] = p
+            # Match `<name>(` or `<name>@plt(` with optional whitespace —
+            # we only want to find the *first* call on a given line so
+            # we don't hint on every nested call. Greedy match wouldn't
+            # help since one rendered line is rarely longer than ~140
+            # chars; just take the first hit.
+            ident_re = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)(?:@plt)?\s*\(")
+            new_lines = []
+            for line in out.splitlines():
+                stripped = line.split("//", 1)[0]
+                if "//" in line:
+                    new_lines.append(line)
+                    continue
+                m = ident_re.search(stripped)
+                if not m:
+                    new_lines.append(line)
+                    continue
+                name = m.group(1)
+                proto = proto_by_name.get(name)
+                if proto is None:
+                    new_lines.append(line)
+                    continue
+                hint = proto.render()
+                new_lines.append(f"{line.rstrip()}  // proto: {hint}")
+            out = "\n".join(new_lines)
+            # Preserve the original trailing newline if any.
+            if raw.endswith("\n") and not out.endswith("\n"):
+                out += "\n"
 
     if include_locals_prelude:
         prelude = _format_locals_prelude(slots)
