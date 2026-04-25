@@ -1,0 +1,48 @@
+{
+  "_version": 3,
+  "entry_va": 4352,
+  "raw_name": "_start",
+  "demangled": "_start",
+  "short_name": "_start",
+  "rejected_names": [
+    "start"
+  ],
+  "role": "other",
+  "role_confidence": 0.25,
+  "c_prototype": "void sub_1100(long arg0, long arg1, long arg2);",
+  "docstring": "/**\n * @brief TODO \u2014 describe this function.\n *\n * Auto-generated placeholder; no LLM was available to write docs.\n */",
+  "source": "// auto-rewritten (heuristic) \u2014 void sub_1100(long arg0, long arg1, long arg2);\nvoid sub_1100(long arg0, long arg1, long arg2)\n{\n    /* 28 lines of pseudocode below */\nfn _start {\n    nop;\n    arg5 = arg2;\n    pop(arg1);\n    arg2 = rsp;\n    rsp = (rsp & 240);\n    push(ret);\n    push(rsp);\n    ret = 0;\n    ret = 0;\n    __libc_start_main(main);\n    unknown(hlt);\n    nop;\n    ret = completed.0;\n    %zf = (ret == expected);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret(completed.0);\n    L_1158:\n    return;\n}\n\n}",
+  "pseudocode": "fn _start {\n    nop;\n    arg5 = arg2;\n    pop(arg1);\n    arg2 = rsp;\n    rsp = (rsp & 240);\n    push(ret);\n    push(rsp);\n    arg4 = 0;\n    arg3 = 0;\n    __libc_start_main(main);\n    unknown(hlt);\n    nop;\n    ret = completed.0;\n    %zf = (ret == arg0);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret(completed.0);\n    L_1158:\n    return;\n}\n",
+  "assumptions": [
+    "Heuristic rewrite \u2014 LLM not consulted; treat output as lightly-substituted pseudocode, not real source."
+  ],
+  "rewrite_confidence": 0.2,
+  "equivalence_passed": false,
+  "divergences": [
+    "[low] other: LLM unavailable; equivalence could not be checked"
+  ],
+  "string_names": {
+    "ELF": "ELF",
+    "/lib64/ld-linux-x86-64.so.2": "LIB64_LD_LINUX_X86",
+    "GNU": "GNU",
+    "9]@": "9",
+    "__gmon_start__": "GMON_START"
+  },
+  "variable_names": {
+    "arg5": "arg5",
+    "arg2": "arg2",
+    "arg1": "arg1",
+    "arg4": "ret",
+    "arg3": "ret",
+    "arg0": "expected",
+    "var0": "var0",
+    "t0": "t0"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 28,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

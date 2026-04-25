@@ -1,0 +1,46 @@
+{
+  "_version": 3,
+  "entry_va": 4576,
+  "raw_name": "frame_dummy",
+  "demangled": "frame_dummy",
+  "short_name": "frame_dummy",
+  "rejected_names": [],
+  "role": "entry_stub",
+  "role_confidence": 0.9,
+  "c_prototype": "void sub_11e0(void);",
+  "docstring": "/**\n * @brief TODO \u2014 describe this function.\n *\n * Auto-generated placeholder; no LLM was available to write docs.\n */",
+  "source": "/* frame_dummy \u2014 compiler-generated entry stub.\n * Standard CRT glue that tail-calls register_tm_clones on first invocation.\n */\nvoid frame_dummy(void)\n{\n    register_tm_clones();\n}\n",
+  "pseudocode": "fn frame_dummy {\n    arg0 = completed.0;\n    arg1 = completed.0;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret = *&[var0+0x3fe8];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret();\n    L_1198:\n    return;\n    nop;\n    goto L_1160;\n}\n",
+  "assumptions": [
+    "This is the standard glibc `frame_dummy` CRT stub emitted by the compiler/linker; its body is identical to `register_tm_clones` (a tail call to it). The arithmetic on `completed.0` and the GOT load via `var0+0x3fe8` are the inlined body of register_tm_clones, not frame_dummy itself.",
+    "Replaced the entire decompiled body with a single call to `register_tm_clones()` because frame_dummy in C source is literally `static void frame_dummy(void) { register_tm_clones(); }` \u2014 the visible arithmetic comes from inlining at -O2.",
+    "Dropped the dead-store chain on `ret`/`arg1` (subtraction of equal values, shifts, zero-flag checks) \u2014 these are the inlined register_tm_clones prologue and not part of the original C source.",
+    "Function name in prototype is `sub_11e0` but the pseudocode header and role indicate this is `frame_dummy`; used the semantic name."
+  ],
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: The rewrite replaces the inlined body with a call to register_tm_clones(). This is a well-known CRT idiom; semantically equivalent assuming the inlined code is indeed register_tm_clones. The pseudocode shows the inlined version while the source shows the un-inlined call \u2014 behaviorally equivalent at the C-source level.",
+    "[low] control_flow: Pseudocode contains a trailing 'goto L_1160' after the return which appears to be unreachable/dead (likely decompiler artifact for alignment nop). Not represented in rewrite, but unreachable."
+  ],
+  "string_names": {
+    "ELF": "ELF",
+    "/lib64/ld-linux-x86-64.so.2": "LIB64_LD_LINUX_X86",
+    "GNU": "GNU",
+    "9]@": "9",
+    "__gmon_start__": "GMON_START"
+  },
+  "variable_names": {
+    "arg0": "completed",
+    "arg1": "arg1",
+    "var0": "var0",
+    "t0": "t0"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 24,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

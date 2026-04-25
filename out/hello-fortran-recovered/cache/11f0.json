@@ -1,0 +1,66 @@
+{
+  "_version": 3,
+  "entry_va": 4592,
+  "raw_name": "MAIN__",
+  "demangled": "MAIN__",
+  "short_name": "fortran_main_program",
+  "rejected_names": [
+    "hello_fortran_main",
+    "print_hello_and_args",
+    "run_main_program",
+    "main_entry"
+  ],
+  "role": "other",
+  "role_confidence": 0.25,
+  "c_prototype": "void MAIN__(void);",
+  "docstring": "/**\n * @brief TODO \u2014 describe this function.\n *\n * Auto-generated placeholder; no LLM was available to write docs.\n */",
+  "source": "/* Reconstructed Fortran PROGRAM main, lowered to C against libgfortran. */\n\n#include <stdint.h>\n#include <string.h>\n\n/* gfortran I/O descriptor (st_parameter_dt). Only the few fields the\n * compiler actually writes are modelled here; the rest is opaque scratch. */\ntypedef struct {\n    int64_t  common;        /* packed flags|unit  (0x600000080 == unit=6, flags=0x80) */\n    const char *filename;   /* source file for runtime diagnostics */\n    int32_t  line;          /* source line number */\n    char     pad[512];      /* remainder of the 528-byte descriptor */\n} st_parameter_dt;\n\nextern void _gfortran_st_write(st_parameter_dt *);\nextern void _gfortran_st_write_done(st_parameter_dt *);\nextern void _gfortran_transfer_character_write(st_parameter_dt *, const char *, int32_t);\nextern void _gfortran_transfer_integer_write(st_parameter_dt *, const void *, int32_t);\nextern int32_t _gfortran_iargc(void);\nextern void _gfortran_get_command_argument_i4(int32_t *number,\n                                              char *value, int32_t v1, int32_t v2,\n                                              int32_t value_len);\nextern int32_t _gfortran_string_len_trim(int32_t len, const char *s);\n\n/* SAVEd integer in a module / BSS slot, printed as \"Global counter:\". */\nextern int32_t global_counter;\n/* SAVEd local of the contained subroutine; mangled as call_count.1 by gfortran. */\nextern int32_t call_count_1;\n\n#define IO_UNIT6_FLAGS  ((int64_t)0x600000080LL)\nstatic const char SRC_FILE[] = \"/workspace/source/fortran/hello.f90\";\n\nvoid MAIN__(void)\n{\n    st_parameter_dt dt;\n    int32_t  num_args;\n    int32_t  total_len;\n    int32_t  arg_index;\n    char     arg_buf[100];\n\n    /* PRINT *, \"Hello, World from Fortran!\"   ! line 12 */\n    dt.common   = IO_UNIT6_FLAGS;\n    dt.filename = SRC_FILE;\n    dt.line     = 12;\n    _gfortran_st_write(&dt);\n    _gfortran_transfer_character_write(&dt, \"Hello, World from Fortran!\", 26);\n    _gfortran_st_write_done(&dt);\n\n    /* num_args = COMMAND_ARGUMENT_COUNT() */\n    num_args  = _gfortran_iargc();\n    total_len = 0;\n\n    /* do i = 1, num_args\n     *     call get_command_argument(i, arg_buf)\n     *     total_len = total_len + len_trim(arg_buf)\n     * end do\n     */\n    for (arg_index = 1; arg_index <= num_args; ++arg_index) {\n        _gfortran_get_command_argument_i4(&arg_index, arg_buf, 0, 0, sizeof arg_buf);\n        total_len += _gfortran_string_len_trim(sizeof arg_buf, arg_buf);\n    }\n\n    /* PRINT *, \"Number of arguments:\", num_args            ! line 25 */\n    dt.common   = IO_UNIT6_FLAGS;\n    dt.filename = SRC_FILE;\n    dt.line     = 25;\n    _gfortran_st_write(&dt);\n    _gfortran_transfer_character_write(&dt, \"Number of arguments:\", 20);\n    _gfortran_transfer_integer_write(&dt, &num_args, 4);\n    _gfortran_st_write_done(&dt);\n\n    /* PRINT *, \"Total argument length:\", total_len         ! line 26 */\n    dt.common   = IO_UNIT6_FLAGS;\n    dt.filename = SRC_FILE;\n    dt.line     = 26;\n    _gfortran_st_write(&dt);\n    _gfortran_transfer_character_write(&dt, \"Total argument length:\", 22);\n    _gfortran_transfer_integer_write(&dt, &total_len, 4);\n    _gfortran_st_write_done(&dt);\n\n    /* PRINT *, \"Global counter:\", global_counter           ! line 27 */\n    dt.common   = IO_UNIT6_FLAGS;\n    dt.filename = SRC_FILE;\n    dt.line     = 27;\n    _gfortran_st_write(&dt);\n    _gfortran_transfer_character_write(&dt, \"Global counter:\", 15);\n    _gfortran_transfer_integer_write(&dt, &global_counter, 4);\n    _gfortran_st_write_done(&dt);\n\n    /* CALL my_subroutine() -- inlined by the compiler:\n     *     call_count_1 = call_count_1 + 1\n     *     PRINT *, \"Fortran subroutine called\"             ! line 40\n     *     PRINT *, \"Subroutine called\", call_count_1, \"times\" ! line 41\n     */\n    call_count_1 += 1;\n\n    dt.common   = IO_UNIT6_FLAGS;\n    dt.filename = SRC_FILE;\n    dt.line     = 40;\n    _gfortran_st_write(&dt);\n    _gfortran_transfer_character_write(&dt, \"Fortran subroutine called\", 25);\n    _gfortran_st_write_done(&dt);\n\n    dt.common   = IO_UNIT6_FLAGS;\n    dt.filename = SRC_FILE;\n    dt.line     = 41;\n    _gfortran_st_write(&dt);\n    _gfortran_transfer_character_write(&dt, \"Subroutine called\", 17);\n    _gfortran_transfer_integer_write(&dt, &call_count_1, 4);\n    _gfortran_transfer_character_write(&dt, \"times\", 5);\n    _gfortran_st_write_done(&dt);\n}\n",
+  "pseudocode": "fn MAIN__ {\n    ret = 0x600000080;\n    push(var0);\n    push(var1);\n    var1 = \"/workspace/source/fortran/hello.f90\";\n    push(var2);\n    push(var3);\n    push(rbp);\n    push(var4);\n    rsp = (rsp - 664);\n    rbp = (rsp + 128);\n    stack_0 = ret;\n    stack_1 = var1;\n    stack_2 = 12;\n    _gfortran_st_write@plt();\n    _gfortran_transfer_character_write@plt(rbp, \"Hello, World from Fortran!\", 26);\n    _gfortran_st_write_done@plt(rbp);\n    _gfortran_iargc@plt();\n    stack_3 = 0;\n    stack_4 = ret;\n    stack_5 = 1;\n    t0 = ret;\n    if (%sle) {\n        goto L_12cc;\n    }\n    var5 = ret;\n    var4 = (rsp + 16);\n    var2 = (rsp + 4);\n    var6 = 0;\n    nop;\n    _gfortran_get_command_argument_i4@plt(var2, var4, 0, 0, 100);\n    _gfortran_string_len_trim@plt(100, var4);\n    var6 = (var6 + ret);\n    ret = stack_6;\n    stack_3 = var6;\n    ret = (ret + 1);\n    stack_5 = ret;\n    %slt = (var5 < ret);\n    %sle = (var5 <= ret);\n    if (%slt) {\n        goto L_1290;\n    }\n    L_1290:\n    _gfortran_get_command_argument_i4@plt(var2, var4, 0, 0, 100);\n    _gfortran_string_len_trim@plt(100, var4);\n    var6 = (var6 + ret);\n    ret = stack_6;\n    stack_3 = var6;\n    ret = (ret + 1);\n    stack_5 = ret;\n    %slt = (var5 < ret);\n    %sle = (var5 <= ret);\n    if (%slt) {\n        goto L_1290;\n    }\n    L_12cc:\n    var4 = 0x600000080;\n    stack_1 = var1;\n    stack_0 = var4;\n    stack_2 = 25;\n    _gfortran_st_write@plt();\n    _gfortran_transfer_character_write@plt(rbp, \"Number of arguments:\", 20);\n    _gfortran_transfer_integer_write@plt(rbp, (rsp + 8), 4);\n    _gfortran_st_write_done@plt(rbp);\n    stack_1 = var1;\n    stack_0 = var4;\n    stack_2 = 26;\n    _gfortran_st_write@plt();\n    _gfortran_transfer_character_write@plt(rbp, \"Total argument length:\", 22);\n    _gfortran_transfer_integer_write@plt(rbp, (rsp + 12), 4);\n    _gfortran_st_write_done@plt(rbp);\n    stack_1 = var1;\n    stack_0 = var4;\n    stack_2 = 27;\n    _gfortran_st_write@plt();\n    _gfortran_transfer_character_write@plt(rbp, \"Global counter:\", 15);\n    _gfortran_transfer_integer_write@plt(rbp, 0x20c0, 4);\n    _gfortran_st_write_done@plt(rbp);\n    stack_1 = var1;\n    stack_0 = var4;\n    stack_2 = 40;\n    &[var7+0x4014] = (*&[var7+0x4014] + 1);\n    _gfortran_st_write@plt();\n    _gfortran_transfer_character_write@plt(rbp, \"Fortran subroutine called\", 25);\n    _gfortran_st_write_done@plt(rbp);\n    arg0 = rbp;\n    stack_1 = var1;\n    stack_0 = var4;\n    stack_2 = 41;\n    _gfortran_st_write@plt();\n    _gfortran_transfer_character_write@plt(rbp, \"Subroutine called\", 17);\n    _gfortran_transfer_integer_write@plt(rbp, call_count.1, 4);\n    _gfortran_transfer_character_write@plt(rbp, \"times\", 5);\n    _gfortran_st_write_done@plt(rbp);\n    rsp = (rsp + 664);\n    pop(var4);\n    pop(rbp);\n    pop(var3);\n    pop(var2);\n    pop(var1);\n    pop(var0);\n    return;\n}\n",
+  "assumptions": [
+    "Modelled the 528-byte rbp-anchored region as a single st_parameter_dt struct with named common/filename/line fields; the remaining bytes are kept as opaque padding because the binary only writes those three slots before each I/O burst.",
+    "Kept 0x600000080 as a single 64-bit 'common' store rather than splitting into the documented unit/flags 32-bit halves, matching the binary's single qword move.",
+    "Folded the unrolled first iteration of the argument loop (the block before L_1290 plus the L_1290 self-loop) into a single `for (i = 1; i <= num_args; ++i)`. The slt/sle compares against num_args drove the bound and direction.",
+    "Treated arg_index (stack slot at rsp+4) as the loop induction variable passed by reference to get_command_argument; the binary reloads stack_5 each iteration which matches passing &arg_index.",
+    "Treated stack_3 as `total_len` (printed for 'Total argument length:') and the outer iargc() return as `num_args` (printed for 'Number of arguments:'); rsp+8 / rsp+12 stack slots were the addresses transferred to gfortran for those PRINTs.",
+    "arg_buf size set to 100 from the buflen argument passed to _gfortran_get_command_argument_i4 / _gfortran_string_len_trim.",
+    "`&[var7+0x4014]` rewritten as an extern int32_t `global_counter` (BSS); the +1 store before the line-40 PRINT was kept as the inlined subroutine body.",
+    "`call_count.1` rewritten as extern `call_count_1` since C identifiers cannot contain '.'; the increment was inlined at the call site by the compiler so it is reproduced here verbatim rather than wrapped in a fabricated function.",
+    "Dropped optimizer-only stack reload chains (stack_4/stack_6 round-trips) and the redundant double assignment of stack_5 inside the loop epilogue.",
+    "Source filename string (`/workspace/source/fortran/hello.f90`) hoisted to a single SRC_FILE constant \u2014 the binary references it from every descriptor setup.",
+    "Line numbers 12, 25, 26, 27, 40, 41 are taken verbatim from the descriptor stores; they are not inferred."
+  ],
+  "rewrite_confidence": 0.78,
+  "equivalence_passed": false,
+  "divergences": [
+    "[low] other: LLM unavailable; equivalence could not be checked"
+  ],
+  "string_names": {
+    "/workspace/source/fortran/hello.f90": "WORKSPACE_SOURCE_FORTRAN",
+    "Hello, World from Fortran!": "HELLO_WORLD_FROM_FORTRAN",
+    "Number of arguments:": "LBL_NUM_ARGS",
+    "Total argument length:": "TOTAL_ARGUMENT_LENGTH",
+    "Global counter:": "GLOBAL_COUNTER_LABEL",
+    "Fortran subroutine called": "FORTRAN_SUBROUTINE_CALLE",
+    "Subroutine called": "SUBROUTINE_CALLED",
+    "times": "STR_TIMES"
+  },
+  "variable_names": {
+    "var0": "var0",
+    "var1": "source_path",
+    "var2": "var2",
+    "var3": "var3",
+    "var4": "arg_buf",
+    "stack_0": "stack_0",
+    "stack_1": "stack_1",
+    "stack_2": "stack_2",
+    "stack_3": "stack_3",
+    "stack_4": "stack_4"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 103,
+  "trivial": false,
+  "stdlib": false,
+  "crt": false,
+  "retries": 1
+}

@@ -1,0 +1,42 @@
+{
+  "_version": 3,
+  "entry_va": 4304,
+  "raw_name": "main",
+  "demangled": "main",
+  "short_name": "main",
+  "rejected_names": [],
+  "role": "entry_stub",
+  "role_confidence": 0.98,
+  "c_prototype": "int main(int argc, char **argv);",
+  "docstring": "/**\n * @brief TODO \u2014 describe this function.\n *\n * Auto-generated placeholder; no LLM was available to write docs.\n */",
+  "source": "int main(int argc, char **argv)\n{\n    _gfortran_set_args(argc, argv);\n    _gfortran_set_options(7, options);\n    MAIN__();\n    return 0;\n}\n",
+  "pseudocode": "fn main {\n    rsp = (rsp - 8);\n    _gfortran_set_args@plt();\n    _gfortran_set_options@plt(7, options.6.2);\n    MAIN__();\n    ret = 0;\n    return;\n}\n",
+  "assumptions": [
+    "Standard gfortran main entry stub; argc/argv are passed implicitly to _gfortran_set_args (the decompiler omitted the args because they are simply forwarded from main's registers).",
+    "`options.6.2` is the compiler-generated static options array; renamed to `options` for readability.",
+    "Stack adjustment (`rsp -= 8`) is a function-prologue artefact and dropped.",
+    "`ret = 0; return;` collapsed into idiomatic `return 0;`."
+  ],
+  "rewrite_confidence": 0.95,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: Pseudocode shows _gfortran_set_args called with no visible arguments; rewriter adds argc/argv. This is the standard gfortran stub and decompiler elided the register-passed args, so semantically equivalent.",
+    "[low] other: Stack pointer adjustment dropped \u2014 standard function prologue alignment, no semantic effect.",
+    "[low] other: Symbol renamed for readability; assumed to refer to the same compiler-generated static options array."
+  ],
+  "string_names": {
+    "ELF": "ELF",
+    "/lib64/ld-linux-x86-64.so.2": "LIB64_LD_LINUX_X86",
+    "GNU": "GNU",
+    "9]@": "9",
+    "__gmon_start__": "GMON_START"
+  },
+  "variable_names": {},
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 8,
+  "trivial": false,
+  "stdlib": false,
+  "crt": false,
+  "retries": 0
+}

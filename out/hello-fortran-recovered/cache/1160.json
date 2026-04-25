@@ -1,0 +1,42 @@
+{
+  "_version": 3,
+  "entry_va": 4448,
+  "raw_name": "register_tm_clones",
+  "demangled": "register_tm_clones",
+  "short_name": "register_tm_clones",
+  "rejected_names": [],
+  "role": "other",
+  "role_confidence": 0.25,
+  "c_prototype": "void sub_1160(void);",
+  "docstring": "/**\n * @brief TODO \u2014 describe this function.\n *\n * Auto-generated placeholder; no LLM was available to write docs.\n */",
+  "source": "// auto-rewritten (heuristic) \u2014 void sub_1160(void);\nvoid sub_1160(void)\n{\n    /* 22 lines of pseudocode below */\nfn register_tm_clones {\n    arg0 = completed.0;\n    arg1 = completed.0;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret = *&[var0+0x3fe8];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret();\n    L_1198:\n    return;\n}\n\n}",
+  "pseudocode": "fn register_tm_clones {\n    arg0 = completed.0;\n    arg1 = completed.0;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret = *&[var0+0x3fe8];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret();\n    L_1198:\n    return;\n}\n",
+  "assumptions": [
+    "Heuristic rewrite \u2014 LLM not consulted; treat output as lightly-substituted pseudocode, not real source."
+  ],
+  "rewrite_confidence": 0.2,
+  "equivalence_passed": false,
+  "divergences": [
+    "[low] other: LLM unavailable; equivalence could not be checked"
+  ],
+  "string_names": {
+    "ELF": "ELF",
+    "/lib64/ld-linux-x86-64.so.2": "LIB64_LD_LINUX_X86",
+    "GNU": "GNU",
+    "9]@": "9",
+    "__gmon_start__": "GMON_START"
+  },
+  "variable_names": {
+    "arg0": "arg0",
+    "arg1": "arg1",
+    "var0": "var0",
+    "t0": "t0"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 22,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}
