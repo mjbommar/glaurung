@@ -1,17 +1,23 @@
-# Reviewer note — `MAIN__` @ 0x11f0 (gfortran main program)
+# MAIN__ (gfortran main program) — rewrite notes
 
 ## What the pipeline did
-- **Reconstructed a Fortran program** from gfortran-emitted code: hello print, `command_argument_count` + loop summing `len_trim`, three summary PRINTs, then an inlined `my_sub` that bumps a SAVE'd counter and PRINTs twice.
-- **Modeled the I/O descriptor** (`st_parameter_dt`) as an opaque `struct gfc_dt` with three named fields (`flags`, `filename`, `line`) — only those slots are touched in the pseudocode. Header re-stores before each `st_write` were *kept* (not dead-store-eliminated) because the line number genuinely changes per PRINT.
-- **Collapsed the duplicated `L_1290` block** (decompiler rendered gfortran's do-while as two copies of the body) into a single `for (i=1; i<=nargs; ++i)` loop.
-- **Inlined `my_sub`** at the call site: represented `&[var7+0x4014] += 1` as `++call_count_1` followed by the two trailing PRINTs.
-- **Dropped** prologue/epilogue (callee-saves, 664-byte `sub rsp`, `rbp = rsp+128` frame-pointer setup) and renamed the gfortran mangled `call_count.1` to C-legal `call_count_1`.
-- **Used `&dt`** explicitly as the first arg to all `_gfortran_*` calls; pseudocode relies on `rbp` as implicit rdi.
+- **Recognised libgfortran I/O idiom**: the three `stack_0/1/2 =` writes immediately before each `_gfortran_st_write` were folded into a single `st_parameter_dt` struct with fields `common_flags` / `filename` / `line`. The struct layout is **fabricated** to fit the observed writes; offsets were not cross‑checked against real libgfortran headers.
+- **Collapsed the peeled loop**: the optimiser had peeled the first iteration (fall‑through into `L_1290` plus a back‑edge), guarded by an outer `if %sle goto L_12cc`. The rewrite presents this as a single `for (i = 1; i <= nargs; ++i)` loop.
+- **Renamed locals from usage**: `stack_3` → `total_len`, `stack_4`/`var5` → `nargs`, `stack_5`/`ret` → `i`, `var2` slot → `arg_index`, `var4` → `arg_buf[100]`.
+- **Inlined the "subroutine"**: the last two print blocks (lines 40/41) are modelled inline rather than as a separate function, since the binary does not actually `call` anything there.
+- **Dropped ABI scaffolding**: prologue pushes, `rsp -= 664`, epilogue pops were removed.
+- **Synthesised prototypes** for all `_gfortran_*` helpers locally; signatures match call sites but not necessarily libgfortran headers.
 
 ## Assumptions not mechanically provable
-- **Stack-slot mapping is the main risk.** Rewriter assumed `rsp+4 = arg_index`, `rsp+8 = nargs`, `rsp+12 = total_len`, `rsp+16 = arg_buf[100]`. But the pseudocode writes `stack_3 = var6` (the running `total_len` accumulator) — and `stack_3` plausibly *is* `rsp+4`, which would mean total_len lives at rsp+4 and the slot mapping for the two integer PRINTs is **swapped**. The rewriter picked the "natural Fortran" mapping; the alternative inverts which value prints under "Number of arguments:" vs "Total argument length:" and also changes which variable's address is passed to `get_command_argument`.
-- `0x600000080` interpreted as gfortran's list-directed/unit-6 transfer-flags word (named `GFC_IO_FLAGS`).
-- `0x20c0` treated as the address of `global_counter` (a distinct global), not as the integer 8384.
-- `_gfortran_iargc()`'s return is assumed to be captured into `nargs` (matches `stack_4 = ret` in pseudocode).
+- The `st_parameter_dt` field layout (long, char*, int) — guessed from the write pattern, not verified.
+- `0x20c0` is the address of a global `int` named `global_counter`. **The code does not honour this**: it casts the literal `8384` to `void*` instead of taking `&global_counter`. After relocation these are different addresses (see divergence).
+- `&[var7+0x4014]` (a GOT‑relative store) is a distinct counter from `call_count.1`. Both were turned into separate C symbols; address identity with the original is lost.
+- `call_count.1` (a gfortran‑mangled static) is modelled as a file‑static `int`, and `_gfortran_transfer_integer_write` is passed `&call_count_1`. The original pseudocode shows the symbol passed directly, which is consistent with "symbol = address", but worth a glance.
+- `source_path` is a `const char[]` rather than a raw pointer; semantically equivalent for the cookie field.
+- Loop‑skipping when `nargs < 1` is preserved by the `i <= nargs` condition (no separate guard needed).
 
-## Reviewer checklist
+## Known divergences carried forward
+- **medium**: `0x20c0` is emitted as `(void *)8384`, not `&global_counter`. Comment and code disagree; at link time this references VA 8384, not the relocated symbol.
+- **low**: `arg_index` is a fresh local each iteration instead of reusing the `(rsp+4)` slot — same semantics, different storage.
+- **low**: `subroutine_invocations` lacks address identity with the original `var7+0x4014` location.
+- **low**: ABI scaffolding (saves/`rsp` adjust) dropped.

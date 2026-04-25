@@ -1,0 +1,26 @@
+.TH HELLO_GFORTRAN_O2 1 "" "" "User Commands"
+.SH NAME
+hello_gfortran_O2 \- recovered Fortran program built with gfortran -O2
+.SH SYNOPSIS
+.B hello_gfortran_O2
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B hello_gfortran_O2
+is a program recovered from a binary originally written in Fortran and
+compiled with
+.BR gfortran (1)
+at optimization level
+.BR -O2 .
+The recovered source tree is C and consists of a small entry-point shim that
+bootstraps the GNU Fortran runtime and dispatches to the Fortran main program.
+.PP
+The executable is intended to be invoked directly. It does not define any
+application-specific command-line interface; any option handling present is
+that provided by the Fortran runtime itself.
+.SH OPTIONS
+.B hello_gfortran_O2
+does not define program-specific options. Arguments are passed through to
+the Fortran runtime as supplied by the operating system.
+.SH SEE ALSO
+.BR gfortran (1),
+.BR cmake (1)

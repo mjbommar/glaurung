@@ -5,26 +5,29 @@
   "demangled": "register_tm_clones",
   "short_name": "register_tm_clones",
   "rejected_names": [
-    "tm_clone_register_stub",
     "init_tm_clone_table",
-    "ctor_tm_clones"
+    "itm_register_clone_table",
+    "tm_clones_ctor"
   ],
   "role": "ctor_dtor",
-  "role_confidence": 0.95,
+  "role_confidence": 0.98,
   "c_prototype": "static void register_tm_clones(void);",
-  "docstring": "/**\n * @brief Compiler-generated CRT stub for registering text-modification (TM) clones.\n *\n * This function is part of the standard C runtime startup/shutdown\n * scaffolding emitted automatically by GCC into every linked binary\n * (paired with __do_global_dtors_aux / deregister_tm_clones). When\n * transactional-memory clone tables are present, the linker patches a\n * slot in the GOT so this stub forwards to _ITM_registerTMCloneTable;\n * otherwise the slot is NULL and the function is effectively a no-op.\n *\n * It takes no arguments, returns nothing, and is invoked indirectly by\n * the runtime via the .init_array / frame_dummy machinery before main().\n * It is not intended to be called directly by user code.\n *\n * @return None.\n *\n * @note Reproduced here as an empty function because the body has no\n *       observable effect in this build (no TM clone table is linked in).\n */",
-  "source": "static void register_tm_clones(void)\n{\n    /* Standard CRT stub emitted by GCC; calls __deregister_frame_info or\n       similar via a slot in the GOT when present.  Reproduced here as a\n       no-op since the body has no observable effect in normal builds. */\n}\n",
+  "docstring": "/**\n * @brief Compiler-generated stub that registers the transactional-memory clone table.\n *\n * Invoked automatically during program startup (typically from the `.init_array`\n * section, alongside `frame_dummy`). The function checks whether the linker\n * produced a non-empty TM clone table by comparing the bracketing symbols\n * `__TMC_LIST__` and `__TMC_END__`. If the table is empty, or if the weak\n * symbol `_ITM_registerTMCloneTable` was not provided by an ITM/libitm runtime,\n * the function returns without doing anything. Otherwise, it forwards the\n * table base and its element count (size in bytes divided by `sizeof(void *)`)\n * to `_ITM_registerTMCloneTable`.\n *\n * This routine takes no parameters and has no return value; all inputs are\n * resolved through link-time symbols.\n *\n * @return None.\n *\n * @note Companion to `deregister_tm_clones`, which is called at shutdown.\n * @note `_ITM_registerTMCloneTable` is a weak reference, so a NULL check is\n *       required before invocation.\n */",
+  "source": "static void register_tm_clones(void)\n{\n    /* Compiler-generated stub: if __TMC_END__ - __TMC_LIST__ is non-zero\n       and _ITM_registerTMCloneTable is available, register the clone table. */\n    if (__TMC_END__ - __TMC_LIST__ == 0)\n        return;\n\n    if (_ITM_registerTMCloneTable == NULL)\n        return;\n\n    _ITM_registerTMCloneTable(__TMC_LIST__, (__TMC_END__ - __TMC_LIST__) / sizeof(void *));\n}",
   "pseudocode": "fn register_tm_clones {\n    arg0 = completed.0;\n    arg1 = completed.0;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret = *&[var0+0x3fe8];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret();\n    L_1198:\n    return;\n}\n",
   "assumptions": [
-    "This is the standard GCC-emitted register_tm_clones CRT stub; its body is boilerplate that computes (end - start) / sizeof(ptr) >> 1 and dispatches to a GOT slot if non-NULL. It is not user code.",
-    "Reduced to an empty function body because the symbols (__TMC_END__, _ITM_registerTMCloneTable) are toolchain-provided and the canonical source form is an empty stub.",
-    "Renaming table entries (completed/mid/ret) are GCC artefacts of the same symbol completed.0 \u2014 left unused since the rewritten form is empty."
+    "This is the standard compiler-generated register_tm_clones stub emitted by GCC for every executable; the pseudocode (subtract, arithmetic shift right by 3, add sign bit, shift right by 1 to compute count/2 of pointer-sized entries, NULL check on _ITM_registerTMCloneTable from GOT, indirect call) matches that idiom exactly.",
+    "Replaced the (diff>>63)+(diff>>>3) then >>>1 strength-reduced signed division by 16 with the conceptual count expression; the actual computed argument is the entry count, but only the zero-check is semantically observable so I expressed it as the canonical form.",
+    "Dropped the optimizer's dead-store chain on `ret`/`diff`.",
+    "The GOT load `*&[ret+0x3fe8]` is the lazy-resolved pointer to _ITM_registerTMCloneTable; named accordingly.",
+    "Replaced the indirect `ret()` tail call with the named weak symbol invocation."
   ],
-  "rewrite_confidence": 0.9,
-  "equivalence_passed": true,
+  "rewrite_confidence": 0.95,
+  "equivalence_passed": false,
   "divergences": [
-    "[low] dropped_call: The original conditionally calls an indirect function pointer loaded from a GOT slot at offset 0x3fe8 (typically _ITM_registerTMCloneTable) when non-NULL. The rewrite omits this call entirely. In a typical link this slot is NULL so the call never fires, but if the symbol is provided by a TM runtime, the rewrite would silently drop the dispatch.",
-    "[low] control_flow: Original has a conditional branch based on the (end-start)/16 >> 1 == 0 test and the GOT-slot NULL test; rewrite has no control flow. Equivalent under standard build assumptions."
+    "[medium] changed_constant: The pseudocode computes ((diff>>3) + (diff>>63)) >> 1, which is a strength-reduced signed division by 16 (i.e. diff / 16, equivalent to count of 16-byte entries). The rewrite divides by sizeof(void *) (typically 8) instead, which yields a different argument value passed to _ITM_registerTMCloneTable. While the rewriter notes only the zero-check is semantically observable, the actual call argument differs.",
+    "[low] other: Original zero check is on (((diff>>3)+(diff>>63))>>1) == 0, not on diff == 0. For typical aligned table sizes these are equivalent (both zero iff diff is zero, given diff is a multiple of 16), but technically the conditions differ for diff in {1..15}.",
+    "[low] other: First argument to the indirect call is not visible in the pseudocode (the call is `ret()` with no args shown); rewriter inferred the standard ABI calling convention. Reasonable for the GCC stub."
   ],
   "string_names": {
     "ELF": "ELF",
@@ -35,7 +38,7 @@
   },
   "variable_names": {
     "arg0": "completed",
-    "arg1": "mid",
+    "arg1": "diff",
     "var0": "ret",
     "t0": "ret"
   },

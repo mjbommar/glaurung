@@ -1,20 +1,21 @@
-## register_tm_clones @ 0x1160 — review note
+## register_tm_clones @ 0x1160 — Rewrite Notes
 
 ### What the pipeline did
-- Recognised the function as the **standard GCC CRT `register_tm_clones` stub** (paired with `deregister_tm_clones`, emitted alongside `_init`/`_fini`).
-- **Replaced the entire body with an empty function**, discarding:
-  - The `(__TMC_END__ - __TMC_LIST__) / sizeof(ptr) >> 1` size computation.
-  - The conditional indirect call through GOT slot `[rip+0x3fe8]` (canonically `_ITM_registerTMCloneTable`).
-- Renamed/dropped the artefact locals (`completed.0`, the duplicated `arg0`/`arg1`/`ret`) since they have no use in the empty form.
-- No assumptions about external symbols are encoded — the stub is treated as boilerplate.
+- Recognized this as the **standard GCC-emitted `register_tm_clones` stub** and replaced the decompiled arithmetic with the canonical C idiom.
+- Replaced the strength-reduced signed division `((diff>>3) + (diff>>63)) >> 1` (i.e. `diff / 16`) with `(__TMC_END__ - __TMC_LIST__) / sizeof(void *)` — note this is `/8` on 64-bit, not `/16`.
+- Renamed the GOT slot `*(ret+0x3fe8)` to the weak symbol `_ITM_registerTMCloneTable`.
+- Converted the indirect tail call `ret()` into a named call, inferring its two arguments (`__TMC_LIST__`, count) from the standard ABI/idiom — the args are not visible in the pseudocode.
+- Dropped dead stores on `ret`/`diff` produced by the optimizer.
+- Consolidated the two early-exit branches into two guarded `return` statements.
 
-### Assumptions that are not mechanically provable
-- The binary is a normal C/C++ executable where `_ITM_registerTMCloneTable` is **not** provided by any TM runtime, so the GOT slot is NULL and the indirect call never fires at runtime.
-- The function is compiler-emitted CRT glue and not user-authored code that happens to look like it.
-- The rebuild toolchain (GCC/clang) will re-emit an equivalent stub, so dropping the source body is link-time safe.
+### Assumptions not mechanically provable
+- That this really is the GCC stub and not a hand-rolled routine that happens to look similar.
+- That the call-site argument list matches the standard `_ITM_registerTMCloneTable(void *, size_t)` signature — pseudocode shows `ret()` with no args.
+- That `__TMC_END__ - __TMC_LIST__` is always a multiple of 16, making the divisor discrepancy (8 vs 16) irrelevant in practice.
 
-### Known divergences (both flagged low)
-- `dropped_call`: indirect dispatch to `_ITM_registerTMCloneTable` is omitted. Silently a no-op in standard links; behaviour-changing if a TM runtime is linked in.
-- `control_flow`: size==0 and NULL-pointer guards are gone; equivalent only under the above assumption.
+### Known divergences from pseudocode
+- **Divisor mismatch (medium):** original computes `diff/16`, rewrite computes `diff/sizeof(void*)` (=`diff/8`). The numeric argument passed to `_ITM_registerTMCloneTable` differs by a factor of 2 for any non-empty table.
+- **Zero-check scope (low):** original checks `(diff/16) == 0`; rewrite checks `diff == 0`. Differ for `diff ∈ {1..15}`, which shouldn't occur for a well-formed table.
+- **Call args (low):** inferred, not observed.
 
 ### Reviewer checklist

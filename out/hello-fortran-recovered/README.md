@@ -1,25 +1,39 @@
-# hello_fortran
+# hello_gfortran_O2
 
-A tiny "hello world" program recovered from a Fortran binary
-(`hello-gfortran-O2`) and reconstructed as portable C source. The
-original program was written in Fortran and compiled with `gfortran`
-at `-O2`; this tree is a C-language re-expression of that program,
-preserving the structure of a Fortran-style entry point.
+A small recovered project originally written in Fortran and compiled with
+`gfortran` at optimization level `-O2`. The recovered sources in this tree are
+C — specifically a thin entry-point shim (`main.c`) responsible for
+bootstrapping the Fortran runtime and handing control to the Fortran main
+program.
+
+This README is aimed at developers who want to build, run, and explore the
+project.
+
+---
 
 ## What it is
 
-This project is a recovered C source tree corresponding to a small
-Fortran program. Because Fortran programs compiled with `gfortran`
-are launched through a small startup shim that calls the user's
-`PROGRAM` body, the recovered code is split along the same seam:
+`hello_gfortran_O2` is the recovered form of a program produced from Fortran
+source compiled with `gfortran -O2`. Recovery preserves the structure of the
+original `gfortran`-built binary, including the conventional split between:
 
-- A C `main` that performs program startup and hands control to the
-  translated Fortran program body.
-- A separate C function that holds the body of the original Fortran
-  `PROGRAM` (the "hello world" logic itself).
+- the C-style program entry point (`main`), and
+- the Fortran main program invoked from it.
 
-No runtime Fortran library dependency is implied by this tree — the
-recovered code is plain C and builds with any C compiler.
+In practice this means the project behaves like a standard `gfortran`-linked
+executable: process startup runs through a small C entry point that initializes
+the GNU Fortran runtime (libgfortran) and then dispatches to the Fortran
+`MAIN__` routine.
+
+The project is intentionally minimal — there are no command-line features
+beyond what the Fortran runtime itself provides.
+
+## Requirements
+
+- A C toolchain (any C compiler that can build the recovered `main.c`).
+- CMake (used as the build driver).
+- The GNU Fortran runtime library (`libgfortran`) available at link/run time,
+  since the original program was produced with `gfortran`.
 
 ## Building
 
@@ -30,41 +44,38 @@ cmake -B build
 cmake --build build
 ```
 
-This produces a `hello_fortran` executable inside the `build/`
-directory.
+This will configure an out-of-tree build under `build/` and produce the
+`hello_gfortran_O2` executable inside that directory.
 
 ## Running
 
-Invoke the built binary directly:
+Once built, run the executable directly:
 
 ```sh
-./build/hello_fortran
+./build/hello_gfortran_O2
 ```
 
-The program takes no required arguments and prints its greeting to
-standard output. See the manpage (`hello_fortran(1)`) for the full
-invocation contract.
+The program accepts no application-specific options. Any options recognized
+are those handled by the underlying Fortran runtime.
 
 ## Module tour
 
-The source is intentionally minimal. Two translation units make up
-the program:
+The project is small. The notable file is:
 
-### `main.c`
-The C entry point. This corresponds to the startup glue that
-`gfortran` would normally synthesize around a Fortran `PROGRAM`. It
-performs whatever setup is required and then delegates to the
-Fortran-style main program body defined in `hello.c`.
+- **`main.c`** — Program entry point. Bootstraps the Fortran runtime and
+  dispatches to the Fortran main program. This is the `main` symbol the linker
+  uses to start the process; the actual user-level logic of the original
+  program lived in the Fortran main program that this shim invokes.
 
-### `hello.c`
-The body of the original Fortran program, translated into C. This
-is where the actual "hello world" output happens — i.e., the work
-that the Fortran `PROGRAM` block was performing in the original
-source.
+## Notes on recovery fidelity
 
-## Provenance
+Because the binary was built with `gfortran -O2`, some recovered structure
+reflects compiler-introduced glue (runtime initialization, name mangling of
+the Fortran main program, etc.) rather than user-authored code. Treat the
+recovered C as a faithful skeleton of what the toolchain produced, not as the
+original Fortran source.
 
-- Original artifact: `hello-gfortran-O2`
-- Original language: Fortran
-- Original compiler: `gfortran` (optimization level `-O2`)
-- Recovered language: C
+## See also
+
+- `hello_gfortran_O2(1)` manpage in this repository.
+- `gfortran(1)`, `libgfortran` documentation.

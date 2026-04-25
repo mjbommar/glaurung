@@ -1,18 +1,17 @@
 ## deregister_tm_clones @ 0x1130 — Rewrite Notes
 
-This is a **compiler-emitted CRT stub**, not user code. The rewriter recognized the canonical `deregister_tm_clones` pattern emitted by GCC/Clang and reconstructed an idiomatic C analog rather than a literal transliteration of the pseudocode.
+**What the pipeline did**
+- Recognized this as the canonical compiler-emitted `crtstuff.c` stub that calls `_ITM_deregisterTMCloneTable` from the `.init_array`.
+- Renamed the reloaded GOT value (`t0`/`ret`) to a typed function pointer `deregister`.
+- Replaced `*&[var0+0x3fe0]` with a named symbol `_ITM_deregisterTMCloneTable_ptr` and the comparand with `__TMC_END__`.
+- Collapsed both `goto L_1158` exits into early `return`s.
+- Changed signature from `(arg0)` → `void` (no params), since the canonical stub takes none; the original `arg0` is modeled as `__TMC_END__`.
 
-### Pipeline transformations
-- **Pattern-matched the stub**: identified the GOT-relative load at `+0x3fe0` as the weak `_ITM_deregisterTMCloneTable` (or `__cxa_finalize`) pointer slot.
-- **Collapsed the zero-register comparison**: `completed.0 == arg0` (where `arg0` is a register the compiler zeroed via `xor`) was rewritten as `completed.0 != 0`. This drops the explicit zero-register parameter from the model.
-- **Renamed** the GOT slot to `__cxa_finalize_ptr` (canonical name is `_ITM_deregisterTMCloneTable`).
-- **Removed the `ret` temp dead-store chain** and the fall-through `L_1158` label; replaced with early-return structure.
-- **Reinterpreted the indirect call argument**: pseudocode shows `ret(completed.0)` (passing the value, ~0), but the rewrite emits `deregister(&completed.0)` (passing the address).
+**Assumptions not mechanically provable**
+- The GOT slot at base+0x3fe0 actually corresponds to `_ITM_deregisterTMCloneTable` (offset/symbol mapping not verified against the relocation table).
+- The pseudocode's `arg0` is `__TMC_END__` — true for the standard crt invocation but the rewrite drops the parameter from the signature.
+- Argument type to the resolved callback is `void *` (unconfirmed; canonical prototype takes no args, so this is also a minor deviation).
+- No `completed.0 = 1` (or similar "already ran" flag write) was added, even though the real crtstuff stub typically performs one. The pseudocode does not show it, so it was left out — but this means if the real binary does set the flag, the rewrite is missing a side effect.
 
-### Non-mechanically-provable assumptions
-1. `arg0` really is always 0 on entry (depends on caller / ABI / xor-zeroing convention).
-2. The GOT slot at `+0x3fe0` is the TM/finalize hook and not some other weak symbol.
-3. The indirect call's intended argument is the guard's address, not its value — **this contradicts the literal pseudocode**.
-4. The missing `completed.0 = 1` write-back (canonical stubs set this after calling) is genuinely absent in this binary, not lost during lifting.
-
-### Reviewer checklist
+**Behavioral risk**
+- Low if this is genuinely the standard stub invoked once from `.init_array`. Higher if (a) the binary sets a completion flag we dropped, or (b) `arg0` is ever something other than `__TMC_END__`.

@@ -1,39 +1,43 @@
 cmake_minimum_required(VERSION 3.10)
-project(hello_fortran C Fortran)
+project(hello_gfortran_O2 C)
 
-set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# The binary imports many _gfortran_* symbols, indicating linkage against
-# the GNU Fortran runtime. Locate libgfortran so it can be linked in.
-find_library(GFORTRAN_LIBRARY
-    NAMES gfortran
-    PATHS
-        /usr/lib
-        /usr/lib/x86_64-linux-gnu
-        /usr/lib64
-        /usr/local/lib
-)
-
-if(NOT GFORTRAN_LIBRARY)
-    message(WARNING "libgfortran not found via find_library; falling back to -lgfortran")
-    set(GFORTRAN_LIBRARY gfortran)
+# Optimization level matches the original binary (-O2)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(HELLO_FORTRAN_SOURCES
+set(CMAKE_C_FLAGS_RELEASE "-O2")
+
+add_executable(hello_gfortran_O2
     main.c
-    hello.c
 )
 
-add_executable(hello_fortran ${HELLO_FORTRAN_SOURCES})
-
-target_link_libraries(hello_fortran PRIVATE ${GFORTRAN_LIBRARY})
-
+# The binary imports a number of libgfortran runtime symbols
+# (_gfortran_set_args, _gfortran_st_write, _gfortran_iargc, ...)
+# so we must link against gfortran's runtime library.
 if(UNIX AND NOT APPLE)
-    # Standard Linux runtime helpers seen in the import list
-    # (__libc_start_main, __cxa_finalize, _ITM_*) come from libc/libgcc and
-    # are linked automatically by the C driver.
-    target_link_libraries(hello_fortran PRIVATE m)
-endif()
+    # Try to locate libgfortran via the gfortran compiler driver
+    find_program(GFORTRAN_EXECUTABLE NAMES gfortran)
+    if(GFORTRAN_EXECUTABLE)
+        execute_process(
+            COMMAND ${GFORTRAN_EXECUTABLE} -print-file-name=libgfortran.so
+            OUTPUT_VARIABLE LIBGFORTRAN_PATH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+    endif()
 
-install(TARGETS hello_fortran RUNTIME DESTINATION bin)
+    if(LIBGFORTRAN_PATH AND EXISTS "${LIBGFORTRAN_PATH}")
+        target_link_libraries(hello_gfortran_O2 PRIVATE ${LIBGFORTRAN_PATH})
+    else()
+        # Fall back to plain -lgfortran; the linker will search default paths.
+        target_link_libraries(hello_gfortran_O2 PRIVATE gfortran)
+    endif()
+
+    # libgfortran typically pulls in libquadmath and libm.
+    target_link_libraries(hello_gfortran_O2 PRIVATE m)
+else()
+    target_link_libraries(hello_gfortran_O2 PRIVATE gfortran m)
+endif()

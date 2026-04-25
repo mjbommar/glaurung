@@ -7,30 +7,32 @@
   "rejected_names": [
     "start",
     "elf_entry_point",
-    "start_program",
-    "call_libc_start_main"
+    "program_entry",
+    "libc_start_main_shim"
   ],
   "role": "entry_stub",
   "role_confidence": 0.99,
   "c_prototype": "void _start(void);",
-  "docstring": "/**\n * @brief ELF program entry point installed by the dynamic linker.\n *\n * Performs the standard System V AMD64 process start-up sequence before\n * transferring control to the C runtime:\n *   - Clears %ebp so stack unwinders stop here.\n *   - Saves %rdx (the dynamic linker's rtld_fini callback) into %r9.\n *   - Pops argc from the stack and uses the remaining %rsp as argv.\n *   - Aligns %rsp down to a 16-byte boundary (ABI requirement before a call).\n *   - Records the original stack pointer as stack_end and zeroes the\n *     legacy init/fini parameters.\n *   - Calls __libc_start_main(main, argc, argv, NULL, NULL, rtld_fini,\n *     stack_end).\n *\n * @return This function does not return. __libc_start_main eventually\n *         invokes exit(); the trailing `hlt` instruction is therefore\n *         unreachable and exists only as a safety trap.\n *\n * @note Invoked directly by the kernel/loader (e.g. via\n *       /lib64/ld-linux-x86-64.so.2); it is not meant to be called from\n *       user code. On entry %rdx holds rtld_fini and the initial stack\n *       layout follows the System V AMD64 ABI process start-up convention.\n */",
-  "source": "/*\n * ELF entry point. Sets up argc/argv on the stack, aligns the stack to\n * 16 bytes, and hands control to __libc_start_main. Never returns.\n */\nvoid _start(void)\n{\n    /* The real implementation is written in assembly:\n     *\n     *     xor   %ebp, %ebp                ; clear frame pointer\n     *     mov   %rdx, %r9                 ; rtld_fini\n     *     pop   %rsi                      ; argc\n     *     mov   %rsp, %rdx                ; argv\n     *     and   $-16, %rsp                ; align stack\n     *     push  %rax\n     *     push  %rsp                      ; stack_end\n     *     xor   %r8, %r8                  ; fini = NULL\n     *     xor   %rcx, %rcx                ; init = NULL\n     *     mov   $main, %rdi\n     *     call  __libc_start_main\n     *     hlt\n     *\n     * __libc_start_main does not return, so the trailing hlt is unreachable.\n     */\n    __libc_start_main(main, argc, argv, /*init=*/0, /*fini=*/0,\n                      rtld_fini, stack_end);\n    __builtin_unreachable();\n}\n",
+  "docstring": "/**\n * @brief ELF program entry point invoked by the kernel/dynamic loader.\n *\n * This is the standard System V AMD64 `_start` stub. The compiler-generated\n * prologue (not expressible in portable C) extracts `argc`, `argv`, and the\n * stack-end pointer from the initial stack frame laid out by the kernel,\n * realigns `rsp` to a 16-byte boundary, zeros the frame-pointer chain, and\n * then tail-calls `__libc_start_main`, which performs C runtime\n * initialization, calls `main`, and ultimately invokes `exit` \u2014 it never\n * returns to `_start`.\n *\n * The `init`, `fini`, and `rtld_fini` hook pointers are passed as NULL in\n * this build, so libc relies on its own constructor/destructor handling.\n *\n * @return This function does not return. Control is transferred to\n *         `__libc_start_main`, and the trailing `__builtin_trap()` (compiled\n *         as `hlt`) is reached only if `__libc_start_main` erroneously\n *         returns, in which case the process aborts immediately.\n *\n * @note Inputs are taken from the architectural registers populated by the\n *       assembly prologue: `rdi` (argc), `rsi` (argv), and `r9` (stack_end).\n * @note This entry point is referenced by the ELF header's `e_entry` field\n *       and is the first user-mode instruction executed after the dynamic\n *       linker (`/lib64/ld-linux-x86-64.so.2`) finishes relocation.\n */",
+  "source": "/*\n * ELF entry point. The compiler-generated _start is almost entirely an ABI\n * shim: it pulls argc/argv off the initial stack, aligns rsp to 16, zeros\n * the frame-pointer chain, and tail-calls __libc_start_main, which never\n * returns. The trailing `hlt` is a guard against __libc_start_main ever\n * returning by mistake.\n *\n * None of the stack/register marshalling is expressible in standard C, so\n * the body below only models the C-visible call.\n */\n\nextern int main(int argc, char **argv, char **envp);\nextern void __libc_start_main(int (*main)(int, char **, char **),\n                              int argc, char **argv,\n                              void (*init)(void), void (*fini)(void),\n                              void (*rtld_fini)(void), void *stack_end);\n\nvoid _start(void)\n{\n    /* argc, argv come from the initial stack laid out by the kernel; the\n     * asm prologue extracts them before this call. */\n    register int     argc      __asm__(\"rdi\");\n    register char  **argv      __asm__(\"rsi\");\n    register void   *stack_end __asm__(\"r9\");\n\n    __libc_start_main(main, argc, argv,\n                      /* init       */ 0,\n                      /* fini       */ 0,\n                      /* rtld_fini  */ 0,\n                      stack_end);\n\n    __builtin_trap();   /* `hlt` \u2014 __libc_start_main is noreturn */\n}\n",
   "pseudocode": "fn _start {\n    nop;\n    arg5 = arg2;\n    pop(arg1);\n    arg2 = rsp;\n    rsp = (rsp & 240);\n    push(ret);\n    push(rsp);\n    arg4 = 0;\n    arg3 = 0;\n    __libc_start_main(main);\n    unknown(hlt);\n    nop;\n    ret = completed.0;\n    %zf = (ret == arg0);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret(completed.0);\n    L_1158:\n    return;\n}\n",
   "assumptions": [
-    "Identified the function as the standard glibc x86-64 _start crt stub; rewrote it as a single __libc_start_main call rather than a literal transliteration of the inline asm.",
-    "Dropped the trailing 'completed.0' / *(offset+0x3fe0) compare-and-call block \u2014 that pattern matches __do_global_dtors_aux, not _start, and almost certainly leaked into the listing through adjacent-function disassembly. No real _start contains it.",
-    "Renamed pseudocode args to their conventional SysV register meanings: argc(rsi), argv(rdx), rtld_fini(r9), stack_end(rsp pushed), init/fini = 0.",
-    "Replaced the unreachable hlt with __builtin_unreachable() to convey intent without inventing a real instruction.",
-    "Treated 'main', 'argv', 'rtld_fini', 'stack_end' as externally-supplied symbols rather than declaring them, matching how the asm stub references them.",
-    "String literals listed in the rename table (ELF, ld-linux, GNU, libgfortran.so.5, etc.) are ELF/program-header artefacts, not referenced by _start itself, so they are not used in the rewrite."
+    "Treated the `completed.0` / `*(offset+0x3FE0)` conditional indirect call as the tail of __do_global_dtors_aux that the disassembler concatenated onto _start; it is not part of _start in any normal toolchain output and was omitted (matches reviewer feedback).",
+    "argc/argv are recovered via inline-asm register bindings rather than literal 0s, since the original prologue pops them from the initial stack and forwards them to __libc_start_main. This is closer to the binary than passing 0/NULL but still not standard C.",
+    "init/fini/rtld_fini are passed as 0; the pseudocode shows arg4=0 and arg3=0 being set before the call, consistent with a static / no-constructor binary.",
+    "Rendered the `hlt` instruction as __builtin_trap() to preserve the noreturn-guard semantics; the privileged instruction would SIGSEGV in userspace, __builtin_trap is the conventional C equivalent.",
+    "Stack alignment (`rsp & ~15`), the pushes of ret/rsp, and the `nop` padding are pure ABI plumbing with no C-level meaning and are not represented.",
+    "String-literal table entries (ELF, ld-linux, GNU, libgfortran) are ELF metadata, not referenced by _start code; ignored.",
+    "Variable renames argc/stack_id/ret/expected/offset described the asm shuffle and the dtors_aux tail and do not survive into the C body."
   ],
-  "rewrite_confidence": 0.9,
+  "rewrite_confidence": 0.7,
   "equivalence_passed": false,
   "divergences": [
-    "[medium] dropped_call: The pseudocode contains a trailing block that loads completed.0, compares to zero, loads a pointer from [var0+0x3fe0] (a registered destructor / __cxa_finalize-style pointer), and if non-null calls it with completed.0. The rewrite drops this block entirely, claiming it leaked from __do_global_dtors_aux. While this is very likely correct for a real _start (which never executes anything after __libc_start_main), if the disassembly truly belongs to this function then dropping it loses the destructor-call side effect.",
-    "[low] dropped_side_effect: The original pushes %rax and %rsp onto the stack as the stack_end argument; the rewrite passes a symbolic 'stack_end' argument. Semantically equivalent at the C level but the actual pushed values are not modeled.",
-    "[low] dropped_call: Replaces the hlt instruction with __builtin_unreachable(). Since __libc_start_main is noreturn, both are unreachable in practice.",
-    "[low] other: Original receives args via registers (arg1..arg5); rewrite uses externally-supplied symbols. Standard idiom for crt _start."
+    "[medium] dropped_call: The original pseudocode contains a conditional tail block: it loads completed.0, compares to arg0, then dereferences *&[var0+0x3fe0] and if non-zero invokes ret(completed.0). The rewrite drops this entire block, justifying it as the __do_global_dtors_aux tail being concatenated. If the disassembler's grouping is correct in the binary, this dropped indirect call is a real side effect missing from the rewrite.",
+    "[low] added_call: Original uses `hlt` (privileged, would fault). Rewrite substitutes __builtin_trap(). Both are noreturn traps; semantically equivalent for userspace though the exact signal/instruction differs (SIGSEGV vs SIGILL on most targets).",
+    "[low] control_flow: Original pops argc from the stack (pop arg1) and computes argv = rsp; the rewrite pretends these come pre-loaded in rdi/rsi via inline-asm bindings. The C-visible call to __libc_start_main receives the same logical arguments, but the prologue stack manipulation (pop, rsp&~15, push ret, push rsp) is not modeled.",
+    "[low] other: Original pseudocode shows arg5 = arg2 (i.e., stack_end = original rsp before alignment), not the value left in r9. The rewrite's binding of stack_end to r9 is plausible since the compiler typically loads it there before the call, but the precise data flow (saving original rsp into r8/stack_end argument) is glossed over.",
+    "[low] dropped_side_effect: Stack alignment and push sequence are not represented. These have no C-level effect but constitute observable register/stack state changes."
   ],
   "string_names": {
     "ELF": "ELF",
@@ -43,17 +45,19 @@
     "arg5": "tmp",
     "arg2": "argc",
     "arg1": "stack_id",
-    "arg4": "ret",
+    "arg4": "unused",
     "arg3": "ret",
     "arg0": "expected",
     "var0": "offset",
     "t0": "ret"
   },
-  "constant_labels": {},
+  "constant_labels": {
+    "0x3fe0": "0x3FE0"
+  },
   "loop_idioms": [],
   "lines": 28,
   "trivial": false,
   "stdlib": false,
   "crt": true,
-  "retries": 0
+  "retries": 1
 }
