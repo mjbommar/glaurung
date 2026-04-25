@@ -449,6 +449,30 @@ def register_analysis_tools(agent: Agent) -> Agent:
             ),
         )
 
+    async def kickoff_analysis(
+        ctx: RunContext,
+        max_functions: int = 64,
+        analyze_packed: bool = False,
+    ) -> dict:
+        """Run the canonical first-touch pipeline on the binary in
+        scope: detect_packer + triage + analyze_functions + index +
+        demangle + per-function stack-frame discovery + type
+        propagation + auto-struct recovery. Returns a structured
+        summary suitable for the agent's opening message. Idempotent
+        when re-run on the same KB."""
+        from glaurung.llm.kb.kickoff import kickoff_analysis as _kickoff
+        from dataclasses import asdict
+        # Best-effort: route through the context's persistent KB if
+        # available, else run with a tmp DB.
+        db_path = getattr(ctx.deps, "db_path", None)
+        summary = _kickoff(
+            str(ctx.deps.file_path),
+            db_path=db_path,
+            max_functions_for_kb_lift=max_functions,
+            skip_if_packed=not analyze_packed,
+        )
+        return asdict(summary)
+
     async def scan_until_byte(
         ctx: RunContext,
         va: int | None = None,
@@ -543,6 +567,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(rename_in_kb, name="rename_in_kb")
     agent.tool(search_byte_pattern, name="search_byte_pattern")
     agent.tool(scan_until_byte, name="scan_until_byte")
+    agent.tool(kickoff_analysis, name="kickoff_analysis")
     agent.tool(list_suspicious_imports, name="list_suspicious_imports")
     agent.tool(identify_compiler_and_runtime, name="identify_compiler_and_runtime")
     agent.tool(detect_crypto_usage, name="detect_crypto_usage")
