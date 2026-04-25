@@ -406,23 +406,35 @@ _NUMERIC_OP_NEAR_FIELD_RE = re.compile(
     r"(\+\+|--|[+\-*/%]=|<<=|>>=|&=|\|=|\^=|\bsizeof|=\s*\d|"
     r"==\s*\d|!=\s*\d|<\s*\d|>\s*\d|<=\s*\d|>=\s*\d)"
 )
-_PTR_OP_NEAR_FIELD_RE = re.compile(r"->|\*\s*self->|\bstrlen\b|\bstrcpy\b|\bmemcpy\b")
+# Pointer-shaped uses we look for AFTER blanking out the access itself:
+# - `*X` immediately before / `[`/`->` after → field is a pointer
+# - field passed to a known pointer-consuming libc function
+_PTR_OP_NEAR_FIELD_RE = re.compile(
+    r"\*\s*\bFIELD_REF\b|\bFIELD_REF\s*->|\bFIELD_REF\s*\["
+    r"|\bstrlen\s*\(\s*FIELD_REF|\bstrcpy\s*\(\s*[^,)]*FIELD_REF"
+    r"|\bmemcpy\s*\([^,)]*,\s*FIELD_REF|\bfopen\s*\(\s*FIELD_REF"
+    r"|\bputs\s*\(\s*FIELD_REF"
+)
 
 
 def _guess_field_type(source_bodies: List[str], pronoun: str, field: str) -> str:
     """Heuristic placeholder type for a field accessed via ``self->FIELD``
     or ``this->FIELD`` across multiple bodies.
 
-    Walks every line that mentions the field and votes:
+    For each body line that references the field, we replace the
+    `<pronoun>-><field>` access with a sentinel marker (``FIELD_REF``)
+    and *then* test the line against pointer-shaped and numeric-shaped
+    op regexes. Replacing the access first prevents the access's own
+    ``->`` from voting for "this field is a pointer" — earlier code
+    miscounted every read as a pointer signal because `->` appears in
+    the access itself.
 
-    - Pointer-y operations (`*self->fld`, `strlen(self->fld)`, `->`
-      following the field, `++` on the result yielding a pointer) → ``void *``.
-    - Numeric ops (`++`, `--`, `+=`, comparisons with int literals,
-      ``= <number>``) → ``int``.
-    - Otherwise default to ``int``, which keeps recovered C/C++ compiling
-      without a pointer-arithmetic warning when the field is incremented
-      and is closer to the truth than ``void *`` for the common counter /
-      flag / size case.
+    - Pointer-y signals (post-substitution): ``*FIELD_REF``,
+      ``FIELD_REF->next``, ``FIELD_REF[i]``, ``strlen(FIELD_REF)``, etc.
+    - Numeric signals: ``++``, ``--``, ``+=``, comparisons with int
+      literals, ``= <number>``.
+    - Default ``int`` — no pointer-arith warning when the field is
+      incremented and matches the common counter / flag / size case.
     """
     field_re = re.compile(rf"\b{re.escape(pronoun)}\s*->\s*{re.escape(field)}\b")
     ptr_votes = 0
@@ -431,9 +443,10 @@ def _guess_field_type(source_bodies: List[str], pronoun: str, field: str) -> str
         for line in body.splitlines():
             if not field_re.search(line):
                 continue
-            if _PTR_OP_NEAR_FIELD_RE.search(line):
+            sanitised = field_re.sub("FIELD_REF", line)
+            if _PTR_OP_NEAR_FIELD_RE.search(sanitised):
                 ptr_votes += 1
-            if _NUMERIC_OP_NEAR_FIELD_RE.search(line):
+            if _NUMERIC_OP_NEAR_FIELD_RE.search(sanitised):
                 int_votes += 1
     if ptr_votes > int_votes:
         return "void *"
