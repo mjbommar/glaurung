@@ -213,6 +213,158 @@ def export_to_c_header(kb: PersistentKnowledgeBase) -> str:
     return _type_db.render_all_as_header(kb)
 
 
+def export_to_binja_script(kb: PersistentKnowledgeBase) -> str:
+    """Render a Binary Ninja Python script that applies our KB's
+    names / comments / data labels / prototypes to an open BinaryView.
+
+    Sister to `export_to_ida_script` — same shape, different API
+    surface. Run inside Binary Ninja's scripting console (the
+    BinaryView is `bv` in scope) or via the headless API.
+    """
+    function_names = list(_xref_db.list_function_names(kb))
+    comments = list(_xref_db.list_comments(kb))
+    data_labels = list(_xref_db.list_data_labels(kb))
+    types = list(_type_db.list_types(kb))
+
+    lines: list[str] = []
+    lines.append("# Glaurung → Binary Ninja export (#190)")
+    lines.append("# Run via the BN scripting console (bv is in scope) or:")
+    lines.append("#   binaryninja.load(\"<binary>\").execute_script(\"<this.py>\")")
+    lines.append("")
+    lines.append("def _apply(bv):")
+    lines.append("    summary = {")
+    lines.append('        "renamed_functions": 0,')
+    lines.append('        "comments_set": 0,')
+    lines.append('        "data_labels_set": 0,')
+    lines.append("    }")
+    lines.append("")
+
+    if function_names:
+        lines.append("    # Function renames — uses bv.get_function_at(va).set_user_symbol")
+        lines.append("    from binaryninja import Symbol, SymbolType")
+        for fn in function_names:
+            ident = fn.canonical.replace("'", "\\'")
+            lines.append(f"    f = bv.get_function_at({fn.entry_va:#x})")
+            lines.append("    if f is not None:")
+            lines.append(
+                f"        bv.define_user_symbol("
+                f"Symbol(SymbolType.FunctionSymbol, "
+                f"{fn.entry_va:#x}, '{ident}'))"
+            )
+            lines.append('        summary["renamed_functions"] += 1')
+        lines.append("")
+
+    if comments:
+        lines.append("    # Per-VA comments — bv.set_comment_at")
+        for va, body in comments:
+            body_q = body.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+            lines.append(
+                f"    bv.set_comment_at({va:#x}, '{body_q}')"
+            )
+            lines.append('    summary["comments_set"] += 1')
+        lines.append("")
+
+    if data_labels:
+        lines.append("    # Data labels — define_user_symbol with DataSymbol.")
+        lines.append("    from binaryninja import Symbol, SymbolType")
+        for d in data_labels:
+            ident = d.name.replace("'", "\\'")
+            lines.append(
+                f"    bv.define_user_symbol("
+                f"Symbol(SymbolType.DataSymbol, {d.va:#x}, '{ident}'))"
+            )
+            lines.append('    summary["data_labels_set"] += 1')
+        lines.append("")
+
+    if types:
+        c_header = _type_db.render_all_as_header(kb).replace(
+            "\\", "\\\\"
+        ).replace("'", "\\'").replace("\n", "\\n")
+        lines.append("    # Bulk-import structs / typedefs via parse_types_from_source")
+        lines.append(
+            f"    parsed, _errors = bv.parse_types_from_source('{c_header}')"
+        )
+        lines.append("    for n, t in parsed.types.items():")
+        lines.append("        bv.define_user_type(n, t)")
+        lines.append("")
+
+    lines.append("    return summary")
+    lines.append("")
+    lines.append("if 'bv' in dir():")
+    lines.append("    print('[glaurung] applying KB to BinaryView...')")
+    lines.append("    print('[glaurung] applied:', _apply(bv))")
+    lines.append("else:")
+    lines.append('    print("[glaurung] this script expects `bv` in scope")')
+    lines.append("")
+    return "\n".join(lines)
+
+
+def export_to_ghidra_script(kb: PersistentKnowledgeBase) -> str:
+    """Render a Ghidra Python (Jython 2.7) script that applies our
+    KB's names / comments / labels to the active program.
+
+    Run via Ghidra's Script Manager. The script uses Ghidra's
+    flat-API (`getFunctionAt`, `createLabel`, `setEOLComment`, etc.)
+    which is available as bare names in scripting context.
+    """
+    function_names = list(_xref_db.list_function_names(kb))
+    comments = list(_xref_db.list_comments(kb))
+    data_labels = list(_xref_db.list_data_labels(kb))
+
+    lines: list[str] = []
+    lines.append("# Glaurung → Ghidra export (#190)")
+    lines.append("# Run via Window > Script Manager. Targets the active program.")
+    lines.append("")
+    lines.append("# @category Glaurung")
+    lines.append("# @runtime Jython")
+    lines.append("")
+    lines.append("from ghidra.program.model.symbol import SourceType")
+    lines.append("")
+    lines.append("def _apply():")
+    lines.append("    summary = {'renamed_functions': 0, 'comments_set': 0, 'data_labels_set': 0}")
+    lines.append("    fm = currentProgram.getFunctionManager()")
+    lines.append("    st = currentProgram.getSymbolTable()")
+    lines.append("    af = currentProgram.getAddressFactory().getDefaultAddressSpace()")
+    lines.append("    def addr(va): return af.getAddress(va)")
+    lines.append("")
+
+    if function_names:
+        for fn in function_names:
+            ident = fn.canonical.replace('"', '\\"')
+            lines.append(f"    fn = fm.getFunctionAt(addr({fn.entry_va:#x}))")
+            lines.append("    if fn is not None:")
+            lines.append(
+                f'        fn.setName("{ident}", SourceType.USER_DEFINED)'
+            )
+            lines.append("        summary['renamed_functions'] += 1")
+        lines.append("")
+
+    if comments:
+        for va, body in comments:
+            body_q = body.replace('"', '\\"').replace("\n", "\\n")
+            lines.append(
+                f'    setEOLComment(addr({va:#x}), "{body_q}")'
+            )
+            lines.append("    summary['comments_set'] += 1")
+        lines.append("")
+
+    if data_labels:
+        for d in data_labels:
+            ident = d.name.replace('"', '\\"')
+            lines.append(
+                f'    createLabel(addr({d.va:#x}), "{ident}", True)'
+            )
+            lines.append("    summary['data_labels_set'] += 1")
+        lines.append("")
+
+    lines.append("    return summary")
+    lines.append("")
+    lines.append("print('[glaurung] applying KB to Ghidra program...')")
+    lines.append("print('[glaurung] applied:', _apply())")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def export_to_ida_script(kb: PersistentKnowledgeBase) -> str:
     """Render an IDAPython script that, when executed inside IDA's
     scripting console, applies every name / comment / data label /

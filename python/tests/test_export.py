@@ -166,6 +166,49 @@ def test_export_to_ida_script_renders_python(tmp_path: Path) -> None:
     kb.close()
 
 
+def test_export_to_binja_script_renders_python(tmp_path: Path) -> None:
+    binary = _need(_HELLO)
+    db = tmp_path / "exp.glaurung"
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+    xref_db.set_function_name(kb, 0x12d0, "binja_renamed", set_by="manual")
+    xref_db.set_comment(kb, 0x12d4, "binja comment")
+    xref_db.set_data_label(kb, va=0x4040, name="g_binja", set_by="manual")
+
+    from glaurung.llm.kb.export import export_to_binja_script
+
+    s = export_to_binja_script(kb)
+    assert "Binary Ninja" in s
+    assert "binja_renamed" in s
+    assert "set_comment_at" in s
+    assert "g_binja" in s
+    assert "DataSymbol" in s
+    # Valid Python syntactically.
+    compile(s, "<binja-export>", "exec")
+    kb.close()
+
+
+def test_export_to_ghidra_script_renders_python(tmp_path: Path) -> None:
+    binary = _need(_HELLO)
+    db = tmp_path / "exp.glaurung"
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+    xref_db.set_function_name(kb, 0x12d0, "ghidra_renamed", set_by="manual")
+    xref_db.set_comment(kb, 0x12d4, "ghidra comment")
+    xref_db.set_data_label(kb, va=0x4040, name="g_ghidra", set_by="manual")
+
+    from glaurung.llm.kb.export import export_to_ghidra_script
+
+    s = export_to_ghidra_script(kb)
+    assert "Ghidra" in s
+    assert "ghidra_renamed" in s
+    assert "setEOLComment" in s
+    assert "g_ghidra" in s
+    assert "createLabel" in s
+    # Ghidra script is also valid as standalone Python (Jython 2.7
+    # syntax is a subset of Python 3 syntax for this trivial shape).
+    compile(s, "<ghidra-export>", "exec")
+    kb.close()
+
+
 def test_export_cli_smoke(tmp_path: Path) -> None:
     """Smoke-test `glaurung export <db>` with all three formats."""
     from glaurung.cli.main import GlaurungCLI
@@ -177,7 +220,7 @@ def test_export_cli_smoke(tmp_path: Path) -> None:
     kb.close()
 
     cli = GlaurungCLI()
-    for fmt in ("markdown", "json", "header", "ida"):
+    for fmt in ("markdown", "json", "header", "ida", "binja", "ghidra"):
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = cli.run(["export", str(db), "--output-format", fmt])
@@ -194,4 +237,10 @@ def test_export_cli_smoke(tmp_path: Path) -> None:
             assert isinstance(out, str)
         elif fmt == "ida":
             assert "import idaapi" in out
+            assert "cli_fn" in out
+        elif fmt == "binja":
+            assert "Binary Ninja" in out or "binaryninja" in out
+            assert "cli_fn" in out
+        elif fmt == "ghidra":
+            assert "Ghidra" in out
             assert "cli_fn" in out
