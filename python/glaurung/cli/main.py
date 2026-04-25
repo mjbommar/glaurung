@@ -13,6 +13,7 @@ from .commands.strings import StringsCommand
 from .commands.decompile import DecompileCommand
 from .commands.name_func import NameFuncCommand
 from .commands.repl import ReplCommand
+from .commands.graph import GraphCommand
 
 from .formatters import (
     TriageFormatter,
@@ -41,6 +42,7 @@ class GlaurungCLI:
             "decompile": DecompileCommand(),
             "name-func": NameFuncCommand(),
             "repl": ReplCommand(),
+            "graph": GraphCommand(),
         }
 
         # Map commands to their formatters. The REPL is interactive and
@@ -56,6 +58,9 @@ class GlaurungCLI:
             "decompile": DecompileFormatter,
             "name-func": NameFuncFormatter,
             "repl": TriageFormatter,
+            # graph command emits raw DOT text via output_plain, so its
+            # formatter is a no-op pass-through (TriageFormatter works fine).
+            "graph": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:
