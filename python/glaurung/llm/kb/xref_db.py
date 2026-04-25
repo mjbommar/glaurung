@@ -1377,6 +1377,178 @@ def list_evidence(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Rename consistency verification (#201 v0)
+# ---------------------------------------------------------------------------
+
+# Hand-curated keyword families for #201 v0. Each family maps a set of
+# *name keywords* (what an analyst might rename a function to) to a
+# set of *callee keywords* (function names the rename is consistent
+# with). When a rename's name keywords are dominated by callees from
+# a different family, the verifier flags the inconsistency.
+#
+# v0 is heuristic; v1 will replace this with an LLM-driven assessment
+# that reads the function's pseudocode + decides naturalistically.
+_NAME_FAMILIES: List[Tuple[str, Tuple[str, ...], Tuple[str, ...]]] = [
+    # (family, name keywords, callee keywords)
+    ("memory_free",
+     ("free", "release", "destroy", "deinit", "dealloc"),
+     ("free", "delete", "release", "destroy")),
+    ("memory_alloc",
+     ("alloc", "create", "new", "init", "make"),
+     ("malloc", "calloc", "realloc", "alloc", "new")),
+    ("parse",
+     ("parse", "decode", "scan", "read", "unmarshal", "deserialize", "lex"),
+     ("strchr", "strrchr", "strtol", "strtoul", "strtod", "atoi", "atol",
+      "strtok", "strstr", "memchr", "scanf", "sscanf", "fscanf",
+      "parse", "decode")),
+    ("format",
+     ("format", "encode", "marshal", "serialize", "render", "build", "make"),
+     ("snprintf", "sprintf", "fprintf", "printf", "asprintf", "format",
+      "encode", "putchar", "fputc")),
+    ("crypto",
+     ("encrypt", "decrypt", "hash", "sign", "verify", "hmac", "kdf",
+      "checksum", "digest"),
+     ("CryptEncrypt", "CryptDecrypt", "CryptCreateHash", "CryptHashData",
+      "CryptDeriveKey", "EVP_", "AES_", "SHA", "MD5", "RC4")),
+    ("network",
+     ("send", "recv", "connect", "bind", "listen", "accept", "request",
+      "fetch", "download", "upload"),
+     ("send", "recv", "connect", "bind", "listen", "accept",
+      "WinHttp", "Internet", "socket", "WSA")),
+    ("file_io",
+     ("open", "close", "load", "save", "read", "write", "import", "export"),
+     ("fopen", "fclose", "fread", "fwrite", "fgets", "fputs",
+      "open", "close", "read", "write", "stat",
+      "CreateFile", "ReadFile", "WriteFile", "DeleteFile")),
+    ("string",
+     ("copy", "concat", "compare", "duplicate", "trim", "split"),
+     ("strcpy", "strncpy", "strcat", "strncat", "strcmp", "strncmp",
+      "strdup", "memcpy", "memmove")),
+    ("process",
+     ("fork", "exec", "spawn", "kill", "wait", "exit"),
+     ("fork", "execve", "execl", "system", "waitpid", "kill",
+      "CreateProcess", "OpenProcess", "TerminateProcess")),
+]
+
+
+@dataclass(frozen=True)
+class NameVerification:
+    """Result of `verify_function_name` — heuristic consistency check
+    between a (potentially newly-applied) function name and the
+    function's actual callee profile."""
+    entry_va: int
+    name: str
+    score: float                      # 0.0 (very inconsistent) … 1.0 (high consistency)
+    matched_family: Optional[str]
+    callee_count: int
+    matching_callees: List[str]       # callees that supported the matched family
+    foreign_callees: List[str]        # callees from a *different* family
+    flags: List[str]                  # e.g. ["family-mismatch", "no-callees"]
+
+
+def _family_for_name(name: str) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+    """Map a function name to its predicted family (if any). First
+    family whose name-keywords match wins; ordering above puts more
+    specific families before less specific ones."""
+    n = name.lower()
+    for family, name_kws, callee_kws in _NAME_FAMILIES:
+        for kw in name_kws:
+            if kw in n:
+                return (family, name_kws, callee_kws)
+    return None
+
+
+def verify_function_name(
+    kb: PersistentKnowledgeBase, entry_va: int,
+) -> Optional[NameVerification]:
+    """Score whether a function's name is consistent with its callee
+    profile. Returns None when the function isn't in the KB.
+
+    Algorithm:
+      1. Look up the function's canonical name.
+      2. Predict the family from name keywords (memory_free, parse,
+         format, crypto, ...).
+      3. List the function's callees via list_xrefs_from(call kind);
+         resolve dst VAs back to canonical names.
+      4. Score = matching_callees / max(1, callee_count).
+      5. Flag `family-mismatch` when callees suggest a *different*
+         family than the name does.
+      6. Flag `no-callees` when the function has zero outgoing call
+         edges (in which case the score is uninformative — e.g.
+         small leaf functions don't tell us much).
+
+    The agent uses this to retract / soften high-confidence rename
+    claims when the score is low.
+    """
+    _ensure_schema(kb._conn)
+    fn = get_function_name(kb, entry_va)
+    if fn is None:
+        return None
+    name = fn.canonical
+    predicted = _family_for_name(name)
+
+    # Pull callees (call edges from this function) via xrefs_from.
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT dst_va FROM xrefs WHERE binary_id = ? "
+        "AND src_function_va = ? AND kind = ?",
+        (kb.binary_id, int(entry_va), "call"),
+    )
+    callee_vas = [row[0] for row in cur.fetchall()]
+    callee_names: List[str] = []
+    for dva in callee_vas:
+        cur.execute(
+            "SELECT canonical, demangled FROM function_names "
+            "WHERE binary_id = ? AND entry_va = ?",
+            (kb.binary_id, int(dva)),
+        )
+        r = cur.fetchone()
+        if r:
+            callee_names.append(r[1] or r[0])
+    # Strip @plt suffixes for matching purposes.
+    callee_names_clean = [c.split("@", 1)[0] for c in callee_names]
+
+    flags: List[str] = []
+    matching: List[str] = []
+    foreign: List[str] = []
+    matched_family: Optional[str] = predicted[0] if predicted else None
+
+    if predicted:
+        _, _, callee_kws = predicted
+        for c in callee_names_clean:
+            cl = c.lower()
+            if any(kw.lower() in cl for kw in callee_kws):
+                matching.append(c)
+            else:
+                # Check if the callee is in a *different* family.
+                for fam, _nkws, ckws in _NAME_FAMILIES:
+                    if fam == matched_family:
+                        continue
+                    if any(kw.lower() in cl for kw in ckws):
+                        foreign.append(c)
+                        break
+
+    score = (len(matching) / len(callee_names_clean)) if callee_names_clean else 0.5
+    if not callee_names_clean:
+        flags.append("no-callees")
+    if predicted and foreign and not matching:
+        flags.append("family-mismatch")
+    if predicted and matching and foreign and len(foreign) > len(matching) * 2:
+        flags.append("majority-foreign-callees")
+
+    return NameVerification(
+        entry_va=int(entry_va),
+        name=name,
+        score=round(score, 3),
+        matched_family=matched_family,
+        callee_count=len(callee_names_clean),
+        matching_callees=matching[:16],
+        foreign_callees=foreign[:16],
+        flags=flags,
+    )
+
+
 def set_function_name_audited(
     kb: PersistentKnowledgeBase,
     entry_va: int,
@@ -1404,6 +1576,32 @@ def set_function_name_audited(
     summary = f"renamed {old_name} → {name}" + (
         f"  ({rationale})" if rationale else ""
     )
+    # Run the consistency verifier so the evidence row carries a
+    # score the chat UI can surface ("⚠️ name suggests `parse_*`
+    # but callees look like `free`/`destroy`...").
+    verification = verify_function_name(kb, entry_va)
+    output: dict = {
+        "previous_set_by": old.set_by if old else None,
+        "demangled": new.demangled if new else None,
+    }
+    if verification is not None:
+        output["verification"] = {
+            "score": verification.score,
+            "matched_family": verification.matched_family,
+            "callee_count": verification.callee_count,
+            "matching_callees": verification.matching_callees,
+            "foreign_callees": verification.foreign_callees,
+            "flags": verification.flags,
+        }
+        # Attach a concise inline note when the rename looks
+        # inconsistent so summaries surface the warning at the
+        # cite-table level without needing to expand the row.
+        if "family-mismatch" in verification.flags or (
+            verification.matched_family and verification.score < 0.25
+            and verification.callee_count >= 2
+        ):
+            summary = f"{summary}  ⚠ name vs. callees suggests inconsistency"
+
     cite_id = record_evidence(
         kb,
         tool="rename_function",
@@ -1418,10 +1616,7 @@ def set_function_name_audited(
         summary=summary,
         va_start=int(entry_va),
         va_end=int(entry_va) + 1,    # representative point; whole fn covered by 0-len range
-        output={
-            "previous_set_by": old.set_by if old else None,
-            "demangled": new.demangled if new else None,
-        },
+        output=output,
     )
     return cite_id, new
 
