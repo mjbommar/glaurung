@@ -1,5 +1,5 @@
-# Glaurung benchmark — 2026-04-25T15:26:29.008179+00:00
-_glaurung HEAD: `a733037f0bd1`_
+# Glaurung benchmark — 2026-04-25T16:41:14.923019+00:00
+_glaurung HEAD: `eac96ac271df`_
 
 ## Aggregate
 - Binaries scored: **10** (errored: 0)
@@ -19,13 +19,13 @@ _glaurung HEAD: `a733037f0bd1`_
 
 | binary | funcs | named | chunks>1 | cold orphans | decompiled | ms |
 |---|---:|---:|---:|---:|---:|---:|
-| `hello-c-gcc-O2` | 7 | 7 | 0 | 0 | 7/7 | 5875 |
-| `hello-cpp-g++-O2` | 11 | 11 | 1 | 0 | 11/11 | 593 |
-| `hello-gcc-O2` | 11 | 11 | 1 | 0 | 11/11 | 579 |
-| `hello-gfortran-O2` | 7 | 7 | 0 | 0 | 7/7 | 355 |
-| `hello-c-clang-O2` | 7 | 7 | 0 | 0 | 7/7 | 348 |
-| `hello-cpp-clang++-O2` | 13 | 13 | 0 | 0 | 13/13 | 809 |
-| `hello-clang-debug` | 16 | 16 | 0 | 0 | 16/16 | 2839 |
-| `hello-clang-stripped` | 8 | 8 | 0 | 0 | 8/8 | 397 |
-| `poly-cpp-virtual` | 14 | 14 | 0 | 0 | 14/14 | 640 |
-| `poly-cpp-virtual-stripped` | 9 | 0 | 0 | 0 | 9/9 | 289 |
+| `hello-c-gcc-O2` | 7 | 7 | 0 | 0 | 7/7 | 3175 |
+| `hello-cpp-g++-O2` | 11 | 11 | 1 | 0 | 11/11 | 708 |
+| `hello-gcc-O2` | 11 | 11 | 1 | 0 | 11/11 | 676 |
+| `hello-gfortran-O2` | 7 | 7 | 0 | 0 | 7/7 | 409 |
+| `hello-c-clang-O2` | 7 | 7 | 0 | 0 | 7/7 | 384 |
+| `hello-cpp-clang++-O2` | 13 | 13 | 0 | 0 | 13/13 | 898 |
+| `hello-clang-debug` | 16 | 16 | 0 | 0 | 16/16 | 3336 |
+| `hello-clang-stripped` | 8 | 8 | 0 | 0 | 8/8 | 446 |
+| `poly-cpp-virtual` | 14 | 14 | 0 | 0 | 14/14 | 736 |
+| `poly-cpp-virtual-stripped` | 9 | 0 | 0 | 0 | 9/9 | 338 |

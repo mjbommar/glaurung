@@ -14,8 +14,12 @@ why each gap matters. Updated whenever a roadmap task completes.
 | 156 | Function-chunk model (non-contiguous functions) | ✅ | `<fn>.cold`/`.part.N` auto-folded into parent's chunks; replaces band-aid heuristic |
 | 180 | Standard type-library bundles (libc/POSIX/WinAPI) | ✅ | 75+ canonical types ship by default, auto-load on KB open |
 | 191 | Stack-frame variable recovery | ✅ | persistent slots, auto-discover from disasm operands, REPL `locals` command |
-| **179** | **PDB ingestion (Microsoft Program Database)** | ⏳ | Symmetric to DWARF — covers PE/Windows. Needs MSVC samples in repo to test against. |
-| **192** | **Control-flow structuring (gotos → if/while/for)** | ⏳ | Multi-week project. The single biggest jump in decompiler readability. |
+| 196 | Stack-frame variable rendering in decompile output | ✅ | KB-aware post-processor; `(rbp - 272)` → `&c2_url_buffer`; typed-locals prelude block with provenance tags |
+| 198 | Win32 API prototype bundle | ✅ | 110 protos covering process injection, persistence, networking, crypto, syscalls; auto-loads alongside libc |
+| **179** | **PDB ingestion (Microsoft Program Database)** | ⏳ | Symmetric to DWARF — covers PE/Windows. Blocked by #197 (MSVC sample fixtures). |
+| **192** | **Control-flow structuring (gotos → if/while/for)** | ⏳ | Multi-week project. The single biggest remaining jump in decompiler readability. |
+| 197 | MSVC + .pdb sample fixtures | ⏳ | Pre-req for #179 PDB testing |
+| 199 | PE format hardening (delay imports, manifest, version info, TLS callbacks) | ⏳ | Pre-req for grounded malware triage claims |
 
 ## Tier A — Major workflow gaps (largely complete)
 
@@ -32,7 +36,7 @@ why each gap matters. Updated whenever a roadmap task completes.
 | 181 | Per-instruction comments + global data labels | ✅ | comments table per-VA (since #154); data_labels for globals |
 | 182 | Demangler audit + KB-wide pass | ✅ | Itanium/Rust/MSVC; every persisted name carries raw + pretty forms |
 | 195 | Type-propagation v2 (call-site arg matching) | ✅ | regex-based operand parser; SysV x86_64 ABI |
-| **162** | **ABI-aware argument recovery (Win64, ARM64)** | ⏳ | Extends #195 to additional calling conventions |
+| 162 | ABI-aware argument recovery (Win64, ARM64) | ✅ | Adds Win64 (rcx/rdx/r8/r9) and AAPCS64 (x0-x7) tables; auto-dispatch from triage |
 | **193** | **Switch-statement reconstruction** | ⏳ | Combines with deferred #177 jump-table walker |
 
 ## #161 umbrella — Decompiler polish atoms

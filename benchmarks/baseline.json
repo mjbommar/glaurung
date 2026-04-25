@@ -1,5 +1,5 @@
 {
-  "glaurung_commit": "a733037f0bd18482850265a22c7f39f29fd4c2ea",
+  "glaurung_commit": "eac96ac271df22f5482f827795f7a7cfa7d88845",
   "schema_version": "1",
   "scorecards": [
     {
@@ -38,12 +38,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 4.1,
+        "analysis_ms": 3.2,
         "debug_info_ms": 0.2,
-        "decompile_ms": 11.8,
-        "stack_frame_ms": 5613.9,
-        "triage_ms": 30.8,
-        "type_kb_ms": 214.4
+        "decompile_ms": 12.2,
+        "stack_frame_ms": 2873.8,
+        "triage_ms": 29.9,
+        "type_kb_ms": 255.3
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -67,7 +67,7 @@
         "auto_struct_candidates": 0,
         "functions_scanned": 7,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     },
     {
@@ -108,10 +108,10 @@
       "elapsed_ms": {
         "analysis_ms": 5.0,
         "debug_info_ms": 0.3,
-        "decompile_ms": 61.8,
-        "stack_frame_ms": 128.4,
-        "triage_ms": 10.2,
-        "type_kb_ms": 387.3
+        "decompile_ms": 62.4,
+        "stack_frame_ms": 161.2,
+        "triage_ms": 7.8,
+        "type_kb_ms": 470.9
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -135,7 +135,7 @@
         "auto_struct_candidates": 21,
         "functions_scanned": 11,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     },
     {
@@ -174,12 +174,12 @@
         "with_chunks_gt_one": 1
       },
       "elapsed_ms": {
-        "analysis_ms": 5.0,
-        "debug_info_ms": 0.2,
-        "decompile_ms": 60.7,
-        "stack_frame_ms": 127.3,
-        "triage_ms": 8.1,
-        "type_kb_ms": 377.6
+        "analysis_ms": 5.1,
+        "debug_info_ms": 0.3,
+        "decompile_ms": 62.2,
+        "stack_frame_ms": 127.6,
+        "triage_ms": 7.9,
+        "type_kb_ms": 472.5
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -203,7 +203,7 @@
         "auto_struct_candidates": 21,
         "functions_scanned": 11,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     },
     {
@@ -242,12 +242,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 2.1,
+        "analysis_ms": 2.3,
         "debug_info_ms": 0.2,
-        "decompile_ms": 17.5,
-        "stack_frame_ms": 81.6,
-        "triage_ms": 12.5,
-        "type_kb_ms": 241.3
+        "decompile_ms": 17.6,
+        "stack_frame_ms": 82.5,
+        "triage_ms": 9.4,
+        "type_kb_ms": 297.1
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -271,7 +271,7 @@
         "auto_struct_candidates": 0,
         "functions_scanned": 7,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     },
     {
@@ -310,12 +310,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 1.5,
-        "debug_info_ms": 0.4,
-        "decompile_ms": 13.0,
-        "stack_frame_ms": 82.4,
-        "triage_ms": 10.3,
-        "type_kb_ms": 240.6
+        "analysis_ms": 2.2,
+        "debug_info_ms": 0.2,
+        "decompile_ms": 12.9,
+        "stack_frame_ms": 78.5,
+        "triage_ms": 7.4,
+        "type_kb_ms": 282.3
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -339,7 +339,7 @@
         "auto_struct_candidates": 0,
         "functions_scanned": 7,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     },
     {
@@ -380,10 +380,10 @@
       "elapsed_ms": {
         "analysis_ms": 7.9,
         "debug_info_ms": 0.2,
-        "decompile_ms": 122.9,
-        "stack_frame_ms": 167.4,
-        "triage_ms": 11.2,
-        "type_kb_ms": 499.4
+        "decompile_ms": 118.2,
+        "stack_frame_ms": 164.4,
+        "triage_ms": 8.3,
+        "type_kb_ms": 599.0
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
@@ -407,7 +407,7 @@
         "auto_struct_candidates": 21,
         "functions_scanned": 13,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     },
     {
@@ -446,12 +446,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 16.8,
-        "debug_info_ms": 1.4,
-        "decompile_ms": 382.9,
-        "stack_frame_ms": 609.6,
-        "triage_ms": 32.7,
-        "type_kb_ms": 1796.0
+        "analysis_ms": 16.6,
+        "debug_info_ms": 1.5,
+        "decompile_ms": 383.8,
+        "stack_frame_ms": 601.7,
+        "triage_ms": 31.6,
+        "type_kb_ms": 2301.1
       },
       "error": null,
       "flags": "-O0 -g -Wall -Wextra",
@@ -475,7 +475,7 @@
         "auto_struct_candidates": 16,
         "functions_scanned": 16,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     },
     {
@@ -516,10 +516,10 @@
       "elapsed_ms": {
         "analysis_ms": 4.2,
         "debug_info_ms": 0.2,
-        "decompile_ms": 43.9,
-        "stack_frame_ms": 86.1,
-        "triage_ms": 8.9,
-        "type_kb_ms": 254.1
+        "decompile_ms": 41.2,
+        "stack_frame_ms": 85.3,
+        "triage_ms": 6.0,
+        "type_kb_ms": 308.7
       },
       "error": null,
       "flags": "-O2 -Wl,-s",
@@ -543,7 +543,7 @@
         "auto_struct_candidates": 16,
         "functions_scanned": 8,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     },
     {
@@ -582,12 +582,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 2.0,
+        "analysis_ms": 1.9,
         "debug_info_ms": 0.3,
-        "decompile_ms": 30.5,
-        "stack_frame_ms": 153.0,
+        "decompile_ms": 30.1,
+        "stack_frame_ms": 152.7,
         "triage_ms": 6.3,
-        "type_kb_ms": 447.8
+        "type_kb_ms": 544.6
       },
       "error": null,
       "flags": null,
@@ -611,7 +611,7 @@
         "auto_struct_candidates": 0,
         "functions_scanned": 14,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     },
     {
@@ -650,12 +650,12 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 1.0,
+        "analysis_ms": 0.9,
         "debug_info_ms": 0.2,
-        "decompile_ms": 8.9,
+        "decompile_ms": 8.5,
         "stack_frame_ms": 0.1,
-        "triage_ms": 9.8,
-        "type_kb_ms": 268.8
+        "triage_ms": 9.1,
+        "type_kb_ms": 319.5
       },
       "error": null,
       "flags": null,
@@ -679,7 +679,7 @@
         "auto_struct_candidates": 0,
         "functions_scanned": 9,
         "propagated_slots": 0,
-        "stdlib_prototypes": 83
+        "stdlib_prototypes": 192
       }
     }
   ],
@@ -707,5 +707,5 @@
       "stack_frame_slots": 754
     }
   },
-  "timestamp": "2026-04-25T15:26:29.008179+00:00"
+  "timestamp": "2026-04-25T16:41:14.923019+00:00"
 }
