@@ -129,6 +129,43 @@ def test_export_to_c_header_renders_struct(tmp_path: Path) -> None:
     kb.close()
 
 
+def test_export_to_ida_script_renders_python(tmp_path: Path) -> None:
+    """The IDA script is real Python; the test only checks shape and
+    that key API calls appear. We don't try to run it inside IDA."""
+    binary = _need(_HELLO)
+    db = tmp_path / "exp.glaurung"
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+
+    xref_db.set_function_name(kb, 0x1234, "my_named_fn", set_by="manual")
+    xref_db.set_comment(kb, 0x1238, "stack canary save")
+    xref_db.set_data_label(
+        kb, va=0x4000, name="g_table", c_type="int[]", set_by="manual",
+    )
+    type_db.add_struct(
+        kb, "exported_struct",
+        [type_db.StructField(0, "a", "int", 4)],
+        set_by="manual",
+    )
+
+    from glaurung.llm.kb.export import export_to_ida_script
+
+    script = export_to_ida_script(kb)
+    # Header + IDA imports.
+    assert "import idaapi" in script
+    assert "import ida_name" in script
+    # Function rename uses ida_name.set_name with the canonical name.
+    assert "my_named_fn" in script
+    # Comment lands via idc.set_cmt.
+    assert "stack canary save" in script
+    # Data label uses ida_name.set_name.
+    assert "g_table" in script
+    # Struct definition arrives via parse_decls.
+    assert "parse_decls" in script
+    # Script is syntactically valid Python.
+    compile(script, "<ida-export>", "exec")
+    kb.close()
+
+
 def test_export_cli_smoke(tmp_path: Path) -> None:
     """Smoke-test `glaurung export <db>` with all three formats."""
     from glaurung.cli.main import GlaurungCLI
@@ -140,7 +177,7 @@ def test_export_cli_smoke(tmp_path: Path) -> None:
     kb.close()
 
     cli = GlaurungCLI()
-    for fmt in ("markdown", "json", "header"):
+    for fmt in ("markdown", "json", "header", "ida"):
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = cli.run(["export", str(db), "--output-format", fmt])
@@ -155,3 +192,6 @@ def test_export_cli_smoke(tmp_path: Path) -> None:
             # Header format is allowed to be empty when the KB has
             # no types — just ensure no error.
             assert isinstance(out, str)
+        elif fmt == "ida":
+            assert "import idaapi" in out
+            assert "cli_fn" in out

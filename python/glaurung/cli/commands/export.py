@@ -19,10 +19,12 @@ class ExportCommand(BaseCommand):
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument(
-            "--output-format", choices=("json", "markdown", "header"),
+            "--output-format", choices=("json", "markdown", "header", "ida"),
             default="markdown",
             help="Export shape (default: markdown). `json` is "
-                 "round-trippable; `header` emits the type DB as .h.",
+                 "round-trippable; `header` emits the type DB as .h; "
+                 "`ida` emits an IDAPython script that applies the KB "
+                 "to an open IDB.",
         )
         parser.add_argument(
             "--binary", type=Path, default=None,
@@ -37,7 +39,8 @@ class ExportCommand(BaseCommand):
             return 2
 
         from glaurung.llm.kb.export import (
-            export_to_c_header, export_to_json, export_to_markdown,
+            export_to_c_header, export_to_ida_script,
+            export_to_json, export_to_markdown,
         )
         from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 
@@ -54,6 +57,8 @@ class ExportCommand(BaseCommand):
                 formatter.output_plain(export_to_json(kb))
             elif args.output_format == "header":
                 formatter.output_plain(export_to_c_header(kb))
+            elif args.output_format == "ida":
+                formatter.output_plain(export_to_ida_script(kb))
             else:
                 formatter.output_plain(export_to_markdown(kb))
         finally:

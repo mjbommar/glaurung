@@ -211,3 +211,148 @@ def export_to_c_header(kb: PersistentKnowledgeBase) -> str:
     existing `render_all_as_header` from type_db so the output is
     consistent with the REPL's `show` command."""
     return _type_db.render_all_as_header(kb)
+
+
+def export_to_ida_script(kb: PersistentKnowledgeBase) -> str:
+    """Render an IDAPython script that, when executed inside IDA's
+    scripting console, applies every name / comment / data label /
+    stack-frame variable / function prototype from this KB to the
+    open IDB.
+
+    First entry on the #190 interop ladder: BNDB / IDB / GZF
+    binary-format converters are still v2 work, but a Python script
+    IDA users can paste / load is enough to hand off our recovered
+    names without binary-format reverse engineering. Same approach
+    works for Binary Ninja (`bv.set_function_name`) and Ghidra
+    (`createFunction` etc.) — those format-specific scripts ship
+    later under #190.
+    """
+    function_names = list(_xref_db.list_function_names(kb))
+    comments = list(_xref_db.list_comments(kb))
+    data_labels = list(_xref_db.list_data_labels(kb))
+    stack_vars = list(_xref_db.list_stack_vars(kb))
+    protos = list(_xref_db.list_function_prototypes(kb))
+    types = list(_type_db.list_types(kb))
+
+    lines: list[str] = []
+    lines.append("# Glaurung → IDAPython export (#165 / #190)")
+    lines.append("# Paste into IDA's scripting console (File > Script file)")
+    lines.append("# or run via `idat -A -S<this.py> <target.idb>`.")
+    lines.append("")
+    lines.append("import idaapi")
+    lines.append("import idc")
+    lines.append("import ida_name")
+    lines.append("import ida_bytes")
+    lines.append("import ida_funcs")
+    lines.append("")
+    lines.append("def _apply():")
+    lines.append("    summary = {")
+    lines.append('        "renamed_functions": 0,')
+    lines.append('        "comments_set": 0,')
+    lines.append('        "data_labels_set": 0,')
+    lines.append('        "stack_vars_set": 0,')
+    lines.append("    }")
+    lines.append("")
+
+    if function_names:
+        lines.append("    # Function renames (preferring demangled when present).")
+        for fn in function_names:
+            pretty = fn.demangled or fn.canonical
+            # Quote names defensively — IDA accepts most identifier-shaped
+            # strings, but pretty-print demangled forms can have spaces /
+            # parens that need to round-trip. Use the canonical (mangled
+            # symbol) as the actual identifier and stash the demangled
+            # form in a repeatable comment.
+            ident = fn.canonical.replace('"', '\\"')
+            lines.append(
+                f'    if ida_name.set_name({fn.entry_va:#x}, "{ident}", '
+                "ida_name.SN_FORCE):"
+            )
+            lines.append('        summary["renamed_functions"] += 1')
+            if fn.demangled and fn.demangled != fn.canonical:
+                pretty_q = fn.demangled.replace('"', '\\"')
+                lines.append(
+                    f'    idc.set_func_cmt({fn.entry_va:#x}, '
+                    f'"{pretty_q}", 1)'
+                )
+        lines.append("")
+
+    if comments:
+        lines.append("    # Per-VA repeatable comments.")
+        for va, body in comments:
+            body_q = body.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+            lines.append(
+                f'    if idc.set_cmt({va:#x}, "{body_q}", 0): '
+                'summary["comments_set"] += 1'
+            )
+        lines.append("")
+
+    if data_labels:
+        lines.append("    # Global data labels.")
+        for d in data_labels:
+            ident = d.name.replace('"', '\\"')
+            lines.append(
+                f'    if ida_name.set_name({d.va:#x}, "{ident}", '
+                "ida_name.SN_FORCE):"
+            )
+            lines.append('        summary["data_labels_set"] += 1')
+            if d.c_type:
+                # IDA's apply-tinfo path is more involved; emit as a
+                # repeatable comment for v0 so the type info survives.
+                ct_q = d.c_type.replace('"', '\\"')
+                lines.append(
+                    f'    idc.set_cmt({d.va:#x}, "type: {ct_q}", 1)'
+                )
+        lines.append("")
+
+    if stack_vars:
+        lines.append("    # Stack-frame variable renames (best-effort).")
+        lines.append(
+            "    # IDA's stack-frame API is per-function — we look up "
+            "the func then rename the offset."
+        )
+        for s in stack_vars:
+            if s.name.startswith("var_") or s.name.startswith("arg_"):
+                continue  # default placeholder, no need to push
+            ident = s.name.replace('"', '\\"')
+            lines.append(
+                f'    f_{s.function_va:x} = ida_funcs.get_func({s.function_va:#x})'
+            )
+            lines.append(
+                f'    if f_{s.function_va:x} is not None: '
+                f'idaapi.set_member_name(f_{s.function_va:x}.frame, '
+                f'{s.offset}, "{ident}") and '
+                'summary["stack_vars_set"].__iadd__(1)'
+            )
+        lines.append("")
+
+    if protos:
+        lines.append("    # Function prototypes (apply via IDA's parse_decl).")
+        for p in protos[:200]:  # cap to keep script size manageable
+            params = ", ".join(
+                f"{pp.c_type} {pp.name}".strip() for pp in p.params
+            ) or "void"
+            decl = f"{p.return_type or 'void'} {p.function_name}({params}{', ...' if p.is_variadic else ''});"
+            decl_q = decl.replace('"', '\\"')
+            lines.append(
+                f'    idc.SetType(idc.get_name_ea_simple("{p.function_name}"), '
+                f'"{decl_q}")'
+            )
+        lines.append("")
+
+    if types:
+        lines.append("    # Struct / typedef definitions: apply via parse_decls.")
+        c_header = _type_db.render_all_as_header(kb).replace(
+            '"', '\\"'
+        ).replace("\n", "\\n")
+        lines.append(f'    idc.parse_decls("{c_header}", 0)')
+        lines.append("")
+
+    lines.append("    return summary")
+    lines.append("")
+    lines.append('if __name__ == "__main__":')
+    lines.append('    print("[glaurung] applying KB to IDB...")')
+    lines.append('    _r = _apply()')
+    lines.append('    print(f"[glaurung] applied: {_r}")')
+    lines.append("")
+    return "\n".join(lines)
