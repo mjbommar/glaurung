@@ -77,6 +77,25 @@ CREATE TABLE IF NOT EXISTS xref_index_state (
     function_count INTEGER NOT NULL,
     edge_count INTEGER NOT NULL
 );
+
+-- Stack-frame variables (#191). One row per (function, frame offset).
+-- Negative offsets are below rbp (locals); positive are above (saved
+-- regs / spill area / red-zone). Auto-discovery seeds rows with
+-- generic names like `var_8` / `arg_10`; analyst rename overwrites
+-- name/c_type and bumps set_by to "manual".
+CREATE TABLE IF NOT EXISTS stack_frame_vars (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    c_type TEXT,
+    use_count INTEGER NOT NULL DEFAULT 0,
+    set_by TEXT,
+    set_at INTEGER,
+    PRIMARY KEY (binary_id, function_va, offset)
+);
+CREATE INDEX IF NOT EXISTS idx_stack_vars_func
+    ON stack_frame_vars(binary_id, function_va);
 """
 
 
@@ -417,3 +436,210 @@ def list_comments(
         (kb.binary_id,),
     )
     return [(va, body) for va, body in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Stack-frame variables (#191)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class StackVar:
+    """One stack-frame slot, named and (optionally) typed."""
+    function_va: int
+    offset: int            # signed: negative = below rbp (local), positive = above
+    name: str              # e.g. "var_8", "arg_10", or analyst-renamed
+    c_type: Optional[str]  # None until type inference / DWARF / analyst sets it
+    use_count: int
+    set_by: Optional[str]
+
+
+def set_stack_var(
+    kb: PersistentKnowledgeBase,
+    function_va: int,
+    offset: int,
+    name: str,
+    *,
+    c_type: Optional[str] = None,
+    use_count: int = 0,
+    set_by: str = "manual",
+) -> None:
+    """Persist a stack-frame variable. Manual entries always win over
+    later automated guesses (consistent with type_db precedence)."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT set_by, use_count FROM stack_frame_vars "
+        "WHERE binary_id = ? AND function_va = ? AND offset = ?",
+        (kb.binary_id, int(function_va), int(offset)),
+    )
+    row = cur.fetchone()
+    if row is not None and row[0] == "manual" and set_by != "manual":
+        # Don't clobber analyst-renamed entries with auto-discovery;
+        # but DO bump use_count if the auto pass saw it referenced.
+        new_uses = max(int(row[1] or 0), int(use_count))
+        cur.execute(
+            "UPDATE stack_frame_vars SET use_count = ? "
+            "WHERE binary_id = ? AND function_va = ? AND offset = ?",
+            (new_uses, kb.binary_id, int(function_va), int(offset)),
+        )
+        kb._conn.commit()
+        return
+    cur.execute(
+        "INSERT OR REPLACE INTO stack_frame_vars "
+        "(binary_id, function_va, offset, name, c_type, use_count, set_by, set_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            kb.binary_id, int(function_va), int(offset),
+            name, c_type, int(use_count), set_by, int(time.time()),
+        ),
+    )
+    kb._conn.commit()
+
+
+def get_stack_var(
+    kb: PersistentKnowledgeBase, function_va: int, offset: int,
+) -> Optional[StackVar]:
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT function_va, offset, name, c_type, use_count, set_by "
+        "FROM stack_frame_vars "
+        "WHERE binary_id = ? AND function_va = ? AND offset = ?",
+        (kb.binary_id, int(function_va), int(offset)),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return StackVar(
+        function_va=row[0], offset=row[1], name=row[2],
+        c_type=row[3], use_count=int(row[4] or 0), set_by=row[5],
+    )
+
+
+def list_stack_vars(
+    kb: PersistentKnowledgeBase, function_va: Optional[int] = None,
+) -> List[StackVar]:
+    """Return every stack-frame variable, optionally filtered to one
+    function. Sorted by (function_va, offset) so locals (negative
+    offsets) come before parameters (positive)."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    if function_va is None:
+        cur.execute(
+            "SELECT function_va, offset, name, c_type, use_count, set_by "
+            "FROM stack_frame_vars "
+            "WHERE binary_id = ? ORDER BY function_va, offset",
+            (kb.binary_id,),
+        )
+    else:
+        cur.execute(
+            "SELECT function_va, offset, name, c_type, use_count, set_by "
+            "FROM stack_frame_vars "
+            "WHERE binary_id = ? AND function_va = ? ORDER BY offset",
+            (kb.binary_id, int(function_va)),
+        )
+    return [
+        StackVar(
+            function_va=r[0], offset=r[1], name=r[2],
+            c_type=r[3], use_count=int(r[4] or 0), set_by=r[5],
+        )
+        for r in cur.fetchall()
+    ]
+
+
+def _default_var_name(offset: int) -> str:
+    """Conventional placeholder name. IDA-style: `var_<hex>` for negative
+    offsets (locals), `arg_<hex>` for positive offsets (parameters)."""
+    if offset < 0:
+        return f"var_{(-offset):x}"
+    return f"arg_{offset:x}"
+
+
+def discover_stack_vars(
+    kb: PersistentKnowledgeBase,
+    binary_path: str,
+    function_va: int,
+    *,
+    max_instructions: int = 1024,
+    window_bytes: int = 4096,
+) -> int:
+    """Disassemble a function and populate stack_frame_vars from every
+    `[rbp + N]` / `[rsp + N]` reference seen.
+
+    Returns the number of unique slots discovered. Idempotent: re-running
+    refreshes use_count without overwriting analyst-renamed entries.
+
+    The pass is intentionally simple — no data-flow tracking, no SSA.
+    Just textual operand parsing of the disassembler's `Instruction`
+    output. Good enough to seed names; #172 will refine types later.
+    """
+    import glaurung as g
+    try:
+        ins = g.disasm.disassemble_window_at(
+            str(binary_path), int(function_va),
+            window_bytes=window_bytes, max_instructions=max_instructions,
+        )
+    except Exception:
+        return 0
+
+    # Aggregate offset → use count.
+    seen: dict[int, int] = {}
+    for i in ins:
+        for op in i.operands:
+            off = _parse_frame_offset(str(op))
+            if off is not None:
+                seen[off] = seen.get(off, 0) + 1
+
+    for off, count in seen.items():
+        set_stack_var(
+            kb, function_va, off, _default_var_name(off),
+            use_count=count, set_by="auto",
+        )
+    return len(seen)
+
+
+def _parse_frame_offset(op: str) -> Optional[int]:
+    """Extract a signed integer offset from operand strings shaped like
+    ``rbp:[rbp - 0x10]``, ``[rbp+0x18]``, ``rsp:[rsp - 0x40]``. Returns
+    None if the operand isn't a frame-relative memory reference.
+
+    We treat rbp and rsp as the only legitimate frame bases. Skipping
+    rsp-relative refs entirely would miss frame-pointer-omitted
+    functions (very common at -O2); including them costs us occasional
+    false positives when rsp moves mid-function, which the bench will
+    surface if it becomes a real issue.
+    """
+    s = op.strip()
+    # Look for the bracket part.
+    lb = s.find("[")
+    rb = s.find("]", lb + 1) if lb >= 0 else -1
+    if lb < 0 or rb < 0:
+        return None
+    inner = s[lb + 1 : rb].strip()
+    # Split on +/- preserving sign.
+    base, sep, rest = _split_signed(inner)
+    if not base or sep is None:
+        return None
+    base = base.strip().lower()
+    if base not in ("rbp", "rsp", "ebp", "esp"):
+        return None
+    rest = rest.strip()
+    try:
+        if rest.startswith("0x") or rest.startswith("0X"):
+            magnitude = int(rest, 16)
+        else:
+            magnitude = int(rest, 10)
+    except ValueError:
+        return None
+    return -magnitude if sep == "-" else magnitude
+
+
+def _split_signed(s: str) -> Tuple[str, Optional[str], str]:
+    """Split `'rbp - 0x10'` → ('rbp', '-', '0x10').
+    Returns ('', None, '') if no signed split point is found."""
+    # Find first + or - that's not at position 0.
+    for i in range(1, len(s)):
+        c = s[i]
+        if c in ("+", "-"):
+            return s[:i].strip(), c, s[i + 1 :].strip()
+    return "", None, ""

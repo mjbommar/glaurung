@@ -1,5 +1,5 @@
 {
-  "glaurung_commit": "7f80928fdc2dac35c0cc5ba3678f03fd07d7e516",
+  "glaurung_commit": "23dff9ef663d0953909f5fd8b4da2c8b82265af7",
   "schema_version": "1",
   "scorecards": [
     {
@@ -38,16 +38,23 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 5.6,
+        "analysis_ms": 5.1,
         "debug_info_ms": 0.2,
-        "decompile_ms": 11.9,
-        "triage_ms": 28.4
+        "decompile_ms": 11.8,
+        "stack_frame_ms": 2944.6,
+        "triage_ms": 31.1
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
       "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-c-gcc-O2.json",
       "platform": "linux",
       "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/c/hello.c",
+      "stack_frame": {
+        "avg_slots_per_function": 0.14,
+        "functions_scanned": 7,
+        "functions_with_slots": 1,
+        "total_slots": 1
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -92,16 +99,23 @@
         "with_chunks_gt_one": 1
       },
       "elapsed_ms": {
-        "analysis_ms": 4.9,
-        "debug_info_ms": 0.3,
-        "decompile_ms": 61.3,
-        "triage_ms": 7.8
+        "analysis_ms": 4.8,
+        "debug_info_ms": 0.2,
+        "decompile_ms": 60.7,
+        "stack_frame_ms": 127.2,
+        "triage_ms": 10.7
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
       "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-cpp-g++-O2.json",
       "platform": "linux",
       "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/cpp/hello.cpp",
+      "stack_frame": {
+        "avg_slots_per_function": 3.55,
+        "functions_scanned": 11,
+        "functions_with_slots": 11,
+        "total_slots": 39
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -146,16 +160,23 @@
         "with_chunks_gt_one": 1
       },
       "elapsed_ms": {
-        "analysis_ms": 4.9,
+        "analysis_ms": 4.8,
         "debug_info_ms": 0.2,
-        "decompile_ms": 62.0,
-        "triage_ms": 7.8
+        "decompile_ms": 60.5,
+        "stack_frame_ms": 124.7,
+        "triage_ms": 11.0
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
       "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-gcc-O2.json",
       "platform": "linux",
       "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/cpp/hello.cpp",
+      "stack_frame": {
+        "avg_slots_per_function": 3.55,
+        "functions_scanned": 11,
+        "functions_with_slots": 11,
+        "total_slots": 39
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -200,16 +221,23 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 2.3,
+        "analysis_ms": 2.0,
         "debug_info_ms": 0.3,
-        "decompile_ms": 17.9,
-        "triage_ms": 9.6
+        "decompile_ms": 17.4,
+        "stack_frame_ms": 83.4,
+        "triage_ms": 12.2
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
       "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-gfortran-O2.json",
       "platform": "linux",
       "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/fortran/hello.f90",
+      "stack_frame": {
+        "avg_slots_per_function": 7.0,
+        "functions_scanned": 7,
+        "functions_with_slots": 7,
+        "total_slots": 49
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -255,15 +283,22 @@
       },
       "elapsed_ms": {
         "analysis_ms": 1.5,
-        "debug_info_ms": 0.2,
-        "decompile_ms": 12.4,
-        "triage_ms": 7.4
+        "debug_info_ms": 0.3,
+        "decompile_ms": 13.0,
+        "stack_frame_ms": 76.8,
+        "triage_ms": 9.9
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
       "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-c-clang-O2.json",
       "platform": "linux",
       "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/c/hello.c",
+      "stack_frame": {
+        "avg_slots_per_function": 0.0,
+        "functions_scanned": 7,
+        "functions_with_slots": 0,
+        "total_slots": 0
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -309,15 +344,22 @@
       },
       "elapsed_ms": {
         "analysis_ms": 7.6,
-        "debug_info_ms": 0.4,
-        "decompile_ms": 119.7,
-        "triage_ms": 7.9
+        "debug_info_ms": 0.3,
+        "decompile_ms": 119.0,
+        "stack_frame_ms": 160.0,
+        "triage_ms": 10.9
       },
       "error": null,
       "flags": "-O2 -Wall -Wextra",
       "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-cpp-clang++-O2.json",
       "platform": "linux",
       "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/cpp/hello.cpp",
+      "stack_frame": {
+        "avg_slots_per_function": 6.92,
+        "functions_scanned": 13,
+        "functions_with_slots": 13,
+        "total_slots": 90
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -363,15 +405,22 @@
       },
       "elapsed_ms": {
         "analysis_ms": 16.5,
-        "debug_info_ms": 1.5,
-        "decompile_ms": 384.6,
-        "triage_ms": 32.7
+        "debug_info_ms": 1.6,
+        "decompile_ms": 386.6,
+        "stack_frame_ms": 592.6,
+        "triage_ms": 32.1
       },
       "error": null,
       "flags": "-O0 -g -Wall -Wextra",
       "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-clang-debug.json",
       "platform": "linux",
       "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/cpp/hello.cpp",
+      "stack_frame": {
+        "avg_slots_per_function": 30.75,
+        "functions_scanned": 16,
+        "functions_with_slots": 16,
+        "total_slots": 492
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -416,16 +465,23 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 4.2,
-        "debug_info_ms": 0.3,
-        "decompile_ms": 41.0,
-        "triage_ms": 6.1
+        "analysis_ms": 4.1,
+        "debug_info_ms": 0.2,
+        "decompile_ms": 41.1,
+        "stack_frame_ms": 83.8,
+        "triage_ms": 8.8
       },
       "error": null,
       "flags": "-O2 -Wl,-s",
       "metadata_path": "samples/binaries/platforms/linux/amd64/export/metadata/hello-clang-stripped.json",
       "platform": "linux",
       "source_path": "/nas4/data/workspace-infosec/glaurung/samples/source/cpp/hello.cpp",
+      "stack_frame": {
+        "avg_slots_per_function": 5.0,
+        "functions_scanned": 8,
+        "functions_with_slots": 8,
+        "total_slots": 40
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -471,15 +527,22 @@
       },
       "elapsed_ms": {
         "analysis_ms": 1.9,
-        "debug_info_ms": 0.3,
-        "decompile_ms": 30.7,
-        "triage_ms": 6.3
+        "debug_info_ms": 0.2,
+        "decompile_ms": 29.9,
+        "stack_frame_ms": 150.8,
+        "triage_ms": 8.7
       },
       "error": null,
       "flags": null,
       "metadata_path": null,
       "platform": null,
       "source_path": null,
+      "stack_frame": {
+        "avg_slots_per_function": 0.29,
+        "functions_scanned": 14,
+        "functions_with_slots": 1,
+        "total_slots": 4
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -524,16 +587,23 @@
         "with_chunks_gt_one": 0
       },
       "elapsed_ms": {
-        "analysis_ms": 0.9,
+        "analysis_ms": 1.1,
         "debug_info_ms": 0.2,
         "decompile_ms": 9.0,
-        "triage_ms": 9.1
+        "stack_frame_ms": 0.1,
+        "triage_ms": 12.9
       },
       "error": null,
       "flags": null,
       "metadata_path": null,
       "platform": null,
       "source_path": null,
+      "stack_frame": {
+        "avg_slots_per_function": 0.0,
+        "functions_scanned": 0,
+        "functions_with_slots": 0,
+        "total_slots": 0
+      },
       "triage": {
         "detected_arch": "x86_64",
         "detected_format": "ELF",
@@ -560,8 +630,10 @@
       "dwarf_types": 139,
       "functions_discovered": 103,
       "functions_named": 94,
-      "multi_chunk_functions": 2
+      "functions_with_stack_slots": 68,
+      "multi_chunk_functions": 2,
+      "stack_frame_slots": 754
     }
   },
-  "timestamp": "2026-04-25T14:26:50.057708+00:00"
+  "timestamp": "2026-04-25T14:52:38.046637+00:00"
 }

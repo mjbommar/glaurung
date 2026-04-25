@@ -109,6 +109,33 @@ class ReplCommand(BaseCommand):
         def _here() -> Optional[int]:
             return history[cursor] if 0 <= cursor < len(history) else None
 
+        # Cached function map (entry_va → Function), populated lazily so the
+        # REPL stays cheap on cold open. Refresh when the user runs `goto`.
+        _funcs_cache: dict[int, object] = {}
+
+        def _ensure_funcs() -> dict[int, object]:
+            if not _funcs_cache:
+                import glaurung as g
+                try:
+                    funcs, _cg = g.analysis.analyze_functions_path(str(binary_path))
+                except Exception:
+                    return _funcs_cache
+                for f in funcs:
+                    _funcs_cache[int(f.entry_point.value)] = f
+            return _funcs_cache
+
+        def _enclosing_function_va(va: int) -> Optional[int]:
+            """Map a VA to the entry of the function whose chunks cover it."""
+            funcs = _ensure_funcs()
+            for entry_va, f in funcs.items():
+                # Use chunk-aware containment so cold splits resolve correctly.
+                try:
+                    if f.contains_va(int(va)):
+                        return int(entry_va)
+                except Exception:
+                    pass
+            return None
+
         # --------------------------------------------------------------
         # Command dispatch
         # --------------------------------------------------------------
@@ -282,6 +309,64 @@ class ReplCommand(BaseCommand):
             type_db.add_struct(kb, name, fields, set_by="manual")
             sys.stdout.write(f"  struct {name} ({len(fields)} fields) saved\n")
 
+        def cmd_locals(argv: List[str]) -> None:
+            """locals               — list stack vars at current function
+            locals discover       — auto-discover stack vars at current function
+            locals rename <off> <name>  — rename a slot (manual)"""
+            here_va = _here()
+            if here_va is None:
+                sys.stdout.write("(set position with `goto` first)\n")
+                return
+            # Resolve to function entry by looking up the containing function.
+            func_va = _enclosing_function_va(here_va)
+            if func_va is None:
+                sys.stdout.write(f"no function contains {here_va:#x}\n")
+                return
+
+            if not argv:
+                vars_ = xref_db.list_stack_vars(kb, function_va=func_va)
+                if not vars_:
+                    sys.stdout.write(
+                        f"no stack vars yet for fn@{func_va:#x}; "
+                        "run `locals discover`\n"
+                    )
+                    return
+                sys.stdout.write(f"  {len(vars_)} vars in fn@{func_va:#x}:\n")
+                for v in vars_:
+                    typ = f": {v.c_type}" if v.c_type else ""
+                    sys.stdout.write(
+                        f"    {v.offset:+#06x}  {v.name}{typ}  "
+                        f"(uses={v.use_count}, by={v.set_by})\n"
+                    )
+                return
+
+            sub = argv[0]
+            if sub == "discover":
+                n = xref_db.discover_stack_vars(kb, str(ctx.file_path), func_va)
+                sys.stdout.write(
+                    f"  discovered {n} stack-frame slot(s) in fn@{func_va:#x}\n"
+                )
+                kb.save()
+                return
+            if sub == "rename":
+                if len(argv) < 3:
+                    sys.stdout.write("locals rename <offset> <name>\n")
+                    return
+                try:
+                    off = int(argv[1], 0)  # accepts decimal, 0x-hex, signed
+                except ValueError:
+                    sys.stdout.write(f"bad offset: {argv[1]!r}\n")
+                    return
+                name = argv[2]
+                xref_db.set_stack_var(
+                    kb, function_va=func_va, offset=off, name=name,
+                    set_by="manual",
+                )
+                sys.stdout.write(f"  renamed {off:+#06x} -> {name}\n")
+                kb.save()
+                return
+            sys.stdout.write(f"unknown locals subcommand: {sub!r}\n")
+
         def cmd_show(argv: List[str]) -> None:
             """show <type-name>"""
             if not argv:
@@ -339,6 +424,7 @@ class ReplCommand(BaseCommand):
             "types": cmd_types,
             "struct": cmd_struct,
             "show": cmd_show,
+            "locals": cmd_locals, "l": cmd_locals,
             "strings": cmd_strings, "s": cmd_strings,
             "ask": cmd_ask,
         }
@@ -467,6 +553,9 @@ glaurung repl commands
     rename <addr> <name>        set canonical function name
     comment <addr> <text>       attach a comment to an address
     struct <n> a:int b:char* …  define a struct
+    locals                      list stack-frame slots in current function
+    locals discover             auto-discover stack-frame slots from disasm
+    locals rename <off> <name>  rename one slot (offset accepts 0x-hex)
     save                        force a save (also automatic on every edit)
 
   Inspection

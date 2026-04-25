@@ -20,12 +20,14 @@ from .metrics import (
     DebugInfoMetrics,
     DecompileMetrics,
     FunctionDiscoveryMetrics,
+    StackFrameMetrics,
     TriageMetrics,
     callgraph_metrics,
     debug_info_metrics,
     decompile_metrics,
     discovery_metrics,
     language_from_source_path,
+    stack_frame_metrics,
     triage_metrics,
 )
 
@@ -54,6 +56,7 @@ class BinaryScorecard:
     callgraph: dict
     decompile: dict
     debug_info: dict = field(default_factory=dict)
+    stack_frame: dict = field(default_factory=dict)
 
     elapsed_ms: dict = field(default_factory=dict)
     error: Optional[str] = None
@@ -115,6 +118,10 @@ class BenchSummary:
                 "dwarf_types": total_int("debug_info.dwarf_types_total"),
                 "dwarf_structs_with_fields": total_int(
                     "debug_info.dwarf_structs_with_fields"
+                ),
+                "stack_frame_slots": total_int("stack_frame.total_slots"),
+                "functions_with_stack_slots": total_int(
+                    "stack_frame.functions_with_slots"
                 ),
             },
             "rates": {
@@ -331,6 +338,10 @@ def run_one_binary(
     dbg = debug_info_metrics(str(binary))
     debug_ms = (time.perf_counter() - debug_started) * 1000
 
+    stack_started = time.perf_counter()
+    sf = stack_frame_metrics(str(binary), funcs_for_metrics)
+    stack_ms = (time.perf_counter() - stack_started) * 1000
+
     return BinaryScorecard(
         binary_path=str(binary),
         metadata_path=str(meta_path) if meta_path else None,
@@ -344,11 +355,13 @@ def run_one_binary(
         callgraph=asdict(cgm),
         decompile=asdict(dec),
         debug_info=asdict(dbg),
+        stack_frame=asdict(sf),
         elapsed_ms={
             "triage_ms": round(triage_ms, 1),
             "analysis_ms": round(analysis_ms, 1),
             "decompile_ms": round(decompile_ms, 1),
             "debug_info_ms": round(debug_ms, 1),
+            "stack_frame_ms": round(stack_ms, 1),
         },
     )
 
@@ -441,6 +454,8 @@ def to_markdown(summary: BenchSummary) -> str:
                      f"(failed: {totals.get('decompiled_failed', 0)})")
         lines.append(f"- DWARF types: **{totals.get('dwarf_types', 0)}** "
                      f"(structs with fields: {totals.get('dwarf_structs_with_fields', 0)})")
+        lines.append(f"- Stack-frame slots: **{totals.get('stack_frame_slots', 0)}** "
+                     f"(across {totals.get('functions_with_stack_slots', 0)} functions)")
         lines.append("")
         lines.append("## Rates")
         lines.append(f"- Symbol-name resolution (avg): **{rates.get('name_match_rate_avg', 0):.1%}**")

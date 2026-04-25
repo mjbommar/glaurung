@@ -167,6 +167,70 @@ def language_from_source_path(source_path: Optional[str]) -> Optional[str]:
 
 
 @dataclass
+class StackFrameMetrics:
+    """Counts of stack-frame slots discoverable across the analysed
+    functions. Drives a regression signal for #191/#192/#194 — every
+    decompiler improvement should lift the count of recoverable slots
+    or shrink the number of functions with zero-slot frames."""
+    functions_scanned: int = 0
+    total_slots: int = 0
+    functions_with_slots: int = 0
+    avg_slots_per_function: float = 0.0
+
+
+def stack_frame_metrics(
+    binary_path: str, funcs, *, max_functions: int = 16
+) -> StackFrameMetrics:
+    """Sample up to `max_functions` named functions in the binary, run
+    the auto-discovery pass on each, return aggregate counts. Sampling
+    keeps the bench fast — full-coverage discovery is for actual
+    analysis sessions, not the per-commit harness.
+
+    Skipped (returns zeros) if anything raises — auto-discovery must
+    not be load-bearing for the bench."""
+    try:
+        from .._sandbox_xref_db import _open_volatile_kb_for_metrics
+    except Exception:
+        # Use the public xref_db directly via a tmp-path KB.
+        pass
+    try:
+        import tempfile
+        from pathlib import Path as _Path
+
+        from glaurung.llm.kb import xref_db as _xref_db
+        from glaurung.llm.kb.persistent import PersistentKnowledgeBase
+
+        named = [f for f in funcs if not f.name.startswith("sub_")][:max_functions]
+        if not named:
+            return StackFrameMetrics()
+        with tempfile.TemporaryDirectory() as td:
+            db = _Path(td) / "bench-stack.glaurung"
+            kb = PersistentKnowledgeBase.open(db, binary_path=_Path(binary_path))
+            total = 0
+            with_any = 0
+            for f in named:
+                try:
+                    n = _xref_db.discover_stack_vars(
+                        kb, binary_path, int(f.entry_point.value),
+                    )
+                except Exception:
+                    n = 0
+                total += n
+                if n > 0:
+                    with_any += 1
+            kb.close()
+        avg = (total / len(named)) if named else 0.0
+        return StackFrameMetrics(
+            functions_scanned=len(named),
+            total_slots=total,
+            functions_with_slots=with_any,
+            avg_slots_per_function=round(avg, 2),
+        )
+    except Exception:
+        return StackFrameMetrics()
+
+
+@dataclass
 class DebugInfoMetrics:
     """Counts of structured types recoverable from debug info.
 
