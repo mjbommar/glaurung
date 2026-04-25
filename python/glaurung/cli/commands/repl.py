@@ -316,6 +316,68 @@ class ReplCommand(BaseCommand):
             type_db.add_struct(kb, name, fields, set_by="manual")
             sys.stdout.write(f"  struct {name} ({len(fields)} fields) saved\n")
 
+        def cmd_label(argv: List[str]) -> None:
+            """label                       — list all data labels
+            label set <addr> <name> [<type>]
+            label remove <addr>
+            label import                 — pull non-function symbols from the binary"""
+            if not argv:
+                labels = xref_db.list_data_labels(kb)
+                if not labels:
+                    sys.stdout.write(
+                        "(no data labels yet — `label import` to bootstrap from symbols)\n"
+                    )
+                    return
+                sys.stdout.write(f"  {len(labels)} data labels:\n")
+                for d in labels[:64]:
+                    typ = f": {d.c_type}" if d.c_type else ""
+                    sys.stdout.write(
+                        f"    {d.va:#010x}  {d.name}{typ}  (set_by={d.set_by})\n"
+                    )
+                if len(labels) > 64:
+                    sys.stdout.write(f"    … {len(labels) - 64} more\n")
+                return
+
+            sub = argv[0]
+            if sub == "set":
+                if len(argv) < 3:
+                    sys.stdout.write("label set <addr> <name> [<type>]\n")
+                    return
+                try:
+                    va = int(argv[1], 0)
+                except ValueError:
+                    sys.stdout.write(f"bad addr: {argv[1]!r}\n")
+                    return
+                name = argv[2]
+                c_type = " ".join(argv[3:]) if len(argv) > 3 else None
+                xref_db.set_data_label(
+                    kb, va=va, name=name, c_type=c_type, set_by="manual",
+                )
+                sys.stdout.write(f"  labelled {va:#010x} -> {name}\n")
+                kb.save()
+                return
+            if sub == "remove":
+                if len(argv) < 2:
+                    sys.stdout.write("label remove <addr>\n")
+                    return
+                try:
+                    va = int(argv[1], 0)
+                except ValueError:
+                    sys.stdout.write(f"bad addr: {argv[1]!r}\n")
+                    return
+                xref_db.remove_data_label(kb, va)
+                sys.stdout.write(f"  removed label at {va:#010x}\n")
+                kb.save()
+                return
+            if sub == "import":
+                n = xref_db.import_data_symbols_from_binary(
+                    kb, str(ctx.file_path),
+                )
+                sys.stdout.write(f"  imported {n} data labels from binary symbols\n")
+                kb.save()
+                return
+            sys.stdout.write(f"unknown label subcommand: {sub!r}\n")
+
         def cmd_locals(argv: List[str]) -> None:
             """locals               — list stack vars at current function
             locals discover       — auto-discover stack vars at current function
@@ -432,6 +494,7 @@ class ReplCommand(BaseCommand):
             "struct": cmd_struct,
             "show": cmd_show,
             "locals": cmd_locals, "l": cmd_locals,
+            "label": cmd_label,
             "strings": cmd_strings, "s": cmd_strings,
             "ask": cmd_ask,
         }
@@ -563,6 +626,10 @@ glaurung repl commands
     locals                      list stack-frame slots in current function
     locals discover             auto-discover stack-frame slots from disasm
     locals rename <off> <name>  rename one slot (offset accepts 0x-hex)
+    label                       list global data labels
+    label set <addr> <name> [<type>]   add or rename a data label
+    label remove <addr>         drop a data label
+    label import                bootstrap labels from binary symbols
     save                        force a save (also automatic on every edit)
 
   Inspection

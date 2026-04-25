@@ -82,6 +82,22 @@ CREATE TABLE IF NOT EXISTS xref_index_state (
     edge_count INTEGER NOT NULL
 );
 
+-- Global data labels (#181). Names + (optional) types for global
+-- variables, .data / .rodata / .bss symbols, jump-table targets, etc.
+-- Distinct from `function_names` because data isn't called.
+CREATE TABLE IF NOT EXISTS data_labels (
+    binary_id INTEGER NOT NULL,
+    va INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    c_type TEXT,                  -- e.g. "int", "char *", "struct stat"
+    size INTEGER,                 -- bytes occupied at the VA, optional
+    set_by TEXT,
+    set_at INTEGER,
+    PRIMARY KEY (binary_id, va)
+);
+CREATE INDEX IF NOT EXISTS idx_data_labels_binary
+    ON data_labels(binary_id);
+
 -- Stack-frame variables (#191). One row per (function, frame offset).
 -- Negative offsets are below rbp (locals); positive are above (saved
 -- regs / spill area / red-zone). Auto-discovery seeds rows with
@@ -528,6 +544,127 @@ def list_comments(
         (kb.binary_id,),
     )
     return [(va, body) for va, body in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Global data labels (#181)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DataLabel:
+    """Named global variable / data symbol."""
+    va: int
+    name: str
+    c_type: Optional[str]
+    size: Optional[int]
+    set_by: Optional[str]
+
+
+def set_data_label(
+    kb: PersistentKnowledgeBase,
+    va: int,
+    name: str,
+    *,
+    c_type: Optional[str] = None,
+    size: Optional[int] = None,
+    set_by: str = "manual",
+) -> None:
+    """Persist a name for a data address. Manual entries always win
+    over later automated guesses (DWARF / symbol table imports)."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT set_by FROM data_labels WHERE binary_id = ? AND va = ?",
+        (kb.binary_id, int(va)),
+    )
+    row = cur.fetchone()
+    if row is not None and row[0] == "manual" and set_by != "manual":
+        return
+    cur.execute(
+        "INSERT OR REPLACE INTO data_labels "
+        "(binary_id, va, name, c_type, size, set_by, set_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            kb.binary_id, int(va), name, c_type, size,
+            set_by, int(time.time()),
+        ),
+    )
+    kb._conn.commit()
+
+
+def get_data_label(
+    kb: PersistentKnowledgeBase, va: int,
+) -> Optional[DataLabel]:
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT va, name, c_type, size, set_by FROM data_labels "
+        "WHERE binary_id = ? AND va = ?",
+        (kb.binary_id, int(va)),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return DataLabel(va=row[0], name=row[1], c_type=row[2], size=row[3], set_by=row[4])
+
+
+def list_data_labels(kb: PersistentKnowledgeBase) -> List[DataLabel]:
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT va, name, c_type, size, set_by FROM data_labels "
+        "WHERE binary_id = ? ORDER BY va",
+        (kb.binary_id,),
+    )
+    return [
+        DataLabel(va=r[0], name=r[1], c_type=r[2], size=r[3], set_by=r[4])
+        for r in cur.fetchall()
+    ]
+
+
+def remove_data_label(kb: PersistentKnowledgeBase, va: int) -> None:
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "DELETE FROM data_labels WHERE binary_id = ? AND va = ?",
+        (kb.binary_id, int(va)),
+    )
+    kb._conn.commit()
+
+
+def import_data_symbols_from_binary(
+    kb: PersistentKnowledgeBase, binary_path: str,
+) -> int:
+    """Pull every defined non-text symbol out of the binary and store
+    it as a data_label with set_by="analyzer". Picks up most globals,
+    .rodata strings, and statically-named arrays. No-op for stripped
+    binaries.
+
+    Returns the number of labels imported.
+    """
+    try:
+        import glaurung as g
+        pairs = g.symbol_address_map(binary_path)
+    except Exception:
+        return 0
+    # symbol_address_map returns (va, name) tuples — but we don't know
+    # which are functions vs data. Filter out names that already have a
+    # function_names row at the same VA so we don't shadow them.
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT entry_va FROM function_names WHERE binary_id = ?",
+        (kb.binary_id,),
+    )
+    func_vas = {row[0] for row in cur.fetchall()}
+    n = 0
+    for va, name in pairs:
+        if int(va) in func_vas:
+            continue
+        set_data_label(
+            kb, int(va), str(name), set_by="analyzer",
+        )
+        n += 1
+    return n
 
 
 # ---------------------------------------------------------------------------
