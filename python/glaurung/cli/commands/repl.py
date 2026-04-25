@@ -186,23 +186,124 @@ class ReplCommand(BaseCommand):
             cursor += 1
             sys.stdout.write(f"  {_here():#x}\n")
 
+        def _rerender_preview(func_va: int, header: str = "") -> None:
+            """Auto-rerender the enclosing function and print the first
+            5 lines so the analyst sees the new identifier(s) take
+            effect immediately. Errors are non-fatal — the rename has
+            already persisted; the preview is convenience only."""
+            try:
+                text = xref_db.render_decompile_with_names(
+                    kb, str(ctx.file_path), func_va,
+                    timeout_ms=500, style="c",
+                )
+            except Exception as e:
+                sys.stdout.write(f"  (re-render skipped: {e})\n")
+                return
+            lines = text.splitlines()
+            if header:
+                sys.stdout.write(f"  ── {header} ──\n")
+            for ln in lines[:5]:
+                sys.stdout.write(f"    {ln}\n")
+            if len(lines) > 5:
+                sys.stdout.write(f"    ... ({len(lines) - 5} more lines)\n")
+
         def cmd_rename(argv: List[str]) -> None:
-            if len(argv) < 2:
-                sys.stdout.write("rename <addr> <name> [--by manual|llm|...]\n")
+            """rename [<addr>] <name> [--by manual|llm|...]
+            With one arg, renames the function enclosing the cursor."""
+            if not argv:
+                sys.stdout.write(
+                    "rename [<addr>] <name>     "
+                    "(at cursor: rename enclosing function)\n"
+                )
+                return
+            set_by = "manual"
+            args_clean = list(argv)
+            if "--by" in args_clean:
+                idx = args_clean.index("--by")
+                if idx + 1 < len(args_clean):
+                    set_by = args_clean[idx + 1]
+                    args_clean = args_clean[:idx] + args_clean[idx + 2:]
+            # Single-arg form: rename the function at the cursor.
+            if len(args_clean) == 1:
+                here_va = _here()
+                if here_va is None:
+                    sys.stdout.write(
+                        "(set position with `goto` first, or pass an addr)\n"
+                    )
+                    return
+                func_va = _enclosing_function_va(here_va) or here_va
+                xref_db.set_function_name(
+                    kb, func_va, args_clean[0], set_by=set_by,
+                )
+                sys.stdout.write(f"  {func_va:#x} → {args_clean[0]}\n")
+                _rerender_preview(func_va, header=f"{args_clean[0]} (post-rename)")
                 return
             try:
-                va = int(argv[0], 0)
+                va = int(args_clean[0], 0)
             except ValueError:
-                sys.stdout.write(f"invalid address: {argv[0]!r}\n")
+                sys.stdout.write(f"invalid address: {args_clean[0]!r}\n")
                 return
-            new_name = argv[1]
-            set_by = "manual"
-            if "--by" in argv:
-                idx = argv.index("--by")
-                if idx + 1 < len(argv):
-                    set_by = argv[idx + 1]
+            new_name = args_clean[1]
             xref_db.set_function_name(kb, va, new_name, set_by=set_by)
             sys.stdout.write(f"  {va:#x} → {new_name}\n")
+            # Re-render the enclosing function (or the renamed function
+            # itself if the addr was its own entry).
+            func_va = _enclosing_function_va(va) or va
+            _rerender_preview(func_va, header=f"{new_name} (post-rename)")
+
+        def cmd_retype(argv: List[str]) -> None:
+            """retype [<addr>] <c-type>
+            Retypes whatever's at the cursor: data label if cursor is
+            in a data section, else stack var if cursor is at a
+            (function_va, offset) frame slot, else the data-label at
+            the explicit addr."""
+            if not argv:
+                sys.stdout.write("retype [<addr>] <c-type>\n")
+                return
+            args_clean = list(argv)
+            if len(args_clean) == 1:
+                # `y <c-type>` at cursor — retype data label at cursor VA.
+                here_va = _here()
+                if here_va is None:
+                    sys.stdout.write(
+                        "(set position with `goto` first, or pass an addr)\n"
+                    )
+                    return
+                c_type = args_clean[0]
+                existing = xref_db.get_data_label(kb, here_va)
+                if existing is None:
+                    sys.stdout.write(
+                        f"no data label at {here_va:#x}; "
+                        f"use `label {here_va:#x} <name> --type {c_type}` first\n"
+                    )
+                    return
+                xref_db.set_data_label(
+                    kb, here_va, existing.name, c_type=c_type,
+                    size=existing.size, set_by="manual",
+                )
+                sys.stdout.write(
+                    f"  {here_va:#x} {existing.name}: {c_type}\n"
+                )
+                return
+            # `y <addr> <c-type>` — explicit form.
+            try:
+                va = int(args_clean[0], 0)
+            except ValueError:
+                sys.stdout.write(f"invalid address: {args_clean[0]!r}\n")
+                return
+            c_type = args_clean[1]
+            existing = xref_db.get_data_label(kb, va)
+            if existing is None:
+                sys.stdout.write(
+                    f"no data label at {va:#x}; "
+                    f"use `label {va:#x} <name> --type {c_type}` first\n"
+                )
+                return
+            xref_db.set_data_label(
+                kb, va, existing.name, c_type=c_type,
+                size=existing.size, set_by="manual",
+            )
+            sys.stdout.write(f"  {va:#x} {existing.name}: {c_type}\n")
 
         def cmd_comment(argv: List[str]) -> None:
             if len(argv) < 2:
@@ -618,6 +719,7 @@ class ReplCommand(BaseCommand):
             "back": cmd_back, "b": cmd_back,
             "forward": cmd_forward, "f": cmd_forward,
             "rename": cmd_rename, "n": cmd_rename,
+            "retype": cmd_retype, "y": cmd_retype,
             "comment": cmd_comment, "c": cmd_comment,
             "xrefs": cmd_xrefs, "x": cmd_xrefs,
             "decomp": cmd_decomp, "d": cmd_decomp,

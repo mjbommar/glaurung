@@ -1383,8 +1383,6 @@ def render_decompile_with_names(
         style=style,
     )
     slots = list_stack_vars(kb, function_va=function_va)
-    if not slots:
-        return raw
     name_by_offset: dict[int, str] = {s.offset: s.name for s in slots}
 
     def _resolve(off_text: str, sign: str) -> Optional[str]:
@@ -1431,6 +1429,39 @@ def render_decompile_with_names(
 
     out = paren_re.sub(_paren_sub, out)
     out = bracket_re.sub(_bracket_sub, out)
+
+    # Apply analyst-renamed function names everywhere they appear in the
+    # rendered output: `sub_1080(...)` and `0x1080(...)` are common shapes
+    # that the native decompiler emits when a callee has no symbol-derived
+    # name. Walking the function_names table once and pre-compiling a
+    # single regex per binary keeps the cost flat per call (#220).
+    fn_names = list_function_names(kb)
+    if fn_names:
+        # Map sub_<hex> → canonical for every analyst-set entry.
+        sub_map: dict[str, str] = {}
+        addr_map: dict[str, str] = {}
+        for fn in fn_names:
+            disp = fn.display
+            if not disp:
+                continue
+            sub_map[f"sub_{fn.entry_va:x}"] = disp
+            sub_map[f"sub_{fn.entry_va:X}"] = disp
+            addr_map[f"0x{fn.entry_va:x}"] = disp
+            addr_map[f"0x{fn.entry_va:X}"] = disp
+        if sub_map:
+            sub_re = re.compile(
+                r"\b(" + "|".join(re.escape(k) for k in sub_map) + r")\b"
+            )
+            out = sub_re.sub(lambda m: sub_map[m.group(1)], out)
+        if addr_map:
+            # Only rewrite addresses immediately followed by `(` so we
+            # don't accidentally rename loose constants. Restrict the
+            # match to call-shaped occurrences.
+            addr_re = re.compile(
+                r"\b(" + "|".join(re.escape(k) for k in addr_map)
+                + r")(?=\s*\()"
+            )
+            out = addr_re.sub(lambda m: addr_map[m.group(1)], out)
 
     if include_locals_prelude:
         prelude = _format_locals_prelude(slots)
