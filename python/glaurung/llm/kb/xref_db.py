@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS function_names (
     aliases_json TEXT NOT NULL DEFAULT '[]',
     set_by TEXT,
     set_at INTEGER,
+    -- Demangled / pretty-printed form, populated by demangle_pass (#182).
+    -- NULL when the canonical name isn't a recognized mangled symbol.
+    demangled TEXT,
+    flavor TEXT,
     PRIMARY KEY (binary_id, entry_va)
 );
 
@@ -114,6 +118,13 @@ class FunctionName:
     canonical: str
     aliases: List[str]
     set_by: Optional[str]
+    demangled: Optional[str] = None
+    flavor: Optional[str] = None  # "rust" | "itanium" | "msvc" | None
+
+    @property
+    def display(self) -> str:
+        """Pretty name for UI: demangled if available, else canonical."""
+        return self.demangled or self.canonical
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
@@ -122,8 +133,19 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     Idempotent — runs on every open. Doesn't bump the schema_version
     (these tables are optional add-ons, present whenever the user
     actually populates them).
+
+    Also runs forward-compatible migrations: when an older DB is opened
+    it picks up new columns that recent code expects.
     """
     conn.executescript(_SCHEMA_SQL)
+    cur = conn.cursor()
+    # Migration: add demangled/flavor columns to function_names if missing.
+    cur.execute("PRAGMA table_info(function_names)")
+    cols = {row[1] for row in cur.fetchall()}
+    if "demangled" not in cols:
+        cur.execute("ALTER TABLE function_names ADD COLUMN demangled TEXT")
+    if "flavor" not in cols:
+        cur.execute("ALTER TABLE function_names ADD COLUMN flavor TEXT")
     conn.commit()
 
 
@@ -216,6 +238,13 @@ def index_callgraph(
         name_rows,
     )
     kb._conn.commit()
+
+    # Sweep the freshly-populated names through the demangler so the
+    # display column lights up immediately. Failures here aren't fatal.
+    try:
+        demangle_function_names(kb)
+    except Exception:
+        pass
     return len(rows)
 
 
@@ -367,7 +396,8 @@ def get_function_name(
 
     cur = kb._conn.cursor()
     cur.execute(
-        "SELECT entry_va, canonical, aliases_json, set_by FROM function_names "
+        "SELECT entry_va, canonical, aliases_json, set_by, demangled, flavor "
+        "FROM function_names "
         "WHERE binary_id = ? AND entry_va = ?",
         (kb.binary_id, entry_va),
     )
@@ -377,7 +407,67 @@ def get_function_name(
     return FunctionName(
         entry_va=row[0], canonical=row[1],
         aliases=json.loads(row[2] or "[]"), set_by=row[3],
+        demangled=row[4], flavor=row[5],
     )
+
+
+def set_demangled(
+    kb: PersistentKnowledgeBase,
+    entry_va: int,
+    demangled: Optional[str],
+    flavor: Optional[str],
+) -> None:
+    """Update only the demangled/flavor columns on an existing
+    function_names row. No-op if the row doesn't exist yet — the
+    canonical name must already be set via ``set_function_name``."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "UPDATE function_names SET demangled = ?, flavor = ? "
+        "WHERE binary_id = ? AND entry_va = ?",
+        (demangled, flavor, kb.binary_id, int(entry_va)),
+    )
+    kb._conn.commit()
+
+
+def demangle_function_names(kb: PersistentKnowledgeBase) -> dict:
+    """Sweep every persisted function name through the native
+    demangler and store the demangled form alongside. Returns a counts
+    summary so callers can report the lift.
+
+    Idempotent — re-running just refreshes the demangled column.
+    Functions whose canonical name doesn't match any known mangling
+    scheme leave the demangled column NULL.
+    """
+    _ensure_schema(kb._conn)
+    try:
+        import glaurung as g
+        demangle_text = g.strings.demangle_text
+    except Exception:
+        return {"error": "demangle_bridge_unavailable"}
+
+    counts = {"total": 0, "rust": 0, "itanium": 0, "msvc": 0, "unrecognized": 0}
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT entry_va, canonical FROM function_names WHERE binary_id = ?",
+        (kb.binary_id,),
+    )
+    rows = cur.fetchall()
+    for entry_va, canonical in rows:
+        counts["total"] += 1
+        result = demangle_text(canonical)
+        if result is None:
+            counts["unrecognized"] += 1
+            continue
+        demangled, flavor = result
+        cur.execute(
+            "UPDATE function_names SET demangled = ?, flavor = ? "
+            "WHERE binary_id = ? AND entry_va = ?",
+            (demangled, flavor, kb.binary_id, int(entry_va)),
+        )
+        counts[flavor] = counts.get(flavor, 0) + 1
+    kb._conn.commit()
+    return counts
 
 
 def list_function_names(
@@ -388,7 +478,8 @@ def list_function_names(
 
     cur = kb._conn.cursor()
     cur.execute(
-        "SELECT entry_va, canonical, aliases_json, set_by FROM function_names "
+        "SELECT entry_va, canonical, aliases_json, set_by, demangled, flavor "
+        "FROM function_names "
         "WHERE binary_id = ? ORDER BY entry_va",
         (kb.binary_id,),
     )
@@ -396,6 +487,7 @@ def list_function_names(
         FunctionName(
             entry_va=row[0], canonical=row[1],
             aliases=json.loads(row[2] or "[]"), set_by=row[3],
+            demangled=row[4], flavor=row[5],
         )
         for row in cur.fetchall()
     ]

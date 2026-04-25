@@ -263,8 +263,14 @@ class ReplCommand(BaseCommand):
                     pass
             sys.stdout.write(f"  {len(names)} functions, showing first {limit}:\n")
             for name in names[:limit]:
+                # Prefer the demangled form when the canonical is mangled.
+                pretty = name.demangled or name.canonical
+                # If we did demangle, also show the raw name parenthesized.
+                aux = (
+                    f"  ({name.canonical})" if name.demangled else ""
+                )
                 sys.stdout.write(
-                    f"    {name.entry_va:#x}  {name.canonical}  "
+                    f"    {name.entry_va:#x}  {pretty}{aux}  "
                     f"(set_by={name.set_by})\n"
                 )
 
