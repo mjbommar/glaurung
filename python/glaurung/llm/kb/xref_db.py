@@ -160,6 +160,25 @@ CREATE TABLE IF NOT EXISTS stack_frame_vars (
 );
 CREATE INDEX IF NOT EXISTS idx_stack_vars_func
     ON stack_frame_vars(binary_id, function_va);
+
+-- Undo / redo log (#228). Captures the pre- and post-images of any
+-- analyst-driven KB write. Auto / dwarf / flirt / propagated writes are
+-- excluded — those re-derive on the next pass and don't need reversal.
+-- ``undone=0`` means the row is reversible via undo(); ``undone=1``
+-- means undo() already reverted it (and redo() can re-apply).
+CREATE TABLE IF NOT EXISTS undo_log (
+    undo_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    binary_id INTEGER NOT NULL,
+    table_name TEXT NOT NULL,    -- function_names | comments | data_labels | stack_frame_vars
+    key_json TEXT NOT NULL,      -- JSON-encoded primary key dict
+    old_value_json TEXT,          -- prior row state (NULL = row didn't exist)
+    new_value_json TEXT,          -- new state (NULL = deletion)
+    set_by TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    undone INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_undo_active
+    ON undo_log(binary_id, undone, ts DESC);
 """
 
 
@@ -207,6 +226,222 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if "flavor" not in cols:
         cur.execute("ALTER TABLE function_names ADD COLUMN flavor TEXT")
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Undo / redo (#228) — analyst trust floor.
+# ---------------------------------------------------------------------------
+#
+# Every analyst-driven KB mutation (set_by="manual") records a row in
+# undo_log capturing the prior row state. ``undo()`` walks the most
+# recent active row, restores its old_value, and marks it undone.
+# ``redo()`` walks the most recent undone row and re-applies new_value.
+#
+# Auto / dwarf / flirt / propagated writes are intentionally NOT
+# captured — those re-derive on the next analysis pass and clutter the
+# log if logged. The contract is "you can undo what you typed, not
+# what the machine inferred."
+
+# Maps table_name → (PK columns, all columns) used to snapshot rows.
+_UNDO_TABLES = {
+    "function_names": (
+        ("entry_va",),
+        ("entry_va", "canonical", "aliases_json", "set_by",
+         "demangled", "flavor"),
+    ),
+    "comments": (
+        ("va",),
+        ("va", "body", "set_by"),
+    ),
+    "data_labels": (
+        ("va",),
+        ("va", "name", "c_type", "size", "set_by"),
+    ),
+    "stack_frame_vars": (
+        ("function_va", "offset"),
+        ("function_va", "offset", "name", "c_type", "use_count", "set_by"),
+    ),
+}
+
+
+def _snapshot_row(
+    kb: PersistentKnowledgeBase, table: str, key: dict
+) -> Optional[dict]:
+    """Read the current row from ``table`` keyed by ``key``. Returns
+    None if no such row exists (so an undo of a fresh insert restores
+    'no row')."""
+    pk_cols, all_cols = _UNDO_TABLES[table]
+    where = " AND ".join(f"{c}=?" for c in pk_cols) + " AND binary_id=?"
+    sql = f"SELECT {','.join(all_cols)} FROM {table} WHERE {where}"
+    cur = kb._conn.cursor()
+    params = tuple(key[c] for c in pk_cols) + (kb.binary_id,)
+    cur.execute(sql, params)
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return dict(zip(all_cols, row))
+
+
+def _record_undo(
+    kb: PersistentKnowledgeBase,
+    table: str,
+    key: dict,
+    old: Optional[dict],
+    new: Optional[dict],
+    set_by: str,
+) -> None:
+    """Append an undo_log entry. Only fires for set_by='manual' — other
+    sources (auto/dwarf/flirt/propagated) are intentionally ignored."""
+    if set_by != "manual":
+        return
+    if old == new:
+        # No-op write, nothing to undo.
+        return
+    import json
+    cur = kb._conn.cursor()
+    cur.execute(
+        "INSERT INTO undo_log (binary_id, table_name, key_json, "
+        "old_value_json, new_value_json, set_by, ts) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            kb.binary_id, table, json.dumps(key, sort_keys=True),
+            json.dumps(old) if old is not None else None,
+            json.dumps(new) if new is not None else None,
+            set_by, int(time.time()),
+        ),
+    )
+
+
+def _apply_snapshot(
+    kb: PersistentKnowledgeBase,
+    table: str,
+    key: dict,
+    snapshot: Optional[dict],
+) -> None:
+    """Restore ``table[key]`` to ``snapshot``. None means delete the row."""
+    pk_cols, all_cols = _UNDO_TABLES[table]
+    cur = kb._conn.cursor()
+    if snapshot is None:
+        where = " AND ".join(f"{c}=?" for c in pk_cols) + " AND binary_id=?"
+        cur.execute(
+            f"DELETE FROM {table} WHERE {where}",
+            tuple(key[c] for c in pk_cols) + (kb.binary_id,),
+        )
+        return
+    cols = ("binary_id",) + all_cols
+    placeholders = ",".join("?" * len(cols))
+    values = (kb.binary_id,) + tuple(snapshot.get(c) for c in all_cols)
+    cur.execute(
+        f"INSERT OR REPLACE INTO {table} ({','.join(cols)}) "
+        f"VALUES ({placeholders})",
+        values,
+    )
+
+
+@dataclass(frozen=True)
+class UndoEntry:
+    undo_id: int
+    table_name: str
+    key: dict
+    old_value: Optional[dict]
+    new_value: Optional[dict]
+    set_by: str
+    ts: int
+    undone: bool
+
+
+def list_undo_log(
+    kb: PersistentKnowledgeBase, *, limit: int = 50, include_undone: bool = True,
+) -> List[UndoEntry]:
+    """Return recent undo_log entries, newest first."""
+    _ensure_schema(kb._conn)
+    import json
+    cur = kb._conn.cursor()
+    where = "binary_id=?"
+    params: tuple = (kb.binary_id,)
+    if not include_undone:
+        where += " AND undone=0"
+    cur.execute(
+        f"SELECT undo_id, table_name, key_json, old_value_json, "
+        f"new_value_json, set_by, ts, undone FROM undo_log "
+        f"WHERE {where} ORDER BY undo_id DESC LIMIT ?",
+        params + (limit,),
+    )
+    out: List[UndoEntry] = []
+    for row in cur.fetchall():
+        out.append(UndoEntry(
+            undo_id=row[0], table_name=row[1],
+            key=json.loads(row[2]),
+            old_value=json.loads(row[3]) if row[3] else None,
+            new_value=json.loads(row[4]) if row[4] else None,
+            set_by=row[5], ts=row[6], undone=bool(row[7]),
+        ))
+    return out
+
+
+def undo(kb: PersistentKnowledgeBase, *, n: int = 1) -> List[UndoEntry]:
+    """Revert the most recent N analyst-driven KB writes. Returns the
+    list of undo_log entries that were applied."""
+    _ensure_schema(kb._conn)
+    import json
+    applied: List[UndoEntry] = []
+    cur = kb._conn.cursor()
+    for _ in range(n):
+        cur.execute(
+            "SELECT undo_id, table_name, key_json, old_value_json, "
+            "new_value_json, set_by, ts FROM undo_log "
+            "WHERE binary_id=? AND undone=0 ORDER BY undo_id DESC LIMIT 1",
+            (kb.binary_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            break
+        undo_id, table, key_json, old_json, new_json, set_by, ts = row
+        key = json.loads(key_json)
+        old = json.loads(old_json) if old_json else None
+        new = json.loads(new_json) if new_json else None
+        _apply_snapshot(kb, table, key, old)
+        cur.execute(
+            "UPDATE undo_log SET undone=1 WHERE undo_id=?", (undo_id,)
+        )
+        applied.append(UndoEntry(
+            undo_id=undo_id, table_name=table, key=key,
+            old_value=old, new_value=new, set_by=set_by, ts=ts, undone=True,
+        ))
+    kb._conn.commit()
+    return applied
+
+
+def redo(kb: PersistentKnowledgeBase, *, n: int = 1) -> List[UndoEntry]:
+    """Re-apply the most recent N undone KB writes. Symmetric to undo()."""
+    _ensure_schema(kb._conn)
+    import json
+    applied: List[UndoEntry] = []
+    cur = kb._conn.cursor()
+    for _ in range(n):
+        cur.execute(
+            "SELECT undo_id, table_name, key_json, old_value_json, "
+            "new_value_json, set_by, ts FROM undo_log "
+            "WHERE binary_id=? AND undone=1 ORDER BY undo_id ASC LIMIT 1",
+            (kb.binary_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            break
+        undo_id, table, key_json, old_json, new_json, set_by, ts = row
+        key = json.loads(key_json)
+        old = json.loads(old_json) if old_json else None
+        new = json.loads(new_json) if new_json else None
+        _apply_snapshot(kb, table, key, new)
+        cur.execute(
+            "UPDATE undo_log SET undone=0 WHERE undo_id=?", (undo_id,)
+        )
+        applied.append(UndoEntry(
+            undo_id=undo_id, table_name=table, key=key,
+            old_value=old, new_value=new, set_by=set_by, ts=ts, undone=False,
+        ))
+    kb._conn.commit()
+    return applied
 
 
 def is_indexed(kb: PersistentKnowledgeBase) -> bool:
@@ -435,6 +670,9 @@ def set_function_name(
     _ensure_schema(kb._conn)
     import json
 
+    key = {"entry_va": entry_va}
+    old = _snapshot_row(kb, "function_names", key) if set_by == "manual" else None
+
     cur = kb._conn.cursor()
     cur.execute(
         "INSERT OR REPLACE INTO function_names "
@@ -445,6 +683,9 @@ def set_function_name(
             json.dumps(aliases or []), set_by, int(time.time()),
         ),
     )
+    if set_by == "manual":
+        new = _snapshot_row(kb, "function_names", key)
+        _record_undo(kb, "function_names", key, old, new, set_by)
     kb._conn.commit()
 
 
@@ -558,12 +799,18 @@ def set_comment(
     *, set_by: str = "manual",
 ) -> None:
     _ensure_schema(kb._conn)
+    key = {"va": va}
+    old = _snapshot_row(kb, "comments", key) if set_by == "manual" else None
+
     cur = kb._conn.cursor()
     cur.execute(
         "INSERT OR REPLACE INTO comments "
         "(binary_id, va, body, set_by, set_at) VALUES (?, ?, ?, ?, ?)",
         (kb.binary_id, va, body, set_by, int(time.time())),
     )
+    if set_by == "manual":
+        new = _snapshot_row(kb, "comments", key)
+        _record_undo(kb, "comments", key, old, new, set_by)
     kb._conn.commit()
 
 
@@ -624,6 +871,8 @@ def set_data_label(
     row = cur.fetchone()
     if row is not None and row[0] == "manual" and set_by != "manual":
         return
+    key = {"va": int(va)}
+    old = _snapshot_row(kb, "data_labels", key) if set_by == "manual" else None
     cur.execute(
         "INSERT OR REPLACE INTO data_labels "
         "(binary_id, va, name, c_type, size, set_by, set_at) "
@@ -633,6 +882,9 @@ def set_data_label(
             set_by, int(time.time()),
         ),
     )
+    if set_by == "manual":
+        new = _snapshot_row(kb, "data_labels", key)
+        _record_undo(kb, "data_labels", key, old, new, set_by)
     kb._conn.commit()
 
 
@@ -1856,6 +2108,11 @@ def set_stack_var(
         )
         kb._conn.commit()
         return
+    key = {"function_va": int(function_va), "offset": int(offset)}
+    old = (
+        _snapshot_row(kb, "stack_frame_vars", key) if set_by == "manual"
+        else None
+    )
     cur.execute(
         "INSERT OR REPLACE INTO stack_frame_vars "
         "(binary_id, function_va, offset, name, c_type, use_count, set_by, set_at) "
@@ -1865,6 +2122,9 @@ def set_stack_var(
             name, c_type, int(use_count), set_by, int(time.time()),
         ),
     )
+    if set_by == "manual":
+        new = _snapshot_row(kb, "stack_frame_vars", key)
+        _record_undo(kb, "stack_frame_vars", key, old, new, set_by)
     kb._conn.commit()
 
 

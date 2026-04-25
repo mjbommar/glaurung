@@ -20,6 +20,7 @@ from .commands.kickoff import KickoffCommand
 from .commands.patch import PatchCommand
 from .commands.verify_recovery import VerifyRecoveryCommand
 from .commands.export import ExportCommand
+from .commands.undo import UndoCommand, RedoCommand
 
 from .formatters import (
     TriageFormatter,
@@ -55,6 +56,8 @@ class GlaurungCLI:
             "patch": PatchCommand(),
             "verify-recovery": VerifyRecoveryCommand(),
             "export": ExportCommand(),
+            "undo": UndoCommand(),
+            "redo": RedoCommand(),
         }
 
         # Map commands to their formatters. The REPL is interactive and
@@ -79,6 +82,8 @@ class GlaurungCLI:
             "patch": TriageFormatter,
             "verify-recovery": TriageFormatter,
             "export": TriageFormatter,
+            "undo": TriageFormatter,
+            "redo": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:
