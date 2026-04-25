@@ -31,6 +31,9 @@ pub mod entropy;
 /// Analysis-time program and memory views
 pub mod analysis;
 
+/// Debug-info ingestion (DWARF, PDB)
+pub mod debug;
+
 /// Disassembly engines and adapters
 pub mod disasm;
 

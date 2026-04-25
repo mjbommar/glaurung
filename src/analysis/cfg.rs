@@ -8,6 +8,7 @@
 use crate::core::address::{Address, AddressKind};
 use crate::core::address_range::AddressRange;
 use crate::core::basic_block::BasicBlock;
+use crate::debug::dwarf::{extract_dwarf_functions, DwarfFunction};
 use crate::core::binary::{Arch as BArch, Endianness};
 use crate::core::call_graph::{CallGraph, CallGraphEdge, CallType};
 use crate::core::control_flow_graph::ControlFlowEdgeKind;
@@ -448,6 +449,59 @@ fn parse_function_seeds(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec
         .collect()
 }
 
+/// Apply DWARF subprogram entries on top of heuristically-discovered
+/// functions. When a DWARF entry matches an existing Function by entry
+/// VA, we override the name and chunk list (DWARF wins) and bump the
+/// parameter count into the signature field. Functions with no DWARF
+/// match are left alone.
+///
+/// We do NOT yet add brand-new Functions for DWARF entries that the
+/// heuristic discovery missed — that's a v1.5 follow-up. v1's measurable
+/// win is: every -g function gets its real name and authoritative
+/// chunk list, so the chunk-merge band-aid stops being load-bearing.
+fn apply_dwarf_overrides(data: &[u8], functions: &mut [Function]) -> usize {
+    let entries = extract_dwarf_functions(data);
+    if entries.is_empty() {
+        return 0;
+    }
+    use std::collections::HashMap;
+    let mut by_va: HashMap<u64, &DwarfFunction> = HashMap::new();
+    for e in &entries {
+        by_va.entry(e.entry_va).or_insert(e);
+    }
+
+    let mut applied = 0usize;
+    for f in functions.iter_mut() {
+        let bits = if f.entry_point.bits == 64 { 64 } else { 32 };
+        let dw = match by_va.get(&f.entry_point.value) {
+            Some(d) => *d,
+            None => continue,
+        };
+        if let Some(name) = &dw.name {
+            f.name = name.clone();
+        }
+        // Replace chunks with the DWARF set — they're authoritative.
+        let mut new_chunks: Vec<AddressRange> = Vec::new();
+        for r in &dw.chunks {
+            if let Ok(start) = Address::new(AddressKind::VA, r.start, bits, None, None) {
+                if let Ok(rng) = AddressRange::new(start, r.size, None) {
+                    new_chunks.push(rng);
+                }
+            }
+        }
+        if !new_chunks.is_empty() {
+            f.chunks = new_chunks.clone();
+            f.range = Some(new_chunks[0].clone());
+            f.size = Some(new_chunks[0].size);
+        }
+        if dw.param_count > 0 && f.signature.is_none() {
+            f.signature = Some(format!("fn({} args)", dw.param_count));
+        }
+        applied += 1;
+    }
+    applied
+}
+
 /// Compiler-emitted suffixes that mark a separate symbol as belonging to
 /// the same logical function as `<base>`. The first match wins per child;
 /// `<base>` is everything before the suffix in the raw symbol name.
@@ -612,9 +666,20 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         }
     }
 
+    // Apply DWARF authoritative ground truth where available. DWARF
+    // gives us the canonical function name, multi-chunk address ranges
+    // (DW_AT_ranges), parameter count, and source language — all of
+    // which beat the heuristic discovery output on -g builds. We only
+    // *override* fields that DWARF has hard answers for; heuristic
+    // basic-block CFG and edges remain.
+    apply_dwarf_overrides(data, &mut functions);
+
     // Fold compiler-emitted split chunks (e.g. GCC -O2 `<fn>.cold`) into
     // their parent function's `chunks` list so downstream consumers see
-    // one logical function instead of N siblings.
+    // one logical function instead of N siblings. Runs after DWARF —
+    // DWARF chunks are already canonical, but a binary may have a mix
+    // (some functions DWARF-covered, some not), and this pass handles
+    // the heuristic side.
     merge_compiler_split_chunks(&mut functions);
 
     // Build callgraph using discovered functions where possible

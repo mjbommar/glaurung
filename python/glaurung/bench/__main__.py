@@ -75,6 +75,10 @@ DEFAULT_CI_MATRIX = [
     "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O2",
     "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-c-clang-O2",
     "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-cpp-clang++-O2",
+    # DWARF lift signal: the `-debug` build vs its sibling `-stripped` build
+    # of the same source. The debug version lights up because of #157.
+    "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug",
+    "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-stripped",
 ]
 
 
