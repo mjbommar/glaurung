@@ -23,6 +23,7 @@ from .commands.export import ExportCommand
 from .commands.undo import UndoCommand, RedoCommand
 from .commands.xrefs import XrefsCommand
 from .commands.frame import FrameCommand
+from .commands.string_xrefs import StringsXrefsCommand
 
 from .formatters import (
     TriageFormatter,
@@ -62,6 +63,7 @@ class GlaurungCLI:
             "redo": RedoCommand(),
             "xrefs": XrefsCommand(),
             "frame": FrameCommand(),
+            "strings-xrefs": StringsXrefsCommand(),
         }
 
         # Map commands to their formatters. The REPL is interactive and
@@ -90,6 +92,7 @@ class GlaurungCLI:
             "redo": TriageFormatter,
             "xrefs": TriageFormatter,
             "frame": TriageFormatter,
+            "strings-xrefs": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:
