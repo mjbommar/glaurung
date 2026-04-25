@@ -1,0 +1,12 @@
+build/
+build-*/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+/hello

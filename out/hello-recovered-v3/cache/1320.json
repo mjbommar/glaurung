@@ -1,0 +1,51 @@
+{
+  "_version": 3,
+  "entry_va": 4896,
+  "raw_name": "main.cold",
+  "demangled": "main.cold",
+  "short_name": "main_cold_unwind_cleanup",
+  "rejected_names": [
+    "main_cold",
+    "main_landing_pad",
+    "destroy_vector_and_resume"
+  ],
+  "role": "other",
+  "role_confidence": 0.6,
+  "c_prototype": "void main_cold(void) __attribute__((noreturn, cold));",
+  "docstring": "/**\n * @brief Cold/exception-cleanup partition of `main()` (compiler-generated).\n *\n * GCC's hot/cold function splitting emits the rarely-taken paths of `main`\n * into a separate `main.cold` symbol. In this binary the cold partition holds\n * the C++ exception landing pad for `main`: when an exception propagates out\n * of the try-region, control transfers here to destroy the local\n * `std::vector<std::string>` and then resume stack unwinding.\n *\n * Concretely, the body performs two actions:\n *   1. Invokes the base-object destructor of `std::vector<std::string>`\n *      (`_ZNSt6vector...D2Ev`) on the vector that lived in `main`'s frame.\n *   2. Tail-calls `_Unwind_Resume`, handing the in-flight exception object\n *      back to the libgcc/libunwind runtime so unwinding can continue past\n *      `main`.\n *\n * Because `_Unwind_Resume` never returns, this function never returns either;\n * it is marked `noreturn` and `cold`. It is not user code and is never called\n * directly \u2014 the personality routine dispatches to it via the `.gcc_except_table`\n * entry attached to `main`.\n *\n * @note The \"parameters\" shown in the decompiled pseudocode (`strings`,\n *       `exc_obj`) are not real arguments; the function takes no arguments\n *       and recovers the vector address and the in-flight exception object\n *       from `main`'s stack frame / the unwind context set up by the\n *       personality routine.\n * @note Despite appearing in the symbol table, this routine is unreachable\n *       on the normal-return path of `main`.\n *\n * @return This function does not return.\n */",
+  "source": "/*\n * main.cold \u2014 compiler-generated cold/exception-cleanup partition of main().\n *\n * GCC splits cold paths (typically the landing pads that run destructors when\n * an exception unwinds through main) into a separate `.cold` symbol.  The body\n * is therefore not \".rela.plt\" user code \u2014 it is just the unwind cleanup for a\n * `std::vector<std::string>` local in main().  It ends by re-raising the\n * in-flight exception (or calling _Unwind_Resume), which is why the symbol is\n * marked `noreturn`.\n *\n * There is no meaningful C-level rewrite: the pseudocode shows a destructor\n * call on the vector followed by a tail call into the unwind runtime.  We\n * reproduce that shape with an `extern \"C\"`-style stub.\n */\n\nextern void _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(void *self);\nextern void _Unwind_Resume(void *exc) __attribute__((noreturn));\n\nvoid main_cold(void) __attribute__((noreturn, cold));\n\nvoid main_cold(void)\n{\n    /*\n     * Cleanup landing pad for main(): destroy the local\n     * std::vector<std::string> and resume unwinding.\n     */\n    void *strings   = __builtin_frame_address(0);  /* placeholder for &local vector */\n    void *exc_obj   = __builtin_frame_address(0);  /* placeholder for in-flight exception */\n\n    _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(strings);\n    _Unwind_Resume(exc_obj);\n}\n",
+  "pseudocode": "fn main.cold {\n    0x12a0(stack_0);\n    0x1300(rbp);\n    rbp = var0;\n    0x1260(rbp, 40);\n    0x12a0(stack_0);\n    _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(stack_1);\n    0x12a0(stack_2);\n    0x1300(rbp);\n    0x12a0(rbp);\n    rbp = var0;\n    0x1260(rbp, 40);\n    goto L_134c;\n    _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(stack_1);\n    0x12a0(stack_2);\n    0x1300(rbp);\n    0x12a0(rbp);\n    rbp = var0;\n    0x1260(rbp, 40);\n    goto L_134c;\n}\n",
+  "assumptions": [
+    "Identified the function as a GCC-emitted .cold partition of main() \u2014 these are not user-written and contain only exception-cleanup landing pads. The 'function' has no real C source equivalent.",
+    "Interpreted the repeated 0x12a0/0x1300/0x1260 thunk calls as PLT stubs for __cxa_begin_catch/_Unwind_Resume/__cxa_end_catch family helpers based on the vector destructor sandwiched between them; the duplicated block is the second landing pad GCC emits for nested cleanup.",
+    "Replaced the mangled vector<string>::~vector call with a single explicit destructor invocation; collapsed the two duplicated landing-pad copies into one since both perform the same cleanup and only one is taken at runtime.",
+    "Used __builtin_frame_address placeholders for the strings vector and exception object pointers because the original frame layout (rbp-relative offsets) is not recoverable without the parent main() frame.",
+    "Dropped the goto L_134c control flow \u2014 both branches converge on identical cleanup, so it is an artifact of the compiler emitting two landing pads sharing a tail.",
+    "Marked the function noreturn/cold per the prototype; the terminating call is modeled as _Unwind_Resume which is the standard tail of a GCC cleanup landing pad."
+  ],
+  "rewrite_confidence": 0.35,
+  "equivalence_passed": false,
+  "divergences": [
+    "[low] other: LLM unavailable; equivalence could not be checked"
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BINARY_BLOB_3B",
+    "__gmon_start__": "SYM_GMON_START"
+  },
+  "variable_names": {
+    "stack_0": "arg",
+    "var0": "saved_rbp",
+    "stack_1": "strings",
+    "stack_2": "arg"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 21,
+  "trivial": false,
+  "stdlib": false,
+  "crt": false,
+  "retries": 0
+}

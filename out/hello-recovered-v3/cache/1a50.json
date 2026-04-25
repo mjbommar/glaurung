@@ -1,0 +1,59 @@
+{
+  "_version": 3,
+  "entry_va": 6736,
+  "raw_name": "_ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev",
+  "demangled": "std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > >::~vector()",
+  "short_name": "vector_string_destroy",
+  "rejected_names": [
+    "std_vector_string_dtor",
+    "destroy_string_vector",
+    "free_string_vector"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "void _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(std::vector<std::string> *this);",
+  "docstring": "/**\n * @brief Destructor for `std::vector<std::string>`; destroys every contained\n *        string and releases the vector's element storage.\n *\n * Reproduces the destructor that libstdc++ inlines for\n * `std::vector<std::basic_string<char>>`. The function walks the range\n * `[_M_start, _M_finish)` and destroys each `std::string` in place: if the\n * string's data pointer (`_M_dataplus._M_p`) does not point at its embedded\n * Small-String-Optimization buffer (`_M_local_buf`, located 16 bytes into the\n * string object), the heap buffer is released via `operator delete`. After all\n * elements have been destroyed, the element array itself is freed via the\n * sized form of `operator delete`, with the size computed from\n * `_M_end_of_storage - _M_start`.\n *\n * @param self  Pointer to the vector to destroy. Must not be NULL. The members\n *              `_M_start`, `_M_finish` and `_M_end_of_storage` describe the\n *              underlying storage; `_M_start == NULL` is handled and skips the\n *              final deallocation (matches an empty/never-allocated vector).\n *\n * @return None.\n *\n * @note This only destroys the contents \u2014 it does not free `self` itself. The\n *       vector object is left in an unspecified state and must not be reused.\n * @note Each contained string is assumed to be a libstdc++ C++11 ABI\n *       `std::string` (with a 16-byte SSO buffer at offset 16).\n */",
+  "source": "/*\n * std::vector<std::string>::~vector()\n *\n * Destroys every std::string element in the vector, then frees the\n * underlying storage. This mirrors what libstdc++ inlines for the\n * destructor of vector<basic_string<char>>:\n *\n *   for (string* p = _M_start; p != _M_finish; ++p)\n *       p->~basic_string();           // calls operator delete on the\n *                                     // heap buffer iff it is not the\n *                                     // SSO buffer (p + 16).\n *   if (_M_start)\n *       operator delete(_M_start, _M_end_of_storage - _M_start);\n */\nvoid std__vector_string__dtor(std__vector_string *self)\n{\n    std__string *first  = self->_M_start;\n    std__string *last   = self->_M_finish;\n\n    /* Destroy each contained std::string. */\n    for (std__string *p = first; p != last; ++p) {\n        /* basic_string stores a pointer to its data; if that pointer\n         * doesn't point at the embedded SSO buffer (p->_M_local_buf,\n         * which lives at offset 16 from the string object), the heap\n         * buffer must be released. */\n        if (p->_M_dataplus._M_p != (char *)&p->_M_local_buf) {\n            operator_delete(p->_M_dataplus._M_p);\n        }\n    }\n\n    /* Free the array of std::string objects, if any was allocated. */\n    if (first != NULL) {\n        size_t bytes = (size_t)((char *)self->_M_end_of_storage\n                              - (char *)first);\n        operator_delete(first, bytes);\n    }\n}\n",
+  "pseudocode": "fn _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev {\n    nop;\n    push(var0);\n    var0 = arg0;\n    push(rbp);\n    push(var1);\n    var1 = *&[arg0+0x8];\n    rbp = *&[arg0];\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a97;\n    }\n    nop;\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    L_1a70:\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    ret = stack_0;\n    0x1260();\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    L_1a8a:\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    rbp = *&[var0];\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    L_1a97:\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    arg1 = *&[var0+0x10];\n    pop(var1);\n    arg0 = rbp;\n    arg1 = (arg1 - rbp);\n    pop(rbp);\n    pop(var0);\n    goto L_1260;\n    L_1ab0:\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n}\n",
+  "assumptions": [
+    "The function is the standard libstdc++ inlined body of std::vector<std::string>::~vector(); reconstructed it as the canonical 'destroy each element, then deallocate storage' pattern.",
+    "The two duplicated `(rbp+16) == stack_top` compares are an artefact of the compiler peeling/duplicating the SSO check; collapsed into one `if (p->_M_dataplus._M_p != &p->_M_local_buf)` test inside the loop.",
+    "The `0x1260()` indirect call with a single pointer argument was identified as `operator delete(void*)` (the per-element string-buffer free); the tail-jump to `L_1260` with two arguments was identified as the sized `operator delete(void*, size_t)` for the vector's storage block.",
+    "Loop control variable `rbp` advances by 32 bytes per iteration, matching `sizeof(std::string)` in libstdc++ (ptr + size + 16-byte SSO union); rewrote as `++p` over `std__string*`.",
+    "`canary`/`var1` is just `_M_finish` loaded once before the loop, not a stack canary \u2014 renamed back to `last`/`_M_finish` for readability.",
+    "Removed the prologue/epilogue push/pop bookkeeping and the redundant duplicated SSO-check basic block as optimizer/peephole artefacts.",
+    "String-literal rename table (ELF, GNU, ld-linux, etc.) is unrelated to this function and was ignored.",
+    "Used placeholder type names `std__vector_string` / `std__string` and a free-standing `operator_delete` since the prompt requested C output for a C++ destructor."
+  ],
+  "rewrite_confidence": 0.78,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] control_flow: The original has two duplicated SSO-check compares (peeled iteration artifact); the rewrite collapses them to a single check inside the loop. Behaviourally equivalent for a normal loop iteration.",
+    "[low] dropped_call: Original tail-jumps to 0x1260 with (rbp, _M_end_of_storage - rbp) as args. Rewriter assumes 0x1260 is operator delete(void*, size_t) for the second call but operator delete(void*) for the per-element call \u2014 same target address with different signatures. This is the rewriter's interpretive choice; the actual call target is the same function in both cases, so if 0x1260 is truly only operator delete(void*), the rewrite changes signature. Likely correct (libstdc++ uses sized delete here), but ambiguous.",
+    "[low] other: Original passes only one argument (rbp loaded into arg0) to 0x1260 for the per-element free; rewrite matches. Note the second argument register (rsi) is not set, so this is consistent.",
+    "[low] other: Original computes `arg1 = *&[var0+0x10] - rbp` where rbp is the freshly-reloaded *self (i.e., _M_start), matching `_M_end_of_storage - _M_start`. Rewrite is equivalent.",
+    "[low] other: Stylistic; the rewriter declared this assumption."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BINARY_BLOB_3B",
+    "__gmon_start__": "SYM_GMON_START"
+  },
+  "variable_names": {
+    "var0": "frame_ptr",
+    "arg0": "ctx",
+    "var1": "canary",
+    "stack_0": "ret",
+    "t0": "base_ptr",
+    "arg1": "offset"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 64,
+  "trivial": false,
+  "stdlib": true,
+  "crt": false,
+  "retries": 0
+}

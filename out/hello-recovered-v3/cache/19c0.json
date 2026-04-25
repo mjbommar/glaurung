@@ -1,0 +1,60 @@
+{
+  "_version": 3,
+  "entry_va": 6592,
+  "raw_name": "_ZN10HelloWorld12printMessageEv",
+  "demangled": "HelloWorld::printMessage()",
+  "short_name": "print_message_and_count",
+  "rejected_names": [
+    "print_message",
+    "emit_message_line",
+    "log_message"
+  ],
+  "role": "wrapper",
+  "role_confidence": 0.55,
+  "c_prototype": "void HelloWorld_printMessage(HelloWorld *this);",
+  "docstring": "/**\n * @brief Prints the object's stored message to std::cout and bumps the call counter.\n *\n * Writes `this->message` (a std::string at offset 0x00) to standard output\n * followed by `std::endl` (newline + flush), then increments `this->call_count`\n * (a `long` at offset 0x20). The compiled body is the canonical g++ -O2\n * lowering of `std::cout << message << std::endl;` \u2014 it calls\n * `std::__ostream_insert` for the string insertion and inlines the `endl`\n * sequence (locate `std::cout`'s ctype<char> facet via the ios_base table at\n * +0xF0, test the facet's `do_widen` vtable slot at +0x38, then either widen\n * '\\n' + `sputc` + `flush` or take the fast path).\n *\n * @param this Pointer to the HelloWorld instance whose `message` is printed\n *             and whose `call_count` is incremented. Must be non-null and\n *             fully constructed (the embedded std::string is dereferenced).\n *\n * @return No value is returned.\n *\n * @note Has the side effects of writing to `std::cout` (which may flush) and\n *       mutating `this->call_count`. Not thread-safe with respect to either\n *       `std::cout` or the counter.\n *\n * @code\n *     HelloWorld hw;            // message initialized elsewhere\n *     HelloWorld_printMessage(&hw);\n * @endcode\n */",
+  "source": "/*\n * HelloWorld::printMessage()  (mangled: _ZN10HelloWorld12printMessageEv)\n *\n * The binary is C++; this file uses the `c` language tag only because the\n * caller requested it.  The body below is what the C++ source almost\n * certainly looked like before compilation.\n *\n *     class HelloWorld {\n *         std::string message;   // offset 0x00, sizeof == 0x20 in libstdc++\n *         long        call_count; // offset 0x20\n *     };\n *\n *     void HelloWorld::printMessage() {\n *         std::cout << this->message << std::endl;\n *         ++this->call_count;\n *     }\n *\n * The lowered code at offset 0x1280 is std::__ostream_insert (operator<<\n * for std::string), and the vtable / locale-ctype dance that follows\n * (load cout's vtable, fetch the virtual-base offset at [vt-0x18], index\n * into the ios_base at +0xF0 to get the ctype<char> facet, test the\n * facet's vtable slot at +0x38, then either widen('\\n') + sputc + flush\n * or take the fast path) is the canonical inlined expansion of\n * std::endl emitted by g++ at -O2.\n */\n\nvoid HelloWorld_printMessage(HelloWorld *this)\n{\n    std::cout << this->message << std::endl;\n    ++this->call_count;\n}\n",
+  "pseudocode": "fn _ZN10HelloWorld12printMessageEv {\n    nop;\n    push(var0);\n    push(rbp);\n    push(var1);\n    arg2 = *&[arg0+0x8];\n    var1 = arg0;\n    arg1 = *&[arg0];\n    arg0 = _ZSt4cout;\n    0x1280();\n    rbp = ret;\n    ret = *&[ret];\n    ret = *&[ret-0x18];\n    var0 = *&[rbp+ret+0xf0];\n    t0 = var0;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1a4b;\n    }\n    t10 = *&[var0+0x38];\n    %zf = (t10 == 0);\n    if (%zf) {\n        goto L_1a20;\n    }\n    unknown(movsx);\n    0x11b0(rbp);\n    0x1200(ret);\n    &[var1+0x20] = (*&[var1+0x20] + 1);\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n    L_1a03:\n    0x11b0(rbp);\n    0x1200(ret);\n    &[var1+0x20] = (*&[var1+0x20] + 1);\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n    L_1a20:\n    0x1290(var0);\n    ret = *&[var0];\n    ret = *&[ret+0x30];\n    %zf = (ret == arg2);\n    if (%zf) {\n        goto L_1a03;\n    }\n    ret(var0, 10, _ZNKSt5ctypeIcE8do_widenEc);\n    unknown(movsx);\n    goto L_1a03;\n    L_1a4b:\n    0x12b0();\n    nop;\n    push(var0);\n    var0 = arg0;\n    push(rbp);\n    push(var1);\n    var1 = *&[arg0+0x8];\n    rbp = *&[arg0];\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a97;\n    }\n    nop;\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    L_1a70:\n    arg0 = stack_top;\n    ret = (rbp + 16);\n    %zf = (arg0 == ret);\n    if (%zf) {\n        goto L_1a8a;\n    }\n    ret = stack_0;\n    0x1260();\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    L_1a8a:\n    rbp = (rbp + 32);\n    %zf = (var1 == rbp);\n    if (%zf) {\n        goto L_1a70;\n    }\n    rbp = *&[var0];\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    L_1a97:\n    t0 = rbp;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1ab0;\n    }\n    arg1 = *&[var0+0x10];\n    pop(var1);\n    arg0 = rbp;\n    arg1 = (arg1 - rbp);\n    pop(rbp);\n    pop(var0);\n    goto L_1260;\n    L_1ab0:\n    pop(var1);\n    pop(rbp);\n    pop(var0);\n    return;\n}\n",
+  "assumptions": [
+    "Function is C++ (HelloWorld::printMessage) but emitted under the `c` language tag as requested; the body uses C++ syntax because the binary's ABI (member function, std::cout, std::string layout, inlined std::endl) is fundamentally C++.",
+    "Field at offset 0 is std::string `message` (libstdc++ layout: _M_dataplus._M_p at 0, _M_string_length at 8). The call to sub_1280 with (cout, data_ptr, length) is std::__ostream_insert, i.e. operator<<(ostream&, const string&).",
+    "The vtable[-0x18] -> +0xF0 -> facet+0x38 test, followed by either a direct sputc('\\n')+flush or do_widen('\\n')+sputc+flush, is the canonical inlined std::endl idiom \u2014 collapsed both branches into `<< std::endl`.",
+    "Field at offset 0x20 incremented by 1 is named `call_count`; assumed to be a machine word (long). The previous pass flagged that picking `int` (32-bit) would mis-size the field, so I left it abstract in the prose and as `++this->call_count` in code.",
+    "Dropped the second function body starting at L_1a4b. It begins with a fresh prologue (`push/push/push`, new var0=arg0) after a tail call to sub_12B0, walks `[this+0]..[this+8]` in 32-byte strides freeing non-SSO buffers, then frees `[this+0..0x10]` \u2014 this is plainly `~vector<string>()` (or similar) for a *different* function that the decompiler concatenated onto printMessage. Keeping it would invent destructor behaviour that printMessage's prototype (void return, no further work after the increment) cannot have.",
+    "Removed register save/restore (push rbp/var0/var1, pop ...) as standard prologue/epilogue artefacts.",
+    "Collapsed the duplicated decompiler labels L_1a03 and the fall-through after the do_widen branch \u2014 both perform identical sputc+flush+increment+epilogue."
+  ],
+  "rewrite_confidence": 0.78,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] control_flow: The pseudocode contains a second prologue/body after L_1a4b that the rewriter intentionally drops as a decompiler artefact (likely a different function concatenated). This appears to be a reasonable interpretation: printMessage proper ends with the epilogue at the first `return`, and L_1a4b is reached only via the `goto L_1a4b` taken when `var0` (the ctype facet pointer) is null \u2014 which in the canonical std::endl idiom does not occur. However, strictly speaking the original code does have a `goto L_1a4b` path; collapsing it under the `<< std::endl` abstraction means the null-facet path is no longer modelled.",
+    "[low] other: Original increments an 8-byte word at [this+0x20] (`*&[var1+0x20] = *&[var1+0x20] + 1` with no width qualifier; default machine word). Rewriter declares it as `long call_count`, which matches a 64-bit machine word. Acceptable.",
+    "[low] other: Rewriter folds the inlined std::endl expansion (vtable load, facet test, sputc+flush, optional do_widen) into a single `<< std::endl`. This is the canonical g++ inlining and is observably equivalent."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BINARY_BLOB_3B",
+    "__gmon_start__": "SYM_GMON_START"
+  },
+  "variable_names": {
+    "var0": "obj",
+    "var1": "obj",
+    "arg2": "expected",
+    "arg0": "pair_ptr",
+    "arg1": "offset",
+    "t0": "tmp",
+    "t10": "flags",
+    "stack_0": "ret"
+  },
+  "constant_labels": {
+    "0x12b0": "sub_12B0()"
+  },
+  "loop_idioms": [],
+  "lines": 116,
+  "trivial": false,
+  "stdlib": false,
+  "crt": false,
+  "retries": 1
+}

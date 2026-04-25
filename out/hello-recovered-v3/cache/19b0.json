@@ -1,0 +1,19 @@
+{
+  "_version": 3,
+  "entry_va": 6576,
+  "raw_name": "_ZNKSt5ctypeIcE8do_widenEc",
+  "demangled": "std::ctype<char>::do_widen(char) const",
+  "short_name": "std_ctype_char_do_widen_char_const",
+  "role": "wrapper",
+  "role_confidence": 0.8,
+  "c_prototype": "void std_ctype_char_do_widen_char_const(void);",
+  "source": "fn _ZNKSt5ctypeIcE8do_widenEc {\n    nop;\n    return arg1;\n}\n",
+  "assumptions": [],
+  "rewrite_confidence": 0.2,
+  "equivalence_passed": true,
+  "divergences": [],
+  "lines": 4,
+  "trivial": true,
+  "stdlib": true,
+  "crt": false
+}

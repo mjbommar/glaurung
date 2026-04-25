@@ -110,7 +110,7 @@ from glaurung.llm.tools.write_readme_and_manpage import (
 # Constants
 # -----------------------------------------------------------------------------
 
-CACHE_VERSION = 2  # bump to invalidate old caches when the schema changes
+CACHE_VERSION = 3  # source post-processing happens at emission, not in cache
 
 # Mangled-name prefixes that indicate a C++ stdlib template instantiation —
 # these functions are inlined copies of libstdc++/libc++ code, not user code,
@@ -124,6 +124,18 @@ _CRT_FUNCTION_NAMES = frozenset({
     "_start", "deregister_tm_clones", "register_tm_clones",
     "__do_global_dtors_aux", "frame_dummy", "_GLOBAL__sub_I_main",
     "__libc_csu_init", "__libc_csu_fini",
+})
+
+# Names that the linker / runtime resolves by exact symbol — the rewriter
+# is not allowed to rename these even when post-rewrite naming proposes
+# something more descriptive. Without this protection, `main` gets
+# renamed to e.g. `run_greeter_and_sum_args`, the audit reports `main`
+# as missing, and the resulting binary will not link.
+_RESERVED_FUNCTION_NAMES = frozenset({
+    "main", "_start", "_init", "_fini",
+    "__libc_start_main", "__libc_csu_init", "__libc_csu_fini",
+    "__do_global_dtors_aux", "_GLOBAL__sub_I_main",
+    "deregister_tm_clones", "register_tm_clones", "frame_dummy",
 })
 
 
@@ -240,6 +252,97 @@ def _def_use_slice(pseudocode: str, var: str, max_lines: int = 8) -> List[str]:
             if len(slice_) >= max_lines:
                 break
     return slice_
+
+
+_QUOTED_STRING_RE = re.compile(r'"((?:[^"\\]|\\.){2,})"')
+
+
+def _restore_pool_literals(source: str, pool: Dict[str, str]) -> str:
+    """Replace quoted strings in rewritten source with the closest exact
+    match from the triage string pool.
+
+    The LLM tends to paraphrase string literals — e.g. emitting
+    ``"Hello, C++!"`` when the pool actually contains ``"Hello, World fro"``.
+    We scan every quoted string in the rewritten source and, when its
+    text is meaningfully similar to a pool entry (SequenceMatcher ratio
+    ≥ 0.55) and the pool entry is at least as long as the rewrite's
+    string, substitute the pool entry. Refuses the swap when the LLM's
+    string is already an exact pool entry, to avoid undoing a correct
+    rewrite. Threshold deliberately conservative — false positives mean
+    we'd replace a legitimate string the rewriter chose.
+    """
+    if not pool:
+        return source
+    import difflib
+    pool_texts = list(pool.keys())
+
+    def _replace(m: "re.Match[str]") -> str:
+        rewrite_str = m.group(1)
+        if rewrite_str in pool_texts:
+            return m.group(0)  # already exact; leave alone.
+        # Find best pool match.
+        best, best_ratio = None, 0.0
+        for p in pool_texts:
+            r = difflib.SequenceMatcher(None, rewrite_str, p).ratio()
+            if r > best_ratio:
+                best, best_ratio = p, r
+        if best is None or best_ratio < 0.55:
+            return m.group(0)
+        # Refuse to substitute a *shorter* pool entry than the rewrite —
+        # that usually means the rewrite has more content than the
+        # truncated pool literal (e.g. rewrite "Hello, World!" vs pool
+        # "Hello, World fro" — keep the rewrite, the pool is broken).
+        if len(best) < len(rewrite_str) - 4:
+            return m.group(0)
+        # Escape any embedded quotes / backslashes.
+        escaped = best.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    return _QUOTED_STRING_RE.sub(_replace, source)
+
+
+_POOL_SYM_RE = re.compile(r"\b([A-Z][A-Z0-9_]{3,})\b")
+
+
+def _collect_pool_references(source: str, pool_by_symbol: Dict[str, str]) -> Dict[str, str]:
+    """Find every pool symbol that appears in the source.
+
+    Returns a {symbol: literal} map containing only the entries actually
+    referenced — so the emitted strings.h header is minimal.
+    """
+    found: Dict[str, str] = {}
+    for m in _POOL_SYM_RE.finditer(source):
+        sym = m.group(1)
+        if sym in pool_by_symbol and sym not in found:
+            found[sym] = pool_by_symbol[sym]
+    return found
+
+
+_THIS_PARAM_RE = re.compile(
+    r"(\(\s*[^)]*?\b)this(\s*\)\s*\{)",
+    re.DOTALL,
+)
+
+
+def _rewrite_this_to_self(source: str) -> str:
+    """Rename ``*this`` parameters to ``*self``, since ``this`` is a C++
+    keyword and cannot be used as a parameter name in a free function.
+
+    The rewriter emits lines like ``void HelloWorld_print(HelloWorld *this) {``
+    which won't compile in C++. We rename the parameter to ``self`` and
+    rewrite ``this->`` references in the body. Only applies when the
+    function's body actually uses ``this->`` — avoids spurious renames in
+    real member functions where ``this`` is implicit.
+    """
+    if "this)" not in source:
+        return source
+    # Quick guard: only act when there's a `*this)` parameter pattern.
+    if not re.search(r"\*\s*this\b\s*\)", source):
+        return source
+    out = source
+    out = re.sub(r"\*\s*this\b(\s*\))", r"*self\1", out)
+    out = out.replace("this->", "self->")
+    return out
 
 
 _HEX_RE = re.compile(r"\b0x([0-9a-fA-F]{3,})\b")
@@ -567,7 +670,9 @@ def recover_function(
     except Exception:
         role, role_confidence = "other", 0.2
 
-    # Rewrite (first pass).
+    # Rewrite (first pass). Post-processing (literal restore + this→self
+    # rename) happens at emission time, not here, so the cache is stable
+    # across orchestrator iteration — only raw rewriter output is cached.
     rewrite_res = _rewrite(
         ctx, entry_va, pseudocode, c_prototype, role,
         target_language, evidence,
@@ -641,6 +746,16 @@ def recover_function(
     except Exception:
         canonical_name = _safe_filename(demangled)
         rejected = []
+
+    # Protect linker-visible canonical names: even if the post-rewrite
+    # naming proposed something more descriptive, the binary will not
+    # link unless `main` stays `main`, etc. The proposed name is moved
+    # into rejected_candidates so it is still visible in the rewrite
+    # notes — just not used as the emitted identifier.
+    if raw_name in _RESERVED_FUNCTION_NAMES and canonical_name != raw_name:
+        if canonical_name and canonical_name not in rejected:
+            rejected.insert(0, canonical_name)
+        canonical_name = raw_name
 
     summary = {
         "_version": CACHE_VERSION,
@@ -973,10 +1088,14 @@ def main() -> int:
                 ),
             )
             if rec.reconciled.canonical_name != s["short_name"]:
-                s.setdefault("aliases", []).extend(
-                    [s["short_name"], *rec.reconciled.aliases]
-                )
-                s["short_name"] = rec.reconciled.canonical_name
+                # Reserved names override any reconciliation result.
+                if s["raw_name"] in _RESERVED_FUNCTION_NAMES:
+                    pass
+                else:
+                    s.setdefault("aliases", []).extend(
+                        [s["short_name"], *rec.reconciled.aliases]
+                    )
+                    s["short_name"] = rec.reconciled.canonical_name
         except Exception as e:
             _log(f"    reconcile failed for {s['raw_name']}: {e}")
 
@@ -988,6 +1107,7 @@ def main() -> int:
                 identifiers=[
                     IdentifierEntry(current=s["short_name"], kind="function")
                     for s in user_summaries
+                    if s["raw_name"] not in _RESERVED_FUNCTION_NAMES
                 ],
                 preferred_style_functions="snake_case",
                 project_prefix=None,
@@ -995,6 +1115,8 @@ def main() -> int:
             ),
         )
         for s in user_summaries:
+            if s["raw_name"] in _RESERVED_FUNCTION_NAMES:
+                continue
             if s["short_name"] in gn.map.renames:
                 s["short_name"] = gn.map.renames[s["short_name"]]
     except Exception as e:
@@ -1065,6 +1187,18 @@ def main() -> int:
         if s["entry_va"] not in module_of_va:
             module_of_va[s["entry_va"]] = default_mod
 
+    # Pair `<fn>.cold` with its parent `<fn>` — GCC -O2 splits the cold
+    # path of a function into a separate symbol, but the two halves
+    # belong in the same source file so an exception path is readable.
+    by_raw_name = {s["raw_name"]: s for s in user_summaries}
+    for s in user_summaries:
+        if not s["raw_name"].endswith(".cold"):
+            continue
+        parent_name = s["raw_name"][: -len(".cold")]
+        parent = by_raw_name.get(parent_name)
+        if parent is not None:
+            module_of_va[s["entry_va"]] = module_of_va[parent["entry_va"]]
+
     def _rewrite_extension(path: str) -> str:
         p = Path(path)
         return str(p.with_suffix(f".{file_ext}"))
@@ -1074,10 +1208,60 @@ def main() -> int:
         grouped.setdefault(_rewrite_extension(mod), []).append(fn_by_va[va])
 
     includes_for_lang = {
-        "c": ["#include <stdio.h>", "#include <stdlib.h>", "#include <string.h>"],
-        "cpp": ['#include <cstdio>', '#include <cstdlib>', '#include <cstring>',
-                '#include <iostream>', '#include <string>', '#include <vector>'],
+        "c": [
+            "#include <stdio.h>", "#include <stdlib.h>", "#include <string.h>",
+            "#include <stdint.h>",
+        ],
+        "cpp": [
+            "#include <cstdio>", "#include <cstdlib>", "#include <cstring>",
+            "#include <cstdint>",  # uint32_t is used by inline-immediate reconstructions
+            "#include <iostream>", "#include <string>", "#include <vector>",
+        ],
     }.get(file_ext, ["#include <stdio.h>"])
+
+    # Apply post-processing to every cached source body before emission:
+    # 1. Restore exact pool literals where the LLM paraphrased.
+    # 2. Rename `*this` parameters to `*self` (C++ keyword collision).
+    # We mutate s["emit_source"] rather than s["source"] so the cache
+    # entry remains untouched and re-runnable.
+    for members in grouped.values():
+        for s in members:
+            post = _restore_pool_literals(s["source"], string_pool)
+            post = _rewrite_this_to_self(post)
+            s["emit_source"] = post
+
+    # Build pool-symbol → literal map keyed by SCREAMING_SNAKE_CASE name.
+    # Walk every emitted source body (post-processed), find references,
+    # and emit only the ones actually used into src/strings.h. Bug F.
+    pool_by_symbol: Dict[str, str] = {sym: text for text, sym in string_pool.items()}
+    used_symbols: Dict[str, str] = {}
+    for members in grouped.values():
+        for s in members:
+            used_symbols.update(_collect_pool_references(s["emit_source"], pool_by_symbol))
+
+    strings_header = ""
+    if used_symbols:
+        strings_header_path = out_dir / "src" / "strings.h"
+        strings_header_path.parent.mkdir(parents=True, exist_ok=True)
+        h_lines = [
+            "// src/strings.h",
+            "// Auto-generated string-pool symbols extracted from .rodata.",
+            "// Each entry is referenced by SCREAMING_SNAKE_CASE name in the",
+            "// recovered source bodies.",
+            "#pragma once",
+            "",
+        ]
+        for sym, text in sorted(used_symbols.items()):
+            escaped = (
+                text.replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t")
+            )
+            h_lines.append(f'static const char {sym}[] = "{escaped}";')
+        strings_header_path.write_text("\n".join(h_lines) + "\n")
+        strings_header = '#include "strings.h"'
 
     for mod_path, members in grouped.items():
         target = out_dir / mod_path
@@ -1087,47 +1271,95 @@ def main() -> int:
             f"// Recovered from {Path(binary_path).name} by glaurung source-recovery",
             "",
             *includes_for_lang,
-            "",
         ]
+        if strings_header and target.parent.name == "src":
+            buf.append(strings_header)
+        buf.append("")
         for s in members:
             if s.get("docstring"):
                 buf.append(s["docstring"])
-            buf.append(s["source"])
+            buf.append(s.get("emit_source", s["source"]))
             buf.append("")
         target.write_text("\n".join(buf))
 
-    # CRT module (single crtstuff file).
+    # CRT module — emitted as a markdown notes file rather than source.
+    #
+    # The recovered CRT bodies use compiler-internal identifiers that are
+    # not legal C/C++ (e.g. GCC's `completed.0` static), reference symbols
+    # that only the dynamic linker knows about (`__dso_handle`,
+    # `__cxa_finalize`), and would link as duplicates of the real
+    # libgcc/crtbegin.o symbols anyway. Writing them as `.cpp` produced
+    # nothing buildable; writing them as documentation preserves the
+    # information without polluting the build.
     if crt_summaries:
-        crt_path = out_dir / f"crt/crtstuff.{file_ext}"
-        crt_path.parent.mkdir(parents=True, exist_ok=True)
-        buf = [
-            f"// crt/crtstuff.{file_ext}",
-            "// Toolchain runtime scaffolding extracted from the binary.",
-            "// These routines are normally supplied by libgcc; shipped here",
-            "// only for reference and audit — do not link alongside the real",
-            "// crtstuff or you will get duplicate _ITM_* / __cxa_finalize.",
+        crt_doc = out_dir / "crt" / "CRTSTUFF.md"
+        crt_doc.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# CRT scaffolding (documentation only)",
             "",
-            *includes_for_lang,
+            "These functions were emitted into the binary by the toolchain",
+            "(libgcc / crtbegin.o / crtend.o). They are recovered here for",
+            "reference; the build does **not** include them — the real",
+            "runtime objects are linked by the C++ driver.",
             "",
         ]
         for s in crt_summaries:
+            lines.append(f"## `{s['raw_name']}`  @ `0x{s['entry_va']:x}`")
+            lines.append("")
+            lines.append(f"- Demangled: `{s['demangled']}`")
+            lines.append(f"- Role: `{s.get('role', 'other')}`")
+            lines.append(
+                f"- Confidence: {s.get('rewrite_confidence', 0.0):.2f}"
+            )
+            lines.append("")
             if s.get("docstring"):
-                buf.append(s["docstring"])
-            buf.append(s["source"])
-            buf.append("")
-        crt_path.write_text("\n".join(buf))
+                # Strip Doxygen `/** */` framing for the markdown body.
+                doc = re.sub(r"^\s*/\*+\s*", "", s["docstring"])
+                doc = re.sub(r"\s*\*+/\s*$", "", doc)
+                doc = re.sub(r"^\s*\*\s?", "", doc, flags=re.MULTILINE)
+                lines.append(doc.strip())
+                lines.append("")
+            lines.append("```")
+            lines.append(s["source"])
+            lines.append("```")
+            lines.append("")
+        crt_doc.write_text("\n".join(lines))
 
-    # Build files.
+    # Build files. Filter out anything that looks like source code — the
+    # LLM occasionally emits a placeholder src/main.cpp alongside the
+    # CMakeLists, which would clobber the real recovered source we just
+    # wrote. Only accept build-control filetypes here.
+    _BUILD_CONTROL_SUFFIXES = {
+        ".txt", ".toml", ".cfg", ".ini", ".cmake", ".mk", ".am",
+        ".in", "", ".gradle", ".lock",
+    }
     if bs is not None:
         for bf in bs.build.files:
+            ext = Path(bf.path).suffix.lower()
+            if ext not in _BUILD_CONTROL_SUFFIXES and Path(bf.path).name not in (
+                "Makefile", "GNUmakefile", "BUILD", "BUILD.bazel",
+                "go.mod", "go.sum",
+            ):
+                _log(f"  skipping non-build file from build tool: {bf.path}")
+                continue
             (out_dir / bf.path).write_text(bf.content)
 
-    # README / manpage.
+    # README / manpage. Defensive against malformed LLM output that
+    # pydantic-ai couldn't coerce into the expected schema — sometimes
+    # the agent returns a string instead of the structured bundle.
     if doc is not None:
-        (out_dir / "README.md").write_text(doc.docs.readme)
-        man_dir = out_dir / "man"
-        man_dir.mkdir(exist_ok=True)
-        (man_dir / f"{project_name}.1").write_text(doc.docs.manpage)
+        try:
+            readme = doc.docs.readme
+            manpage = doc.docs.manpage
+        except AttributeError:
+            # Tool returned something unexpected; skip docs rather than crash.
+            readme = manpage = None
+            _log("  README: unexpected return shape from doc tool, skipping")
+        if readme is not None:
+            (out_dir / "README.md").write_text(readme)
+            man_dir = out_dir / "man"
+            man_dir.mkdir(exist_ok=True)
+            (man_dir / f"{project_name}.1").write_text(manpage)
 
     # Audit.
     _log("auditing tree…")

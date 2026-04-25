@@ -1,0 +1,53 @@
+{
+  "_version": 3,
+  "entry_va": 6304,
+  "raw_name": "register_tm_clones",
+  "demangled": "register_tm_clones",
+  "short_name": "register_tm_clones",
+  "rejected_names": [
+    "register_tm_clone_table",
+    "init_tm_clones",
+    "tm_clone_register"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "static void register_tm_clones(void);",
+  "docstring": "/**\n * @brief Register the module's transactional-memory clone table with the ITM runtime.\n *\n * Computes the number of entries in the TM clone table as\n * `(__TMC_END__ - __TMC_LIST__) / sizeof(void *)`. If the table is empty, or if\n * the GCC transactional-memory runtime hook `_ITM_registerTMCloneTable` is not\n * present (i.e. resolves to NULL via its weak reference), the function returns\n * without doing anything. Otherwise it forwards `__TMC_LIST__` and the computed\n * size to `_ITM_registerTMCloneTable` so the runtime can track this module's\n * transactional clones.\n *\n * This is part of the standard CRT startup glue emitted by the compiler\n * (paired with `deregister_tm_clones`) and is normally invoked from a\n * `.init_array` constructor at program / shared-object load time; it is not\n * intended to be called directly by user code.\n *\n * @note `_ITM_registerTMCloneTable` is referenced as a weak symbol, so its\n *       absence at link/load time is handled gracefully via the NULL check.\n * @note The symbols `__TMC_LIST__` and `__TMC_END__` delimit the TM clone\n *       table for the current module.\n */",
+  "source": "static void register_tm_clones(void)\n{\n    ptrdiff_t size = (__TMC_END__ - __TMC_LIST__) / sizeof(void *);\n\n    if (size == 0)\n        return;\n\n    if (_ITM_registerTMCloneTable == NULL)\n        return;\n\n    _ITM_registerTMCloneTable(__TMC_LIST__, size);\n}",
+  "pseudocode": "fn register_tm_clones {\n    arg0 = __TMC_END__;\n    arg1 = __TMC_END__;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret = *&[var0+0x3ff0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret();\n    L_18d8:\n    return;\n}\n",
+  "assumptions": [
+    "This is the standard GCC-emitted register_tm_clones crtstuff function; reconstructed from the canonical idiom rather than literal pseudocode transcription.",
+    "The arithmetic '(size>>63) + (size>>3); >>1' is the compiler's signed division by 16 (sizeof(void*)*2) idiom; rendered as plain pointer subtraction divided by element size.",
+    "The pseudocode shows a single subtraction between __TMC_END__ and itself which is clearly a decompiler artifact; the real second operand is __TMC_LIST__ (the start symbol typical for this crt function).",
+    "The indirect call through *(ret+0x3ff0) is the GOT slot for _ITM_registerTMCloneTable; rendered as a direct weak-symbol NULL check and call.",
+    "Dropped the redundant register-shuffle dead stores (ret = arg1, then arg1 reassigned) as optimizer artefacts.",
+    "String-literal rename table was not relevant to this function and was ignored."
+  ],
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": false,
+  "divergences": [
+    "[low] changed_constant: The pseudocode arithmetic is signed division by 16 ((x>>63 + x>>3) >> 1 = x/16), but sizeof(void*) = 8, not 16. The canonical crtstuff idiom divides by sizeof(void*)*2 = 16. The rewrite uses sizeof(void *) (8) which doubles the resulting size value compared to the original. Note: the rewriter's own assumption acknowledges 'sizeof(void*)*2' but the code uses sizeof(void *).",
+    "[medium] other: The pseudocode literally shows __TMC_END__ - __TMC_END__ (always zero), which would make the first zero check always true and the function a no-op. The rewriter substituted __TMC_LIST__ as the second operand based on the canonical idiom assumption. If the pseudocode is accurate, this is a behavioral change (function would early-return on first check; in rewrite it may proceed).",
+    "[low] other: Indirect call through GOT slot rendered as direct weak symbol reference; semantically equivalent under the standard crtstuff idiom assumption."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BINARY_BLOB_3B",
+    "__gmon_start__": "SYM_GMON_START"
+  },
+  "variable_names": {
+    "arg0": "start",
+    "arg1": "size",
+    "var0": "ret",
+    "t0": "ret"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 22,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

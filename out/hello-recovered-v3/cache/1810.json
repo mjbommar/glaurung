@@ -1,0 +1,51 @@
+{
+  "_version": 3,
+  "entry_va": 6160,
+  "raw_name": "_GLOBAL__sub_I_main",
+  "demangled": "_GLOBAL__sub_I_main",
+  "short_name": "_GLOBAL__sub_I_main",
+  "rejected_names": [
+    "init_iostreams_global",
+    "global_sub_initializer",
+    "register_iostream_init",
+    "static_init_main"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "static void _GLOBAL__sub_I_main(void);",
+  "docstring": "/**\n * @brief Global static initializer for the translation unit containing main().\n *\n * Compiler-generated constructor (named via the `_GLOBAL__sub_I_` prefix) that\n * runs before main() to perform static initialization for this translation\n * unit. It constructs the file-scope `std::ios_base::Init` object\n * `_ZStL8__ioinit`, which is the standard mechanism by which including\n * <iostream> guarantees that the standard streams (std::cin, std::cout,\n * std::cerr, std::clog and their wide counterparts) are initialized before\n * first use.\n *\n * After construction, it registers the matching `~Init` destructor with\n * `__cxa_atexit`, tied to `__dso_handle`, so the streams are flushed and\n * torn down when this DSO is unloaded or the program exits.\n *\n * @note This function takes no parameters and returns no value. It is\n *       emitted automatically by the C++ front-end and placed in the\n *       `.init_array` (or equivalent) section; it is not intended to be\n *       called by user code.\n * @note `_ZStL8__ioinit` is the mangled name of the TU-local\n *       `std::ios_base::Init __ioinit` sentinel object that <iostream>\n *       defines in every translation unit that includes it.\n *\n * @see std::ios_base::Init\n * @see __cxa_atexit\n */",
+  "source": "static void _GLOBAL__sub_I_main(void)\n{\n    std::ios_base::Init::Init(&_ZStL8__ioinit);\n    __cxa_atexit(&std::ios_base::Init::~Init, &_ZStL8__ioinit, &__dso_handle);\n}\n",
+  "pseudocode": "fn _GLOBAL__sub_I_main {\n    nop;\n    push(rbp);\n    rbp = _ZStL8__ioinit;\n    0x12d0(rbp);\n    arg0 = *&[var0+0x3ff8];\n    arg1 = rbp;\n    pop(rbp);\n    arg2 = __dso_handle;\n    goto L_1230;\n}\n",
+  "assumptions": [
+    "This is the standard libstdc++ global static initializer emitted for any TU that includes <iostream>; the call at 0x12d0 is std::ios_base::Init::Init() on _ZStL8__ioinit and the tail-call at 0x1230 is __cxa_atexit registering the matching destructor.",
+    "The stack-canary load (*(canary+0x3ff8)) and rbp save/restore are compiler-emitted prologue/epilogue artefacts and have been omitted from the rewritten source.",
+    "The variable renames stack_canary/frame_ptr/dso_handle describe register usage at the tail-call boundary, not user-visible arguments; only __dso_handle survives into the source as the third argument to __cxa_atexit.",
+    "String-literal renames (ELF_MAGIC_STR, LD_LINUX_X86_64_PATH, etc.) belong to other sections of the binary and are not referenced by this constructor; they were ignored.",
+    "Mixed C/C++ symbols (std::ios_base::Init) are written in C++ syntax even though the requested target language is C, because the underlying ABI calls cannot be expressed in pure C without name-mangled extern declarations."
+  ],
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": false,
+  "divergences": [
+    "[low] other: LLM unavailable; equivalence could not be checked"
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BINARY_BLOB_3B",
+    "__gmon_start__": "SYM_GMON_START"
+  },
+  "variable_names": {
+    "arg0": "stack_canary",
+    "var0": "canary",
+    "arg1": "frame_ptr",
+    "arg2": "dso_handle"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 11,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

@@ -1,0 +1,49 @@
+{
+  "_version": 3,
+  "entry_va": 6432,
+  "raw_name": "frame_dummy",
+  "demangled": "frame_dummy",
+  "short_name": "frame_dummy",
+  "rejected_names": [
+    "init_frame_dummy",
+    "call_register_tm_clones",
+    "ctor_stub"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.98,
+  "c_prototype": "static void frame_dummy(void);",
+  "docstring": "/**\n * @brief Compiler-generated initialization stub invoked at program startup.\n *\n * This function is emitted automatically by the toolchain (placed in the\n * .init_array / .ctors section) and is run before main() as part of the C\n * runtime startup sequence. Its sole job is to delegate to\n * register_tm_clones(), which sets up Transactional Memory clone tables\n * when supported.\n *\n * @note This is not user code; it is produced by GCC and should not be\n *       called or modified directly. It takes no arguments and returns\n *       no value.\n */",
+  "source": "static void frame_dummy(void)\n{\n    register_tm_clones();\n}",
+  "pseudocode": "fn frame_dummy {\n    arg0 = __TMC_END__;\n    arg1 = __TMC_END__;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret = *&[var0+0x3ff0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_18d8;\n    }\n    ret();\n    L_18d8:\n    return;\n    nop;\n    goto L_18a0;\n}\n",
+  "assumptions": [
+    "This is the standard glibc crt frame_dummy function, which is typically compiled to a tail call into register_tm_clones(); the pseudocode body shown actually appears to be the body of register_tm_clones itself (computes (__TMC_END__ - __TMC_END__)/8 ... ), but the prototype labels it frame_dummy.",
+    "Treated the indirect call through __TMC_END__[0] and the size/2 computation as the well-known register_tm_clones idiom rather than reproducing it literally.",
+    "Dropped optimizer artefacts: shifted-by-63 sign correction for signed division by 8, and the unreachable goto L_18a0 after return."
+  ],
+  "rewrite_confidence": 0.6,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: The pseudocode shown appears to be the body of register_tm_clones (computes (__TMC_END__ - __TMC_END__)/8/2 and indirect-calls *__TMC_END__) rather than frame_dummy proper. The rewrite collapses this to a single tail call to register_tm_clones(), which is the standard glibc crt idiom and behaviorally equivalent.",
+    "[low] control_flow: Unreachable goto after return was dropped. No observable behavior change."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BINARY_BLOB_3B",
+    "__gmon_start__": "SYM_GMON_START"
+  },
+  "variable_names": {
+    "arg0": "start",
+    "arg1": "size",
+    "var0": "ret",
+    "t0": "ret"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 24,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

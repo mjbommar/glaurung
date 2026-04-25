@@ -1,0 +1,52 @@
+{
+  "_version": 3,
+  "entry_va": 6368,
+  "raw_name": "__do_global_dtors_aux",
+  "demangled": "__do_global_dtors_aux",
+  "short_name": "__do_global_dtors_aux",
+  "rejected_names": [
+    "do_global_dtors_aux",
+    "run_global_destructors",
+    "finalize_module",
+    "cxa_finalize_once"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.99,
+  "c_prototype": "static void __do_global_dtors_aux(void);",
+  "docstring": "/**\n * @brief Runs global destructors exactly once at program/shared-object teardown.\n *\n * Compiler-generated finalization routine placed in the `.fini_array` section\n * (the counterpart to `frame_dummy` in `.init_array`). It is invoked\n * automatically by the dynamic loader / C runtime when the module is being\n * unloaded (program exit or `dlclose`).\n *\n * Behavior:\n *  - Guards against re-entry using the file-scope `completed` flag; if a\n *    previous invocation already finished, the function returns immediately.\n *  - If `__cxa_finalize` was resolved (non-NULL), it is called with\n *    `__dso_handle` so that destructors registered via `__cxa_atexit` for\n *    this DSO are run.\n *  - Calls `deregister_tm_clones()` to undo the transactional-memory clone\n *    table registration performed at startup.\n *  - Sets `completed = 1` so subsequent calls become no-ops.\n *\n * @note Has no parameters and no return value; all state is module-global\n *       (`completed`, `__cxa_finalize`, `__dso_handle`).\n * @note Not intended to be called from user code; emitted by the toolchain\n *       and registered automatically via `.fini_array`.\n */",
+  "source": "static void __do_global_dtors_aux(void)\n{\n    if (completed)\n        return;\n\n    if (__cxa_finalize != NULL)\n        __cxa_finalize(__dso_handle);\n\n    deregister_tm_clones();\n    completed = 1;\n}\n",
+  "pseudocode": "fn __do_global_dtors_aux {\n    nop;\n    t10 = *&[var0+0x4150];\n    %zf = (t10 == 0);\n    if (%zf) {\n        goto L_1918;\n    }\n    push(rbp);\n    t10 = *&[var0+0x3fd0];\n    %zf = (t10 == 0x3fd000000000);\n    if (%zf) {\n        goto L_1907;\n    }\n    0x11a0(*&[var0+0x4008]);\n    deregister_tm_clones();\n    &[var0+0x4150] = 1;\n    // x86-64 epilogue: restore rbp\n    return;\n    L_1907:\n    deregister_tm_clones();\n    &[var0+0x4150] = 1;\n    // x86-64 epilogue: restore rbp\n    return;\n    L_1918:\n    return;\n}\n",
+  "assumptions": [
+    "The byte flag at ctx+0x4150 is the standard `completed.0` guard variable emitted by GCC for __do_global_dtors_aux; renamed to `completed`.",
+    "The pointer at ctx+0x3fd0 compared against a non-zero sentinel is the weak reference to __cxa_finalize; the indirect call `0x11a0(*&[ctx+0x4008])` is __cxa_finalize(__dso_handle).",
+    "The argument at ctx+0x4008 is the address of __dso_handle, the standard argument passed to __cxa_finalize in this compiler-generated routine.",
+    "Collapsed the two return paths (with/without __cxa_finalize call) into a single linear control flow because both set completed=1 and call deregister_tm_clones() \u2014 equivalent behavior, idiomatic for the well-known GCC-emitted source.",
+    "Dropped the rbp push/epilogue artefacts as ABI noise.",
+    "The compare `flag == 0x3fd000000000` is the optimizer's way of testing the GOT slot for __cxa_finalize against zero (a strength-reduction artefact of the relocation); represented as the standard NULL test."
+  ],
+  "rewrite_confidence": 0.95,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] other: Original compares the loaded value against the constant 0x3fd000000000 rather than 0. This is the standard pattern produced by GCC for weak symbol checks in PIE/PIC code (the constant is an artifact of the relocation/strength-reduction); semantically equivalent to a NULL check on the weak __cxa_finalize symbol.",
+    "[low] dropped_side_effect: Original explicitly preserves rbp; the rewrite omits this ABI/frame artifact. No observable behavior change.",
+    "[low] control_flow: The two original return paths (with and without the __cxa_finalize call) are collapsed into a single linear sequence. Both paths perform deregister_tm_clones() and set completed=1, so behavior is preserved."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BINARY_BLOB_3B",
+    "__gmon_start__": "SYM_GMON_START"
+  },
+  "variable_names": {
+    "t10": "flag",
+    "var0": "ctx"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 26,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}

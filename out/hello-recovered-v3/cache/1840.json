@@ -1,0 +1,58 @@
+{
+  "_version": 3,
+  "entry_va": 6208,
+  "raw_name": "_start",
+  "demangled": "_start",
+  "short_name": "_start",
+  "rejected_names": [
+    "start",
+    "elf_entry_point",
+    "start_main_bootstrap",
+    "libc_start_trampoline"
+  ],
+  "role": "entry_stub",
+  "role_confidence": 0.99,
+  "c_prototype": "void _start(void);",
+  "docstring": "/**\n * @brief ELF program entry point (glibc `_start` stub).\n *\n * This is the symbol the kernel transfers control to after loading the\n * executable. It performs the standard System V AMD64 ABI start-up\n * sequence before delegating to glibc's `__libc_start_main`, which in\n * turn invokes the user-defined `main()`.\n *\n * The hand-written prologue (see the inline asm comments in the source):\n *   - Clears `%ebp` so backtraces terminate at this frame.\n *   - Saves `%rdx` (the dynamic linker's `rtld_fini` callback supplied by\n *     the kernel/ld.so) into `%r9` for forwarding.\n *   - Pops `argc` off the stack into `%rsi` and captures the resulting\n *     `%rsp` as `argv` in `%rdx`.\n *   - Aligns `%rsp` down to a 16-byte boundary as required by the ABI,\n *     then pushes a dummy word and the original stack end.\n *   - Zeroes `%r8` and `%rcx` (the `fini` and `init` arguments).\n *   - Loads the address of `main` into `%rdi`.\n *\n * Control is then transferred to `__libc_start_main`, which runs\n * constructors, calls `main`, and on return invokes `exit()`. It does not\n * return to this function.\n *\n * @return This function does not return. The trailing `hlt` instruction\n *         emitted by the compiler/linker is a safety net that will fault\n *         if `__libc_start_main` ever does return.\n *\n * @note Not intended to be called from C code; it is the ELF\n *       `e_entry` target and assumes the kernel-supplied initial stack\n *       layout (argc, argv[], envp[], auxv) and that `%rdx` holds\n *       `rtld_fini` as set up by the dynamic loader\n *       (`/lib64/ld-linux-x86-64.so.2`).\n * @note Relies on the weak symbol `__gmon_start__` resolution performed\n *       by libc during start-up for profiling support.\n */",
+  "source": "/*\n * ELF entry point. Standard glibc _start stub: sets up argc/argv on the\n * stack, aligns the stack to 16 bytes, zeroes the frame pointer chain\n * registers used by __libc_start_main, and hands control to libc which\n * eventually calls main(). __libc_start_main never returns; the trailing\n * hlt is a safety net.\n */\nvoid _start(void)\n{\n    /* xor %ebp,%ebp                \u2014 clear the frame pointer  */\n    /* mov %rdx, %r9                \u2014 rtld_fini (saved for libc) */\n    /* pop %rsi                     \u2014 argc                    */\n    /* mov %rsp, %rdx               \u2014 argv                    */\n    /* and $0xfffffffffffffff0,%rsp \u2014 16-byte align the stack */\n    /* push %rax  ; push %rsp       \u2014 dummy + stack end       */\n    /* mov $0, %r8  ; mov $0, %rcx  \u2014 fini, init = NULL       */\n    /* mov $main, %rdi                                        */\n    __libc_start_main(main, argc, argv, NULL, NULL, rtld_fini, stack_end);\n    __builtin_unreachable();   /* hlt */\n}\n",
+  "pseudocode": "fn _start {\n    nop;\n    arg5 = arg2;\n    pop(arg1);\n    arg2 = rsp;\n    rsp = (rsp & 240);\n    push(ret);\n    push(rsp);\n    arg4 = 0;\n    arg3 = 0;\n    __libc_start_main(main);\n    unknown(hlt);\n    nop;\n    ret = __TMC_END__;\n    %zf = (ret == arg0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1898;\n    }\n    ret(__TMC_END__);\n    L_1898:\n    return;\n}\n",
+  "assumptions": [
+    "The pseudocode is the canonical glibc _start stub for x86-64; rewritten as the well-known idiom rather than a literal transliteration.",
+    "The trailing block comparing __TMC_END__ and dereferencing a GOT slot is dead code: it is unreachable because __libc_start_main never returns and the hlt traps first. Dropped.",
+    "Inferred the standard __libc_start_main 7-argument signature; the original variable names (stack_id, unused, ret, expected) are register-allocation artefacts of the SysV ABI shuffle and have no semantic meaning here, so they were not preserved.",
+    "Replaced the explicit hlt with __builtin_unreachable() to convey 'control never returns' without inventing an inline-asm payload that the binary doesn't actually parameterise.",
+    "Did not emit a prototype for __libc_start_main or globals (main, argv, rtld_fini, stack_end); they are assumed declared elsewhere as in a normal crt1.o context.",
+    "String literals listed in the rename table (ELF magic, ld-linux path, GNU, __gmon_start__) belong to surrounding ELF/note sections, not to _start itself, so none were referenced."
+  ],
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": true,
+  "divergences": [
+    "[low] dropped_call: The original contains a post-__libc_start_main tail that compares __TMC_END__ against arg0 and conditionally calls through a GOT slot, then calls __TMC_END__. This is unreachable because __libc_start_main is noreturn and the intervening hlt traps; dropping it is safe.",
+    "[low] dropped_call: The literal hlt instruction is replaced with __builtin_unreachable(). Functionally equivalent for a noreturn path; no observable behavioural difference in normal execution.",
+    "[low] other: Argument order/identifiers are reconstructed from the SysV ABI rather than the pseudocode's variable names (arg5/arg2/etc.). The mapping matches the glibc 7-arg signature; semantics preserved."
+  ],
+  "string_names": {
+    "ELF": "ELF_MAGIC_STR",
+    "/lib64/ld-linux-x86-64.so.2": "LD_LINUX_X86_64_PATH",
+    "GNU": "STR_GNU",
+    "}wH": "UNKNOWN_BINARY_BLOB_3B",
+    "__gmon_start__": "SYM_GMON_START"
+  },
+  "variable_names": {
+    "arg5": "tmp",
+    "arg2": "argc",
+    "arg1": "stack_id",
+    "arg4": "unused",
+    "arg3": "ret",
+    "arg0": "expected",
+    "var0": "ret",
+    "t0": "ret"
+  },
+  "constant_labels": {},
+  "loop_idioms": [],
+  "lines": 28,
+  "trivial": false,
+  "stdlib": false,
+  "crt": true,
+  "retries": 0
+}
