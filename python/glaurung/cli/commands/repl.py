@@ -222,18 +222,27 @@ class ReplCommand(BaseCommand):
             if target is None:
                 sys.stdout.write("xrefs [<addr>]\n")
                 return
+            from glaurung.cli.commands.xrefs import _disasm_one
             into = xref_db.list_xrefs_to(kb, target)
             outof = xref_db.list_xrefs_from(kb, target)
+            file_path = str(ctx.file_path) if ctx.file_path else ""
             sys.stdout.write(f"  refs to {target:#x}: {len(into)}\n")
-            for r in into[:8]:
-                fn = xref_db.get_function_name(kb, r.src_va)
-                tag = fn.canonical if fn else f"sub_{r.src_va:x}"
-                sys.stdout.write(f"    {r.kind:8s}  {r.src_va:#x} ({tag})\n")
+            for r in into[:12]:
+                fn_va = r.src_function_va or r.src_va
+                fn = xref_db.get_function_name(kb, fn_va)
+                tag = fn.display if fn else f"sub_{fn_va:x}"
+                snippet = _disasm_one(file_path, r.src_va) if file_path else ""
+                sys.stdout.write(
+                    f"    {r.kind:11s} {r.src_va:#x}  {tag:<24}  {snippet}\n"
+                )
             sys.stdout.write(f"  refs from {target:#x}: {len(outof)}\n")
-            for r in outof[:8]:
+            for r in outof[:12]:
                 fn = xref_db.get_function_name(kb, r.dst_va)
-                tag = fn.canonical if fn else f"sub_{r.dst_va:x}"
-                sys.stdout.write(f"    {r.kind:8s}  {r.dst_va:#x} ({tag})\n")
+                tag = fn.display if fn else f"sub_{r.dst_va:x}"
+                snippet = _disasm_one(file_path, r.src_va) if file_path else ""
+                sys.stdout.write(
+                    f"    {r.kind:11s} → {r.dst_va:#x}  {tag:<24}  {snippet}\n"
+                )
 
         def cmd_decomp(argv: List[str]) -> None:
             target = self._resolve_va(argv, _here())
