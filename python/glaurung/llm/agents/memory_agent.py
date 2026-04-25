@@ -102,6 +102,14 @@ from ..tools.find_embedded_executables import (
     build_tool as build_find_embedded_executables,
     FindEmbeddedExecutablesResult,
 )
+from ..tools.find_encoded_blobs import (
+    build_find_base64_blobs, FindBase64BlobsResult,
+    build_find_hex_blobs, FindHexBlobsResult,
+    build_find_pem_blocks, FindPemBlocksResult,
+    build_try_xor_brute, TryXorBruteResult,
+    build_scan_xor_encoded_strings, ScanXorEncodedStringsResult,
+    build_find_compressed_blobs, FindCompressedBlobsResult,
+)
 from .memory_foundation import create_foundation_agent
 
 
@@ -573,6 +581,77 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(extract_archive_all, name="extract_archive_all")
     agent.tool(recursive_unpack, name="recursive_unpack")
     agent.tool(find_embedded_executables, name="find_embedded_executables")
+
+    # Embedded-content Sprint 2 — encoded-blob detection
+    async def find_base64_blobs(
+        ctx: RunContext, path: str, min_len: int = 32, max_results: int = 64,
+    ) -> FindBase64BlobsResult:
+        tool = build_find_base64_blobs()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(path=path, min_len=min_len, max_results=max_results),
+        )
+
+    async def find_hex_blobs(
+        ctx: RunContext, path: str, min_bytes: int = 64, max_results: int = 32,
+    ) -> FindHexBlobsResult:
+        tool = build_find_hex_blobs()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(path=path, min_bytes=min_bytes, max_results=max_results),
+        )
+
+    async def find_pem_blocks(
+        ctx: RunContext, path: str, max_results: int = 32,
+    ) -> FindPemBlocksResult:
+        tool = build_find_pem_blocks()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(path=path, max_results=max_results),
+        )
+
+    async def try_xor_brute(
+        ctx: RunContext, path: str, offset: int = 0,
+        length: int = 256, top_k: int = 3,
+    ) -> TryXorBruteResult:
+        tool = build_try_xor_brute()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                path=path, offset=offset, length=length, top_k=top_k,
+            ),
+        )
+
+    async def scan_xor_encoded_strings(
+        ctx: RunContext, path: str, window: int = 32,
+        stride: int = 8, min_score: float = 0.06, max_results: int = 32,
+    ) -> ScanXorEncodedStringsResult:
+        tool = build_scan_xor_encoded_strings()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                path=path, window=window, stride=stride,
+                min_score=min_score, max_results=max_results,
+            ),
+        )
+
+    async def find_compressed_blobs(
+        ctx: RunContext, path: str, max_results: int = 32, probe_bytes: int = 4096,
+    ) -> FindCompressedBlobsResult:
+        tool = build_find_compressed_blobs()
+        return tool.run(
+            ctx.deps, ctx.deps.kb,
+            tool.input_model(
+                path=path, max_results=max_results, probe_bytes=probe_bytes,
+            ),
+        )
+
+    agent.tool(find_base64_blobs, name="find_base64_blobs")
+    agent.tool(find_hex_blobs, name="find_hex_blobs")
+    agent.tool(find_pem_blocks, name="find_pem_blocks")
+    agent.tool(try_xor_brute, name="try_xor_brute")
+    agent.tool(scan_xor_encoded_strings, name="scan_xor_encoded_strings")
+    agent.tool(find_compressed_blobs, name="find_compressed_blobs")
 
     return agent
 

@@ -4,32 +4,37 @@
   "raw_name": "main",
   "demangled": "main",
   "short_name": "main",
-  "rejected_names": [],
+  "rejected_names": [
+    "fortran_main_entry",
+    "gfortran_runtime_bootstrap",
+    "program_entry"
+  ],
   "role": "entry_stub",
   "role_confidence": 0.98,
   "c_prototype": "int main(int argc, char **argv);",
-  "docstring": "/**\n * @brief TODO \u2014 describe this function.\n *\n * Auto-generated placeholder; no LLM was available to write docs.\n */",
-  "source": "int main(int argc, char **argv)\n{\n    _gfortran_set_args(argc, argv);\n    _gfortran_set_options(7, options);\n    MAIN__();\n    return 0;\n}\n",
+  "docstring": "/**\n * @brief Program entry point for a GNU Fortran-compiled executable.\n *\n * Performs the standard libgfortran startup sequence required before\n * Fortran code may execute: it forwards the process command-line to the\n * runtime via _gfortran_set_args(), installs the compiler-generated\n * runtime options table (options_6_2, of length 7) via\n * _gfortran_set_options(), and then transfers control to the Fortran\n * PROGRAM unit through MAIN__(). On return from the Fortran program,\n * main() returns 0 to the operating system.\n *\n * @param argc Number of command-line arguments, passed unchanged to\n *             _gfortran_set_args().\n * @param argv Vector of command-line argument strings, passed unchanged\n *             to _gfortran_set_args() so they are visible to Fortran\n *             intrinsics such as GET_COMMAND_ARGUMENT.\n *\n * @return Always 0; any abnormal termination is handled inside the\n *         libgfortran runtime (e.g. via STOP/ERROR STOP) and does not\n *         return through this function.\n * @retval 0 The Fortran program completed and returned normally.\n *\n * @note This function is the C shim emitted by gfortran; the user's\n *       Fortran PROGRAM is invoked as MAIN__(). The binary therefore\n *       has a runtime dependency on libgfortran.so.5.\n */",
+  "source": "int main(int argc, char **argv)\n{\n    _gfortran_set_args(argc, argv);\n    _gfortran_set_options(7, options_6_2);\n    MAIN__();\n    return 0;\n}\n",
   "pseudocode": "fn main {\n    rsp = (rsp - 8);\n    _gfortran_set_args@plt();\n    _gfortran_set_options@plt(7, options.6.2);\n    MAIN__();\n    ret = 0;\n    return;\n}\n",
   "assumptions": [
-    "Standard gfortran main entry stub; argc/argv are passed implicitly to _gfortran_set_args (the decompiler omitted the args because they are simply forwarded from main's registers).",
-    "`options.6.2` is the compiler-generated static options array; renamed to `options` for readability.",
-    "Stack adjustment (`rsp -= 8`) is a function-prologue artefact and dropped.",
-    "`ret = 0; return;` collapsed into idiomatic `return 0;`."
+    "The pseudocode shows _gfortran_set_args called with no visible arguments, but the standard gfortran entry stub passes (argc, argv); restored those.",
+    "options.6.2 is the compiler-generated options array symbol from gfortran; referenced as external 'options_6_2'.",
+    "Dropped the rsp adjustment as a stack-frame artifact.",
+    "Dropped the explicit 'ret = 0' temporary in favor of a direct 'return 0;'."
   ],
   "rewrite_confidence": 0.95,
   "equivalence_passed": true,
   "divergences": [
-    "[low] other: Pseudocode shows _gfortran_set_args called with no visible arguments; rewriter adds argc/argv. This is the standard gfortran stub and decompiler elided the register-passed args, so semantically equivalent.",
-    "[low] other: Stack pointer adjustment dropped \u2014 standard function prologue alignment, no semantic effect.",
-    "[low] other: Symbol renamed for readability; assumed to refer to the same compiler-generated static options array."
+    "[low] other: Pseudocode shows no visible args; rewriter restored standard (argc, argv) per gfortran main stub convention. This matches typical gfortran-emitted main and is almost certainly correct, but is an inferred reconstruction.",
+    "[low] other: The pseudocode references 'options.6.2' (a gfortran-internal symbol name with dots not valid in C). Rewriter renamed to 'options_6_2'. Semantically equivalent if linked properly, but the actual symbol name in the binary contains dots.",
+    "[low] other: Stack adjustment dropped \u2014 this is a frame-setup artifact with no observable effect.",
+    "[low] other: Temporary 'ret = 0' folded into 'return 0;' \u2014 equivalent."
   ],
   "string_names": {
     "ELF": "ELF",
     "/lib64/ld-linux-x86-64.so.2": "LIB64_LD_LINUX_X86",
     "GNU": "GNU",
     "9]@": "9",
-    "__gmon_start__": "GMON_START"
+    "libgfortran.so.5": "LIBGFORTRAN_SO_NAME"
   },
   "variable_names": {},
   "constant_labels": {},

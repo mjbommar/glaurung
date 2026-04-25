@@ -1,24 +1,18 @@
 ## frame_dummy @ 0x11e0 — Reviewer Note
 
 ### What the pipeline did
-- **Wholesale replacement**: The decompiled body (subtraction of `completed.0` from itself, right shifts, GOT load at `var0+0x3fe8`, conditional indirect call) was discarded and replaced with a single `register_tm_clones();` call.
-- **Renamed**: Function labeled `sub_11e0` in the binary, but the rewriter used the semantic name `frame_dummy` based on the standard CRT layout.
-- **Dropped dead control flow**: The trailing `goto L_1160` after `return` (likely a decompiler artifact / alignment nop) was not represented.
-- **Added comment** documenting that this is compiler-generated CRT glue.
+- Collapsed the entire decompiled body to an empty `static void frame_dummy(void)` stub.
+- Discarded the `completed.0 - completed.0` computation, the `>>63` sign-extract / `>>>3` / `>>>1` shift sequence, and the conditional indirect call through `*(GOT+0x3fe8)` as compiler/optimizer artefacts.
+- Dropped the trailing `goto L_1160` (loop back-edge) on the assumption it is unreachable.
+- Renamed nothing meaningful — the entire body was treated as dead code.
 
-### Assumptions not mechanically provable
-- The inlined arithmetic + GOT-indirect call really is `register_tm_clones` (the rewriter recognized the well-known glibc CRT idiom by shape, not by symbol resolution).
-- The GOT slot at `var0+0x3fe8` actually holds the `__cxa_finalize`/deregistration pointer that `register_tm_clones` checks — not verified against the binary's relocations.
-- A symbol named `register_tm_clones` exists (or will be linked) in the project. If the rebuild is freestanding, this call may not resolve.
-- `frame_dummy` is the correct semantic name (vs. some other CRT stub at this address).
+### Assumptions not mechanically proven
+- That this really is the standard glibc crt `frame_dummy` and not a custom function that happens to share the name/shape. Identification is by pattern, not by symbol provenance.
+- That `completed.0` is genuinely the static guard variable such that `x - x == 0` holds at the source level (the pseudocode shows two reads of `completed.0`, which *should* be identical, but the rewriter assumed both loads see the same value with no intervening side effect — true here, but a semantic assumption).
+- That `*(rip+0x3fe8)` (the JCR/`__JCR_END__` or deregister pointer) is NULL in this binary, so the indirect call is never taken at runtime. Not verified against the actual section contents.
+- That the `goto L_1160` tail is the conventional `register_tm_clones`-style loop epilogue and not a live edge.
 
-### Behavioral note
-The original is the *inlined* form (-O2); the rewrite is the *un-inlined* C source. These compile to equivalent code only if the compiler chooses to inline `register_tm_clones` again. For a CRT stub this is essentially always benign.
+### Risk
+Low. If the binary is built with a non-trivial JCR list (very old toolchains, or `-fuse-ld` quirks), the omitted indirect call would actually run at startup and the empty stub would silently skip frame registration. On any modern glibc/gcc/clang target this is a no-op.
 
 ### Reviewer checklist
-- Confirm address 0x11e0 corresponds to `frame_dummy` in the binary's symbol table / `.init_array`.
-- Confirm a separate `register_tm_clones` function exists in the recovered project (or is provided by CRT) so this call links.
-- Verify the offset `0x3fe8` from the PIC base matches the `register_tm_clones` GOT check, not some unrelated indirect call.
-- Confirm `frame_dummy` is referenced from `.init_array` (or equivalent) — if not, this stub may be dead and the rename is misleading.
-- Decide whether to keep CRT stubs in the recovered source at all, or let the toolchain regenerate them (often preferable).
-- Sanity-check that no observable behavior depended on the dropped `goto L_1160` / nop tail (should be none).

@@ -1,32 +1,18 @@
-# `deregister_tm_clones` @ 0x1130 — Reviewer Note
+## deregister_tm_clones @ 0x1130 — Rewrite Notes
 
-## What the pipeline did
-**Effectively nothing.** This is a heuristic fallback: the rewriter wrapped the
-original pseudocode verbatim inside a `void sub_1130(long arg0)` C function
-shell. No real translation occurred:
+This is a **compiler-emitted CRT stub**, not user code. The rewriter recognized the canonical `deregister_tm_clones` pattern emitted by GCC/Clang and reconstructed an idiomatic C analog rather than a literal transliteration of the pseudocode.
 
-- The pseudocode block (`fn deregister_tm_clones { ... }`) is pasted as-is
-  inside the C function body, which is **not valid C** and will not compile.
-- No locals were renamed, no control flow was reconstructed, no `goto`
-  lowering, no call site for the indirect dispatch (`ret(completed.0)`) was
-  emitted as a real C call.
-- The function name in the wrapper (`sub_1130`) does not match the symbol
-  (`deregister_tm_clones`).
+### Pipeline transformations
+- **Pattern-matched the stub**: identified the GOT-relative load at `+0x3fe0` as the weak `_ITM_deregisterTMCloneTable` (or `__cxa_finalize`) pointer slot.
+- **Collapsed the zero-register comparison**: `completed.0 == arg0` (where `arg0` is a register the compiler zeroed via `xor`) was rewritten as `completed.0 != 0`. This drops the explicit zero-register parameter from the model.
+- **Renamed** the GOT slot to `__cxa_finalize_ptr` (canonical name is `_ITM_deregisterTMCloneTable`).
+- **Removed the `ret` temp dead-store chain** and the fall-through `L_1158` label; replaced with early-return structure.
+- **Reinterpreted the indirect call argument**: pseudocode shows `ret(completed.0)` (passing the value, ~0), but the rewrite emits `deregister(&completed.0)` (passing the address).
 
-## Assumptions not mechanically provable
-- That `arg0` is the correct (and only) parameter — the symbol is normally
-  the standard CRT `deregister_tm_clones()` taking **no arguments**; `arg0`
-  likely reflects a register the disassembler couldn't prove dead.
-- That `completed.0` is compared to a parameter rather than to a constant
-  (in the canonical CRT stub it's compared against an address loaded via
-  PC-relative arithmetic, not a function argument).
-- That `*&[var0+0x3fe0]` is a load from `.got`/`_ITM_deregisterTMCloneTable`;
-  the rewriter never resolved this.
+### Non-mechanically-provable assumptions
+1. `arg0` really is always 0 on entry (depends on caller / ABI / xor-zeroing convention).
+2. The GOT slot at `+0x3fe0` is the TM/finalize hook and not some other weak symbol.
+3. The indirect call's intended argument is the guard's address, not its value — **this contradicts the literal pseudocode**.
+4. The missing `completed.0 = 1` write-back (canonical stubs set this after calling) is genuinely absent in this binary, not lost during lifting.
 
-## Divergences
-- LLM was unavailable; no equivalence check was performed. Output should be
-  treated as pseudocode, not source.
-
-## Bottom line
-Do **not** merge as C. This needs a real rewrite pass (or simply replace
-with the well-known stock `deregister_tm_clones` CRT stub).
+### Reviewer checklist

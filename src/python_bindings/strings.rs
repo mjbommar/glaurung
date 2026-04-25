@@ -41,6 +41,20 @@ pub fn register_strings_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyR
     strings_mod.add_function(wrap_pyfunction!(demangle_text_py, &strings_mod)?)?;
     strings_mod.add_function(wrap_pyfunction!(demangle_list_py, &strings_mod)?)?;
 
+    // Byte-level metrics (entropy, base64-likeness, char-class hist,
+    // unicode script frequencies). Used by the embedded-content
+    // extraction tools to identify what an unknown blob looks like.
+    strings_mod.add_function(wrap_pyfunction!(shannon_entropy_py, &strings_mod)?)?;
+    strings_mod.add_function(wrap_pyfunction!(printable_ascii_ratio_py, &strings_mod)?)?;
+    strings_mod.add_function(wrap_pyfunction!(is_base64_py, &strings_mod)?)?;
+    strings_mod.add_function(wrap_pyfunction!(character_class_histogram_py, &strings_mod)?)?;
+    strings_mod.add_function(wrap_pyfunction!(unicode_script_frequencies_py, &strings_mod)?)?;
+    // Reuse the existing triage `infer`-based content sniffer to
+    // identify embedded blobs (jpeg / png / pdf / zip / executable
+    // formats) — we already build the table once for triage; this
+    // makes it callable per-bytes from Python.
+    strings_mod.add_function(wrap_pyfunction!(sniff_bytes_py, &strings_mod)?)?;
+
     // Add strings submodule to main module
     m.add_submodule(&strings_mod)?;
 
@@ -277,4 +291,95 @@ fn demangle_list_py(names: Vec<String>, max: usize) -> Vec<(String, String, Stri
         }
     }
     out
+}
+
+// ----------------------------------------------------------------------------
+// Byte-level metric bindings — see src/strings/metrics.rs for the underlying
+// implementations.
+// ----------------------------------------------------------------------------
+
+/// Shannon entropy of a byte slice in bits/byte.
+#[pyfunction]
+#[pyo3(name = "shannon_entropy")]
+fn shannon_entropy_py(data: &[u8]) -> f64 {
+    crate::strings::metrics::shannon_entropy(data)
+}
+
+/// Fraction of bytes that are printable ASCII or common whitespace.
+#[pyfunction]
+#[pyo3(name = "printable_ascii_ratio")]
+fn printable_ascii_ratio_py(data: &[u8]) -> f64 {
+    crate::strings::metrics::printable_ascii_ratio(data)
+}
+
+/// Quick "does this look like base64?" verdict. Returns a dict with
+/// keys `is_base64`, `alphabet_fraction`, `length_aligned`, `padded`,
+/// `decoded_size_estimate`.
+#[pyfunction]
+#[pyo3(name = "is_base64")]
+fn is_base64_py(py: Python<'_>, data: &[u8]) -> PyResult<PyObject> {
+    let v = crate::strings::metrics::is_base64(data);
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("is_base64", v.is_base64)?;
+    dict.set_item("alphabet_fraction", v.alphabet_fraction)?;
+    dict.set_item("length_aligned", v.length_aligned)?;
+    dict.set_item("padded", v.padded)?;
+    dict.set_item("decoded_size_estimate", v.decoded_size_estimate)?;
+    Ok(dict.into())
+}
+
+/// Character-class histogram. Returns a dict with keys `total`,
+/// `alpha`, `digit`, `punct`, `whitespace`, `control`, `high_bit`,
+/// `null`. Useful for fingerprinting unknown buffers.
+#[pyfunction]
+#[pyo3(name = "character_class_histogram")]
+fn character_class_histogram_py(py: Python<'_>, data: &[u8]) -> PyResult<PyObject> {
+    let h = crate::strings::metrics::character_class_histogram(data);
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("total", h.total)?;
+    dict.set_item("alpha", h.alpha)?;
+    dict.set_item("digit", h.digit)?;
+    dict.set_item("punct", h.punct)?;
+    dict.set_item("whitespace", h.whitespace)?;
+    dict.set_item("control", h.control)?;
+    dict.set_item("high_bit", h.high_bit)?;
+    dict.set_item("null", h.null)?;
+    Ok(dict.into())
+}
+
+/// Unicode script frequencies for valid UTF-8 input. Empty dict on
+/// invalid UTF-8 — caller should treat that as "this isn't text".
+/// Keys are script names (`Latin`, `Cyrillic`, `Han`, …).
+#[pyfunction]
+#[pyo3(name = "unicode_script_frequencies")]
+fn unicode_script_frequencies_py(
+    py: Python<'_>,
+    data: &[u8],
+) -> PyResult<PyObject> {
+    let m = crate::strings::metrics::unicode_script_frequencies(data);
+    let dict = pyo3::types::PyDict::new(py);
+    for (k, v) in m {
+        dict.set_item(k, v)?;
+    }
+    Ok(dict.into())
+}
+
+/// Identify the file-type of a byte slice using the same `infer`-based
+/// content sniffer that the triage pipeline uses for top-level files.
+/// Returns ``(mime, extension, label)`` or ``None`` when no signature
+/// matches. Either of the strings may be empty when the sniffer found
+/// only one of the three.
+#[pyfunction]
+#[pyo3(name = "sniff_bytes")]
+fn sniff_bytes_py(data: &[u8]) -> Option<(String, String, String)> {
+    if let Some(hint) = crate::triage::sniffers::ContentSniffer::sniff_bytes(data) {
+        let mime = hint.mime.unwrap_or_default();
+        let ext = hint.extension.unwrap_or_default();
+        let label = hint.label.unwrap_or_default();
+        if mime.is_empty() && ext.is_empty() && label.is_empty() {
+            return None;
+        }
+        return Some((mime, ext, label));
+    }
+    None
 }

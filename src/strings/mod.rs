@@ -8,6 +8,7 @@ mod classify;
 mod config;
 pub mod detect;
 pub mod detect_fast;
+pub mod metrics;
 pub mod normalize;
 pub mod patterns;
 mod scan;

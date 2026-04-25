@@ -4,37 +4,40 @@
   "raw_name": "frame_dummy",
   "demangled": "frame_dummy",
   "short_name": "frame_dummy",
-  "rejected_names": [],
+  "rejected_names": [
+    "init_frame_stub",
+    "noop_init",
+    "register_frame_info_stub"
+  ],
   "role": "entry_stub",
-  "role_confidence": 0.9,
-  "c_prototype": "void sub_11e0(void);",
-  "docstring": "/**\n * @brief TODO \u2014 describe this function.\n *\n * Auto-generated placeholder; no LLM was available to write docs.\n */",
-  "source": "/* frame_dummy \u2014 compiler-generated entry stub.\n * Standard CRT glue that tail-calls register_tm_clones on first invocation.\n */\nvoid frame_dummy(void)\n{\n    register_tm_clones();\n}\n",
+  "role_confidence": 0.95,
+  "c_prototype": "static void frame_dummy(void);",
+  "docstring": "/**\n * @brief Compiler-generated initialization stub; performs no action.\n *\n * This function is emitted automatically by the toolchain (typically placed in\n * the .init/.fini machinery alongside `__do_global_dtors_aux`) and contains no\n * meaningful body. It exists to satisfy the runtime's expectation of an\n * initialization hook and is invoked indirectly during program startup; it is\n * not intended to be called by user code.\n *\n * @return None.\n *\n * @note The function takes no parameters and has no observable side effects.\n */",
+  "source": "static void frame_dummy(void)\n{\n    /* Compiler-generated stub: nothing to do. */\n}\n",
   "pseudocode": "fn frame_dummy {\n    arg0 = completed.0;\n    arg1 = completed.0;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret = *&[var0+0x3fe8];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret();\n    L_1198:\n    return;\n    nop;\n    goto L_1160;\n}\n",
   "assumptions": [
-    "This is the standard glibc `frame_dummy` CRT stub emitted by the compiler/linker; its body is identical to `register_tm_clones` (a tail call to it). The arithmetic on `completed.0` and the GOT load via `var0+0x3fe8` are the inlined body of register_tm_clones, not frame_dummy itself.",
-    "Replaced the entire decompiled body with a single call to `register_tm_clones()` because frame_dummy in C source is literally `static void frame_dummy(void) { register_tm_clones(); }` \u2014 the visible arithmetic comes from inlining at -O2.",
-    "Dropped the dead-store chain on `ret`/`arg1` (subtraction of equal values, shifts, zero-flag checks) \u2014 these are the inlined register_tm_clones prologue and not part of the original C source.",
-    "Function name in prototype is `sub_11e0` but the pseudocode header and role indicate this is `frame_dummy`; used the semantic name."
+    "frame_dummy is a standard glibc/crt entry stub emitted by the compiler; on modern toolchains its body is effectively empty (the legacy __register_frame_info path is dead).",
+    "The pseudocode's `completed.0 - completed.0` self-subtraction always yields zero, making the subsequent shift/branch logic unreachable dead code \u2014 omitted.",
+    "The indirect `ret()` call through `*(offset+0x3fe8)` (the legacy JCR/deregister pointer) is never taken on this build and is omitted, matching the conventional empty `frame_dummy` source form.",
+    "Dropped optimizer artefacts: redundant moves between arg0/arg1/ret, the >>63 sign-extract idiom, and the goto L_1160 tail."
   ],
   "rewrite_confidence": 0.9,
   "equivalence_passed": true,
   "divergences": [
-    "[low] other: The rewrite replaces the inlined body with a call to register_tm_clones(). This is a well-known CRT idiom; semantically equivalent assuming the inlined code is indeed register_tm_clones. The pseudocode shows the inlined version while the source shows the un-inlined call \u2014 behaviorally equivalent at the C-source level.",
-    "[low] control_flow: Pseudocode contains a trailing 'goto L_1160' after the return which appears to be unreachable/dead (likely decompiler artifact for alignment nop). Not represented in rewrite, but unreachable."
+    "[low] other: frame_dummy is a standard compiler-emitted stub. The pseudocode's logic computes (completed - completed) which is always 0, so the conditional branch to the indirect call is never taken. Omitting the dead code and producing an empty function body is behaviorally equivalent."
   ],
   "string_names": {
     "ELF": "ELF",
     "/lib64/ld-linux-x86-64.so.2": "LIB64_LD_LINUX_X86",
     "GNU": "GNU",
     "9]@": "9",
-    "__gmon_start__": "GMON_START"
+    "libgfortran.so.5": "LIBGFORTRAN_SO_NAME"
   },
   "variable_names": {
     "arg0": "completed",
-    "arg1": "arg1",
-    "var0": "var0",
-    "t0": "t0"
+    "arg1": "diff",
+    "var0": "offset",
+    "t0": "ret"
   },
   "constant_labels": {},
   "loop_idioms": [],

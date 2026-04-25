@@ -1,0 +1,33 @@
+.TH HELLO_FORTRAN 1 "" "" "User Commands"
+.SH NAME
+hello_fortran \- recovered Fortran "hello world" program, re-expressed in C
+.SH SYNOPSIS
+.B hello_fortran
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B hello_fortran
+is a small program recovered from the binary
+.IR hello-gfortran-O2 ,
+which was originally written in Fortran and compiled with
+.B gfortran
+at optimization level
+.BR -O2 .
+The recovered source is provided in C, split into a C entry point
+.RB ( main.c )
+that delegates to a Fortran-style main program body
+.RB ( hello.c )
+containing the translated program logic.
+.PP
+When run, the program executes the body of the original Fortran
+.B PROGRAM
+unit and exits.
+.SH OPTIONS
+.B hello_fortran
+does not define any command-line options. Any arguments accepted on
+the command line are those handled by the standard program startup
+path inherited from the recovered entry point; no option is
+documented as part of the program's own interface.
+.SH SEE ALSO
+.BR gfortran (1),
+.BR cmake (1),
+.BR cc (1)

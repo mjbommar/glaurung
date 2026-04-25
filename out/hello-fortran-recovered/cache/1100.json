@@ -5,38 +5,49 @@
   "demangled": "_start",
   "short_name": "_start",
   "rejected_names": [
-    "start"
+    "start",
+    "elf_entry_point",
+    "start_program",
+    "call_libc_start_main"
   ],
-  "role": "other",
-  "role_confidence": 0.25,
-  "c_prototype": "void sub_1100(long arg0, long arg1, long arg2);",
-  "docstring": "/**\n * @brief TODO \u2014 describe this function.\n *\n * Auto-generated placeholder; no LLM was available to write docs.\n */",
-  "source": "// auto-rewritten (heuristic) \u2014 void sub_1100(long arg0, long arg1, long arg2);\nvoid sub_1100(long arg0, long arg1, long arg2)\n{\n    /* 28 lines of pseudocode below */\nfn _start {\n    nop;\n    arg5 = arg2;\n    pop(arg1);\n    arg2 = rsp;\n    rsp = (rsp & 240);\n    push(ret);\n    push(rsp);\n    ret = 0;\n    ret = 0;\n    __libc_start_main(main);\n    unknown(hlt);\n    nop;\n    ret = completed.0;\n    %zf = (ret == expected);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret(completed.0);\n    L_1158:\n    return;\n}\n\n}",
+  "role": "entry_stub",
+  "role_confidence": 0.99,
+  "c_prototype": "void _start(void);",
+  "docstring": "/**\n * @brief ELF program entry point installed by the dynamic linker.\n *\n * Performs the standard System V AMD64 process start-up sequence before\n * transferring control to the C runtime:\n *   - Clears %ebp so stack unwinders stop here.\n *   - Saves %rdx (the dynamic linker's rtld_fini callback) into %r9.\n *   - Pops argc from the stack and uses the remaining %rsp as argv.\n *   - Aligns %rsp down to a 16-byte boundary (ABI requirement before a call).\n *   - Records the original stack pointer as stack_end and zeroes the\n *     legacy init/fini parameters.\n *   - Calls __libc_start_main(main, argc, argv, NULL, NULL, rtld_fini,\n *     stack_end).\n *\n * @return This function does not return. __libc_start_main eventually\n *         invokes exit(); the trailing `hlt` instruction is therefore\n *         unreachable and exists only as a safety trap.\n *\n * @note Invoked directly by the kernel/loader (e.g. via\n *       /lib64/ld-linux-x86-64.so.2); it is not meant to be called from\n *       user code. On entry %rdx holds rtld_fini and the initial stack\n *       layout follows the System V AMD64 ABI process start-up convention.\n */",
+  "source": "/*\n * ELF entry point. Sets up argc/argv on the stack, aligns the stack to\n * 16 bytes, and hands control to __libc_start_main. Never returns.\n */\nvoid _start(void)\n{\n    /* The real implementation is written in assembly:\n     *\n     *     xor   %ebp, %ebp                ; clear frame pointer\n     *     mov   %rdx, %r9                 ; rtld_fini\n     *     pop   %rsi                      ; argc\n     *     mov   %rsp, %rdx                ; argv\n     *     and   $-16, %rsp                ; align stack\n     *     push  %rax\n     *     push  %rsp                      ; stack_end\n     *     xor   %r8, %r8                  ; fini = NULL\n     *     xor   %rcx, %rcx                ; init = NULL\n     *     mov   $main, %rdi\n     *     call  __libc_start_main\n     *     hlt\n     *\n     * __libc_start_main does not return, so the trailing hlt is unreachable.\n     */\n    __libc_start_main(main, argc, argv, /*init=*/0, /*fini=*/0,\n                      rtld_fini, stack_end);\n    __builtin_unreachable();\n}\n",
   "pseudocode": "fn _start {\n    nop;\n    arg5 = arg2;\n    pop(arg1);\n    arg2 = rsp;\n    rsp = (rsp & 240);\n    push(ret);\n    push(rsp);\n    arg4 = 0;\n    arg3 = 0;\n    __libc_start_main(main);\n    unknown(hlt);\n    nop;\n    ret = completed.0;\n    %zf = (ret == arg0);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret = *&[var0+0x3fe0];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1158;\n    }\n    ret(completed.0);\n    L_1158:\n    return;\n}\n",
   "assumptions": [
-    "Heuristic rewrite \u2014 LLM not consulted; treat output as lightly-substituted pseudocode, not real source."
+    "Identified the function as the standard glibc x86-64 _start crt stub; rewrote it as a single __libc_start_main call rather than a literal transliteration of the inline asm.",
+    "Dropped the trailing 'completed.0' / *(offset+0x3fe0) compare-and-call block \u2014 that pattern matches __do_global_dtors_aux, not _start, and almost certainly leaked into the listing through adjacent-function disassembly. No real _start contains it.",
+    "Renamed pseudocode args to their conventional SysV register meanings: argc(rsi), argv(rdx), rtld_fini(r9), stack_end(rsp pushed), init/fini = 0.",
+    "Replaced the unreachable hlt with __builtin_unreachable() to convey intent without inventing a real instruction.",
+    "Treated 'main', 'argv', 'rtld_fini', 'stack_end' as externally-supplied symbols rather than declaring them, matching how the asm stub references them.",
+    "String literals listed in the rename table (ELF, ld-linux, GNU, libgfortran.so.5, etc.) are ELF/program-header artefacts, not referenced by _start itself, so they are not used in the rewrite."
   ],
-  "rewrite_confidence": 0.2,
+  "rewrite_confidence": 0.9,
   "equivalence_passed": false,
   "divergences": [
-    "[low] other: LLM unavailable; equivalence could not be checked"
+    "[medium] dropped_call: The pseudocode contains a trailing block that loads completed.0, compares to zero, loads a pointer from [var0+0x3fe0] (a registered destructor / __cxa_finalize-style pointer), and if non-null calls it with completed.0. The rewrite drops this block entirely, claiming it leaked from __do_global_dtors_aux. While this is very likely correct for a real _start (which never executes anything after __libc_start_main), if the disassembly truly belongs to this function then dropping it loses the destructor-call side effect.",
+    "[low] dropped_side_effect: The original pushes %rax and %rsp onto the stack as the stack_end argument; the rewrite passes a symbolic 'stack_end' argument. Semantically equivalent at the C level but the actual pushed values are not modeled.",
+    "[low] dropped_call: Replaces the hlt instruction with __builtin_unreachable(). Since __libc_start_main is noreturn, both are unreachable in practice.",
+    "[low] other: Original receives args via registers (arg1..arg5); rewrite uses externally-supplied symbols. Standard idiom for crt _start."
   ],
   "string_names": {
     "ELF": "ELF",
     "/lib64/ld-linux-x86-64.so.2": "LIB64_LD_LINUX_X86",
     "GNU": "GNU",
     "9]@": "9",
-    "__gmon_start__": "GMON_START"
+    "libgfortran.so.5": "LIBGFORTRAN_SO_NAME"
   },
   "variable_names": {
-    "arg5": "arg5",
-    "arg2": "arg2",
-    "arg1": "arg1",
+    "arg5": "tmp",
+    "arg2": "argc",
+    "arg1": "stack_id",
     "arg4": "ret",
     "arg3": "ret",
     "arg0": "expected",
-    "var0": "var0",
-    "t0": "t0"
+    "var0": "offset",
+    "t0": "ret"
   },
   "constant_labels": {},
   "loop_idioms": [],

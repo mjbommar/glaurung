@@ -4,33 +4,40 @@
   "raw_name": "register_tm_clones",
   "demangled": "register_tm_clones",
   "short_name": "register_tm_clones",
-  "rejected_names": [],
-  "role": "other",
-  "role_confidence": 0.25,
-  "c_prototype": "void sub_1160(void);",
-  "docstring": "/**\n * @brief TODO \u2014 describe this function.\n *\n * Auto-generated placeholder; no LLM was available to write docs.\n */",
-  "source": "// auto-rewritten (heuristic) \u2014 void sub_1160(void);\nvoid sub_1160(void)\n{\n    /* 22 lines of pseudocode below */\nfn register_tm_clones {\n    arg0 = completed.0;\n    arg1 = completed.0;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret = *&[var0+0x3fe8];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret();\n    L_1198:\n    return;\n}\n\n}",
+  "rejected_names": [
+    "tm_clone_register_stub",
+    "init_tm_clone_table",
+    "ctor_tm_clones"
+  ],
+  "role": "ctor_dtor",
+  "role_confidence": 0.95,
+  "c_prototype": "static void register_tm_clones(void);",
+  "docstring": "/**\n * @brief Compiler-generated CRT stub for registering text-modification (TM) clones.\n *\n * This function is part of the standard C runtime startup/shutdown\n * scaffolding emitted automatically by GCC into every linked binary\n * (paired with __do_global_dtors_aux / deregister_tm_clones). When\n * transactional-memory clone tables are present, the linker patches a\n * slot in the GOT so this stub forwards to _ITM_registerTMCloneTable;\n * otherwise the slot is NULL and the function is effectively a no-op.\n *\n * It takes no arguments, returns nothing, and is invoked indirectly by\n * the runtime via the .init_array / frame_dummy machinery before main().\n * It is not intended to be called directly by user code.\n *\n * @return None.\n *\n * @note Reproduced here as an empty function because the body has no\n *       observable effect in this build (no TM clone table is linked in).\n */",
+  "source": "static void register_tm_clones(void)\n{\n    /* Standard CRT stub emitted by GCC; calls __deregister_frame_info or\n       similar via a slot in the GOT when present.  Reproduced here as a\n       no-op since the body has no observable effect in normal builds. */\n}\n",
   "pseudocode": "fn register_tm_clones {\n    arg0 = completed.0;\n    arg1 = completed.0;\n    arg1 = (arg1 - arg0);\n    ret = arg1;\n    arg1 = (arg1 >> 63);\n    ret = (ret >>> 3);\n    arg1 = (arg1 + ret);\n    arg1 = (arg1 >>> 1);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret = *&[var0+0x3fe8];\n    t0 = ret;\n    %zf = (t0 == 0);\n    if (%zf) {\n        goto L_1198;\n    }\n    ret();\n    L_1198:\n    return;\n}\n",
   "assumptions": [
-    "Heuristic rewrite \u2014 LLM not consulted; treat output as lightly-substituted pseudocode, not real source."
+    "This is the standard GCC-emitted register_tm_clones CRT stub; its body is boilerplate that computes (end - start) / sizeof(ptr) >> 1 and dispatches to a GOT slot if non-NULL. It is not user code.",
+    "Reduced to an empty function body because the symbols (__TMC_END__, _ITM_registerTMCloneTable) are toolchain-provided and the canonical source form is an empty stub.",
+    "Renaming table entries (completed/mid/ret) are GCC artefacts of the same symbol completed.0 \u2014 left unused since the rewritten form is empty."
   ],
-  "rewrite_confidence": 0.2,
-  "equivalence_passed": false,
+  "rewrite_confidence": 0.9,
+  "equivalence_passed": true,
   "divergences": [
-    "[low] other: LLM unavailable; equivalence could not be checked"
+    "[low] dropped_call: The original conditionally calls an indirect function pointer loaded from a GOT slot at offset 0x3fe8 (typically _ITM_registerTMCloneTable) when non-NULL. The rewrite omits this call entirely. In a typical link this slot is NULL so the call never fires, but if the symbol is provided by a TM runtime, the rewrite would silently drop the dispatch.",
+    "[low] control_flow: Original has a conditional branch based on the (end-start)/16 >> 1 == 0 test and the GOT-slot NULL test; rewrite has no control flow. Equivalent under standard build assumptions."
   ],
   "string_names": {
     "ELF": "ELF",
     "/lib64/ld-linux-x86-64.so.2": "LIB64_LD_LINUX_X86",
     "GNU": "GNU",
     "9]@": "9",
-    "__gmon_start__": "GMON_START"
+    "libgfortran.so.5": "LIBGFORTRAN_SO_NAME"
   },
   "variable_names": {
-    "arg0": "arg0",
-    "arg1": "arg1",
-    "var0": "var0",
-    "t0": "t0"
+    "arg0": "completed",
+    "arg1": "mid",
+    "var0": "ret",
+    "t0": "ret"
   },
   "constant_labels": {},
   "loop_idioms": [],
