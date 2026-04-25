@@ -1,18 +1,19 @@
-# Reviewer Note: `main_cold_unwind_cleanup` @ 0x1320
+# Reviewer note: `main_cold_unwind_cleanup` @ 0x1320
 
 ## What the pipeline did
-- **Reclassified the function** as a GCC-emitted `.cold` partition of `main()` — i.e. an exception-unwinding landing pad, not user code. The output is a stub, not a faithful C reconstruction.
-- **Collapsed two duplicated cleanup blocks** in the pseudocode (the pre- and post-`goto L_134c` arms) into a single body, on the theory that GCC emits two landing pads sharing a tail and only one runs at runtime.
-- **Renamed/identified thunks heuristically**: `0x12a0`, `0x1300`, `0x1260` were guessed to be PLT stubs in the `__cxa_begin_catch` / `_Unwind_Resume` / `__cxa_end_catch` family. None of these names were verified against the binary's PLT.
-- **Replaced frame/`rbp`-relative operands with `__builtin_frame_address(0)` placeholders** for both the vector pointer and the exception object — these are not the real arguments.
-- **Added `noreturn`/`cold` attributes** and reduced the tail to a single `_Unwind_Resume` call.
-- **Dropped** the `0x12a0(stack_0)` / `0x12a0(stack_2)` calls and the second destructor invocation entirely.
+- **Reclassified the function**: declared it a GCC `.cold` partition of `main()` — i.e. a compiler-emitted exception unwind landing pad rather than user code. The output is a stub, not a faithful translation of every instruction.
+- **Collapsed duplicated blocks**: the pseudocode contains two near-identical sequences joined by `goto L_134c`. The rewriter merged them into one, on the theory that GCC emits two landing pads sharing a tail and only one runs at any given unwind.
+- **Renamed/guessed thunks**: the unnamed PLT stubs `0x12a0`, `0x1300`, `0x1260` are *guessed* to be `__cxa_begin_catch` / `_Unwind_Resume` / `__cxa_end_catch`-family helpers based purely on the surrounding `std::vector<std::string>::~vector` call. None of these names were resolved from the binary.
+- **Dropped most calls**: the original has ~10 thunk invocations (multiple `0x12a0`, `0x1300`, `0x1260`, two destructor calls). The rewrite emits only one destructor call + one `_Unwind_Resume`. Significant behavior is omitted, not preserved.
+- **Invented operand values**: both pointer arguments are filled with `__builtin_frame_address(0)` placeholders because the rbp-relative offsets in the parent `main()` frame are not recoverable in isolation.
+- **Added attributes**: `noreturn`, `cold`, and an `extern` declaration for `_Unwind_Resume` were synthesized; nothing in the pseudocode proves the function never returns.
 
-## Assumptions that are not mechanically provable
-- That `0x12a0`, `0x1300`, `0x1260` are in fact unwind/EH runtime thunks (no PLT resolution was done).
-- That the two pseudocode arms are semantically identical and safe to merge — the original has two distinct destructor calls and two distinct stack slots (`stack_0`, `stack_1`, `stack_2`), which suggests *two different objects* may be destroyed, not one.
-- That only a single `vector<string>` local exists in `main()`. The pseudocode shows the vector destructor called twice on `stack_1`, which could equally indicate two vectors at different offsets that the decompiler aliased.
-- That the function terminates via `_Unwind_Resume` rather than rethrow / `__cxa_rethrow` / `std::terminate`.
-- Equivalence checking was skipped (LLM unavailable) — this rewrite is **not verified** against the original.
+## Assumptions not mechanically provable
+- That `0x12a0`/`0x1300`/`0x1260` are in fact C++ ABI / unwind helpers and not application functions.
+- That the two landing-pad copies are semantically equivalent and safe to merge.
+- That the function is `noreturn` (terminating in `_Unwind_Resume`).
+- That the destructor's `this` and the resume argument are the same / adjacent stack slots — operands were not recovered.
+- That this symbol is even reachable as `main.cold` (name was inferred from context, not symbol table evidence shown here).
 
-## Reviewer checklist
+## Verification status
+- Equivalence check was **not** performed (LLM unavailable). Treat the rewrite as a hand-written summary, not a verified translation.

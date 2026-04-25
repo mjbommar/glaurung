@@ -402,15 +402,60 @@ def _collect_struct_field_accesses(
     return {k: sorted(v) for k, v in type_fields.items()}
 
 
+_NUMERIC_OP_NEAR_FIELD_RE = re.compile(
+    r"(\+\+|--|[+\-*/%]=|<<=|>>=|&=|\|=|\^=|\bsizeof|=\s*\d|"
+    r"==\s*\d|!=\s*\d|<\s*\d|>\s*\d|<=\s*\d|>=\s*\d)"
+)
+_PTR_OP_NEAR_FIELD_RE = re.compile(r"->|\*\s*self->|\bstrlen\b|\bstrcpy\b|\bmemcpy\b")
+
+
+def _guess_field_type(source_bodies: List[str], pronoun: str, field: str) -> str:
+    """Heuristic placeholder type for a field accessed via ``self->FIELD``
+    or ``this->FIELD`` across multiple bodies.
+
+    Walks every line that mentions the field and votes:
+
+    - Pointer-y operations (`*self->fld`, `strlen(self->fld)`, `->`
+      following the field, `++` on the result yielding a pointer) → ``void *``.
+    - Numeric ops (`++`, `--`, `+=`, comparisons with int literals,
+      ``= <number>``) → ``int``.
+    - Otherwise default to ``int``, which keeps recovered C/C++ compiling
+      without a pointer-arithmetic warning when the field is incremented
+      and is closer to the truth than ``void *`` for the common counter /
+      flag / size case.
+    """
+    field_re = re.compile(rf"\b{re.escape(pronoun)}\s*->\s*{re.escape(field)}\b")
+    ptr_votes = 0
+    int_votes = 0
+    for body in source_bodies:
+        for line in body.splitlines():
+            if not field_re.search(line):
+                continue
+            if _PTR_OP_NEAR_FIELD_RE.search(line):
+                ptr_votes += 1
+            if _NUMERIC_OP_NEAR_FIELD_RE.search(line):
+                int_votes += 1
+    if ptr_votes > int_votes:
+        return "void *"
+    return "int"
+
+
 def _augment_canonical_types(
     canonical: Dict[str, str],
     field_accesses: Dict[str, List[str]],
+    source_bodies: Optional[List[str]] = None,
 ) -> Dict[str, str]:
     """Add fields referenced via ``->`` but not present in the merged
-    canonical declarations. Adds them as ``void *FIELD;`` placeholders
-    so the resulting types.h compiles even when the rewriter never
-    declared the field's true type.
+    canonical declarations.
+
+    Each field's placeholder type is heuristically chosen by
+    :func:`_guess_field_type` — defaults to ``int`` (no warning on
+    ``++``/arithmetic) and switches to ``void *`` only when the access
+    pattern looks pointer-shaped (e.g. dereferenced or fed to strlen).
+    Without this heuristic every recovered field came out as
+    ``void *FIELD`` which compiles but warns on every increment.
     """
+    bodies = source_bodies or []
     out: Dict[str, str] = {}
     for name, decl in canonical.items():
         fields = field_accesses.get(name, [])
@@ -424,8 +469,22 @@ def _augment_canonical_types(
             continue
         # Inject placeholders before the closing brace of the decl.
         injection = "\n    /* fields recovered from cross-function uses: */\n"
-        injection += "\n".join(f"    void *{f}; /* TODO: real type */" for f in missing)
-        injection += "\n"
+        injection_lines = []
+        for f in missing:
+            ty = _guess_field_type(bodies, "self", f)
+            # Try `this` too — sometimes the same field is accessed both ways.
+            if ty == "int":
+                ty2 = _guess_field_type(bodies, "this", f)
+                if ty2 == "void *":
+                    ty = ty2
+            # ty is either "int" (need a space before the field name) or
+            # "void *" (the trailing * already separates the type token
+            # from the field; either spacing is legal C).
+            sep = "" if ty.endswith("*") else " "
+            injection_lines.append(
+                f"    {ty}{sep}{f}; /* TODO: refine type */"
+            )
+        injection += "\n".join(injection_lines) + "\n"
         # Find the last `}` in the decl and inject before it.
         idx = decl.rfind("}")
         if idx < 0:
@@ -437,11 +496,19 @@ def _augment_canonical_types(
     for name, fields in field_accesses.items():
         if name in out:
             continue
-        body = "\n".join(f"    void *{f}; /* TODO: real type */" for f in fields)
+        body_lines: List[str] = []
+        for f in fields:
+            ty = _guess_field_type(bodies, "self", f)
+            if ty == "int":
+                ty2 = _guess_field_type(bodies, "this", f)
+                if ty2 == "void *":
+                    ty = ty2
+            sep = "" if ty.endswith("*") else " "
+            body_lines.append(f"    {ty}{sep}{f}; /* TODO: refine type */")
         out[name] = (
             f"struct {name} {{\n"
             "    /* synthesized from cross-function field accesses */\n"
-            + body + "\n};"
+            + "\n".join(body_lines) + "\n};"
         )
     return out
 
@@ -1387,10 +1454,11 @@ def main() -> int:
         for s in members:
             all_type_decls.extend(_extract_type_decls(s["emit_source"]))
     canonical_types = _merge_type_decls(all_type_decls)
-    field_accesses = _collect_struct_field_accesses(
-        [s["emit_source"] for members in grouped.values() for s in members]
+    all_bodies = [s["emit_source"] for members in grouped.values() for s in members]
+    field_accesses = _collect_struct_field_accesses(all_bodies)
+    canonical_types = _augment_canonical_types(
+        canonical_types, field_accesses, source_bodies=all_bodies,
     )
-    canonical_types = _augment_canonical_types(canonical_types, field_accesses)
     if canonical_types:
         # Strip duplicates from per-function bodies so the header is the
         # single source of truth.

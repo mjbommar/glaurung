@@ -9,21 +9,15 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Recommended hardening / warning flags on Linux
+# Stack protector flag observed in binary (__stack_chk_fail)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(-Wall -Wextra -fstack-protector-strong)
+    add_compile_options(-fstack-protector-strong -Wall)
 endif()
 
-add_executable(hello
-    src/hello.cpp
-)
+add_executable(hello src/hello.cpp)
 
-# Binary imports indicate the C++ standard library and pthread are required.
-# libstdc++ is linked automatically by the C++ driver; pthread is linked
-# explicitly for portability with std::thread / atexit handlers.
 if(UNIX AND NOT APPLE)
-    find_package(Threads REQUIRED)
-    target_link_libraries(hello PRIVATE Threads::Threads)
+    target_link_libraries(hello PRIVATE pthread)
 endif()
 
 install(TARGETS hello RUNTIME DESTINATION bin)

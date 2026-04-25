@@ -1,17 +1,17 @@
-# print_message_and_count @ 0x19c0 — Reviewer Note
+## Audit note: `HelloWorld::printMessage` @ 0x19c0
 
-## What the pipeline did
-- Recognized the function as `HelloWorld::printMessage()` (C++), even though the language tag is `c`. Body is written in C++ syntax.
-- Collapsed the inlined `std::endl` expansion (vtable[-0x18] → ios_base+0xF0 ctype facet → facet+0x38 vtable test → either direct `sputc('\n')+flush` or `do_widen('\n')+sputc+flush`) into a single `<< std::endl`.
-- Identified `sub_1280` as `std::__ostream_insert` and rendered it as `std::cout << this->message`.
-- Renamed `[this+0x20]` increment to `++this->call_count`.
-- Dropped prologue/epilogue register saves.
-- **Dropped the entire second body starting at L_1a4b** as a decompiler artifact (a separate concatenated function — looks like a `~vector<string>()`-style destructor: walks `[base..end]` in 32-byte strides freeing non-SSO buffers, then frees the outer storage).
+### What the pipeline did
+- **Recognised idiom**: collapsed the entire vtable / `ios_base` facet / `do_widen('\n')` / `sputc` / `flush` dance into a single `std::cout << this->message << std::endl;`. Both branches at `L_1a03` (fast path) and the `do_widen` fallback fold to the same C++ statement.
+- **Recognised `operator<<`**: identified the call to `sub_1280(cout, data_ptr, length)` as `std::__ostream_insert` invoked via `operator<<(ostream&, const string&)`, implying field@0 is a `std::string`.
+- **Named the struct**: introduced `HelloWorld { std::string message; long call_count; }` with `message` at offset 0, `call_count` at offset 0x20.
+- **Dropped a second function body**: the pseudocode after `L_1a4b` has a fresh prologue and walks `[this+0]..[this+8]` in 32-byte strides freeing buffers — looks like a destructor (`~vector<string>` or similar) concatenated by the decompiler. Rewriter discarded it entirely.
+- **Discarded the `var0 == 0` (null facet) branch** that jumps to `L_1a4b`; under the std::endl interpretation that branch is unreachable, so it's not modelled.
+- Cleaned up prologue/epilogue register saves and emitted as C++ inside a `c`-tagged file (per request).
 
-## Assumptions not mechanically provable
-- Class layout: `std::string message` at offset 0 (libstdc++ 0x20 bytes), `long call_count` at offset 0x20. Field name and exact integer width of `call_count` are guesses; original is just a machine-word increment.
-- The `goto L_1a4b` (taken when the ctype facet pointer is null) is assumed unreachable under the canonical std::endl idiom and is *not* modelled in the rewrite.
-- L_1a4b onward is assumed to be a *different* function the decompiler glued on. This is plausible (fresh prologue, distinct semantics, printMessage's signature has no room for it) but not proven from the listing alone.
+### Assumptions not mechanically provable
+- Field @0 is really `std::string` (libstdc++ layout). Could conceivably be any object whose first two words are `(char*, size_t)`.
+- Field @0x20 is a `long` (machine-word) counter — width not provable from the `add [..],1` alone; rewriter chose 64-bit.
+- The post-`L_1a4b` blob really is a separate function and not a legitimate cold path of `printMessage`. Tail-call to `sub_12B0` plus a fresh prologue makes this likely but not certain.
+- The `goto L_1a4b` taken when the ctype facet pointer is null is assumed unreachable in practice (canonical for `std::endl`).
 
-## Review checklist
-<!-- items below -->
+### Reviewer checklist

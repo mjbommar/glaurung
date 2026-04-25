@@ -178,14 +178,16 @@ def _heuristic(args: InferBuildSystemArgs) -> BuildSystem:
 
 _SYSTEM_PROMPT = (
     "You are setting up the build system for a recovered project in "
-    "the requested target language. Produce all the files needed to "
-    "build: CMakeLists.txt / Cargo.toml / go.mod / pyproject.toml "
-    "(plus companion files only when necessary). Infer external "
-    "library dependencies from the binary's import list (openssl, "
-    "libcurl, pthread, zlib, …). Wrap platform-specific modules in "
-    "the appropriate conditional (CMake's if(WIN32), Cargo's "
-    "cfg(target_os)). Produce complete, syntactically valid files — "
-    "not fragments."
+    "the requested target language. Produce ONLY build-control files: "
+    "CMakeLists.txt / Cargo.toml / go.mod / pyproject.toml / Makefile "
+    "/ build.gradle / etc. Do NOT emit source files (.c, .cpp, .rs, "
+    ".go, .py) or header files (.h, .hpp) — the source tree already "
+    "exists separately and any .cpp/.c entry you return will be "
+    "rejected by the orchestrator. Infer external library dependencies "
+    "from the binary's import list (openssl, libcurl, pthread, zlib, "
+    "…). Wrap platform-specific modules in the appropriate conditional "
+    "(CMake's if(WIN32), Cargo's cfg(target_os)). Produce complete, "
+    "syntactically valid files — not fragments."
 )
 
 

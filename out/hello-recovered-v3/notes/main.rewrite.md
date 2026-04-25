@@ -1,21 +1,23 @@
 # Audit note — `main` @ 0x13d0
 
 ## What the pipeline did
-- **Language switch**: prototype declared C, but the rewriter emitted C++ because the binary uses libstdc++ (`std::vector<std::string>`, `std::cout`, mangled `HelloWorld::printMessage`, ctor/dtor pairs). Reasonable, but worth confirming the build system is OK with this.
-- **Loop collapsing**:
-  - Inlined argv→`std::vector<std::string>` copy loop (SSO + heap branches at L_1530/L_1538/L_1553/L_15ae) replaced by `reserve(argc) + emplace_back`.
-  - 32-byte-stride length accumulator (L_15d0..L_15ed) replaced by a `range-for` summing `s.size()`.
-- **Object identity**: inferred two distinct `HelloWorld` instances (`hello1`, `hello2`) from two ctor/dtor/printMessage triples.
-- **Renames**: role-based (`greeting`, `args`, `sum_label`, `total_length`) rather than mechanical, because pseudocode names collide across scopes.
-- **Error paths consolidated**: original had three throw sites (`basic_string::_M_construct null not valid`, `__throw_length_error`, `cannot create std::vector larger than max_size()`). Rewriter kept only a single null-arg check throwing a `logic_error`, dropping the length_error and vector-max-size paths.
-- **Dropped**: stack canary save/check, duplicated basic-block tails (loop-peel artefacts).
+- **Re-tagged language**: prototype said C, output is C++ because the binary uses libstdc++ (`std::vector<std::string>`, `std::cout`, mangled `HelloWorld::printMessage`).
+- **Collapsed inlined std::string construction loop** (L_1553..L_15d0, with SSO vs heap branches at L_1530/L_1538/L_15ae) into `args.emplace_back(argv[i])`.
+- **Collapsed 32-byte-stride length-accumulation loop** (L_15d0..L_15ed) into a range-for summing `s.size()`.
+- **Inferred two `HelloWorld` instances** from the two `printMessage()` calls and matching ctor/dtor pairs.
+- **Inferred `reserve(argc)`** from the `(span>>3)*32` allocation via `operator new` at 0x1250.
+- **Dropped** duplicated basic-block tails (loop-peel artefacts), the stack-canary save/check, and the `__throw_length_error("cannot create std::vector larger than max_size()")` overflow path.
+- **Renamed** locals semantically (`greeting`, `args`, `hello1`, `sum_label`) rather than via mechanical 1:1 substitution.
 
 ## Assumptions not mechanically provable
-- **rodata[0x20a0] is unrecoverable** → first `std::string`'s leading 8 bytes substituted with an empty placeholder. **Materially changes the constructed string.**
-- **`stack_21` (counter value) source not traced** → hard-coded `0`. **Changes observable output.**
-- Used **undefined symbolic identifiers** (`ERR_STRING_NULL_NOT_VALID`, `LBL_TOTAL_ARG_LENGTH`, `COUNTER_VALUE_LABEL`) where the pseudocode has actual string literals. **Code as-emitted will not compile** and the observable strings differ from the binary.
-- Assumed `argc >= 0` so `static_cast<size_t>(argc)` is equivalent to the original `movsxd`.
-- Assumed `reserve(argc)` matches the original's direct `operator new(argc*32)` semantics — fine at source level, but skips the explicit `> 0x1ffffffffffffff8` overflow check.
-- Assumed the two `printMessage` calls are on distinct objects rather than one re-used object.
+- Two distinct `HelloWorld` objects (vs one reused) — based on ctor/dtor pairing in prologue/epilogue.
+- The `argv` copy is exactly `for i in [0,argc)` — argc bound came from `(cursor_span/8)` matching argv length convention.
+- The accumulator `var8` is summing `string::size()` over `args` (not e.g. capacity).
+- Second string literal decoded as `"Sum printer"` (11 bytes) from immediates 0x6e697270206d7553 / 0x6574 / 0x72 — note trailing `'r'` (0x72) wasn't shown in immediates table; verify.
+- The single null-check throw maps to the `_M_construct null not valid` site only; original also chains to `__throw_length_error`.
 
-## Reviewer checklist
+## Known materially-different output (HIGH severity)
+- **First greeting string**: leading 8 bytes come from `rodata[0x20a0]` in the binary; rewrite substitutes an empty-buffer placeholder. **Constructed string content is wrong.**
+- **Counter value print**: original emits `stack_21` (untraced source); rewrite hard-codes `0`. **Observable output differs.**
+- **Undefined identifiers** (`ERR_STRING_NULL_NOT_VALID`, `LBL_TOTAL_ARG_LENGTH`, `COUNTER_VALUE_LABEL`): code as written **will not compile**; literal strings from pseudocode were not inlined verbatim.
+- **Dropped length_error path**: original calls `0x1270()` then `__throw_length_error`; rewrite throws a single `logic_error`.

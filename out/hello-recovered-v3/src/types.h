@@ -10,6 +10,6 @@ public:
     void printMessage();
 
     /* fields recovered from cross-function uses: */
-    void *call_count; /* TODO: real type */
-    void *message; /* TODO: real type */
+    int call_count; /* TODO: refine type */
+    void *message; /* TODO: refine type */
 };
