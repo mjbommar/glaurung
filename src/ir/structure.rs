@@ -444,6 +444,37 @@ fn detect_if_shape(
         }
     }
 
+    // --- if-then with shared-exit goto (#192) ------------------------------
+    // The richer shape: one arm is a terminating block that is reached from
+    // multiple sites (e.g. `L_end: return;` shared by every `if (cond) goto
+    // L_end;` in the function). We clone-inline the terminating block into
+    // this if-then's body but DO NOT mark it visited, so other branches in
+    // the same function can also fold their gotos away — and so the outer
+    // build will still emit the block as the function's tail.
+    //
+    // The block-index reference inside `IfThen { then_r: Region::Block(b) }`
+    // causes the AST lowerer to render the terminating statements twice
+    // (once per if-goto site, once at the tail), which is the right
+    // semantics: each if statement is conceptually `if (cond) { return; }`.
+    for &(body, cont) in &[(t, e), (e, t)] {
+        let body_is_shared_exit =
+            cfg.succs[body].is_empty() && cfg.preds[body].len() > 1;
+        if body_is_shared_exit {
+            visited.insert(cond);
+            // Don't mark `body` as visited — let outer recursion emit it
+            // when we eventually fall through (or when another branch also
+            // references it).
+            return Some((
+                Region::IfThen {
+                    cond,
+                    then_r: Box::new(Region::Block(body)),
+                    join: None,
+                },
+                Some(cont),
+            ));
+        }
+    }
+
     // --- if-then-else where both arms terminate (#192) ---------------------
     // Both arms exit the function; there is no continuation. We emit an
     // IfThenElse with join=None and signal the outer build to stop.
@@ -700,6 +731,54 @@ mod tests {
             !matches!(&r, Region::Unstructured(_)),
             "expected structured shape; got {:?}", r,
         );
+    }
+
+    #[test]
+    fn shared_exit_goto_folds_into_if_thens() {
+        // The canonical real-binary shape:
+        //   B0: cond → B1, L (goto L on true)
+        //   B1: cond → B2, L (goto L on true)
+        //   B2: → L  (fall-through)
+        //   L:  return
+        // Expected: the structurer wraps each `if cond` around `Block(L)`
+        // and emits L itself as the function tail. Crucially, no
+        // Unstructured nodes — every block participates in a structured
+        // shape.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100, 0x1300]), // B0: cond → B1, L
+            (0x1100, vec![Op::Nop], vec![0x1200, 0x1300]), // B1: cond → B2, L
+            (0x1200, vec![Op::Nop], vec![0x1300]),         // B2: → L
+            (0x1300, vec![Op::Return], vec![]),            // L:  return
+        ]);
+        let r = recover_for(&lf);
+        // Walk the tree and confirm no Unstructured leaves and that the
+        // shared exit (block 3) is referenced more than once (the
+        // clone-inline behaviour).
+        fn count_block(r: &Region, target: usize) -> (usize, bool) {
+            match r {
+                Region::Block(b) => ((*b == target) as usize, false),
+                Region::Seq(parts) => {
+                    let mut count = 0;
+                    let mut bad = false;
+                    for p in parts {
+                        let (c, b) = count_block(p, target);
+                        count += c; bad |= b;
+                    }
+                    (count, bad)
+                }
+                Region::IfThen { then_r, .. } => count_block(then_r, target),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    let (c1, b1) = count_block(then_r, target);
+                    let (c2, b2) = count_block(else_r, target);
+                    (c1 + c2, b1 || b2)
+                }
+                Region::While { body, .. } => count_block(body, target),
+                Region::Unstructured(_) => (0, true),
+            }
+        }
+        let (count, has_unstructured) = count_block(&r, 3);
+        assert!(!has_unstructured, "expected no Unstructured; got {:?}", r);
+        assert!(count >= 2, "expected shared-exit block referenced >=2 times; got {} in {:?}", count, r);
     }
 
     #[test]
