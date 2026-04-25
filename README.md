@@ -72,11 +72,44 @@ Active development. Foundations and analyst‑facing surface area are largely in
 ### Active Frontier
 
 - **Decompiler readability** (#161 umbrella): control‑flow structuring (gotos→if/while/for), switch reconstruction, type‑aware re‑render
-- **PDB ingestion** (#179): symmetric counterpart to DWARF for Windows/MSVC binaries
+- **Decompiler readability** (#192 control‑flow structuring, #193 switch reconstruction): the single biggest gap to Hex‑Rays‑grade output
+- **PDB ingestion** (#179, blocked on #197 MSVC sample fixtures): symmetric counterpart to DWARF for Windows/MSVC binaries
 - **More architectures** (#166): MIPS, RISC‑V, PowerPC, WASM
-- **Patch / assembly editor** (#185)
 - **BSim‑equivalent function similarity** (#186)
-- **Headless project management** (#188): multi‑binary projects with cross‑binary symbol resolution
+- **Web chat UI** (#203/#204): the actual product surface for the agentic workflow
+
+## Quick start: agentic workflow today
+
+```bash
+# One‑shot first‑touch analysis: detect packer + triage + analyze + index +
+# demangle + per‑function discover/propagate/recover‑structs in ~300ms.
+glaurung kickoff samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+
+# Function‑level diff between two binaries (BinDiff‑style).
+glaurung diff old.elf new.elf
+
+# Packer detection (UPX / Themida / VMProtect / ASPack / MPRESS / ...).
+glaurung detect-packer suspicious.bin
+
+# DOT export — pipe into `dot -Tsvg` for callgraph or per‑function CFG visuals.
+glaurung graph my.elf callgraph
+glaurung graph my.elf cfg main
+
+# Patch hex bytes at a VA, producing a new binary file.
+glaurung patch in.elf out.elf --va 0x1140 --bytes "90 90 90"
+
+# Interactive REPL with persistent KB (.glaurung project file).
+glaurung repl my.elf
+0x1234> goto main
+0x1234> locals discover
+0x1234> propagate
+0x1234> locals rename -0x10 my_request_buf
+0x1234> decomp
+```
+
+Three end‑to‑end demo conversations are written up in
+[`docs/demos/`](./docs/demos/) — malware triage, vulnerability hunting,
+and patch analysis — each reproducible from the current HEAD.
 
 ## Installation
 

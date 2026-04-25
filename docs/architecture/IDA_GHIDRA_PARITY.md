@@ -39,6 +39,8 @@ why each gap matters. Updated whenever a roadmap task completes.
 | 162 | ABI-aware argument recovery (Win64, ARM64) | ✅ | Adds Win64 (rcx/rdx/r8/r9) and AAPCS64 (x0-x7) tables; auto-dispatch from triage |
 | 177 | Jump-table walker | ✅ | Detects relative-offset `i32` switch tables in rodata; seeds case bodies as discoverable functions |
 | 184 | Function-level binary diff tool | ✅ | `glaurung diff a b` — pair-wise diff with same/changed/added/removed status per function; Markdown + JSON output |
+| 185 | Patch / assembly editor (v0) | ✅ | `glaurung patch in out --va --bytes <hex>`; `patch_at_va()` API; v1 will add iced-x86-encoded mnemonic input |
+| 206 | `kickoff_analysis` composite tool | ✅ | One-shot first-touch pipeline (~300ms): detect_packer + triage + analyze + index + demangle + per-function discover/propagate/recover-structs. Available as REPL command, CLI subcommand, and pydantic-ai memory tool. |
 | **193** | **Switch-statement reconstruction** | ⏳ | Combines with #177 jump-table walker (now shipped) — next is IR-level construct emission |
 
 ## #161 umbrella — Decompiler polish atoms
@@ -78,6 +80,18 @@ why each gap matters. Updated whenever a roadmap task completes.
 | 188 | Headless analyzer + project management (Ghidra-style) | ⏳ | Multi-binary projects |
 | 189 | Debugger integration (gdb/lldb bridge) | ⏳ | Static-only today |
 | 190 | Symbol export to BNDB / IDB / Ghidra archive | ⏳ | Subset of #165 |
+
+## Demo loop status
+
+All three canonical chat-UI demo conversations from the phased plan are now reproducible from the current HEAD:
+
+| Demo | Sample | Transcript |
+|---|---|---|
+| 1. Malware triage | `c2_demo-clang-O0` | [demo-1-malware-triage.md](../demos/demo-1-malware-triage.md) |
+| 2. Vulnerability hunting | `vulnparse-c-gcc-O0` | [demo-2-vulnerability-hunting.md](../demos/demo-2-vulnerability-hunting.md) |
+| 3. Patch analysis | `switchy-c-gcc-O2{,-v2}` | [demo-3-patch-analysis.md](../demos/demo-3-patch-analysis.md) |
+
+`glaurung kickoff` (#206) makes the agent's first turn a single tool call (~300ms). Combined with `glaurung diff` (#184) for patch analysis and `glaurung detect-packer` (#187) for malware triage, the deterministic backbone of the chat UI is fully in place — only the streaming web front-end (#203/#204) and the decompiler-readability work (#192/#193) are gating Phase 5 launch.
 
 ## Where Glaurung *over-performs* the incumbents
 
