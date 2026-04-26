@@ -64,19 +64,39 @@ Active development. Foundations and analyst‑facing surface area are largely in
 - 50+ deterministic memory tools registered with the `pydantic-ai` agent: `view_hex`, `search_byte_pattern`, `scan_until_byte`, `decompile_function`, `view_function`, `view_strings`, `list_xrefs_*`, `propose_types_for_function`, `verify_semantic_equivalence`, etc.
 - Source‑recovery orchestrator (`scripts/recover_source.py`) — multi‑LLM pipeline that lifts a binary into idiomatic C/C++/Rust source with audit report
 
-**Operator tooling**
-- `glaurung repl <binary>`: navigation, rename, comment, struct, locals (discover/rename), label, borrow, proto, propagate, recover‑structs, ask
+**Operator tooling — daily-basics floor (the IDA/Ghidra parity floor)**
+- `glaurung repl <binary>`: navigation, `n`/`y` rename+retype keystrokes (auto-rerender), `c` comment, `x` xrefs, `l` locals, struct, label, borrow, proto, propagate, recover-structs, ask
+- `glaurung xrefs <db> <va>` — cross-references panel (callers/readers/writers with src-function + disasm snippet)
+- `glaurung frame <db> <fn-va>` — stack-frame editor with inline rename/retype
+- `glaurung view <db> <va>` — synchronised hex / disasm / pseudocode tri-pane
+- `glaurung find <db> <query>` — substring/regex search across functions, comments, labels, types, stack vars, strings, disassembly
+- `glaurung strings-xrefs <db>` — IDA-style strings window (string + length + use sites)
+- `glaurung patch in out --va N --nop|--jmp|--force-branch [--verify]` — mnemonic patch shorthands with re-disasm verification
+- `glaurung bookmark <db> add|list|delete` and `glaurung journal <db>` — analyst notes
+- `glaurung undo <db>` / `glaurung redo <db>` — reverse any analyst KB write (rename / retype / comment / data label / stack var)
+- `glaurung classfile <path>` — JVM .class / .jar triage
+- `glaurung luac <path>` — Lua bytecode (.luac, LuaJIT) recognizer
 - `glaurung graph <binary> callgraph | cfg <fn>`: DOT export for any visualizer
-- `python -m glaurung.bench --ci-matrix`: per‑commit scorecard tracking 12 metrics across the sample matrix
+- `python -m glaurung.bench --ci-matrix` / `--packed-matrix`: per-commit scorecard tracking 12+ metrics across the sample matrix
+
+**Corpus reach**
+- ELF / Mach-O / PE native binaries (C / C++ / Fortran / Rust / Go)
+- Stripped Go binaries — `g.analysis.gopclntab_names_path` recovers full namespaced names from `.gopclntab`
+- .NET / Mono managed PEs — `g.analysis.cil_methods_path` walks ECMA-335 metadata to recover full `Namespace.Type::Method` names
+- JVM `.class` and `.jar`/`.war`/`.ear` archives — `glaurung classfile` decodes class metadata + method descriptors
+- Lua bytecode (Lua 5.1/5.2/5.3/5.4 + LuaJIT) — `glaurung luac` recognizes engine + recovers source filename
 
 ### Active Frontier
 
-- **Decompiler readability** (#161 umbrella): control‑flow structuring (gotos→if/while/for), switch reconstruction, type‑aware re‑render
-- **Decompiler readability** (#192 control‑flow structuring, #193 switch reconstruction): the single biggest gap to Hex‑Rays‑grade output
+The deterministic backbone is in place. Remaining tracked work is now larger projects:
+
 - **PDB ingestion** (#179, blocked on #197 MSVC sample fixtures): symmetric counterpart to DWARF for Windows/MSVC binaries
-- **More architectures** (#166): MIPS, RISC‑V, PowerPC, WASM
-- **BSim‑equivalent function similarity** (#186)
-- **Web chat UI** (#203/#204): the actual product surface for the agentic workflow
+- **PE format hardening** (#199): delay imports, manifest, version info, TLS callbacks — pre-req for grounded malware triage claims
+- **Web chat UI** (#203/#204): the actual product surface for the agentic workflow; deterministic backbone is fully done
+- **More architectures** (#166): MIPS, RISC-V, PowerPC, WASM
+- **C → Rust translate end-to-end demo** (#173)
+- **BSim-equivalent function similarity** (#186)
+- **Plugin architecture** (#168), **headless project management** (#188), **debugger bridge** (#189)
 
 ## Quick start: agentic workflow today
 
