@@ -86,6 +86,23 @@ DEFAULT_CI_MATRIX = [
     "samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual-stripped",
 ]
 
+# UPX-packed binaries — anchor for #187 packer detection regression.
+# All ten samples should detect_packer as UPX with confidence ≥ 0.9
+# and overall_entropy in [7.0, 8.0]. kickoff_analysis short-circuits
+# deeper analysis on these (skip_if_packed=True).
+PACKED_MATRIX = [
+    "samples/packed/hello-gfortran-O0.upx9",
+    "samples/packed/hello-gfortran-O1.upx9",
+    "samples/packed/hello-gfortran-O2.upx9",
+    "samples/packed/hello-gfortran-O3.upx9",
+    "samples/packed/hello-gfortran-debug.upx9",
+    "samples/packed/hello-go.upx9",
+    "samples/packed/hello-go-static.upx9",
+    "samples/packed/hello-rust-debug.upx9",
+    "samples/packed/hello-rust-musl.upx9",
+    "samples/packed/hello-rust-release.upx9",
+]
+
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
@@ -103,6 +120,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--ci-matrix", action="store_true",
         help="Use the built-in CI matrix (small, fast, language coverage).",
+    )
+    p.add_argument(
+        "--packed-matrix", action="store_true",
+        help="Score the UPX-packed corpus under samples/packed/. "
+             "Regression anchor for #187 packer detection: every "
+             "binary should report packer=UPX, entropy>7.0, and the "
+             "deeper analysis short-circuits.",
     )
     p.add_argument(
         "--output", type=Path, default=None,
@@ -131,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
     explicit = list(args.binary)
     if args.ci_matrix:
         explicit.extend(Path(s) for s in DEFAULT_CI_MATRIX if Path(s).exists())
+    if args.packed_matrix:
+        explicit.extend(Path(s) for s in PACKED_MATRIX if Path(s).exists())
 
     binaries = _discover_binaries(args.root, explicit)
     if not binaries:
