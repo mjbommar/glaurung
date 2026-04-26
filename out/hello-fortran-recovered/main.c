@@ -6,6 +6,12 @@
 #include <string.h>
 #include <stdint.h>
 
+/* Task Q: extern prototypes for libgfortran / Fortran-runtime symbols referenced below. */
+extern void _gfortran_set_args(int argc, char **argv);
+extern void _gfortran_set_options(int n, int *opts);
+extern int options[];
+extern void MAIN__(void);
+
 /**
  * @brief Program entry point for a GNU Fortran-compiled executable.
  *

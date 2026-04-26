@@ -173,6 +173,140 @@ def _is_crt_function(name: str) -> bool:
     return name in _CRT_FUNCTION_NAMES
 
 
+# Task Q: extern prototypes for libgfortran / Fortran-runtime symbols.
+# When the rewriter emits a C lowering of a gfortran binary, the function
+# bodies end up calling _gfortran_* runtime entry points and MAIN__. Without
+# explicit extern declarations these compile under -Wno-implicit-function-
+# declaration but fail under -Wall -Werror, and the recovered tree fails the
+# build-and-verify gate (Bug L audit, finding [high] invented_function).
+#
+# Each entry maps symbol → canonical C extern declaration. The right side is
+# emitted verbatim above the function bodies of any module that references
+# the symbol but does not already declare it.
+_FORTRAN_RUNTIME_PROTOTYPES: Dict[str, str] = {
+    # Process-startup helpers (called from gfortran-emitted main()).
+    "_gfortran_set_args":
+        "extern void _gfortran_set_args(int argc, char **argv);",
+    "_gfortran_set_options":
+        "extern void _gfortran_set_options(int n, int *opts);",
+    # The gfortran-emitted main() also references a static `options[]` array
+    # that the front-end stamps into rodata. We can't recover the actual
+    # values, so we declare it extern and leave linkage to the runtime —
+    # the analyst can supply a stub if they want to actually link.
+    "options":
+        "extern int options[];",
+    # The Fortran program unit's mangled name.
+    "MAIN__":
+        "extern void MAIN__(void);",
+    # libgfortran I/O — the most common runtime calls in any non-trivial
+    # Fortran program.
+    "_gfortran_st_write":
+        "extern void _gfortran_st_write(void *dt);",
+    "_gfortran_st_write_done":
+        "extern void _gfortran_st_write_done(void *dt);",
+    "_gfortran_st_read":
+        "extern void _gfortran_st_read(void *dt);",
+    "_gfortran_st_read_done":
+        "extern void _gfortran_st_read_done(void *dt);",
+    "_gfortran_transfer_character":
+        "extern void _gfortran_transfer_character(void *dt, char *s, int len);",
+    "_gfortran_transfer_character_write":
+        "extern void _gfortran_transfer_character_write(void *dt, "
+        "const char *s, int len);",
+    "_gfortran_transfer_integer":
+        "extern void _gfortran_transfer_integer(void *dt, void *p, int kind);",
+    "_gfortran_transfer_integer_write":
+        "extern void _gfortran_transfer_integer_write(void *dt, "
+        "const void *p, int kind);",
+    "_gfortran_transfer_real":
+        "extern void _gfortran_transfer_real(void *dt, void *p, int kind);",
+    "_gfortran_transfer_real_write":
+        "extern void _gfortran_transfer_real_write(void *dt, "
+        "const void *p, int kind);",
+    "_gfortran_transfer_logical":
+        "extern void _gfortran_transfer_logical(void *dt, void *p, int kind);",
+    "_gfortran_transfer_array":
+        "extern void _gfortran_transfer_array(void *dt, void *desc, "
+        "int kind, int charlen);",
+    # Command-argument intrinsics.
+    "_gfortran_iargc":
+        "extern int _gfortran_iargc(void);",
+    "_gfortran_get_command_argument_i4":
+        "extern void _gfortran_get_command_argument_i4(int *idx, char *buf, "
+        "int unused1, int unused2, int buflen);",
+    "_gfortran_get_command_i4":
+        "extern void _gfortran_get_command_i4(char *buf, int unused1, "
+        "int unused2, int buflen);",
+    # String intrinsics.
+    "_gfortran_string_len_trim":
+        "extern int _gfortran_string_len_trim(int buflen, const char *buf);",
+    "_gfortran_string_index":
+        "extern int _gfortran_string_index(int buflen, const char *buf, "
+        "int sublen, const char *sub, int back);",
+    "_gfortran_concat_string":
+        "extern void _gfortran_concat_string(int destlen, char *dest, "
+        "int alen, const char *a, int blen, const char *b);",
+    "_gfortran_compare_string":
+        "extern int _gfortran_compare_string(int alen, const char *a, "
+        "int blen, const char *b);",
+    # Program-control / error path.
+    "_gfortran_stop_string":
+        "extern void _gfortran_stop_string(const char *s, int len, "
+        "int quiet) __attribute__((noreturn));",
+    "_gfortran_error_stop_string":
+        "extern void _gfortran_error_stop_string(const char *s, int len, "
+        "int quiet) __attribute__((noreturn));",
+    "_gfortran_runtime_error":
+        "extern void _gfortran_runtime_error(const char *fmt, ...) "
+        "__attribute__((noreturn));",
+    # Math / numeric — added on demand; keep this list focused on the
+    # symbols actually seen in samples/ + Bug L audit.
+}
+
+
+def _emit_runtime_externs(bodies: List[str]) -> List[str]:
+    """Return canonical extern declarations for any libgfortran / MAIN__ /
+    options symbol referenced from `bodies` but not already declared.
+
+    Detection is conservative: a symbol is "referenced" if it appears as a
+    bareword token in any body, and "declared" if any body contains
+    ``extern <return> <symbol>(`` or ``void <symbol>(`` or ``int <symbol>(``
+    at column-1-ish (typical for an extern declaration). When ambiguous,
+    we err on the side of emitting the canonical extern — gcc accepts a
+    redundant extern next to an existing declaration for the same prototype.
+    """
+    if not bodies:
+        return []
+    text = "\n".join(bodies)
+    out: List[str] = []
+    for symbol, decl in _FORTRAN_RUNTIME_PROTOTYPES.items():
+        # Reference: symbol appears as a whole-word token.
+        if not re.search(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])", text):
+            continue
+        # Skip if already declared. We don't try to validate signatures —
+        # just spot any line that looks like a prototype for this symbol.
+        already = re.search(
+            rf"^\s*(?:extern\s+)?[A-Za-z_][\w\s\*]*?\b{re.escape(symbol)}\s*\(",
+            text,
+            flags=re.MULTILINE,
+        )
+        if already:
+            continue
+        # Also skip if the symbol is the name of a function defined in this
+        # module (e.g. MAIN__ in the file that defines it).
+        defined = re.search(
+            rf"^\s*[A-Za-z_][\w\s\*]*?\b{re.escape(symbol)}\s*\([^)]*\)\s*\{{",
+            text,
+            flags=re.MULTILINE,
+        )
+        if defined:
+            continue
+        # `options` is a global, not a function. Skip the function-style
+        # check above for it (the regex won't match anyway, but be explicit).
+        out.append(decl)
+    return out
+
+
 def _language_to_target(lang: Optional[str]) -> str:
     """Map a detected compiler-level language to the rewriter's target enum.
 
@@ -1586,6 +1720,19 @@ def main() -> int:
             buf.append(types_header)
         if strings_header and target.parent.name == "src":
             buf.append(strings_header)
+        # Task Q: inject extern declarations for libgfortran / MAIN__ /
+        # `options` symbols that are referenced by this module's function
+        # bodies but not declared locally. The pass is language-agnostic
+        # at the detection level (it scans bodies), but in practice only
+        # fires on Fortran-recovered output where the rewriter lowers
+        # gfortran-emitted main() and MAIN__ as plain C.
+        body_texts = [s.get("emit_source", s["source"]) for s in members]
+        runtime_externs = _emit_runtime_externs(body_texts)
+        if runtime_externs:
+            buf.append("")
+            buf.append("/* Task Q: extern prototypes for libgfortran /"
+                       " Fortran-runtime symbols referenced below. */")
+            buf.extend(runtime_externs)
         buf.append("")
         for s in members:
             if s.get("docstring"):
