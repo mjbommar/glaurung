@@ -118,8 +118,10 @@ def test_locals_prelude_lists_typed_slots(tmp_path: Path) -> None:
         kb, str(binary), int(main.entry_point.value),
     )
     assert "── locals (from KB)" in rendered
-    # Propagated slots show their set_by tag.
-    assert "// propagated" in rendered
+    # Propagated slots show their set_by tag (#194 changed format
+    # from `// propagated` comment line to `set_by=propagated` tag
+    # alongside a real C declaration).
+    assert "set_by=propagated" in rendered
     kb.close()
 
 

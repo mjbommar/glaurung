@@ -1625,8 +1625,15 @@ def render_decompile_with_names(
                 out += "\n"
 
     if include_locals_prelude:
-        prelude = _format_locals_prelude(slots)
-        if prelude:
+        prelude_parts: list[str] = []
+        sig = _format_signature_comment(kb, function_va)
+        if sig:
+            prelude_parts.append(sig + "\n")
+        body = _format_locals_prelude(slots)
+        if body:
+            prelude_parts.append(body)
+        if prelude_parts:
+            prelude = "".join(prelude_parts)
             # Inject after the first opening brace so the prelude lives
             # inside the function body. Falls back to prepending if no
             # `{` is found (defensive — the renderer should always emit one).
@@ -1640,13 +1647,16 @@ def render_decompile_with_names(
 
 
 def _format_locals_prelude(slots: List["StackVar"]) -> str:
-    """Build a `// locals (from KB)` comment block listing every named
-    slot with its c_type and provenance. Skips fully-default `var_*`
-    rows with no c_type (no information to surface).
+    """Build a typed-locals prelude block (#194). Slots with a known
+    c_type emit a real C-style declaration (`int counter; // dwarf`)
+    so the rendered output reads as compilable-shape pseudocode.
+    Slots without a c_type fall back to a `// var_8 (unknown type)`
+    comment line so the analyst sees them but they don't make the
+    output un-parseable.
 
-    Output style is C-comment-only so the result still parses as C
-    syntax for downstream tools that don't tolerate analyst metadata
-    inline."""
+    Skips fully-default `var_*` rows with no c_type AND no
+    interesting set_by tag — no information to surface there.
+    """
     interesting = [
         s for s in slots
         if s.c_type or s.set_by in ("manual", "propagated", "dwarf")
@@ -1655,11 +1665,36 @@ def _format_locals_prelude(slots: List["StackVar"]) -> str:
         return ""
     lines = ["    // ── locals (from KB) ─────────────────────────────────"]
     for s in sorted(interesting, key=lambda s: s.offset):
-        type_str = s.c_type or "(unknown)"
-        tag = f"  // {s.set_by}" if s.set_by else ""
-        lines.append(f"    // {s.offset:+#06x}  {type_str:<24}  {s.name}{tag}")
+        tag = f"  // {s.offset:+#06x}  set_by={s.set_by}" if s.set_by else ""
+        if s.c_type:
+            # Real C-style declaration. Preserve trailing `*` spacing
+            # so `char *buf` reads naturally, vs `char* buf`.
+            sep = "" if s.c_type.endswith("*") else " "
+            lines.append(f"    {s.c_type}{sep}{s.name};{tag}")
+        else:
+            lines.append(
+                f"    // {s.offset:+#06x}  {s.name}  (unknown type, set_by={s.set_by or 'auto'})"
+            )
     lines.append("    // ─────────────────────────────────────────────────")
     return "\n".join(lines) + "\n"
+
+
+def _format_signature_comment(
+    kb: PersistentKnowledgeBase, function_va: int,
+) -> Optional[str]:
+    """When the KB has a function_prototype for the function we're
+    rendering, emit a `// signature: int main(...)` line so the
+    reader sees the typed contract before the body. Returns None if
+    no prototype is known."""
+    fn = get_function_name(kb, function_va)
+    if fn is None:
+        return None
+    proto = get_function_prototype(kb, fn.canonical)
+    if proto is None and fn.demangled:
+        proto = get_function_prototype(kb, fn.demangled)
+    if proto is None:
+        return None
+    return f"    // signature: {proto.render()};"
 
 
 def _resolve_call_target_name(
