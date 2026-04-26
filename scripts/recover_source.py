@@ -136,6 +136,15 @@ _RESERVED_FUNCTION_NAMES = frozenset({
     "__libc_start_main", "__libc_csu_init", "__libc_csu_fini",
     "__do_global_dtors_aux", "_GLOBAL__sub_I_main",
     "deregister_tm_clones", "register_tm_clones", "frame_dummy",
+    # Bug S: gfortran's mangled program-unit name. Without this entry
+    # the post-rewrite naming pass renames `MAIN__` → `main` (after
+    # _safe_filename strips trailing underscores) → `fortran_main_program`
+    # (collision-rename to avoid clobbering the real C `main`), and the
+    # gfortran-emitted main() loses its call target. The Bug L audit
+    # called this out as [medium] module_coherence: "renaming MAIN__
+    # to 'hello_program_main' loses the gfortran name-mangling contract
+    # … anything linking against the original mangled symbol will fail."
+    "MAIN__",
 })
 
 

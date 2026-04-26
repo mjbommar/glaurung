@@ -124,6 +124,64 @@ def test_MAIN__prototype_is_zero_arg_void_return():
     )
 
 
+def test_MAIN__is_in_reserved_function_names():
+    """Bug S: ``MAIN__`` must be in the orchestrator's reserved-name
+    set so the post-rewrite naming pass can't rename it. Without
+    this protection ``_safe_filename("MAIN__")`` returns ``"main"``
+    (because ``.strip("_").lower()`` eats the trailing underscores),
+    which collides with the real C ``main`` and forces a
+    collision-rename to ``fortran_main_program`` — losing the
+    gfortran ABI contract the linker depends on."""
+    import sys
+    sys.path.insert(0, str(_REPO / "scripts"))
+    import recover_source  # noqa: E402
+
+    assert "MAIN__" in recover_source._RESERVED_FUNCTION_NAMES, (
+        "MAIN__ must be in _RESERVED_FUNCTION_NAMES — Bug S "
+        "regression. gfortran emits a separate main() that calls "
+        "MAIN__ by its mangled name; renaming breaks linkage."
+    )
+
+
+def test_safe_filename_strips_underscores_demonstrates_why_reservation_needed():
+    """This test documents the underlying gotcha: ``_safe_filename``
+    intentionally strips leading/trailing underscores (so names like
+    ``__do_global_dtors_aux`` get stable identifiers) — but that
+    same logic eats ``MAIN__``'s trailing pair, hence the need for
+    the reserved-name override."""
+    import sys
+    sys.path.insert(0, str(_REPO / "scripts"))
+    import recover_source  # noqa: E402
+
+    # Confirm the gotcha is real before relying on the override.
+    assert recover_source._safe_filename("MAIN__") == "main"
+
+
+@pytest.mark.skipif(not _MAIN_C.exists(), reason="recovered main.c missing")
+def test_recovered_tree_keeps_MAIN__symbol():
+    """End-to-end: the recovered tree's MAIN__ definition must be
+    spelled MAIN__, not hello_program_main / fortran_main_program /
+    any other paraphrase. main.c calls MAIN__() so the call target
+    must exist under that name."""
+    candidates = [
+        _REPO / "out/hello-fortran-recovered/hello.c",
+        _REPO / "out/hello-fortran-recovered/src/core.c",
+    ]
+    found = False
+    for path in candidates:
+        if not path.exists():
+            continue
+        text = path.read_text()
+        if re.search(r"\bvoid\s+MAIN__\s*\(\s*void\s*\)\s*\{", text):
+            found = True
+            break
+    assert found, (
+        "Could not locate `void MAIN__(void) {` in any recovered "
+        "module — Bug S regression. main.c expects to call MAIN__ "
+        "but the function definition has been renamed away."
+    )
+
+
 @pytest.mark.skipif(not _MAIN_C.exists(), reason="recovered main.c missing")
 def test_main_compiles_under_wall_werror():
     """The all-up gate: the recovered main.c must build clean under
