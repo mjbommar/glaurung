@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cxx_runtime.h"
+
 /**
  * @brief Base destructor (D2) for `std::vector<std::string>`.
  *
@@ -18,7 +20,7 @@
  * storage block of size `_M_end_of_storage - _M_start` bytes is freed via
  * the sized `operator delete`.
  *
- * @param this Pointer to the `std::vector<std::string>` instance to destroy.
+ * @param self Pointer to the `std::vector<std::string>` instance to destroy.
  *             Must reference a valid (possibly empty) vector; `_M_start` may
  *             be NULL for a default-constructed / moved-from vector, in which
  *             case no deallocation is performed.
@@ -29,10 +31,10 @@
  *       require no heap free; only out-of-line buffers are released.
  */
 /* std::vector<std::string>::~vector() - base destructor (D2) */
-void std__vector_string__dtor(std__vector_string *this)
+void std__vector_string__dtor(std__vector_string *self)
 {
-    std__string *first = this->_M_start;
-    std__string *last  = this->_M_finish;
+    std__string *first = self->_M_start;
+    std__string *last  = self->_M_finish;
 
     /* Destroy each std::string in [first, last). */
     for (std__string *p = first; p != last; ++p) {
@@ -44,9 +46,9 @@ void std__vector_string__dtor(std__vector_string *this)
     }
 
     /* Deallocate the vector's storage. */
-    if (this->_M_start != NULL) {
-        operator_delete(this->_M_start,
-                        (char *)this->_M_end_of_storage - (char *)this->_M_start);
+    if (self->_M_start != NULL) {
+        operator_delete(self->_M_start,
+                        (char *)self->_M_end_of_storage - (char *)self->_M_start);
     }
 }
 

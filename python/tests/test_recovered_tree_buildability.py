@@ -76,9 +76,12 @@ def _list_recovered_trees() -> list[Path]:
 # someone else gets paged.
 _KNOWN_BROKEN: dict[str, str] = {
     "hello-recovered":
-        "type `std__vector_string` declared in one TU, used as a "
-        "parameter type in another (Bug J cross-TU type unification "
-        "didn't propagate to vector_string.c)",
+        "iostream_support.c emits raw C++ syntax (std::ostream, "
+        "std::ctype<char>, etc.) without including <iostream> — "
+        "the rewriter wrote a 'recovered std::endl' as plain C++ "
+        "tokens, which won't parse without the standard headers. "
+        "(Bug AA closed std__vector_string cross-TU; the iostream "
+        "implementation gap is a separate v2 problem.)",
     "hello-recovered-v2":
         "HelloWorld::printMessage() defined in print_message.cpp but "
         "missing from the HelloWorld struct definition there — "
