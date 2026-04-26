@@ -10,6 +10,7 @@ pub mod cfg;
 pub mod elf_got;
 pub mod elf_plt;
 pub mod entry;
+pub mod gopclntab;
 pub mod macho_stubs;
 pub mod memory;
 pub mod pe_iat;

@@ -564,6 +564,38 @@ def index_callgraph(
     )
     kb._conn.commit()
 
+    # Go binaries are stripped of regular symbols but always ship a
+    # `.gopclntab` section. Walk it and upgrade every `sub_<hex>` row
+    # whose entry VA matches a recovered Go function (#212). Set_by
+    # is "gopclntab" so manual renames still take precedence.
+    try:
+        go_pairs = g.analysis.gopclntab_names_path(binary_path)
+        if go_pairs:
+            for va, name in go_pairs:
+                cur.execute(
+                    "SELECT canonical, set_by FROM function_names "
+                    "WHERE binary_id = ? AND entry_va = ?",
+                    (kb.binary_id, int(va)),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    set_function_name(
+                        kb, int(va), str(name), set_by="gopclntab",
+                    )
+                    continue
+                # Upgrade rows the analyzer left as sub_<hex>; never
+                # clobber manual / dwarf-derived names.
+                cur_canon, cur_setby = row
+                if cur_setby in ("manual", "dwarf"):
+                    continue
+                if cur_canon and not cur_canon.startswith("sub_"):
+                    continue
+                set_function_name(
+                    kb, int(va), str(name), set_by="gopclntab",
+                )
+    except Exception:
+        pass
+
     # Sweep the freshly-populated names through the demangler so the
     # display column lights up immediately. Failures here aren't fatal.
     try:

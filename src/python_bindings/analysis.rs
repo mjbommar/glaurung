@@ -31,6 +31,9 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     // Mach-O-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(macho_stubs_map_path_py, &analysis_mod)?)?;
 
+    // Go pclntab walker for recovering function names from stripped Go binaries.
+    analysis_mod.add_function(wrap_pyfunction!(gopclntab_names_path_py, &analysis_mod)?)?;
+
     // Add analysis submodule to main module
     m.add_submodule(&analysis_mod)?;
 
@@ -192,4 +195,31 @@ fn macho_stubs_map_path_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     Ok(crate::analysis::macho_stubs::macho_stubs_map(&data))
+}
+
+/// Walk a Go binary's `.gopclntab` and return every recovered
+/// `(entry_va, name)` pair. Returns an empty list if the section is
+/// missing (i.e. not a Go binary) or if the format is unsupported.
+/// Errors only on truly malformed sections.
+#[pyfunction]
+#[pyo3(name = "gopclntab_names_path")]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
+fn gopclntab_names_path_py(
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Vec<(u64, String)>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    match crate::analysis::gopclntab::extract_go_functions(&data) {
+        Ok(funcs) => Ok(funcs.into_iter().map(|f| (f.entry_va, f.name)).collect()),
+        // Non-Go or unsupported magic = empty result. Truncation is a real
+        // error worth surfacing.
+        Err(crate::analysis::gopclntab::GoPclnError::NoSection) => Ok(Vec::new()),
+        Err(crate::analysis::gopclntab::GoPclnError::UnknownMagic(_)) => Ok(Vec::new()),
+        Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "gopclntab parse failed: {:?}", e,
+        ))),
+    }
 }
