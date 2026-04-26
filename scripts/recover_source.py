@@ -2012,6 +2012,22 @@ def main() -> int:
                 binary_metadata=BinaryMetadata(
                     imports_count=len(binary_imports),
                     functions_count=len(funcs),
+                    # Bug R: strings_count was always reported as 0 by the
+                    # audit because we forgot to thread the triage strings
+                    # totals through here. The audit's [medium]
+                    # assumption_risk finding ("strings_count=0 yet a
+                    # 'hello' program must contain the greeting literal")
+                    # was a measurement artefact, not a real triage gap —
+                    # the strings ARE present in .rodata and surfaced by
+                    # `glaurung strings`. Sum across every observed
+                    # encoding so multi-byte strings (UTF-16 in PEs) get
+                    # counted too.
+                    strings_count=int(
+                        (art.strings.ascii_count or 0)
+                        + (art.strings.utf8_count or 0)
+                        + (art.strings.utf16le_count or 0)
+                        + (art.strings.utf16be_count or 0)
+                    ),
                     size_bytes=int(art.size_bytes or 0),
                     format=str(art.verdicts[0].format),
                 ),
