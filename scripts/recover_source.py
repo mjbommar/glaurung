@@ -561,6 +561,85 @@ def _emit_runtime_externs(bodies: List[str]) -> List[str]:
     return out
 
 
+# Bug GG: extern declarations of Itanium-mangled libstdc++ runtime
+# symbols + the C-ABI exception-handling helpers must be wrapped in
+# `extern "C"` when emitted into a .cpp file. Without C linkage, g++
+# re-mangles the already-mangled name and the linker hunts for a
+# spelling that doesn't exist (the diagnostic shows the demangled
+# C++ form, e.g. `_Unwind_Resume(void*)` or `vector<…>::~vector()`,
+# even though the source asked for the literal symbol).
+#
+# This regex matches an extern declaration whose target symbol begins
+# with one of the conventional libstdc++ / itanium-ABI prefixes:
+#   * _Z…     Itanium C++ mangled name (vector D2, basic_string, ...)
+#   * _Unwind_…  GCC unwinder ABI (libgcc_eh.so)
+#   * __cxa_…    Itanium C++ ABI runtime (__cxa_rethrow, __cxa_atexit, …)
+#   * __dso_handle  per-DSO handle used by __cxa_atexit
+#   * _ZdlPv*    operator delete entry points
+#
+# Plain-C runtime helpers (memcpy, fprintf, …) are NOT wrapped — they
+# don't fall in any of the prefix sets.
+_CXX_RUNTIME_EXTERN_RE = re.compile(
+    r"^(?P<full>\s*extern\s+[^;{}]*?\b"
+    r"(?:_Z\w+|_Unwind_\w+|__cxa_\w+|__dso_handle|_ZdlPv\w*)"
+    r"\s*[\(\[][^;{}]*\)?\s*"
+    r"(?:__attribute__\s*\(\([^)]*\)\)\s*)?"
+    r";)\s*$",
+    re.MULTILINE,
+)
+
+
+def _wrap_cxx_runtime_externs_with_c_linkage(body: str) -> str:
+    """Wrap any extern declarations targeting libstdc++ / Itanium-ABI
+    runtime symbols in ``extern "C" { … }``.
+
+    Idempotent: if a matching declaration is already inside an
+    ``extern "C"`` block (detected by a brace-balance heuristic), it
+    is left alone. The pass only fires on bodies that look like C++
+    (we test for `class`, `namespace`, `::`, or `<` template syntax),
+    so plain C bodies are untouched.
+    """
+    if not body:
+        return body
+    # Quick heuristic: only wrap in C++-shaped files.
+    if not re.search(r"\b(?:class|namespace)\b|::\s*\w|<\w[^>]*>", body):
+        return body
+
+    matches = list(_CXX_RUNTIME_EXTERN_RE.finditer(body))
+    if not matches:
+        return body
+
+    # Track which matches are already inside an `extern "C"` block.
+    # Heuristic: count occurrences of `extern "C" {` before the match
+    # and `}` between any such opening and the match. If the diff is
+    # positive, we're inside an extern "C" block.
+    def _inside_extern_c(pos: int) -> bool:
+        prefix = body[:pos]
+        opens = [m.start() for m in re.finditer(r'extern\s+"C"\s*\{', prefix)]
+        if not opens:
+            return False
+        # Count close-braces after the most-recent opener.
+        last_open = opens[-1]
+        between = prefix[last_open:]
+        # Subtract 1 for the opener's own '{', count net braces.
+        opens_in = between.count("{") - 1
+        closes_in = between.count("}")
+        return opens_in >= closes_in
+
+    out = body
+    # Process matches in reverse so substitutions don't shift later offsets.
+    for m in reversed(matches):
+        if _inside_extern_c(m.start()):
+            continue
+        wrapped = (
+            'extern "C" {\n'
+            f'{m.group("full").strip()}\n'
+            '}'
+        )
+        out = out[: m.start()] + wrapped + out[m.end():]
+    return out
+
+
 def _language_to_target(lang: Optional[str]) -> str:
     """Map a detected compiler-level language to the rewriter's target enum.
 
@@ -2036,6 +2115,14 @@ def main() -> int:
                        "statics (file-scope statics in the original "
                        "binary, not external imports). */")
             buf.extend(local_static_defs)
+        # Bug GG: wrap any libstdc++ / itanium-ABI runtime extern
+        # declarations in `extern "C"` so g++ doesn't re-mangle them.
+        # Only fires on C++-shaped bodies (heuristic in the helper);
+        # plain C bodies are left alone.
+        for s in members:
+            s["emit_source"] = _wrap_cxx_runtime_externs_with_c_linkage(
+                s.get("emit_source", s["source"])
+            )
         buf.append("")
         for s in members:
             if s.get("docstring"):

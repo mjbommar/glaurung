@@ -46,6 +46,7 @@ from recover_source import (  # noqa: E402  (sys.path mutation above)
     _module_uses_gfortran_dt,
     _strip_extern_decls_for_local_statics,
     _strip_local_gfortran_dt_decls,
+    _wrap_cxx_runtime_externs_with_c_linkage,
 )
 
 
@@ -413,6 +414,112 @@ void MAIN__(void) { /* stub for the test */ }
         f"Bug W stub-definition pipeline produced uncompilable C:\n"
         f"stdout={result.stdout}\nstderr={result.stderr}\n"
         f"--- source ---\n{main_c.read_text()}"
+    )
+
+
+# -----------------------------------------------------------------------
+# Bug GG — extern "C" wrapping for libstdc++ / Itanium runtime symbols
+# -----------------------------------------------------------------------
+
+def test_wrap_runtime_externs_targets_libstdcxx_mangled_names():
+    """The pass must wrap any extern declaring an Itanium-mangled
+    symbol (`_Z…`) in extern "C" so g++ doesn't re-mangle it."""
+    body = """\
+class X {};
+extern void _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(void *self);
+"""
+    out = _wrap_cxx_runtime_externs_with_c_linkage(body)
+    assert 'extern "C" {' in out
+    assert "_ZNSt6vector" in out
+
+
+def test_wrap_runtime_externs_targets_unwind_resume():
+    """`_Unwind_Resume` is a libgcc_eh entry — same C-linkage gotcha."""
+    body = """\
+class X {};
+extern void _Unwind_Resume(void *exc) __attribute__((noreturn));
+"""
+    out = _wrap_cxx_runtime_externs_with_c_linkage(body)
+    assert 'extern "C" {' in out
+
+
+def test_wrap_runtime_externs_targets_cxa_helpers():
+    """The Itanium C++ ABI runtime — __cxa_atexit, __cxa_rethrow, etc."""
+    body = """\
+class X {};
+extern void __cxa_rethrow(void) __attribute__((noreturn));
+extern void __cxa_atexit(void (*f)(void *), void *p, void *handle);
+"""
+    out = _wrap_cxx_runtime_externs_with_c_linkage(body)
+    # Both should be wrapped.
+    assert out.count('extern "C" {') == 2
+
+
+def test_wrap_runtime_externs_idempotent_on_already_wrapped():
+    """If the extern is already inside an `extern "C"` block, leave
+    it alone — running the pass twice produces the same output."""
+    body = """\
+class X {};
+extern "C" {
+extern void __cxa_rethrow(void) __attribute__((noreturn));
+}
+"""
+    once = _wrap_cxx_runtime_externs_with_c_linkage(body)
+    twice = _wrap_cxx_runtime_externs_with_c_linkage(once)
+    assert once == twice
+    # And no double-wrapping.
+    assert once.count('extern "C" {') == 1
+
+
+def test_wrap_runtime_externs_skips_plain_c_bodies():
+    """Plain-C bodies (no class / namespace / template) are left
+    untouched — the pass is C++-only."""
+    body = "extern int printf(const char *fmt, ...);\nint main(void) { return 0; }"
+    assert _wrap_cxx_runtime_externs_with_c_linkage(body) == body
+
+
+def test_wrap_runtime_externs_skips_non_runtime_externs():
+    """Plain-C runtime helpers (memcpy, fprintf, …) don't fall into
+    any of the libstdc++ / Itanium prefix sets and stay unwrapped."""
+    body = """\
+class X {};
+extern int printf(const char *fmt, ...);
+extern void *memcpy(void *dst, const void *src, size_t n);
+"""
+    out = _wrap_cxx_runtime_externs_with_c_linkage(body)
+    # No new extern "C" added — these aren't runtime symbols we bridge.
+    assert 'extern "C"' not in out
+
+
+def test_wrap_runtime_externs_handles_empty():
+    assert _wrap_cxx_runtime_externs_with_c_linkage("") == ""
+    assert _wrap_cxx_runtime_externs_with_c_linkage(None) is None
+
+
+def test_wrap_runtime_externs_compiles_clean(tmp_path):
+    """End-to-end: a synthetic C++ body with bare libstdc++ externs,
+    when run through the pass, must compile clean under
+    -Wall -Werror — proving the pass produces a usable C++ TU."""
+    if shutil.which("g++") is None:
+        pytest.skip("g++ not available")
+
+    raw = """\
+class HelloWorld { public: void f() {} };
+
+extern void _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(void *self);
+extern void _Unwind_Resume(void *exc) __attribute__((noreturn));
+"""
+    wrapped = _wrap_cxx_runtime_externs_with_c_linkage(raw)
+    test_cpp = tmp_path / "ut.cpp"
+    test_cpp.write_text(wrapped)
+    result = subprocess.run(
+        ["g++", "-c", "-Wall", "-Werror", str(test_cpp), "-o",
+         str(tmp_path / "ut.o")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, (
+        f"wrapped C++ failed to compile under -Wall -Werror:\n"
+        f"stderr={result.stderr}\n--- source ---\n{wrapped}"
     )
 
 
