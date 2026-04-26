@@ -9,8 +9,22 @@
 /* Task Q: extern prototypes for libgfortran / Fortran-runtime symbols referenced below. */
 extern void _gfortran_set_args(int argc, char **argv);
 extern void _gfortran_set_options(int n, int *opts);
-extern int options[];
 extern void MAIN__(void);
+
+/* Bug W: gfortran's compile-time options array (originally `options.6.2`,
+ * file-scope LOCAL static at 0x20d0 in the binary). 7 int entries
+ * encode language standard / range-check / backtrace flags. Values
+ * are the actual bytes recovered from .rodata so a re-compile of the
+ * recovered source produces identical runtime behaviour. */
+static int options[7] = {
+    0x844,    /* GFC_STD_F95_OBS | F2003 | F2008 | LEGACY (lang-standard mask) */
+    0x0fff,   /* runtime-warn mask */
+    0x0,      /* pedantic */
+    0x1,      /* backtrace */
+    0x1,      /* sign-zero */
+    0x0,      /* range-check */
+    0x1f,     /* fpe + denormal trap mask */
+};
 
 /**
  * @brief Program entry point for a GNU Fortran-compiled executable.

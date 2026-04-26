@@ -198,12 +198,11 @@ _FORTRAN_RUNTIME_PROTOTYPES: Dict[str, str] = {
         "extern void _gfortran_set_args(int argc, char **argv);",
     "_gfortran_set_options":
         "extern void _gfortran_set_options(int n, int *opts);",
-    # The gfortran-emitted main() also references a static `options[]` array
-    # that the front-end stamps into rodata. We can't recover the actual
-    # values, so we declare it extern and leave linkage to the runtime —
-    # the analyst can supply a stub if they want to actually link.
-    "options":
-        "extern int options[];",
+    # The gfortran-emitted main() also references the `options[]` array.
+    # In the binary it's a LOCAL static (file-scope), not an extern
+    # import; Bug W's _emit_file_scope_static_defs synthesises a real
+    # definition for it. Keep the name out of the extern registry so
+    # the two passes don't fight.
     # The Fortran program unit's mangled name.
     "MAIN__":
         "extern void MAIN__(void);",
@@ -400,6 +399,102 @@ def _strip_local_gfortran_dt_decls(body: str) -> str:
         out,
     )
 
+    return out
+
+
+# Bug W: gfortran-emitted file-scope statics that the rewriter
+# typically declares ``extern`` but never finds a definition for.
+# The symbol-table truth is that these are LOCAL (file-scope static)
+# in the binary, not external imports — leaving them ``extern`` makes
+# the recovered tree fail to link. _emit_file_scope_static_defs
+# synthesises a stub definition for any of these symbols that's
+# referenced via an extern declaration.
+_FORTRAN_FILE_SCOPE_STATIC_DEFINITIONS: Dict[str, str] = {
+    # Runtime options array passed to _gfortran_set_options. Seven
+    # int32 entries; values reflect the gfortran -O2 defaults observed
+    # in samples/binaries/.../hello-gfortran-O2 (.rodata @ 0x20d0).
+    "options":
+        "/* Bug W: gfortran's compile-time options array (LOCAL "
+        "static in the binary). 7 int entries encode language "
+        "standard / range-check / backtrace flags. */\n"
+        "static int options[7] = {\n"
+        "    0x844, 0x0fff, 0x0, 0x1, 0x1, 0x0, 0x1f,\n"
+        "};",
+    # SAVE'd locals from Fortran subroutines that the rewriter
+    # promoted to file scope. Zero-init matches the binary's .bss
+    # layout in the original.
+    "subroutine_invocations":
+        "/* Bug W: SAVE'd local from a Fortran subroutine — "
+        "zero-init matches the binary's .bss layout. */\n"
+        "static int subroutine_invocations;",
+    "call_count_1":
+        "/* Bug W: SAVE'd local from a Fortran subroutine — "
+        "zero-init matches the binary's .bss layout. */\n"
+        "static int call_count_1;",
+}
+
+
+def _emit_file_scope_static_defs(bodies: List[str]) -> List[str]:
+    """Return canonical stub definitions for any binary-LOCAL static
+    that's referenced via an ``extern`` declaration but lacks a
+    matching definition anywhere in the module.
+
+    Detection: the bareword appears on at least one ``extern <…>
+    <name>`` line, AND no body contains a definition for it (a
+    line matching ``static <…> <name>`` or ``<type> <name>[…] = …``).
+    When both conditions are met, emit the canonical stub so the
+    recovered tree can link cleanly.
+    """
+    if not bodies:
+        return []
+    text = "\n".join(bodies)
+    out: List[str] = []
+    for symbol, stub in _FORTRAN_FILE_SCOPE_STATIC_DEFINITIONS.items():
+        # Must be referenced via an `extern` declaration.
+        extern_re = re.compile(
+            rf"^\s*extern\s+[A-Za-z_][\w\s\*]*?\b{re.escape(symbol)}\b",
+            re.MULTILINE,
+        )
+        if not extern_re.search(text):
+            continue
+        # Must NOT already have a concrete (non-extern) definition.
+        text_no_externs = re.sub(
+            r"^\s*extern\s+[^;]*;\s*\n", "", text, flags=re.MULTILINE,
+        )
+        defined_re = re.compile(
+            rf"^\s*(?:static\s+)?[A-Za-z_][\w\s\*]*?\b{re.escape(symbol)}\s*"
+            rf"(?:\[[^\]]*\])?\s*(?:=|;)",
+            re.MULTILINE,
+        )
+        if defined_re.search(text_no_externs):
+            continue
+        out.append(stub)
+    return out
+
+
+def _strip_extern_decls_for_local_statics(body: str) -> str:
+    """Drop ``extern`` declarations whose name now resolves to a
+    file-scope static stub emitted by _emit_file_scope_static_defs.
+
+    Without this strip, the body would have both:
+
+        extern int options[];                 // from rewriter
+        static int options[7] = { … };        // from Bug W stub
+
+    which is a compile error (conflicting types). Strip the extern
+    once we know the static is going to be emitted.
+    """
+    if not body:
+        return body
+    out = body
+    for symbol in _FORTRAN_FILE_SCOPE_STATIC_DEFINITIONS:
+        out = re.sub(
+            rf"^\s*extern\s+[A-Za-z_][\w\s\*]*?\b{re.escape(symbol)}\b"
+            rf"\s*(?:\[[^\]]*\])?\s*;\s*\n?",
+            "",
+            out,
+            flags=re.MULTILINE,
+        )
     return out
 
 
@@ -1904,6 +1999,23 @@ def main() -> int:
             buf.append("/* Task Q: extern prototypes for libgfortran /"
                        " Fortran-runtime symbols referenced below. */")
             buf.extend(runtime_externs)
+        # Bug W: synthesise stub definitions for any binary-LOCAL static
+        # the rewriter mistakenly declared `extern`. Without these the
+        # recovered tree can't link (`undefined reference to options`,
+        # `… subroutine_invocations`). The strip pass below removes the
+        # rewriter's `extern int options[];` style line so the stub
+        # definition is the single declaration of the symbol.
+        local_static_defs = _emit_file_scope_static_defs(body_texts)
+        if local_static_defs:
+            for s in members:
+                s["emit_source"] = _strip_extern_decls_for_local_statics(
+                    s.get("emit_source", s["source"])
+                )
+            buf.append("")
+            buf.append("/* Bug W: stub definitions for binary-LOCAL "
+                       "statics (file-scope statics in the original "
+                       "binary, not external imports). */")
+            buf.extend(local_static_defs)
         buf.append("")
         for s in members:
             if s.get("docstring"):

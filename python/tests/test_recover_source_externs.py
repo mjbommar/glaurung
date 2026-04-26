@@ -25,6 +25,8 @@ These tests exercise the helpers directly — no LLM, no I/O — so they
 run in milliseconds and don't depend on a working sample binary.
 """
 
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -36,18 +38,22 @@ _SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
 from recover_source import (  # noqa: E402  (sys.path mutation above)
+    _FORTRAN_FILE_SCOPE_STATIC_DEFINITIONS,
     _FORTRAN_RUNTIME_PROTOTYPES,
     _GFORTRAN_RUNTIME_HEADER,
+    _emit_file_scope_static_defs,
     _emit_runtime_externs,
     _module_uses_gfortran_dt,
+    _strip_extern_decls_for_local_statics,
     _strip_local_gfortran_dt_decls,
 )
 
 
-def test_main_c_with_no_externs_gets_all_four():
-    """The canonical gfortran-emitted main() body references four
-    undeclared symbols — the pass should emit all four canonical
-    extern declarations."""
+def test_main_c_with_no_externs_gets_three_runtime_externs():
+    """The canonical gfortran-emitted main() body references three
+    libgfortran functions plus MAIN__. ``options`` is now handled
+    by Bug W's stub-definition pass, not Q's extern pass — so Q
+    should emit three runtime externs + MAIN__, not four."""
     body = """\
 int main(int argc, char **argv)
 {
@@ -61,9 +67,10 @@ int main(int argc, char **argv)
     assert externs == [
         _FORTRAN_RUNTIME_PROTOTYPES["_gfortran_set_args"],
         _FORTRAN_RUNTIME_PROTOTYPES["_gfortran_set_options"],
-        _FORTRAN_RUNTIME_PROTOTYPES["options"],
         _FORTRAN_RUNTIME_PROTOTYPES["MAIN__"],
     ]
+    # And `options` is the responsibility of the Bug W pass, not Q.
+    assert "options" not in _FORTRAN_RUNTIME_PROTOTYPES
 
 
 def test_existing_extern_is_not_duplicated():
@@ -143,13 +150,21 @@ void f(void) {
     assert _FORTRAN_RUNTIME_PROTOTYPES["_gfortran_iargc"] not in externs
 
 
-def test_options_global_is_treated_as_extern_int_array():
-    """``options`` is the gfortran-emitted runtime-options static array;
-    the canonical extern is ``extern int options[];`` (not a function
-    prototype)."""
+def test_options_global_is_handled_by_bug_w_not_q():
+    """``options`` is the gfortran runtime-options array — a
+    binary-LOCAL static, NOT an external import. Bug W emits a
+    stub definition; Q must NOT emit an extern for it (the two
+    would collide)."""
     body = "void f(int *o) { _gfortran_set_options(7, options); }"
     externs = _emit_runtime_externs([body])
-    assert "extern int options[];" in externs
+    # No `extern int options` anywhere in Q's output. (Token-bounded
+    # check — _gfortran_set_options is allowed.)
+    import re as _re
+    assert not any(
+        _re.search(r"\bextern\s+int\s+options\b", e) for e in externs
+    ), f"Q emitted an extern for options: {externs!r}"
+    # Bug W's registry has it instead.
+    assert "options" in _FORTRAN_FILE_SCOPE_STATIC_DEFINITIONS
 
 
 def test_extern_decl_lines_are_not_duplicated_across_runs():
@@ -287,3 +302,117 @@ void use_dt(void) {
     assert result.returncode == 0, (
         f"compile failed:\nstdout={result.stdout}\nstderr={result.stderr}"
     )
+
+
+# -----------------------------------------------------------------------
+# Bug W — stub definitions for gfortran-emitted file-scope statics
+# -----------------------------------------------------------------------
+
+def test_emit_file_scope_static_defs_emits_options_when_extern_declared():
+    """The most common gfortran case: main.c has
+    `extern int options[];` (rewriter's mistake) and references it
+    as `_gfortran_set_options(7, options)`. The pass must emit the
+    canonical static int options[7] = { … } stub."""
+    body = """\
+extern int options[];
+int main(int argc, char **argv) {
+    _gfortran_set_options(7, options);
+    return 0;
+}
+"""
+    defs = _emit_file_scope_static_defs([body])
+    assert any("static int options[7]" in d for d in defs)
+
+
+def test_emit_file_scope_static_defs_emits_subroutine_invocations():
+    """SAVE'd Fortran locals like `subroutine_invocations` get the
+    zero-init stub — matches the binary's .bss layout."""
+    body = """\
+extern int subroutine_invocations;
+void caller(void) { subroutine_invocations += 1; }
+"""
+    defs = _emit_file_scope_static_defs([body])
+    assert any("static int subroutine_invocations" in d for d in defs)
+
+
+def test_emit_file_scope_static_defs_skips_already_defined():
+    """If the body already has `static int options[7] = {…};` we
+    don't double-emit. Idempotence keeps re-runs safe."""
+    body = """\
+extern int options[];
+static int options[7] = {0};
+"""
+    defs = _emit_file_scope_static_defs([body])
+    assert not any("static int options" in d for d in defs)
+
+
+def test_emit_file_scope_static_defs_skips_when_no_extern_present():
+    """No `extern` decl => no stub. The pass only fires when the
+    rewriter has actively mis-classified the symbol."""
+    body = "int main(void) { return 0; }"
+    assert _emit_file_scope_static_defs([body]) == []
+
+
+def test_strip_extern_decls_for_local_statics_removes_offenders():
+    """The strip pass must drop the rewriter's
+    `extern int options[];` so it doesn't conflict with the stub
+    definition Bug W is about to emit."""
+    body = """\
+extern int options[];
+extern int subroutine_invocations;
+extern int unrelated_external;
+void f(void) { options[0] = 1; }
+"""
+    out = _strip_extern_decls_for_local_statics(body)
+    assert "extern int options" not in out
+    assert "extern int subroutine_invocations" not in out
+    # Genuinely-external symbols are preserved.
+    assert "extern int unrelated_external" in out
+
+
+def test_strip_extern_decls_handles_empty_body():
+    assert _strip_extern_decls_for_local_statics("") == ""
+    assert _strip_extern_decls_for_local_statics(None) is None
+
+
+def test_bug_w_pipeline_produces_compilable_main(tmp_path):
+    """End-to-end on a synthetic gfortran-emitted main: apply both
+    the strip + emit passes, then attempt a -Wall -Werror compile.
+    This is the gate that catches Bug W as a unit."""
+    if shutil.which("gcc") is None:
+        pytest.skip("gcc not available")
+
+    raw_body = """\
+extern void _gfortran_set_args(int argc, char **argv);
+extern void _gfortran_set_options(int n, int *opts);
+extern int options[];
+extern void MAIN__(void);
+
+int main(int argc, char **argv) {
+    _gfortran_set_args(argc, argv);
+    _gfortran_set_options(7, options);
+    MAIN__();
+    return 0;
+}
+
+void MAIN__(void) { /* stub for the test */ }
+"""
+    stripped = _strip_extern_decls_for_local_statics(raw_body)
+    stubs = _emit_file_scope_static_defs([raw_body])
+    assert stubs, "Bug W pass should have produced at least one stub"
+
+    main_c = tmp_path / "ut.c"
+    main_c.write_text("\n".join(stubs) + "\n" + stripped)
+
+    result = subprocess.run(
+        ["gcc", "-O2", "-Wall", "-Werror", "-c",
+         str(main_c), "-o", str(tmp_path / "ut.o")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, (
+        f"Bug W stub-definition pipeline produced uncompilable C:\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}\n"
+        f"--- source ---\n{main_c.read_text()}"
+    )
+
+

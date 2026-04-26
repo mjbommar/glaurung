@@ -99,9 +99,14 @@ extern int  _gfortran_string_len_trim(int buflen, const char *buf);
 static const char source_path[] = "/workspace/source/fortran/hello.f90";
 
 /* File-scope globals referenced by the binary. */
+/* Bug W: these were originally declared `extern` by the rewriter, but
+ * the symbol table shows they are LOCAL statics in the binary
+ * (`call_count.1` at 0x4014, the my_subroutine SAVE'd counter), not
+ * external imports. Promote to file-scope statics with zero-init —
+ * matches the binary's .bss layout and lets the recovered tree link. */
 extern int global_counter;       /* address 0x20c0 in the original */
 static int call_count_1;         /* call_count.1 – static in subroutine */
-extern int subroutine_invocations; /* &[var7+0x4014] – bumped before call */
+static int subroutine_invocations;  /* &[var7+0x4014] – bumped before call (Bug W) */
 
 void MAIN__(void)
 {
