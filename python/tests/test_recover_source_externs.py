@@ -1,19 +1,27 @@
-"""Tests for the Task Q runtime-extern injection pass in
+"""Tests for the Task Q + Task P Fortran-runtime emission passes in
 ``scripts/recover_source.py``.
 
-The pass scans every emitted module body for references to libgfortran
-runtime symbols (``_gfortran_*``), the gfortran-emitted process-startup
-helpers (``_gfortran_set_args``, ``_gfortran_set_options``, ``options``),
-and the Fortran ``MAIN__`` mangled name, and injects extern prototypes
-for any symbol that's referenced but not already declared/defined in
-this module.
+Two passes are exercised here:
 
-Why this pass exists: the Bug L verification audit flagged that
-``main.c`` in the Fortran-recovered tree calls four undefined symbols,
-which makes the recovered project fail ``-Wall -Werror`` and lose the
-build-and-verify (#171) gate.
+* **Task Q** — ``_emit_runtime_externs`` scans every emitted module body
+  for references to libgfortran runtime symbols (``_gfortran_*``), the
+  gfortran-emitted process-startup helpers (``_gfortran_set_args``,
+  ``_gfortran_set_options``, ``options``), and the Fortran ``MAIN__``
+  mangled name, and emits extern prototypes for any symbol that's
+  referenced but not already declared/defined in this module.
 
-These tests exercise the helper directly — no LLM, no I/O — so they
+* **Task P** — ``_module_uses_gfortran_dt`` /
+  ``_strip_local_gfortran_dt_decls`` / ``_GFORTRAN_RUNTIME_HEADER``
+  detect modules that touch the libgfortran I/O descriptor, strip the
+  rewriter's per-body stub declarations, and provide a canonical
+  ``st_parameter_dt`` definition so ``dt.flags = …`` /
+  ``dt.common_flags = …`` both compile.
+
+Both passes exist to close audit findings from the Bug L verification —
+``main.c`` and ``hello.c`` in the Fortran-recovered tree fail
+``-Wall -Werror`` without them.
+
+These tests exercise the helpers directly — no LLM, no I/O — so they
 run in milliseconds and don't depend on a working sample binary.
 """
 
@@ -29,7 +37,10 @@ sys.path.insert(0, str(_SCRIPTS))
 
 from recover_source import (  # noqa: E402  (sys.path mutation above)
     _FORTRAN_RUNTIME_PROTOTYPES,
+    _GFORTRAN_RUNTIME_HEADER,
     _emit_runtime_externs,
+    _module_uses_gfortran_dt,
+    _strip_local_gfortran_dt_decls,
 )
 
 
@@ -149,3 +160,130 @@ def test_extern_decl_lines_are_not_duplicated_across_runs():
     second = _emit_runtime_externs([body])
     assert first == second
     assert "extern void MAIN__(void);" in first
+
+
+# -----------------------------------------------------------------------
+# Task P — canonical gfc_dt / st_parameter_dt struct emission
+# -----------------------------------------------------------------------
+
+def test_module_uses_gfortran_dt_detects_both_spellings():
+    """Detection must fire on either ``gfc_dt`` or ``st_parameter_dt``."""
+    assert _module_uses_gfortran_dt("gfc_dt dt;") is True
+    assert _module_uses_gfortran_dt("st_parameter_dt dt;") is True
+    assert _module_uses_gfortran_dt("extern void f(gfc_dt *);") is True
+
+
+def test_module_uses_gfortran_dt_negative_cases():
+    """No false positives on plain C, similar names, or empty bodies."""
+    assert _module_uses_gfortran_dt("") is False
+    assert _module_uses_gfortran_dt("int main(void) { return 0; }") is False
+    # Substring of a different identifier — must NOT match.
+    assert _module_uses_gfortran_dt("int my_gfc_dt_helper(void);") is False
+    assert _module_uses_gfortran_dt("int st_parameter_dt_helper;") is False
+
+
+def test_strip_local_gfortran_dt_decls_removes_forward_decl():
+    """The most common rewriter shape: a forward typedef that fails to
+    compile because field accesses follow."""
+    body = """\
+extern int x;
+typedef struct gfc_dt gfc_dt;
+
+void use(void) { gfc_dt dt; (void)dt; }
+"""
+    out = _strip_local_gfortran_dt_decls(body)
+    assert "typedef struct gfc_dt gfc_dt" not in out
+    # Surrounding code is preserved.
+    assert "extern int x;" in out
+    assert "void use(void)" in out
+
+
+def test_strip_local_gfortran_dt_decls_removes_stub_struct():
+    """A stub anonymous struct with explicit fields must also be
+    stripped — the canonical header is the single source of truth."""
+    body = """\
+/* libgfortran I/O transfer descriptor (opaque). */
+typedef struct {
+    long  common_flags;
+    const char *filename;
+    int   line;
+    char  pad[600];
+} st_parameter_dt;
+
+void f(void) { st_parameter_dt dt; dt.common_flags = 0; }
+"""
+    out = _strip_local_gfortran_dt_decls(body)
+    assert "typedef struct" not in out
+    assert "common_flags = 0" in out  # use site stays
+
+
+def test_strip_local_gfortran_dt_decls_idempotent_on_clean_body():
+    """A body that has no stub declarations is returned unchanged."""
+    body = "void f(gfc_dt *dt) { dt->flags = 0; }"
+    assert _strip_local_gfortran_dt_decls(body) == body
+
+
+def test_strip_local_gfortran_dt_decls_handles_empty():
+    """Empty / None bodies don't crash."""
+    assert _strip_local_gfortran_dt_decls("") == ""
+
+
+def test_canonical_header_defines_both_field_spellings():
+    """The canonical header must expose both ``flags`` and
+    ``common_flags`` so any rewriter naming compiles."""
+    h = _GFORTRAN_RUNTIME_HEADER
+    # Anonymous union exposes both spellings on shared storage.
+    assert "union {" in h
+    assert "long flags;" in h
+    assert "long common_flags;" in h
+    # gfc_dt alias is provided.
+    assert "typedef st_parameter_dt gfc_dt;" in h
+    # Has filename + line for runtime error reporting.
+    assert "const char *filename;" in h
+    assert "int        line;" in h
+    # Pragma + include guard so a module can include it freely.
+    assert "#pragma once" in h
+
+
+def test_canonical_header_compiles_under_gcc_wall_werror(tmp_path):
+    """The whole point of Task P: a translation unit that includes the
+    canonical header and exercises both field spellings + gfc_dt alias
+    must compile clean under -Wall -Werror."""
+    import shutil
+    import subprocess
+
+    if shutil.which("gcc") is None:
+        pytest.skip("gcc not available")
+
+    (tmp_path / "gfortran_runtime.h").write_text(_GFORTRAN_RUNTIME_HEADER)
+    test_c = tmp_path / "ut.c"
+    test_c.write_text("""\
+#include "gfortran_runtime.h"
+
+extern void _gfortran_st_write(void *);
+
+/* Exercise both spellings + the gfc_dt alias + the public fields. */
+static const char SOURCE[] = "ut.c";
+
+void use_dt(void) {
+    st_parameter_dt dt1;
+    dt1.flags    = 0x600000080L;
+    dt1.filename = SOURCE;
+    dt1.line     = 42;
+    _gfortran_st_write(&dt1);
+
+    gfc_dt dt2;
+    dt2.common_flags = 0x600000080L;
+    dt2.filename     = SOURCE;
+    dt2.line         = 43;
+    _gfortran_st_write(&dt2);
+}
+""")
+    result = subprocess.run(
+        ["gcc", "-O2", "-Wall", "-Werror", "-c",
+         str(test_c), "-o", str(tmp_path / "ut.o")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, (
+        f"compile failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+    )

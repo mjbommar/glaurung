@@ -6,6 +6,8 @@
 #include <string.h>
 #include <stdint.h>
 
+#include "src/gfortran_runtime.h"
+
 /**
  * @brief Fortran program entry point (`MAIN__`) emitted by gfortran for hello.f90.
  *
@@ -84,8 +86,7 @@
 extern int  global_counter;          /* address 0x20c0 in the binary */
 static int  call_count_1;            /* my_sub's SAVE'd local        */
 
-/* gfortran runtime — opaque I/O state descriptor (st_parameter_dt). */
-typedef struct gfc_dt gfc_dt;
+/* gfc_dt is now defined canonically in src/gfortran_runtime.h (Task P). */
 
 /* Common header word stuffed into the descriptor before each WRITE.
  * Bit pattern 0x600000080 selects list-directed output to unit 6. */

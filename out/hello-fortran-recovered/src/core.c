@@ -6,6 +6,8 @@
 #include <string.h>
 #include <stdint.h>
 
+#include "gfortran_runtime.h"
+
 /**
  * @brief Fortran program entry point (gfortran `MAIN__`) for `hello.f90`.
  *
@@ -91,14 +93,8 @@ extern void _gfortran_get_command_argument_i4(int *idx, char *buf,
                                               int a, int b, int buflen);
 extern int  _gfortran_string_len_trim(int buflen, const char *buf);
 
-/* libgfortran I/O transfer descriptor (opaque – sized for gfortran ABI). */
-typedef struct {
-    long  common_flags;          /* 0x600000080 */
-    const char *filename;
-    int   line;
-    /* … remaining fields opaque … */
-    char  pad[600];
-} st_parameter_dt;
+/* st_parameter_dt is now defined canonically in gfortran_runtime.h
+ * (Task P) — single source of truth across every recovered module. */
 
 static const char source_path[] = "/workspace/source/fortran/hello.f90";
 
