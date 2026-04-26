@@ -1,0 +1,3 @@
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+to    0x12ae       call          main                             Endbr64

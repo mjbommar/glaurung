@@ -1,0 +1,6 @@
+# Kickoff analysis — hello-go.upx9
+
+⚠️  **PACKED**: UPX (confidence 95%)
+  - indicator: `UPX!`
+
+_binary detected as UPX; skipping deep analysis (re-run with skip_if_packed=False to override)_

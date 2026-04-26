@@ -1,0 +1,32 @@
+# Kickoff analysis — vulnparse-c-gcc-O0
+
+- format: **ELF**, arch: **x86_64**, size: **19408** bytes
+- entry: **0x1100**
+
+## Functions
+- discovered: **7** (with blocks: 7, named: 7)
+- callgraph edges: **2**
+- name sources: analyzer=7
+
+## Type system
+- stdlib prototypes loaded: **192**
+- DWARF types imported: **6**
+- stack slots discovered: **52**
+- types propagated: **0**
+- auto-struct candidates: **0**
+
+## IOCs (from string scan)
+- **hostname**: 3
+- **path_posix**: 1
+- **java_path**: 1
+- **ipv4**: 0
+
+Examples:
+  - `path_posix` `/lib64/ld-linux-x86-64.so.2`  (off `0x374`)
+  - `java_path` `lib64/ld-linux-x86-64.so.2`  (off `0x375`)
+  - `c_identifier` `lib64`  (off `0x375`)
+  - `c_identifier` `ld`  (off `0x37b`)
+  - `c_identifier` `linux`  (off `0x37e`)
+  - `c_identifier` `x86`  (off `0x384`)
+
+_completed in N ms_

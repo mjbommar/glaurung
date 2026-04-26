@@ -1,0 +1,14 @@
+# Binary diff — switchy-c-gcc-O2 ↔ switchy-c-gcc-O2-v2
+
+1 same / 6 changed / 0 added / 0 removed (a=7 b=7)
+
+## Changed functions
+
+| function | a hash | b hash | a size | b size |
+|---|---|---|---:|---:|
+| `__do_global_dtors_aux` | `7fd4526f20430951` | `c8015d10c2ed71a5` | 57 | NN |
+| `_start` | `ea7906078022b002` | `655a8c389e85d4a0` | 89 | NN |
+| `deregister_tm_clones` | `6057d1ade1a998f4` | `318941da3c2929c8` | 41 | NN |
+| `dispatch` | `b9016d60df22f19d` | `6a818a145f5bf746` | 47 | NN |
+| `main` | `f8c58af674c873ca` | `e0e57fc75dfc574b` | 39 | NN |
+| `register_tm_clones` | `dc6edb3b026d7f42` | `bb1d6b3058d50a55` | 57 | NN |

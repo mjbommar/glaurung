@@ -1,0 +1,32 @@
+# Kickoff analysis — hello-c-clang-debug
+
+- format: **ELF**, arch: **x86_64**, size: **17680** bytes
+- entry: **0x1060**
+
+## Functions
+- discovered: **9** (with blocks: 9, named: 8)
+- callgraph edges: **5**
+- name sources: analyzer=9
+
+## Type system
+- stdlib prototypes loaded: **192**
+- DWARF types imported: **0**
+- stack slots discovered: **36**
+- types propagated: **0**
+- auto-struct candidates: **0**
+
+## IOCs (from string scan)
+- **hostname**: 6
+- **path_posix**: 6
+- **java_path**: 4
+- **ipv4**: 0
+
+Examples:
+  - `path_posix` `/lib64/ld-linux-x86-64.so.2`  (off `0x318`)
+  - `java_path` `lib64/ld-linux-x86-64.so.2`  (off `0x319`)
+  - `c_identifier` `lib64`  (off `0x319`)
+  - `c_identifier` `ld`  (off `0x31f`)
+  - `c_identifier` `linux`  (off `0x322`)
+  - `c_identifier` `x86`  (off `0x328`)
+
+_completed in N ms_

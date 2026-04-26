@@ -1,0 +1,30 @@
+# Kickoff analysis — Hello-mono.exe
+
+- format: **PE**, arch: **x86**, size: **3072** bytes
+- entry: **0x40238e**
+
+## Functions
+- discovered: **1** (with blocks: 1, named: 0)
+- callgraph edges: **0**
+- name sources: cil=2, analyzer=1
+
+## Type system
+- stdlib prototypes loaded: **192**
+- DWARF types imported: **0**
+- stack slots discovered: **1**
+- types propagated: **0**
+- auto-struct candidates: **0**
+
+## IOCs (from string scan)
+- **hostname**: 2
+- **ipv4**: 0
+
+Examples:
+  - `c_identifier` `This`  (off `0x4e`)
+  - `c_identifier` `program`  (off `0x53`)
+  - `c_identifier` `cannot`  (off `0x5b`)
+  - `c_identifier` `be`  (off `0x62`)
+  - `c_identifier` `run`  (off `0x65`)
+  - `c_identifier` `in`  (off `0x69`)
+
+_completed in N ms_

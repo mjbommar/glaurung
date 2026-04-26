@@ -1,0 +1,26 @@
+── pseudocode (enclosing function) ──
+fn main {
+    // ── locals (from KB) ─────────────────────────────────
+    void *var_1b0;  // -0x1b0  set_by=propagated
+    void *var_140;  // -0x140  set_by=propagated
+    char *var_110;  // -0x110  set_by=propagated
+    // ─────────────────────────────────────────────────
+
+    // x86-64 prologue: save rbp, frame 432 bytes
+    local_0 = 0;
+    local_1 = arg0;
+    local_2 = arg1;
+    printf@plt("Connecting to C2 server...\n");  // proto: int printf(const char * fmt, ...)
+    snprintf@plt(&var_110, 256, "http://%s:8080%s", *&[var0+0x4050], *&[var0+0x4070]);
+    memcpy@plt(&var_140, "https://10.10.10.10:443/malware/update", 39);
+    ret = *&[var0+0x2150];
+    local_3 = ret;
+    ret = *&[var0+0x2158];
+    local_4 = ret;
+    ret = *&[var0+0x2160];
+    local_5 = ret;
+    ret = *&[var0+0x2168];
+    local_6 = ret;
+    printf@plt("Primary: %s\n", *&[var0+0x4040]);  // proto: int printf(const char * fmt, ...)
+    printf@plt("Backup: %s\n", *&[var0+0x4048]);  // proto: int printf(const char * fmt, ...)
+    printf@plt("Domain: %s\n", *&[var0+0x4050]);  // proto: int printf(const char * fmt, ...)

@@ -1,0 +1,30 @@
+# Glaurung KB export
+
+- function_names: **9**
+- prototypes: **192**
+- comments: **0**
+- data_labels: **0**
+- stack_vars: **36**
+- types: **112**
+- evidence rows: **1**
+
+## Functions (first 32)
+
+| entry | name | demangled | set_by |
+|---|---|---|---|
+| `0x1060` | `_start` | — | analyzer |
+| `0x1090` | `deregister_tm_clones` | — | analyzer |
+| `0x10c0` | `register_tm_clones` | — | analyzer |
+| `0x1100` | `__do_global_dtors_aux` | — | analyzer |
+| `0x1140` | `frame_dummy` | — | analyzer |
+| `0x1150` | `main` | — | analyzer |
+| `0x117b` | `sub_117b` | — | analyzer |
+| `0x11d0` | `print_sum` | — | analyzer |
+| `0x1200` | `static_function` | — | analyzer |
+
+## Types (first 16)
+
+- `ATOM` (typedef, set_by=stdlib, confidence=0.99)
+- `BOOL` (typedef, set_by=stdlib, confidence=0.99)
+- `BOOLEAN` (typedef, set_by=stdlib, confidence=0.99)
+- `BYTE` (typedef, set_by=stdlib, confidence=0.99)

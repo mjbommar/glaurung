@@ -1,0 +1,9 @@
+── pseudocode (enclosing function) ──
+fn print_sum {
+    push(rbp);
+    rsp = (rsp - 16);
+    local_0 = arg0;
+    printf@plt("Total argument length: %d\n", local_1);  // proto: int printf(const char * fmt, ...)
+    // x86-64 epilogue: restore rbp
+    return;
+}

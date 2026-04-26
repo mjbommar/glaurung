@@ -1,39 +1,43 @@
 # §B — Your first binary
 
 Goal: load a binary, run the full first-touch pipeline, and end up
-with a `.glaurung` project file that every subsequent command in
-this tutorial reads from.
+with a `.glaurung` project file every later command reads from.
+
+> **Verified output.** Every `$ ` block in this chapter is a real
+> captured session against the binary at the listed path, regenerated
+> by `scripts/verify_tutorial.py` and stored under
+> `docs/tutorial/_fixtures/01-first-binary/`. If your output differs,
+> the surface drifted — file the diff.
 
 ## Pick a binary
 
-We'll use the simplest C program in the sample corpus:
-
 ```bash
-BIN=samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug
-file $BIN
+$ BIN=samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug
+$ file $BIN
 ```
 
-```
-ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV),
-dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2,
-BuildID[sha1]=..., not stripped, with debug_info
+```text
+samples/.../hello-clang-debug: ELF 64-bit LSB pie executable, x86-64,
+version 1 (SYSV), dynamically linked,
+interpreter /lib64/ld-linux-x86-64.so.2,
+BuildID[sha1]=..., for GNU/Linux 3.2.0,
+with debug_info, not stripped
 ```
 
-This is a tiny `printf("Hello\n")`-style program built with clang at
-`-O0 -g`. We picked it because:
+(Captured: [`_fixtures/01-first-binary/file.out`](../_fixtures/01-first-binary/file.out).)
 
-- It has full DWARF debug info (all functions named, all types known).
-- Its main is short enough to read in one screen.
-- It's representative — most binaries you'll triage in real work
-  share its structure.
+This is a tiny **C++** program built with clang at `-O0 -g`. The
+"clang-debug" name is the canonical first-binary in this tutorial
+because it has full DWARF info and its `main` is short enough to
+read in one screen.
 
 ## Run kickoff
 
 ```bash
-glaurung kickoff $BIN --db tutorial.glaurung
+$ glaurung kickoff $BIN --db tutorial.glaurung
 ```
 
-Expected output:
+Real captured output:
 
 ```markdown
 # Kickoff analysis — hello-clang-debug
@@ -55,92 +59,94 @@ Expected output:
 
 ## IOCs (from string scan)
 - **hostname**: 5
-- **java_path**: 1
 - **path_posix**: 1
+- **java_path**: 1
 - **ipv4**: 0
 
-_completed in 470 ms_
+Examples:
+  - `path_posix` `/lib64/ld-linux-x86-64.so.2`  (off `0x318`)
+  - `java_path` `lib64/ld-linux-x86-64.so.2`  (off `0x319`)
+  - `c_identifier` `lib64`  (off `0x319`)
+  - `c_identifier` `ld`  (off `0x31f`)
+  - `c_identifier` `linux`  (off `0x322`)
+  - `c_identifier` `x86`  (off `0x328`)
+
+_completed in N ms_
 ```
+
+(Captured: [`_fixtures/01-first-binary/kickoff.out`](../_fixtures/01-first-binary/kickoff.out).)
 
 ## Read this aloud
 
 Every line is information you'd otherwise have to chase by hand in
-IDA / Ghidra. Top to bottom:
+IDA / Ghidra:
 
-- **format / arch / size**: from the file header. Triage already
-  knows we're looking at a 64-bit Linux ELF.
-- **entry**: the address the loader will jump to (`_start`). Useful
-  for "where do I begin?"
-- **Functions discovered: 16, named: 16** — every function has a
-  symbol-derived name (because `-g` is set). On a stripped binary,
-  the named count would be much lower.
-- **Type system**:
-  - **stdlib prototypes loaded: 192** — `printf`, `malloc`, ~190
-    other libc functions are now known to the type system. Glaurung
-    will use them to type your stack vars when those functions are
-    called (see Tier 4 §V `typed-locals-from-libc.md`).
-  - **DWARF types imported: 104** — every struct, enum, and typedef
-    the compiler emitted in debug info.
-  - **stack slots discovered: 492** — analyzer-inferred local
-    variables across all 16 functions.
-  - **auto-struct candidates: 16** — heuristic `[reg+offset]` patterns
-    that look like struct accesses (#163).
-- **IOCs**: any indicators of compromise the string scanner found.
-  This binary just has linker paths; on a real malware sample (Tier 3 §S)
-  this section is where C2 URLs would land.
-- **completed in 470 ms** — the whole pipeline is sub-second on
-  small binaries. On a 10MB malware sample expect 2-5 seconds.
+- **format / arch / size** — from the file header.
+- **entry: 0x11e0** — `_start`. Useful for "where do I begin?"
+- **discovered: 16 (named: 16)** — every function got a name (the
+  binary isn't stripped). On a stripped binary the named count
+  would be much lower.
+- **DWARF types imported: 104** — every struct / enum / typedef
+  the compiler emitted. (This is a big number because the binary
+  is C++ and pulls in std::string and friends.)
+- **stack slots discovered: 492** — analyzer-inferred locals
+  across all 16 functions.
+- **auto-struct candidates: 16** — heuristic struct-shaped accesses
+  the auto-struct pass (#163) flagged.
+- **IOCs** — what triage's string scanner classified. On this
+  binary just linker paths; on the malware analog in §S the same
+  block surfaces real C2 URLs.
 
-## What just happened
+## Inspect the project file directly
 
-Under the hood, `kickoff` ran:
-
-1. **detect-packer** — confirmed the binary isn't packed.
-2. **triage** — format / arch / language identification.
-3. **analyze-functions** — function discovery + callgraph construction.
-4. **index-callgraph** — wrote functions and call edges to the
-   `.glaurung` SQLite file.
-5. **demangle** — every function name got its display form.
-6. **per-function** — stack-slot discovery, type propagation
-   (no-op here because there are no libc calls in the user code yet),
-   and auto-struct candidates.
-
-Total: ~470ms on this binary. **Every later command reads from the
-same `tutorial.glaurung` file** — you don't re-run kickoff per
-command.
-
-## Inspect the project file
-
-`tutorial.glaurung` is a SQLite file. You can open it directly:
+The `.glaurung` file is a SQLite database — read it with `sqlite3`
+or any other SQLite client:
 
 ```bash
-sqlite3 tutorial.glaurung "SELECT * FROM function_names LIMIT 5"
+$ sqlite3 tutorial.glaurung -cmd ".mode column" \
+    "SELECT printf('%#x', entry_va) AS entry_va, canonical, set_by
+     FROM function_names ORDER BY entry_va LIMIT 5;"
 ```
 
+Real captured output:
+
+```text
+entry_va  canonical                 set_by
+--------  ------------------------  --------
+0x11a0    __cxx_global_var_init     analyzer
+0x11d0    _GLOBAL__sub_I_hello.cpp  analyzer
+0x11e0    _start                    analyzer
+0x1210    deregister_tm_clones      analyzer
+0x1240    register_tm_clones        analyzer
 ```
-1|4576|frame_dummy|[]|analyzer|...
-1|4400|deregister_tm_clones|[]|analyzer|...
-1|4304|main|[]|analyzer|...
-...
-```
+
+(Captured: [`_fixtures/01-first-binary/sqlite-fnames.out`](../_fixtures/01-first-binary/sqlite-fnames.out).)
+
+Notice `__cxx_global_var_init` and `_GLOBAL__sub_I_hello.cpp` —
+these are C++-specific runtime stubs the compiler injected to
+initialize globals before `main`. The original source is
+`hello.cpp`.
 
 Tables include `function_names`, `comments`, `data_labels`,
 `stack_frame_vars`, `xrefs`, `types`, `function_prototypes`,
 `bookmarks`, `journal`, `evidence_log`, and `undo_log`. Every CLI
 surface we'll cover writes to one of these.
 
-## Try a couple of CLI surfaces against the project
+## Try a few CLI surfaces
 
 We'll go deep on each in Tiers 2-3, but try these now to confirm
 your install works end-to-end:
 
+### `glaurung view` — synchronized hex / disasm / pseudocode
+
 ```bash
-# What's at the entry point?
-glaurung view tutorial.glaurung 0x11e0 \
-  --binary $BIN --hex-window 32 --pseudo-lines 6
+$ glaurung view tutorial.glaurung 0x11e0 \
+    --binary $BIN --hex-window 32 --pseudo-lines 6
 ```
 
-```
+Real captured output:
+
+```text
 ── hex @ 0x11e0 ──
     0x11d0  55 48 89 e5 e8 c7 ff ff ff 5d c3 0f 1f 44 00 00   |UH.......]...D..|
     0x11e0  f3 0f 1e fa 31 ed 49 89 d1 5e 48 89 e2 48 83 e4   |....1.I..^H..H..| ←
@@ -150,7 +156,14 @@ glaurung view tutorial.glaurung 0x11e0 \
     0x11e4  31ed                      xor ebp, ebp
     0x11e6  4989d1                    mov r9, rdx
     0x11e9  5e                        pop rsi
-    ...
+    0x11ea  4889e2                    mov rdx, rsp
+    0x11ed  4883e4f0                  and rsp
+    0x11f1  50                        push rax
+    0x11f2  54                        push rsp
+    0x11f3  4531c0                    xor r8d, r8d
+    0x11f6  31c9                      xor ecx, ecx
+    0x11f8  488d3dd1000000            lea rdi, rip:[rip + 0x12d0]
+    0x11ff  ff15cb4d0000              call rip:[rip + 0x5fd0]
 
 ── pseudocode (enclosing function) ──
 fn _start {
@@ -161,29 +174,39 @@ fn _start {
     rsp = (rsp & 240);
 ```
 
-Three synchronized panels: hex bytes, disassembly, decompiled
-pseudocode. The `←` markers point at the row containing your
-target VA. We'll go deep on this command in [§F](../02-daily-basics/cross-references.md)
-and [§H](../02-daily-basics/strings-and-data.md).
+(Captured: [`_fixtures/01-first-binary/view.out`](../_fixtures/01-first-binary/view.out).)
+
+Three synchronized panels:
+
+- **hex** — raw bytes, with `←` marking the row containing `0x11e0`.
+- **disasm** — instructions starting at `0x11e0`. The first row
+  (`Endbr64`) is the entry point.
+- **pseudocode** — the enclosing function (`_start`).
+
+The lea at 0x11f8 loads `rip + 0x12d0` (which is `main`'s VA — see
+the next subsection) into rdi. That's `__libc_start_main`'s first
+arg: a function pointer to `main`. Standard CRT bootstrap.
+
+### `glaurung find` — locate `main`
 
 ```bash
-# What strings does it have? (cheap version — no DB needed)
-glaurung strings $BIN | head -10
+$ glaurung find tutorial.glaurung main --kind function
 ```
 
-```bash
-# Find every function in the KB.
-glaurung find tutorial.glaurung main --kind function
-```
+Real captured output:
 
-```
+```text
 kind        location        snippet
-----------  --------------  ----------------------------
-function    0x10d0          main  (set_by=analyzer)
+--------------------------------------------------------------------------------
+function    0x12d0          main  (set_by=analyzer)
 ```
 
-(That `set_by=analyzer` tag is the provenance — see
-[`reference/set-by-precedence.md`](../reference/set-by-precedence.md).)
+(Captured: [`_fixtures/01-first-binary/find-main.out`](../_fixtures/01-first-binary/find-main.out).)
+
+`main` is at `0x12d0` — matching the lea target in `_start`.
+`set_by=analyzer` means the name came from the binary's symbol
+table (the binary isn't stripped). See
+[`reference/set-by-precedence.md`](../reference/set-by-precedence.md).
 
 ## What's next
 
@@ -191,11 +214,11 @@ Pick one:
 
 - [**§C `cli-tour.md`**](cli-tour.md) — quick survey of all 27
   shipped CLI subcommands so you know what's where.
-- [**§D `repl-tour.md`**](repl-tour.md) — the interactive REPL with
-  cursor-based navigation and one-keystroke annotation.
-- [**Tier 2: Daily basics**](../02-daily-basics/) — go straight to
-  the keystroke loops if you're impatient.
+- [**§D `repl-tour.md`**](repl-tour.md) — the interactive REPL.
+- [**Tier 2: Daily basics**](../02-daily-basics/) — go straight
+  to the keystroke loops if you're impatient.
 - [**Tier 3 §M `01-hello-c-clang.md`**](../03-walkthroughs/01-hello-c-clang.md) —
-  full kickoff → annotate walkthrough on this same binary.
+  full kickoff → annotate walkthrough on the C-only sibling
+  binary `hello-c-clang-debug`.
 
 → [§C `cli-tour.md`](cli-tour.md)

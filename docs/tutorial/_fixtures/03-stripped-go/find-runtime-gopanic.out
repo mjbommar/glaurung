@@ -1,0 +1,3 @@
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x464b80        runtime.gopanic  (set_by=gopclntab)

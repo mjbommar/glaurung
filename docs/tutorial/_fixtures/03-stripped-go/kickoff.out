@@ -1,0 +1,32 @@
+# Kickoff analysis — hello-go
+
+- format: **ELF**, arch: **x86_64**, size: **1425560** bytes
+- entry: **0x46d1e0**
+
+## Functions
+- discovered: **16** (with blocks: 16, named: 0)
+- callgraph edges: **0**
+- name sources: gopclntab=1801
+
+## Type system
+- stdlib prototypes loaded: **192**
+- DWARF types imported: **0**
+- stack slots discovered: **160**
+- types propagated: **0**
+- auto-struct candidates: **32**
+
+## IOCs (from string scan)
+- **java_path**: 1
+- **path_posix**: 1
+- **hostname**: 1
+- **ipv4**: 0
+
+Examples:
+  - `path_posix` `/qX9lCEmUD5wxPlbFoWbu/uFKWi9tvwcKX-1JoH49O/7bp7aRo25jsgzkQau8bl`  (off `0xfc0`)
+  - `java_path` `_MNoXSivWLKBjjCAORgb/qX9lCEmUD5wxPlbFoWbu/uFKWi9tvwcKX-1JoH49O/7bp7aRo25jsgzkQau8bl`  (off `0xfac`)
+  - `c_identifier` `_MNoXSivWLKBjjCAORgb`  (off `0xfac`)
+  - `c_identifier` `qX9lCEmUD5wxPlbFoWbu`  (off `0xfc1`)
+  - `c_identifier` `uFKWi9tvwcKX`  (off `0xfd6`)
+  - `c_identifier` `v`  (off `0x1124`)
+
+_completed in N ms_

@@ -1,0 +1,26 @@
+── pseudocode (enclosing function) ──
+fn main {
+    // x86-64 prologue: save rbp, frame 32 bytes
+    local_0 = 0;
+    local_1 = arg0;
+    local_2 = arg1;
+    printf@plt("Hello, World from C!\n");  // proto: int printf(const char * fmt, ...)
+    local_3 = 0;
+    local_4 = 0;
+    ret = local_5;
+    t11 = local_6;
+    if ((ret < t11)) {
+        print_sum(local_7);
+        static_function();
+        ret = 0;
+        rsp = (rsp + 32);
+        pop(rbp);
+        return;
+    }
+    ret = local_2;
+    unknown(movsxd);
+    strlen@plt(*&[ret+arg3*8]);  // proto: size_t strlen(const char * s)
+    arg3 = ret;
+    unknown(movsxd);
+    ret = (ret + arg3);
+    local_3 = ret;

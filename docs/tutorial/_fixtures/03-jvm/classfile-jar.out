@@ -1,0 +1,18 @@
+# HelloWorld.jar: 1 class file(s)
+
+class HelloWorld  (Java 17 (classfile 61))
+  extends java/lang/Object
+  access: public
+  fields: 3
+    private static final     GLOBAL_COUNTER: I
+    private                  message: Ljava/lang/String;
+    private                  counter: I
+  methods: 6
+    public                   <init>(Ljava/lang/String;)V
+    public                   <init>()V
+    public                   printMessage()V
+    public                   getCounter()I
+    public static            printGlobalInfo()V
+    public static            main([Ljava/lang/String;)V
+
+_parsed 1 class(es)_

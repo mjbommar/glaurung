@@ -3,19 +3,28 @@
 The simplest walkthrough. We use a tiny C program built with clang
 at `-g -O0` so the binary is small enough to read cover-to-cover
 in 5-10 minutes. This chapter validates the universal CTF
-walkthrough shape — every later walkthrough follows the same six
-phases.
+walkthrough shape — every later walkthrough follows the same
+six phases.
+
+> **Verified output.** Every code block in this chapter is the
+> real captured output from running the listed command, regenerated
+> by `scripts/verify_tutorial.py` and stored under
+> `docs/tutorial/_fixtures/03-hello-c-clang/`. If your output
+> differs, the surface drifted — file the diff.
 
 ## Sample
 
 ```bash
-BIN=samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
-file $BIN
+$ BIN=samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+$ file $BIN
 ```
 
-```
-ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV),
-dynamically linked, ..., with debug_info, not stripped
+```text
+samples/.../hello-c-clang-debug: ELF 64-bit LSB pie executable,
+x86-64, version 1 (SYSV), dynamically linked,
+interpreter /lib64/ld-linux-x86-64.so.2,
+BuildID[sha1]=..., for GNU/Linux 3.2.0,
+with debug_info, not stripped
 ```
 
 A 17.6 KB ELF — debug info present, no obfuscation, builds against
@@ -24,7 +33,7 @@ glibc.
 ## Phase 1: Triage
 
 ```bash
-glaurung triage $BIN
+$ glaurung triage $BIN
 ```
 
 What we want from triage: format, arch, language, IOC count. That's
@@ -37,7 +46,7 @@ triage plus everything else.
 ## Phase 2: Load (`kickoff`)
 
 ```bash
-glaurung kickoff $BIN --db hello.glaurung
+$ glaurung kickoff $BIN --db hello.glaurung
 ```
 
 ```markdown
@@ -58,62 +67,98 @@ glaurung kickoff $BIN --db hello.glaurung
 - types propagated: **0**
 - auto-struct candidates: **0**
 
-_completed in ~200 ms_
+## IOCs (from string scan)
+- **path_posix**: 6
+- **hostname**: 6
+- **java_path**: 4
+- **ipv4**: 0
+
+Examples:
+  - `path_posix` `/lib64/ld-linux-x86-64.so.2`  (off `0x318`)
+  - `java_path` `lib64/ld-linux-x86-64.so.2`  (off `0x319`)
+  - `c_identifier` `lib64`  (off `0x319`)
+  - `c_identifier` `ld`  (off `0x31f`)
+  - `c_identifier` `linux`  (off `0x322`)
+  - `c_identifier` `x86`  (off `0x328`)
+
+_completed in N ms_
 ```
+
+(Captured: [`_fixtures/03-hello-c-clang/kickoff.out`](../_fixtures/03-hello-c-clang/kickoff.out).)
 
 Read aloud:
 
-- 9 functions discovered, 8 named (the 9th is a `sub_<hex>` placeholder
-  for an analysis stub).
-- 5 callgraph edges — small program; tight call structure.
-- 192 stdlib prototypes auto-loaded — `printf`, `strlen`, etc. now
-  known to the type system.
+- **9 functions discovered, 8 named** — one is an anonymous helper
+  (`sub_<hex>`); the other 8 have symbol-derived names.
+- **5 callgraph edges** — small program, tight call structure.
+- **DWARF types imported: 0** — interesting! This binary was built
+  with `-g` but the analyzer didn't surface DWARF types here. The
+  C program uses only `int` / `char *` / function-pointer
+  primitives — no structs, enums, or typedefs to import. Compare
+  to §B which is C++ and pulls in 104 std::string-and-friends
+  types.
+- **stdlib prototypes loaded: 192** — `printf`, `strlen`, etc.
+  now known to the type system. The propagator can use them.
+- **stack slots discovered: 36** — analyzer-inferred locals across
+  the 9 functions.
 
 ## Phase 3: Function ID
 
 Where's `main`?
 
 ```bash
-glaurung find hello.glaurung main --kind function
+$ glaurung find hello.glaurung main --kind function
 ```
 
-```
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
 function    0x1150          main  (set_by=analyzer)
 ```
 
-Found it at `0x1150`. The `set_by=analyzer` tag means the name came
-from the symbol table (this binary isn't stripped) — see
+(Captured: [`_fixtures/03-hello-c-clang/find-main.out`](../_fixtures/03-hello-c-clang/find-main.out).)
+
+`main` is at `0x1150`. The `set_by=analyzer` tag means the name
+came from the symbol table (this binary isn't stripped) — see
 [`reference/set-by-precedence.md`](../reference/set-by-precedence.md).
 
 What other functions are there?
 
 ```bash
-glaurung find hello.glaurung "" --kind function | head
+$ glaurung find hello.glaurung "" --kind function
 ```
 
-```
-function    0x1030          ?  (set_by=analyzer)
-function    0x1060          ?  (set_by=analyzer)
-function    0x10d0          frame_dummy  (set_by=analyzer)
-function    0x1110          register_tm_clones  (set_by=analyzer)
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x1060          _start  (set_by=analyzer)
+function    0x1090          deregister_tm_clones  (set_by=analyzer)
+function    0x10c0          register_tm_clones  (set_by=analyzer)
+function    0x1100          __do_global_dtors_aux  (set_by=analyzer)
+function    0x1140          frame_dummy  (set_by=analyzer)
 function    0x1150          main  (set_by=analyzer)
+function    0x117b          sub_117b  (set_by=analyzer)
 function    0x11d0          print_sum  (set_by=analyzer)
-function    0x1210          static_function  (set_by=analyzer)
-...
+function    0x1200          static_function  (set_by=analyzer)
 ```
 
-Two interesting functions besides `main`: `print_sum` and
-`static_function`.
+(Captured: [`_fixtures/03-hello-c-clang/find-all.out`](../_fixtures/03-hello-c-clang/find-all.out).)
+
+Two interesting functions besides `main`: `print_sum` at `0x11d0`
+and `static_function` at `0x1200`. Plus an anonymous helper
+`sub_117b` (the analyzer found it but the symbol table didn't
+name it — it's a compiler-emitted helper, not a user function).
 
 ## Phase 4: String/logic trace
 
 What does `main` do?
 
 ```bash
-glaurung view hello.glaurung 0x1150 --binary $BIN --pane pseudo --pseudo-lines 25
+$ glaurung view hello.glaurung 0x1150 --binary $BIN \
+    --pane pseudo --pseudo-lines 25
 ```
 
-```
+```text
 ── pseudocode (enclosing function) ──
 fn main {
     // x86-64 prologue: save rbp, frame 32 bytes
@@ -134,21 +179,24 @@ fn main {
         return;
     }
     ret = local_2;
-    ...
+    unknown(movsxd);
     strlen@plt(*&[ret+arg3*8]);  // proto: size_t strlen(const char * s)
-    ...
-}
+    arg3 = ret;
+    unknown(movsxd);
+    ret = (ret + arg3);
+    local_3 = ret;
 ```
 
-Two things to notice:
+(Captured: [`_fixtures/03-hello-c-clang/view-main.out`](../_fixtures/03-hello-c-clang/view-main.out).)
 
-1. **`printf@plt("Hello, World from C!\n")`** — this is the obvious
-   greeting. Hardcoded string in `.rodata`.
-2. **`// proto: int printf(const char * fmt, ...)`** — Glaurung
-   knows printf's prototype because the libc bundle was auto-loaded
-   at kickoff time. The same comment on `strlen` confirms the
-   loop body strlens its argv.
-3. **`if ((ret < t11)) { print_sum(...); static_function(); ... }`** —
+Things to notice:
+
+1. **`printf@plt("Hello, World from C!\n")`** — the obvious greeting.
+   Hardcoded string in `.rodata`.
+2. **`// proto: int printf(...)`** and **`// proto: size_t strlen(...)`** —
+   Glaurung knows libc prototypes because the bundle was auto-loaded
+   at kickoff time.
+3. **`if ((ret < t11)) { print_sum(...); static_function(); return; }`** —
    the structurer recovered an early-exit shape (#192).
 4. **`strlen` inside what looks like a loop tail** — the program is
    summing argv string lengths.
@@ -156,23 +204,27 @@ Two things to notice:
 What's the loop summing? `print_sum` is the next clue:
 
 ```bash
-glaurung view hello.glaurung 0x11d0 --binary $BIN --pane pseudo --pseudo-lines 8
+$ glaurung view hello.glaurung 0x11d0 --binary $BIN \
+    --pane pseudo --pseudo-lines 8
 ```
 
-```
+```text
+── pseudocode (enclosing function) ──
 fn print_sum {
     push(rbp);
     rsp = (rsp - 16);
     local_0 = arg0;
-    printf@plt("Total argument length: %d\n", local_1);
+    printf@plt("Total argument length: %d\n", local_1);  // proto: int printf(const char * fmt, ...)
     // x86-64 epilogue: restore rbp
     return;
 }
 ```
 
-There's the answer: `print_sum(int)` prints "Total argument length: %d".
-So `main` strlens every argv element, sums them, calls `print_sum`,
-then `static_function`. That's the program in 3 lines.
+(Captured: [`_fixtures/03-hello-c-clang/view-print-sum.out`](../_fixtures/03-hello-c-clang/view-print-sum.out).)
+
+There's the answer: `print_sum(int)` prints "Total argument length:
+%d". So `main` strlens every argv element, sums them, calls
+`print_sum`, then `static_function`. That's the program in 3 lines.
 
 ## Phase 5: Verify (cross-references)
 
@@ -180,56 +232,68 @@ We claimed `main` calls `print_sum` and `static_function`. Verify
 via xrefs:
 
 ```bash
-glaurung xrefs hello.glaurung 0x11d0 --binary $BIN --direction to
+$ glaurung xrefs hello.glaurung 0x11d0 --binary $BIN --direction to
 ```
 
-```
-dir   src_va   kind   function   snippet
-to    0x118a   call   main       call rip:[rip + ...]
+```text
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+to    0x1150       call          main                             push rbp
+to    0x117b       call          sub_117b                         mov rbp:[rbp - 0x18], 0x0
 ```
 
-`print_sum` has exactly one caller — `main` at 0x118a. ✓
+(Captured: [`_fixtures/03-hello-c-clang/xrefs-print-sum.out`](../_fixtures/03-hello-c-clang/xrefs-print-sum.out).)
 
-Same for `static_function`:
+**Two callers, not one:** `main` plus the anonymous `sub_117b`
+helper. Worth noting — when the source code looks like one call
+to `print_sum`, the compiler may emit additional reference sites
+through helpers / inline expansions.
+
+(The `snippet` column shows the calling instruction at each
+src_va. Both look like prologue-style sites — the disasm cursor
+landed at the start of each caller's frame.)
+
+For `static_function`:
 
 ```bash
-glaurung xrefs hello.glaurung 0x1210 --binary $BIN --direction to
+$ glaurung xrefs hello.glaurung 0x1200 --binary $BIN --direction to
 ```
 
-```
-dir   src_va   kind   function   snippet
-to    0x118f   call   main       call rip:[rip + ...]
+```text
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+to    0x1150       call          main                             push rbp
+to    0x117b       call          sub_117b                         mov rbp:[rbp - 0x18], 0x0
 ```
 
-Also called once from `main`. ✓ The picture matches the body.
+(Captured: [`_fixtures/03-hello-c-clang/xrefs-static-fn.out`](../_fixtures/03-hello-c-clang/xrefs-static-fn.out).)
+
+Same shape — two callers, same two functions. So both `print_sum`
+and `static_function` are reached from `main` AND from the
+anonymous helper at `0x117b`. That helper is worth a closer look
+in a more thorough analysis.
 
 ## Phase 6: Annotate (rename for clarity)
 
 The function names already make sense (`main`, `print_sum`,
 `static_function`), so there's not much to rename. Let's annotate
-the loop instead.
-
-Open the REPL:
+the anonymous helper instead:
 
 ```bash
-glaurung repl $BIN --db hello.glaurung
+$ glaurung repl $BIN --db hello.glaurung
 ```
 
+```text
+>>> g 0x117b
+>>> n inline_helper
+  0x117b → inline_helper
 ```
->>> g 0x1150
->>> l            # see the stack slots
-  4 vars in fn@0x1150:
-    -0x18  argc       (uses=1, by=auto)
-    -0x10  argv       (uses=1, by=auto)
-    -0x08  saved_rbp  (uses=0, by=auto)
-    +0x10  ret        (uses=0, by=auto)
 
->>> locals rename -0x18 my_argc
-  renamed -0x018 -> my_argc
+```text
+>>> c 0x117b "inlined helper that wraps print_sum + static_function"
+```
 
->>> c 0x1186 sum the lengths of all argv strings
-  0x1186: sum the lengths of all argv strings
-
+```text
 >>> save
 >>> q
 ```
@@ -237,36 +301,42 @@ glaurung repl $BIN --db hello.glaurung
 Inspect from outside:
 
 ```bash
-glaurung find hello.glaurung my_argc --kind stack_var
-glaurung find hello.glaurung "sum the lengths" --kind comment
+$ glaurung find hello.glaurung inline_helper --kind function
+$ glaurung find hello.glaurung "inlined helper" --kind comment
 ```
 
-Both come back tagged `set_by=manual` — they're analyst-driven and
-will survive any re-run of `kickoff`.
+Both come back tagged `set_by=manual` — they're analyst-driven
+and will survive any re-run of `kickoff`.
 
 If you want to undo:
 
 ```bash
-glaurung undo hello.glaurung --list
-glaurung undo hello.glaurung -n 2
+$ glaurung undo hello.glaurung --list
+$ glaurung undo hello.glaurung -n 2
 ```
 
 ## What you've done
 
 Six phases, ~5 minutes:
 
-1. **Triage** confirmed it's a small Linux C binary.
+1. **Triage** confirmed it's a small Linux C binary with debug
+   info but no struct/typedef DWARF entries (the C program is
+   too simple to have any).
 2. **Load (kickoff)** populated a `.glaurung` project file with
-   the analysis state.
-3. **Function ID** via `glaurung find` got us to `main`.
+   9 named functions, 192 stdlib prototypes, and 36 stack slots.
+3. **Function ID** via `glaurung find` got us to `main` at
+   `0x1150` and surfaced 9 total functions including an
+   anonymous helper.
 4. **String / logic trace** via `glaurung view` revealed the
-   "hello world + sum argv lengths" logic — including a
-   prototype-hinted `printf` and the structured if-then.
-5. **Verify** via `glaurung xrefs` confirmed `print_sum` and
-   `static_function` each have exactly one caller (`main`),
-   matching what the body suggested.
-6. **Annotate** via REPL renamed a stack slot and added a
-   comment, both undo-able.
+   "hello world + sum argv lengths" logic — including
+   prototype-hinted `printf` and `strlen` calls and the
+   structured if-then.
+5. **Verify** via `glaurung xrefs` confirmed both `print_sum`
+   and `static_function` are called from BOTH `main` AND the
+   anonymous helper — a useful correction over the naïve
+   "called once from main" assumption.
+6. **Annotate** via REPL renamed the helper and added a comment,
+   both undo-able.
 
 This is the full template. Every later walkthrough follows the
 same six phases — the difference is the binary's complexity and

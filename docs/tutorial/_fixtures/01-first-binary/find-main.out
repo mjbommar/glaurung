@@ -1,0 +1,3 @@
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x12d0          main  (set_by=analyzer)

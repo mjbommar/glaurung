@@ -1,0 +1,31 @@
+── pseudocode (enclosing function) ──
+fn parse_record {
+    nop;
+    // x86-64 prologue: save rbp, frame 112 bytes
+    local_0 = arg0;
+    local_1 = arg1;
+    ret = __stack_chk_guard;
+    local_2 = ret;
+    t10 = local_1;
+    %zf = (t10 == -0x7000000000);
+    %cf = (t10 u< -0x7000000000);
+    if (%zf) {
+        goto L_1297;
+    }
+    ret = local_0;
+    unknown(movzx);
+    local_3 = ret;
+    unknown(movzx);
+    arg2 = local_1;
+    %zf = (arg2 == ret);
+    %cf = (arg2 u< ret);
+    if (%cf) {
+        goto L_1254;
+    }
+    ret = *&[var0+0x4020];
+    arg2 = 12;
+    0x10f0("short input\n", 1, (arg2 - 1), ret);
+    goto L_1298;
+    L_1254:
+    unknown(movzx);
+    ret = local_0;

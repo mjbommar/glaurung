@@ -1,0 +1,4 @@
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x402050        Hello::.ctor  (set_by=cil)
+function    0x402058        Hello::Main  (set_by=cil)

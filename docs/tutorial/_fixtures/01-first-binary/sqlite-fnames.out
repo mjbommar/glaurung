@@ -1,0 +1,7 @@
+entry_va  canonical                 set_by  
+--------  ------------------------  --------
+0x11a0    __cxx_global_var_init     analyzer
+0x11d0    _GLOBAL__sub_I_hello.cpp  analyzer
+0x11e0    _start                    analyzer
+0x1210    deregister_tm_clones      analyzer
+0x1240    register_tm_clones        analyzer

@@ -1,0 +1,20 @@
+# Glaurung → Ghidra export (#190)
+# Run via Window > Script Manager. Targets the active program.
+
+# @category Glaurung
+# @runtime Jython
+
+from ghidra.program.model.symbol import SourceType
+
+def _apply():
+    summary = {'renamed_functions': 0, 'comments_set': 0, 'data_labels_set': 0}
+    fm = currentProgram.getFunctionManager()
+    st = currentProgram.getSymbolTable()
+    af = currentProgram.getAddressFactory().getDefaultAddressSpace()
+    def addr(va): return af.getAddress(va)
+
+    fn = fm.getFunctionAt(addr(0x1060))
+    if fn is not None:
+        fn.setName("_start", SourceType.USER_DEFINED)
+        summary['renamed_functions'] += 1
+    fn = fm.getFunctionAt(addr(0x1090))

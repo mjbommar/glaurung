@@ -1,0 +1,15 @@
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x4351e0        runtime.main.func2  (set_by=gopclntab)
+function    0x45ea40        runtime.main.func1  (set_by=gopclntab)
+function    0x493180        main.(*Application).String  (set_by=gopclntab)
+function    0x493220        main.worker  (set_by=gopclntab)
+function    0x493320        main.worker.deferwrap1  (set_by=gopclntab)
+function    0x493380        main.riskyOperation  (set_by=gopclntab)
+function    0x493440        main.riskyOperation.func1  (set_by=gopclntab)
+function    0x4934e0        main.main  (set_by=gopclntab)
+function    0x493b60        main.main.func1  (set_by=gopclntab)
+function    0x493ba0        main.main.gowrap1  (set_by=gopclntab)
+function    0x493c00        main.main.func2  (set_by=gopclntab)
+function    0x493c20        main.mapSlice[go.shape.int,go.shape.int]  (set_by=gopclntab)
+function    0x493ce0        type:.eq.main.Application  (set_by=gopclntab)

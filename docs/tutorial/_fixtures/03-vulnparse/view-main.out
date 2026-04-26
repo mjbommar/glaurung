@@ -1,0 +1,31 @@
+── pseudocode (enclosing function) ──
+fn main {
+    nop;
+    // x86-64 prologue: save rbp, frame 32 bytes
+    local_0 = arg0;
+    local_1 = arg1;
+    t10 = local_2;
+    if ((t10 <= 1)) {
+        ret = local_1;
+        ret = *&[ret+0x8];
+        local_3 = ret;
+        ret = local_1;
+        ret = (ret + 8);
+        ret = *&[ret];
+        0x10a0(ret);
+        local_4 = ret;
+        arg2 = local_4;
+        ret = local_3;
+        parse_record(ret, arg2);
+        ret = 0;
+        rsp = rbp;
+        pop(rbp);
+        return;
+    }
+    ret = local_1;
+    arg2 = *&[ret];
+    arg3 = "usage: %s <input-bytes>\n";
+    ret = 0;
+    0x10d0(ret, arg3);
+    ret = 1;
+    goto L_132e;

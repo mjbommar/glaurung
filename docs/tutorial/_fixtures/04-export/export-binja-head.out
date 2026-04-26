@@ -1,0 +1,20 @@
+# Glaurung → Binary Ninja export (#190)
+# Run via the BN scripting console (bv is in scope) or:
+#   binaryninja.load("<binary>").execute_script("<this.py>")
+
+def _apply(bv):
+    summary = {
+        "renamed_functions": 0,
+        "comments_set": 0,
+        "data_labels_set": 0,
+    }
+
+    # Function renames — uses bv.get_function_at(va).set_user_symbol
+    from binaryninja import Symbol, SymbolType
+    f = bv.get_function_at(0x1060)
+    if f is not None:
+        bv.define_user_symbol(Symbol(SymbolType.FunctionSymbol, 0x1060, '_start'))
+        summary["renamed_functions"] += 1
+    f = bv.get_function_at(0x1090)
+    if f is not None:
+        bv.define_user_symbol(Symbol(SymbolType.FunctionSymbol, 0x1090, 'deregister_tm_clones'))

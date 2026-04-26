@@ -1,0 +1,20 @@
+# Glaurung → IDAPython export (#165 / #190)
+# Paste into IDA's scripting console (File > Script file)
+# or run via `idat -A -S<this.py> <target.idb>`.
+
+import idaapi
+import idc
+import ida_name
+import ida_bytes
+import ida_funcs
+
+def _apply():
+    summary = {
+        "renamed_functions": 0,
+        "comments_set": 0,
+        "data_labels_set": 0,
+        "stack_vars_set": 0,
+    }
+
+    # Function renames (preferring demangled when present).
+    if ida_name.set_name(0x1060, "_start", ida_name.SN_FORCE):

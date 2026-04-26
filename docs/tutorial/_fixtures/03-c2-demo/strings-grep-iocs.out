@@ -1,0 +1,10 @@
+[0x2013] ascii    len=   9 2.20 lang=- script=- | 10.0.2.15
+[0x201d] ascii    len=  19 3.62 lang=- script=- | malware-c2.evil.com
+[0x2031] ascii    len=  34 3.89 lang=- script=Latin | beacon.command-control.badguys.org
+[0x206b] ascii    len=  25 3.97 lang=- script=Latin | stolen-data@evil-corp.com
+[0x20c3] ascii    len=  16 3.12 lang=- script=- | http://%s:8080%s
+[0x2102] ascii    len=   8 3.00 lang=- script=- | Cron: %s
+[0x2120] ascii    len=  38 4.03 lang=- script=- | https://10.10.10.10:443/malware/update
+[0x2170] ascii    len=  28 3.70 lang=- script=- | /etc/cron.d/evil-persistence
+[0x2190] ascii    len=  36 3.76 lang=- script=- | /etc/systemd/system/backdoor.service
+[0x3879] ascii    len=   8 2.75 lang=- script=Latin | .comment
