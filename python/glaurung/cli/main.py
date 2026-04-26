@@ -28,6 +28,7 @@ from .commands.view import ViewCommand
 from .commands.find import FindCommand
 from .commands.bookmark import BookmarkCommand, JournalCommand
 from .commands.classfile import ClassfileCommand
+from .commands.luac import LuacCommand
 
 from .formatters import (
     TriageFormatter,
@@ -73,6 +74,7 @@ class GlaurungCLI:
             "bookmark": BookmarkCommand(),
             "journal": JournalCommand(),
             "classfile": ClassfileCommand(),
+            "luac": LuacCommand(),
         }
 
         # Map commands to their formatters. The REPL is interactive and
@@ -107,6 +109,7 @@ class GlaurungCLI:
             "bookmark": TriageFormatter,
             "journal": TriageFormatter,
             "classfile": TriageFormatter,
+            "luac": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:

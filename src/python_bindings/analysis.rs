@@ -37,6 +37,8 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     analysis_mod.add_function(wrap_pyfunction!(cil_methods_path_py, &analysis_mod)?)?;
     // Java classfile parser for triaging .class files and JAR contents.
     analysis_mod.add_function(wrap_pyfunction!(parse_java_class_path_py, &analysis_mod)?)?;
+    // Lua bytecode recognizer / source-name extractor.
+    analysis_mod.add_function(wrap_pyfunction!(parse_lua_bytecode_path_py, &analysis_mod)?)?;
 
     // Add analysis submodule to main module
     m.add_submodule(&analysis_mod)?;
@@ -199,6 +201,46 @@ fn macho_stubs_map_path_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     Ok(crate::analysis::macho_stubs::macho_stubs_map(&data))
+}
+
+/// Parse a Lua bytecode file (.luac or LuaJIT) and return a
+/// structured dict with version, format, source filename (if
+/// present), and engine kind. Returns None for non-Lua files.
+#[pyfunction]
+#[pyo3(name = "parse_lua_bytecode_path")]
+#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+fn parse_lua_bytecode_path_py(
+    py: Python<'_>,
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Option<PyObject>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    use crate::analysis::lua_bytecode::{parse_lua, LuaError, LuaKind};
+    match parse_lua(&data) {
+        Ok(info) => {
+            let dict = pyo3::types::PyDict::new(py);
+            let kind_str = match info.kind {
+                LuaKind::Lua51 => "Lua 5.1",
+                LuaKind::Lua52 => "Lua 5.2",
+                LuaKind::Lua53 => "Lua 5.3",
+                LuaKind::Lua54 => "Lua 5.4",
+                LuaKind::LuaJit => "LuaJIT",
+                LuaKind::Unknown(_) => "unknown",
+            };
+            dict.set_item("kind", kind_str)?;
+            dict.set_item("format", info.format)?;
+            dict.set_item("source", info.source)?;
+            dict.set_item("little_endian", info.little_endian)?;
+            Ok(Some(dict.into()))
+        }
+        Err(LuaError::BadMagic) => Ok(None),
+        Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "lua parse failed: {:?}", e,
+        ))),
+    }
 }
 
 /// Parse a Java `.class` file and return a structured dict with the
