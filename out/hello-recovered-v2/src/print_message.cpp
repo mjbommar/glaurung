@@ -37,6 +37,12 @@ struct HelloWorld {
     std::size_t length;    // +0x08
     // ... padding / unrecovered members ...
     int         call_count;// +0x20
+
+    /* Bug BB: rewriter defined `void HelloWorld::printMessage()`
+     * below but omitted the in-class declaration. C++ requires
+     * member-function definitions to match a prior in-class
+     * declaration, so we add it here to close the link. */
+    void printMessage();
 };
 
 void HelloWorld::printMessage()

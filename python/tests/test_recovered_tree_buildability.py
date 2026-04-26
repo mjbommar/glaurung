@@ -83,12 +83,19 @@ _KNOWN_BROKEN: dict[str, str] = {
         "(Bug AA closed std__vector_string cross-TU; the iostream "
         "implementation gap is a separate v2 problem.)",
     "hello-recovered-v2":
-        "HelloWorld::printMessage() defined in print_message.cpp but "
-        "missing from the HelloWorld struct definition there — "
-        "mismatched method declaration / definition",
+        "compile clean (Bug BB closed the missing in-class "
+        "decl of HelloWorld::printMessage); link still fails — "
+        "main.cpp expects a `main` symbol the rewriter didn't "
+        "emit, plus libstdc++ vector destructor + __cxa_rethrow "
+        "with no extern bridges. Same class as Bugs W+Q for "
+        "libstdc++ — v2 effort.",
     "hello-recovered-v3":
-        "undefined reference to HelloWorld::printMessage() — only the "
-        "main module is rewritten; print_message.cpp wasn't emitted",
+        "compile clean (Bug CC bridged HelloWorld::printMessage to "
+        "the free-function variant); link still fails — undefined "
+        "refs to libstdc++ exception-handling runtime (vector D2 "
+        "destructor + _Unwind_Resume). Rewriter writes C-style "
+        "symbol names instead of Itanium-mangled extern decls. "
+        "Same shape as Bug Q for libstdc++ — v2 effort.",
 }
 
 

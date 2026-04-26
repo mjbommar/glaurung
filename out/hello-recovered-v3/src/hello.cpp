@@ -177,6 +177,17 @@ void HelloWorld_printMessage(HelloWorld *self)
     ++self->call_count;
 }
 
+/* Bug CC: types.h declares `void HelloWorld::printMessage()` (the
+ * canonical C++ method spelling, mangled _ZN10HelloWorld12printMessageEv)
+ * and the rest of hello.cpp calls it that way (`hello1.printMessage()`),
+ * but the rewriter only emitted the free-function variant
+ * `HelloWorld_printMessage(self)` above. Bridge them with a one-line
+ * member-function definition that delegates to the free function. */
+void HelloWorld::printMessage()
+{
+    HelloWorld_printMessage(this);
+}
+
 
 /**
  * @brief Cold/exception-cleanup partition of `main()` (compiler-generated).
