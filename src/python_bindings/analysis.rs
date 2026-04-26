@@ -35,6 +35,8 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     analysis_mod.add_function(wrap_pyfunction!(gopclntab_names_path_py, &analysis_mod)?)?;
     // .NET CIL metadata parser for recovering method names from managed PEs.
     analysis_mod.add_function(wrap_pyfunction!(cil_methods_path_py, &analysis_mod)?)?;
+    // Java classfile parser for triaging .class files and JAR contents.
+    analysis_mod.add_function(wrap_pyfunction!(parse_java_class_path_py, &analysis_mod)?)?;
 
     // Add analysis submodule to main module
     m.add_submodule(&analysis_mod)?;
@@ -197,6 +199,57 @@ fn macho_stubs_map_path_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     Ok(crate::analysis::macho_stubs::macho_stubs_map(&data))
+}
+
+/// Parse a Java `.class` file and return a structured dict with the
+/// class name, super class, interfaces, methods, and fields.
+/// Returns None for files that don't have the 0xCAFEBABE magic.
+#[pyfunction]
+#[pyo3(name = "parse_java_class_path")]
+#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+fn parse_java_class_path_py(
+    py: Python<'_>,
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Option<PyObject>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    match crate::analysis::java_class::parse_class(&data) {
+        Ok(info) => {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("class_name", info.class_name)?;
+            dict.set_item("super_class", info.super_class)?;
+            dict.set_item("interfaces", info.interfaces)?;
+            dict.set_item("major_version", info.major_version)?;
+            dict.set_item("minor_version", info.minor_version)?;
+            dict.set_item("access_flags", info.access_flags)?;
+            let methods = pyo3::types::PyList::empty(py);
+            for m in info.methods {
+                let mdict = pyo3::types::PyDict::new(py);
+                mdict.set_item("name", m.name)?;
+                mdict.set_item("descriptor", m.descriptor)?;
+                mdict.set_item("access_flags", m.access_flags)?;
+                methods.append(mdict)?;
+            }
+            dict.set_item("methods", methods)?;
+            let fields = pyo3::types::PyList::empty(py);
+            for f in info.fields {
+                let fdict = pyo3::types::PyDict::new(py);
+                fdict.set_item("name", f.name)?;
+                fdict.set_item("descriptor", f.descriptor)?;
+                fdict.set_item("access_flags", f.access_flags)?;
+                fields.append(fdict)?;
+            }
+            dict.set_item("fields", fields)?;
+            Ok(Some(dict.into()))
+        }
+        Err(crate::analysis::java_class::ClassError::BadMagic(_)) => Ok(None),
+        Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "java class parse failed: {:?}", e,
+        ))),
+    }
 }
 
 /// Walk a .NET PE assembly's CIL metadata and return every method's

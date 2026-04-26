@@ -12,6 +12,7 @@ pub mod elf_got;
 pub mod elf_plt;
 pub mod entry;
 pub mod gopclntab;
+pub mod java_class;
 pub mod macho_stubs;
 pub mod memory;
 pub mod pe_iat;
