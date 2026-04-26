@@ -36,13 +36,20 @@ typedef struct std__vector_string {
     std__string *_M_end_of_storage;
 } std__vector_string;
 
-/* Bug AA: the recovered tree calls `operator_delete` as a plain
- * C function. libstdc++ exports `operator delete(void *)` and
- * the sized variant `operator delete(void *, size_t)`. We bridge
- * via static inline shims so the recovered .c files don't have
- * to know the C++ ABI mangling. */
+/* Bug AA + DD: the recovered tree calls `operator_delete` as
+ * a plain C function. libstdc++ exports `operator delete(void *)`
+ * and the sized variant `operator delete(void *, size_t)`. We
+ * bridge via static inline shims so the recovered .c files don't
+ * have to know the C++ ABI mangling. extern "C" wrap is critical
+ * — without it g++ re-mangles _ZdlPv* and link fails. */
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern void _ZdlPv(void *p);                    /* operator delete(void *) */
 extern void _ZdlPvm(void *p, size_t sz);        /* operator delete(void *, size_t) */
+#ifdef __cplusplus
+}
+#endif
 
 static inline void operator_delete(void *p)        { _ZdlPv(p); }
 static inline void operator_delete_sized(void *p, size_t sz) { _ZdlPvm(p, sz); }

@@ -75,21 +75,16 @@ def _list_recovered_trees() -> list[Path]:
 # Adding an entry = a new regression we're acknowledging while
 # someone else gets paged.
 _KNOWN_BROKEN: dict[str, str] = {
-    "hello-recovered":
-        "iostream_support.c emits raw C++ syntax (std::ostream, "
-        "std::ctype<char>, etc.) without including <iostream> — "
-        "the rewriter wrote a 'recovered std::endl' as plain C++ "
-        "tokens, which won't parse without the standard headers. "
-        "(Bug AA closed std__vector_string cross-TU; the iostream "
-        "implementation gap is a separate v2 problem.)",
-    # hello-recovered-v2: closed by Bugs BB + DD (extern "C"
-    # bridging + main/strings/vector-dtor stubs). Tree builds,
-    # links, and runs.
-    # hello-recovered-v3: closed by Bugs CC + DD (extern "C"
-    # bridging for libstdc++ exception-handling symbols). Tree
-    # builds, links, and runs to completion — entry removed so
-    # any future rewriter regression that breaks the build fails
-    # the suite immediately.
+    # All four recovered trees now build, link, and run end-to-end:
+    # * hello-fortran-recovered: Bugs P/Q/W (libgfortran ABI shims).
+    # * hello-recovered:         Bugs AA/EE (cxx_runtime + iostream gut +
+    #                             HelloWorld stubs).
+    # * hello-recovered-v2:      Bugs BB/DD (extern "C" + main stub).
+    # * hello-recovered-v3:      Bugs CC/DD (extern "C" + member-fn bridge).
+    #
+    # The dict is intentionally empty — any future rewriter
+    # regression that breaks any of the trees fails the suite
+    # immediately rather than silently degrading to xfail.
 }
 
 

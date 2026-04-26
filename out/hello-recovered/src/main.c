@@ -55,7 +55,18 @@ class HelloWorld {
 public:
     HelloWorld(const std::string &msg);
     void printMessage() const;
+private:
+    std::string message;
 };
+
+/* Bug EE: rewriter declared HelloWorld but never emitted its
+ * constructor or printMessage definitions. The build-and-link
+ * gate needs them to resolve; minimal in-line stubs are fine
+ * because runtime fidelity is a separate concern (Bug X-style). */
+inline HelloWorld::HelloWorld(const std::string &msg) : message(msg) {}
+inline void HelloWorld::printMessage() const {
+    std::cout << message << std::endl;
+}
 
 /*
  * Reconstructed main:
