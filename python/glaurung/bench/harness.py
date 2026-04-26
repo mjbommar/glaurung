@@ -60,6 +60,7 @@ class BinaryScorecard:
     debug_info: dict = field(default_factory=dict)
     stack_frame: dict = field(default_factory=dict)
     type_kb: dict = field(default_factory=dict)
+    packer: dict = field(default_factory=dict)
 
     elapsed_ms: dict = field(default_factory=dict)
     error: Optional[str] = None
@@ -192,6 +193,26 @@ def run_one_binary(
     repo_root = repo_root or Path.cwd()
     binary = Path(binary)
 
+    # Packer detection runs before triage — we want to know the
+    # binary is packed BEFORE deeper passes spend time on shells.
+    # When packed, kickoff_analysis already short-circuits; the
+    # bench harness keeps running so the scorecard captures the
+    # detection signal even if downstream metrics are mostly zero.
+    packer_dict: dict = {}
+    try:
+        from glaurung.llm.kb.packer_detect import detect_packer
+        verdict = detect_packer(str(binary))
+        packer_dict = {
+            "is_packed": verdict.is_packed,
+            "packer_name": verdict.packer_name,
+            "family": verdict.family,
+            "confidence": verdict.confidence,
+            "overall_entropy": round(verdict.overall_entropy, 4),
+            "indicator_count": len(verdict.indicators),
+        }
+    except Exception:
+        packer_dict = {}
+
     meta_path = _resolve_metadata(binary)
     metadata: dict = {}
     if meta_path:
@@ -219,6 +240,7 @@ def run_one_binary(
             discovery={},
             callgraph={},
             decompile={},
+            packer=packer_dict,
             error=f"triage: {e}",
         )
     triage_ms = (time.perf_counter() - triage_started) * 1000
@@ -290,6 +312,7 @@ def run_one_binary(
             discovery={},
             callgraph={},
             decompile={},
+            packer=packer_dict,
             elapsed_ms={"triage_ms": round(triage_ms, 1)},
             error=f"analysis: {e}",
         )
@@ -368,6 +391,7 @@ def run_one_binary(
         debug_info=asdict(dbg),
         stack_frame=asdict(sf),
         type_kb=asdict(tkb),
+        packer=packer_dict,
         elapsed_ms={
             "triage_ms": round(triage_ms, 1),
             "analysis_ms": round(analysis_ms, 1),
@@ -471,6 +495,26 @@ def to_markdown(summary: BenchSummary) -> str:
                      f"(across {totals.get('functions_with_stack_slots', 0)} functions)")
         lines.append(f"- Type-KB lift: **{totals.get('propagated_slots', 0)}** propagated, "
                      f"**{totals.get('auto_struct_candidates', 0)}** auto-struct candidates")
+        # Packer-detection signal: when ANY scorecard came back with
+        # is_packed=True, surface the count so packed-matrix runs
+        # produce a regression-trackable line (#213).
+        packed_count = sum(
+            1 for c in summary.scorecards
+            if c.packer and c.packer.get("is_packed")
+        )
+        if packed_count:
+            families: dict = {}
+            for c in summary.scorecards:
+                if c.packer and c.packer.get("is_packed"):
+                    fam = c.packer.get("packer_name") or "(generic)"
+                    families[fam] = families.get(fam, 0) + 1
+            fam_str = ", ".join(
+                f"{n}×{c}" for n, c in sorted(families.items())
+            )
+            lines.append(
+                f"- Packed binaries: **{packed_count}** "
+                f"(by family: {fam_str})"
+            )
         lines.append("")
         lines.append("## Rates")
         lines.append(f"- Symbol-name resolution (avg): **{rates.get('name_match_rate_avg', 0):.1%}**")
@@ -478,25 +522,62 @@ def to_markdown(summary: BenchSummary) -> str:
         lines.append(f"- Language detection match: **{rates.get('language_match_rate', 0):.1%}**")
         lines.append("")
 
+    has_packed = any(
+        c.packer and c.packer.get("is_packed") for c in summary.scorecards
+    )
     lines.append("## Per binary")
     lines.append("")
-    lines.append("| binary | funcs | named | chunks>1 | cold orphans | decompiled | ms |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|")
+    if has_packed:
+        lines.append(
+            "| binary | funcs | named | chunks>1 | cold orphans | "
+            "decompiled | packer | entropy | ms |"
+        )
+        lines.append("|---|---:|---:|---:|---:|---:|---|---:|---:|")
+    else:
+        lines.append(
+            "| binary | funcs | named | chunks>1 | cold orphans | "
+            "decompiled | ms |"
+        )
+        lines.append("|---|---:|---:|---:|---:|---:|---:|")
     for c in summary.scorecards:
         if c.error:
-            lines.append(f"| `{Path(c.binary_path).name}` | — | — | — | — | error: {c.error} | — |")
+            if has_packed:
+                lines.append(
+                    f"| `{Path(c.binary_path).name}` | — | — | — | — | "
+                    f"error: {c.error} | — | — | — |"
+                )
+            else:
+                lines.append(
+                    f"| `{Path(c.binary_path).name}` | — | — | — | — | "
+                    f"error: {c.error} | — |"
+                )
             continue
         d = c.discovery
         de = c.decompile
         ms = sum(v for v in (c.elapsed_ms or {}).values())
-        lines.append(
-            f"| `{Path(c.binary_path).name}` "
-            f"| {d.get('total', 0)} "
-            f"| {d.get('named_from_symbols', 0)} "
-            f"| {d.get('with_chunks_gt_one', 0)} "
-            f"| {d.get('cold_orphans', 0)} "
-            f"| {de.get('succeeded', 0)}/{de.get('attempted', 0)} "
-            f"| {ms:.0f} |"
-        )
+        if has_packed:
+            pk = c.packer or {}
+            pk_name = pk.get("packer_name") or ("yes" if pk.get("is_packed") else "—")
+            ent = pk.get("overall_entropy")
+            ent_str = f"{ent:.2f}" if ent is not None else "—"
+            lines.append(
+                f"| `{Path(c.binary_path).name}` "
+                f"| {d.get('total', 0)} "
+                f"| {d.get('named_from_symbols', 0)} "
+                f"| {d.get('with_chunks_gt_one', 0)} "
+                f"| {d.get('cold_orphans', 0)} "
+                f"| {de.get('succeeded', 0)}/{de.get('attempted', 0)} "
+                f"| {pk_name} | {ent_str} | {ms:.0f} |"
+            )
+        else:
+            lines.append(
+                f"| `{Path(c.binary_path).name}` "
+                f"| {d.get('total', 0)} "
+                f"| {d.get('named_from_symbols', 0)} "
+                f"| {d.get('with_chunks_gt_one', 0)} "
+                f"| {d.get('cold_orphans', 0)} "
+                f"| {de.get('succeeded', 0)}/{de.get('attempted', 0)} "
+                f"| {ms:.0f} |"
+            )
 
     return "\n".join(lines) + "\n"
