@@ -110,7 +110,15 @@ static int subroutine_invocations;  /* &[var7+0x4014] – bumped before call (Bu
 
 void MAIN__(void)
 {
-    st_parameter_dt dt;
+    /* Bug X: zero-initialise the descriptor so libgfortran's
+     * private state starts with sane defaults. The original
+     * gfortran-emitted code keeps a stack-resident descriptor
+     * across all I/O calls in the routine, but reusing one
+     * uninitialised in C tickles libgfortran's "is this a fresh
+     * stream?" check and crashes. {0} keeps the recovered tree
+     * runnable until the rewriter learns the full descriptor
+     * init sequence. */
+    st_parameter_dt dt = {0};
     char  arg_buf[100];
     int   arg_index;
     int   nargs;
