@@ -235,8 +235,17 @@ void HelloWorld::printMessage()
  * reproduce that shape with an `extern "C"`-style stub.
  */
 
+/* Bug DD: these are libstdc++ runtime / itanium-ABI exception-
+ * handling symbols. The mangled name is the LITERAL symbol the
+ * binary expects — without `extern "C"` g++ would re-mangle these
+ * declarations as C++ functions and link would fail with
+ * "_Unwind_Resume(void*)" (the unmangled spelling of the
+ * twice-mangled symbol it was looking for). C linkage forces
+ * g++ to use the literal name from the declaration. */
+extern "C" {
 extern void _ZNSt6vectorINSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESaIS5_EED2Ev(void *self);
 extern void _Unwind_Resume(void *exc) __attribute__((noreturn));
+}
 
 void main_cold(void) __attribute__((noreturn, cold));
 

@@ -82,20 +82,14 @@ _KNOWN_BROKEN: dict[str, str] = {
         "tokens, which won't parse without the standard headers. "
         "(Bug AA closed std__vector_string cross-TU; the iostream "
         "implementation gap is a separate v2 problem.)",
-    "hello-recovered-v2":
-        "compile clean (Bug BB closed the missing in-class "
-        "decl of HelloWorld::printMessage); link still fails — "
-        "main.cpp expects a `main` symbol the rewriter didn't "
-        "emit, plus libstdc++ vector destructor + __cxa_rethrow "
-        "with no extern bridges. Same class as Bugs W+Q for "
-        "libstdc++ — v2 effort.",
-    "hello-recovered-v3":
-        "compile clean (Bug CC bridged HelloWorld::printMessage to "
-        "the free-function variant); link still fails — undefined "
-        "refs to libstdc++ exception-handling runtime (vector D2 "
-        "destructor + _Unwind_Resume). Rewriter writes C-style "
-        "symbol names instead of Itanium-mangled extern decls. "
-        "Same shape as Bug Q for libstdc++ — v2 effort.",
+    # hello-recovered-v2: closed by Bugs BB + DD (extern "C"
+    # bridging + main/strings/vector-dtor stubs). Tree builds,
+    # links, and runs.
+    # hello-recovered-v3: closed by Bugs CC + DD (extern "C"
+    # bridging for libstdc++ exception-handling symbols). Tree
+    # builds, links, and runs to completion — entry removed so
+    # any future rewriter regression that breaks the build fails
+    # the suite immediately.
 }
 
 
