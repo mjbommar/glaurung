@@ -7,6 +7,7 @@
 
 pub mod aarch64_literals;
 pub mod cfg;
+pub mod cil_metadata;
 pub mod elf_got;
 pub mod elf_plt;
 pub mod entry;

@@ -570,29 +570,20 @@ def index_callgraph(
     # is "gopclntab" so manual renames still take precedence.
     try:
         go_pairs = g.analysis.gopclntab_names_path(binary_path)
-        if go_pairs:
-            for va, name in go_pairs:
-                cur.execute(
-                    "SELECT canonical, set_by FROM function_names "
-                    "WHERE binary_id = ? AND entry_va = ?",
-                    (kb.binary_id, int(va)),
-                )
-                row = cur.fetchone()
-                if row is None:
-                    set_function_name(
-                        kb, int(va), str(name), set_by="gopclntab",
-                    )
-                    continue
-                # Upgrade rows the analyzer left as sub_<hex>; never
-                # clobber manual / dwarf-derived names.
-                cur_canon, cur_setby = row
-                if cur_setby in ("manual", "dwarf"):
-                    continue
-                if cur_canon and not cur_canon.startswith("sub_"):
-                    continue
-                set_function_name(
-                    kb, int(va), str(name), set_by="gopclntab",
-                )
+        _import_external_names(kb, go_pairs, "gopclntab")
+    except Exception:
+        pass
+
+    # .NET PE assemblies ship method names in CIL metadata even when
+    # otherwise stripped. The walker yields (rva, name) tuples; we
+    # need to add the image base to map RVAs to VAs.
+    try:
+        cil_methods = g.analysis.cil_methods_path(binary_path)
+        if cil_methods:
+            image_base = _pe_image_base(binary_path)
+            if image_base is not None:
+                cil_pairs = [(image_base + rva, name) for rva, name in cil_methods]
+                _import_external_names(kb, cil_pairs, "cil")
     except Exception:
         pass
 
@@ -603,6 +594,75 @@ def index_callgraph(
     except Exception:
         pass
     return len(rows)
+
+
+def _import_external_names(
+    kb: PersistentKnowledgeBase,
+    pairs: Iterable[Tuple[int, str]],
+    set_by: str,
+) -> None:
+    """Apply a (va, name) batch from an external recovery source
+    (gopclntab, CIL metadata, etc.) to the function_names table.
+
+    Skips rows where a manual / dwarf name already exists, and won't
+    clobber an existing non-`sub_<hex>` name produced by the analyzer
+    or another external source. Inserts fresh rows for VAs not yet
+    in the table.
+    """
+    if not pairs:
+        return
+    cur = kb._conn.cursor()
+    for va, name in pairs:
+        cur.execute(
+            "SELECT canonical, set_by FROM function_names "
+            "WHERE binary_id = ? AND entry_va = ?",
+            (kb.binary_id, int(va)),
+        )
+        row = cur.fetchone()
+        if row is None:
+            set_function_name(kb, int(va), str(name), set_by=set_by)
+            continue
+        cur_canon, cur_setby = row
+        if cur_setby in ("manual", "dwarf"):
+            continue
+        if cur_canon and not cur_canon.startswith("sub_"):
+            continue
+        set_function_name(kb, int(va), str(name), set_by=set_by)
+
+
+def _pe_image_base(binary_path: str) -> Optional[int]:
+    """Return the PE image base (the VA the loader maps the binary at)
+    so RVAs from analyzers can be turned into absolute VAs. Returns
+    None for non-PE binaries or on parse failure."""
+    try:
+        with open(binary_path, "rb") as f:
+            head = f.read(0x400)
+        if head[:2] != b"MZ":
+            return None
+        if len(head) < 0x40:
+            return None
+        pe_off = int.from_bytes(head[0x3c:0x40], "little")
+        if pe_off + 0x18 > len(head):
+            with open(binary_path, "rb") as f:
+                f.seek(pe_off)
+                pe_head = f.read(0x100)
+        else:
+            pe_head = head[pe_off:]
+        if pe_head[:4] != b"PE\x00\x00":
+            return None
+        magic = int.from_bytes(pe_head[0x18:0x1a], "little")
+        # Image base lives at offset 0x1c (PE32) or 0x18 (PE32+) of
+        # the optional header. Optional header starts at PE off + 0x18.
+        opt_off = 0x18
+        if magic == 0x10b:  # PE32
+            ib = int.from_bytes(pe_head[opt_off + 0x1c:opt_off + 0x20], "little")
+        elif magic == 0x20b:  # PE32+
+            ib = int.from_bytes(pe_head[opt_off + 0x18:opt_off + 0x20], "little")
+        else:
+            return None
+        return ib
+    except Exception:
+        return None
 
 
 def _row_count(kb: PersistentKnowledgeBase, kind: Optional[str] = None) -> int:

@@ -33,6 +33,8 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
 
     // Go pclntab walker for recovering function names from stripped Go binaries.
     analysis_mod.add_function(wrap_pyfunction!(gopclntab_names_path_py, &analysis_mod)?)?;
+    // .NET CIL metadata parser for recovering method names from managed PEs.
+    analysis_mod.add_function(wrap_pyfunction!(cil_methods_path_py, &analysis_mod)?)?;
 
     // Add analysis submodule to main module
     m.add_submodule(&analysis_mod)?;
@@ -195,6 +197,29 @@ fn macho_stubs_map_path_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     Ok(crate::analysis::macho_stubs::macho_stubs_map(&data))
+}
+
+/// Walk a .NET PE assembly's CIL metadata and return every method's
+/// `(rva, full_name)` pair. Returns an empty list for non-.NET PEs
+/// so callers can silently fall through.
+#[pyfunction]
+#[pyo3(name = "cil_methods_path")]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
+fn cil_methods_path_py(
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Vec<(u32, String)>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    match crate::analysis::cil_metadata::extract_cil_methods(&data) {
+        Ok(methods) => Ok(methods.into_iter().map(|m| (m.rva, m.name)).collect()),
+        Err(crate::analysis::cil_metadata::CilError::NoCom) => Ok(Vec::new()),
+        Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "cil parse failed: {:?}", e,
+        ))),
+    }
 }
 
 /// Walk a Go binary's `.gopclntab` and return every recovered
