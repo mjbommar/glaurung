@@ -1,0 +1,10 @@
+functions: 9 | callgraph edges: 12
+- _start @0x1060 blocks=4 edges=4 size=89
+- deregister_tm_clones @0x1090 blocks=4 edges=4 size=41
+- register_tm_clones @0x10c0 blocks=4 edges=4 size=57
+- __do_global_dtors_aux @0x1100 blocks=5 edges=4 size=57
+- frame_dummy @0x1140 blocks=5 edges=5 size=9
+- main @0x1150 blocks=4 edges=5 size=127
+- print_sum @0x11d0 blocks=1 edges=0 size=34
+- static_function @0x1200 blocks=1 edges=0 size=41
+- sub_117b @0x117b blocks=4 edges=5 size=84

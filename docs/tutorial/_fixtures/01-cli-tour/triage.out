@@ -1,0 +1,9 @@
+path: /nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+size: 17680 bytes (17.3 KiB)
+verdicts: 1
+format=ELF arch=x86_64 64-bit endianness=Little confidence=0.86
+symbols: imports=7 exports=0 libs=1 flags: debug,nx,aslr,relro,pie
+strings: ascii=105 utf8=1 u16le=0 u16be=0
+languages: (none)
+scripts: Latin=4
+entropy: overall=1.97

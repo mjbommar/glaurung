@@ -11,17 +11,23 @@ fraction of commodity malware. Recognising UPX-packed input
 without wasting time on the packed body is the floor for any
 serious malware-triage workflow.
 
+> **Verified output.** Every block is captured by
+> `scripts/verify_tutorial.py` and stored under
+> [`_fixtures/03-upx-packed/`](../_fixtures/03-upx-packed/).
+
 ## Sample
 
 ```bash
-PACKED=samples/packed/hello-go.upx9
-file $PACKED
+$ PACKED=samples/packed/hello-go.upx9
+$ file $PACKED
 ```
 
+```text
+samples/packed/hello-go.upx9: ELF 64-bit LSB executable, x86-64,
+version 1 (SYSV), statically linked, no section header
 ```
-ELF 64-bit LSB executable, x86-64, version 1 (SYSV),
-statically linked, no section header
-```
+
+(Captured: [`_fixtures/03-upx-packed/file.out`](../_fixtures/03-upx-packed/file.out).)
 
 Two giveaways even before any analysis:
 
@@ -33,14 +39,16 @@ Two giveaways even before any analysis:
 ## Phase 1: Triage — packer detection (#187)
 
 ```bash
-glaurung detect-packer $PACKED
+$ glaurung detect-packer $PACKED
 ```
 
-```
+```text
 PACKED: UPX  (confidence 95%)
   indicator: UPX!
   overall entropy: 7.879 bits/byte
 ```
+
+(Captured: [`_fixtures/03-upx-packed/detect-packer.out`](../_fixtures/03-upx-packed/detect-packer.out).)
 
 The detector flags it as UPX with 95% confidence. The signals:
 
@@ -59,7 +67,7 @@ in the implementation.
 ## Phase 2: Load (`kickoff`) — short-circuit on packed input
 
 ```bash
-glaurung kickoff $PACKED --db packed.glaurung
+$ glaurung kickoff $PACKED --db packed.glaurung
 ```
 
 ```markdown
@@ -68,9 +76,10 @@ glaurung kickoff $PACKED --db packed.glaurung
 ⚠️  **PACKED**: UPX (confidence 95%)
   - indicator: `UPX!`
 
-_binary detected as UPX; skipping deep analysis
- (re-run with skip_if_packed=False to override)_
+_binary detected as UPX; skipping deep analysis (re-run with skip_if_packed=False to override)_
 ```
+
+(Captured: [`_fixtures/03-upx-packed/kickoff.out`](../_fixtures/03-upx-packed/kickoff.out).)
 
 `kickoff` short-circuits. Why:
 

@@ -16,9 +16,9 @@
 - auto-struct candidates: **32**
 
 ## IOCs (from string scan)
+- **hostname**: 1
 - **java_path**: 1
 - **path_posix**: 1
-- **hostname**: 1
 - **ipv4**: 0
 
 Examples:

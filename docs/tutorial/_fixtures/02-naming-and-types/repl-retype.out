@@ -1,0 +1,11 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+y 0x4040 char[64]
+save
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+               db=/tmp/tutorial-fixtures/02-naming-and-types.glaurung  session='main'
+>   0x4040 g_c2_endpoints: char[64]
+> saved.
+> 
+saving and exiting…

@@ -17,8 +17,8 @@
 
 ## IOCs (from string scan)
 - **hostname**: 5
-- **java_path**: 1
 - **path_posix**: 1
+- **java_path**: 1
 - **ipv4**: 0
 
 Examples:

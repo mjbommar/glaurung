@@ -1,0 +1,13 @@
+engine: iced-x86 arch: x86_64
+0x11e0: 3d350e0000           cmp eax, 0xe35
+0x11e5: b000                 mov al, 0x0
+0x11e7: e854feffff           call 0x1040
+0x11ec: 4883c410             add rsp
+
+note: truncated preview output.
+- Read only first 256 bytes of file
+- Stopped after 4 instructions
+hints:
+- Increase output: e.g., --window-bytes 4096 --max-instructions 512
+- Start from a specific VA: --addr 0x<address> (e.g., entrypoint)
+- This command is a quick preview; it does not linearly sweep all code

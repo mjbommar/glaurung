@@ -37,12 +37,18 @@ first run).
 Sanity check:
 
 ```bash
-uv run glaurung --version
+$ uv run glaurung --version
 ```
 
-Expect a semver-shaped string. If you get an `ImportError`, the
-native extension didn't build — check that you have a Rust toolchain
-on `$PATH` and re-run `uv sync`.
+```text
+glaurung 0.1.0
+```
+
+(Captured: [`_fixtures/01-install/version.out`](../_fixtures/01-install/version.out).)
+
+If you get an `ImportError` instead, the native extension didn't
+build — check that you have a Rust toolchain on `$PATH` and re-run
+`uv sync`.
 
 ## Option 3 — Build the wheel manually
 
@@ -59,15 +65,15 @@ glaurung --help
 ## Verify the install
 
 ```bash
-glaurung --help | head -3
+$ uv run glaurung --help | head -3
 ```
 
-Expected output (truncated):
-
-```
+```text
 usage: glaurung [-h] [--version]
                 {triage,strings,symbols,disasm,cfg,ask,decompile,name-func,repl,graph,detect-packer,diff,kickoff,patch,verify-recovery,export,undo,redo,xrefs,frame,strings-xrefs,view,find,bookmark,journal,classfile,luac} ...
 ```
+
+(Captured: [`_fixtures/01-install/help-head.out`](../_fixtures/01-install/help-head.out).)
 
 That's 27 subcommands. Every one is documented in
 [`reference/cli-cheatsheet.md`](../reference/cli-cheatsheet.md).
@@ -77,13 +83,43 @@ That's 27 subcommands. Every one is documented in
 This is the one-liner that confirms the full pipeline works:
 
 ```bash
-glaurung kickoff samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug
+$ uv run glaurung kickoff \
+    samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
 ```
 
+```markdown
+# Kickoff analysis — hello-c-clang-debug
+
+- format: **ELF**, arch: **x86_64**, size: **17680** bytes
+- entry: **0x1060**
+
+## Functions
+- discovered: **9** (with blocks: 9, named: 8)
+- callgraph edges: **5**
+- name sources: analyzer=9
+
+## Type system
+- stdlib prototypes loaded: **192**
+- DWARF types imported: **0**
+- stack slots discovered: **36**
+- types propagated: **0**
+- auto-struct candidates: **0**
+
+## IOCs (from string scan)
+- **path_posix**: 6
+- **hostname**: 6
+- **java_path**: 4
+- **ipv4**: 0
+
+_completed in N ms_
+```
+
+(Captured: [`_fixtures/01-install/kickoff-smoketest.out`](../_fixtures/01-install/kickoff-smoketest.out).)
+
 You should see a markdown summary mentioning the format (ELF), arch
-(x86_64), language (C), function count, and named-vs-unnamed ratio,
-finishing in under a second. If it does, your install is healthy and
-you're ready for [§B `first-binary.md`](first-binary.md).
+(x86_64), function count, and named-vs-unnamed ratio, finishing in
+under a second. If it does, your install is healthy and you're
+ready for [§B `first-binary.md`](first-binary.md).
 
 If the smoke test errors out, see the [troubleshooting section](#troubleshooting).
 

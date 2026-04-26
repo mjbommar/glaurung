@@ -10,17 +10,23 @@ This walkthrough is the **shortest** in Tier 3 because the format
 is the most self-describing — a Java `.class` file *is* the
 analysis target, not a container that has to be triaged first.
 
+> **Verified output.** Every block is captured by
+> `scripts/verify_tutorial.py` and stored under
+> [`_fixtures/03-jvm/`](../_fixtures/03-jvm/).
+
 ## Sample
 
 ```bash
-CLS=samples/binaries/platforms/linux/amd64/export/java/HelloWorld.class
-JAR=samples/binaries/platforms/linux/amd64/export/java/HelloWorld.jar
-file $CLS
+$ CLS=samples/binaries/platforms/linux/amd64/export/java/HelloWorld.class
+$ JAR=samples/binaries/platforms/linux/amd64/export/java/HelloWorld.jar
+$ file $CLS
 ```
 
+```text
+samples/.../HelloWorld.class: compiled Java class data, version 61.0 (Java SE 17)
 ```
-compiled Java class data, version 61.0 (Java SE 17)
-```
+
+(Captured: [`_fixtures/03-jvm/file-class.out`](../_fixtures/03-jvm/file-class.out).)
 
 The corresponding source is in
 `samples/source/java/HelloWorld.java`:
@@ -47,10 +53,10 @@ So we expect: 3 fields, 6 methods (including 2 constructors).
 For class files, triage and load are the same step:
 
 ```bash
-glaurung classfile $CLS
+$ glaurung classfile $CLS
 ```
 
-```
+```text
 class HelloWorld  (Java 17 (classfile 61))
   extends java/lang/Object
   access: public
@@ -66,6 +72,8 @@ class HelloWorld  (Java 17 (classfile 61))
     public static            printGlobalInfo()V
     public static            main([Ljava/lang/String;)V
 ```
+
+(Captured: [`_fixtures/03-jvm/classfile.out`](../_fixtures/03-jvm/classfile.out).)
 
 Read every line:
 
@@ -128,18 +136,31 @@ collapses:
 Jar / war / ear files are zip archives full of class entries:
 
 ```bash
-glaurung classfile $JAR
+$ glaurung classfile $JAR
 ```
 
-```
+```text
 # HelloWorld.jar: 1 class file(s)
 
 class HelloWorld  (Java 17 (classfile 61))
   extends java/lang/Object
-  ...
+  access: public
+  fields: 3
+    private static final     GLOBAL_COUNTER: I
+    private                  message: Ljava/lang/String;
+    private                  counter: I
+  methods: 6
+    public                   <init>(Ljava/lang/String;)V
+    public                   <init>()V
+    public                   printMessage()V
+    public                   getCounter()I
+    public static            printGlobalInfo()V
+    public static            main([Ljava/lang/String;)V
 
 _parsed 1 class(es)_
 ```
+
+(Captured: [`_fixtures/03-jvm/classfile-jar.out`](../_fixtures/03-jvm/classfile-jar.out).)
 
 The walker iterates every `.class` inside the archive and prints
 the same per-class summary. For a JAR with 50+ classes, this is

@@ -1,0 +1,13 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x1160
+propagate
+save
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+               db=/tmp/tutorial-fixtures/04-typed-locals.glaurung  session='main'
+>   0x1160  main  (set_by=analyzer)
+0x1160>   refined types on 3 stack slot(s) in fn@0x1160
+0x1160> saved.
+0x1160> 
+saving and exiting…

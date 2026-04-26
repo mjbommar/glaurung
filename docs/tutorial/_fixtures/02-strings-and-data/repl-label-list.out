@@ -1,0 +1,10 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+label
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+               db=/tmp/tutorial-fixtures/02-strings-and-data.glaurung  session='main'
+>   1 data labels:
+    0x00004040  g_c2_endpoints: char[64]  (set_by=manual)
+> 
+saving and exiting…

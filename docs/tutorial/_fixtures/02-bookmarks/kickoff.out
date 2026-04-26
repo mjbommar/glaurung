@@ -1,0 +1,35 @@
+# Kickoff analysis — c2_demo-clang-O0
+
+- format: **ELF**, arch: **x86_64**, size: **16456** bytes
+- entry: **0x1070**
+
+## Functions
+- discovered: **6** (with blocks: 6, named: 6)
+- callgraph edges: **1**
+- name sources: analyzer=6
+
+## Type system
+- stdlib prototypes loaded: **192**
+- DWARF types imported: **0**
+- stack slots discovered: **90**
+- types propagated: **18**
+- auto-struct candidates: **0**
+
+## IOCs (from string scan)
+- **path_posix**: 11
+- **hostname**: 10
+- **java_path**: 10
+- **ipv4**: 4
+- **domain**: 3
+- **url**: 2
+- **email**: 1
+
+Examples:
+  - `path_posix` `/lib64/ld-linux-x86-64.so.2`  (off `0x318`)
+  - `java_path` `lib64/ld-linux-x86-64.so.2`  (off `0x319`)
+  - `c_identifier` `lib64`  (off `0x319`)
+  - `c_identifier` `ld`  (off `0x31f`)
+  - `c_identifier` `linux`  (off `0x322`)
+  - `c_identifier` `x86`  (off `0x328`)
+
+_completed in N ms_

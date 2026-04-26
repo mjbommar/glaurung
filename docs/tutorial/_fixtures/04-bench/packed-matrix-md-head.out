@@ -1,0 +1,22 @@
+# Glaurung benchmark — TIMESTAMP
+_glaurung HEAD: `<sha>`_
+
+## Aggregate
+- Binaries scored: **10** (errored: 0)
+- Functions discovered: **10** (named: 0)
+- Multi-chunk functions: **0** (cold orphans: 0)
+- Decompiled OK: **10** (failed: 0)
+- DWARF types: **0** (structs with fields: 0)
+- Stack-frame slots: **0** (across 0 functions)
+- Type-KB lift: **0** propagated, **10** auto-struct candidates
+- Packed binaries: **10** (by family: UPX×10)
+
+## Rates
+- Symbol-name resolution (avg): **0.0%**
+- Decompile success (avg): **100.0%**
+- Language detection match: **0.0%**
+
+## Per binary
+
+| binary | funcs | named | chunks>1 | cold orphans | decompiled | packer | entropy | ms |
+|---|---:|---:|---:|---:|---:|---|---:|---:|

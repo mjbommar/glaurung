@@ -10,30 +10,39 @@ spot-checking the agent's claims, building your own analyst
 report, or debugging a session where the agent's answer didn't
 match expectations.
 
+> **Verified output.** Every block is captured by
+> `scripts/verify_tutorial.py` and stored under
+> [`_fixtures/05-kickoff-anatomy/`](../_fixtures/05-kickoff-anatomy/).
+> The fixtures show the evidence_log on a fresh post-kickoff
+> `.glaurung` (one row, one tool call). After an agent session
+> the table will have many more rows — the schema and shape are
+> the same.
+
 ## Reading the log
 
 The `.glaurung` file is SQLite. The evidence table is queryable
-with any sqlite3 client:
+with any sqlite3 client. Right after a fresh `kickoff`:
 
 ```bash
-sqlite3 demo.glaurung "SELECT cite_id, tool, summary FROM evidence_log ORDER BY cite_id LIMIT 10;"
+$ sqlite3 demo.glaurung \
+    "SELECT cite_id, tool, summary FROM evidence_log ORDER BY cite_id LIMIT 10;"
 ```
 
-```
-1  | kickoff_analysis | kickoff: ELF/x86_64, 6 functions, 18 propagated, 38 ioc strings
-2  | list_strings     | sampled 20 of 38 strings
-3  | view_function    | main @ 0x1160 — 432-byte frame, snprintf+memcpy+printf
-4  | list_xrefs_to    | xrefs to 0x4040: 6 data_read sites
-5  | get_function_prototype | snprintf(char *, size_t, const char *, ...)
-...
+```text
+1|kickoff_analysis|kickoff: 6 fns, 6 named, 90 slots, 18 propagated, 0 structs
 ```
 
-Each row is one tool call.
+(Captured: [`_fixtures/05-kickoff-anatomy/evidence-log-head.out`](../_fixtures/05-kickoff-anatomy/evidence-log-head.out).)
+
+One row, because only one tool has run — `kickoff_analysis`
+itself. After a few rounds of agent chat the log fills up with
+`view_function`, `list_xrefs_to`, `get_function_prototype`, etc.
+rows.
 
 ## The full schema
 
 ```bash
-sqlite3 demo.glaurung ".schema evidence_log"
+$ sqlite3 demo.glaurung ".schema evidence_log"
 ```
 
 ```sql
@@ -44,12 +53,20 @@ CREATE TABLE evidence_log (
     args_json TEXT NOT NULL,        -- inputs the tool was called with
     summary TEXT NOT NULL,          -- short human-readable description
     va_start INTEGER,               -- nullable: VA range this evidence covers
-    va_end INTEGER,
+    va_end INTEGER,                 -- exclusive end
     file_offset INTEGER,            -- nullable file-offset alternative
     output_json TEXT,               -- structured output (caller-defined schema)
     created_at INTEGER NOT NULL
 );
+CREATE INDEX idx_evidence_binary
+    ON evidence_log(binary_id);
+CREATE INDEX idx_evidence_tool
+    ON evidence_log(binary_id, tool);
+CREATE INDEX idx_evidence_va
+    ON evidence_log(binary_id, va_start);
 ```
+
+(Captured: [`_fixtures/05-kickoff-anatomy/evidence-log-schema.out`](../_fixtures/05-kickoff-anatomy/evidence-log-schema.out).)
 
 Useful columns:
 
@@ -61,7 +78,34 @@ Useful columns:
 - `va_start` / `va_end` — for tools anchored to a VA range
   (decompile, view, xrefs).
 
+A row's `args_json` and `output_json` start with the tool's input
+shape and structured output respectively:
+
+```bash
+$ sqlite3 demo.glaurung \
+    "SELECT cite_id, tool, summary, va_start, va_end,
+            substr(args_json, 1, 80) AS args_head,
+            substr(output_json, 1, 80) AS output_head
+     FROM evidence_log ORDER BY cite_id LIMIT 3;"
+```
+
+```text
+1|kickoff_analysis|kickoff: 6 fns, 6 named, 90 slots, 18 propagated, 0 structs|||{"binary_path": "/nas4/data/workspace-infosec/glaurung/samples/binaries/platform|{"arch": "x86_64", "auto_structs_emitted": 0, "by_set_by": {"analyzer": 6}, "cal
+```
+
+(Captured: [`_fixtures/05-kickoff-anatomy/evidence-log-args-output.out`](../_fixtures/05-kickoff-anatomy/evidence-log-args-output.out).)
+
+The `va_start` / `va_end` columns are empty for `kickoff_analysis`
+because it's a binary-scope tool, not anchored to a VA range.
+Per-function tools like `view_function` and `list_xrefs_to`
+populate them.
+
 ## Verify a citation
+
+> **Illustrative**: the example below assumes the agent has run
+> several tool calls (cite_id 12 in particular). The query shape
+> is what's verified; the row contents will reflect whatever the
+> agent actually saw in your session.
 
 The agent said "C2 endpoints found at 0x4040 (cite 12)." Check it:
 

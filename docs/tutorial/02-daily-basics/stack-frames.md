@@ -4,157 +4,172 @@ The frame editor — IDA's "Stack frame" window in CLI form. List
 every slot a function uses, see provenance for each, rename and
 retype inline.
 
+> **Verified output.** Every block is captured by
+> `scripts/verify_tutorial.py` and stored under
+> [`_fixtures/02-stack-frames/`](../_fixtures/02-stack-frames/).
+
 ## Setup
 
 ```bash
-BIN=samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
-glaurung kickoff $BIN --db demo.glaurung
+$ BIN=samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+$ glaurung kickoff $BIN --db demo.glaurung
 ```
 
-## CLI form
+```text
+# Kickoff analysis — c2_demo-clang-O0
+- format: **ELF**, arch: **x86_64**, size: **16456** bytes
+- entry: **0x1070**
+- discovered: **6** functions
+- stack slots discovered: **90**
+- types propagated: **18**
+- stdlib prototypes loaded: **192**
+```
+
+(Captured: [`_fixtures/02-stack-frames/kickoff.out`](../_fixtures/02-stack-frames/kickoff.out).)
+
+90 slots across 6 functions, 18 already typed by the propagation
+pass.
+
+## CLI form: `glaurung frame <db> <fn-va> list`
 
 ```bash
-glaurung frame demo.glaurung 0x1160 --binary $BIN list
+$ glaurung frame demo.glaurung 0x1160 list --binary $BIN
 ```
 
-The first argument after the action is the function entry VA. (Use
-`glaurung find <db> <name> --kind function` to find one.)
-
-## Discover slots
-
-If the slot table is empty (because `kickoff` only does a sample
-of functions during the per-function lift), populate it:
-
-```bash
-glaurung frame demo.glaurung 0x1160 --binary $BIN discover
-```
-
-```
-discovered 18 stack-frame slot(s) in fn@0x1160
-```
-
-Then list:
-
-```bash
-glaurung frame demo.glaurung 0x1160 --binary $BIN list
-```
-
-```
+```text
   offset  name                      type                       size  uses  set_by
---------  ------------------------  ------------------------  -----  ----  -------
- -0x1b0  var_1b0                   (unknown)                            2  auto
- -0x140  var_140                   (unknown)                  112      3  auto
- -0x010  var_10                    (unknown)                  304      1  auto
- +0x010  ret                       (unknown)                   32      0  auto
+---------------------------------------------------------------------------------
+-0x1b0  var_1b0                   void *                              2  propagated
+-0x180  var_180                   (unknown)                    48     2  auto
+-0x178  var_178                   (unknown)                     8     1  auto
+-0x170  var_170                   (unknown)                     8     1  auto
+-0x168  var_168                   (unknown)                     8     1  auto
+-0x164  var_164                   (unknown)                     4     1  auto
+-0x160  var_160                   (unknown)                     4     1  auto
+-0x158  var_158                   (unknown)                     8     1  auto
+-0x150  var_150                   (unknown)                     8     1  auto
+-0x148  var_148                   (unknown)                     8     1  auto
+-0x140  var_140                   void *                        8     1  propagated
+-0x110  var_110                   char *                       48     2  propagated
+-0x010  var_10                    (unknown)                   256     1  auto
+-0x008  var_8                     (unknown)                     8     1  auto
+-0x004  var_4                     (unknown)                     4     1  auto
 ```
+
+(Captured: [`_fixtures/02-stack-frames/frame-list-before.out`](../_fixtures/02-stack-frames/frame-list-before.out).)
+
+15 slots already populated by the kickoff lift. Three are typed
+`set_by=propagated` — the propagation pass walked the libc
+prototype graph and inferred `void *` / `char *` from how each
+slot flows into call sites like `snprintf` / `memcpy`.
 
 Columns:
 
-- `offset` — signed offset from the frame pointer (typically rbp on
-  x86_64). Negative = local; positive = arg / saved-reg / red-zone.
-- `name` — analyzer-assigned (`var_<hex>` for locals, `arg_<hex>` for
-  positive offsets) or analyst-renamed.
+- `offset` — signed offset from the frame pointer (rbp on x86_64).
+  Negative = local; positive = arg / saved-reg / red-zone.
+- `name` — analyzer-assigned (`var_<hex>`) or analyst-renamed.
 - `type` — `c_type` if known. `(unknown)` is the default.
-- `size` — gap to the next slot (a heuristic — the actual storage
-  size depends on how the slot is accessed). See
-  [#239 GAP](../../architecture/IDA_GHIDRA_PARITY.md) for tracking
-  explicit sizes.
+- `size` — gap to the next slot (heuristic — actual storage size
+  depends on access width). Tracked as
+  [#239 GAP](../../architecture/IDA_GHIDRA_PARITY.md).
 - `uses` — how many times the discoverer saw the slot referenced.
 - `set_by` — provenance: `auto`, `manual`, `propagated`, `dwarf`.
 
-## Rename a slot
+## `discover` — re-run the slot finder
+
+If the slot table is empty (or you want to re-run discovery
+explicitly), use `discover`:
 
 ```bash
-glaurung frame demo.glaurung 0x1160 --binary $BIN rename -0x1b0 url_buffer
+$ glaurung frame demo.glaurung 0x1160 discover --binary $BIN
 ```
 
+```text
+discovered 15 stack-frame slot(s) in fn@0x1160
 ```
+
+(Captured: [`_fixtures/02-stack-frames/frame-discover.out`](../_fixtures/02-stack-frames/frame-discover.out).)
+
+Now list:
+
+```bash
+$ glaurung frame demo.glaurung 0x1160 list --binary $BIN
+```
+
+```text
+  offset  name                      type                       size  uses  set_by
+---------------------------------------------------------------------------------
+-0x1b0  var_1b0                   (unknown)                           2  auto
+-0x180  var_180                   (unknown)                    48     2  auto
+-0x178  var_178                   (unknown)                     8     1  auto
+-0x170  var_170                   (unknown)                     8     1  auto
+-0x168  var_168                   (unknown)                     8     1  auto
+-0x164  var_164                   (unknown)                     4     1  auto
+-0x160  var_160                   (unknown)                     4     1  auto
+-0x158  var_158                   (unknown)                     8     1  auto
+-0x150  var_150                   (unknown)                     8     1  auto
+-0x148  var_148                   (unknown)                     8     1  auto
+-0x140  var_140                   (unknown)                     8     1  auto
+-0x110  var_110                   (unknown)                    48     2  auto
+-0x010  var_10                    (unknown)                   256     1  auto
+-0x008  var_8                     (unknown)                     8     1  auto
+-0x004  var_4                     (unknown)                     4     1  auto
+```
+
+(Captured: [`_fixtures/02-stack-frames/frame-list-after.out`](../_fixtures/02-stack-frames/frame-list-after.out).)
+
+> **Behavior to know.** `discover` rebuilds the slot table from
+> the lifted disasm — and that rebuild *resets* `set_by=propagated`
+> types back to `auto`. The propagation pass needs a separate
+> re-run (REPL `propagate`) to re-infer them. **Manual writes
+> survive** discover (they're highest precedence) but propagated
+> types do not.
+
+## `rename` and `retype`
+
+```bash
+$ glaurung frame demo.glaurung 0x1160 rename -0x1b0 url_buffer --binary $BIN
+```
+
+```text
   fn@0x1160 -0x1b0 -> url_buffer
 ```
 
-## Retype a slot
+(Captured: [`_fixtures/02-stack-frames/frame-rename.out`](../_fixtures/02-stack-frames/frame-rename.out).)
 
 ```bash
-glaurung frame demo.glaurung 0x1160 --binary $BIN retype -0x1b0 "char[256]"
+$ glaurung frame demo.glaurung 0x1160 retype -0x1b0 "char[256]" --binary $BIN
 ```
 
-```
+```text
   fn@0x1160 -0x1b0 url_buffer: char[256]
 ```
 
+(Captured: [`_fixtures/02-stack-frames/frame-retype.out`](../_fixtures/02-stack-frames/frame-retype.out).)
+
 Both writes are `set_by=manual` and enter the undo log (#228).
-
-## Look at the function with named slots
-
-```bash
-glaurung view demo.glaurung 0x1160 --binary $BIN --pane pseudo --pseudo-lines 8
-```
-
-```
-── pseudocode (enclosing function) ──
-fn c2_main {
-    // ── locals (from KB) ───────────────────────
-    char url_buffer[256];          // -0x1b0  set_by=manual
-    // ───────────────────────────────────────────
-    nop;
-    rsp = (rsp - 432);
-    *&[rsp + 0x18] = arg0;
-    ...
-    snprintf@plt(&url_buffer, 256, "http://%s:8080%s", ...);
-    ...
-}
-```
-
-The slot now appears as a real C declaration in the typed-locals
-prelude (#194), and `(rbp - 0x1b0)` references in the body render
-as `url_buffer` (#196).
-
-## REPL form
+Confirm:
 
 ```bash
-glaurung repl $BIN --db demo.glaurung
+$ glaurung frame demo.glaurung 0x1160 list --binary $BIN
 ```
 
-```
->>> g 0x1160
->>> l
-  18 vars in fn@0x1160:
-    -0x1b0  url_buffer    : char[256]  (uses=2, by=manual)
-    -0x140  var_140                    (uses=3, by=auto)
-    -0x10   var_10                     (uses=1, by=auto)
-    ...
->>> locals rename -0x140 cmd_buffer
-  renamed -0x140 -> cmd_buffer
+```text
+  offset  name                      type                       size  uses  set_by
+---------------------------------------------------------------------------------
+-0x1b0  url_buffer                char[256]                           2  manual
+-0x180  var_180                   (unknown)                    48     2  auto
+…
 ```
 
-## Type propagation lights up auto types
+(Captured: [`_fixtures/02-stack-frames/frame-list-final.out`](../_fixtures/02-stack-frames/frame-list-final.out).)
 
-When a stack slot flows into a typed function call, the propagation
-pass (#172 / #195) infers the type:
-
-```
->>> propagate
-  propagated types into 8 stack slots across 1 functions
->>> l
-  18 vars in fn@0x1160:
-    -0x1b0  url_buffer    : char[256]   (uses=2, by=manual)
-    -0x140  cmd_buffer    : char *      (uses=3, by=propagated)
-    -0x10   sockfd        : int         (uses=1, by=propagated)
-    ...
-```
-
-The `set_by=propagated` rows came from the prototype bundle —
-e.g. the slot at `-0x10` flowed into `recv(int sockfd, ...)` so
-`sockfd` got typed `int`.
-
-`set_by=manual` rows are never overwritten by propagation (manual
-always wins — see
-[`reference/set-by-precedence.md`](../reference/set-by-precedence.md)).
+The first row now reads `url_buffer : char[256]  set_by=manual`.
 
 ## JSON for scripting
 
 ```bash
-glaurung frame demo.glaurung 0x1160 --binary $BIN list --format json | jq '.[0]'
+$ glaurung frame demo.glaurung 0x1160 list --binary $BIN --format json | jq '.[0]'
 ```
 
 ```json
@@ -168,21 +183,45 @@ glaurung frame demo.glaurung 0x1160 --binary $BIN list --format json | jq '.[0]'
 }
 ```
 
+(Captured: [`_fixtures/02-stack-frames/frame-list-json.out`](../_fixtures/02-stack-frames/frame-list-json.out)
+— full array of 15 slot objects.)
+
+`function_va` and `offset` are byte-encoded ints; convert with
+`printf "%#x" 4448` (= `0x1160`) or in jq with
+`(.function_va / 16 | floor)` etc.
+
+## REPL form
+
+The `l` / `locals` keystroke shows the slots for the cursor's
+enclosing function. See §D `repl-tour.md` "Inspect locals — `l`"
+and §E `naming-and-types.md` "Stack-var rename" for live REPL
+captures.
+
+## Type propagation lights up auto types
+
+After a manual rename, run the propagator to re-derive types
+elsewhere in the function:
+
+```text
+>>> propagate
+  propagated types into N stack slots across M functions
+```
+
+The `set_by=propagated` rows come from the prototype bundle —
+e.g. a slot that flows into `recv(int sockfd, …)` gets typed
+`int`. `set_by=manual` rows are never overwritten by propagation
+(manual always wins — see
+[`reference/set-by-precedence.md`](../reference/set-by-precedence.md)).
+
 ## Common patterns
 
-**"What locals does this function have?"**
-`glaurung frame <db> <fn-va> list`
-
-**"Auto-discover slots if I haven't yet"**
-`glaurung frame <db> <fn-va> discover`
-
-**"Type a slot based on its use site"**
-Run `glaurung repl > propagate` instead of typing by hand — the
-propagation pass figures out types from typed call sites.
-
-**"Make this slot a struct"**
-Define the type with `glaurung repl > struct ...` then retype:
-`glaurung frame <db> <fn-va> retype <offset> "MyStruct"`.
+| Question                                | Command                                                      |
+|-----------------------------------------|--------------------------------------------------------------|
+| What locals does this function have?    | `glaurung frame <db> <fn-va> list --binary <bin>`            |
+| Re-discover slots                       | `glaurung frame <db> <fn-va> discover --binary <bin>`        |
+| Name a slot                             | `glaurung frame <db> <fn-va> rename <off> <name> --binary <bin>` |
+| Type a slot                             | `glaurung frame <db> <fn-va> retype <off> <c-type> --binary <bin>` |
+| Type many slots automatically           | REPL `propagate`                                             |
 
 ## What's next
 

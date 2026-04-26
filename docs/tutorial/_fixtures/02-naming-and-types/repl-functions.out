@@ -1,0 +1,15 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+functions
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+               db=/tmp/tutorial-fixtures/02-naming-and-types.glaurung  session='main'
+>   6 functions, showing first 20:
+    0x1070  _start  (set_by=analyzer)
+    0x10a0  deregister_tm_clones  (set_by=analyzer)
+    0x10d0  register_tm_clones  (set_by=analyzer)
+    0x1110  __do_global_dtors_aux  (set_by=analyzer)
+    0x1150  frame_dummy  (set_by=analyzer)
+    0x1160  main  (set_by=analyzer)
+> 
+saving and exiting…

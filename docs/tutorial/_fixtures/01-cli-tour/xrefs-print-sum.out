@@ -1,0 +1,4 @@
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+to    0x1150       call          main                             push rbp
+to    0x117b       call          sub_117b                         mov rbp:[rbp - 0x18], 0x0

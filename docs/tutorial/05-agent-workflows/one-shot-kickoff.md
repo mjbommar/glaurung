@@ -7,6 +7,10 @@ chat-driven workflow uses this same data, so understanding what
 kickoff produces (and what it doesn't) is the foundation for the
 rest of Tier 5.
 
+> **Verified output.** The kickoff summary block is captured by
+> `scripts/verify_tutorial.py` and stored at
+> [`_fixtures/05-kickoff-anatomy/kickoff.out`](../_fixtures/05-kickoff-anatomy/kickoff.out).
+
 ## What kickoff does
 
 ```bash
@@ -67,23 +71,55 @@ zero rows are `set_by="manual"`. That's important for two reasons:
 ## Read the markdown summary aloud
 
 ```bash
-glaurung kickoff samples/.../c2_demo-clang-O0 --db demo.glaurung
+$ glaurung kickoff samples/.../c2_demo-clang-O0 --db demo.glaurung
 ```
 
-Every line of the summary maps to a specific KB query:
+```markdown
+# Kickoff analysis — c2_demo-clang-O0
 
+- format: **ELF**, arch: **x86_64**, size: **16456** bytes
+- entry: **0x1070**
+
+## Functions
+- discovered: **6** (with blocks: 6, named: 6)
+- callgraph edges: **1**
+- name sources: analyzer=6
+
+## Type system
+- stdlib prototypes loaded: **192**
+- DWARF types imported: **0**
+- stack slots discovered: **90**
+- types propagated: **18**
+- auto-struct candidates: **0**
+
+## IOCs (from string scan)
+- **path_posix**: 11
+- **hostname**: 10
+- **java_path**: 10
+- **ipv4**: 4
+- **domain**: 3
+- **url**: 2
+- **email**: 1
+
+_completed in N ms_
 ```
-- format: ELF, arch: x86_64                  ← triage.verdicts[0]
-- entry: 0x1070                              ← triage.entry_va
-- discovered: 6, named: 6                    ← list_function_names(kb)
-- callgraph edges: 1                         ← count(xrefs WHERE kind='call')
-- name sources: analyzer=6                   ← group_by(set_by)
-- stdlib prototypes loaded: 192              ← list_function_prototypes(kb)
-- DWARF types imported: 0                    ← list_types(kb, set_by='dwarf')
-- stack slots discovered: 90                 ← count(stack_frame_vars)
-- types propagated: 18                       ← count(stack_frame_vars WHERE set_by='propagated')
-- IOCs: 4 ipv4 / 3 domain / 2 url / 1 email  ← triage.ioc_summary
-```
+
+(Captured: [`_fixtures/05-kickoff-anatomy/kickoff.out`](../_fixtures/05-kickoff-anatomy/kickoff.out).)
+
+Every line maps to a specific KB query:
+
+| Summary line | Underlying query |
+|---|---|
+| `format: ELF, arch: x86_64` | `triage.verdicts[0]` |
+| `entry: 0x1070` | `triage.entry_va` |
+| `discovered: 6, named: 6` | `list_function_names(kb)` |
+| `callgraph edges: 1` | `count(xrefs WHERE kind='call')` |
+| `name sources: analyzer=6` | `group_by(set_by)` |
+| `stdlib prototypes loaded: 192` | `list_function_prototypes(kb)` |
+| `DWARF types imported: 0` | `list_types(kb, set_by='dwarf')` |
+| `stack slots discovered: 90` | `count(stack_frame_vars)` |
+| `types propagated: 18` | `count(stack_frame_vars WHERE set_by='propagated')` |
+| `IOCs: 4 ipv4 / 3 domain / 2 url / 1 email` | `triage.ioc_summary` |
 
 The agent's first turn in a chat workflow is essentially "run
 kickoff, render the summary, point at the IOCs." Every claim is

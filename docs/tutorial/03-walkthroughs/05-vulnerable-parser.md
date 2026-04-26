@@ -9,17 +9,26 @@ This is the canonical "vulnerable parser" CTF shape: triage →
 identify the parse function → trace user input flow → spot the
 unsafe size handling → verify with disasm.
 
+> **Verified output.** Every block is captured by
+> `scripts/verify_tutorial.py` and stored under
+> [`_fixtures/03-vulnparse/`](../_fixtures/03-vulnparse/).
+
 ## Sample
 
 ```bash
-BIN=samples/binaries/platforms/linux/amd64/synthetic/vulnparse-c-gcc-O0
-file $BIN
+$ BIN=samples/binaries/platforms/linux/amd64/synthetic/vulnparse-c-gcc-O0
+$ file $BIN
 ```
 
+```text
+samples/.../vulnparse-c-gcc-O0: ELF 64-bit LSB pie executable, x86-64,
+version 1 (SYSV), dynamically linked,
+interpreter /lib64/ld-linux-x86-64.so.2,
+BuildID[sha1]=...,
+for GNU/Linux 3.2.0, with debug_info, not stripped
 ```
-ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV),
-dynamically linked, not stripped
-```
+
+(Captured: [`_fixtures/03-vulnparse/file.out`](../_fixtures/03-vulnparse/file.out).)
 
 The corresponding C source describes a `parse_record(char *buf,
 size_t len)` that does **a `memcpy` of `len` bytes** into a
@@ -29,10 +38,10 @@ parsed via `strtoul`. Classic stack overflow.
 ## Phase 1: Triage
 
 ```bash
-glaurung kickoff $BIN --db vuln.glaurung
+$ glaurung kickoff $BIN --db vuln.glaurung
 ```
 
-```
+```markdown
 # Kickoff analysis — vulnparse-c-gcc-O0
 
 - format: **ELF**, arch: **x86_64**, size: **19408** bytes
@@ -42,55 +51,73 @@ glaurung kickoff $BIN --db vuln.glaurung
 - discovered: **7** (with blocks: 7, named: 7)
 - callgraph edges: **2**
 - name sources: analyzer=7
+
+## Type system
+- stdlib prototypes loaded: **192**
+- DWARF types imported: **6**
+- stack slots discovered: **52**
+- types propagated: **0**
+- auto-struct candidates: **0**
+
+_completed in N ms_
 ```
 
-7 functions, all named (the binary isn't stripped, has DWARF). Tiny
-program — easy to read end-to-end.
+(Captured: [`_fixtures/03-vulnparse/kickoff.out`](../_fixtures/03-vulnparse/kickoff.out).)
+
+7 functions, all named (the binary isn't stripped, has DWARF). 6
+DWARF types ingested. Tiny program — easy to read end-to-end.
 
 ## Phase 2: Function ID
 
 ```bash
-glaurung find vuln.glaurung "" --kind function
+$ glaurung find vuln.glaurung "" --kind function
 ```
 
-```
-function    0x1100          _start                  (analyzer)
-function    0x1130          deregister_tm_clones    (analyzer)
-function    0x1160          register_tm_clones      (analyzer)
-function    0x11a0          __do_global_dtors_aux   (analyzer)
-function    0x11e0          frame_dummy             (analyzer)
-function    0x11e9          parse_record            (analyzer)   ← the target
-function    0x12ae          main                    (analyzer)
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x1100          _start  (set_by=analyzer)
+function    0x1130          deregister_tm_clones  (set_by=analyzer)
+function    0x1160          register_tm_clones  (set_by=analyzer)
+function    0x11a0          __do_global_dtors_aux  (set_by=analyzer)
+function    0x11e0          frame_dummy  (set_by=analyzer)
+function    0x11e9          parse_record  (set_by=analyzer)
+function    0x12ae          main  (set_by=analyzer)
 ```
 
-The function name `parse_record` is the obvious target. Five of the
-seven functions are CRT scaffolding (`_start`, `frame_dummy`, etc.)
-— skip those.
+(Captured: [`_fixtures/03-vulnparse/find-all-funcs.out`](../_fixtures/03-vulnparse/find-all-funcs.out).)
+
+The function name `parse_record` is the obvious target. Five of
+the seven functions are CRT scaffolding (`_start`, `frame_dummy`,
+etc.) — skip those.
 
 ## Phase 3: Trace user input — start at `main`
 
 ```bash
-glaurung view vuln.glaurung 0x12ae --binary $BIN --pane pseudo --pseudo-lines 30
+$ glaurung view vuln.glaurung 0x12ae --binary $BIN \
+    --pane pseudo --pseudo-lines 30
 ```
 
-```
+```text
+── pseudocode (enclosing function) ──
 fn main {
     nop;
+    // x86-64 prologue: save rbp, frame 32 bytes
     local_0 = arg0;
     local_1 = arg1;
     t10 = local_2;
-    if ((t10 <= 1)) {                                  # if argc <= 1
+    if ((t10 <= 1)) {
         ret = local_1;
-        ret = *&[ret+0x8];                             # argv[1]
+        ret = *&[ret+0x8];
         local_3 = ret;
         ret = local_1;
         ret = (ret + 8);
-        ret = *&[ret];                                 # argv[1] again
-        0x10a0(ret);                                   # call into PLT — strtoul?
-        local_4 = ret;                                 # length from strtoul
+        ret = *&[ret];
+        0x10a0(ret);
+        local_4 = ret;
         arg2 = local_4;
         ret = local_3;
-        parse_record(ret, arg2);                       # ← the call
+        parse_record(ret, arg2);
         ret = 0;
         rsp = rbp;
         pop(rbp);
@@ -100,11 +127,12 @@ fn main {
     arg2 = *&[ret];
     arg3 = "usage: %s <input-bytes>\n";
     ret = 0;
-    0x10d0(ret, arg3);                                 # stderr fprintf
+    0x10d0(ret, arg3);
     ret = 1;
     goto L_132e;
-}
 ```
+
+(Captured: [`_fixtures/03-vulnparse/view-main.out`](../_fixtures/03-vulnparse/view-main.out).)
 
 Read aloud:
 
@@ -119,23 +147,28 @@ Read aloud:
 Sanity check the call into `parse_record`:
 
 ```bash
-glaurung xrefs vuln.glaurung 0x11e9 --binary $BIN --direction to
+$ glaurung xrefs vuln.glaurung 0x11e9 --binary $BIN --direction to
 ```
 
+```text
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+to    0x12ae       call          main                             Endbr64
 ```
-dir   src_va       kind          function                snippet
-to    0x12ae       call          main                    Endbr64
-```
+
+(Captured: [`_fixtures/03-vulnparse/xrefs-parse-record.out`](../_fixtures/03-vulnparse/xrefs-parse-record.out).)
 
 Exactly one caller — `main`. ✓
 
 ## Phase 4: The vulnerable function
 
 ```bash
-glaurung view vuln.glaurung 0x11e9 --binary $BIN --pane pseudo --pseudo-lines 30
+$ glaurung view vuln.glaurung 0x11e9 --binary $BIN \
+    --pane pseudo --pseudo-lines 30
 ```
 
-```
+```text
+── pseudocode (enclosing function) ──
 fn parse_record {
     nop;
     // x86-64 prologue: save rbp, frame 112 bytes
@@ -157,17 +190,18 @@ fn parse_record {
     %zf = (arg2 == ret);
     %cf = (arg2 u< ret);
     if (%cf) {
-        goto L_1254;       # < ?
+        goto L_1254;
     }
     ret = *&[var0+0x4020];
     arg2 = 12;
-    0x10f0("short input\n", 1, (arg2 - 1), ret);    # fprintf to stderr
+    0x10f0("short input\n", 1, (arg2 - 1), ret);
     goto L_1298;
     L_1254:
     unknown(movzx);
     ret = local_0;
-    ...
 ```
+
+(Captured: [`_fixtures/03-vulnparse/view-parse-record.out`](../_fixtures/03-vulnparse/view-parse-record.out).)
 
 Several signals:
 

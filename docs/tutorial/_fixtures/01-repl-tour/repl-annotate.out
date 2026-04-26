@@ -1,0 +1,22 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x1200
+n demo_static
+c 0x1200 called once from main; flags-only side effect
+save
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+               db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
+>   0x1200  static_function  (set_by=analyzer)
+0x1200>   0x1200 → demo_static
+  ── demo_static (post-rename) ──
+    fn static_function {
+        push(rbp);
+        ret = *&[var0+0x4040];
+        ret = (ret + 1);
+        &[var0+0x4040] = ret;
+    ... (4 more lines)
+0x1200>   0x1200: called once from main; flags-only side effect
+0x1200> saved.
+0x1200> 
+saving and exiting…

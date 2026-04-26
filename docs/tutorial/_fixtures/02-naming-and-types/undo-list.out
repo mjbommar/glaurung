@@ -1,0 +1,5 @@
+#5 stack_frame_vars function_va=0x1160 offset=-0x1b0  name: 'var_1b0' → 'url_buffer'
+#4 data_labels va=0x4040  c_type: 'char *' → 'char[64]'
+#3 data_labels va=0x4040  name: '<none>' → 'g_c2_endpoints'
+#2 comments va=0x1160  body: '<none>' → 'entry: stash argc/argv into locals'
+#1 function_names entry_va=0x1160  canonical: 'main' → 'c2_main'

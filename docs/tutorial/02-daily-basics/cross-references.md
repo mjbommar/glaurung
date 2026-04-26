@@ -4,42 +4,65 @@ The single most-pressed button in IDA / Ghidra: "show me everywhere
 this function is called from / everywhere this address is read."
 Glaurung's xrefs panel does the same in either CLI or REPL form.
 
+> **Verified output.** Every block in this chapter is captured by
+> `scripts/verify_tutorial.py` against
+> [`hello-c-clang-debug`](../reference/sample-corpus.md#hello-c-clang-debug)
+> and stored under
+> [`_fixtures/02-cross-references/`](../_fixtures/02-cross-references/).
+> Same binary as §B and §M, so addresses match.
+
 ## Setup
 
 ```bash
-BIN=samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
-glaurung kickoff $BIN --db demo.glaurung
+$ BIN=samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+$ glaurung kickoff $BIN --db demo.glaurung
 ```
+
+> **Why hello-c-clang here, not c2_demo?** The c2_demo binary's
+> kickoff path doesn't currently populate the xref index for PLT
+> calls — `glaurung xrefs` returns no rows on it. hello-c-clang
+> exercises the full xref index. Tracked as a follow-up against
+> kickoff coverage.
 
 ## CLI form: `glaurung xrefs <db> <va>`
 
-Find every caller of `printf`. First locate it:
+Find every caller of `print_sum`. First locate it:
 
 ```bash
-glaurung find demo.glaurung printf --kind function
+$ glaurung find demo.glaurung print_sum --kind function
 ```
 
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x11d0          print_sum  (set_by=analyzer)
 ```
-function    0x1030          printf  (set_by=analyzer)
-```
+
+(Captured: [`_fixtures/02-cross-references/find-print-sum.out`](../_fixtures/02-cross-references/find-print-sum.out).)
 
 Now show all callers:
 
 ```bash
-glaurung xrefs demo.glaurung 0x1030 --binary $BIN --direction to
+$ glaurung xrefs demo.glaurung 0x11d0 --binary $BIN --direction to
 ```
 
-```
-dir   src_va        kind          function                          snippet
-to    0x119c        call          c2_main                           call rip:[rip + 0xee94]
-to    0x11d4        call          c2_main                           call rip:[rip + 0xee5c]
-to    0x121e        call          c2_main                           call rip:[rip + 0xee12]
-...
+```text
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+to    0x1150       call          main                             push rbp
+to    0x117b       call          sub_117b                         mov rbp:[rbp - 0x18], 0x0
 ```
 
-Six callers, all from `c2_main`. The `snippet` column shows the
-calling instruction at each VA — useful for distinguishing the
-specific call site.
+(Captured: [`_fixtures/02-cross-references/xrefs-to-print-sum.out`](../_fixtures/02-cross-references/xrefs-to-print-sum.out).)
+
+Two callers: `main` (0x1150) and the anonymous helper `sub_117b`.
+The `snippet` column shows the calling instruction at each
+src_va — useful for distinguishing call sites.
+
+> **Cross-check with §M.** This is the same xref result Phase 5
+> of [§M `01-hello-c-clang.md`](../03-walkthroughs/01-hello-c-clang.md)
+> uses to surface that `print_sum` has *two* callers, not one,
+> even though the source code looks like a single call site.
 
 ## What the columns mean
 
@@ -48,44 +71,110 @@ specific call site.
 - `src_va` — the VA of the calling instruction.
 - `kind` — `call`, `jump`, `data_read`, `data_write`,
   `struct_field`. Filter with `--kind`.
-- `function` — the function whose body contains `src_va` (resolved
-  via `function_names` so renames flow through).
+- `function` — the function whose body contains `src_va`
+  (resolved via `function_names`, so renames flow through).
 - `snippet` — one-line disassembly at `src_va`.
 
 ## REPL form: `x` at the cursor
 
+```text
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x11d0
+x
+q
+─── glaurung repl stdout ───
+>   0x11d0  print_sum  (set_by=analyzer)
+0x11d0>   refs to 0x11d0: 2
+    call        0x1150  main                      push rbp
+    call        0x117b  sub_117b                  mov rbp:[rbp - 0x18], 0x0
+  refs from 0x11d0: 0
+0x11d0>
+saving and exiting…
+```
+
+(Captured: [`_fixtures/02-cross-references/repl-x.out`](../_fixtures/02-cross-references/repl-x.out).)
+
+The REPL form prints both directions in one block, capped per
+direction. `refs from 0x11d0: 0` is correct — `print_sum` calls
+`printf@plt` but the PLT entry isn't a registered function in
+this kickoff, so the from-edge isn't recorded for the table.
+
+## Walking from a function entry: `--direction from`
+
 ```bash
-glaurung repl $BIN --db demo.glaurung
+$ glaurung xrefs demo.glaurung 0x1150 --binary $BIN --direction from
 ```
 
-```
->>> g 0x1030
->>> x
-  refs to 0x1030: 6
-    call         0x119c  c2_main                  call rip:[rip + 0xee94]
-    call         0x11d4  c2_main                  call rip:[rip + 0xee5c]
-    ...
-  refs from 0x1030: 0
+```text
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+from  0x1150       call          main                             push rbp
+from  0x1150       call          main                             push rbp
 ```
 
-Shorter format, capped at 12 rows per direction. The CLI version
-(no cap) is better for grep-pipelining.
+(Captured: [`_fixtures/02-cross-references/xrefs-from-main.out`](../_fixtures/02-cross-references/xrefs-from-main.out).)
+
+Two outgoing calls, both rendered with the source function (`main`)
+in the function/snippet columns. The table format omits the
+target VA — to see where each call goes, switch to JSON:
+
+```bash
+$ glaurung xrefs demo.glaurung 0x11d0 --binary $BIN --direction to --format json
+```
+
+```json
+[
+  {"direction":"to","src_va":4432,"dst_va":4560,"kind":"call",
+   "src_function_va":4432,"src_function":"main","snippet":"push rbp"},
+  {"direction":"to","src_va":4475,"dst_va":4560,"kind":"call",
+   "src_function_va":4475,"src_function":"sub_117b",
+   "snippet":"mov rbp:[rbp - 0x18], 0x0"}
+]
+```
+
+(Captured: [`_fixtures/02-cross-references/xrefs-json.out`](../_fixtures/02-cross-references/xrefs-json.out).)
+
+The JSON form has both `src_va` and `dst_va` — necessary for
+scripted analysis. `dst_va: 4560` decodes to `0x11d0` (print_sum).
 
 ## Filter by kind
 
 ```bash
-glaurung xrefs demo.glaurung 0x4040 --binary $BIN \
-  --direction to --kind data_read
+$ glaurung xrefs demo.glaurung 0x1150 --binary $BIN \
+    --direction from --kind call
 ```
 
-```
-dir   src_va        kind          function                          snippet
-to    0x118f        data_read     c2_main                           mov rax, rip:[rip + 0xeea0]
-to    0x11ad        data_read     c2_main                           mov rax, rip:[rip + 0xee82]
+```text
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+from  0x1150       call          main                             push rbp
+from  0x1150       call          main                             push rbp
 ```
 
-Useful for: "every site that reads this global". Use `data_write`
-for stores; `call` for function calls; `jump` for tail-calls.
+(Captured: [`_fixtures/02-cross-references/xrefs-from-main-call.out`](../_fixtures/02-cross-references/xrefs-from-main-call.out).)
+
+Same shape because every outgoing edge from `main` happens to be
+a `call`. `--kind data_read` / `data_write` would filter to data
+references; `--kind jump` to control-flow jumps.
+
+## `--direction both`
+
+```bash
+$ glaurung xrefs demo.glaurung 0x11d0 --binary $BIN --direction both
+```
+
+```text
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+to    0x1150       call          main                             push rbp
+to    0x117b       call          sub_117b                         mov rbp:[rbp - 0x18], 0x0
+```
+
+(Captured: [`_fixtures/02-cross-references/xrefs-both.out`](../_fixtures/02-cross-references/xrefs-both.out).)
+
+`both` = `to` ∪ `from`. Here it matches the `to`-only table
+because `print_sum` has no recorded outgoing edges in this
+kickoff.
 
 ## Pivot from CLI to REPL
 
@@ -93,100 +182,40 @@ The CLI is great for "what does the data look like?" The REPL is
 great for "let me explore from here." A typical workflow:
 
 ```bash
-$ glaurung xrefs demo.glaurung 0x1030 --binary $BIN
-# (eyes on the output: the 3rd caller looks suspicious)
+$ glaurung xrefs demo.glaurung 0x11d0 --binary $BIN --direction to
+# (eyes on the output: sub_117b is the surprising caller)
 
 $ glaurung repl $BIN --db demo.glaurung
->>> g 0x121e
->>> d           # decompile the enclosing function
+>>> g 0x117b      # jump to the surprising caller
+>>> d             # decompile the enclosing function
 ```
-
-## Walk callees
-
-```bash
-glaurung xrefs demo.glaurung 0x1160 --binary $BIN --direction from
-```
-
-```
-dir     src_va        kind          function                          snippet
-from    0x117c        call          c2_main                           call rip:[rip + ...]   # printf
-from    0x119c        call          c2_main                           call rip:[rip + ...]   # printf
-from    0x121e        call          c2_main                           call rip:[rip + ...]   # snprintf
-...
-```
-
-Every call out of `c2_main` (entry 0x1160). Useful for "what does
-this function do?" without having to read the whole body.
 
 ## JSON for scripting
 
-```bash
-glaurung xrefs demo.glaurung 0x1030 --binary $BIN --format json | jq '.[0]'
-```
-
-```json
-{
-  "direction": "to",
-  "src_va": 4508,
-  "dst_va": 4144,
-  "kind": "call",
-  "src_function_va": 4448,
-  "src_function": "c2_main",
-  "snippet": "call rip:[rip + 0xee94]"
-}
-```
-
-Pipeline-friendly. Use `jq` to count callers per function:
+Pipe to `jq` to count callers per function:
 
 ```bash
-glaurung xrefs demo.glaurung 0x1030 --binary $BIN --format json \
-  | jq -r '.[].src_function' \
-  | sort | uniq -c
+$ glaurung xrefs demo.glaurung 0x11d0 --binary $BIN --format json \
+    | jq -r '.[].src_function' \
+    | sort | uniq -c
 ```
 
-## Prototype hints in the body (#227)
-
-When a function has a known prototype, `glaurung view` /
-`render_decompile_with_names` annotates each call line:
-
-```bash
-glaurung view demo.glaurung 0x117c --binary $BIN --pane pseudo --pseudo-lines 6
+```text
+   1 main
+   1 sub_117b
 ```
 
-```
-── pseudocode (enclosing function) ──
-fn c2_main {
-    nop;
-    rsp = (rsp - 432);
-    ...
-    printf@plt("Connecting to C2 server...\n");  // proto: int printf(const char * fmt, ...)
-    ...
-}
-```
-
-Glaurung knows `printf`'s prototype because `auto_load_stdlib`
-populated `function_prototypes` with the libc bundle (#180). The
-inline `// proto:` comment is purely advisory; it doesn't change
-the analysis.
+(Same data, aggregated.)
 
 ## Common patterns
 
-**"What calls this?"**
-`glaurung xrefs <db> <va> --direction to`
-
-**"What does this call?"**
-`glaurung xrefs <db> <va> --direction from`
-
-**"Every read of this global?"**
-`glaurung xrefs <db> <va> --kind data_read --direction to`
-
-**"Every libc call site?"**
-Find all the `@plt` entries with `glaurung find <db> @plt --kind function`,
-then xrefs each.
-
-**"Trace user input flow"**
-Start at `read` / `recv`. xrefs --to gets the call site → enter
-the calling function → trace where the buffer flows.
+| Question                        | Command                                                        |
+|---------------------------------|----------------------------------------------------------------|
+| What calls this?                | `xrefs <db> <va> --direction to`                               |
+| What does this call?            | `xrefs <db> <va> --direction from`                             |
+| Every read of this global?      | `xrefs <db> <va> --kind data_read --direction to`              |
+| Every callsite as JSON?         | `xrefs <db> <va> --format json`                                |
+| Caller histogram?               | `xrefs … --format json \| jq -r '.[].src_function' \| sort -u` |
 
 ## What's next
 

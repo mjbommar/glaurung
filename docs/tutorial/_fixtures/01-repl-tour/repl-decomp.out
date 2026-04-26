@@ -1,0 +1,18 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x11d0
+d
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+               db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
+>   0x11d0  print_sum  (set_by=analyzer)
+0x11d0>   fn print_sum {
+      push(rbp);
+      rsp = (rsp - 16);
+      local_0 = arg0;
+      printf@plt("Total argument length: %d\n", local_1);  // proto: int printf(const char * fmt, ...)
+      // x86-64 epilogue: restore rbp
+      return;
+  }
+0x11d0> 
+saving and exiting…

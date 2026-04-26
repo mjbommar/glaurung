@@ -1,0 +1,11 @@
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x1060          _start  (set_by=analyzer)
+function    0x1090          deregister_tm_clones  (set_by=analyzer)
+function    0x10c0          register_tm_clones  (set_by=analyzer)
+function    0x1100          __do_global_dtors_aux  (set_by=analyzer)
+function    0x1140          frame_dummy  (set_by=analyzer)
+function    0x1150          main  (set_by=analyzer)
+function    0x117b          sub_117b  (set_by=analyzer)
+function    0x11d0          print_sum  (set_by=analyzer)
+function    0x1200          static_function  (set_by=analyzer)

@@ -10,17 +10,23 @@ The same `kickoff` → `find` → `view` workflow you learned in §M / §N
 works here — that's the point. The format-specific recovery is
 plumbing; the analyst experience is the same.
 
+> **Verified output.** Every block is captured by
+> `scripts/verify_tutorial.py` and stored under
+> [`_fixtures/03-dotnet-pe/`](../_fixtures/03-dotnet-pe/).
+
 ## Sample
 
 ```bash
-BIN=samples/binaries/platforms/linux/amd64/export/dotnet/mono/Hello-mono.exe
-file $BIN
+$ BIN=samples/binaries/platforms/linux/amd64/export/dotnet/mono/Hello-mono.exe
+$ file $BIN
 ```
 
-```
-PE32 executable for MS Windows 4.00 (console),
+```text
+samples/.../Hello-mono.exe: PE32 executable for MS Windows 4.00 (console),
 Intel i386 Mono/.Net assembly, 3 sections
 ```
+
+(Captured: [`_fixtures/03-dotnet-pe/file.out`](../_fixtures/03-dotnet-pe/file.out).)
 
 Note the `Mono/.Net assembly` marker — this is `file`'s way of
 saying "the COM data directory is non-empty," which is what makes
@@ -57,7 +63,7 @@ Triage flags it as PE (x86) without yet decoding the CIL —
 ## Phase 2: Load (`kickoff`)
 
 ```bash
-glaurung kickoff $BIN --db dotnet.glaurung
+$ glaurung kickoff $BIN --db dotnet.glaurung
 ```
 
 ```markdown
@@ -76,9 +82,12 @@ glaurung kickoff $BIN --db dotnet.glaurung
 - DWARF types imported: **0**
 - stack slots discovered: **1**
 - types propagated: **0**
+- auto-struct candidates: **0**
 
-_completed in ~250 ms_
+_completed in N ms_
 ```
+
+(Captured: [`_fixtures/03-dotnet-pe/kickoff.out`](../_fixtures/03-dotnet-pe/kickoff.out).)
 
 The line that matters: **`name sources: cil=2`**.
 
@@ -90,13 +99,17 @@ names** with their fully-qualified shape.
 ## Phase 3: Function ID
 
 ```bash
-glaurung find dotnet.glaurung Hello --kind function
+$ glaurung find dotnet.glaurung Hello --kind function
 ```
 
-```
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
 function    0x402050        Hello::.ctor  (set_by=cil)
 function    0x402058        Hello::Main  (set_by=cil)
 ```
+
+(Captured: [`_fixtures/03-dotnet-pe/find-hello.out`](../_fixtures/03-dotnet-pe/find-hello.out).)
 
 Two methods recovered:
 

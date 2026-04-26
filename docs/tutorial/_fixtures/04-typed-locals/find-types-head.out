@@ -1,0 +1,10 @@
+kind        location        snippet
+--------------------------------------------------------------------------------
+type        ATOM            typedef  (set_by=stdlib)
+type        BOOL            typedef  (set_by=stdlib)
+type        BOOLEAN         typedef  (set_by=stdlib)
+type        BYTE            typedef  (set_by=stdlib)
+type        CHAR            typedef  (set_by=stdlib)
+type        DIR             typedef  (set_by=stdlib)
+type        DWORD           typedef  (set_by=stdlib)
+type        DWORD_PTR       typedef  (set_by=stdlib)

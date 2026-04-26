@@ -1,0 +1,49 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+help
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+               db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
+> glaurung repl commands
+
+  Navigation
+    goto <addr> | g <addr>      jump cursor to address
+    back | b                    previous history position
+    forward | f                 next history position
+
+  Persistence (auto-saved)
+    rename <addr> <name>        set canonical function name
+    comment <addr> <text>       attach a comment to an address
+    struct <n> a:int b:char* …  define a struct
+    locals                      list stack-frame slots in current function
+    locals discover             auto-discover stack-frame slots from disasm
+    locals rename <off> <name>  rename one slot (offset accepts 0x-hex)
+    label                       list global data labels
+    label set <addr> <name> [<type>]   add or rename a data label
+    label remove <addr>         drop a data label
+    label import                bootstrap labels from binary symbols
+    borrow <donor>              copy names from a debug-build sibling
+    proto                       list loaded function prototypes
+    proto <name>                show one prototype (e.g. printf)
+    proto set <name> <return> [<param>:<type> ...]   analyst override
+    propagate                   refine slot types from prototype params
+    recover-structs             auto-discover structs from access patterns
+    save                        force a save (also automatic on every edit)
+
+  Inspection
+    xrefs [<addr>]              calls/refs into and out of address
+    decomp [<addr>] | d         show pseudocode for the function at address
+    functions [<n>]             list functions (default 20)
+    types [<kind>]              list types
+    show <type-name>            print one type as C
+    strings [<n>]               first N triage strings
+
+  AI
+    ask <question>              run the memory agent (51 tools) over the
+                                binary; persists results to the KB
+
+  Misc
+    help | ? | h                this text
+    quit | q | exit             save and exit
+> 
+saving and exiting…

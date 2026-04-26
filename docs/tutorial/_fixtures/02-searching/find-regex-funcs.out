@@ -1,0 +1,4 @@
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x1060          _start  (set_by=analyzer)
+function    0x1100          __do_global_dtors_aux  (set_by=analyzer)

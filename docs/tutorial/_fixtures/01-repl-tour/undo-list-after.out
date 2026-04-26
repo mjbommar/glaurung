@@ -1,0 +1,3 @@
+#3 stack_frame_vars function_va=0x1150 offset=-0x18  name: 'var_18' → 'argc_copy'
+#2 comments va=0x1200  body: '<none>' → 'called once from main; flags-only side effect'
+#1 function_names entry_va=0x1200  canonical: 'static_function' → 'demo_static'

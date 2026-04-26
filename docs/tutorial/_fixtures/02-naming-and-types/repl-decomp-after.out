@@ -1,0 +1,53 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x1160
+d
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+               db=/tmp/tutorial-fixtures/02-naming-and-types.glaurung  session='main'
+>   0x1160  c2_main  (set_by=manual)
+0x1160>   fn main {
+      // ── locals (from KB) ─────────────────────────────────
+      // -0x1b0  url_buffer  (unknown type, set_by=manual)
+      void *var_140;  // -0x140  set_by=propagated
+      char *var_110;  // -0x110  set_by=propagated
+      // ─────────────────────────────────────────────────
+  
+      // x86-64 prologue: save rbp, frame 432 bytes
+      local_0 = 0;
+      local_1 = arg0;
+      local_2 = arg1;
+      printf@plt("Connecting to C2 server...\n");  // proto: int printf(const char * fmt, ...)
+      snprintf@plt(&var_110, 256, "http://%s:8080%s", *&[var0+0x4050], *&[var0+0x4070]);
+      memcpy@plt(&var_140, "https://10.10.10.10:443/malware/update", 39);
+      ret = *&[var0+0x2150];
+      local_3 = ret;
+      ret = *&[var0+0x2158];
+      local_4 = ret;
+      ret = *&[var0+0x2160];
+      local_5 = ret;
+      ret = *&[var0+0x2168];
+      local_6 = ret;
+      printf@plt("Primary: %s\n", *&[var0+0x4040]);  // proto: int printf(const char * fmt, ...)
+      printf@plt("Backup: %s\n", *&[var0+0x4048]);  // proto: int printf(const char * fmt, ...)
+      printf@plt("Domain: %s\n", *&[var0+0x4050]);  // proto: int printf(const char * fmt, ...)
+      printf@plt("URL: %s\n", &var_110);  // proto: int printf(const char * fmt, ...)
+      ret = *&[var0+0x2170];
+      local_7 = ret;
+      ret = *&[var0+0x2178];
+      local_8 = ret;
+      ret = *&[var0+0x2180];
+      local_9 = ret;
+      ret = *&[var0+0x2188];
+      local_10 = ret;
+      ret = *&[var0+0x218c];
+      local_11 = ret;
+      memcpy@plt(&url_buffer, "/etc/systemd/system/backdoor.service", 37);  // proto: void * memcpy(void * dst, const void * src, size_t n)
+      printf@plt("Cron: %s\n", &var_180);  // proto: int printf(const char * fmt, ...)
+      printf@plt("Service: %s\n", &url_buffer);  // proto: int printf(const char * fmt, ...)
+      ret = 0;
+      // x86-64 epilogue: restore rbp
+      return;
+  }
+0x1160> 
+saving and exiting…

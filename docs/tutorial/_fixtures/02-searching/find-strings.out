@@ -1,0 +1,6 @@
+kind        location        snippet
+--------------------------------------------------------------------------------
+string      file:0x2004     Hello, World from C!
+string      file:0x32dd     /workspace/source/c/hello.c
+string      file:0x33a4     /workspace/source/c/hello.c
+string      file:0x3887     hello.c

@@ -1,0 +1,4 @@
+dir   src_va       kind          function                         snippet
+-------------------------------------------------------------------------
+from  0x1150       call          main                             push rbp
+from  0x1150       call          main                             push rbp

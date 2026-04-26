@@ -6,119 +6,162 @@ data label, stack-var — goes through the undo log. A single
 
 This is the *reason* you can rename aggressively without fear.
 
+> **Verified output.** Every block is captured by
+> `scripts/verify_tutorial.py` and stored under
+> [`_fixtures/02-undo-redo/`](../_fixtures/02-undo-redo/).
+
 ## Setup
 
 ```bash
-BIN=samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
-glaurung kickoff $BIN --db demo.glaurung
+$ BIN=samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+$ glaurung kickoff $BIN --db demo.glaurung
 ```
 
 ## A round trip
 
-Make some changes:
+Make some changes through the REPL:
+
+```text
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x1160
+n c2_main
+c 0x1160 entry: stash argc/argv into locals
+label set 0x4040 g_c2_endpoints char *
+save
+q
+─── glaurung repl stdout ───
+>   0x1160  main  (set_by=analyzer)
+0x1160>   0x1160 → c2_main
+  ── c2_main (post-rename) ──
+    fn main { … (post-rename body) … }
+0x1160>   0x1160: entry: stash argc/argv into locals
+0x1160>   labelled 0x00004040 -> g_c2_endpoints
+0x1160> saved.
+0x1160>
+saving and exiting…
+```
+
+(Captured: [`_fixtures/02-undo-redo/repl-make-changes.out`](../_fixtures/02-undo-redo/repl-make-changes.out).)
+
+Three writes: rename, comment, label. All `set_by=manual`, all
+in the undo log.
+
+## Inspect history (no mutation): `undo --list`
 
 ```bash
-glaurung repl $BIN --db demo.glaurung
+$ glaurung undo demo.glaurung --list
 ```
 
-```
->>> g 0x1160
->>> n c2_main
->>> c entry: stash argc/argv into locals
->>> label 0x4040 g_secret_key --type "char[32]"
->>> save
->>> q
-```
-
-Inspect history (no mutation):
-
-```bash
-glaurung undo demo.glaurung --list
-```
-
-```
-#3 data_labels va=0x4040  name: '<none>' → 'g_secret_key'
+```text
+#3 data_labels va=0x4040  name: '<none>' → 'g_c2_endpoints'
 #2 comments va=0x1160  body: '<none>' → 'entry: stash argc/argv into locals'
 #1 function_names entry_va=0x1160  canonical: 'main' → 'c2_main'
 ```
 
-Each row tells you which table changed, which key, and the old →
-new value transition.
+(Captured: [`_fixtures/02-undo-redo/undo-list-before.out`](../_fixtures/02-undo-redo/undo-list-before.out).)
 
-## Undo
+Newest first. Each row tells you which table changed, the key,
+and the old → new value transition.
 
-```bash
-glaurung undo demo.glaurung
-```
-
-```
-undo #3 data_labels {va: 0x4040}  name: 'g_secret_key' → '<none>'
-```
-
-Just the most recent write. Confirm:
+## Undo the last write
 
 ```bash
-glaurung find demo.glaurung g_secret_key --kind data
+$ glaurung undo demo.glaurung
 ```
 
-```
-(no matches for 'g_secret_key')
+```text
+undo [undone] #3 data_labels va=0x4040  name: '<none>' → 'g_c2_endpoints'
 ```
 
-Gone. Now undo again:
+(Captured: [`_fixtures/02-undo-redo/undo-once.out`](../_fixtures/02-undo-redo/undo-once.out).)
+
+The data label is gone. The history list now marks it `[undone]`:
 
 ```bash
-glaurung undo demo.glaurung
+$ glaurung undo demo.glaurung --list
 ```
 
-```
-undo #2 comments {va: 0x1160}  body: 'entry: stash argc/argv into locals' → '<none>'
+```text
+[undone] #3 data_labels va=0x4040  name: '<none>' → 'g_c2_endpoints'
+#2 comments va=0x1160  body: '<none>' → 'entry: stash argc/argv into locals'
+#1 function_names entry_va=0x1160  canonical: 'main' → 'c2_main'
 ```
 
-The comment is gone. One more:
+(Captured: [`_fixtures/02-undo-redo/undo-list-after.out`](../_fixtures/02-undo-redo/undo-list-after.out).)
+
+Note the `[undone]` flag — the row stays in history, marked
+reversible. A later `redo` re-applies it.
+
+## Redo the last undone write
 
 ```bash
-glaurung undo demo.glaurung
+$ glaurung redo demo.glaurung
 ```
 
-```
-undo #1 function_names {entry_va: 0x1160}  canonical: 'c2_main' → 'main'
+```text
+redo #3 data_labels va=0x4040  name: '<none>' → 'g_c2_endpoints'
 ```
 
-Back to the kickoff state.
+(Captured: [`_fixtures/02-undo-redo/redo-once.out`](../_fixtures/02-undo-redo/redo-once.out).)
 
-## Multi-step undo
+The label is back. History reverts:
 
 ```bash
-glaurung undo demo.glaurung -n 5
+$ glaurung undo demo.glaurung --list
 ```
 
-Reverts the last 5 writes in one call. Useful for "throw away the
+```text
+#3 data_labels va=0x4040  name: '<none>' → 'g_c2_endpoints'
+#2 comments va=0x1160  body: '<none>' → 'entry: stash argc/argv into locals'
+#1 function_names entry_va=0x1160  canonical: 'main' → 'c2_main'
+```
+
+(Captured: [`_fixtures/02-undo-redo/undo-list-after-redo.out`](../_fixtures/02-undo-redo/undo-list-after-redo.out).)
+
+The `[undone]` flag is gone — `#3` is live again.
+
+## Multi-step undo: `-n`
+
+```bash
+$ glaurung undo demo.glaurung -n 3
+```
+
+```text
+undo [undone] #3 data_labels va=0x4040  name: '<none>' → 'g_c2_endpoints'
+undo [undone] #2 comments va=0x1160  body: '<none>' → 'entry: stash argc/argv into locals'
+undo [undone] #1 function_names entry_va=0x1160  canonical: 'main' → 'c2_main'
+```
+
+(Captured: [`_fixtures/02-undo-redo/undo-multi.out`](../_fixtures/02-undo-redo/undo-multi.out).)
+
+Three writes reverted in one call. Useful for "throw away the
 last few minutes of edits."
 
-## Redo
-
 ```bash
-glaurung redo demo.glaurung
+$ glaurung undo demo.glaurung --list
 ```
 
-```
-redo #1 function_names {entry_va: 0x1160}  canonical: 'main' → 'c2_main'
+```text
+[undone] #3 data_labels va=0x4040  name: '<none>' → 'g_c2_endpoints'
+[undone] #2 comments va=0x1160  body: '<none>' → 'entry: stash argc/argv into locals'
+[undone] #1 function_names entry_va=0x1160  canonical: 'main' → 'c2_main'
 ```
 
-`redo` re-applies the most recently undone write. It works in the
-same multi-step way: `redo -n 5`.
+(Captured: [`_fixtures/02-undo-redo/undo-list-final.out`](../_fixtures/02-undo-redo/undo-list-final.out).)
+
+All three are now `[undone]` — back to the kickoff state. A
+`redo -n 3` would put them all back.
 
 ## What enters the log
 
-Only `set_by=manual` writes are captured. Specifically:
+Only `set_by=manual` writes are captured:
 
 - Function rename (`set_function_name` with `set_by="manual"`)
 - Stack-var rename / retype (`set_stack_var`)
 - Data-label add / retype (`set_data_label`)
 - Comment add / replace (`set_comment`)
 
-What does NOT enter the log:
+What does **not** enter the log:
 
 - `set_by=auto` (heuristic struct discovery, default `var_<hex>` slots)
 - `set_by=dwarf` (debug-info-derived names + types)
@@ -147,30 +190,14 @@ re-run patch."
 
 ## Common patterns
 
-**"I just made a mistake"**
-
-```bash
-glaurung undo <db>
-```
-
-**"I want to throw away everything since lunch"**
-
-```bash
-glaurung undo <db> --list   # find the row from before lunch
-glaurung undo <db> -n 12    # rewind that many writes
-```
-
-**"I undid too far"**
-
-```bash
-glaurung redo <db> -n 3
-```
-
-**"What changed in this session?"**
-
-```bash
-glaurung undo <db> --list | head -20
-```
+| Need                                    | Command                                        |
+|-----------------------------------------|------------------------------------------------|
+| Undo the last write                     | `glaurung undo <db>`                           |
+| Undo the last 3 writes                  | `glaurung undo <db> -n 3`                      |
+| Redo the most recent undo               | `glaurung redo <db>`                           |
+| Redo many                               | `glaurung redo <db> -n 5`                      |
+| Inspect history (no mutation)           | `glaurung undo <db> --list`                    |
+| What changed in this session?           | `glaurung undo <db> --list \| head -20`        |
 
 ## Trust safety
 
@@ -190,7 +217,7 @@ log keeps the history reversible.
 
 - The undo log is per-`.glaurung` file. Backing up the file backs
   up the log too.
-- `redo` history is reset by a new `manual` write. If you `undo`,
+- `redo` history is reset by a new `manual` write — if you `undo`,
   then make a new manual change, the redo stack is cleared (just
   like every text editor).
 - The log doesn't currently track patches (#235 GAP). Workaround:

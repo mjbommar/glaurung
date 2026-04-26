@@ -1,0 +1,14 @@
+engine: iced-x86 arch: x86_64
+0x1150: 55                   push rbp
+0x1151: 4889e5               mov rbp, rsp
+0x1154: 4883ec20             sub rsp
+0x1158: c745fc00000000       mov rbp:[rbp - 0x4], 0x0
+0x115f: 897df8               mov rbp:[rbp - 0x8], edi
+
+note: truncated preview output.
+- Read only first 256 bytes of file
+- Stopped after 5 instructions
+hints:
+- Increase output: e.g., --window-bytes 4096 --max-instructions 512
+- Start from a specific VA: --addr 0x<address> (e.g., entrypoint)
+- This command is a quick preview; it does not linearly sweep all code

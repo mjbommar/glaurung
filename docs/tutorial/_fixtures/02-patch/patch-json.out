@@ -1,0 +1,1 @@
+{"output_path":"/tmp/tutorial-fixtures/patched-json.bin","va":4576,"file_offset":4576,"original_hex":"3d350e0000","patched_hex":"9090909090","notes":["patched 5 bytes at VA 0x11e0 (file offset 0x11e0)"],"verify":"verify: Nop"}

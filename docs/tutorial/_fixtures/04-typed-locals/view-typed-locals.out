@@ -1,0 +1,9 @@
+── pseudocode (enclosing function) ──
+fn main {
+    // ── locals (from KB) ─────────────────────────────────
+    void *var_1b0;  // -0x1b0  set_by=propagated
+    void *var_140;  // -0x140  set_by=propagated
+    char *var_110;  // -0x110  set_by=propagated
+    // ─────────────────────────────────────────────────
+
+    // x86-64 prologue: save rbp, frame 432 bytes

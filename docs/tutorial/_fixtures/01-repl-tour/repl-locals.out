@@ -1,0 +1,16 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x1150
+l
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+               db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
+>   0x1150  main  (set_by=analyzer)
+0x1150>   5 vars in fn@0x1150:
+    -0x018  var_18  (uses=5, by=auto)
+    -0x014  var_14  (uses=4, by=auto)
+    -0x010  var_10  (uses=2, by=auto)
+    -0x008  var_8  (uses=2, by=auto)
+    -0x004  var_4  (uses=3, by=auto)
+0x1150> 
+saving and exiting…

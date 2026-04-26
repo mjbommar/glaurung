@@ -1,0 +1,18 @@
+CREATE TABLE evidence_log (
+    cite_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    binary_id INTEGER NOT NULL,
+    tool TEXT NOT NULL,             -- e.g. "view_hex", "decompile_function"
+    args_json TEXT NOT NULL,        -- inputs the tool was called with
+    summary TEXT NOT NULL,          -- short human-readable description
+    va_start INTEGER,               -- nullable: VA range this evidence covers
+    va_end INTEGER,                 -- exclusive end
+    file_offset INTEGER,            -- nullable file-offset alternative
+    output_json TEXT,               -- structured output (caller-defined schema)
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_evidence_binary
+    ON evidence_log(binary_id);
+CREATE INDEX idx_evidence_tool
+    ON evidence_log(binary_id, tool);
+CREATE INDEX idx_evidence_va
+    ON evidence_log(binary_id, va_start);

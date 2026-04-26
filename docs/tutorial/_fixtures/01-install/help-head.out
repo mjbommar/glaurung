@@ -1,0 +1,3 @@
+usage: glaurung [-h] [--version]
+                {triage,strings,symbols,disasm,cfg,ask,decompile,name-func,repl,graph,detect-packer,diff,kickoff,patch,verify-recovery,export,undo,redo,xrefs,frame,strings-xrefs,view,find,bookmark,journal,classfile,luac} ...
+

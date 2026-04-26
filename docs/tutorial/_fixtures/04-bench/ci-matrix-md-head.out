@@ -1,0 +1,22 @@
+# Glaurung benchmark — TIMESTAMP
+_glaurung HEAD: `<sha>`_
+
+## Aggregate
+- Binaries scored: **10** (errored: 0)
+- Functions discovered: **103** (named: 94)
+- Multi-chunk functions: **2** (cold orphans: 0)
+- Decompiled OK: **103** (failed: 0)
+- DWARF types: **139** (structs with fields: 15)
+- Stack-frame slots: **754** (across 68 functions)
+- Type-KB lift: **0** propagated, **95** auto-struct candidates
+
+## Rates
+- Symbol-name resolution (avg): **90.0%**
+- Decompile success (avg): **100.0%**
+- Language detection match: **80.0%**
+
+## Per binary
+
+| binary | funcs | named | chunks>1 | cold orphans | decompiled | ms |
+|---|---:|---:|---:|---:|---:|---:|
+| `hello-c-gcc-O2` | 7 | 7 | 0 | 0 | 7/7 | 110 |

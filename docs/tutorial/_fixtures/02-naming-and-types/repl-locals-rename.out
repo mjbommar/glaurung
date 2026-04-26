@@ -1,0 +1,30 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x1160
+l
+locals rename -0x1b0 url_buffer
+save
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+               db=/tmp/tutorial-fixtures/02-naming-and-types.glaurung  session='main'
+>   0x1160  c2_main  (set_by=manual)
+0x1160>   15 vars in fn@0x1160:
+    -0x1b0  var_1b0: void *  (uses=2, by=propagated)
+    -0x180  var_180  (uses=2, by=auto)
+    -0x178  var_178  (uses=1, by=auto)
+    -0x170  var_170  (uses=1, by=auto)
+    -0x168  var_168  (uses=1, by=auto)
+    -0x164  var_164  (uses=1, by=auto)
+    -0x160  var_160  (uses=1, by=auto)
+    -0x158  var_158  (uses=1, by=auto)
+    -0x150  var_150  (uses=1, by=auto)
+    -0x148  var_148  (uses=1, by=auto)
+    -0x140  var_140: void *  (uses=1, by=propagated)
+    -0x110  var_110: char *  (uses=2, by=propagated)
+    -0x010  var_10  (uses=1, by=auto)
+    -0x008  var_8  (uses=1, by=auto)
+    -0x004  var_4  (uses=1, by=auto)
+0x1160>   renamed -0x1b0 -> url_buffer
+0x1160> saved.
+0x1160> 
+saving and exiting…

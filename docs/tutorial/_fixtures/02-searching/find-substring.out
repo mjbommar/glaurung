@@ -1,0 +1,7 @@
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x1150          main  (set_by=analyzer)
+string      file:0x498      __libc_start_main
+string      file:0x3322     main
+string      file:0x38fa     __libc_start_main@GLIBC_2.34
+string      file:0x39c8     main

@@ -1,0 +1,7 @@
+  offset  name                      type                       size  uses  set_by
+---------------------------------------------------------------------------------
+-0x018  var_18                    (unknown)                           5  auto
+-0x014  var_14                    (unknown)                     4     4  auto
+-0x010  var_10                    (unknown)                     4     2  auto
+-0x008  var_8                     (unknown)                     8     2  auto
+-0x004  var_4                     (unknown)                     4     3  auto

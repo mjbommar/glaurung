@@ -1,0 +1,11 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+c 0x1160 entry: stash argc/argv into locals
+save
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+               db=/tmp/tutorial-fixtures/02-naming-and-types.glaurung  session='main'
+>   0x1160: entry: stash argc/argv into locals
+> saved.
+> 
+saving and exiting…

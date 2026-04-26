@@ -1,0 +1,23 @@
+── hex @ 0x1150 ──
+    0x1148  ff 0f 1f 80 00 00 00 00 55 48 89 e5 48 83 ec 20   |........UH..H.. | ←
+
+── disasm @ 0x1150 ──
+    0x1150  55                        push rbp ←
+    0x1151  4889e5                    mov rbp, rsp
+    0x1154  4883ec20                  sub rsp
+    0x1158  c745fc00000000            mov rbp:[rbp - 0x4], 0x0
+    0x115f  897df8                    mov rbp:[rbp - 0x8], edi
+    0x1162  488975f0                  mov rbp:[rbp - 0x10], rsi
+    0x1166  488d3d970e0000            lea rdi, rip:[rip + 0x2004]
+    0x116d  b000                      mov al, 0x0
+    0x116f  e8ccfeffff                call 0x1040
+    0x1174  c745ec00000000            mov rbp:[rbp - 0x14], 0x0
+    0x117b  c745e800000000            mov rbp:[rbp - 0x18], 0x0
+    0x1182  8b45e8                    mov eax, rbp:[rbp - 0x18]
+
+── pseudocode (enclosing function) ──
+fn main {
+    // x86-64 prologue: save rbp, frame 32 bytes
+    local_0 = 0;
+    local_1 = arg0;
+    local_2 = arg1;

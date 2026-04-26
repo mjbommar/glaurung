@@ -1,0 +1,12 @@
+  offset  enc       len  uses  text  →  used_at
+--------------------------------------------------------------------------------
+     792  ascii      27     0  /lib64/ld-linux-x86-64.so.2
+    1185  ascii      14     0  __cxa_finalize
+    1200  ascii      17     0  __libc_start_main
+    1278  ascii      27     0  _ITM_deregisterTMCloneTable
+    1306  ascii      14     0  __gmon_start__
+    1321  ascii      25     0  _ITM_registerTMCloneTable
+    8196  ascii      14     0  192.168.100.50
+    8221  ascii      19     0  malware-c2.evil.com
+    8241  ascii      34     0  beacon.command-control.badguys.org
+    8276  ascii      22     0  Mozilla/5.0 BotNet/1.0

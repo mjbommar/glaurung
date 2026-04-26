@@ -13,6 +13,15 @@ export OPENAI_API_KEY=sk-...
 Tiers 1-4 work without these. Tier 5 is where Glaurung's LLM
 integration starts paying off.
 
+> **Output here is illustrative, not captured.** Unlike Tiers
+> 1-4, the agent's natural-language responses are non-deterministic
+> by design — different LLM model versions and prompt variations
+> will phrase things differently. The deterministic substrate
+> (every memory tool the agent calls + every `evidence_log` row it
+> writes) IS reproducible; that's covered in §Z. The example
+> response below is what one run looked like — yours will differ
+> in wording but should land on the same evidence rows.
+
 ## The agent has 50+ memory tools
 
 Every deterministic surface you've used in Tiers 1-4 is also

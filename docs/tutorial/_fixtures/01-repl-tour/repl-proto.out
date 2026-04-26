@@ -1,0 +1,9 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+proto printf
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+               db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
+>   int printf(const char * fmt, ...)  (set_by=stdlib)
+> 
+saving and exiting…

@@ -9,17 +9,24 @@ If you've ever opened a stripped Go binary in IDA Pro and seen
 nothing but `sub_<hex>` everywhere, this is the chapter that shows
 you what's possible without an external plugin.
 
+> **Verified output.** Every block is captured by
+> `scripts/verify_tutorial.py` and stored under
+> [`_fixtures/03-stripped-go/`](../_fixtures/03-stripped-go/).
+
 ## Sample
 
 ```bash
-BIN=samples/binaries/platforms/linux/amd64/export/go/hello-go
-file $BIN
+$ BIN=samples/binaries/platforms/linux/amd64/export/go/hello-go
+$ file $BIN
 ```
 
-```
+```text
 ELF 64-bit LSB executable, x86-64, version 1 (SYSV),
-statically linked, Go BuildID=..., stripped
+statically linked, Go BuildID=_MNoXSivWLKBjjCAORgb/...,
+stripped
 ```
+
+(Captured: [`_fixtures/03-stripped-go/file.out`](../_fixtures/03-stripped-go/file.out).)
 
 Key callouts:
 
@@ -43,7 +50,7 @@ doesn't yet recover names — that's `kickoff`'s job.
 ## Phase 2: Load (`kickoff`)
 
 ```bash
-glaurung kickoff $BIN --db go.glaurung
+$ glaurung kickoff $BIN --db go.glaurung
 ```
 
 ```markdown
@@ -64,8 +71,10 @@ glaurung kickoff $BIN --db go.glaurung
 - types propagated: **0**
 - auto-struct candidates: **32**
 
-_completed in 5261 ms_
+_completed in N ms_
 ```
+
+(Captured: [`_fixtures/03-stripped-go/kickoff.out`](../_fixtures/03-stripped-go/kickoff.out).)
 
 The line that matters: **`name sources: gopclntab=1801`**.
 
@@ -82,12 +91,16 @@ Where's `main.main`? In Go, the user's `main` package is
 namespaced.
 
 ```bash
-glaurung find go.glaurung "main.main$" --regex --kind function
+$ glaurung find go.glaurung "main.main$" --regex --kind function
 ```
 
-```
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
 function    0x4934e0        main.main  (set_by=gopclntab)
 ```
+
+(Captured: [`_fixtures/03-stripped-go/find-main-main.out`](../_fixtures/03-stripped-go/find-main-main.out).)
 
 The `set_by=gopclntab` tag means the name came from the runtime's
 function table — not from a symbol table (there isn't one) and not
@@ -96,21 +109,28 @@ from the analyst.
 What other `main.*` functions are there?
 
 ```bash
-glaurung find go.glaurung "main\." --regex --kind function | head
+$ glaurung find go.glaurung "main\." --regex --kind function
 ```
 
-```
-function    0x493180        main.(*Application).String     (set_by=gopclntab)
-function    0x493220        main.worker                     (set_by=gopclntab)
-function    0x493380        main.riskyOperation             (set_by=gopclntab)
-function    0x493440        main.riskyOperation.func1       (set_by=gopclntab)
-function    0x4934e0        main.main                       (set_by=gopclntab)
-function    0x493b60        main.main.func1                 (set_by=gopclntab)
-function    0x493ba0        main.main.gowrap1               (set_by=gopclntab)
-function    0x493c00        main.main.func2                 (set_by=gopclntab)
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x4351e0        runtime.main.func2  (set_by=gopclntab)
+function    0x45ea40        runtime.main.func1  (set_by=gopclntab)
+function    0x493180        main.(*Application).String  (set_by=gopclntab)
+function    0x493220        main.worker  (set_by=gopclntab)
+function    0x493320        main.worker.deferwrap1  (set_by=gopclntab)
+function    0x493380        main.riskyOperation  (set_by=gopclntab)
+function    0x493440        main.riskyOperation.func1  (set_by=gopclntab)
+function    0x4934e0        main.main  (set_by=gopclntab)
+function    0x493b60        main.main.func1  (set_by=gopclntab)
+function    0x493ba0        main.main.gowrap1  (set_by=gopclntab)
+function    0x493c00        main.main.func2  (set_by=gopclntab)
 function    0x493c20        main.mapSlice[go.shape.int,go.shape.int]  (set_by=gopclntab)
-...
+function    0x493ce0        type:.eq.main.Application  (set_by=gopclntab)
 ```
+
+(Captured: [`_fixtures/03-stripped-go/find-main-namespace.out`](../_fixtures/03-stripped-go/find-main-namespace.out).)
 
 This is what the binary actually contains — not just `main.main`,
 but the goroutine wrappers (`gowrap1`), defer-statement wrappers
@@ -154,23 +174,44 @@ should exist (every Go binary has it) and so should the standard
 library:
 
 ```bash
-glaurung find go.glaurung "runtime.gopanic$" --regex --kind function
+$ glaurung find go.glaurung "runtime.gopanic$" --regex --kind function
 ```
 
-```
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
 function    0x464b80        runtime.gopanic  (set_by=gopclntab)
 ```
 
+(Captured: [`_fixtures/03-stripped-go/find-runtime-gopanic.out`](../_fixtures/03-stripped-go/find-runtime-gopanic.out).)
+
 ```bash
-glaurung find go.glaurung "internal/abi.Kind.String" --kind function
+$ glaurung find go.glaurung "internal/abi.Kind.String" --kind function
 ```
 
-```
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
 function    0x401000        internal/abi.Kind.String  (set_by=gopclntab)
 ```
 
-Both present. The recovery is comprehensive — every Go function
-the runtime needs at panic / reflection / scheduler time is named.
+(Captured: [`_fixtures/03-stripped-go/find-internal-abi.out`](../_fixtures/03-stripped-go/find-internal-abi.out).)
+
+```bash
+$ glaurung find go.glaurung "runtime.main$" --regex --kind function
+```
+
+```text
+kind        location        snippet
+--------------------------------------------------------------------------------
+function    0x434dc0        runtime.main  (set_by=gopclntab)
+```
+
+(Captured: [`_fixtures/03-stripped-go/find-runtime-main.out`](../_fixtures/03-stripped-go/find-runtime-main.out).)
+
+All three present. The recovery is comprehensive — every Go function
+the runtime needs at panic / reflection / scheduler time is named,
+including the runtime's `main` (which calls user `main.main`).
 
 ## Phase 6: Annotate
 

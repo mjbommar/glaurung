@@ -1,0 +1,10 @@
+path: /nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+size: 17680 bytes (17.3 KiB)
+encodings: ascii=105 utf8=1 u16le=0 u16be=0
+languages: (none)
+scripts: Latin=16
+lengths: count=105 min=4 max=44 mean=13.3 median=11.0 p90=27.0 p99=38.0
+entropy: count=105 min=1.50 max=4.18 mean=2.97 p90=3.84 p99=4.11
+[0x318] ascii    len=  27 3.86 lang=- script=- | /lib64/ld-linux-x86-64.so.2
+[0x489] ascii    len=  14 3.18 lang=- script=- | __cxa_finalize
+[0x498] ascii    len=  17 3.26 lang=- script=- | __libc_start_main

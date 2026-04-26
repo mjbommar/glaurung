@@ -1,0 +1,1 @@
+[{"direction":"to","src_va":4432,"dst_va":4560,"kind":"call","src_function_va":4432,"src_function":"main","snippet":"push rbp"},{"direction":"to","src_va":4475,"dst_va":4560,"kind":"call","src_function_va":4475,"src_function":"sub_117b","snippet":"mov rbp:[rbp - 0x18], 0x0"}]

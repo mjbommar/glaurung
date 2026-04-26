@@ -1,0 +1,7 @@
+  offset  enc       len  uses  text  →  used_at
+--------------------------------------------------------------------------------
+     792  ascii      27     0  /lib64/ld-linux-x86-64.so.2
+    1161  ascii      14     0  __cxa_finalize
+    1176  ascii      17     0  __libc_start_main
+    1194  ascii       6     0  strlen
+    1201  ascii       6     0  printf

@@ -1,0 +1,13 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x1150
+b
+f
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+               db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
+>   0x1150  main  (set_by=analyzer)
+0x1150> (at oldest history entry)
+0x1150> (at newest history entry)
+0x1150> 
+saving and exiting…

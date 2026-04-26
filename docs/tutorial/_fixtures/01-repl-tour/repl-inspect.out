@@ -1,0 +1,14 @@
+─── stdin (keystrokes piped to glaurung repl) ───
+g 0x1150
+x
+q
+─── glaurung repl stdout ───
+glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+               db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
+>   0x1150  main  (set_by=analyzer)
+0x1150>   refs to 0x1150: 0
+  refs from 0x1150: 2
+    call        → 0x11d0  print_sum                 push rbp
+    call        → 0x1200  static_function           push rbp
+0x1150> 
+saving and exiting…

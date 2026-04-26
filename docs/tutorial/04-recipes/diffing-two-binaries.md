@@ -5,11 +5,15 @@ Use case: "what did the patch change?" — comparing a CVE-fixed
 release to its predecessor, or a patched malware variant to the
 original.
 
+> **Verified output.** Captured by `scripts/verify_tutorial.py`
+> and stored at
+> [`_fixtures/04-diff/diff.out`](../_fixtures/04-diff/diff.out).
+
 ## The one-liner
 
 ```bash
-glaurung diff samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2 \
-              samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2
+$ glaurung diff samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2 \
+                samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2
 ```
 
 ```markdown
@@ -21,12 +25,12 @@ glaurung diff samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2 
 
 | function | a hash | b hash | a size | b size |
 |---|---|---|---:|---:|
-| `__do_global_dtors_aux` | `7fd45...` | `c8015...` | 57 | 57 |
-| `_start`                | `ea790...` | `655a8...` | 89 | 89 |
-| `deregister_tm_clones`  | `6057d...` | `31894...` | 41 | 41 |
-| `dispatch`              | `b9016...` | `6a818...` | 47 | 151 |
-| `main`                  | `f8c58...` | `e0e57...` | 39 | 39 |
-| `register_tm_clones`    | `dc6ed...` | `bb1d6...` | 57 | 57 |
+| `__do_global_dtors_aux` | `7fd4526f20430951` | `c8015d10c2ed71a5` | 57 | 57 |
+| `_start` | `ea7906078022b002` | `655a8c389e85d4a0` | 89 | 89 |
+| `deregister_tm_clones` | `6057d1ade1a998f4` | `318941da3c2929c8` | 41 | 41 |
+| `dispatch` | `b9016d60df22f19d` | `6a818a145f5bf746` | 47 | 151 |
+| `main` | `f8c58af674c873ca` | `e0e57fc75dfc574b` | 39 | 39 |
+| `register_tm_clones` | `dc6edb3b026d7f42` | `bb1d6b3058d50a55` | 57 | 57 |
 ```
 
 The `dispatch` function grew from 47 to 151 bytes — that's where

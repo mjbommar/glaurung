@@ -5,27 +5,171 @@ applies your renames, comments, data labels, types, and stack
 vars **inside the target tool**. Use case: Glaurung is your
 fast-iterate engine; the polished tool gets the result.
 
-## The four output formats
+> **Verified output.** Every block is captured by
+> `scripts/verify_tutorial.py` and stored under
+> [`_fixtures/04-export/`](../_fixtures/04-export/).
+
+## The output formats
 
 ```bash
-# Markdown — human-readable report.
-glaurung export tutorial.glaurung --output-format markdown
-
-# JSON — round-trippable.
-glaurung export tutorial.glaurung --output-format json > kb.json
-
-# C header — every type as a compilable .h.
-glaurung export tutorial.glaurung --output-format header > kb.h
-
-# IDAPython script — apply your KB inside IDA Pro.
-glaurung export tutorial.glaurung --output-format ida > apply_in_ida.py
-
-# Binary Ninja Python script.
-glaurung export tutorial.glaurung --output-format binja > apply_in_binja.py
-
-# Ghidra Python script (Jython 2.7 syntax).
-glaurung export tutorial.glaurung --output-format ghidra > apply_in_ghidra.py
+$ glaurung export tutorial.glaurung --output-format markdown   # human report
+$ glaurung export tutorial.glaurung --output-format json       # round-trippable KB
+$ glaurung export tutorial.glaurung --output-format header     # compilable C .h
+$ glaurung export tutorial.glaurung --output-format ida        # IDAPython
+$ glaurung export tutorial.glaurung --output-format binja      # Binary Ninja Python
+$ glaurung export tutorial.glaurung --output-format ghidra     # Ghidra Jython
 ```
+
+## Markdown report (head)
+
+```bash
+$ glaurung export tutorial.glaurung --output-format markdown | head -30
+```
+
+```markdown
+# Glaurung KB export
+
+- function_names: **9**
+- prototypes: **192**
+- comments: **0**
+- data_labels: **0**
+- stack_vars: **36**
+- types: **112**
+- evidence rows: **1**
+
+## Functions (first 32)
+
+| entry | name | demangled | set_by |
+|---|---|---|---|
+| `0x1060` | `_start` | — | analyzer |
+| `0x1090` | `deregister_tm_clones` | — | analyzer |
+| `0x10c0` | `register_tm_clones` | — | analyzer |
+| `0x1100` | `__do_global_dtors_aux` | — | analyzer |
+| `0x1140` | `frame_dummy` | — | analyzer |
+| `0x1150` | `main` | — | analyzer |
+| `0x117b` | `sub_117b` | — | analyzer |
+| `0x11d0` | `print_sum` | — | analyzer |
+| `0x1200` | `static_function` | — | analyzer |
+
+## Types (first 16)
+
+- `ATOM` (typedef, set_by=stdlib, confidence=0.99)
+- `BOOL` (typedef, set_by=stdlib, confidence=0.99)
+- `BOOLEAN` (typedef, set_by=stdlib, confidence=0.99)
+- `BYTE` (typedef, set_by=stdlib, confidence=0.99)
+```
+
+(Captured: [`_fixtures/04-export/export-markdown-head.out`](../_fixtures/04-export/export-markdown-head.out).)
+
+## JSON shape
+
+```bash
+$ glaurung export tutorial.glaurung --output-format json | python -c \
+    'import json,sys; d=json.load(sys.stdin); \
+     print("schema_version:", d["schema_version"]); \
+     print("keys:", sorted(d.keys()))'
+```
+
+```text
+schema_version: 1
+keys: ['comments', 'data_labels', 'evidence_log', 'function_names',
+       'function_prototypes', 'schema_version', 'stack_frame_vars',
+       'summary', 'types']
+```
+
+(Captured: [`_fixtures/04-export/export-json-summary.out`](../_fixtures/04-export/export-json-summary.out).)
+
+The top-level keys are the round-trippable tables — every analyst
+write Glaurung tracks ends up in one of those buckets.
+
+## IDAPython script (head)
+
+```bash
+$ glaurung export tutorial.glaurung --output-format ida | head -20
+```
+
+```python
+# Glaurung → IDAPython export (#165 / #190)
+# Paste into IDA's scripting console (File > Script file)
+# or run via `idat -A -S<this.py> <target.idb>`.
+
+import idaapi
+import idc
+import ida_name
+import ida_bytes
+import ida_funcs
+
+def _apply():
+    summary = {
+        "renamed_functions": 0,
+        "comments_set": 0,
+        "data_labels_set": 0,
+        "stack_vars_set": 0,
+    }
+
+    # Function renames (preferring demangled when present).
+    if ida_name.set_name(0x1060, "_start", ida_name.SN_FORCE):
+```
+
+(Captured: [`_fixtures/04-export/export-ida-head.out`](../_fixtures/04-export/export-ida-head.out).)
+
+## Binary Ninja script (head)
+
+```bash
+$ glaurung export tutorial.glaurung --output-format binja | head -20
+```
+
+```python
+# Glaurung → Binary Ninja export (#190)
+# Run via the BN scripting console (bv is in scope) or:
+#   binaryninja.load("<binary>").execute_script("<this.py>")
+
+def _apply(bv):
+    summary = {
+        "renamed_functions": 0,
+        "comments_set": 0,
+        "data_labels_set": 0,
+    }
+
+    # Function renames — uses bv.get_function_at(va).set_user_symbol
+    from binaryninja import Symbol, SymbolType
+    f = bv.get_function_at(0x1060)
+    if f is not None:
+        bv.define_user_symbol(Symbol(SymbolType.FunctionSymbol, 0x1060, '_start'))
+        summary["renamed_functions"] += 1
+```
+
+(Captured: [`_fixtures/04-export/export-binja-head.out`](../_fixtures/04-export/export-binja-head.out).)
+
+## Ghidra script (head)
+
+```bash
+$ glaurung export tutorial.glaurung --output-format ghidra | head -20
+```
+
+```python
+# Glaurung → Ghidra export (#190)
+# Run via Window > Script Manager. Targets the active program.
+
+# @category Glaurung
+# @runtime Jython
+
+from ghidra.program.model.symbol import SourceType
+
+def _apply():
+    summary = {'renamed_functions': 0, 'comments_set': 0, 'data_labels_set': 0}
+    fm = currentProgram.getFunctionManager()
+    st = currentProgram.getSymbolTable()
+    af = currentProgram.getAddressFactory().getDefaultAddressSpace()
+    def addr(va): return af.getAddress(va)
+
+    fn = fm.getFunctionAt(addr(0x1060))
+    if fn is not None:
+        fn.setName("_start", SourceType.USER_DEFINED)
+        summary['renamed_functions'] += 1
+```
+
+(Captured: [`_fixtures/04-export/export-ghidra-head.out`](../_fixtures/04-export/export-ghidra-head.out).)
 
 ## How the IDA / Binja / Ghidra scripts work
 
