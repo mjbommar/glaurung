@@ -30,6 +30,14 @@ public class AttributeFixture {
         int total = base + 7;
         return total;
     }
+
+    public static int guarded(String input) {
+        try {
+            return Integer.parseInt(input);
+        } catch (NumberFormatException ex) {
+            return -1;
+        }
+    }
 }
 """.strip()
         + "\n",
@@ -49,7 +57,7 @@ def test_parse_java_class_recovers_source_exceptions_and_local_variables(
 ) -> None:
     class_file = _compile_attribute_class(tmp_path)
 
-    info = g.analysis.parse_java_class_bytes(class_file.read_bytes())
+    info = getattr(g, "analysis").parse_java_class_bytes(class_file.read_bytes())
 
     assert info is not None
     assert info["source_file"] == "AttributeFixture.java"
@@ -60,3 +68,20 @@ def test_parse_java_class_recovers_source_exceptions_and_local_variables(
     assert locals_by_name["input"]["index"] == 0
     assert locals_by_name["base"]["descriptor"] == "I"
     assert locals_by_name["total"]["descriptor"] == "I"
+
+
+def test_parse_java_class_recovers_exception_handlers(tmp_path: Path) -> None:
+    class_file = _compile_attribute_class(tmp_path)
+
+    info = getattr(g, "analysis").parse_java_class_bytes(class_file.read_bytes())
+
+    assert info is not None
+    guarded = next(method for method in info["methods"] if method["name"] == "guarded")
+    code = guarded["code"]
+    assert code["exception_table_len"] == 1
+    assert len(code["exception_handlers"]) == 1
+    handler = code["exception_handlers"][0]
+    assert handler["catch_type"] == "java/lang/NumberFormatException"
+    assert handler["start_pc"] == 0
+    assert handler["end_pc"] > handler["start_pc"]
+    assert handler["handler_pc"] >= handler["end_pc"]

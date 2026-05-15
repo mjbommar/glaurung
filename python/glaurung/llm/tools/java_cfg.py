@@ -9,7 +9,7 @@ from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
-from .java_view_bytecode import JavaBytecodeInstruction
+from .java_view_bytecode import JavaBytecodeExceptionHandler, JavaBytecodeInstruction
 from .java_view_bytecode import build_tool as build_bytecode_tool
 
 
@@ -20,6 +20,7 @@ JavaCfgEdgeKind = Literal[
     "goto",
     "switch_default",
     "jsr",
+    "exception",
 ]
 
 
@@ -60,6 +61,14 @@ class JavaCfgEdge(BaseModel):
     source_start_bci: int
     target_start_bci: int
     kind: JavaCfgEdgeKind
+    catch_type: str | None = None
+
+
+class JavaCfgExceptionHandler(BaseModel):
+    start_pc: int
+    end_pc: int
+    handler_pc: int
+    catch_type: str | None = None
 
 
 class JavaCfgResult(BaseModel):
@@ -74,8 +83,10 @@ class JavaCfgResult(BaseModel):
     instruction_count: int = 0
     block_count: int = 0
     edge_count: int = 0
+    exception_handler_count: int = 0
     blocks: list[JavaCfgBlock] = Field(default_factory=list)
     edges: list[JavaCfgEdge] = Field(default_factory=list)
+    exception_handlers: list[JavaCfgExceptionHandler] = Field(default_factory=list)
     stop_reasons: list[str] = Field(default_factory=list)
     truncated: bool = False
     cfg_node_id: str | None = None
@@ -133,9 +144,14 @@ class JavaCfgTool(MemoryTool[JavaCfgArgs, JavaCfgResult]):
 
         blocks, edges, stop_reasons, truncated = _build_cfg(
             bytecode.instructions,
+            exception_handlers=bytecode.exception_handlers,
             max_blocks=args.max_blocks,
             max_edges=args.max_edges,
         )
+        exception_handlers = [
+            JavaCfgExceptionHandler(**handler.model_dump())
+            for handler in bytecode.exception_handlers
+        ]
         cfg_node = kb.add_node(
             Node(
                 kind=NodeKind.java_cfg,
@@ -155,6 +171,7 @@ class JavaCfgTool(MemoryTool[JavaCfgArgs, JavaCfgResult]):
                     "instruction_count": len(bytecode.instructions),
                     "block_count": len(blocks),
                     "edge_count": len(edges),
+                    "exception_handler_count": len(exception_handlers),
                     "stop_reasons": stop_reasons,
                     "truncated": truncated or bytecode.truncated,
                 },
@@ -173,8 +190,10 @@ class JavaCfgTool(MemoryTool[JavaCfgArgs, JavaCfgResult]):
             instruction_count=len(bytecode.instructions),
             block_count=len(blocks),
             edge_count=len(edges),
+            exception_handler_count=len(exception_handlers),
             blocks=blocks,
             edges=edges,
+            exception_handlers=exception_handlers,
             stop_reasons=stop_reasons,
             truncated=truncated or bytecode.truncated,
             cfg_node_id=cfg_node.id,
@@ -184,6 +203,7 @@ class JavaCfgTool(MemoryTool[JavaCfgArgs, JavaCfgResult]):
 def _build_cfg(
     instructions: list[JavaBytecodeInstruction],
     *,
+    exception_handlers: list[JavaBytecodeExceptionHandler],
     max_blocks: int,
     max_edges: int,
 ) -> tuple[list[JavaCfgBlock], list[JavaCfgEdge], list[str], bool]:
@@ -200,6 +220,13 @@ def _build_cfg(
     }
 
     leaders = {sorted_instructions[0].bci}
+    for handler in exception_handlers:
+        if handler.start_pc in bci_to_instruction:
+            leaders.add(handler.start_pc)
+        if handler.end_pc in bci_to_instruction:
+            leaders.add(handler.end_pc)
+        if handler.handler_pc in bci_to_instruction:
+            leaders.add(handler.handler_pc)
     for instruction in sorted_instructions:
         targets = _branch_targets(instruction)
         for target in targets:
@@ -252,11 +279,21 @@ def _build_cfg(
                 truncated = True
                 break
             edges.append(edge)
+        if len(edges) >= max_edges:
+            truncated = True
+            break
+        for edge in _exception_edges_for_block(
+            block,
+            exception_handlers=exception_handlers,
+            block_by_start=block_by_start,
+        ):
+            if len(edges) >= max_edges:
+                truncated = True
+                break
+            if edge not in edges:
+                edges.append(edge)
 
-    stop_reasons = [
-        "exception_edges_not_yet_modeled",
-        "stack_frame_analysis_not_yet_available",
-    ]
+    stop_reasons = ["stack_frame_analysis_not_yet_available"]
     return blocks, edges, stop_reasons, truncated
 
 
@@ -333,6 +370,7 @@ def _edge(
     block_by_start: dict[int, JavaCfgBlock],
     target_bci: int,
     kind: JavaCfgEdgeKind,
+    catch_type: str | None = None,
 ) -> list[JavaCfgEdge]:
     target_block = block_by_start.get(target_bci)
     if target_block is None:
@@ -344,8 +382,40 @@ def _edge(
             source_start_bci=source_block.start_bci,
             target_start_bci=target_block.start_bci,
             kind=kind,
+            catch_type=catch_type,
         )
     ]
+
+
+def _exception_edges_for_block(
+    source_block: JavaCfgBlock,
+    *,
+    exception_handlers: list[JavaBytecodeExceptionHandler],
+    block_by_start: dict[int, JavaCfgBlock],
+) -> list[JavaCfgEdge]:
+    out: list[JavaCfgEdge] = []
+    for handler in exception_handlers:
+        if not _block_intersects_handler(source_block, handler):
+            continue
+        out.extend(
+            _edge(
+                source_block,
+                block_by_start,
+                handler.handler_pc,
+                "exception",
+                catch_type=handler.catch_type,
+            )
+        )
+    return out
+
+
+def _block_intersects_handler(
+    block: JavaCfgBlock,
+    handler: JavaBytecodeExceptionHandler,
+) -> bool:
+    return (
+        block.start_bci < handler.end_pc and block.end_bci_exclusive > handler.start_pc
+    )
 
 
 def _branch_targets(instruction: JavaBytecodeInstruction) -> list[int]:

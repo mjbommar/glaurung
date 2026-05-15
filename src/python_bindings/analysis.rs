@@ -337,6 +337,16 @@ fn java_code_to_py(
     dict.set_item("max_locals", code.max_locals)?;
     dict.set_item("code_length", code.code_length)?;
     dict.set_item("exception_table_len", code.exception_table_len)?;
+    let exception_handlers = pyo3::types::PyList::empty(py);
+    for handler in code.exception_handlers {
+        let hdict = pyo3::types::PyDict::new(py);
+        hdict.set_item("start_pc", handler.start_pc)?;
+        hdict.set_item("end_pc", handler.end_pc)?;
+        hdict.set_item("handler_pc", handler.handler_pc)?;
+        hdict.set_item("catch_type", handler.catch_type)?;
+        exception_handlers.append(hdict)?;
+    }
+    dict.set_item("exception_handlers", exception_handlers)?;
     dict.set_item("attributes_count", code.attributes_count)?;
     let line_numbers = pyo3::types::PyList::empty(py);
     for line in code.line_numbers {

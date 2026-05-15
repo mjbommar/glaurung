@@ -83,6 +83,13 @@ class JavaBytecodeLocalVariableType(BaseModel):
     index: int
 
 
+class JavaBytecodeExceptionHandler(BaseModel):
+    start_pc: int
+    end_pc: int
+    handler_pc: int
+    catch_type: str | None = None
+
+
 class JavaViewBytecodeResult(BaseModel):
     archive_path: str
     class_found: bool
@@ -105,6 +112,7 @@ class JavaViewBytecodeResult(BaseModel):
     local_variable_types: list[JavaBytecodeLocalVariableType] = Field(
         default_factory=list
     )
+    exception_handlers: list[JavaBytecodeExceptionHandler] = Field(default_factory=list)
     truncated: bool = False
     bytecode_node_id: str | None = None
 
@@ -293,6 +301,11 @@ def _result_for_method(
             bci_end,
         )
     ]
+    exception_handlers = [
+        _exception_handler_summary(handler)
+        for handler in code.get("exception_handlers", [])
+        if isinstance(handler, dict)
+    ]
     mapped_method_members = _mapped_method_members(
         mappings=mappings,
         class_mapping=class_mapping,
@@ -323,6 +336,7 @@ def _result_for_method(
                 "xref_count": len(xrefs),
                 "local_variable_count": len(local_variables),
                 "local_variable_type_count": len(local_variable_types),
+                "exception_handler_count": len(exception_handlers),
                 "truncated": truncated,
                 "bci_start": bci_start,
                 "bci_end": bci_end,
@@ -355,6 +369,7 @@ def _result_for_method(
         xrefs=xrefs,
         local_variables=local_variables,
         local_variable_types=local_variable_types,
+        exception_handlers=exception_handlers,
         truncated=truncated,
         bytecode_node_id=bytecode_node.id,
     )
@@ -454,6 +469,18 @@ def _local_variable_type_summary(
         name=str(local_type["name"]),
         signature=str(local_type["signature"]),
         index=int(local_type["index"]),
+    )
+
+
+def _exception_handler_summary(
+    handler: dict[str, Any],
+) -> JavaBytecodeExceptionHandler:
+    catch_type = handler.get("catch_type")
+    return JavaBytecodeExceptionHandler(
+        start_pc=int(handler["start_pc"]),
+        end_pc=int(handler["end_pc"]),
+        handler_pc=int(handler["handler_pc"]),
+        catch_type=catch_type if isinstance(catch_type, str) else None,
     )
 
 

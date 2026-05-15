@@ -38,9 +38,9 @@ Glaurung already has a growing Java path:
 - `src/analysis/java_class.rs` parses a `.class` header, constant-pool names, class
   name, superclass, interfaces, fields, method descriptors, `Code` metadata, and
   source/debug attributes (`SourceFile`, method `Exceptions`, `LineNumberTable`,
-  `LocalVariableTable`, and `LocalVariableTypeTable`), plus initial JVM instruction
-  listings and lightweight method-level bytecode xrefs for invokes, fields, class
-  refs, and loaded strings.
+  `LocalVariableTable`, and `LocalVariableTypeTable`), exception handler tables, plus
+  initial JVM instruction listings and lightweight method-level bytecode xrefs for
+  invokes, fields, class refs, and loaded strings.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `src/analysis/java_jar.rs` and the Python bindings expose bounded central-directory
   JAR metadata, including nested archive entries, multi-release class variants,
@@ -69,8 +69,9 @@ Glaurung already has a growing Java path:
 - Python memory tools can now view a selected method's JVM bytecode with BCI, opcode,
   mnemonic, operands, source-line anchors, xrefs, bounded windows, and mapping context.
 - Python memory tools can now build an initial bytecode CFG for a selected method,
-  with basic blocks, conditional/goto/fallthrough/default-switch edges, line anchors,
-  and explicit stop reasons for missing exception edges and frame analysis.
+  with basic blocks, conditional/goto/fallthrough/default-switch/exception edges,
+  line anchors, exception handler ranges, and explicit stop reasons for missing frame
+  analysis.
 - Python memory tools can now query normalized bytecode xrefs from a selected source
   class/method or to a selected target owner/name/descriptor, emitting `java_xref`
   evidence nodes with optional ProGuard/Mojang mapping-aware source and target
@@ -93,9 +94,9 @@ Glaurung already has a growing Java path:
 
 Known limitations:
 
-- The Rust parser still skips many attributes after the initial source/debug subset,
-  including annotations, bootstrap methods, records, modules, nestmates, generic
-  signatures, and stack maps.
+- The Rust parser still skips many attributes after the initial source/debug and
+  exception-handler subset, including annotations, bootstrap methods, records,
+  modules, nestmates, generic signatures, and stack maps.
 - There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
 - There is no dependency resolver, build-system inference, source tree emitter,
@@ -186,7 +187,7 @@ here, it is probably not represented strongly enough in the plan.
 | Gap | Planned coverage |
 | --- | --- |
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
-| Bytecode CFG, xrefs, and call graph | Initial `java_cfg`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with exception edges, interprocedural xrefs, and CHA/RTA dispatch |
+| Bytecode CFG, xrefs, and call graph | Initial `java_cfg`, exception edges, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with frame analysis, interprocedural xrefs, and CHA/RTA dispatch |
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, and local-variable table support exists; continue annotations/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
@@ -730,9 +731,10 @@ Outputs:
 - Opcode and mnemonic for decoded JVM instructions.
 - Line table mapping when debug metadata exists.
 - Local-variable and local-variable-type scopes when debug metadata exists.
+- Exception handler table ranges and catch types.
 - Optional method xrefs at matching BCI offsets.
 - Descriptor-aware mapping context where ProGuard/Mojang mappings are supplied.
-- Stack/local frame snapshots and exception handlers in a later ASM-backed revision.
+- Stack/local frame snapshots in a later ASM-backed revision.
 
 `java_cfg`
 
@@ -745,10 +747,11 @@ Inputs:
 Outputs:
 
 - Basic blocks with BCI ranges, instruction counts, line anchors, and terminators.
-- Conditional true/false, goto, fallthrough, and default-switch edges.
+- Conditional true/false, goto, fallthrough, default-switch, and exception edges.
+- Exception handler ranges and catch types.
 - Dominator-friendly block IDs.
-- Stop reasons for missing exception regions and stack/local frame analysis.
-- Exception regions and loop hints in a later revision.
+- Stop reasons for missing stack/local frame analysis.
+- Loop hints in a later revision.
 
 Implementation notes:
 

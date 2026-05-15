@@ -40,6 +40,14 @@ public class CfgFixture {
         }
         return total;
     }
+
+    public static int guarded(String input) {
+        try {
+            return Integer.parseInt(input);
+        } catch (NumberFormatException ex) {
+            return -1;
+        }
+    }
 }
 """.strip()
         + "\n",
@@ -106,6 +114,42 @@ def test_java_cfg_builds_basic_blocks_and_edges(tmp_path: Path) -> None:
         and n.props.get("block_count") == result.block_count
         for n in ctx.kb.nodes()
     )
+
+
+def test_java_cfg_models_exception_handler_edges(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_cfg import build_tool
+
+    jar = _compile_cfg_jar(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            class_name="CfgFixture",
+            method_name="guarded",
+            method_descriptor="(Ljava/lang/String;)I",
+        ),
+    )
+
+    assert result.method_found
+    assert result.exception_handler_count == 1
+    assert result.exception_handlers[0].catch_type == "java/lang/NumberFormatException"
+    assert any(
+        block.start_bci == result.exception_handlers[0].handler_pc
+        for block in result.blocks
+    )
+    exception_edges = [edge for edge in result.edges if edge.kind == "exception"]
+    assert exception_edges
+    assert any(
+        edge.target_start_bci == result.exception_handlers[0].handler_pc
+        and edge.catch_type == "java/lang/NumberFormatException"
+        for edge in exception_edges
+    )
+    assert "exception_edges_not_yet_modeled" not in result.stop_reasons
+    assert "stack_frame_analysis_not_yet_available" in result.stop_reasons
 
 
 def test_memory_agent_registers_java_cfg() -> None:

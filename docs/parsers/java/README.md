@@ -50,8 +50,8 @@ Implemented pieces now include:
 - Rust classfile parsing for magic/version, constant-pool names, class/super names,
   fields, methods, descriptors, `SourceFile`, method `Exceptions`, `Code` attribute
   metadata, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, JVM
-  instruction listings, and lightweight method-level bytecode xrefs for invokes,
-  fields, class refs, and loaded strings.
+  exception handler tables, instruction listings, and lightweight method-level
+  bytecode xrefs for invokes, fields, class refs, and loaded strings.
 - Rust central-directory JAR indexing for bounded archive metadata: entry counts,
   compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
   signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
@@ -97,8 +97,8 @@ Implemented pieces now include:
   normalized operands, line anchors, local-variable scopes, xrefs, bounded windows,
   and mapping context.
 - Initial bytecode CFG construction for selected methods, exposing basic blocks,
-  conditional/goto/fallthrough/default-switch edges, line anchors, stop reasons, and
-  KB `java_cfg` nodes.
+  conditional/goto/fallthrough/default-switch/exception edges, line anchors,
+  exception handler ranges, stop reasons, and KB `java_cfg` nodes.
 - Initial normalized xref queries through `java_xrefs_from` and `java_xrefs_to`,
   exposing source class/method, BCI, line anchors, target owner/name/descriptor,
   xref kind, optional mapping-aware source/target annotations, and KB `java_xref`
@@ -123,8 +123,8 @@ Implemented pieces now include:
 
 Not yet implemented:
 
-- Stack/local frames, exception-edge CFGs, interprocedural xrefs, and advanced
-  call graphs such as CHA/RTA with precise virtual dispatch candidates.
+- Stack/local frames, interprocedural xrefs, and advanced call graphs such as
+  CHA/RTA with precise virtual dispatch candidates.
 - Full attribute parsing for annotations, modules, records, sealed classes, nestmates,
   bootstrap methods, stack maps, and runtime-visible metadata beyond the initial
   source/debug attributes.
@@ -194,7 +194,8 @@ Important lessons:
 - [x] Initial bytecode instruction decode and `java_view_bytecode`
 - [x] Initial bytecode CFG via `java_cfg`
 - [x] Initial constant-pool call graph via `java_call_graph`
-- [ ] Exception-handler CFG edges and stack/local frame analysis
+- [x] Exception-handler table parsing and CFG exception edges
+- [ ] Stack/local frame analysis
 - [ ] Annotation processing
 
 ### Phase 5: JAR Processing

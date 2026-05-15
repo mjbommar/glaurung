@@ -25,12 +25,21 @@ pub struct JavaCode {
     pub max_locals: u16,
     pub code_length: u32,
     pub exception_table_len: u16,
+    pub exception_handlers: Vec<JavaExceptionHandler>,
     pub attributes_count: u16,
     pub line_numbers: Vec<JavaLineNumber>,
     pub local_variables: Vec<JavaLocalVariable>,
     pub local_variable_types: Vec<JavaLocalVariableType>,
     pub instructions: Vec<JavaInstruction>,
     pub xrefs: Vec<JavaXref>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaExceptionHandler {
+    pub start_pc: u16,
+    pub end_pc: u16,
+    pub handler_pc: u16,
+    pub catch_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -459,6 +468,8 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
     if exception_table_end + 2 > body.len() {
         return Err(ClassError::Truncated("exception table"));
     }
+    let exception_handlers =
+        parse_exception_table(&body[code_end + 2..exception_table_end], exception_table_len, cp)?;
     let attributes_count = u16::from_be_bytes(
         body[exception_table_end..exception_table_end + 2]
             .try_into()
@@ -502,6 +513,7 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         max_locals,
         code_length,
         exception_table_len,
+        exception_handlers,
         attributes_count,
         line_numbers,
         local_variables,
@@ -509,6 +521,40 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         instructions,
         xrefs,
     })
+}
+
+fn parse_exception_table(
+    body: &[u8],
+    exception_table_len: u16,
+    cp: &[CpEntry],
+) -> Result<Vec<JavaExceptionHandler>, ClassError> {
+    let expected_len = (exception_table_len as usize)
+        .checked_mul(8)
+        .ok_or(ClassError::Truncated("exception table"))?;
+    if body.len() < expected_len {
+        return Err(ClassError::Truncated("exception table"));
+    }
+    let mut handlers = Vec::with_capacity(exception_table_len as usize);
+    let mut p = 0usize;
+    for _ in 0..exception_table_len {
+        let start_pc = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        let end_pc = u16::from_be_bytes(body[p + 2..p + 4].try_into().unwrap());
+        let handler_pc = u16::from_be_bytes(body[p + 4..p + 6].try_into().unwrap());
+        let catch_type_idx = u16::from_be_bytes(body[p + 6..p + 8].try_into().unwrap());
+        let catch_type = if catch_type_idx == 0 {
+            None
+        } else {
+            Some(read_class_name(cp, catch_type_idx)?)
+        };
+        handlers.push(JavaExceptionHandler {
+            start_pc,
+            end_pc,
+            handler_pc,
+            catch_type,
+        });
+        p += 8;
+    }
+    Ok(handlers)
 }
 
 fn parse_exceptions_attribute(body: &[u8], cp: &[CpEntry]) -> Result<Vec<String>, ClassError> {
