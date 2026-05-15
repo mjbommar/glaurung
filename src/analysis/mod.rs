@@ -13,6 +13,7 @@ pub mod elf_plt;
 pub mod entry;
 pub mod gopclntab;
 pub mod java_class;
+pub mod java_jar;
 pub mod jump_table;
 pub mod lua_bytecode;
 pub mod macho_stubs;

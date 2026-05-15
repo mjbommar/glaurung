@@ -16,6 +16,7 @@ from .base import MemoryTool, ToolMeta
 
 class JavaIndexArchiveArgs(BaseModel):
     path: str | None = Field(None, description="Path to the JAR/ZIP archive")
+    max_entries: int = Field(4_096, ge=0)
     max_classes: int = Field(256, ge=0)
     include_resources: bool = False
     max_resources: int = Field(256, ge=0)
@@ -38,18 +39,88 @@ class JavaResourceSummary(BaseModel):
     size: int
 
 
+class JavaArchiveEntrySummary(BaseModel):
+    entry_name: str
+    compressed_size: int
+    uncompressed_size: int
+    compression_method: int
+    crc32: int
+    local_header_offset: int
+    is_dir: bool
+    is_class: bool
+    is_resource: bool
+    is_nested_archive: bool
+    is_multi_release_class: bool
+    multi_release_version: int | None = None
+    is_signature_file: bool
+    is_maven_metadata: bool
+    is_service_descriptor: bool
+    is_module_info: bool
+    is_zip_slip: bool
+
+
+class JavaNestedArchiveSummary(BaseModel):
+    entry_name: str
+    compressed_size: int
+    uncompressed_size: int
+
+
+class JavaSignatureFileSummary(BaseModel):
+    entry_name: str
+    size: int
+
+
+class JavaMavenArtifactSummary(BaseModel):
+    entry_name: str
+    group_id: str | None = None
+    artifact_id: str | None = None
+    version: str | None = None
+
+
+class JavaServiceDescriptorSummary(BaseModel):
+    entry_name: str
+    service_name: str
+    providers: list[str]
+
+
+class JavaSuspiciousEntrySummary(BaseModel):
+    entry_name: str
+    reason: str
+
+
 class JavaIndexArchiveResult(BaseModel):
     archive_path: str
     archive_format: str
     sha256: str
+    entry_count: int = 0
     total_uncompressed_size: int
+    total_compressed_size: int = 0
+    directory_count: int = 0
     class_count: int
     parsed_class_count: int
     parse_error_count: int
     resource_count: int
     manifest_main_class: str | None = None
+    entries: list[JavaArchiveEntrySummary] = Field(default_factory=list)
     classes: list[JavaClassSummary]
     resources: list[JavaResourceSummary]
+    nested_archive_count: int = 0
+    nested_archives: list[JavaNestedArchiveSummary] = Field(default_factory=list)
+    multi_release_class_count: int = 0
+    multi_release_versions: list[int] = Field(default_factory=list)
+    signed: bool = False
+    signature_file_count: int = 0
+    signature_files: list[JavaSignatureFileSummary] = Field(default_factory=list)
+    maven_artifact_count: int = 0
+    maven_artifacts: list[JavaMavenArtifactSummary] = Field(default_factory=list)
+    service_descriptor_count: int = 0
+    service_descriptors: list[JavaServiceDescriptorSummary] = Field(
+        default_factory=list
+    )
+    module_info_present: bool = False
+    zip_slip_entry_count: int = 0
+    suspicious_entries: list[JavaSuspiciousEntrySummary] = Field(default_factory=list)
+    zip64_locator_present: bool = False
     truncated: bool = False
 
 
@@ -78,40 +149,122 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
         digest = _sha256(path)
         classes: list[JavaClassSummary] = []
         resources: list[JavaResourceSummary] = []
+        entries: list[JavaArchiveEntrySummary] = []
+        nested_archives: list[JavaNestedArchiveSummary] = []
+        signature_files: list[JavaSignatureFileSummary] = []
+        maven_artifacts: list[JavaMavenArtifactSummary] = []
+        service_descriptors: list[JavaServiceDescriptorSummary] = []
+        suspicious_entries: list[JavaSuspiciousEntrySummary] = []
         class_count = 0
         parsed_class_count = 0
         parse_error_count = 0
         resource_count = 0
+        entry_count = 0
         total_uncompressed_size = 0
+        total_compressed_size = 0
+        directory_count = 0
+        nested_archive_count = 0
+        multi_release_class_count = 0
+        multi_release_versions: list[int] = []
+        signed = False
+        signature_file_count = 0
+        maven_artifact_count = 0
+        service_descriptor_count = 0
+        module_info_present = False
+        zip_slip_entry_count = 0
+        zip64_locator_present = False
         manifest_main_class: str | None = None
         truncated = False
         java_analysis = getattr(g, "analysis")
+        native_index = java_analysis.index_java_archive_path(
+            str(path),
+            max_entries=args.max_entries,
+        )
 
         if not zipfile.is_zipfile(path):
             return JavaIndexArchiveResult(
                 archive_path=str(path),
                 archive_format="not_zip",
                 sha256=digest,
+                entry_count=0,
                 total_uncompressed_size=path.stat().st_size,
+                total_compressed_size=0,
+                directory_count=0,
                 class_count=0,
                 parsed_class_count=0,
                 parse_error_count=1,
                 resource_count=0,
                 manifest_main_class=None,
+                entries=[],
                 classes=[],
                 resources=[],
                 truncated=False,
             )
+        if native_index is not None:
+            entry_count = int(native_index["entry_count"])
+            total_uncompressed_size = int(native_index["total_uncompressed_size"])
+            total_compressed_size = int(native_index["total_compressed_size"])
+            directory_count = int(native_index["directory_count"])
+            class_count = int(native_index["class_count"])
+            resource_count = int(native_index["resource_count"])
+            nested_archive_count = int(native_index["nested_archive_count"])
+            multi_release_class_count = int(native_index["multi_release_class_count"])
+            multi_release_versions = [
+                int(version) for version in native_index["multi_release_versions"]
+            ]
+            signature_file_count = int(native_index["signature_file_count"])
+            signed = bool(native_index["signed"])
+            maven_artifact_count = int(native_index["maven_metadata_count"])
+            service_descriptor_count = int(native_index["service_descriptor_count"])
+            module_info_present = bool(native_index["module_info_present"])
+            zip_slip_entry_count = int(native_index["zip_slip_entry_count"])
+            zip64_locator_present = bool(native_index["zip64_locator_present"])
+            truncated = bool(native_index["truncated"])
+            entries = [
+                JavaArchiveEntrySummary(**entry)
+                for entry in native_index["entries"]
+                if isinstance(entry, dict)
+            ]
+            nested_archives = [
+                JavaNestedArchiveSummary(
+                    entry_name=entry.entry_name,
+                    compressed_size=entry.compressed_size,
+                    uncompressed_size=entry.uncompressed_size,
+                )
+                for entry in entries
+                if entry.is_nested_archive
+            ]
+            signature_files = [
+                JavaSignatureFileSummary(
+                    entry_name=entry.entry_name,
+                    size=entry.uncompressed_size,
+                )
+                for entry in entries
+                if entry.is_signature_file
+            ]
+            suspicious_entries = [
+                JavaSuspiciousEntrySummary(
+                    entry_name=entry.entry_name,
+                    reason="zip_slip_path",
+                )
+                for entry in entries
+                if entry.is_zip_slip
+            ]
 
         with zipfile.ZipFile(path) as zf:
             infos = zf.infolist()
-            total_uncompressed_size = sum(info.file_size for info in infos)
+            if native_index is None:
+                entry_count = len(infos)
+                total_uncompressed_size = sum(info.file_size for info in infos)
             manifest_main_class = _manifest_main_class(zf)
+            maven_artifacts = _maven_artifacts(zf, entries)
+            service_descriptors = _service_descriptors(zf, entries)
             for info in infos:
                 if info.is_dir():
                     continue
                 if info.filename.endswith(".class"):
-                    class_count += 1
+                    if native_index is None:
+                        class_count += 1
                     if len(classes) >= args.max_classes:
                         truncated = True
                         continue
@@ -136,7 +289,8 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                     parsed_class_count += 1
                     classes.append(summary)
                 else:
-                    resource_count += 1
+                    if native_index is None:
+                        resource_count += 1
                     if args.include_resources and len(resources) < args.max_resources:
                         resources.append(
                             JavaResourceSummary(
@@ -154,8 +308,16 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                 props={
                     "path": str(path),
                     "sha256": digest,
+                    "entry_count": entry_count,
                     "class_count": class_count,
                     "resource_count": resource_count,
+                    "nested_archive_count": nested_archive_count,
+                    "multi_release_versions": multi_release_versions,
+                    "signed": signed,
+                    "maven_artifact_count": maven_artifact_count,
+                    "service_descriptor_count": service_descriptor_count,
+                    "module_info_present": module_info_present,
+                    "zip_slip_entry_count": zip_slip_entry_count,
                     "manifest_main_class": manifest_main_class,
                 },
                 tags=["java", "jar"],
@@ -188,14 +350,33 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
             archive_path=str(path),
             archive_format="jar",
             sha256=digest,
+            entry_count=entry_count,
             total_uncompressed_size=total_uncompressed_size,
+            total_compressed_size=total_compressed_size,
+            directory_count=directory_count,
             class_count=class_count,
             parsed_class_count=parsed_class_count,
             parse_error_count=parse_error_count,
             resource_count=resource_count,
             manifest_main_class=manifest_main_class,
+            entries=entries,
             classes=classes,
             resources=resources,
+            nested_archive_count=nested_archive_count,
+            nested_archives=nested_archives,
+            multi_release_class_count=multi_release_class_count,
+            multi_release_versions=multi_release_versions,
+            signed=signed,
+            signature_file_count=signature_file_count,
+            signature_files=signature_files,
+            maven_artifact_count=maven_artifact_count,
+            maven_artifacts=maven_artifacts,
+            service_descriptor_count=service_descriptor_count,
+            service_descriptors=service_descriptors,
+            module_info_present=module_info_present,
+            zip_slip_entry_count=zip_slip_entry_count,
+            suspicious_entries=suspicious_entries,
+            zip64_locator_present=zip64_locator_present,
             truncated=truncated,
         )
 
@@ -218,6 +399,61 @@ def _manifest_main_class(zf: zipfile.ZipFile) -> str | None:
     return attrs.get("Main-Class")
 
 
+def _maven_artifacts(
+    zf: zipfile.ZipFile,
+    entries: list[JavaArchiveEntrySummary],
+) -> list[JavaMavenArtifactSummary]:
+    out: list[JavaMavenArtifactSummary] = []
+    for entry in entries:
+        if not entry.is_maven_metadata:
+            continue
+        if entry.entry_name.endswith("/pom.properties"):
+            try:
+                raw = zf.read(entry.entry_name)
+            except KeyError:
+                raw = b""
+            props = _parse_properties(raw.decode("utf-8", errors="replace"))
+            out.append(
+                JavaMavenArtifactSummary(
+                    entry_name=entry.entry_name,
+                    group_id=props.get("groupId"),
+                    artifact_id=props.get("artifactId"),
+                    version=props.get("version"),
+                )
+            )
+        else:
+            out.append(JavaMavenArtifactSummary(entry_name=entry.entry_name))
+    return out
+
+
+def _service_descriptors(
+    zf: zipfile.ZipFile,
+    entries: list[JavaArchiveEntrySummary],
+) -> list[JavaServiceDescriptorSummary]:
+    out: list[JavaServiceDescriptorSummary] = []
+    for entry in entries:
+        if not entry.is_service_descriptor:
+            continue
+        service_name = entry.entry_name.removeprefix("META-INF/services/")
+        try:
+            text = zf.read(entry.entry_name).decode("utf-8", errors="replace")
+        except KeyError:
+            text = ""
+        providers = [
+            line.split("#", 1)[0].strip()
+            for line in text.splitlines()
+            if line.split("#", 1)[0].strip()
+        ]
+        out.append(
+            JavaServiceDescriptorSummary(
+                entry_name=entry.entry_name,
+                service_name=service_name,
+                providers=providers,
+            )
+        )
+    return out
+
+
 def _parse_manifest(text: str) -> dict[str, str]:
     lines: list[str] = []
     for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
@@ -231,6 +467,20 @@ def _parse_manifest(text: str) -> dict[str, str]:
         if sep:
             attrs[key] = value.strip()
     return attrs
+
+
+def _parse_properties(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("#", "!")):
+            continue
+        key, sep, value = line.partition("=")
+        if not sep:
+            key, sep, value = line.partition(":")
+        if sep:
+            out[key.strip()] = value.strip()
+    return out
 
 
 def build_tool() -> MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResult]:

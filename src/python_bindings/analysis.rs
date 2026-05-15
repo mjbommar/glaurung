@@ -38,6 +38,11 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     // Java classfile parser for triaging .class files and JAR contents.
     analysis_mod.add_function(wrap_pyfunction!(parse_java_class_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(parse_java_class_bytes_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(index_java_archive_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(
+        index_java_archive_bytes_py,
+        &analysis_mod
+    )?)?;
     // Lua bytecode recognizer / source-name extractor.
     analysis_mod.add_function(wrap_pyfunction!(parse_lua_bytecode_path_py, &analysis_mod)?)?;
 
@@ -388,6 +393,100 @@ fn java_code_to_py(
         xrefs.append(xdict)?;
     }
     dict.set_item("xrefs", xrefs)?;
+    Ok(dict.into())
+}
+
+/// Index a Java JAR/ZIP archive and return central-directory metadata.
+/// Returns None for data that is not a ZIP/JAR archive.
+#[pyfunction]
+#[pyo3(name = "index_java_archive_path")]
+#[pyo3(signature = (path, max_entries=4096usize, max_read_bytes=268_435_456u64, max_file_size=1_073_741_824u64))]
+fn index_java_archive_path_py(
+    py: Python<'_>,
+    path: String,
+    max_entries: usize,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Option<Py<PyAny>>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    index_java_archive_bytes_inner(py, &data, max_entries)
+}
+
+/// Index Java JAR/ZIP archive bytes and return central-directory metadata.
+/// Returns None for data that is not a ZIP/JAR archive.
+#[pyfunction]
+#[pyo3(name = "index_java_archive_bytes")]
+#[pyo3(signature = (data, max_entries=4096usize))]
+fn index_java_archive_bytes_py(
+    py: Python<'_>,
+    data: &[u8],
+    max_entries: usize,
+) -> PyResult<Option<Py<PyAny>>> {
+    index_java_archive_bytes_inner(py, data, max_entries)
+}
+
+fn index_java_archive_bytes_inner(
+    py: Python<'_>,
+    data: &[u8],
+    max_entries: usize,
+) -> PyResult<Option<Py<PyAny>>> {
+    match crate::analysis::java_jar::index_jar(data, max_entries) {
+        Ok(index) => java_jar_index_to_py(py, index).map(Some),
+        Err(crate::analysis::java_jar::JavaJarError::NotZip) => Ok(None),
+        Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "java archive index failed: {:?}",
+            e,
+        ))),
+    }
+}
+
+fn java_jar_index_to_py(
+    py: Python<'_>,
+    index: crate::analysis::java_jar::JavaJarIndex,
+) -> PyResult<Py<PyAny>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("entry_count", index.entry_count)?;
+    dict.set_item("total_compressed_size", index.total_compressed_size)?;
+    dict.set_item("total_uncompressed_size", index.total_uncompressed_size)?;
+    dict.set_item("directory_count", index.directory_count)?;
+    dict.set_item("class_count", index.class_count)?;
+    dict.set_item("resource_count", index.resource_count)?;
+    dict.set_item("nested_archive_count", index.nested_archive_count)?;
+    dict.set_item("multi_release_class_count", index.multi_release_class_count)?;
+    dict.set_item("multi_release_versions", index.multi_release_versions)?;
+    dict.set_item("signature_file_count", index.signature_file_count)?;
+    dict.set_item("signed", index.signed)?;
+    dict.set_item("maven_metadata_count", index.maven_metadata_count)?;
+    dict.set_item("service_descriptor_count", index.service_descriptor_count)?;
+    dict.set_item("module_info_present", index.module_info_present)?;
+    dict.set_item("zip_slip_entry_count", index.zip_slip_entry_count)?;
+    dict.set_item("truncated", index.truncated)?;
+    dict.set_item("zip64_locator_present", index.zip64_locator_present)?;
+    let entries = pyo3::types::PyList::empty(py);
+    for entry in index.entries {
+        let edict = pyo3::types::PyDict::new(py);
+        edict.set_item("entry_name", entry.entry_name)?;
+        edict.set_item("compressed_size", entry.compressed_size)?;
+        edict.set_item("uncompressed_size", entry.uncompressed_size)?;
+        edict.set_item("compression_method", entry.compression_method)?;
+        edict.set_item("crc32", entry.crc32)?;
+        edict.set_item("local_header_offset", entry.local_header_offset)?;
+        edict.set_item("is_dir", entry.is_dir)?;
+        edict.set_item("is_class", entry.is_class)?;
+        edict.set_item("is_resource", entry.is_resource)?;
+        edict.set_item("is_nested_archive", entry.is_nested_archive)?;
+        edict.set_item("is_multi_release_class", entry.is_multi_release_class)?;
+        edict.set_item("multi_release_version", entry.multi_release_version)?;
+        edict.set_item("is_signature_file", entry.is_signature_file)?;
+        edict.set_item("is_maven_metadata", entry.is_maven_metadata)?;
+        edict.set_item("is_service_descriptor", entry.is_service_descriptor)?;
+        edict.set_item("is_module_info", entry.is_module_info)?;
+        edict.set_item("is_zip_slip", entry.is_zip_slip)?;
+        entries.append(edict)?;
+    }
+    dict.set_item("entries", entries)?;
     Ok(dict.into())
 }
 

@@ -52,6 +52,10 @@ Implemented pieces now include:
   metadata, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, JVM
   instruction listings, and lightweight method-level bytecode xrefs for invokes,
   fields, class refs, and loaded strings.
+- Rust central-directory JAR indexing for bounded archive metadata: entry counts,
+  compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
+  signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
+  `module-info.class`, zip-slip path detection, and truncation state.
 - Python binding `g.analysis.parse_java_class_bytes(data)` for in-memory `.class`
   parsing without extracting JAR entries to temporary files.
 - CLI JAR/class summarization through `glaurung classfile`.
@@ -175,14 +179,18 @@ Important lessons:
 ### Phase 5: JAR Processing
 - [x] Manifest parsing
 - [x] Archive/resource indexing
+- [x] Initial native central-directory JAR indexing with nested archive,
+  multi-release, signed metadata, Maven metadata, ServiceLoader, module-info, and
+  zip-slip detection.
 - [x] Minecraft metadata detection
 - [x] Mojang mapping fetch/cache/hash verification
 - [x] ProGuard/Mojang mapping annotation coverage
 - [x] Targeted ProGuard/Mojang mapping lookup
 - [x] Descriptor-aware mapped class/member view annotations
 - [x] Vanilla server bundler extraction
-- [ ] Multi-release JAR support
-- [ ] Signed JAR validation
+- [x] Initial multi-release JAR variant detection
+- [x] Initial signed JAR metadata detection
+- [ ] Signed JAR cryptographic validation
 
 ### Phase 6: Decompilation and Source Recovery
 - [ ] Java helper project with ASM, Vineflower, CFR, and JavaParser
