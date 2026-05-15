@@ -174,6 +174,9 @@ from ..tools.java_infer_build_system import build_tool as build_java_infer_build
 from ..tools.java_compile_recovered_project import (
     build_tool as build_java_compile_recovered_project,
 )
+from ..tools.java_reconstruct_source_tree import (
+    build_tool as build_java_reconstruct_source_tree,
+)
 from ..tools.java_view_bytecode import build_tool as build_java_view_bytecode
 from ..tools.java_cfg import build_tool as build_java_cfg
 from ..tools.java_xrefs_from import build_tool as build_java_xrefs_from
@@ -787,6 +790,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_infer_build_system()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_compile_recovered_project())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_java_reconstruct_source_tree())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_view_bytecode()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_cfg()))

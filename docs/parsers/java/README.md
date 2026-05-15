@@ -85,6 +85,7 @@ Implemented pieces now include:
   - `java_infer_dependencies`
   - `java_infer_build_system`
   - `java_compile_recovered_project`
+  - `java_reconstruct_source_tree`
   - `java_view_bytecode`
   - `java_cfg`
   - `java_xrefs_from`
@@ -145,6 +146,10 @@ Implemented pieces now include:
   supporting bounded `javac` execution for generated source trees and argfiles,
   automatic `sources.txt` population, timeout handling, structured diagnostics, and
   `java_compile_result` KB nodes.
+- Initial source-tree reconstruction through `java_reconstruct_source_tree`,
+  creating `src/main/java` and `src/main/resources` scaffolds, preserving runtime
+  resources and metadata, skipping signed-JAR signature files, tracking classes that
+  still need decompilation, and emitting explicit generated stubs only when requested.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -169,8 +174,8 @@ Not yet implemented:
   runtime-visible metadata beyond the initial source/debug and class/member
   annotation attributes.
 - Decompiler helper integration with Vineflower/CFR.
-- Clean source-project recovery after the initial dependency/build/compile layers:
-  dependency resolution policy, source tree emission, Maven/Gradle execution,
+- Clean source-project recovery after the initial dependency/build/scaffold/compile
+  layers: dependency resolution policy, decompiler source emission, Maven/Gradle execution,
   compiler-diagnostic repair, and ABI/resource validation.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
   correlation, framework-aware reachability, and richer directory-level risk
@@ -274,8 +279,10 @@ Important lessons:
   nested archives, and bytecode external package references
 - [ ] Dependency resolution from modules, `jdeps`, supplied classpaths, and missing
   class diagnostics
-- [ ] Source tree reconstruction under `src/main/java` and `src/main/resources`
-- [ ] Manifest, module, ServiceLoader, framework metadata, and resource preservation
+- [x] Initial source tree scaffold under `src/main/java` and `src/main/resources`
+- [x] Initial manifest, ServiceLoader, framework metadata, and resource preservation
+- [ ] Decompiled source emission, module source recovery, and semantic source/resource
+  validation
 - [x] Initial build system inference for plain `javac`, Maven, and Gradle
 - [ ] Build-system refinement for module paths, annotation processors, loader-specific
   Minecraft build plugins, and resolver/cache policy

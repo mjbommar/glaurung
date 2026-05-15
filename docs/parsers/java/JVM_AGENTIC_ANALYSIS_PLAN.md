@@ -112,6 +112,11 @@ Glaurung already has a growing Java path:
   `javac` execution through `java_compile_recovered_project`, including generated
   `sources.txt` population, nested argfile expansion, timeout handling, structured
   diagnostics, and `java_compile_result` evidence nodes.
+- Python memory tools can now create an initial recovered source-project scaffold
+  with `java_reconstruct_source_tree`, preserving runtime resources and metadata
+  under `src/main/resources`, creating `src/main/java`, skipping signed-JAR signature
+  files, tracking classes that still require decompilation, and emitting marked
+  stubs only when explicitly requested.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -130,9 +135,10 @@ Known limitations:
   signatures, and stack maps.
 - There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
-- There is initial dependency inference, build-system inference, and bounded `javac`
-  compile diagnostics, but no dependency resolver, source tree emitter, Maven/Gradle
-  compile execution, repair loop, or ABI comparison for recovered Java source.
+- There is initial dependency inference, build-system inference, source-tree
+  scaffolding, and bounded `javac` compile diagnostics, but no dependency resolver,
+  Java decompiler source emitter, Maven/Gradle compile execution, repair loop, or
+  ABI comparison for recovered Java source.
 - The generic static-audit layer now has initial sensitive sinks, entrypoints,
   config/resource extraction, config correlation, redacted secret scanning,
   archive-set summaries, and per-archive risk reports. It still lacks precise
@@ -241,7 +247,7 @@ here, it is probably not represented strongly enough in the plan.
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
 | Dependency and classpath recovery | Initial `java_infer_dependencies` and `java_infer_build_system` exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, Java release, and `javac`/Maven/Gradle planning; continue with module `requires`, `jdeps`, supplied classpath comparison, missing-class diagnostics, resolver/cache policy, and annotation processors |
 | Signed archive validation | Initial `java_verify_signatures` exists using `jarsigner -verify`; continue with policy scoring, certificate/timestamp summaries, and archive-set rollups |
-| Source tree/project reconstruction | Initial `java_infer_build_system` exists; continue with `java_reconstruct_source_tree`, resource preservation, and generated source lists |
+| Source tree/project reconstruction | Initial `java_reconstruct_source_tree` and `java_infer_build_system` exist for resource/metadata preservation, explicit stubs, generated source lists, and build planning; continue with decompiler source emission, module source recovery, and source/resource validation |
 | Compile diagnostics | `java_compile_recovered_project` |
 | Agentic compile-repair loop | `java_repair_decompiled_source` plus compile iteration budgets |
 | ABI/API and resource validation | `java_compare_rebuilt_abi`, `java_validate_recovered_application` |
@@ -1009,6 +1015,23 @@ Implementation notes:
 
 `java_reconstruct_source_tree`
 
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_source_tree` KB nodes.
+- Creates `src/main/java` and `src/main/resources` under caller-provided output
+  roots. It does not choose an output path implicitly.
+- Copies runtime resources according to a bounded resource policy, preserves
+  manifest, ServiceLoader, Maven/framework metadata, and license/notice files, and
+  skips signed-JAR signature files by default.
+- Tracks classes requiring decompilation. Generated Java stubs are emitted only when
+  `emit_stub_sources=True`, and those files are explicitly marked as generated
+  stubs.
+- Minecraft smoke tests showed the 1.20.1 server launcher has only four outer
+  classes and a small metadata/resource layer including `META-INF/libraries.list`,
+  while the 1.21.11 client immediately exposes shader include resources such as
+  `projection.glsl`, `fog.glsl`, and `matrix.glsl`.
+
 Inputs:
 
 - JAR path.
@@ -1039,6 +1062,8 @@ Responsibilities:
   should be reported as invalidated rather than copied blindly.
 - Emit stubs only with explicit marking and evidence when a class cannot be
   decompiled.
+- Continue by wiring decompiler output into `src/main/java`, preserving module source
+  metadata, and validating copied resources against the original archive.
 
 `java_infer_build_system`
 
@@ -2392,7 +2417,8 @@ Tasks:
 - Implement `java_decompile_archive`.
 - Extend `java_infer_dependencies` with supplied-classpath comparison, module
   `requires`, optional `jdeps` evidence, and missing-class diagnostics.
-- Implement `java_reconstruct_source_tree`.
+- Extend `java_reconstruct_source_tree` with decompiler source emission, module
+  source recovery, and resource validation.
 - Extend `java_infer_build_system` with module paths, annotation processors,
   loader-specific Minecraft plugin templates, and resolver/cache policy.
 - Extend `java_compile_recovered_project` with Maven/Gradle execution, richer
