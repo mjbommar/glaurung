@@ -74,6 +74,7 @@ Implemented pieces now include:
   - `java_trace_to_sink`
   - `java_reachability`
   - `java_detect_secrets`
+  - `java_detect_suspicious_blobs`
   - `java_view_bytecode`
   - `java_cfg`
   - `java_xrefs_from`
@@ -273,6 +274,10 @@ Important lessons:
   config generation, policy files, and indirect key construction.
 - [x] Initial `java_detect_secrets` with strict redaction, value hashing,
   entropy/context evidence, and no default raw secret output.
+- [x] Initial `java_detect_suspicious_blobs` for encoded class/string constants,
+  same-method decoder-to-sink correlation, hidden class/native/archive resources,
+  compressed blobs, high-entropy resource blobs, redacted hashes, and
+  `java_suspicious_blob` KB nodes.
 - [x] Initial `java_audit_archive_set` for directory-level audit summaries across
   large JAR sets.
 - [x] Initial `java_risk_report` with config correlation, exact call-site

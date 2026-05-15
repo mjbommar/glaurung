@@ -1197,6 +1197,60 @@ Outputs:
 - Per-class signals and evidence IDs.
 - Mapping recommendations before decompilation or audit.
 
+`java_detect_suspicious_blobs`
+
+Inputs:
+
+- JAR path or archive locator.
+- `include_class_constants: bool`
+- `include_methods: bool`
+- `include_resources: bool`
+- `include_benign_resource_like: bool = False`
+- Class/resource/finding budgets.
+
+Initial signals:
+
+- Base64, URL-safe Base64, and hex-looking class string constants.
+- Decoded constant magic for Java classfiles, ZIP/gzip/zlib blobs, and native
+  ELF/PE/Mach-O payloads.
+- Same-method decoder/deobfuscation APIs such as `Base64$Decoder.decode`,
+  `HexFormat.parseHex`, `Inflater`, `GZIPInputStream`, `Cipher.doFinal`, and
+  `SecretKeySpec`.
+- Same-method sink correlation from decoder APIs into `ClassLoader#defineClass`,
+  `MethodHandles.Lookup#defineClass`, `URLClassLoader`, `System.load`,
+  `System.loadLibrary`, `ProcessBuilder`, `Runtime.exec`, socket/URL APIs, and
+  selected file-write APIs.
+- Archive/resource anomalies such as hidden classfile bytes under non-`.class`
+  paths, nested compressed/archive blobs, native-looking resources, and
+  high-entropy non-media resources.
+
+Current output states:
+
+- `benign_resource_like`
+- `encoded_constant`
+- `compressed_blob`
+- `encrypted_or_random_blob`
+- `decoder_nearby`
+- `decoded_to_file`
+- `decoded_to_classloader`
+- `decoded_to_native_load`
+- `decoded_to_process_or_network`
+
+Implementation status:
+
+- Initial Python memory tool exists and emits `java_suspicious_blob` KB nodes with
+  raw values redacted by default.
+- Named `.jar`, `.zip`, and `.gz` resources are treated as benign resource-like by
+  default to keep standard dependency bundling from drowning out hidden or
+  misleadingly named blobs. Callers can enable benign-resource output when they
+  need dependency packaging evidence.
+- The first implementation is deliberately method-local. Interprocedural taint
+  from encoded constants/resources through helper methods into loaders, native
+  calls, filesystem writes, processes, or network sinks remains future work.
+- It should be integrated into `java_risk_report` and archive-set rollups after
+  calibration against large real-world JARs to avoid language/resource false
+  positives.
+
 `java_detect_entrypoints`
 
 Inputs:
