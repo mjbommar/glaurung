@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import zipfile
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,10 @@ class JavaIndexArchiveArgs(BaseModel):
     max_classes: int = Field(256, ge=0)
     include_resources: bool = False
     max_resources: int = Field(256, ge=0)
+    include_nested_indexes: bool = False
+    max_nested_archives: int = Field(16, ge=0)
+    max_nested_archive_bytes: int = Field(64 * 1024 * 1024, ge=0)
+    max_nested_entries: int = Field(4_096, ge=0)
 
 
 class JavaClassSummary(BaseModel):
@@ -65,6 +70,31 @@ class JavaNestedArchiveSummary(BaseModel):
     uncompressed_size: int
 
 
+class JavaNestedArchiveIndexSummary(BaseModel):
+    entry_name: str
+    sha256: str
+    size: int
+    entry_count: int
+    class_count: int
+    resource_count: int
+    nested_archive_count: int
+    multi_release_class_count: int
+    multi_release_versions: list[int] = Field(default_factory=list)
+    signed: bool
+    signature_file_count: int
+    maven_metadata_count: int
+    service_descriptor_count: int
+    module_info_present: bool
+    zip_slip_entry_count: int
+    truncated: bool
+
+
+class JavaSkippedNestedArchiveSummary(BaseModel):
+    entry_name: str
+    size: int
+    reason: str
+
+
 class JavaSignatureFileSummary(BaseModel):
     entry_name: str
     size: int
@@ -106,6 +136,14 @@ class JavaIndexArchiveResult(BaseModel):
     resources: list[JavaResourceSummary]
     nested_archive_count: int = 0
     nested_archives: list[JavaNestedArchiveSummary] = Field(default_factory=list)
+    nested_archive_index_count: int = 0
+    nested_archive_indexes: list[JavaNestedArchiveIndexSummary] = Field(
+        default_factory=list
+    )
+    skipped_nested_archive_count: int = 0
+    skipped_nested_archives: list[JavaSkippedNestedArchiveSummary] = Field(
+        default_factory=list
+    )
     multi_release_class_count: int = 0
     multi_release_versions: list[int] = Field(default_factory=list)
     signed: bool = False
@@ -151,6 +189,8 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
         resources: list[JavaResourceSummary] = []
         entries: list[JavaArchiveEntrySummary] = []
         nested_archives: list[JavaNestedArchiveSummary] = []
+        nested_archive_indexes: list[JavaNestedArchiveIndexSummary] = []
+        skipped_nested_archives: list[JavaSkippedNestedArchiveSummary] = []
         signature_files: list[JavaSignatureFileSummary] = []
         maven_artifacts: list[JavaMavenArtifactSummary] = []
         service_descriptors: list[JavaServiceDescriptorSummary] = []
@@ -259,6 +299,16 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
             manifest_main_class = _manifest_main_class(zf)
             maven_artifacts = _maven_artifacts(zf, entries)
             service_descriptors = _service_descriptors(zf, entries)
+            if args.include_nested_indexes:
+                nested_archive_indexes, skipped_nested_archives = (
+                    _nested_archive_indexes(
+                        zf=zf,
+                        java_analysis=java_analysis,
+                        max_nested_archives=args.max_nested_archives,
+                        max_nested_archive_bytes=args.max_nested_archive_bytes,
+                        max_nested_entries=args.max_nested_entries,
+                    )
+                )
             for info in infos:
                 if info.is_dir():
                     continue
@@ -312,6 +362,8 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                     "class_count": class_count,
                     "resource_count": resource_count,
                     "nested_archive_count": nested_archive_count,
+                    "nested_archive_index_count": len(nested_archive_indexes),
+                    "skipped_nested_archive_count": len(skipped_nested_archives),
                     "multi_release_versions": multi_release_versions,
                     "signed": signed,
                     "maven_artifact_count": maven_artifact_count,
@@ -364,6 +416,10 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
             resources=resources,
             nested_archive_count=nested_archive_count,
             nested_archives=nested_archives,
+            nested_archive_index_count=len(nested_archive_indexes),
+            nested_archive_indexes=nested_archive_indexes,
+            skipped_nested_archive_count=len(skipped_nested_archives),
+            skipped_nested_archives=skipped_nested_archives,
             multi_release_class_count=multi_release_class_count,
             multi_release_versions=multi_release_versions,
             signed=signed,
@@ -397,6 +453,93 @@ def _manifest_main_class(zf: zipfile.ZipFile) -> str | None:
     text = raw.decode("utf-8", errors="replace")
     attrs = _parse_manifest(text)
     return attrs.get("Main-Class")
+
+
+def _nested_archive_indexes(
+    *,
+    zf: zipfile.ZipFile,
+    java_analysis: Any,
+    max_nested_archives: int,
+    max_nested_archive_bytes: int,
+    max_nested_entries: int,
+) -> tuple[list[JavaNestedArchiveIndexSummary], list[JavaSkippedNestedArchiveSummary]]:
+    indexes: list[JavaNestedArchiveIndexSummary] = []
+    skipped: list[JavaSkippedNestedArchiveSummary] = []
+    for info in zf.infolist():
+        if info.is_dir() or not _is_nested_archive_name(info.filename):
+            continue
+        if len(indexes) >= max_nested_archives:
+            skipped.append(
+                JavaSkippedNestedArchiveSummary(
+                    entry_name=info.filename,
+                    size=info.file_size,
+                    reason="nested_archive_budget_exhausted",
+                )
+            )
+            continue
+        if info.file_size > max_nested_archive_bytes:
+            skipped.append(
+                JavaSkippedNestedArchiveSummary(
+                    entry_name=info.filename,
+                    size=info.file_size,
+                    reason="nested_archive_too_large",
+                )
+            )
+            continue
+        try:
+            data = zf.read(info)
+        except (KeyError, RuntimeError, zipfile.BadZipFile):
+            skipped.append(
+                JavaSkippedNestedArchiveSummary(
+                    entry_name=info.filename,
+                    size=info.file_size,
+                    reason="nested_archive_read_error",
+                )
+            )
+            continue
+        nested_index = java_analysis.index_java_archive_bytes(
+            data,
+            max_entries=max_nested_entries,
+        )
+        if nested_index is None:
+            skipped.append(
+                JavaSkippedNestedArchiveSummary(
+                    entry_name=info.filename,
+                    size=info.file_size,
+                    reason="nested_archive_not_zip",
+                )
+            )
+            continue
+        indexes.append(
+            JavaNestedArchiveIndexSummary(
+                entry_name=info.filename,
+                sha256=hashlib.sha256(data).hexdigest(),
+                size=len(data),
+                entry_count=int(nested_index["entry_count"]),
+                class_count=int(nested_index["class_count"]),
+                resource_count=int(nested_index["resource_count"]),
+                nested_archive_count=int(nested_index["nested_archive_count"]),
+                multi_release_class_count=int(
+                    nested_index["multi_release_class_count"]
+                ),
+                multi_release_versions=[
+                    int(version) for version in nested_index["multi_release_versions"]
+                ],
+                signed=bool(nested_index["signed"]),
+                signature_file_count=int(nested_index["signature_file_count"]),
+                maven_metadata_count=int(nested_index["maven_metadata_count"]),
+                service_descriptor_count=int(nested_index["service_descriptor_count"]),
+                module_info_present=bool(nested_index["module_info_present"]),
+                zip_slip_entry_count=int(nested_index["zip_slip_entry_count"]),
+                truncated=bool(nested_index["truncated"]),
+            )
+        )
+    return indexes, skipped
+
+
+def _is_nested_archive_name(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.endswith((".jar", ".zip"))
 
 
 def _maven_artifacts(

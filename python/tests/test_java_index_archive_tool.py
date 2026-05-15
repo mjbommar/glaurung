@@ -175,6 +175,35 @@ def test_java_index_archive_reports_hardened_jar_metadata(tmp_path: Path) -> Non
     )
 
 
+def test_java_index_archive_can_index_nested_archives(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_index_archive import build_tool
+
+    jar = _hardened_index_fixture(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            include_nested_indexes=True,
+            max_nested_archives=4,
+        ),
+    )
+
+    assert result.nested_archive_count == 1
+    assert result.nested_archive_index_count == 1
+    assert result.skipped_nested_archive_count == 0
+    nested = result.nested_archive_indexes[0]
+    assert nested.entry_name == "libs/nested.jar"
+    assert nested.entry_count == 1
+    assert nested.class_count == 0
+    assert nested.resource_count == 1
+    assert not nested.signed
+    assert len(nested.sha256) == 64
+
+
 def test_java_index_archive_respects_entry_budget(tmp_path: Path) -> None:
     from glaurung.llm.tools.java_index_archive import build_tool
 

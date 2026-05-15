@@ -57,6 +57,9 @@ Implemented pieces now include:
   compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
   signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
   `module-info.class`, zip-slip path detection, and truncation state.
+- Opt-in recursive nested archive indexing in `java_index_archive`, producing bounded
+  summaries for selected nested JAR/ZIP payloads without extracting or executing
+  archive code.
 - Python binding `g.analysis.parse_java_class_bytes(data)` for in-memory `.class`
   parsing without extracting JAR entries to temporary files.
 - CLI JAR/class summarization through `glaurung classfile`.
@@ -231,6 +234,7 @@ Important lessons:
 - [x] Initial native central-directory JAR indexing with nested archive,
   multi-release, signed metadata, Maven metadata, ServiceLoader, module-info, and
   zip-slip detection.
+- [x] Optional nested JAR/ZIP index summaries through `java_index_archive`
 - [x] Minecraft metadata detection
 - [x] Mojang mapping fetch/cache/hash verification
 - [x] ProGuard/Mojang mapping annotation coverage
