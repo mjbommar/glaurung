@@ -69,6 +69,8 @@ Glaurung already has a growing Java path:
   constants, nearby bytecode xrefs, mapping-aware names, source-line anchors from
   `LineNumberTable`, and explicit stop reasons for unavailable
   CFG/call-graph/dataflow precision.
+- Python memory tools can now find initial bounded call-graph reachability paths from
+  detected entrypoints to a requested method or external sink target.
 - Python memory tools can now view a selected method's JVM bytecode with BCI, opcode,
   mnemonic, operands, source-line anchors, xrefs, bounded windows, and mapping context.
 - Python memory tools can now build an initial bytecode CFG for a selected method,
@@ -202,7 +204,7 @@ here, it is probably not represented strongly enough in the plan.
 | ABI/API and resource validation | `java_compare_rebuilt_abi`, `java_validate_recovered_application` |
 | Runtime behavior validation | `java_launch_target`, JDI/JFR/javaagent tools, opt-in smoke profile |
 | Sensitive Java behavior detection | Initial `java_detect_security_sensitive_behavior` exists; expand sink rule packs and config correlation in Phase 3.5 |
-| Entrypoint and reachability context | Initial `java_detect_entrypoints`, `java_detect_frameworks`, and method-local `java_trace_to_sink` exist; expand framework hooks, call graph, and interprocedural traces |
+| Entrypoint and reachability context | Initial `java_detect_entrypoints`, `java_detect_frameworks`, `java_reachability`, and method-local `java_trace_to_sink` exist; expand framework hooks and interprocedural source-to-sink traces |
 | Config/resource correlation | Initial `java_extract_config_surface` and `java_correlate_behavior_config` exist; expand framework-aware and indirect-key correlation |
 | Secret and token handling | Initial `java_detect_secrets` exists with redacted value hashes and no raw output by default |
 | Directory/modpack risk review | Initial `java_audit_archive_set` and `java_risk_report` exist; expand framework-aware reachability and multi-archive reporting |
@@ -1360,6 +1362,27 @@ Outputs:
   native method, missing dependency, decompiler failure, or obfuscation.
 - Confidence per edge.
 
+`java_reachability`
+
+Inputs:
+
+- JAR path/archive locator.
+- Optional mapping path/namespace.
+- Target owner, method name, and optional descriptor.
+- Optional entrypoint category filters.
+- `max_depth`, `max_edges`, `max_entrypoints`, and `max_paths`.
+
+Outputs:
+
+- Bounded call-graph paths from detected entrypoint methods to the requested target.
+- Edge evidence with source method, target method, invoke kind, BCI, and source-line
+  anchors where available.
+- Target match counts and stop reasons for truncated call graphs, truncated
+  entrypoints, missing target input, or no reached target.
+- Initial implementation uses constant-pool call graph edges only; CHA/RTA dispatch,
+  config/dataflow argument slicing, and framework lifecycle expansion remain future
+  work.
+
 `java_correlate_behavior_config`
 
 Inputs:
@@ -1724,6 +1747,7 @@ Java support will add many tools. To keep agent prompts manageable:
   - `java_xrefs_from`
 - Defer advanced tools:
   - `java_call_graph`
+  - `java_reachability`
   - `java_decompile_archive`
   - `java_reconstruct_source_tree`
   - `java_compile_recovered_project`
@@ -1733,6 +1757,7 @@ Java support will add many tools. To keep agent prompts manageable:
   - `java_detect_security_sensitive_behavior`
   - `java_extract_config_surface`
   - `java_trace_to_sink`
+  - `java_reachability`
   - `java_risk_report`
   - `java_audit_archive_set`
   - `java_jdi_debug`
@@ -2089,6 +2114,9 @@ Tasks:
   JSON, TOML, XML, and redacts sensitive config values.
 - Implement `java_detect_secrets` with redaction and stable hashes.
 - Implement `java_trace_to_sink` for bounded source-to-sink evidence.
+- Implement `java_reachability` for bounded entrypoint-to-target call graph paths.
+  Initial constant-pool call graph reachability exists; framework lifecycle expansion
+  and source-to-sink argument slicing remain future work.
 - Implement `java_correlate_behavior_config`.
 - Implement `java_risk_report` and `java_audit_archive_set`. Initial versions exist:
   `java_risk_report` ranks sensitive behavior/config correlations plus redacted

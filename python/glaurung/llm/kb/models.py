@@ -33,6 +33,7 @@ class NodeKind(str, Enum):
     java_sensitive_sink = "java_sensitive_sink"
     java_entrypoint = "java_entrypoint"
     java_framework = "java_framework"
+    java_reachability = "java_reachability"
     java_config_key = "java_config_key"
     java_secret = "java_secret"
     java_config_correlation = "java_config_correlation"

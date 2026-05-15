@@ -170,6 +170,7 @@ from ..tools.java_cfg import build_tool as build_java_cfg
 from ..tools.java_xrefs_from import build_tool as build_java_xrefs_from
 from ..tools.java_xrefs_to import build_tool as build_java_xrefs_to
 from ..tools.java_call_graph import build_tool as build_java_call_graph
+from ..tools.java_reachability import build_tool as build_java_reachability
 from ..tools.java_correlate_behavior_config import (
     build_tool as build_java_correlate_behavior_config,
 )
@@ -774,6 +775,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_xrefs_from()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_xrefs_to()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_call_graph()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_reachability()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_correlate_behavior_config())
     )

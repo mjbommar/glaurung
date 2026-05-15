@@ -71,6 +71,7 @@ Implemented pieces now include:
   - `java_lookup_mapping`
   - `java_audit_archive_set`
   - `java_trace_to_sink`
+  - `java_reachability`
   - `java_detect_secrets`
   - `java_view_bytecode`
   - `java_cfg`
@@ -94,6 +95,9 @@ Implemented pieces now include:
   reasons where precise dataflow/call graph support is not available yet. When
   `LineNumberTable` data exists, trace results include source-line anchors for the
   sink, constants, and neighboring xrefs.
+- Initial entrypoint-to-target reachability through `java_reachability`, using
+  detected entrypoints and the bounded constant-pool call graph to find paths to a
+  requested method or external sink.
 - Initial bytecode viewing for selected methods, exposing BCI, opcode, mnemonic,
   normalized operands, line anchors, local-variable scopes, xrefs, bounded windows,
   and mapping context.
@@ -249,6 +253,7 @@ Important lessons:
 - [x] Initial `java_trace_to_sink` for bounded method-local evidence from a
   sensitive call to constants, environment/system property strings, nearby xrefs,
   mapping context, and trace stop reasons.
+- [x] Initial `java_reachability` for bounded entrypoint-to-target call graph paths.
 - [ ] Full source-to-sink slicing across CFG blocks, callers/callees, config reads,
   argument builders, and entrypoints.
 - [x] Initial `java_correlate_behavior_config` to distinguish capability-only,
