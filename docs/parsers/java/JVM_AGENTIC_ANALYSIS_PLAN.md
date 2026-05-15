@@ -99,6 +99,10 @@ Glaurung already has a growing Java path:
   available, reporting signed/unsigned/invalid state, signed-entry counts, warnings,
   signature metadata entries, bounded output excerpts, and KB evidence without
   executing archive code.
+- Python memory tools can now infer an initial dependency/classpath profile from
+  manifest `Class-Path`, Maven `pom.properties`, nested JAR paths, and bytecode
+  external package references, emitting `java_dependency` evidence nodes without
+  downloading dependencies.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -111,13 +115,15 @@ Glaurung already has a growing Java path:
 
 Known limitations:
 
-- The Rust parser still skips many attributes after the initial source/debug and
-  exception-handler subset, including annotations, bootstrap methods, records,
-  modules, nestmates, generic signatures, and stack maps.
+- The Rust parser still skips many attributes after the initial source/debug,
+  annotation, and exception-handler subset, including parameter annotations,
+  annotation defaults, bootstrap methods, records, modules, nestmates, generic
+  signatures, and stack maps.
 - There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
-- There is no dependency resolver, build-system inference, source tree emitter,
-  compile diagnostic parser, repair loop, or ABI comparison for recovered Java source.
+- There is initial dependency inference, but no dependency resolver, build-system
+  inference, source tree emitter, compile diagnostic parser, repair loop, or ABI
+  comparison for recovered Java source.
 - The generic static-audit layer now has initial sensitive sinks, entrypoints,
   config/resource extraction, config correlation, redacted secret scanning,
   archive-set summaries, and per-archive risk reports. It still lacks precise
@@ -224,7 +230,7 @@ here, it is probably not represented strongly enough in the plan.
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, and runtime-visible/runtime-invisible class/member annotation support exists; continue parameter annotations/defaults/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
-| Dependency and classpath recovery | Initial Maven/service metadata path detection, nested archive summaries, and multi-release target selection exist; continue with `java_infer_dependencies`, `java_infer_build_system`, manifest class paths, modules, and nested library handling |
+| Dependency and classpath recovery | Initial `java_infer_dependencies` exists for manifest class paths, Maven identity metadata, nested archive coordinates, and bytecode external packages; continue with module `requires`, `jdeps`, supplied classpath comparison, missing-class diagnostics, resolver policy, and `java_infer_build_system` |
 | Signed archive validation | Initial `java_verify_signatures` exists using `jarsigner -verify`; continue with policy scoring, certificate/timestamp summaries, and archive-set rollups |
 | Source tree/project reconstruction | `java_reconstruct_source_tree`, `java_infer_build_system` |
 | Compile diagnostics | `java_compile_recovered_project` |
@@ -950,6 +956,18 @@ compile, inspect failures, patch, and verify against original evidence.
 
 `java_infer_dependencies`
 
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_dependency` KB nodes.
+- Combines manifest `Class-Path`, Maven `pom.properties`, nested JAR/ZIP path
+  coordinates, and bytecode references to packages not defined in the archive.
+- Normalizes JVM array descriptors before dependency grouping and collapses common
+  Java/game libraries such as Guava, Gson, Netty, fastutil, JOML, LWJGL, OSHI,
+  SLF4J, jopt-simple, ICU4J, Forge/Fabric/Mixin, and loader-provided Minecraft APIs.
+- Does not download dependencies, execute archive code, or trust guessed coordinates
+  as ground truth.
+
 Inputs:
 
 - JAR path.
@@ -976,6 +994,9 @@ Implementation notes:
   external dependencies just because their package normally belongs to a library.
 - For Minecraft and mod loaders, dependency inference must account for loader-provided
   libraries, nested server bundles, mixins, access transformers, and remapped names.
+- Continue by comparing inferred external packages against caller-supplied
+  classpaths, parsing JPMS `module-info` dependencies, and turning compiler missing
+  class diagnostics into dependency repair actions.
 
 `java_reconstruct_source_tree`
 
@@ -2322,7 +2343,8 @@ Goals:
 Tasks:
 
 - Implement `java_decompile_archive`.
-- Implement `java_infer_dependencies`.
+- Extend `java_infer_dependencies` with supplied-classpath comparison, module
+  `requires`, optional `jdeps` evidence, and missing-class diagnostics.
 - Implement `java_reconstruct_source_tree`.
 - Implement `java_infer_build_system`.
 - Implement `java_compile_recovered_project`.

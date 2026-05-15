@@ -19,22 +19,26 @@
 //!
 //! Layout (1.20+, header struct from `runtime/symtab.go`):
 //!
-//!     u32  magic = 0xfffffff1
-//!     u16  pad
-//!     u8   minLC
-//!     u8   ptrSize
-//!     usize nfunc
-//!     usize nfiles
-//!     usize textStart
-//!     usize funcnametab_off  (relative to start of pclntab)
-//!     usize cu_off
-//!     usize filetab_off
-//!     usize pctab_off
-//!     usize pclntab_off     (the function table proper)
+//! ```text
+//! u32  magic = 0xfffffff1
+//! u16  pad
+//! u8   minLC
+//! u8   ptrSize
+//! usize nfunc
+//! usize nfiles
+//! usize textStart
+//! usize funcnametab_off  (relative to start of pclntab)
+//! usize cu_off
+//! usize filetab_off
+//! usize pctab_off
+//! usize pclntab_off     (the function table proper)
+//! ```
 //!
 //! Then at `pclntab_off`:
 //!
-//!     [u32 entry_off, u32 _func_off]  × (nfunc + 1)
+//! ```text
+//! [u32 entry_off, u32 _func_off]  x (nfunc + 1)
+//! ```
 //!
 //! Each _func struct begins with `(entry_off u32, name_off i32)` — the
 //! name is a null-terminated string at `funcnametab_off + name_off`.

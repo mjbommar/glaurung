@@ -82,6 +82,7 @@ Implemented pieces now include:
   - `java_detect_secrets`
   - `java_detect_suspicious_blobs`
   - `java_verify_signatures`
+  - `java_infer_dependencies`
   - `java_view_bytecode`
   - `java_cfg`
   - `java_xrefs_from`
@@ -130,6 +131,9 @@ Implemented pieces now include:
   using `jarsigner -verify` when available and reporting signed/unsigned/invalid
   state, warning counts, signed-entry counts, signature metadata entries, bounded
   output excerpts, and KB evidence without executing archive code.
+- Initial dependency inference through `java_infer_dependencies`, combining manifest
+  `Class-Path`, Maven `pom.properties`, nested JAR paths, and bytecode external
+  package references into `java_dependency` KB nodes without downloading code.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -154,9 +158,9 @@ Not yet implemented:
   runtime-visible metadata beyond the initial source/debug and class/member
   annotation attributes.
 - Decompiler helper integration with Vineflower/CFR.
-- Clean source-project recovery: dependency inference, source tree emission, build
-  file generation, compilation, compiler-diagnostic repair, and ABI/resource
-  validation.
+- Clean source-project recovery after the initial dependency inference layer:
+  dependency resolution policy, source tree emission, build file generation,
+  compilation, compiler-diagnostic repair, and ABI/resource validation.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
   correlation, framework-aware reachability, and richer directory-level risk
   reporting.
@@ -177,8 +181,8 @@ priority is not another broad scanner. The next priority is structure:
 4. Calibrate risk reports, especially secret false positives and config semantics.
 5. Add ASM/Vineflower/CFR helper tooling for decompiler output and source/bytecode
    correlation.
-6. Start clean source recovery: emit source/resources, infer dependencies/build files,
-   compile, repair diagnostics, and compare rebuilt ABI/resources.
+6. Start clean source recovery: extend dependency/build inference, emit
+   source/resources, compile, repair diagnostics, and compare rebuilt ABI/resources.
 
 Important lessons:
 
@@ -255,7 +259,10 @@ Important lessons:
 - [ ] `java_decompile_method`
 - [ ] `java_decompile_archive`
 - [ ] Source/bytecode line correlation
-- [ ] Dependency inference from manifest, modules, Maven metadata, `jdeps`, and xrefs
+- [x] Initial `java_infer_dependencies` from manifest `Class-Path`, Maven metadata,
+  nested archives, and bytecode external package references
+- [ ] Dependency resolution from modules, `jdeps`, supplied classpaths, and missing
+  class diagnostics
 - [ ] Source tree reconstruction under `src/main/java` and `src/main/resources`
 - [ ] Manifest, module, ServiceLoader, framework metadata, and resource preservation
 - [ ] Build system inference for plain `javac`, Maven, and Gradle
@@ -443,8 +450,8 @@ pub struct JavaConfigBinding {
 ## Future Enhancements
 
 - [x] Initial bytecode disassembly
-- [ ] Control flow graph generation
-- [ ] Dependency analysis
+- [x] Initial control flow graph generation
+- [x] Initial dependency inference
 - [ ] Clean compilable source project recovery
 - [ ] Source-to-sink behavior slicing
 - [ ] Config-aware risk reporting for JAR sets and modpacks
