@@ -71,6 +71,9 @@ Glaurung already has a growing Java path:
 - Python memory tools can now build an initial bytecode CFG for a selected method,
   with basic blocks, conditional/goto/fallthrough/default-switch edges, line anchors,
   and explicit stop reasons for missing exception edges and frame analysis.
+- Python memory tools can now query normalized bytecode xrefs from a selected source
+  class/method or to a selected target owner/name/descriptor, emitting `java_xref`
+  evidence nodes.
 - Python memory tools can now detect likely secrets in class string constants and
   text resources while redacting raw values and emitting stable hashes.
 - Python memory tools can now correlate sensitive sink findings with method-local
@@ -178,7 +181,7 @@ here, it is probably not represented strongly enough in the plan.
 | Gap | Planned coverage |
 | --- | --- |
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
-| Bytecode CFG and xrefs | Initial `java_cfg` exists for block/branch/fallthrough edges; continue with exception edges, normalized xrefs, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` |
+| Bytecode CFG and xrefs | Initial `java_cfg`, `java_xrefs_from`, and `java_xrefs_to` exist; continue with exception edges, interprocedural xrefs, and `java_call_graph` |
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, and local-variable table support exists; continue annotations/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
@@ -460,12 +463,13 @@ python/glaurung/llm/tools/
   java_view_class.py
   java_view_bytecode.py
   java_cfg.py
+  java_xrefs_from.py
+  java_xrefs_to.py
   java_risk_report.py
   java_decompile.py
   java_source_recovery.py
   java_dependencies.py
   java_compile.py
-  java_xrefs.py
   java_call_graph.py
   java_runtime.py
   java_minecraft.py
@@ -753,34 +757,35 @@ Implementation notes:
 
 Inputs:
 
-- `method_locator`
-- `include_strings`
-- `include_fields`
-- `include_types`
-- `include_invokedynamic`
+- `path`
+- `class_name`
+- `method_name`
+- `method_descriptor`
+- `kind`
+- budgets
 
 Outputs:
 
-- Invoked methods.
-- Field reads/writes.
-- Type refs.
-- String constants.
-- Bootstrap methods.
-- Resource-like string refs.
+- Normalized xrefs emitted by a source class or method.
+- Source class, source method, descriptor, BCI, and line anchor.
+- Target owner, name, descriptor, xref kind, and loaded string value where present.
 
 `java_xrefs_to`
 
 Inputs:
 
-- `symbol_locator`
-- `limit`
+- `path`
+- `target_owner`
+- `target_name`
+- `target_descriptor`
+- `kind`
+- budgets
 
 Outputs:
 
-- Referencing classes and methods.
-- Ref kind.
-- BCI.
-- Optional decompiled source line.
+- Normalized callers/references to the requested target.
+- Source class/method/BCI/line anchors for each reference.
+- `java_xref` KB nodes for evidence-backed agent answers.
 
 `java_call_graph`
 

@@ -27,6 +27,7 @@ class NodeKind(str, Enum):
     java_resource = "java_resource"
     java_bytecode = "java_bytecode"
     java_cfg = "java_cfg"
+    java_xref = "java_xref"
     java_mapping = "java_mapping"
     java_sensitive_sink = "java_sensitive_sink"
     java_entrypoint = "java_entrypoint"

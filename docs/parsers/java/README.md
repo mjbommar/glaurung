@@ -73,6 +73,8 @@ Implemented pieces now include:
   - `java_detect_secrets`
   - `java_view_bytecode`
   - `java_cfg`
+  - `java_xrefs_from`
+  - `java_xrefs_to`
   - `java_correlate_behavior_config`
   - `java_risk_report`
   - `minecraft_detect_archive`
@@ -96,6 +98,9 @@ Implemented pieces now include:
 - Initial bytecode CFG construction for selected methods, exposing basic blocks,
   conditional/goto/fallthrough/default-switch edges, line anchors, stop reasons, and
   KB `java_cfg` nodes.
+- Initial normalized xref queries through `java_xrefs_from` and `java_xrefs_to`,
+  exposing source class/method, BCI, line anchors, target owner/name/descriptor,
+  xref kind, and KB `java_xref` nodes.
 - Initial redacted secret detection across method string constants and text
   resources. Findings store category, source location, length, context with the
   candidate replaced, and stable hashes, not raw values.
@@ -112,7 +117,7 @@ Implemented pieces now include:
 
 Not yet implemented:
 
-- Stack/local frames, exception-edge CFGs, advanced Java xrefs, and call graph.
+- Stack/local frames, exception-edge CFGs, interprocedural xrefs, and call graph.
 - Full attribute parsing for annotations, modules, records, sealed classes, nestmates,
   bootstrap methods, stack maps, and runtime-visible metadata beyond the initial
   source/debug attributes.
@@ -177,6 +182,7 @@ Important lessons:
   parsing
 - [x] `LineNumberTable` parsing
 - [x] Lightweight bytecode xref extraction for invokes, fields, classes, and strings
+- [x] Initial normalized xref queries via `java_xrefs_from` and `java_xrefs_to`
 - [x] Initial bytecode instruction decode and `java_view_bytecode`
 - [x] Initial bytecode CFG via `java_cfg`
 - [ ] Exception-handler CFG edges and stack/local frame analysis
