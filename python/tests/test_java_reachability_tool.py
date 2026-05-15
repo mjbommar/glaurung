@@ -25,7 +25,23 @@ def _compile_reachability_jar(tmp_path: Path) -> Path:
     src = tmp_path / "src"
     out = tmp_path / "classes"
     src.mkdir()
+    (src / "net" / "minecraftforge" / "eventbus" / "api").mkdir(parents=True)
     out.mkdir()
+    (
+        src / "net" / "minecraftforge" / "eventbus" / "api" / "SubscribeEvent.java"
+    ).write_text(
+        """
+package net.minecraftforge.eventbus.api;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+public @interface SubscribeEvent {}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
     (src / "App.java").write_text(
         """
 import java.nio.file.Path;
@@ -33,6 +49,21 @@ import java.nio.file.Path;
 public class App {
     public static void main(String[] args) throws Exception {
         Controller.handle(Path.of("demo.txt"));
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (src / "ForgeEventHandler.java").write_text(
+        """
+import java.nio.file.Path;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+
+public class ForgeEventHandler {
+    @SubscribeEvent
+    public void onEvent(Path path) throws Exception {
+        Worker.write(path);
     }
 }
 """.strip()
@@ -78,7 +109,7 @@ public class Worker {
             "17",
             "-d",
             str(out),
-            *[str(path) for path in src.glob("*.java")],
+            *[str(path) for path in src.rglob("*.java")],
         ],
         check=True,
         capture_output=True,
@@ -111,6 +142,7 @@ def test_java_reachability_finds_entrypoint_to_external_sink_path(
             target_owner="java/nio/file/Files",
             target_name="writeString",
             target_descriptor="(Ljava/nio/file/Path;Ljava/lang/CharSequence;[Ljava/nio/file/OpenOption;)Ljava/nio/file/Path;",
+            entrypoint_categories=["main_method"],
             max_depth=4,
         ),
     )
@@ -133,6 +165,41 @@ def test_java_reachability_finds_entrypoint_to_external_sink_path(
         and node.props.get("reachable") is True
         for node in ctx.kb.nodes()
     )
+
+
+def test_java_reachability_uses_forge_event_annotation_entrypoints(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_reachability import build_tool
+
+    jar = _compile_reachability_jar(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            target_owner="java/nio/file/Files",
+            target_name="writeString",
+            target_descriptor="(Ljava/nio/file/Path;Ljava/lang/CharSequence;[Ljava/nio/file/OpenOption;)Ljava/nio/file/Path;",
+            entrypoint_categories=["forge_subscribe_event"],
+            max_depth=4,
+        ),
+    )
+
+    assert result.reachable
+    assert result.path_count == 1
+    path = result.paths[0]
+    assert path.entrypoint_category == "forge_subscribe_event"
+    assert path.entrypoint_method_id == (
+        "ForgeEventHandler#onEvent(Ljava/nio/file/Path;)V"
+    )
+    assert [edge.source_method_id for edge in path.edges] == [
+        "ForgeEventHandler#onEvent(Ljava/nio/file/Path;)V",
+        "Worker#write(Ljava/nio/file/Path;)V",
+    ]
 
 
 def test_java_reachability_can_match_exact_call_site(tmp_path: Path) -> None:
