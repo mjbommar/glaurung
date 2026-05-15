@@ -103,6 +103,11 @@ Glaurung already has a growing Java path:
   manifest `Class-Path`, Maven `pom.properties`, nested JAR paths, and bytecode
   external package references, emitting `java_dependency` evidence nodes without
   downloading dependencies.
+- Python memory tools can now infer an initial source-recovery build plan with
+  `java_infer_build_system`, selecting `javac`, Maven, or Gradle from recovered
+  source-root build files, embedded Maven/Gradle/plugin metadata, Minecraft mod
+  metadata, classfile Java release, and dependency evidence while emitting
+  `java_build_system` evidence nodes.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -121,9 +126,9 @@ Known limitations:
   signatures, and stack maps.
 - There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
-- There is initial dependency inference, but no dependency resolver, build-system
-  inference, source tree emitter, compile diagnostic parser, repair loop, or ABI
-  comparison for recovered Java source.
+- There is initial dependency and build-system inference, but no dependency resolver,
+  source tree emitter, compile diagnostic parser, repair loop, or ABI comparison for
+  recovered Java source.
 - The generic static-audit layer now has initial sensitive sinks, entrypoints,
   config/resource extraction, config correlation, redacted secret scanning,
   archive-set summaries, and per-archive risk reports. It still lacks precise
@@ -230,9 +235,9 @@ here, it is probably not represented strongly enough in the plan.
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, and runtime-visible/runtime-invisible class/member annotation support exists; continue parameter annotations/defaults/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
-| Dependency and classpath recovery | Initial `java_infer_dependencies` exists for manifest class paths, Maven identity metadata, nested archive coordinates, and bytecode external packages; continue with module `requires`, `jdeps`, supplied classpath comparison, missing-class diagnostics, resolver policy, and `java_infer_build_system` |
+| Dependency and classpath recovery | Initial `java_infer_dependencies` and `java_infer_build_system` exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, Java release, and `javac`/Maven/Gradle planning; continue with module `requires`, `jdeps`, supplied classpath comparison, missing-class diagnostics, resolver/cache policy, and annotation processors |
 | Signed archive validation | Initial `java_verify_signatures` exists using `jarsigner -verify`; continue with policy scoring, certificate/timestamp summaries, and archive-set rollups |
-| Source tree/project reconstruction | `java_reconstruct_source_tree`, `java_infer_build_system` |
+| Source tree/project reconstruction | Initial `java_infer_build_system` exists; continue with `java_reconstruct_source_tree`, resource preservation, and generated source lists |
 | Compile diagnostics | `java_compile_recovered_project` |
 | Agentic compile-repair loop | `java_repair_decompiled_source` plus compile iteration budgets |
 | ABI/API and resource validation | `java_compare_rebuilt_abi`, `java_validate_recovered_application` |
@@ -1033,6 +1038,19 @@ Responsibilities:
 
 `java_infer_build_system`
 
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_build_system` KB nodes.
+- Selects `javac`, Maven, or Gradle from optional recovered source-root build files,
+  embedded Maven `pom.xml`/`pom.properties`, Gradle plugin descriptors, Minecraft
+  mod metadata, inferred dependencies, and classfile Java release.
+- Generates build-control files only: `pom.xml`, `build.gradle`, `javac.args`, and
+  `sources.txt` placeholders. It does not write source files, fetch dependencies,
+  or execute archive code.
+- Minecraft smoke tests show 1.20.1 client/server classfiles require Java 17
+  (major 61), while the copied 1.21.11 client requires Java 21 (major 65).
+
 Inputs:
 
 - JAR path.
@@ -1058,6 +1076,8 @@ Selection rules:
 - Use a local `libs/` directory for unresolved dependency JARs supplied by the user.
 - Never fetch arbitrary dependencies during planning without an explicit network/cache
   policy.
+- Continue by adding module-path inference, annotation processor detection,
+  loader-specific Minecraft build plugin templates, and resolver/cache policy hooks.
 
 `java_compile_recovered_project`
 
@@ -2346,7 +2366,8 @@ Tasks:
 - Extend `java_infer_dependencies` with supplied-classpath comparison, module
   `requires`, optional `jdeps` evidence, and missing-class diagnostics.
 - Implement `java_reconstruct_source_tree`.
-- Implement `java_infer_build_system`.
+- Extend `java_infer_build_system` with module paths, annotation processors,
+  loader-specific Minecraft plugin templates, and resolver/cache policy.
 - Implement `java_compile_recovered_project`.
 - Implement structured compiler diagnostic parsing for `javac`, Maven, and Gradle.
 - Implement `java_repair_decompiled_source` with narrow, evidence-grounded patches.

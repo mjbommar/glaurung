@@ -224,6 +224,12 @@ def test_java_dependency_package_prefix_groups_common_libraries() -> None:
     assert _known_dependency_hint("org.joml") == ("org.joml", "joml")
     assert _package_prefix("oshi/hardware/CentralProcessor") == "oshi"
     assert _known_dependency_hint("oshi") == ("com.github.oshi", "oshi-core")
+    assert _package_prefix("com/jcraft/jogg/Packet") == "com.jcraft.jogg"
+    assert _known_dependency_hint("com.jcraft.jogg") == ("com.jcraft", "jogg")
+    assert _package_prefix("com/jcraft/jorbis/DspState") == "com.jcraft.jorbis"
+    assert _known_dependency_hint("com.jcraft.jorbis") == ("com.jcraft", "jorbis")
+    assert _package_prefix("net/jpountz/lz4/LZ4Factory") == "net.jpountz.lz4"
+    assert _known_dependency_hint("net.jpountz.lz4") == ("net.jpountz.lz4", "lz4")
 
 
 def test_memory_agent_registers_java_infer_dependencies() -> None:

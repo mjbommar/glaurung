@@ -170,6 +170,7 @@ from ..tools.java_detect_suspicious_blobs import (
 )
 from ..tools.java_verify_signatures import build_tool as build_java_verify_signatures
 from ..tools.java_infer_dependencies import build_tool as build_java_infer_dependencies
+from ..tools.java_infer_build_system import build_tool as build_java_infer_build_system
 from ..tools.java_view_bytecode import build_tool as build_java_view_bytecode
 from ..tools.java_cfg import build_tool as build_java_cfg
 from ..tools.java_xrefs_from import build_tool as build_java_xrefs_from
@@ -780,6 +781,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_verify_signatures()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_infer_dependencies()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_infer_build_system()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_view_bytecode()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_cfg()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_xrefs_from()))

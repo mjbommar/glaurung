@@ -83,6 +83,7 @@ Implemented pieces now include:
   - `java_detect_suspicious_blobs`
   - `java_verify_signatures`
   - `java_infer_dependencies`
+  - `java_infer_build_system`
   - `java_view_bytecode`
   - `java_cfg`
   - `java_xrefs_from`
@@ -134,6 +135,11 @@ Implemented pieces now include:
 - Initial dependency inference through `java_infer_dependencies`, combining manifest
   `Class-Path`, Maven `pom.properties`, nested JAR paths, and bytecode external
   package references into `java_dependency` KB nodes without downloading code.
+- Initial build-system inference through `java_infer_build_system`, selecting
+  `javac`, Maven, or Gradle from recovered source-root build files, embedded Maven
+  metadata, Gradle/plugin metadata, Minecraft mod metadata, classfile Java release,
+  and dependency evidence. It emits build-control files and `java_build_system` KB
+  nodes without fetching dependencies.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -158,9 +164,9 @@ Not yet implemented:
   runtime-visible metadata beyond the initial source/debug and class/member
   annotation attributes.
 - Decompiler helper integration with Vineflower/CFR.
-- Clean source-project recovery after the initial dependency inference layer:
-  dependency resolution policy, source tree emission, build file generation,
-  compilation, compiler-diagnostic repair, and ABI/resource validation.
+- Clean source-project recovery after the initial dependency/build planning layers:
+  dependency resolution policy, source tree emission, real compilation,
+  compiler-diagnostic repair, and ABI/resource validation.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
   correlation, framework-aware reachability, and richer directory-level risk
   reporting.
@@ -265,7 +271,9 @@ Important lessons:
   class diagnostics
 - [ ] Source tree reconstruction under `src/main/java` and `src/main/resources`
 - [ ] Manifest, module, ServiceLoader, framework metadata, and resource preservation
-- [ ] Build system inference for plain `javac`, Maven, and Gradle
+- [x] Initial build system inference for plain `javac`, Maven, and Gradle
+- [ ] Build-system refinement for module paths, annotation processors, loader-specific
+  Minecraft build plugins, and resolver/cache policy
 - [ ] Structured compiler diagnostics for `javac`, Maven, and Gradle
 - [ ] Agentic compile-repair loop for decompiler syntax and build/classpath failures
 - [ ] ABI/API comparison between original and rebuilt classes
