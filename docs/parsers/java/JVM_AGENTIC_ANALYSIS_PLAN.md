@@ -57,8 +57,9 @@ Glaurung already has a growing Java path:
   directories, aggregating Minecraft metadata and sensitive sink categories for
   modpack-style review.
 - Python memory tools can now trace a selected sensitive sink to method-local
-  constants, nearby bytecode xrefs, mapping-aware names, and explicit stop reasons
-  for unavailable CFG/call-graph/dataflow precision.
+  constants, nearby bytecode xrefs, mapping-aware names, source-line anchors from
+  `LineNumberTable`, and explicit stop reasons for unavailable
+  CFG/call-graph/dataflow precision.
 - Existing archive tools can enumerate and extract JAR contents because JAR is a ZIP
   container.
 - `glaurung ask` can seed Java archive summaries and Minecraft mapping hints.

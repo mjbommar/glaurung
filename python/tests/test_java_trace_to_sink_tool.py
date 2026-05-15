@@ -106,6 +106,7 @@ def test_java_trace_to_sink_returns_constants_and_neighbor_xrefs(
     assert result.finding.category == "process"
     assert result.finding.mapped_class_name == "com.example.TraceFixture"
     assert result.finding.mapped_method_names == ["start"]
+    assert result.sink_line_number is not None
     values = {constant.value for constant in result.constants}
     assert {
         "trace.fixture.enabled",
@@ -119,9 +120,13 @@ def test_java_trace_to_sink_returns_constants_and_neighbor_xrefs(
     assert any(
         constant.value_kind == "environment_variable" for constant in result.constants
     )
+    assert all(constant.line_number is not None for constant in result.constants)
     assert any(
         xref.owner == "java/nio/file/Files" and xref.name == "writeString"
         for xref in result.neighbor_xrefs
+    )
+    assert any(
+        xref.line_number == result.sink_line_number for xref in result.neighbor_xrefs
     )
     assert "precise_dataflow_not_yet_available" in result.stop_reasons
     assert any(

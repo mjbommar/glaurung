@@ -77,7 +77,9 @@ Implemented pieces now include:
   and security-sensitive sink summaries across many JARs.
 - Initial trace-to-sink evidence around sensitive calls, joining the selected sink
   finding with method-local constants, nearby xrefs, mappings, and explicit stop
-  reasons where precise dataflow/call graph support is not available yet.
+  reasons where precise dataflow/call graph support is not available yet. When
+  `LineNumberTable` data exists, trace results include source-line anchors for the
+  sink, constants, and neighboring xrefs.
 - Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
   mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
   jars remain in ignored `tmp/` for smoke tests only.

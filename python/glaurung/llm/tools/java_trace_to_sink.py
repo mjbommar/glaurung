@@ -49,6 +49,7 @@ class JavaTraceToSinkArgs(BaseModel):
 
 class JavaTraceConstant(BaseModel):
     bci: int
+    line_number: int | None = None
     value: str | None
     value_kind: str
     redacted_value_hash: str | None = None
@@ -57,6 +58,7 @@ class JavaTraceConstant(BaseModel):
 
 class JavaTraceXref(BaseModel):
     bci: int
+    line_number: int | None = None
     opcode: int | None
     kind: str
     owner: str
@@ -76,6 +78,7 @@ class JavaTraceToSinkResult(BaseModel):
     method_name: str | None = None
     mapped_method_names: list[str] = Field(default_factory=list)
     method_descriptor: str | None = None
+    sink_line_number: int | None = None
     constants: list[JavaTraceConstant] = Field(default_factory=list)
     neighbor_xrefs: list[JavaTraceXref] = Field(default_factory=list)
     stop_reasons: list[str] = Field(default_factory=list)
@@ -135,10 +138,13 @@ class JavaTraceToSinkTool(MemoryTool[JavaTraceToSinkArgs, JavaTraceToSinkResult]
             )
 
         xrefs = _method_xrefs(method)
+        line_numbers = _line_numbers(method)
+        sink_line_number = _line_number_for_bci(line_numbers, finding.bci)
         constants = (
             _constants_for_method(
                 xrefs,
                 sink_bci=finding.bci,
+                line_numbers=line_numbers,
                 limit=args.max_constants,
             )
             if args.include_constants
@@ -148,6 +154,7 @@ class JavaTraceToSinkTool(MemoryTool[JavaTraceToSinkArgs, JavaTraceToSinkResult]
             _neighbor_xrefs(
                 xrefs,
                 sink_bci=finding.bci,
+                line_numbers=line_numbers,
                 direction=args.direction,
                 limit=args.max_neighbor_xrefs,
             )
@@ -171,6 +178,7 @@ class JavaTraceToSinkTool(MemoryTool[JavaTraceToSinkArgs, JavaTraceToSinkResult]
                     "tool": "java_trace_to_sink",
                     "archive_path": str(path),
                     "finding": finding.model_dump(),
+                    "sink_line_number": sink_line_number,
                     "constant_count": len(constants),
                     "neighbor_xref_count": len(neighbor_xrefs),
                     "stop_reasons": stop_reasons,
@@ -189,6 +197,7 @@ class JavaTraceToSinkTool(MemoryTool[JavaTraceToSinkArgs, JavaTraceToSinkResult]
             method_name=finding.method_name,
             mapped_method_names=finding.mapped_method_names,
             method_descriptor=finding.method_descriptor,
+            sink_line_number=sink_line_number,
             constants=constants,
             neighbor_xrefs=neighbor_xrefs,
             stop_reasons=stop_reasons,
@@ -269,10 +278,24 @@ def _method_xrefs(method: dict[str, Any]) -> list[dict[str, Any]]:
     return [xref for xref in code.get("xrefs", []) if isinstance(xref, dict)]
 
 
+def _line_numbers(method: dict[str, Any]) -> list[dict[str, Any]]:
+    code = method.get("code")
+    if not isinstance(code, dict):
+        return []
+    return [
+        line
+        for line in code.get("line_numbers", [])
+        if isinstance(line, dict)
+        and isinstance(line.get("start_pc"), int)
+        and isinstance(line.get("line_number"), int)
+    ]
+
+
 def _constants_for_method(
     xrefs: list[dict[str, Any]],
     *,
     sink_bci: int | None,
+    line_numbers: list[dict[str, Any]],
     limit: int,
 ) -> list[JavaTraceConstant]:
     constants: list[JavaTraceConstant] = []
@@ -286,6 +309,10 @@ def _constants_for_method(
         constants.append(
             JavaTraceConstant(
                 bci=int(xref.get("bci", 0)),
+                line_number=_line_number_for_bci(
+                    line_numbers,
+                    int(xref.get("bci", 0)),
+                ),
                 value=None if redacted else value,
                 value_kind=_value_kind(value),
                 redacted_value_hash=redacted_hash,
@@ -301,6 +328,7 @@ def _neighbor_xrefs(
     xrefs: list[dict[str, Any]],
     *,
     sink_bci: int | None,
+    line_numbers: list[dict[str, Any]],
     direction: TraceDirection,
     limit: int,
 ) -> list[JavaTraceXref]:
@@ -322,6 +350,7 @@ def _neighbor_xrefs(
         out.append(
             JavaTraceXref(
                 bci=bci,
+                line_number=_line_number_for_bci(line_numbers, bci),
                 opcode=opcode if isinstance(opcode, int) else None,
                 kind=kind,
                 owner=str(xref.get("owner", "")),
@@ -334,6 +363,20 @@ def _neighbor_xrefs(
         if len(out) >= limit:
             break
     return out
+
+
+def _line_number_for_bci(
+    line_numbers: list[dict[str, Any]],
+    bci: int | None,
+) -> int | None:
+    if bci is None:
+        return None
+    current: int | None = None
+    for item in sorted(line_numbers, key=lambda value: int(value["start_pc"])):
+        if int(item["start_pc"]) > bci:
+            break
+        current = int(item["line_number"])
+    return current
 
 
 def _direction_includes(
