@@ -49,8 +49,8 @@ Implemented pieces now include:
 
 - Rust classfile parsing for magic/version, constant-pool names, class/super names,
   fields, methods, descriptors, `Code` attribute metadata, `LineNumberTable`
-  entries, and lightweight method-level bytecode xrefs for invokes, fields, class
-  refs, and loaded strings.
+  entries, JVM instruction listings, and lightweight method-level bytecode xrefs for
+  invokes, fields, class refs, and loaded strings.
 - Python binding `g.analysis.parse_java_class_bytes(data)` for in-memory `.class`
   parsing without extracting JAR entries to temporary files.
 - CLI JAR/class summarization through `glaurung classfile`.
@@ -66,6 +66,7 @@ Implemented pieces now include:
   - `java_audit_archive_set`
   - `java_trace_to_sink`
   - `java_detect_secrets`
+  - `java_view_bytecode`
   - `java_correlate_behavior_config`
   - `minecraft_detect_archive`
   - `minecraft_fetch_mappings`
@@ -82,6 +83,8 @@ Implemented pieces now include:
   reasons where precise dataflow/call graph support is not available yet. When
   `LineNumberTable` data exists, trace results include source-line anchors for the
   sink, constants, and neighboring xrefs.
+- Initial bytecode viewing for selected methods, exposing BCI, opcode, mnemonic,
+  normalized operands, line anchors, xrefs, bounded windows, and mapping context.
 - Initial redacted secret detection across method string constants and text
   resources. Findings store category, source location, length, context with the
   candidate replaced, and stable hashes, not raw values.
@@ -95,7 +98,7 @@ Implemented pieces now include:
 
 Not yet implemented:
 
-- Full JVM instruction listing, bytecode CFG, advanced Java xrefs, and call graph.
+- Bytecode CFG, stack/local frames, advanced Java xrefs, and call graph.
 - Full attribute parsing for local variables, annotations, modules, records, sealed
   classes, nestmates, bootstrap methods, and stack maps.
 - Decompiler helper integration with Vineflower/CFR.
@@ -130,7 +133,7 @@ Not yet implemented:
 - [x] `Code` attribute metadata
 - [x] `LineNumberTable` parsing
 - [x] Lightweight bytecode xref extraction for invokes, fields, classes, and strings
-- [ ] Bytecode instruction decode
+- [x] Initial bytecode instruction decode and `java_view_bytecode`
 - [ ] Annotation processing
 
 ### Phase 5: JAR Processing
@@ -209,8 +212,17 @@ pub struct Method {
     pub name: String,
     pub descriptor: String,
     pub bytecode: Option<Vec<u8>>,
+    pub instructions: Vec<JavaInstruction>,
     pub exceptions: Vec<String>,
     pub annotations: Vec<Annotation>,
+}
+
+pub struct JavaInstruction {
+    pub bci: u32,
+    pub opcode: u8,
+    pub mnemonic: String,
+    pub operands: Vec<String>,
+    pub length: u32,
 }
 
 pub struct JavaXref {
@@ -307,7 +319,7 @@ pub struct JavaConfigBinding {
 
 ## Future Enhancements
 
-- [ ] Bytecode disassembly
+- [x] Initial bytecode disassembly
 - [ ] Control flow graph generation
 - [ ] Dependency analysis
 - [ ] Clean compilable source project recovery

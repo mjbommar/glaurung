@@ -338,6 +338,17 @@ fn java_code_to_py(
         line_numbers.append(ldict)?;
     }
     dict.set_item("line_numbers", line_numbers)?;
+    let instructions = pyo3::types::PyList::empty(py);
+    for instruction in code.instructions {
+        let idict = pyo3::types::PyDict::new(py);
+        idict.set_item("bci", instruction.bci)?;
+        idict.set_item("opcode", instruction.opcode)?;
+        idict.set_item("mnemonic", instruction.mnemonic)?;
+        idict.set_item("operands", instruction.operands)?;
+        idict.set_item("length", instruction.length)?;
+        instructions.append(idict)?;
+    }
+    dict.set_item("instructions", instructions)?;
     let xrefs = pyo3::types::PyList::empty(py);
     for xref in code.xrefs {
         let xdict = pyo3::types::PyDict::new(py);

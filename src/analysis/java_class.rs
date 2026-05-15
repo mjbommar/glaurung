@@ -26,6 +26,7 @@ pub struct JavaCode {
     pub exception_table_len: u16,
     pub attributes_count: u16,
     pub line_numbers: Vec<JavaLineNumber>,
+    pub instructions: Vec<JavaInstruction>,
     pub xrefs: Vec<JavaXref>,
 }
 
@@ -33,6 +34,15 @@ pub struct JavaCode {
 pub struct JavaLineNumber {
     pub start_pc: u16,
     pub line_number: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaInstruction {
+    pub bci: u32,
+    pub opcode: u8,
+    pub mnemonic: String,
+    pub operands: Vec<String>,
+    pub length: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -413,7 +423,9 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         }
         p = attr_end;
     }
-    let xrefs = parse_code_xrefs(&body[code_start..code_end], cp)?;
+    let code_bytes = &body[code_start..code_end];
+    let instructions = parse_code_instructions(code_bytes)?;
+    let xrefs = parse_code_xrefs(code_bytes, cp)?;
     Ok(JavaCode {
         max_stack,
         max_locals,
@@ -421,6 +433,7 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         exception_table_len,
         attributes_count,
         line_numbers,
+        instructions,
         xrefs,
     })
 }
@@ -452,6 +465,76 @@ fn parse_line_number_table(body: &[u8]) -> Result<Vec<JavaLineNumber>, ClassErro
         p += 4;
     }
     Ok(out)
+}
+
+fn parse_code_instructions(code: &[u8]) -> Result<Vec<JavaInstruction>, ClassError> {
+    let mut out = Vec::new();
+    let mut pc = 0usize;
+    while pc < code.len() {
+        let opcode = code[pc];
+        let Some(len) = instruction_len(code, pc, opcode)? else {
+            out.push(JavaInstruction {
+                bci: pc as u32,
+                opcode,
+                mnemonic: format!("unknown_0x{opcode:02x}"),
+                operands: Vec::new(),
+                length: 1,
+            });
+            break;
+        };
+        out.push(JavaInstruction {
+            bci: pc as u32,
+            opcode,
+            mnemonic: opcode_mnemonic(opcode).to_string(),
+            operands: instruction_operands(code, pc, opcode)?,
+            length: len as u32,
+        });
+        pc = pc.saturating_add(len);
+    }
+    Ok(out)
+}
+
+fn instruction_operands(code: &[u8], pc: usize, opcode: u8) -> Result<Vec<String>, ClassError> {
+    match opcode {
+        0x10 => Ok(vec![format!("{}", code[pc + 1] as i8)]),
+        0x11 => Ok(vec![format!("{}", read_i16_operand(code, pc, "sipush")?)]),
+        0x12 => Ok(vec![format!("cp#{}", code[pc + 1])]),
+        0x13 | 0x14 => Ok(vec![format!("cp#{}", read_u16_operand(code, pc, "ldc_w")?)]),
+        0x15..=0x19 | 0x36..=0x3a | 0xa9 => Ok(vec![format!("local={}", code[pc + 1])]),
+        0x84 => Ok(vec![
+            format!("local={}", code[pc + 1]),
+            format!("const={}", code[pc + 2] as i8),
+        ]),
+        0x99..=0xa8 | 0xc6 | 0xc7 => {
+            let offset = read_i16_operand(code, pc, "branch")?;
+            Ok(vec![format!("target={}", branch_target(pc, offset as i32))])
+        }
+        0xaa => tableswitch_operands(code, pc),
+        0xab => lookupswitch_operands(code, pc),
+        0xb2..=0xb8 | 0xbb | 0xbd | 0xc0 | 0xc1 => Ok(vec![format!(
+            "cp#{}",
+            read_u16_operand(code, pc, "constant-pool instruction")?
+        )]),
+        0xb9 => Ok(vec![
+            format!("cp#{}", read_u16_operand(code, pc, "invokeinterface")?),
+            format!("count={}", code[pc + 3]),
+        ]),
+        0xba => Ok(vec![format!(
+            "cp#{}",
+            read_u16_operand(code, pc, "invokedynamic")?
+        )]),
+        0xbc => Ok(vec![format!("atype={}", newarray_type(code[pc + 1]))]),
+        0xc4 => wide_operands(code, pc),
+        0xc5 => Ok(vec![
+            format!("cp#{}", read_u16_operand(code, pc, "multianewarray")?),
+            format!("dimensions={}", code[pc + 3]),
+        ]),
+        0xc8 | 0xc9 => {
+            let offset = read_i32_operand(code, pc, "wide branch")?;
+            Ok(vec![format!("target={}", branch_target(pc, offset))])
+        }
+        _ => Ok(Vec::new()),
+    }
 }
 
 fn parse_code_xrefs(code: &[u8], cp: &[CpEntry]) -> Result<Vec<JavaXref>, ClassError> {
@@ -521,6 +604,102 @@ fn read_u16_operand(code: &[u8], pc: usize, label: &'static str) -> Result<u16, 
         return Err(ClassError::Truncated(label));
     }
     Ok(u16::from_be_bytes([code[pc + 1], code[pc + 2]]))
+}
+
+fn read_i16_operand(code: &[u8], pc: usize, label: &'static str) -> Result<i16, ClassError> {
+    if pc + 2 >= code.len() {
+        return Err(ClassError::Truncated(label));
+    }
+    Ok(i16::from_be_bytes([code[pc + 1], code[pc + 2]]))
+}
+
+fn read_i32_operand(code: &[u8], pc: usize, label: &'static str) -> Result<i32, ClassError> {
+    if pc + 4 >= code.len() {
+        return Err(ClassError::Truncated(label));
+    }
+    Ok(i32::from_be_bytes([
+        code[pc + 1],
+        code[pc + 2],
+        code[pc + 3],
+        code[pc + 4],
+    ]))
+}
+
+fn branch_target(pc: usize, offset: i32) -> i64 {
+    pc as i64 + offset as i64
+}
+
+fn tableswitch_operands(code: &[u8], pc: usize) -> Result<Vec<String>, ClassError> {
+    let pad = switch_padding(pc);
+    let base = pc + 1 + pad;
+    let default = read_i32_at(code, base, "tableswitch")?;
+    let low = read_i32_at(code, base + 4, "tableswitch")?;
+    let high = read_i32_at(code, base + 8, "tableswitch")?;
+    if high < low {
+        return Err(ClassError::Truncated("tableswitch bounds"));
+    }
+    let cases = high as i64 - low as i64 + 1;
+    Ok(vec![
+        format!("default={}", branch_target(pc, default)),
+        format!("low={low}"),
+        format!("high={high}"),
+        format!("cases={cases}"),
+    ])
+}
+
+fn lookupswitch_operands(code: &[u8], pc: usize) -> Result<Vec<String>, ClassError> {
+    let pad = switch_padding(pc);
+    let base = pc + 1 + pad;
+    let default = read_i32_at(code, base, "lookupswitch")?;
+    let npairs = read_i32_at(code, base + 4, "lookupswitch")?;
+    if npairs < 0 {
+        return Err(ClassError::Truncated("lookupswitch bounds"));
+    }
+    Ok(vec![
+        format!("default={}", branch_target(pc, default)),
+        format!("pairs={npairs}"),
+    ])
+}
+
+fn newarray_type(atype: u8) -> &'static str {
+    match atype {
+        4 => "boolean",
+        5 => "char",
+        6 => "float",
+        7 => "double",
+        8 => "byte",
+        9 => "short",
+        10 => "int",
+        11 => "long",
+        _ => "unknown",
+    }
+}
+
+fn wide_operands(code: &[u8], pc: usize) -> Result<Vec<String>, ClassError> {
+    if pc + 1 >= code.len() {
+        return Err(ClassError::Truncated("wide"));
+    }
+    let widened_opcode = code[pc + 1];
+    if widened_opcode == 0x84 {
+        if pc + 5 >= code.len() {
+            return Err(ClassError::Truncated("wide iinc"));
+        }
+        let local = u16::from_be_bytes([code[pc + 2], code[pc + 3]]);
+        let value = i16::from_be_bytes([code[pc + 4], code[pc + 5]]);
+        return Ok(vec![
+            "wide=iinc".to_string(),
+            format!("local={local}"),
+            format!("const={value}"),
+        ]);
+    }
+    if pc + 3 >= code.len() {
+        return Err(ClassError::Truncated("wide local"));
+    }
+    let local = u16::from_be_bytes([code[pc + 2], code[pc + 3]]);
+    Ok(vec![
+        format!("wide={}", opcode_mnemonic(widened_opcode)),
+        format!("local={local}"),
+    ])
 }
 
 fn resolve_constant_xref(
@@ -642,6 +821,217 @@ fn read_name_and_type(cp: &[CpEntry], idx: u16) -> Result<(String, String), Clas
             Ok((read_utf8(cp, *name_idx)?, read_utf8(cp, *desc_idx)?))
         }
         _ => Err(ClassError::BadCpIndex(idx)),
+    }
+}
+
+fn opcode_mnemonic(opcode: u8) -> &'static str {
+    match opcode {
+        0x00 => "nop",
+        0x01 => "aconst_null",
+        0x02 => "iconst_m1",
+        0x03 => "iconst_0",
+        0x04 => "iconst_1",
+        0x05 => "iconst_2",
+        0x06 => "iconst_3",
+        0x07 => "iconst_4",
+        0x08 => "iconst_5",
+        0x09 => "lconst_0",
+        0x0a => "lconst_1",
+        0x0b => "fconst_0",
+        0x0c => "fconst_1",
+        0x0d => "fconst_2",
+        0x0e => "dconst_0",
+        0x0f => "dconst_1",
+        0x10 => "bipush",
+        0x11 => "sipush",
+        0x12 => "ldc",
+        0x13 => "ldc_w",
+        0x14 => "ldc2_w",
+        0x15 => "iload",
+        0x16 => "lload",
+        0x17 => "fload",
+        0x18 => "dload",
+        0x19 => "aload",
+        0x1a => "iload_0",
+        0x1b => "iload_1",
+        0x1c => "iload_2",
+        0x1d => "iload_3",
+        0x1e => "lload_0",
+        0x1f => "lload_1",
+        0x20 => "lload_2",
+        0x21 => "lload_3",
+        0x22 => "fload_0",
+        0x23 => "fload_1",
+        0x24 => "fload_2",
+        0x25 => "fload_3",
+        0x26 => "dload_0",
+        0x27 => "dload_1",
+        0x28 => "dload_2",
+        0x29 => "dload_3",
+        0x2a => "aload_0",
+        0x2b => "aload_1",
+        0x2c => "aload_2",
+        0x2d => "aload_3",
+        0x2e => "iaload",
+        0x2f => "laload",
+        0x30 => "faload",
+        0x31 => "daload",
+        0x32 => "aaload",
+        0x33 => "baload",
+        0x34 => "caload",
+        0x35 => "saload",
+        0x36 => "istore",
+        0x37 => "lstore",
+        0x38 => "fstore",
+        0x39 => "dstore",
+        0x3a => "astore",
+        0x3b => "istore_0",
+        0x3c => "istore_1",
+        0x3d => "istore_2",
+        0x3e => "istore_3",
+        0x3f => "lstore_0",
+        0x40 => "lstore_1",
+        0x41 => "lstore_2",
+        0x42 => "lstore_3",
+        0x43 => "fstore_0",
+        0x44 => "fstore_1",
+        0x45 => "fstore_2",
+        0x46 => "fstore_3",
+        0x47 => "dstore_0",
+        0x48 => "dstore_1",
+        0x49 => "dstore_2",
+        0x4a => "dstore_3",
+        0x4b => "astore_0",
+        0x4c => "astore_1",
+        0x4d => "astore_2",
+        0x4e => "astore_3",
+        0x4f => "iastore",
+        0x50 => "lastore",
+        0x51 => "fastore",
+        0x52 => "dastore",
+        0x53 => "aastore",
+        0x54 => "bastore",
+        0x55 => "castore",
+        0x56 => "sastore",
+        0x57 => "pop",
+        0x58 => "pop2",
+        0x59 => "dup",
+        0x5a => "dup_x1",
+        0x5b => "dup_x2",
+        0x5c => "dup2",
+        0x5d => "dup2_x1",
+        0x5e => "dup2_x2",
+        0x5f => "swap",
+        0x60 => "iadd",
+        0x61 => "ladd",
+        0x62 => "fadd",
+        0x63 => "dadd",
+        0x64 => "isub",
+        0x65 => "lsub",
+        0x66 => "fsub",
+        0x67 => "dsub",
+        0x68 => "imul",
+        0x69 => "lmul",
+        0x6a => "fmul",
+        0x6b => "dmul",
+        0x6c => "idiv",
+        0x6d => "ldiv",
+        0x6e => "fdiv",
+        0x6f => "ddiv",
+        0x70 => "irem",
+        0x71 => "lrem",
+        0x72 => "frem",
+        0x73 => "drem",
+        0x74 => "ineg",
+        0x75 => "lneg",
+        0x76 => "fneg",
+        0x77 => "dneg",
+        0x78 => "ishl",
+        0x79 => "lshl",
+        0x7a => "ishr",
+        0x7b => "lshr",
+        0x7c => "iushr",
+        0x7d => "lushr",
+        0x7e => "iand",
+        0x7f => "land",
+        0x80 => "ior",
+        0x81 => "lor",
+        0x82 => "ixor",
+        0x83 => "lxor",
+        0x84 => "iinc",
+        0x85 => "i2l",
+        0x86 => "i2f",
+        0x87 => "i2d",
+        0x88 => "l2i",
+        0x89 => "l2f",
+        0x8a => "l2d",
+        0x8b => "f2i",
+        0x8c => "f2l",
+        0x8d => "f2d",
+        0x8e => "d2i",
+        0x8f => "d2l",
+        0x90 => "d2f",
+        0x91 => "i2b",
+        0x92 => "i2c",
+        0x93 => "i2s",
+        0x94 => "lcmp",
+        0x95 => "fcmpl",
+        0x96 => "fcmpg",
+        0x97 => "dcmpl",
+        0x98 => "dcmpg",
+        0x99 => "ifeq",
+        0x9a => "ifne",
+        0x9b => "iflt",
+        0x9c => "ifge",
+        0x9d => "ifgt",
+        0x9e => "ifle",
+        0x9f => "if_icmpeq",
+        0xa0 => "if_icmpne",
+        0xa1 => "if_icmplt",
+        0xa2 => "if_icmpge",
+        0xa3 => "if_icmpgt",
+        0xa4 => "if_icmple",
+        0xa5 => "if_acmpeq",
+        0xa6 => "if_acmpne",
+        0xa7 => "goto",
+        0xa8 => "jsr",
+        0xa9 => "ret",
+        0xaa => "tableswitch",
+        0xab => "lookupswitch",
+        0xac => "ireturn",
+        0xad => "lreturn",
+        0xae => "freturn",
+        0xaf => "dreturn",
+        0xb0 => "areturn",
+        0xb1 => "return",
+        0xb2 => "getstatic",
+        0xb3 => "putstatic",
+        0xb4 => "getfield",
+        0xb5 => "putfield",
+        0xb6 => "invokevirtual",
+        0xb7 => "invokespecial",
+        0xb8 => "invokestatic",
+        0xb9 => "invokeinterface",
+        0xba => "invokedynamic",
+        0xbb => "new",
+        0xbc => "newarray",
+        0xbd => "anewarray",
+        0xbe => "arraylength",
+        0xbf => "athrow",
+        0xc0 => "checkcast",
+        0xc1 => "instanceof",
+        0xc2 => "monitorenter",
+        0xc3 => "monitorexit",
+        0xc4 => "wide",
+        0xc5 => "multianewarray",
+        0xc6 => "ifnull",
+        0xc7 => "ifnonnull",
+        0xc8 => "goto_w",
+        0xc9 => "jsr_w",
+        0xca => "breakpoint",
+        0xfe => "impdep1",
+        0xff => "impdep2",
+        _ => "unknown",
     }
 }
 
@@ -864,6 +1254,23 @@ mod tests {
             .iter()
             .find(|m| m.name == "printMessage")
             .expect("printMessage method");
+        let instructions = &print_message.code.as_ref().expect("code").instructions;
+        assert_eq!(instructions.first().map(|ins| ins.bci), Some(0));
+        assert_eq!(
+            instructions.first().map(|ins| ins.mnemonic.as_str()),
+            Some("getstatic"),
+        );
+        assert!(
+            instructions
+                .iter()
+                .any(|ins| ins.bci == 7 && ins.mnemonic == "invokevirtual"),
+            "expected invokevirtual at bci 7, got {instructions:?}",
+        );
+        assert_eq!(
+            instructions.last().map(|ins| ins.mnemonic.as_str()),
+            Some("return"),
+        );
+
         let line_numbers = &print_message.code.as_ref().expect("code").line_numbers;
         assert_eq!(
             line_numbers,

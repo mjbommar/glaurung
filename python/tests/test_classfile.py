@@ -102,6 +102,27 @@ def test_parse_class_bytes_recovers_line_numbers() -> None:
     ]
 
 
+def test_parse_class_bytes_recovers_bytecode_instructions() -> None:
+    data = _need(_HELLO_CLASS).read_bytes()
+    info = g.analysis.parse_java_class_bytes(data)
+    assert info is not None
+
+    print_message = next(m for m in info["methods"] if m["name"] == "printMessage")
+    instructions = print_message["code"]["instructions"]
+
+    assert instructions[0]["bci"] == 0
+    assert instructions[0]["opcode"] == 0xB2
+    assert instructions[0]["mnemonic"] == "getstatic"
+    assert instructions[0]["length"] == 3
+    assert instructions[0]["operands"] and instructions[0]["operands"][0].startswith(
+        "cp#"
+    )
+    assert any(
+        ins["bci"] == 7 and ins["mnemonic"] == "invokevirtual" for ins in instructions
+    )
+    assert instructions[-1]["mnemonic"] == "return"
+
+
 def test_parse_class_returns_none_on_non_class() -> None:
     info = g.analysis.parse_java_class_path(str(_need(_HELLO_C)))
     assert info is None

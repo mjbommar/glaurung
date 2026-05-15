@@ -37,8 +37,8 @@ Glaurung already has a growing Java path:
 
 - `src/analysis/java_class.rs` parses a `.class` header, constant-pool names, class
   name, superclass, interfaces, fields, method descriptors, `Code` metadata, and
-  `LineNumberTable` entries, plus lightweight method-level bytecode xrefs for invokes,
-  fields, class refs, and loaded strings.
+  `LineNumberTable` entries, plus initial JVM instruction listings and lightweight
+  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
@@ -60,6 +60,8 @@ Glaurung already has a growing Java path:
   constants, nearby bytecode xrefs, mapping-aware names, source-line anchors from
   `LineNumberTable`, and explicit stop reasons for unavailable
   CFG/call-graph/dataflow precision.
+- Python memory tools can now view a selected method's JVM bytecode with BCI, opcode,
+  mnemonic, operands, source-line anchors, xrefs, bounded windows, and mapping context.
 - Python memory tools can now detect likely secrets in class string constants and
   text resources while redacting raw values and emitting stable hashes.
 - Python memory tools can now correlate sensitive sink findings with method-local
@@ -74,9 +76,8 @@ Known limitations:
 - The Rust parser still skips most attributes after `Code`, including local variables,
   annotations, bootstrap methods, records, modules, nestmates, generic signatures, and
   stack maps.
-- There is no full native bytecode instruction listing, source/bytecode mapping,
-  advanced Java xref model, Java call graph, decompiler helper, or JVM runtime tool
-  surface.
+- There is no bytecode CFG/frame model, advanced Java xref model, Java call graph,
+  decompiler helper, or JVM runtime tool surface.
 - There is no dependency resolver, build-system inference, source tree emitter,
   compile diagnostic parser, repair loop, or ABI comparison for recovered Java source.
 - There is no generic static-audit layer for sensitive API sinks, entrypoint
@@ -107,7 +108,7 @@ here, it is probably not represented strongly enough in the plan.
 
 | Gap | Planned coverage |
 | --- | --- |
-| JVM instruction decode | `java_view_bytecode`, ASM helper, Phase 2 |
+| JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
 | Bytecode CFG and xrefs | `java_cfg`, `java_xrefs_from`, `java_xrefs_to`, `java_call_graph` |
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
 | Attributes and annotations | Initial `LineNumberTable` support exists; continue Rust parser responsibilities, `java_view_class`, source recovery validation |
@@ -631,19 +632,26 @@ Outputs:
 
 Inputs:
 
-- `method_locator`
-- `include_frames`
-- `include_exception_table`
-- `window_bci_start`
-- `window_bci_end`
+- `path`
+- `class_name`
+- `method_name`
+- `method_descriptor`
+- `mapping_path`
+- `include_xrefs`
+- `bci_start`
+- `bci_end`
+- `max_classes_scan`
+- `max_instructions`
 
 Outputs:
 
 - Bytecode listing with BCI.
 - Operands resolved to constant-pool refs.
-- Stack/local frame snapshots when available.
-- Exception handlers.
-- Line table mapping.
+- Opcode and mnemonic for decoded JVM instructions.
+- Line table mapping when debug metadata exists.
+- Optional method xrefs at matching BCI offsets.
+- Descriptor-aware mapping context where ProGuard/Mojang mappings are supplied.
+- Stack/local frame snapshots and exception handlers in a later ASM-backed revision.
 
 `java_cfg`
 
@@ -1929,6 +1937,8 @@ Acceptance:
   ask seeding.
 - Initial method-level bytecode xrefs expose invoke, field, class, and loaded-string
   evidence to Python tools.
+- Initial `java_view_bytecode` exposes selected method instructions with BCI,
+  mnemonic, operands, line anchors, xrefs, bounded windows, and mapping context.
 
 ### Phase 3.5: Sensitive Behavior, Config, and Deobfuscation-Aware Annotation
 
