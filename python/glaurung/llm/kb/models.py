@@ -39,6 +39,7 @@ class NodeKind(str, Enum):
     java_suspicious_blob = "java_suspicious_blob"
     java_dependency = "java_dependency"
     java_build_system = "java_build_system"
+    java_compile_result = "java_compile_result"
     java_config_correlation = "java_config_correlation"
     java_risk_finding = "java_risk_finding"
 

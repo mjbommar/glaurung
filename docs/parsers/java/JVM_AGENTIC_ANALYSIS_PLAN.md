@@ -108,6 +108,10 @@ Glaurung already has a growing Java path:
   source-root build files, embedded Maven/Gradle/plugin metadata, Minecraft mod
   metadata, classfile Java release, and dependency evidence while emitting
   `java_build_system` evidence nodes.
+- Python memory tools can now compile recovered Java source trees with bounded
+  `javac` execution through `java_compile_recovered_project`, including generated
+  `sources.txt` population, nested argfile expansion, timeout handling, structured
+  diagnostics, and `java_compile_result` evidence nodes.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -126,9 +130,9 @@ Known limitations:
   signatures, and stack maps.
 - There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
-- There is initial dependency and build-system inference, but no dependency resolver,
-  source tree emitter, compile diagnostic parser, repair loop, or ABI comparison for
-  recovered Java source.
+- There is initial dependency inference, build-system inference, and bounded `javac`
+  compile diagnostics, but no dependency resolver, source tree emitter, Maven/Gradle
+  compile execution, repair loop, or ABI comparison for recovered Java source.
 - The generic static-audit layer now has initial sensitive sinks, entrypoints,
   config/resource extraction, config correlation, redacted secret scanning,
   archive-set summaries, and per-archive risk reports. It still lacks precise
@@ -1081,6 +1085,21 @@ Selection rules:
 
 `java_compile_recovered_project`
 
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_compile_result` KB nodes.
+- Supports bounded `javac` compilation for recovered `src/main/java` trees.
+- Populates empty/missing `sources.txt`, expands nested javac argfiles, writes
+  classes under `build/classes`, and reports stdout/stderr excerpts without running
+  recovered application code.
+- Parses initial javac diagnostics into categories such as missing classpath
+  dependency, syntax/decompiler reconstruction error, duplicate class/package,
+  visibility mismatch, generic/signature mismatch, and module/processor issues.
+- Minecraft smoke tests used the inferred Java release from the copied jars and
+  confirmed the local JDK can compile tiny recovered-style projects at Java 17 for
+  Minecraft 1.20.1 client/server and Java 21 for the copied 1.21.11 client.
+
 Inputs:
 
 - Source project root.
@@ -1111,6 +1130,14 @@ Diagnostic categories:
 - Access/visibility mismatch.
 - Duplicate class or package conflict.
 - Annotation processor or module-path issue.
+
+Implementation notes:
+
+- Keep execution bounded and static: compile recovered source, but do not run the
+  rebuilt application.
+- Continue with Maven/Gradle execution only after resolver/cache policy is explicit.
+- Feed diagnostics into `java_repair_decompiled_source`; prefer dependency/build
+  fixes over source edits for missing package/class errors.
 
 `java_repair_decompiled_source`
 
@@ -2368,8 +2395,8 @@ Tasks:
 - Implement `java_reconstruct_source_tree`.
 - Extend `java_infer_build_system` with module paths, annotation processors,
   loader-specific Minecraft plugin templates, and resolver/cache policy.
-- Implement `java_compile_recovered_project`.
-- Implement structured compiler diagnostic parsing for `javac`, Maven, and Gradle.
+- Extend `java_compile_recovered_project` with Maven/Gradle execution, richer
+  structured diagnostics, rebuilt JAR packaging, and build-log cache keys.
 - Implement `java_repair_decompiled_source` with narrow, evidence-grounded patches.
 - Implement `java_compare_rebuilt_abi`.
 - Implement `java_validate_recovered_application`.

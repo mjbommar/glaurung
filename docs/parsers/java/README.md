@@ -84,6 +84,7 @@ Implemented pieces now include:
   - `java_verify_signatures`
   - `java_infer_dependencies`
   - `java_infer_build_system`
+  - `java_compile_recovered_project`
   - `java_view_bytecode`
   - `java_cfg`
   - `java_xrefs_from`
@@ -140,6 +141,10 @@ Implemented pieces now include:
   metadata, Gradle/plugin metadata, Minecraft mod metadata, classfile Java release,
   and dependency evidence. It emits build-control files and `java_build_system` KB
   nodes without fetching dependencies.
+- Initial recovered-project compilation through `java_compile_recovered_project`,
+  supporting bounded `javac` execution for generated source trees and argfiles,
+  automatic `sources.txt` population, timeout handling, structured diagnostics, and
+  `java_compile_result` KB nodes.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -164,8 +169,8 @@ Not yet implemented:
   runtime-visible metadata beyond the initial source/debug and class/member
   annotation attributes.
 - Decompiler helper integration with Vineflower/CFR.
-- Clean source-project recovery after the initial dependency/build planning layers:
-  dependency resolution policy, source tree emission, real compilation,
+- Clean source-project recovery after the initial dependency/build/compile layers:
+  dependency resolution policy, source tree emission, Maven/Gradle execution,
   compiler-diagnostic repair, and ABI/resource validation.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
   correlation, framework-aware reachability, and richer directory-level risk
@@ -274,7 +279,8 @@ Important lessons:
 - [x] Initial build system inference for plain `javac`, Maven, and Gradle
 - [ ] Build-system refinement for module paths, annotation processors, loader-specific
   Minecraft build plugins, and resolver/cache policy
-- [ ] Structured compiler diagnostics for `javac`, Maven, and Gradle
+- [x] Initial bounded `javac` compilation and structured diagnostics
+- [ ] Maven/Gradle compile execution and richer structured diagnostics
 - [ ] Agentic compile-repair loop for decompiler syntax and build/classpath failures
 - [ ] ABI/API comparison between original and rebuilt classes
 - [ ] Recovered application validation report
