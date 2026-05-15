@@ -36,6 +36,11 @@ AbiDifferenceKind = Literal[
     "extra_method_annotation",
     "changed_method_annotation",
 ]
+AbiScope = Literal["all", "package_api", "public_api"]
+
+_ACC_PUBLIC = 0x0001
+_ACC_PRIVATE = 0x0002
+_ACC_PROTECTED = 0x0004
 
 
 class JavaCompareRebuiltAbiArgs(BaseModel):
@@ -47,6 +52,13 @@ class JavaCompareRebuiltAbiArgs(BaseModel):
     )
     max_classes: int = Field(50_000, ge=0)
     max_differences: int = Field(512, ge=0)
+    scope: AbiScope = Field(
+        "all",
+        description=(
+            "ABI surface to compare: all class/member details, non-private "
+            "package API, or public/protected API only."
+        ),
+    )
     include_annotations: bool = Field(
         False,
         description=(
@@ -73,6 +85,7 @@ class JavaAbiDifference(BaseModel):
 class JavaCompareRebuiltAbiResult(BaseModel):
     original_path: str
     rebuilt_path: str | None = None
+    scope: AbiScope = "all"
     include_annotations: bool = False
     abi_match: bool
     original_class_count: int = 0
@@ -150,8 +163,12 @@ class JavaCompareRebuiltAbiTool(
                 stop_reasons=["rebuilt_path_missing"],
             )
 
-        original = _load_abi(original_path, args.max_classes, args.include_annotations)
-        rebuilt = _load_abi(rebuilt_path, args.max_classes, args.include_annotations)
+        original = _load_abi(
+            original_path, args.max_classes, args.include_annotations, args.scope
+        )
+        rebuilt = _load_abi(
+            rebuilt_path, args.max_classes, args.include_annotations, args.scope
+        )
         stop_reasons = [*original.stop_reasons, *rebuilt.stop_reasons]
         differences = _compare_abi(
             original.classes, rebuilt.classes, args.max_differences
@@ -166,6 +183,7 @@ class JavaCompareRebuiltAbiTool(
         result = JavaCompareRebuiltAbiResult(
             original_path=str(original_path),
             rebuilt_path=str(rebuilt_path),
+            scope=args.scope,
             include_annotations=args.include_annotations,
             abi_match=not differences
             and not original.stop_reasons
@@ -184,18 +202,23 @@ class JavaCompareRebuiltAbiTool(
 
 
 def _load_abi(
-    path: Path, max_classes: int, include_annotations: bool
+    path: Path,
+    max_classes: int,
+    include_annotations: bool,
+    scope: AbiScope,
 ) -> _AbiLoadResult:
     result = _AbiLoadResult()
     if path.is_dir():
         class_files = sorted(p for p in path.rglob("*.class") if p.is_file())
         for class_file in class_files:
             _add_class_bytes(
-                result, class_file.read_bytes(), max_classes, include_annotations
+                result, class_file.read_bytes(), max_classes, include_annotations, scope
             )
         return result
     if path.is_file() and path.suffix == ".class":
-        _add_class_bytes(result, path.read_bytes(), max_classes, include_annotations)
+        _add_class_bytes(
+            result, path.read_bytes(), max_classes, include_annotations, scope
+        )
         return result
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as zf:
@@ -205,7 +228,7 @@ def _load_abi(
                 if info.filename.startswith("META-INF/versions/"):
                     continue
                 _add_class_bytes(
-                    result, zf.read(info), max_classes, include_annotations
+                    result, zf.read(info), max_classes, include_annotations, scope
                 )
         return result
     result.stop_reasons.append("unsupported_class_container")
@@ -217,6 +240,7 @@ def _add_class_bytes(
     data: bytes,
     max_classes: int,
     include_annotations: bool,
+    scope: AbiScope,
 ) -> None:
     if len(result.classes) >= max_classes:
         result.truncated = True
@@ -230,20 +254,26 @@ def _add_class_bytes(
     if parsed is None:
         result.parse_error_count += 1
         return
-    abi = _class_abi(parsed, include_annotations)
+    abi = _class_abi(parsed, include_annotations, scope)
+    if not _class_in_scope(abi.access_flags, scope):
+        return
     result.classes[abi.class_name] = abi
 
 
-def _class_abi(parsed: dict[str, Any], include_annotations: bool) -> _ClassAbi:
+def _class_abi(
+    parsed: dict[str, Any], include_annotations: bool, scope: AbiScope
+) -> _ClassAbi:
     fields = {
         _member_key(member): int(member.get("access_flags", 0))
         for member in parsed.get("fields", [])
         if isinstance(member, dict)
+        and _member_in_scope(int(member.get("access_flags", 0)), scope)
     }
     methods = {
         _member_key(member): int(member.get("access_flags", 0))
         for member in parsed.get("methods", [])
         if isinstance(member, dict)
+        and _member_in_scope(int(member.get("access_flags", 0)), scope)
     }
     return _ClassAbi(
         class_name=str(parsed["class_name"]),
@@ -253,10 +283,10 @@ def _class_abi(parsed: dict[str, Any], include_annotations: bool) -> _ClassAbi:
         annotations=_annotations(parsed.get("annotations", []))
         if include_annotations
         else {},
-        field_annotations=_member_annotations(parsed.get("fields", []))
+        field_annotations=_member_annotations(parsed.get("fields", []), scope)
         if include_annotations
         else {},
-        method_annotations=_member_annotations(parsed.get("methods", []))
+        method_annotations=_member_annotations(parsed.get("methods", []), scope)
         if include_annotations
         else {},
     )
@@ -446,10 +476,12 @@ def _add_difference(
         differences.append(difference)
 
 
-def _member_annotations(members: Any) -> dict[str, dict[str, str]]:
+def _member_annotations(members: Any, scope: AbiScope) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for member in members:
         if not isinstance(member, dict):
+            continue
+        if not _member_in_scope(int(member.get("access_flags", 0)), scope):
             continue
         annotations = _annotations(member.get("annotations", []))
         if annotations:
@@ -624,6 +656,22 @@ def _annotation_message(
     return f"Annotation {annotation_descriptor} changed on {target}."
 
 
+def _class_in_scope(access_flags: int, scope: AbiScope) -> bool:
+    if scope == "all":
+        return True
+    if scope == "package_api":
+        return access_flags & _ACC_PRIVATE == 0
+    return access_flags & (_ACC_PUBLIC | _ACC_PROTECTED) != 0
+
+
+def _member_in_scope(access_flags: int, scope: AbiScope) -> bool:
+    if scope == "all":
+        return True
+    if scope == "package_api":
+        return access_flags & _ACC_PRIVATE == 0
+    return access_flags & (_ACC_PUBLIC | _ACC_PROTECTED) != 0
+
+
 def _append_once(items: list[str], value: str) -> None:
     if value not in items:
         items.append(value)
@@ -635,6 +683,7 @@ def _add_abi_node(kb: KnowledgeBase, result: JavaCompareRebuiltAbiResult) -> Non
             [
                 result.original_path,
                 result.rebuilt_path or "",
+                result.scope,
                 str(result.abi_match),
                 str(result.include_annotations),
                 str(result.difference_count),

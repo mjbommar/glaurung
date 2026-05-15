@@ -119,9 +119,9 @@ Glaurung already has a growing Java path:
   stubs only when explicitly requested.
 - Python memory tools can now compare original and rebuilt Java ABI surfaces with
   `java_compare_rebuilt_abi`, checking class presence, field/method descriptors,
-  access flags, and optional class/member annotation fingerprints across JARs, class
-  directories, or single class files while emitting `java_abi_comparison` evidence
-  nodes.
+  access flags, selected `all`/`package_api`/`public_api` scope, and optional
+  class/member annotation fingerprints across JARs, class directories, or single
+  class files while emitting `java_abi_comparison` evidence nodes.
 - Python memory tools can now emit an initial recovered-application validation report
   with `java_validate_recovered_application`, orchestrating bounded `javac`
   compilation, rebuilt ABI comparison, original archive resource parity against
@@ -261,7 +261,7 @@ here, it is probably not represented strongly enough in the plan.
 | Source tree/project reconstruction | Initial `java_reconstruct_source_tree` and `java_infer_build_system` exist for resource/metadata preservation, explicit stubs, generated source lists, and build planning; continue with decompiler source emission, module source recovery, and source/resource validation |
 | Compile diagnostics | `java_compile_recovered_project` |
 | Agentic compile-repair loop | `java_repair_decompiled_source` plus compile iteration budgets |
-| ABI/API and resource validation | Initial `java_compare_rebuilt_abi` and `java_validate_recovered_application` exist for descriptor/access ABI checks, optional class/member annotation parity, resource parity, compile status, and generated-stub policy; continue with parameter/default/module validation and public-vs-private compatibility scoring |
+| ABI/API and resource validation | Initial `java_compare_rebuilt_abi` and `java_validate_recovered_application` exist for descriptor/access ABI checks, public/package/all scope filtering, optional class/member annotation parity, resource parity, compile status, and generated-stub policy; continue with parameter/default/module validation and richer compatibility scoring |
 | Runtime behavior validation | `java_launch_target`, JDI/JFR/javaagent tools, opt-in smoke profile |
 | Sensitive Java behavior detection | Initial `java_detect_security_sensitive_behavior` exists; expand sink rule packs and config correlation in Phase 3.5 |
 | Entrypoint and reachability context | Initial `java_detect_entrypoints`, `java_detect_frameworks`, `java_reachability`, and method-local `java_trace_to_sink` exist; expand framework hooks and interprocedural source-to-sink traces |
@@ -1218,11 +1218,12 @@ Initial Python implementation status:
 - Compares original and rebuilt JARs, class directories, or single `.class` files
   using the Rust class parser exposed through Python.
 - Reports missing/extra classes, fields, and methods by descriptor, plus class/member
-  access-flag differences. When `include_annotations` is enabled, it also reports
-  missing, extra, and changed class/member annotations using descriptor, visibility,
-  and redacted element fingerprints. It does not yet compare parameter annotations,
-  annotation defaults, resources, module metadata, or byte-for-byte classfile
-  equivalence.
+  access-flag differences. The `scope` option can compare every class/member,
+  non-private package API, or public/protected API only. When `include_annotations`
+  is enabled, it also reports missing, extra, and changed class/member annotations
+  using descriptor, visibility, and redacted element fingerprints. It does not yet
+  compare parameter annotations, annotation defaults, resources, module metadata, or
+  byte-for-byte classfile equivalence.
 - Minecraft smoke tests showed the 1.20.1 server wrapper self-comparing at four
   class ABI surfaces, the 1.20.1 client self-comparing at 7,436 class ABI surfaces,
   and the copied 1.21.11 client exposing 10,291 class ABI surfaces.
@@ -1231,7 +1232,7 @@ Inputs:
 
 - Original JAR.
 - Rebuilt classes directory or rebuilt JAR.
-- Scope: public API, package API, or all classes.
+- Scope: `all`, `package_api`, or `public_api`.
 - Include class/member annotations: bool.
 - Include resources: bool, planned for richer validation only.
 
@@ -1250,8 +1251,8 @@ surface. The first goal is ABI/API compatibility, not byte-for-byte classfile
 equivalence.
 
 Continue by adding parameter annotation/default parity, module/service metadata
-validation, richer resource policy, and compatibility scoring that distinguishes
-public API breaks from private implementation differences.
+validation, richer resource policy, and compatibility scoring that weights public
+breaks, package breaks, private implementation drift, and generated stubs.
 
 `java_validate_recovered_application`
 
@@ -1262,7 +1263,8 @@ Initial Python implementation status:
 - Runs bounded `javac` through `java_compile_recovered_project` when requested.
 - Uses `java_compare_rebuilt_abi` against the generated classes directory or a
   caller-supplied rebuilt JAR/classes path for `abi` and `full_static` profiles.
-  Callers can opt into class/member annotation parity with `include_annotations`.
+  Callers can set `abi_scope` and can opt into class/member annotation parity with
+  `include_annotations`.
 - Compares original archive resources against recovered `src/main/resources`,
   skipping `.class` and signature metadata while reporting missing, extra, and
   changed resources with SHA-256 evidence.

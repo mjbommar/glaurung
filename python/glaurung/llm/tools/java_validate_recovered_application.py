@@ -12,6 +12,7 @@ from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .java_compare_rebuilt_abi import (
+    AbiScope,
     JavaAbiDifference,
     build_tool as build_java_compare_rebuilt_abi,
 )
@@ -51,6 +52,7 @@ class JavaValidateRecoveredApplicationArgs(BaseModel):
     classpath: list[str] = Field(default_factory=list)
     run_compile: bool = True
     allow_generated_stubs: bool = False
+    abi_scope: AbiScope = "all"
     include_annotations: bool = Field(
         False,
         description="Include class/member annotation parity in ABI validation.",
@@ -207,6 +209,7 @@ class JavaValidateRecoveredApplicationTool(
                     abi_tool.input_model(
                         original_path=str(original_path),
                         rebuilt_path=str(rebuilt_path),
+                        scope=args.abi_scope,
                         include_annotations=args.include_annotations,
                         max_differences=args.max_abi_differences,
                     ),

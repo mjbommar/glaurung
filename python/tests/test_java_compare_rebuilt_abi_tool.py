@@ -205,6 +205,87 @@ public class Main {
     )
 
 
+def test_java_compare_rebuilt_abi_supports_public_and_package_scopes(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_compare_rebuilt_abi import build_tool
+
+    original = _compile_source(
+        tmp_path,
+        """
+package app;
+
+public class Main {
+    public String value() {
+        return helper();
+    }
+
+    String packageOnly() {
+        return "package";
+    }
+
+    private String helper() {
+        return "hello";
+    }
+}
+""",
+        out_name="original",
+    )
+    rebuilt = _compile_source(
+        tmp_path,
+        """
+package app;
+
+public class Main {
+    public String value() {
+        return "hello";
+    }
+}
+""",
+        out_name="rebuilt",
+    )
+    ctx = _ctx(original)
+    tool = build_tool()
+
+    all_result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            original_path=str(original),
+            rebuilt_path=str(rebuilt),
+            scope="all",
+        ),
+    )
+    public_result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            original_path=str(original),
+            rebuilt_path=str(rebuilt),
+            scope="public_api",
+        ),
+    )
+    package_result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            original_path=str(original),
+            rebuilt_path=str(rebuilt),
+            scope="package_api",
+        ),
+    )
+
+    assert all_result.abi_match is False
+    assert any(diff.member_name == "helper" for diff in all_result.differences)
+    assert public_result.abi_match is True
+    assert package_result.abi_match is False
+    assert any(
+        diff.kind == "missing_method" and diff.member_name == "packageOnly"
+        for diff in package_result.differences
+    )
+    assert not any(diff.member_name == "helper" for diff in package_result.differences)
+
+
 def test_java_compare_rebuilt_abi_handles_missing_rebuilt_path(tmp_path: Path) -> None:
     from glaurung.llm.tools.java_compare_rebuilt_abi import build_tool
 

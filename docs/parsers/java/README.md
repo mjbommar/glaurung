@@ -154,8 +154,9 @@ Implemented pieces now include:
   still need decompilation, and emitting explicit generated stubs only when requested.
 - Initial ABI comparison through `java_compare_rebuilt_abi`, comparing original and
   rebuilt JARs or class directories by class names, field descriptors, method
-  descriptors, access flags, and optional class/member annotation fingerprints, with
-  `java_abi_comparison` KB evidence.
+  descriptors, access flags, selected `all`/`package_api`/`public_api` scope, and
+  optional class/member annotation fingerprints, with `java_abi_comparison` KB
+  evidence.
 - Initial recovered-application validation through
   `java_validate_recovered_application`, orchestrating bounded `javac`
   compilation, rebuilt ABI comparison, original archive resource parity against
@@ -303,6 +304,7 @@ Important lessons:
 - [ ] Maven/Gradle compile execution and richer structured diagnostics
 - [ ] Agentic compile-repair loop for decompiler syntax and build/classpath failures
 - [x] Initial ABI/API comparison between original and rebuilt classes
+- [x] Initial scoped ABI filtering for all, package, and public/protected API
 - [x] Initial resource validation between original archives and recovered
   `src/main/resources`
 - [x] Optional class/member annotation parity in ABI validation
