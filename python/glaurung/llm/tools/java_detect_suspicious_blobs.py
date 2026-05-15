@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import json
 import math
 import re
 import zipfile
@@ -403,7 +404,12 @@ def _resource_findings(
                 message="Resource has high entropy and does not look like a normal media asset.",
             )
         ]
-    return []
+    return _encoded_resource_findings(
+        entry_name=entry_name,
+        data=data,
+        args=args,
+        remaining=remaining,
+    )
 
 
 class _DecodedStringCandidate(BaseModel):
@@ -508,6 +514,259 @@ def _decode_string(
         if len(decoded) >= args.min_decoded_length and _plausible_decode(decoded):
             out.append(("hex", decoded))
     return out
+
+
+def _encoded_resource_findings(
+    *,
+    entry_name: str,
+    data: bytes,
+    args: JavaDetectSuspiciousBlobsArgs,
+    remaining: int,
+) -> list[JavaSuspiciousBlobFinding]:
+    if remaining <= 0 or not entry_name.lower().endswith(".json"):
+        return []
+    if _is_likely_localization_json(entry_name):
+        return []
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return []
+    try:
+        root = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+
+    out: list[JavaSuspiciousBlobFinding] = []
+    for json_path, key, parent_keys, value in _json_string_values(root):
+        if not _is_sensitive_encoded_resource_context(
+            entry_name=entry_name,
+            key=key,
+            parent_keys=parent_keys,
+            json_path=json_path,
+        ):
+            continue
+        for encoding, decoded in _decode_string_relaxed(value, args=args):
+            magic = _magic(decoded)
+            decoded_entropy = _entropy_bytes(decoded)
+            if magic == "class":
+                state: SuspiciousBlobState = "decoded_to_classloader"
+                category = "encoded_resource_class_blob"
+                severity = "high"
+                confidence = 0.95
+                message = "Sensitive-looking JSON value decodes to Java classfile magic."
+            elif magic in {"elf", "pe", "macho"}:
+                state = "decoded_to_native_load"
+                category = "encoded_resource_native_blob"
+                severity = "high"
+                confidence = 0.9
+                message = "Sensitive-looking JSON value decodes to native binary magic."
+            elif magic in {"zip", "gzip", "zlib"}:
+                state = "compressed_blob"
+                category = "encoded_resource_compressed_blob"
+                severity = "medium"
+                confidence = 0.85
+                message = "Sensitive-looking JSON value decodes to compressed data."
+            elif _binaryish_decoded_secret(decoded):
+                state = "encrypted_or_random_blob"
+                category = "encoded_resource_secret_blob"
+                severity = "high" if _strong_secret_key_hint(key) else "medium"
+                confidence = 0.82 if _strong_secret_key_hint(key) else 0.74
+                message = (
+                    "Sensitive-looking JSON value decodes to compact binary data "
+                    "that looks encrypted or random."
+                )
+            else:
+                continue
+            line_number = _line_number_for_value(text, value)
+            out.append(
+                _finding(
+                    state=state,
+                    category=category,
+                    severity=severity,
+                    confidence=confidence,
+                    source_type="resource",
+                    path=entry_name,
+                    line_number=line_number,
+                    value_hash=_hash_text(value),
+                    value_length=len(value),
+                    decoded_length=len(decoded),
+                    entropy=decoded_entropy,
+                    magic=magic,
+                    evidence=[
+                        f"{encoding} JSON value",
+                        f"json_path={json_path}",
+                        f"decoded_length={len(decoded)}",
+                        f"decoded_entropy={decoded_entropy:.3f}",
+                    ],
+                    message=message,
+                )
+            )
+            if len(out) >= remaining:
+                return out
+    return out
+
+
+def _json_string_values(
+    value: Any,
+    *,
+    json_path: str = "$",
+    key: str | None = None,
+    parent_keys: frozenset[str] = frozenset(),
+) -> list[tuple[str, str | None, frozenset[str], str]]:
+    if isinstance(value, str):
+        return [(json_path, key, parent_keys, value)]
+    if isinstance(value, dict):
+        keys = frozenset(str(item).lower() for item in value)
+        out: list[tuple[str, str | None, frozenset[str], str]] = []
+        for child_key, child_value in value.items():
+            child_key_text = str(child_key)
+            out.extend(
+                _json_string_values(
+                    child_value,
+                    json_path=f"{json_path}.{child_key_text}",
+                    key=child_key_text,
+                    parent_keys=keys,
+                )
+            )
+        return out
+    if isinstance(value, list):
+        out = []
+        for index, child_value in enumerate(value):
+            out.extend(
+                _json_string_values(
+                    child_value,
+                    json_path=f"{json_path}[{index}]",
+                    key=key,
+                    parent_keys=parent_keys,
+                )
+            )
+        return out
+    return []
+
+
+def _decode_string_relaxed(
+    value: str,
+    *,
+    args: JavaDetectSuspiciousBlobsArgs,
+) -> list[tuple[str, bytes]]:
+    compact = "".join(value.split())
+    if len(compact) < args.min_encoded_length:
+        return []
+    out: list[tuple[str, bytes]] = []
+    if _looks_base64(compact):
+        padded = compact + ("=" * ((4 - len(compact) % 4) % 4))
+        for label, altchars in (("base64", None), ("base64url", b"-_")):
+            try:
+                decoded = base64.b64decode(
+                    padded.encode("ascii"),
+                    altchars=altchars,
+                    validate=altchars is None,
+                )
+            except (binascii.Error, ValueError):
+                continue
+            if len(decoded) >= args.min_decoded_length:
+                out.append((label, decoded))
+                break
+    if _looks_hex(compact):
+        raw = compact[2:] if compact.startswith(("0x", "0X")) else compact
+        try:
+            decoded = binascii.unhexlify(raw)
+        except (binascii.Error, ValueError):
+            decoded = b""
+        if len(decoded) >= args.min_decoded_length:
+            out.append(("hex", decoded))
+    return out
+
+
+_RESOURCE_CONTEXT_HINTS = (
+    "auth",
+    "credential",
+    "key",
+    "oauth",
+    "secret",
+    "storage",
+    "token",
+)
+_RESOURCE_SECRET_KEY_HINTS = (
+    "access_token",
+    "apikey",
+    "api_key",
+    "auth",
+    "client_secret",
+    "credential",
+    "password",
+    "passwd",
+    "private_key",
+    "secret",
+    "stored",
+    "token",
+)
+_EXACT_RESOURCE_SECRET_KEYS = frozenset({"auth", "key", "stored"})
+_GENERIC_BLOB_KEYS = ("blob", "ciphertext", "data", "payload", "value")
+
+
+def _is_sensitive_encoded_resource_context(
+    *,
+    entry_name: str,
+    key: str | None,
+    parent_keys: frozenset[str],
+    json_path: str,
+) -> bool:
+    lowered_entry = entry_name.lower()
+    lowered_key = (key or "").lower()
+    lowered_json_path = json_path.lower()
+    if _strong_secret_key_hint(key):
+        return True
+    has_contextual_path = any(
+        hint in lowered_entry or hint in lowered_json_path
+        for hint in _RESOURCE_CONTEXT_HINTS
+    )
+    if lowered_key in _GENERIC_BLOB_KEYS and has_contextual_path:
+        return True
+    if lowered_key in _GENERIC_BLOB_KEYS and (
+        parent_keys.intersection(_RESOURCE_SECRET_KEY_HINTS)
+        or parent_keys.intersection(_EXACT_RESOURCE_SECRET_KEYS)
+    ):
+        return True
+    return lowered_key in _GENERIC_BLOB_KEYS and {"stored", "data"}.issubset(
+        parent_keys
+    )
+
+
+def _strong_secret_key_hint(key: str | None) -> bool:
+    lowered = (key or "").lower()
+    return lowered in _EXACT_RESOURCE_SECRET_KEYS or any(
+        hint in lowered for hint in _RESOURCE_SECRET_KEY_HINTS
+    )
+
+
+def _is_likely_localization_json(path: str) -> bool:
+    lowered = path.lower()
+    return (
+        "/lang/" in lowered
+        or lowered.startswith("lang/")
+        or lowered.endswith("_localization/en_us.json")
+        or "_localization/" in lowered
+    )
+
+
+def _binaryish_decoded_secret(data: bytes) -> bool:
+    if not data:
+        return False
+    if _magic(data) is not None:
+        return True
+    printable = sum(1 for byte in data if byte in b"\r\n\t" or 32 <= byte <= 126)
+    printable_ratio = printable / len(data)
+    max_entropy = min(8.0, math.log2(len(data))) if len(data) > 1 else 1.0
+    normalized_entropy = _entropy_bytes(data) / max_entropy
+    return printable_ratio < 0.65 and normalized_entropy >= 0.65
+
+
+def _line_number_for_value(text: str, value: str) -> int | None:
+    offset = text.find(value)
+    if offset < 0:
+        return None
+    return text.count("\n", 0, offset) + 1
 
 
 _BASE64_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
@@ -778,7 +1037,11 @@ def _line_number_for_bci(
 
 def _magic(data: bytes) -> str | None:
     if data.startswith(b"\xca\xfe\xba\xbe"):
-        return "class"
+        if len(data) >= 8:
+            major = int.from_bytes(data[6:8], "big")
+            if 45 <= major <= 100:
+                return "class"
+        return "macho"
     if data.startswith(b"PK\x03\x04"):
         return "zip"
     if data.startswith(b"\x1f\x8b"):
@@ -817,6 +1080,15 @@ def _is_benign_resource_like(path: str) -> bool:
             ".jar",
             ".zip",
             ".gz",
+            ".gzip",
+            ".nbt",
+            ".schem",
+            ".schematic",
+            ".mcstructure",
+            ".rsa",
+            ".dsa",
+            ".ec",
+            ".sf",
             ".class",
         )
     )
@@ -824,7 +1096,9 @@ def _is_benign_resource_like(path: str) -> bool:
 
 def _is_named_compressed_archive(path: str) -> bool:
     lowered = path.lower()
-    return lowered.endswith((".jar", ".zip", ".gz", ".gzip"))
+    return lowered.endswith(
+        (".jar", ".zip", ".gz", ".gzip", ".nbt", ".schem", ".schematic")
+    )
 
 
 def _entropy_bytes(data: bytes) -> float:

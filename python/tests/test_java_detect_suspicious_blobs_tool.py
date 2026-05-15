@@ -29,7 +29,7 @@ def _compile_suspicious_blob_jar(tmp_path: Path) -> Path:
     out = tmp_path / "classes"
     src.mkdir()
     out.mkdir()
-    hidden_class_blob = b"\xca\xfe\xba\xbe" + bytes(range(64))
+    hidden_class_blob = b"\xca\xfe\xba\xbe\x00\x00\x00\x3d" + bytes(range(64))
     encoded_class_blob = base64.b64encode(hidden_class_blob).decode("ascii")
     encoded_text = base64.b64encode(b"normal decoded text").decode("ascii")
 
@@ -80,10 +80,20 @@ public class SuspiciousBlobFixture extends ClassLoader {{
             "META-INF/libraries/example-dependency.jar", b"PK\x03\x04" + b"\x00" * 96
         )
         zf.writestr("payload/native.dat", b"\x7fELF" + b"\x00" * 96)
+        zf.writestr("payload/macho-fat.dat", b"\xca\xfe\xba\xbe\x00\x00\x00\x02")
+        zf.writestr("META-INF/TESTSIGN.RSA", bytes(range(256)) * 4)
         zf.writestr(
             "assets/demo/lang/en_us.json",
             '{"message":"This is a long ordinary localization string, not a payload."}\n',
         )
+        zf.writestr(
+            "data/demo/storage/a.json",
+            (
+                '{"stored":"AAECAwQFBgcICQoLDA0ODw==",'
+                '"data":"CxBXXqXsswI5QIdOFSzjEig/Zs20u4rZeA/mDXS7isE="}\n'
+            ),
+        )
+        zf.writestr("data/demo/structures/room.nbt", b"\x1f\x8b" + b"\x00" * 96)
     return jar_path
 
 
@@ -103,8 +113,10 @@ def test_java_detect_suspicious_blobs_reports_encoded_and_resource_anomalies(
     assert result.summary_by_state["decoder_nearby"] >= 1
     assert result.summary_by_state["decoded_to_classloader"] >= 2
     assert result.summary_by_state["compressed_blob"] >= 1
+    assert result.summary_by_state["encrypted_or_random_blob"] >= 1
     assert result.summary_by_state["decoded_to_native_load"] >= 1
     assert result.summary_by_category["archive_resource_anomaly"] >= 3
+    assert result.summary_by_category["encoded_resource_secret_blob"] >= 1
     assert all(f.value is None for f in result.findings)
     assert all(f.redacted_value_hash for f in result.findings if f.value_length)
     assert any(
@@ -113,8 +125,20 @@ def test_java_detect_suspicious_blobs_reports_encoded_and_resource_anomalies(
         and f.state == "decoded_to_classloader"
         for f in result.findings
     )
+    assert any(
+        f.path == "payload/macho-fat.dat" and f.state == "decoded_to_native_load"
+        for f in result.findings
+    )
     assert not any("example-dependency.jar" in f.path for f in result.findings)
     assert not any("lang/en_us.json" in f.path for f in result.findings)
+    assert not any("structures/room.nbt" in f.path for f in result.findings)
+    assert not any("META-INF/TESTSIGN.RSA" in f.path for f in result.findings)
+    assert any(
+        f.path == "data/demo/storage/a.json"
+        and f.state == "encrypted_or_random_blob"
+        and f.category == "encoded_resource_secret_blob"
+        for f in result.findings
+    )
     assert any(n.kind == NodeKind.java_suspicious_blob for n in ctx.kb.nodes())
 
 
