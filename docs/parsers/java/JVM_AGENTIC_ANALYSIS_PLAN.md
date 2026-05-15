@@ -89,6 +89,10 @@ Glaurung already has a growing Java path:
   target annotations.
 - Python memory tools can now detect likely secrets in class string constants and
   text resources while redacting raw values and emitting stable hashes.
+- Python memory tools can now verify JAR signatures with `jarsigner -verify` when
+  available, reporting signed/unsigned/invalid state, signed-entry counts, warnings,
+  signature metadata entries, bounded output excerpts, and KB evidence without
+  executing archive code.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -158,6 +162,10 @@ These observations should steer the next execution steps.
 - Vanilla server and launcher-style artifacts can hide the real target JAR inside
   nested or versioned entries. Native JAR indexing needs first-class nested archive,
   multi-release, and signed-JAR handling.
+- Signed metadata and cryptographic verification are distinct: smoke tests showed
+  Minecraft 1.20.1 client as Mojang-signed (`MOJANGCS.SF/RSA`) with verifier
+  warnings, while the 1.20.1 server launcher/bundler is unsigned and contains many
+  nested payload entries.
 - Source recovery will need both bytecode truth and decompiler output. The parser
   now captures the source/debug anchors needed to compare and repair decompiled code,
   but it does not yet produce a compilable project.
@@ -169,7 +177,8 @@ detour:
 
 1. **JAR index hardening follow-through**: recurse into selected nested archives,
    model multi-release class selection policy, parse Maven/service metadata contents
-   at scale, and add signed-JAR cryptographic validation when required.
+   at scale, and use `java_verify_signatures` where cryptographic signature state
+   matters.
 2. **Bytecode CFG and xrefs**: basic blocks, branch/switch/exception edges, normalized
    xref tables, `java_xrefs_from`, `java_xrefs_to`, and a first call graph.
 3. **Reachability and framework context**: connect entrypoints, ServiceLoader,
@@ -200,6 +209,7 @@ here, it is probably not represented strongly enough in the plan.
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
 | Dependency and classpath recovery | Initial Maven/service metadata path detection exists; continue with `java_infer_dependencies`, `java_infer_build_system`, manifest class paths, modules, and nested library handling |
+| Signed archive validation | Initial `java_verify_signatures` exists using `jarsigner -verify`; continue with policy scoring, certificate/timestamp summaries, and archive-set rollups |
 | Source tree/project reconstruction | `java_reconstruct_source_tree`, `java_infer_build_system` |
 | Compile diagnostics | `java_compile_recovered_project` |
 | Agentic compile-repair loop | `java_repair_decompiled_source` plus compile iteration budgets |
@@ -1250,6 +1260,44 @@ Implementation status:
 - It should be integrated into `java_risk_report` and archive-set rollups after
   calibration against large real-world JARs to avoid language/resource false
   positives.
+
+`java_verify_signatures`
+
+Inputs:
+
+- JAR path or archive locator.
+- `timeout_seconds`
+- `max_output_chars`
+
+Signals:
+
+- Signature metadata entries under `META-INF/*.SF`, `*.RSA`, `*.DSA`, and `*.EC`.
+- `jarsigner -verify -certs -verbose` exit state and bounded output.
+- Signed and unsigned entry counts from verifier output.
+- Verification warnings such as self-signed, untrusted, expired, or untimestamped
+  certificate chains.
+- Invalid, unsigned, missing-tool, timeout, and non-ZIP states.
+
+Outputs:
+
+- `verified`, `verified_with_warnings`, `unsigned`, `invalid`, `tool_missing`,
+  `timeout`, `not_zip`, or `error`.
+- Signature metadata summaries, warning/error summaries, signed/unsigned entry
+  counts, bounded output excerpts, and KB evidence nodes.
+- Raw values are not sensitive here, but verifier output remains bounded so very
+  large archives cannot flood agent context.
+
+Implementation status:
+
+- Initial Python memory tool exists and uses local JDK `jarsigner` when present.
+- Tests generate a tiny signed fixture with `keytool`/`jarsigner` and an unsigned
+  fixture at test time; no signed third-party JAR is vendored for the test.
+- Minecraft smoke tests show why this is separate from metadata indexing: the client
+  JAR can be signed by Mojang while the server launcher/bundler is unsigned but
+  contains many nested payloads.
+- Future work: parse certificate owner/issuer/timestamp summaries into structured
+  fields, add policy modes, and roll signature state into archive-set and risk
+  reports.
 
 `java_detect_entrypoints`
 

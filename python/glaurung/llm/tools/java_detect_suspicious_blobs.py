@@ -553,7 +553,9 @@ def _encoded_resource_findings(
                 category = "encoded_resource_class_blob"
                 severity = "high"
                 confidence = 0.95
-                message = "Sensitive-looking JSON value decodes to Java classfile magic."
+                message = (
+                    "Sensitive-looking JSON value decodes to Java classfile magic."
+                )
             elif magic in {"elf", "pe", "macho"}:
                 state = "decoded_to_native_load"
                 category = "encoded_resource_native_blob"

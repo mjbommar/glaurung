@@ -75,6 +75,7 @@ Implemented pieces now include:
   - `java_reachability`
   - `java_detect_secrets`
   - `java_detect_suspicious_blobs`
+  - `java_verify_signatures`
   - `java_view_bytecode`
   - `java_cfg`
   - `java_xrefs_from`
@@ -119,6 +120,10 @@ Implemented pieces now include:
 - Initial redacted secret detection across method string constants and text
   resources. Findings store category, source location, length, context with the
   candidate replaced, and stable hashes, not raw values.
+- Initial signed-JAR cryptographic validation through `java_verify_signatures`,
+  using `jarsigner -verify` when available and reporting signed/unsigned/invalid
+  state, warning counts, signed-entry counts, signature metadata entries, bounded
+  output excerpts, and KB evidence without executing archive code.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -178,6 +183,10 @@ Important lessons:
   framework defaults and indirect key construction.
 - Risk reports must keep capability, reachability, configured state, and observed
   runtime behavior separate.
+- Signature metadata and nested archive state are separate evidence dimensions:
+  Minecraft 1.20.1 client smoke tests show a Mojang-signed client JAR
+  (`MOJANGCS.SF/RSA`), while the server launcher/bundler JAR is unsigned and wraps
+  nested server payloads.
 
 ### Phase 1: Header Validation
 - [x] Magic number (0xCAFEBABE)
@@ -230,7 +239,7 @@ Important lessons:
 - [x] Vanilla server bundler extraction
 - [x] Initial multi-release JAR variant detection
 - [x] Initial signed JAR metadata detection
-- [ ] Signed JAR cryptographic validation
+- [x] Initial signed JAR cryptographic validation via `java_verify_signatures`
 
 ### Phase 6: Decompilation and Source Recovery
 - [ ] Java helper project with ASM, Vineflower, CFR, and JavaParser
