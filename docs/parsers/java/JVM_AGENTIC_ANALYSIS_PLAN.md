@@ -37,8 +37,8 @@ Glaurung already has a growing Java path:
 
 - `src/analysis/java_class.rs` parses a `.class` header, constant-pool names, class
   name, superclass, interfaces, fields, method descriptors, `Code` metadata, and
-  lightweight method-level bytecode xrefs for invokes, fields, class refs, and loaded
-  strings.
+  `LineNumberTable` entries, plus lightweight method-level bytecode xrefs for invokes,
+  fields, class refs, and loaded strings.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
@@ -65,9 +65,9 @@ Glaurung already has a growing Java path:
 
 Known limitations:
 
-- The Rust parser still skips most attributes after `Code`, including line tables,
-  local variables, annotations, bootstrap methods, records, modules, nestmates,
-  generic signatures, and stack maps.
+- The Rust parser still skips most attributes after `Code`, including local variables,
+  annotations, bootstrap methods, records, modules, nestmates, generic signatures, and
+  stack maps.
 - There is no full native bytecode instruction listing, source/bytecode mapping,
   advanced Java xref model, Java call graph, decompiler helper, or JVM runtime tool
   surface.
@@ -104,7 +104,7 @@ here, it is probably not represented strongly enough in the plan.
 | JVM instruction decode | `java_view_bytecode`, ASM helper, Phase 2 |
 | Bytecode CFG and xrefs | `java_cfg`, `java_xrefs_from`, `java_xrefs_to`, `java_call_graph` |
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
-| Attributes and annotations | Rust parser responsibilities, `java_view_class`, source recovery validation |
+| Attributes and annotations | Initial `LineNumberTable` support exists; continue Rust parser responsibilities, `java_view_class`, source recovery validation |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | `java_annotate_mappings`, `java_lookup_mapping`, `minecraft_fetch_mappings`, `minecraft_apply_mappings` |
 | Dependency and classpath recovery | `java_infer_dependencies`, `java_infer_build_system` |

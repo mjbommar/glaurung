@@ -48,8 +48,9 @@ Java class files (.class) contain Java bytecode that runs on the Java Virtual Ma
 Implemented pieces now include:
 
 - Rust classfile parsing for magic/version, constant-pool names, class/super names,
-  fields, methods, descriptors, `Code` attribute metadata, and lightweight
-  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  fields, methods, descriptors, `Code` attribute metadata, `LineNumberTable`
+  entries, and lightweight method-level bytecode xrefs for invokes, fields, class
+  refs, and loaded strings.
 - Python binding `g.analysis.parse_java_class_bytes(data)` for in-memory `.class`
   parsing without extracting JAR entries to temporary files.
 - CLI JAR/class summarization through `glaurung classfile`.
@@ -84,8 +85,8 @@ Implemented pieces now include:
 Not yet implemented:
 
 - Full JVM instruction listing, bytecode CFG, advanced Java xrefs, and call graph.
-- Full attribute parsing for line tables, local variables, annotations, modules,
-  records, sealed classes, nestmates, and bootstrap methods.
+- Full attribute parsing for local variables, annotations, modules, records, sealed
+  classes, nestmates, bootstrap methods, and stack maps.
 - Decompiler helper integration with Vineflower/CFR.
 - Clean source-project recovery: dependency inference, source tree emission, build
   file generation, compilation, compiler-diagnostic repair, and ABI/resource
@@ -116,6 +117,7 @@ Not yet implemented:
 - [x] Field enumeration
 - [x] Method signature parsing
 - [x] `Code` attribute metadata
+- [x] `LineNumberTable` parsing
 - [x] Lightweight bytecode xref extraction for invokes, fields, classes, and strings
 - [ ] Bytecode instruction decode
 - [ ] Annotation processing
@@ -203,6 +205,11 @@ pub struct JavaXref {
     pub target: String,
     pub bci: Option<u32>,
     pub constant_pool_index: Option<u16>,
+}
+
+pub struct JavaLineNumber {
+    pub start_pc: u16,
+    pub line_number: u16,
 }
 
 pub struct JavaSensitiveFinding {

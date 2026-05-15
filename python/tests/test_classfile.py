@@ -88,6 +88,20 @@ def test_parse_class_bytes_recovers_method_xrefs() -> None:
     )
 
 
+def test_parse_class_bytes_recovers_line_numbers() -> None:
+    data = _need(_HELLO_CLASS).read_bytes()
+    info = g.analysis.parse_java_class_bytes(data)
+    assert info is not None
+
+    print_message = next(m for m in info["methods"] if m["name"] == "printMessage")
+
+    assert print_message["code"]["line_numbers"] == [
+        {"start_pc": 0, "line_number": 23},
+        {"start_pc": 10, "line_number": 24},
+        {"start_pc": 20, "line_number": 25},
+    ]
+
+
 def test_parse_class_returns_none_on_non_class() -> None:
     info = g.analysis.parse_java_class_path(str(_need(_HELLO_C)))
     assert info is None

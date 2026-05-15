@@ -25,7 +25,14 @@ pub struct JavaCode {
     pub code_length: u32,
     pub exception_table_len: u16,
     pub attributes_count: u16,
+    pub line_numbers: Vec<JavaLineNumber>,
     pub xrefs: Vec<JavaXref>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaLineNumber {
+    pub start_pc: u16,
+    pub line_number: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -386,17 +393,25 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
             .unwrap(),
     );
     let mut p = exception_table_end + 2;
+    let mut line_numbers = Vec::new();
     for _ in 0..attributes_count {
         if p + 6 > body.len() {
             return Err(ClassError::Truncated("code nested attribute header"));
         }
+        let name_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        let name = read_utf8(cp, name_idx)?;
         let alen = u32::from_be_bytes(body[p + 2..p + 6].try_into().unwrap()) as usize;
-        p = (p + 6)
+        let attr_start = p + 6;
+        let attr_end = attr_start
             .checked_add(alen)
             .ok_or(ClassError::Truncated("code nested attribute body"))?;
-        if p > body.len() {
+        if attr_end > body.len() {
             return Err(ClassError::Truncated("code nested attribute body"));
         }
+        if name == "LineNumberTable" {
+            line_numbers.extend(parse_line_number_table(&body[attr_start..attr_end])?);
+        }
+        p = attr_end;
     }
     let xrefs = parse_code_xrefs(&body[code_start..code_end], cp)?;
     Ok(JavaCode {
@@ -405,8 +420,38 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         code_length,
         exception_table_len,
         attributes_count,
+        line_numbers,
         xrefs,
     })
+}
+
+fn parse_line_number_table(body: &[u8]) -> Result<Vec<JavaLineNumber>, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("LineNumberTable length"));
+    }
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let expected_len = 2usize
+        .checked_add(
+            count
+                .checked_mul(4)
+                .ok_or(ClassError::Truncated("LineNumberTable body"))?,
+        )
+        .ok_or(ClassError::Truncated("LineNumberTable body"))?;
+    if expected_len > body.len() {
+        return Err(ClassError::Truncated("LineNumberTable body"));
+    }
+    let mut out = Vec::with_capacity(count);
+    let mut p = 2usize;
+    for _ in 0..count {
+        let start_pc = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        let line_number = u16::from_be_bytes(body[p + 2..p + 4].try_into().unwrap());
+        out.push(JavaLineNumber {
+            start_pc,
+            line_number,
+        });
+        p += 4;
+    }
+    Ok(out)
 }
 
 fn parse_code_xrefs(code: &[u8], cp: &[CpEntry]) -> Result<Vec<JavaXref>, ClassError> {
@@ -802,6 +847,40 @@ mod tests {
                     && xref.bci == 1
             }),
             "expected constructor string constant xref, got {init_xrefs:?}",
+        );
+    }
+
+    #[test]
+    fn parses_line_number_tables() {
+        let path = Path::new("samples/binaries/platforms/linux/amd64/export/java/HelloWorld.class");
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).unwrap();
+        let info = parse_class(&data).expect("parse should succeed");
+
+        let print_message = info
+            .methods
+            .iter()
+            .find(|m| m.name == "printMessage")
+            .expect("printMessage method");
+        let line_numbers = &print_message.code.as_ref().expect("code").line_numbers;
+        assert_eq!(
+            line_numbers,
+            &vec![
+                JavaLineNumber {
+                    start_pc: 0,
+                    line_number: 23,
+                },
+                JavaLineNumber {
+                    start_pc: 10,
+                    line_number: 24,
+                },
+                JavaLineNumber {
+                    start_pc: 20,
+                    line_number: 25,
+                },
+            ],
         );
     }
 

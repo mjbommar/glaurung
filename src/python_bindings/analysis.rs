@@ -330,6 +330,14 @@ fn java_code_to_py(
     dict.set_item("code_length", code.code_length)?;
     dict.set_item("exception_table_len", code.exception_table_len)?;
     dict.set_item("attributes_count", code.attributes_count)?;
+    let line_numbers = pyo3::types::PyList::empty(py);
+    for line in code.line_numbers {
+        let ldict = pyo3::types::PyDict::new(py);
+        ldict.set_item("start_pc", line.start_pc)?;
+        ldict.set_item("line_number", line.line_number)?;
+        line_numbers.append(ldict)?;
+    }
+    dict.set_item("line_numbers", line_numbers)?;
     let xrefs = pyo3::types::PyList::empty(py);
     for xref in code.xrefs {
         let xdict = pyo3::types::PyDict::new(py);
