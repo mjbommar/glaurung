@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import zipfile
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +26,15 @@ AbiDifferenceKind = Literal[
     "changed_class_access",
     "changed_field_access",
     "changed_method_access",
+    "missing_class_annotation",
+    "extra_class_annotation",
+    "changed_class_annotation",
+    "missing_field_annotation",
+    "extra_field_annotation",
+    "changed_field_annotation",
+    "missing_method_annotation",
+    "extra_method_annotation",
+    "changed_method_annotation",
 ]
 
 
@@ -37,6 +47,13 @@ class JavaCompareRebuiltAbiArgs(BaseModel):
     )
     max_classes: int = Field(50_000, ge=0)
     max_differences: int = Field(512, ge=0)
+    include_annotations: bool = Field(
+        False,
+        description=(
+            "Compare runtime-visible and runtime-invisible class/member annotation "
+            "descriptors and element fingerprints."
+        ),
+    )
 
 
 class JavaAbiDifference(BaseModel):
@@ -44,6 +61,10 @@ class JavaAbiDifference(BaseModel):
     class_name: str
     member_name: str | None = None
     descriptor: str | None = None
+    annotation_descriptor: str | None = None
+    annotation_visibility: str | None = None
+    original_annotation_sha256: str | None = None
+    rebuilt_annotation_sha256: str | None = None
     original_access_flags: int | None = None
     rebuilt_access_flags: int | None = None
     message: str
@@ -52,6 +73,7 @@ class JavaAbiDifference(BaseModel):
 class JavaCompareRebuiltAbiResult(BaseModel):
     original_path: str
     rebuilt_path: str | None = None
+    include_annotations: bool = False
     abi_match: bool
     original_class_count: int = 0
     rebuilt_class_count: int = 0
@@ -68,6 +90,9 @@ class _ClassAbi(BaseModel):
     access_flags: int
     fields: dict[str, int] = Field(default_factory=dict)
     methods: dict[str, int] = Field(default_factory=dict)
+    annotations: dict[str, str] = Field(default_factory=dict)
+    field_annotations: dict[str, dict[str, str]] = Field(default_factory=dict)
+    method_annotations: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class _AbiLoadResult(BaseModel):
@@ -86,7 +111,8 @@ class JavaCompareRebuiltAbiTool(
                 name="java_compare_rebuilt_abi",
                 description=(
                     "Compare original and rebuilt Java class ABI surfaces using "
-                    "class, field, method descriptor, and access flag evidence."
+                    "class, field, method descriptor, access flag, and optional "
+                    "annotation evidence."
                 ),
                 tags=("java", "abi", "source-recovery", "verification", "kb"),
             ),
@@ -124,8 +150,8 @@ class JavaCompareRebuiltAbiTool(
                 stop_reasons=["rebuilt_path_missing"],
             )
 
-        original = _load_abi(original_path, args.max_classes)
-        rebuilt = _load_abi(rebuilt_path, args.max_classes)
+        original = _load_abi(original_path, args.max_classes, args.include_annotations)
+        rebuilt = _load_abi(rebuilt_path, args.max_classes, args.include_annotations)
         stop_reasons = [*original.stop_reasons, *rebuilt.stop_reasons]
         differences = _compare_abi(
             original.classes, rebuilt.classes, args.max_differences
@@ -140,6 +166,7 @@ class JavaCompareRebuiltAbiTool(
         result = JavaCompareRebuiltAbiResult(
             original_path=str(original_path),
             rebuilt_path=str(rebuilt_path),
+            include_annotations=args.include_annotations,
             abi_match=not differences
             and not original.stop_reasons
             and not rebuilt.stop_reasons,
@@ -156,15 +183,19 @@ class JavaCompareRebuiltAbiTool(
         return result
 
 
-def _load_abi(path: Path, max_classes: int) -> _AbiLoadResult:
+def _load_abi(
+    path: Path, max_classes: int, include_annotations: bool
+) -> _AbiLoadResult:
     result = _AbiLoadResult()
     if path.is_dir():
         class_files = sorted(p for p in path.rglob("*.class") if p.is_file())
         for class_file in class_files:
-            _add_class_bytes(result, class_file.read_bytes(), max_classes)
+            _add_class_bytes(
+                result, class_file.read_bytes(), max_classes, include_annotations
+            )
         return result
     if path.is_file() and path.suffix == ".class":
-        _add_class_bytes(result, path.read_bytes(), max_classes)
+        _add_class_bytes(result, path.read_bytes(), max_classes, include_annotations)
         return result
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as zf:
@@ -173,13 +204,20 @@ def _load_abi(path: Path, max_classes: int) -> _AbiLoadResult:
                     continue
                 if info.filename.startswith("META-INF/versions/"):
                     continue
-                _add_class_bytes(result, zf.read(info), max_classes)
+                _add_class_bytes(
+                    result, zf.read(info), max_classes, include_annotations
+                )
         return result
     result.stop_reasons.append("unsupported_class_container")
     return result
 
 
-def _add_class_bytes(result: _AbiLoadResult, data: bytes, max_classes: int) -> None:
+def _add_class_bytes(
+    result: _AbiLoadResult,
+    data: bytes,
+    max_classes: int,
+    include_annotations: bool,
+) -> None:
     if len(result.classes) >= max_classes:
         result.truncated = True
         _append_once(result.stop_reasons, "max_classes")
@@ -192,11 +230,11 @@ def _add_class_bytes(result: _AbiLoadResult, data: bytes, max_classes: int) -> N
     if parsed is None:
         result.parse_error_count += 1
         return
-    abi = _class_abi(parsed)
+    abi = _class_abi(parsed, include_annotations)
     result.classes[abi.class_name] = abi
 
 
-def _class_abi(parsed: dict[str, Any]) -> _ClassAbi:
+def _class_abi(parsed: dict[str, Any], include_annotations: bool) -> _ClassAbi:
     fields = {
         _member_key(member): int(member.get("access_flags", 0))
         for member in parsed.get("fields", [])
@@ -212,6 +250,15 @@ def _class_abi(parsed: dict[str, Any]) -> _ClassAbi:
         access_flags=int(parsed["access_flags"]),
         fields=fields,
         methods=methods,
+        annotations=_annotations(parsed.get("annotations", []))
+        if include_annotations
+        else {},
+        field_annotations=_member_annotations(parsed.get("fields", []))
+        if include_annotations
+        else {},
+        method_annotations=_member_annotations(parsed.get("methods", []))
+        if include_annotations
+        else {},
     )
 
 
@@ -285,6 +332,38 @@ def _compare_class(
         missing_kind="missing_field",
         extra_kind="extra_field",
         changed_kind="changed_field_access",
+        differences=differences,
+        max_differences=max_differences,
+    )
+    _compare_annotations(
+        class_name=original.class_name,
+        member_name=None,
+        descriptor=None,
+        original=original.annotations,
+        rebuilt=rebuilt.annotations,
+        missing_kind="missing_class_annotation",
+        extra_kind="extra_class_annotation",
+        changed_kind="changed_class_annotation",
+        differences=differences,
+        max_differences=max_differences,
+    )
+    _compare_member_annotations(
+        class_name=original.class_name,
+        original=original.field_annotations,
+        rebuilt=rebuilt.field_annotations,
+        missing_kind="missing_field_annotation",
+        extra_kind="extra_field_annotation",
+        changed_kind="changed_field_annotation",
+        differences=differences,
+        max_differences=max_differences,
+    )
+    _compare_member_annotations(
+        class_name=original.class_name,
+        original=original.method_annotations,
+        rebuilt=rebuilt.method_annotations,
+        missing_kind="missing_method_annotation",
+        extra_kind="extra_method_annotation",
+        changed_kind="changed_method_annotation",
         differences=differences,
         max_differences=max_differences,
     )
@@ -367,6 +446,184 @@ def _add_difference(
         differences.append(difference)
 
 
+def _member_annotations(members: Any) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        annotations = _annotations(member.get("annotations", []))
+        if annotations:
+            result[_member_key(member)] = annotations
+    return result
+
+
+def _annotations(raw_annotations: Any) -> dict[str, str]:
+    annotations: dict[str, str] = {}
+    if not isinstance(raw_annotations, list):
+        return annotations
+    for annotation in raw_annotations:
+        if not isinstance(annotation, dict):
+            continue
+        descriptor = str(annotation.get("descriptor") or "")
+        visibility = str(annotation.get("visibility") or "unknown")
+        if not descriptor:
+            continue
+        key = _annotation_key(visibility, descriptor)
+        annotations[key] = _annotation_fingerprint(annotation)
+    return annotations
+
+
+def _annotation_key(visibility: str, descriptor: str) -> str:
+    return f"{visibility}:{descriptor}"
+
+
+def _split_annotation_key(key: str) -> tuple[str, str]:
+    visibility, _, descriptor = key.partition(":")
+    return visibility, descriptor
+
+
+def _annotation_fingerprint(annotation: dict[str, Any]) -> str:
+    normalized = json.dumps(
+        annotation,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _compare_member_annotations(
+    *,
+    class_name: str,
+    original: dict[str, dict[str, str]],
+    rebuilt: dict[str, dict[str, str]],
+    missing_kind: AbiDifferenceKind,
+    extra_kind: AbiDifferenceKind,
+    changed_kind: AbiDifferenceKind,
+    differences: list[JavaAbiDifference],
+    max_differences: int,
+) -> None:
+    for member_key in sorted(set(original) | set(rebuilt)):
+        member_name, descriptor = _split_member_key(member_key)
+        _compare_annotations(
+            class_name=class_name,
+            member_name=member_name,
+            descriptor=descriptor,
+            original=original.get(member_key, {}),
+            rebuilt=rebuilt.get(member_key, {}),
+            missing_kind=missing_kind,
+            extra_kind=extra_kind,
+            changed_kind=changed_kind,
+            differences=differences,
+            max_differences=max_differences,
+        )
+
+
+def _compare_annotations(
+    *,
+    class_name: str,
+    member_name: str | None,
+    descriptor: str | None,
+    original: dict[str, str],
+    rebuilt: dict[str, str],
+    missing_kind: AbiDifferenceKind,
+    extra_kind: AbiDifferenceKind,
+    changed_kind: AbiDifferenceKind,
+    differences: list[JavaAbiDifference],
+    max_differences: int,
+) -> None:
+    for key in sorted(set(original) - set(rebuilt)):
+        visibility, annotation_descriptor = _split_annotation_key(key)
+        _add_difference(
+            differences,
+            max_differences,
+            JavaAbiDifference(
+                kind=missing_kind,
+                class_name=class_name,
+                member_name=member_name,
+                descriptor=descriptor,
+                annotation_descriptor=annotation_descriptor,
+                annotation_visibility=visibility,
+                original_annotation_sha256=original[key],
+                message=_annotation_message(
+                    "missing",
+                    class_name,
+                    member_name,
+                    descriptor,
+                    annotation_descriptor,
+                ),
+            ),
+        )
+    for key in sorted(set(rebuilt) - set(original)):
+        visibility, annotation_descriptor = _split_annotation_key(key)
+        _add_difference(
+            differences,
+            max_differences,
+            JavaAbiDifference(
+                kind=extra_kind,
+                class_name=class_name,
+                member_name=member_name,
+                descriptor=descriptor,
+                annotation_descriptor=annotation_descriptor,
+                annotation_visibility=visibility,
+                rebuilt_annotation_sha256=rebuilt[key],
+                message=_annotation_message(
+                    "extra",
+                    class_name,
+                    member_name,
+                    descriptor,
+                    annotation_descriptor,
+                ),
+            ),
+        )
+    for key in sorted(set(original) & set(rebuilt)):
+        if original[key] == rebuilt[key]:
+            continue
+        visibility, annotation_descriptor = _split_annotation_key(key)
+        _add_difference(
+            differences,
+            max_differences,
+            JavaAbiDifference(
+                kind=changed_kind,
+                class_name=class_name,
+                member_name=member_name,
+                descriptor=descriptor,
+                annotation_descriptor=annotation_descriptor,
+                annotation_visibility=visibility,
+                original_annotation_sha256=original[key],
+                rebuilt_annotation_sha256=rebuilt[key],
+                message=_annotation_message(
+                    "changed",
+                    class_name,
+                    member_name,
+                    descriptor,
+                    annotation_descriptor,
+                ),
+            ),
+        )
+
+
+def _annotation_message(
+    state: str,
+    class_name: str,
+    member_name: str | None,
+    descriptor: str | None,
+    annotation_descriptor: str,
+) -> str:
+    target = (
+        class_name
+        if member_name is None
+        else f"{class_name}.{member_name}{descriptor or ''}"
+    )
+    if state == "missing":
+        return (
+            f"Rebuilt output is missing annotation {annotation_descriptor} on {target}."
+        )
+    if state == "extra":
+        return f"Rebuilt output adds annotation {annotation_descriptor} on {target}."
+    return f"Annotation {annotation_descriptor} changed on {target}."
+
+
 def _append_once(items: list[str], value: str) -> None:
     if value not in items:
         items.append(value)
@@ -379,6 +636,7 @@ def _add_abi_node(kb: KnowledgeBase, result: JavaCompareRebuiltAbiResult) -> Non
                 result.original_path,
                 result.rebuilt_path or "",
                 str(result.abi_match),
+                str(result.include_annotations),
                 str(result.difference_count),
             ]
         ).encode("utf-8")

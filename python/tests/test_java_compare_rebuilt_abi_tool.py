@@ -115,6 +115,96 @@ public class Main {
     )
 
 
+def test_java_compare_rebuilt_abi_detects_missing_annotations(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_compare_rebuilt_abi import build_tool
+
+    original = _compile_source(
+        tmp_path,
+        """
+package app;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+@interface Marker {
+    String value();
+}
+
+@Marker("class")
+public class Main {
+    @Marker("field")
+    public int count;
+
+    @Marker("method")
+    public String value() {
+        return "hello";
+    }
+}
+""",
+        out_name="original",
+    )
+    rebuilt = _compile_source(
+        tmp_path,
+        """
+package app;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+@interface Marker {
+    String value();
+}
+
+public class Main {
+    public int count;
+
+    public String value() {
+        return "hello";
+    }
+}
+""",
+        out_name="rebuilt",
+    )
+    ctx = _ctx(original)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            original_path=str(original),
+            rebuilt_path=str(rebuilt),
+            include_annotations=True,
+        ),
+    )
+
+    assert result.abi_match is False
+    assert any(
+        diff.kind == "missing_class_annotation"
+        and diff.class_name == "app/Main"
+        and diff.annotation_descriptor == "Lapp/Marker;"
+        for diff in result.differences
+    )
+    assert any(
+        diff.kind == "missing_field_annotation"
+        and diff.class_name == "app/Main"
+        and diff.member_name == "count"
+        and diff.annotation_descriptor == "Lapp/Marker;"
+        for diff in result.differences
+    )
+    assert any(
+        diff.kind == "missing_method_annotation"
+        and diff.class_name == "app/Main"
+        and diff.member_name == "value"
+        and diff.annotation_descriptor == "Lapp/Marker;"
+        for diff in result.differences
+    )
+
+
 def test_java_compare_rebuilt_abi_handles_missing_rebuilt_path(tmp_path: Path) -> None:
     from glaurung.llm.tools.java_compare_rebuilt_abi import build_tool
 

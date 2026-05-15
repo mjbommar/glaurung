@@ -51,6 +51,10 @@ class JavaValidateRecoveredApplicationArgs(BaseModel):
     classpath: list[str] = Field(default_factory=list)
     run_compile: bool = True
     allow_generated_stubs: bool = False
+    include_annotations: bool = Field(
+        False,
+        description="Include class/member annotation parity in ABI validation.",
+    )
     max_abi_differences: int = Field(64, ge=0)
     max_resource_differences: int = Field(64, ge=0)
     max_resources: int = Field(20_000, ge=0)
@@ -203,6 +207,7 @@ class JavaValidateRecoveredApplicationTool(
                     abi_tool.input_model(
                         original_path=str(original_path),
                         rebuilt_path=str(rebuilt_path),
+                        include_annotations=args.include_annotations,
                         max_differences=args.max_abi_differences,
                     ),
                 )

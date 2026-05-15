@@ -42,7 +42,7 @@ def _write_source_project(root: Path, source: str = _SOURCE) -> Path:
     return source_path
 
 
-def _compile_original_jar(tmp_path: Path) -> Path:
+def _compile_original_jar(tmp_path: Path, source: str = _SOURCE) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java validation fixture")
     src = tmp_path / "original-src"
@@ -50,7 +50,7 @@ def _compile_original_jar(tmp_path: Path) -> Path:
     src.mkdir()
     classes.mkdir()
     source_path = src / "Main.java"
-    source_path.write_text(_SOURCE.strip() + "\n", encoding="utf-8")
+    source_path.write_text(source.strip() + "\n", encoding="utf-8")
     subprocess.run(
         ["javac", "--release", "17", "-d", str(classes), str(source_path)],
         check=True,
@@ -127,6 +127,77 @@ def test_java_validate_recovered_application_detects_resource_drift(
     assert result.abi_match is True
     assert result.resource_match is False
     assert any(diff.kind == "missing_resource" for diff in result.resource_differences)
+
+
+def test_java_validate_recovered_application_can_require_annotation_parity(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_validate_recovered_application import build_tool
+
+    annotated_source = """
+package app;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+@interface Marker {
+    String value();
+}
+
+@Marker("class")
+public class Main {
+    @Marker("method")
+    public String value() {
+        return "hello";
+    }
+}
+"""
+    original = _compile_original_jar(tmp_path, annotated_source)
+    project = tmp_path / "recovered"
+    _write_source_project(
+        project,
+        """
+package app;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+@interface Marker {
+    String value();
+}
+
+public class Main {
+    public String value() {
+        return "hello";
+    }
+}
+""",
+    )
+    ctx = _ctx(original)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            original_path=str(original),
+            source_project_root=str(project),
+            java_release=17,
+            include_annotations=True,
+        ),
+    )
+
+    assert result.validation_passed is False
+    assert result.status == "invalid"
+    assert result.compile_success is True
+    assert result.abi_match is False
+    assert any(
+        diff.kind == "missing_class_annotation"
+        and diff.annotation_descriptor == "Lapp/Marker;"
+        for diff in result.abi_differences
+    )
 
 
 def test_java_validate_recovered_application_rejects_generated_stubs(

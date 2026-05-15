@@ -154,7 +154,8 @@ Implemented pieces now include:
   still need decompilation, and emitting explicit generated stubs only when requested.
 - Initial ABI comparison through `java_compare_rebuilt_abi`, comparing original and
   rebuilt JARs or class directories by class names, field descriptors, method
-  descriptors, and access flags, with `java_abi_comparison` KB evidence.
+  descriptors, access flags, and optional class/member annotation fingerprints, with
+  `java_abi_comparison` KB evidence.
 - Initial recovered-application validation through
   `java_validate_recovered_application`, orchestrating bounded `javac`
   compilation, rebuilt ABI comparison, original archive resource parity against
@@ -304,7 +305,9 @@ Important lessons:
 - [x] Initial ABI/API comparison between original and rebuilt classes
 - [x] Initial resource validation between original archives and recovered
   `src/main/resources`
-- [ ] Annotation/module validation between original and rebuilt artifacts
+- [x] Optional class/member annotation parity in ABI validation
+- [ ] Parameter annotation/default and module validation between original and rebuilt
+  artifacts
 - [x] Initial recovered application validation report
 
 ### Phase 7: Static Behavior Audit and Risk Reporting
