@@ -116,6 +116,33 @@ Not yet implemented:
   correlation, framework-aware reachability, and richer directory-level risk
   reporting.
 
+### Current Roadmap Adjustment
+
+Recent Minecraft and BMC4 mod smoke tests changed the order of work. The parser and
+agent tools are now strong enough for evidence-backed static triage, so the next
+priority is not another broad scanner. The next priority is structure:
+
+1. Harden JAR indexing for nested archives, multi-release variants, signed metadata,
+   module/Maven/service metadata, and budget reporting.
+2. Build bytecode CFG, normalized xrefs, and an initial call graph.
+3. Add framework/mod-loader reachability so findings can move from "capability" to
+   "reachable from lifecycle or entrypoint" when evidence supports it.
+4. Calibrate risk reports, especially secret false positives and config semantics.
+5. Add ASM/Vineflower/CFR helper tooling for decompiler output and source/bytecode
+   correlation.
+6. Start clean source recovery: emit source/resources, infer dependencies/build files,
+   compile, repair diagnostics, and compare rebuilt ABI/resources.
+
+Important lessons:
+
+- Mojang/ProGuard mappings are mandatory for readable answers on obfuscated jars.
+- Minecraft debug tables can provide useful line/local-scope anchors even when names
+  remain obfuscated or synthetic.
+- Config correlation should stay conservative; exact matches are reliable but miss
+  framework defaults and indirect key construction.
+- Risk reports must keep capability, reachability, configured state, and observed
+  runtime behavior separate.
+
 ### Phase 1: Header Validation
 - [x] Magic number (0xCAFEBABE)
 - [x] Version extraction

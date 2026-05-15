@@ -85,9 +85,11 @@ Known limitations:
   decompiler helper, or JVM runtime tool surface.
 - There is no dependency resolver, build-system inference, source tree emitter,
   compile diagnostic parser, repair loop, or ABI comparison for recovered Java source.
-- There is no generic static-audit layer for sensitive API sinks, entrypoint
-  detection, config/resource correlation, source-to-sink slicing, secret redaction,
-  or archive-set risk reporting.
+- The generic static-audit layer now has initial sensitive sinks, entrypoints,
+  config/resource extraction, config correlation, redacted secret scanning,
+  archive-set summaries, and per-archive risk reports. It still lacks precise
+  reachability, interprocedural source-to-sink slicing, framework-aware config
+  semantics, dynamic observation, and mature risk calibration.
 - The current memory agent mostly registers hand-written wrappers instead of using
   `tool_to_pyd_ai`, which means many tool calls bypass generic evidence logging.
 - Local JDK availability can vary. Dynamic, decompiler, compiler, and JDK-tool
@@ -105,6 +107,61 @@ Copied Minecraft fixtures currently include:
 - `tmp/minecraft-jars/local-server/server-starter-server.jar`
 
 These are ignored by git and should remain in `tmp/`.
+
+## Findings From Implementation and Smoke Tests
+
+These observations should steer the next execution steps.
+
+- Minecraft and Forge/Fabric/modpack JARs are useful stress tests because they combine
+  obfuscation, mappings, debug metadata, nested packaging, service metadata,
+  reflection, config resources, and large archive sizes.
+- Mojang mappings are essential for useful human explanations. Raw bytecode remains
+  the source of truth, but names such as `enn#s()V` only become actionable when the
+  tool can also report `net.minecraft.client.Minecraft#tick()V`.
+- Debug metadata is present in some Minecraft client classes, but it is not clean
+  source recovery metadata. `LineNumberTable` and local-variable slot scopes are
+  valuable; `SourceFile` may be generic and local names may be synthetic or obfuscated
+  (`$$0`, `$$1`, etc.).
+- Config correlation must remain conservative. Exact key matching prevents false
+  claims like "this behavior is enabled", but it misses indirect key construction,
+  framework default config generation, and policy/lifecycle semantics.
+- Secret detection is useful as a redacted signal, but high-entropy strings in
+  manifests, rendering constants, mod metadata, and generated identifiers can dominate
+  risk reports. Ranking needs stronger context filters and category-specific
+  suppression before secrets should drive top-level severity.
+- The current risk-report state is "capability plus local evidence", not full
+  exploitability. Risk answers must continue to distinguish capability, entrypoint or
+  framework reachability, configured/enabled state, and dynamic observation.
+- Vanilla server and launcher-style artifacts can hide the real target JAR inside
+  nested or versioned entries. Native JAR indexing needs first-class nested archive,
+  multi-release, and signed-JAR handling.
+- Source recovery will need both bytecode truth and decompiler output. The parser
+  now captures the source/debug anchors needed to compare and repair decompiled code,
+  but it does not yet produce a compilable project.
+
+## Near-Term Execution Order
+
+The next work should happen in this order unless a specific investigation requires a
+detour:
+
+1. **JAR index hardening**: native safe JAR indexer, nested archive discovery,
+   multi-release class variants, signed-JAR metadata, Maven/module/service metadata,
+   and archive budget reporting.
+2. **Bytecode CFG and xrefs**: basic blocks, branch/switch/exception edges, normalized
+   xref tables, `java_xrefs_from`, `java_xrefs_to`, and a first call graph.
+3. **Reachability and framework context**: connect entrypoints, ServiceLoader,
+   Forge/Fabric/NeoForge metadata, schedulers, thread starts, static initializers, and
+   mod lifecycle hooks to sensitive behavior.
+4. **Risk report calibration**: reduce secret false positives, add policy/suppression
+   hooks, separate capability/reachable/configured/observed states in every ranked
+   item, and make archive-set reports consume per-archive `java_risk_report` output.
+5. **Decompiler helper**: add the Java helper project with ASM first, then
+   Vineflower/CFR wrappers and source/bytecode correlation.
+6. **Clean source recovery loop**: emit source/resources, infer dependencies/build
+   metadata, compile with `javac`/Maven/Gradle, parse diagnostics, repair, and compare
+   rebuilt ABI/resources against the original archive.
+7. **Opt-in runtime observation**: bounded JDI/JFR/javaagent tooling only after static
+   evidence and source recovery have enough structure to constrain what is executed.
 
 ## Gap Coverage Matrix
 
