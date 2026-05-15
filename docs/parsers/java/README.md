@@ -62,6 +62,7 @@ Implemented pieces now include:
   - `java_view_class`
   - `java_annotate_mappings`
   - `java_lookup_mapping`
+  - `java_audit_archive_set`
   - `minecraft_detect_archive`
   - `minecraft_fetch_mappings`
   - `minecraft_extract_bundled_server`
@@ -70,6 +71,8 @@ Implemented pieces now include:
 - Descriptor-aware deobfuscation annotations on sensitive-behavior findings,
   including mapped class names and mapped method names/signatures when a
   ProGuard/Mojang mapping file is supplied.
+- Archive-set auditing for modpack-style directories, combining Minecraft metadata
+  and security-sensitive sink summaries across many JARs.
 - Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
   mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
   jars remain in ignored `tmp/` for smoke tests only.
@@ -158,7 +161,9 @@ Not yet implemented:
   behavior, enabled behavior, dormant behavior, and unknown behavior.
 - [ ] `java_detect_secrets` with strict redaction, value hashing, entropy/context
   evidence, and no default raw secret output.
-- [ ] `java_risk_report` and directory-level audit commands for large JAR sets.
+- [x] Initial `java_audit_archive_set` for directory-level audit summaries across
+  large JAR sets.
+- [ ] `java_risk_report` with reachability/config correlation and ranked findings.
 - [ ] Agent prompt and Pydantic models for cited audit findings rather than
   free-form security claims.
 
