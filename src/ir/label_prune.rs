@@ -85,11 +85,7 @@ mod tests {
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
-            body: vec![
-                Stmt::Label(0x100),
-                Stmt::Nop,
-                Stmt::Return { value: None },
-            ],
+            body: vec![Stmt::Label(0x100), Stmt::Nop, Stmt::Return { value: None }],
         };
         prune_unreferenced_labels(&mut f);
         assert_eq!(f.body.len(), 2);

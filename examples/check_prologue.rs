@@ -1,16 +1,18 @@
-use glaurung::ir::ast::{lower, render};
-use glaurung::ir::expr_reconstruct::reconstruct;
-use glaurung::ir::ssa::compute_ssa;
-use glaurung::ir::structure::recover;
-use glaurung::ir::lift_function::lift_function_from_bytes;
 use glaurung::analysis::cfg::{analyze_functions_bytes, Budgets};
 use glaurung::core::binary::Arch;
 use glaurung::ir::arm64_prologue::recognise_arm64_prologue;
-use glaurung::ir::naming::apply_role_names;
+use glaurung::ir::ast::{lower, render};
 use glaurung::ir::call_args::CallConv;
+use glaurung::ir::expr_reconstruct::reconstruct;
+use glaurung::ir::lift_function::lift_function_from_bytes;
+use glaurung::ir::naming::apply_role_names;
+use glaurung::ir::ssa::compute_ssa;
+use glaurung::ir::structure::recover;
 
 fn main() {
-    let data = std::fs::read("samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc").unwrap();
+    let data =
+        std::fs::read("samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc")
+            .unwrap();
     let (funcs, _) = analyze_functions_bytes(&data, &Budgets::default());
     let main = funcs.iter().find(|f| f.entry_point.value == 0x700).unwrap();
     let lf = lift_function_from_bytes(&data, main, Arch::AArch64).unwrap();

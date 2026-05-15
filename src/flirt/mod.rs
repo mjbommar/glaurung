@@ -248,9 +248,7 @@ pub fn discover_flirt_seeds(
 /// Rename every `sub_*` function whose entry-VA prologue exactly matches
 /// a signature in `lib`. Reads prologues from `data` via the binary's
 /// section table (`object` crate). Returns the number of renames applied.
-pub fn apply_flirt_overrides(
-    data: &[u8], functions: &mut [Function], lib: &FlirtLibrary,
-) -> usize {
+pub fn apply_flirt_overrides(data: &[u8], functions: &mut [Function], lib: &FlirtLibrary) -> usize {
     let maps = build_va_map(data);
     let mut renamed = 0usize;
     for f in functions.iter_mut() {

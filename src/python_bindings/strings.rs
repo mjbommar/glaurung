@@ -47,8 +47,14 @@ pub fn register_strings_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyR
     strings_mod.add_function(wrap_pyfunction!(shannon_entropy_py, &strings_mod)?)?;
     strings_mod.add_function(wrap_pyfunction!(printable_ascii_ratio_py, &strings_mod)?)?;
     strings_mod.add_function(wrap_pyfunction!(is_base64_py, &strings_mod)?)?;
-    strings_mod.add_function(wrap_pyfunction!(character_class_histogram_py, &strings_mod)?)?;
-    strings_mod.add_function(wrap_pyfunction!(unicode_script_frequencies_py, &strings_mod)?)?;
+    strings_mod.add_function(wrap_pyfunction!(
+        character_class_histogram_py,
+        &strings_mod
+    )?)?;
+    strings_mod.add_function(wrap_pyfunction!(
+        unicode_script_frequencies_py,
+        &strings_mod
+    )?)?;
     // Reuse the existing triage `infer`-based content sniffer to
     // identify embedded blobs (jpeg / png / pdf / zip / executable
     // formats) — we already build the table once for triage; this
@@ -352,10 +358,7 @@ fn character_class_histogram_py(py: Python<'_>, data: &[u8]) -> PyResult<PyObjec
 /// Keys are script names (`Latin`, `Cyrillic`, `Han`, …).
 #[pyfunction]
 #[pyo3(name = "unicode_script_frequencies")]
-fn unicode_script_frequencies_py(
-    py: Python<'_>,
-    data: &[u8],
-) -> PyResult<PyObject> {
+fn unicode_script_frequencies_py(py: Python<'_>, data: &[u8]) -> PyResult<PyObject> {
     let m = crate::strings::metrics::unicode_script_frequencies(data);
     let dict = pyo3::types::PyDict::new(py);
     for (k, v) in m {

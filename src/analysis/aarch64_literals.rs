@@ -132,7 +132,14 @@ mod tests {
     }
 
     fn mem_operand(base: &str, disp: i64) -> Operand {
-        Operand::memory(0, Access::Read, Some(disp), Some(base.to_string()), None, None)
+        Operand::memory(
+            0,
+            Access::Read,
+            Some(disp),
+            Some(base.to_string()),
+            None,
+            None,
+        )
     }
 
     fn mk(mnem: &str, addr: u64, ops: Vec<Operand>) -> Instruction {
@@ -155,7 +162,11 @@ mod tests {
         // adrp x0, #0x12000
         // add  x0, x0, #0x456    ; -> 0x12456
         let insns = vec![
-            mk("adrp", 0x1000, vec![reg_operand("x0"), imm_operand(0x12000)]),
+            mk(
+                "adrp",
+                0x1000,
+                vec![reg_operand("x0"), imm_operand(0x12000)],
+            ),
             mk(
                 "add",
                 0x1004,
@@ -173,7 +184,11 @@ mod tests {
         // adrp x1, #0x20000
         // ldr  w2, [x1, #0x10]   ; -> 0x20010
         let insns = vec![
-            mk("adrp", 0x2000, vec![reg_operand("x1"), imm_operand(0x20000)]),
+            mk(
+                "adrp",
+                0x2000,
+                vec![reg_operand("x1"), imm_operand(0x20000)],
+            ),
             mk(
                 "ldr",
                 0x2004,

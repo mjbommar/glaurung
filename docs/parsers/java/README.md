@@ -4,6 +4,10 @@
 
 Java class files (.class) contain Java bytecode that runs on the Java Virtual Machine (JVM). GLAURUNG's Java parser handles class files, JAR archives, and provides analysis capabilities for JVM-based applications including Kotlin, Scala, and other JVM languages.
 
+## Planning
+
+- [JVM and Java Agentic Analysis Plan](./JVM_AGENTIC_ANALYSIS_PLAN.md) - detailed plan for class/JAR parsing, JVM bytecode analysis, decompilation, Minecraft mappings, runtime JVM debugging, and pydantic-ai tool integration.
+
 ## Format Specifications
 
 ### Primary References
@@ -39,34 +43,121 @@ Java class files (.class) contain Java bytecode that runs on the Java Virtual Ma
 
 ## Parser Implementation
 
+### Current Implementation Status
+
+Implemented pieces now include:
+
+- Rust classfile parsing for magic/version, constant-pool names, class/super names,
+  fields, methods, descriptors, `Code` attribute metadata, and lightweight
+  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
+- Python binding `g.analysis.parse_java_class_bytes(data)` for in-memory `.class`
+  parsing without extracting JAR entries to temporary files.
+- CLI JAR/class summarization through `glaurung classfile`.
+- Agent memory tools:
+  - `java_index_archive`
+  - `java_detect_obfuscation`
+  - `java_detect_security_sensitive_behavior`
+  - `java_detect_entrypoints`
+  - `java_extract_config_surface`
+  - `java_view_class`
+  - `java_annotate_mappings`
+  - `java_lookup_mapping`
+  - `minecraft_detect_archive`
+  - `minecraft_fetch_mappings`
+  - `minecraft_extract_bundled_server`
+- Ask-command Java seeding for archive summaries, obfuscation annotations, and
+  Minecraft loader/version/mapping hints.
+- Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
+  mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
+  jars remain in ignored `tmp/` for smoke tests only.
+
+Not yet implemented:
+
+- Full JVM instruction listing, bytecode CFG, advanced Java xrefs, and call graph.
+- Full attribute parsing for line tables, local variables, annotations, modules,
+  records, sealed classes, nestmates, and bootstrap methods.
+- Decompiler helper integration with Vineflower/CFR.
+- Clean source-project recovery: dependency inference, source tree emission, build
+  file generation, compilation, compiler-diagnostic repair, and ABI/resource
+  validation.
+- Remaining generic static behavior audit: source-to-sink slicing, deeper config
+  correlation, secret scanning beyond config values, risk ranking, and directory-level
+  archive scans.
+
 ### Phase 1: Header Validation
-- [ ] Magic number (0xCAFEBABE)
-- [ ] Version compatibility check
+- [x] Magic number (0xCAFEBABE)
+- [x] Version extraction
+- [ ] Version compatibility policy
 - [ ] File size validation
 
 ### Phase 2: Constant Pool
-- [ ] Entry type parsing
-- [ ] UTF-8 string extraction
-- [ ] Class/method references
-- [ ] Symbol resolution
+- [x] Core entry type parsing
+- [x] UTF-8 string extraction
+- [x] Class/name/descriptor resolution
+- [ ] Full method/field reference graph
 
 ### Phase 3: Class Structure
-- [ ] Access modifier parsing
-- [ ] Inheritance hierarchy
+- [x] Access flag extraction
+- [x] Superclass extraction
 - [ ] Interface implementation
 - [ ] Inner class detection
 
 ### Phase 4: Member Analysis
-- [ ] Field enumeration
-- [ ] Method signature parsing
-- [ ] Bytecode extraction
+- [x] Field enumeration
+- [x] Method signature parsing
+- [x] `Code` attribute metadata
+- [x] Lightweight bytecode xref extraction for invokes, fields, classes, and strings
+- [ ] Bytecode instruction decode
 - [ ] Annotation processing
 
 ### Phase 5: JAR Processing
-- [ ] Manifest parsing
+- [x] Manifest parsing
+- [x] Archive/resource indexing
+- [x] Minecraft metadata detection
+- [x] Mojang mapping fetch/cache/hash verification
+- [x] ProGuard/Mojang mapping annotation coverage
+- [x] Targeted ProGuard/Mojang mapping lookup
+- [x] Descriptor-aware mapped class/member view annotations
+- [x] Vanilla server bundler extraction
 - [ ] Multi-release JAR support
 - [ ] Signed JAR validation
-- [ ] Resource extraction
+
+### Phase 6: Decompilation and Source Recovery
+- [ ] Java helper project with ASM, Vineflower, CFR, and JavaParser
+- [ ] `java_decompile_class`
+- [ ] `java_decompile_method`
+- [ ] `java_decompile_archive`
+- [ ] Source/bytecode line correlation
+- [ ] Dependency inference from manifest, modules, Maven metadata, `jdeps`, and xrefs
+- [ ] Source tree reconstruction under `src/main/java` and `src/main/resources`
+- [ ] Manifest, module, ServiceLoader, framework metadata, and resource preservation
+- [ ] Build system inference for plain `javac`, Maven, and Gradle
+- [ ] Structured compiler diagnostics for `javac`, Maven, and Gradle
+- [ ] Agentic compile-repair loop for decompiler syntax and build/classpath failures
+- [ ] ABI/API comparison between original and rebuilt classes
+- [ ] Recovered application validation report
+
+### Phase 7: Static Behavior Audit and Risk Reporting
+- [ ] Sensitive API rule packs for process execution, filesystem mutation,
+  networking, local servers, native loading, reflection, class loading,
+  serialization, crypto, credentials, scripting, unsafe APIs, and scheduling.
+- [x] Initial archive-wide `java_detect_security_sensitive_behavior` with class, method,
+  descriptor, bytecode index, matched instruction, rule ID, severity, confidence,
+  and evidence IDs.
+- [x] Initial `java_extract_config_surface` for embedded resources plus caller-supplied
+  config roots using properties, TOML, JSON, XML, service descriptors, and manifests.
+- [x] Initial `java_detect_entrypoints` for main classes, agents, ServiceLoader providers,
+  static initializers, and scheduled job registrations.
+- [ ] `java_trace_to_sink` for bounded backward slices from a sensitive call to
+  constants, config reads, environment/system property reads, argument builders,
+  and entrypoints.
+- [ ] `java_correlate_behavior_config` to distinguish capability, configured
+  behavior, enabled behavior, dormant behavior, and unknown behavior.
+- [ ] `java_detect_secrets` with strict redaction, value hashing, entropy/context
+  evidence, and no default raw secret output.
+- [ ] `java_risk_report` and directory-level audit commands for large JAR sets.
+- [ ] Agent prompt and Pydantic models for cited audit findings rather than
+  free-form security claims.
 
 ## Data Model
 
@@ -90,6 +181,37 @@ pub struct Method {
     pub bytecode: Option<Vec<u8>>,
     pub exceptions: Vec<String>,
     pub annotations: Vec<Annotation>,
+}
+
+pub struct JavaXref {
+    pub source_method: String,
+    pub kind: String,
+    pub target: String,
+    pub bci: Option<u32>,
+    pub constant_pool_index: Option<u16>,
+}
+
+pub struct JavaSensitiveFinding {
+    pub finding_id: String,
+    pub archive_sha256: String,
+    pub rule_id: String,
+    pub sink_kind: String,
+    pub severity: String,
+    pub confidence: f32,
+    pub class_internal_name: String,
+    pub method_name: String,
+    pub method_descriptor: String,
+    pub bci: Option<u32>,
+    pub matched_symbol: String,
+    pub evidence_ids: Vec<String>,
+}
+
+pub struct JavaConfigBinding {
+    pub config_path: String,
+    pub key: String,
+    pub value_kind: String,
+    pub redacted_value_hash: Option<String>,
+    pub evidence_id: String,
 }
 ```
 
@@ -118,6 +240,19 @@ pub struct Method {
 - Resource exhaustion
 - Zip slip vulnerability
 
+### Static Behavior Audit
+- Never execute target Java code while answering static audit questions.
+- Classify sensitive behavior by evidence-backed sink category, not by vague
+  "suspicious" labels.
+- Distinguish code capability from configured or reachable behavior. A mod that
+  contains HTTP code is different from one that has a current config enabling it.
+- Redact tokens, session IDs, API keys, OAuth secrets, and high-entropy credential
+  candidates by default. Store hashes and context instead of raw values.
+- Correlate sinks to entrypoints, scheduler callbacks, service providers, framework
+  lifecycle hooks, and configuration keys before assigning high confidence.
+- Treat deobfuscation and string decoding as bounded analysis. Report transforms,
+  byte counts, and confidence, and preserve original bytecode evidence.
+
 ## Testing Coverage
 
 ### Test Samples
@@ -125,12 +260,22 @@ pub struct Method {
 - Complex inheritance: Multiple interfaces
 - JAR files: With dependencies
 - Obfuscated code: ProGuard/R8 processed
+- Source recovery fixtures: resources, services, inner classes, enums, records,
+  lambdas, generics, checked exceptions, and small multi-JAR classpaths
+- Static audit fixtures: safe generated classes that reference process execution,
+  filesystem writes/deletes, HTTP and socket APIs, local server APIs, reflection,
+  custom class loaders, serialization, crypto, scheduled executors, environment
+  reads, system properties, and config-driven branches without executing them
+- Local-only smoke tests: Minecraft client/server/Forge JARs in ignored `tmp/`
 
 ## Future Enhancements
 
 - [ ] Bytecode disassembly
 - [ ] Control flow graph generation
 - [ ] Dependency analysis
+- [ ] Clean compilable source project recovery
+- [ ] Source-to-sink behavior slicing
+- [ ] Config-aware risk reporting for JAR sets and modpacks
 - [ ] Android DEX support
 - [ ] Kotlin metadata parsing
 - [ ] GraalVM native image support

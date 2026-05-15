@@ -166,10 +166,16 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Store { addr, src } => count_reg_uses(addr, target) + count_reg_uses(src, target),
         Stmt::Call { target: t, args } => {
             count_reg_uses(t, target)
-                + args.iter().map(|a| count_reg_uses(a, target)).sum::<usize>()
+                + args
+                    .iter()
+                    .map(|a| count_reg_uses(a, target))
+                    .sum::<usize>()
         }
         Stmt::If { cond, .. } | Stmt::While { cond, .. } => count_reg_uses(cond, target),
-        Stmt::Return { value } => value.as_ref().map(|e| count_reg_uses(e, target)).unwrap_or(0),
+        Stmt::Return { value } => value
+            .as_ref()
+            .map(|e| count_reg_uses(e, target))
+            .unwrap_or(0),
         Stmt::Push { value } => count_reg_uses(value, target),
         Stmt::Switch { discriminant, .. } => count_reg_uses(discriminant, target),
         Stmt::Pop { .. }
@@ -275,7 +281,9 @@ mod tests {
     use crate::ir::ast::{lower, render};
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
-    use crate::ir::types::{BinOp, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+    use crate::ir::types::{
+        BinOp, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value,
+    };
 
     fn mk_single_block(ops: Vec<Op>) -> LlirFunction {
         LlirFunction {
@@ -365,7 +373,11 @@ mod tests {
         let text = render(&f);
         // Confirm both flag-writes still reference %t0 and the definition
         // survived (reconstruction conservatively leaves multi-use temps).
-        assert!(text.contains("%t0 = (%rax & %rax);"), "lost temp def: {}", text);
+        assert!(
+            text.contains("%t0 = (%rax & %rax);"),
+            "lost temp def: {}",
+            text
+        );
         assert!(text.contains("%zf = (%t0 == 0);"), "lost zf use: {}", text);
         assert!(text.contains("%sf = (%t0 < 0);"), "lost sf use: {}", text);
     }

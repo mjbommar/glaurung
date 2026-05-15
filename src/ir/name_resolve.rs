@@ -59,7 +59,11 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
                 resolve_body(body, addr_map);
             }
             Stmt::Push { value } => resolve_expr(value, addr_map),
-            Stmt::Switch { discriminant, cases, default } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
                 resolve_expr(discriminant, addr_map);
                 for (_, body) in cases.iter_mut() {
                     resolve_body(body, addr_map);
@@ -194,11 +198,7 @@ mod tests {
         map.insert(0x3fd8, "__libc_start_main@plt".to_string());
         resolve_names(&mut f, &map);
         let text = render(&f);
-        assert!(
-            text.contains("call __libc_start_main@plt"),
-            "got: {}",
-            text
-        );
+        assert!(text.contains("call __libc_start_main@plt"), "got: {}", text);
         assert!(!text.contains("call 0x3fd8"), "raw VA leaked: {}", text);
     }
 

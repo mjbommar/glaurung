@@ -150,9 +150,7 @@ fn is_dead_from(body: &[Stmt], start: usize, dst: &VReg, ret_regs: &[&str]) -> b
 
 /// Names of frame- and link-registers (and their aliases after naming) for
 /// which a top-level `%X = 0;` is ABI bookkeeping when unread.
-const ABI_BOOKKEEPING_REGS: &[&str] = &[
-    "fp", "lr", "x29", "x30", "w29", "w30", "rbp", "ebp",
-];
+const ABI_BOOKKEEPING_REGS: &[&str] = &["fp", "lr", "x29", "x30", "w29", "w30", "rbp", "ebp"];
 
 fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
     // Collect the offsets of qualifying stmts, then decide for each one
@@ -173,7 +171,10 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
         .collect();
     let mut to_drop: Vec<usize> = Vec::new();
     for &i in &candidates {
-        let name = if let Stmt::Assign { dst: VReg::Phys(n), .. } = &body[i] {
+        let name = if let Stmt::Assign {
+            dst: VReg::Phys(n), ..
+        } = &body[i]
+        {
             n.clone()
         } else {
             continue;
@@ -220,20 +221,22 @@ fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
         }
         Stmt::Push { value } => expr_reads(value, dst),
         Stmt::Pop { target: t } => t == dst,
-        Stmt::Switch { discriminant, cases, default } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
             expr_reads(discriminant, dst)
-                || cases.iter().any(|(_, body)| {
-                    body.iter().any(|s| stmt_reads(s, dst))
-                })
+                || cases
+                    .iter()
+                    .any(|(_, body)| body.iter().any(|s| stmt_reads(s, dst)))
                 || default
                     .as_ref()
                     .is_some_and(|b| b.iter().any(|s| stmt_reads(s, dst)))
         }
-        Stmt::Goto { .. }
-        | Stmt::Label(_)
-        | Stmt::Nop
-        | Stmt::Unknown(_)
-        | Stmt::Comment(_) => false,
+        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {
+            false
+        }
     }
 }
 

@@ -280,9 +280,8 @@ mod tests {
         use object::{Object, ObjectSection};
         use std::path::Path;
 
-        let path = Path::new(
-            "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
-        );
+        let path =
+            Path::new("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2");
         if !path.exists() {
             eprintln!("sample missing: {}", path.display());
             return;
@@ -295,10 +294,7 @@ mod tests {
         if let Ok(obj) = object::read::File::parse(&data[..]) {
             for s in obj.sections() {
                 let name = s.name().unwrap_or("").to_ascii_lowercase();
-                if name.contains(".rodata")
-                    || name.contains(".data")
-                    || name.contains(".bss")
-                {
+                if name.contains(".rodata") || name.contains(".data") || name.contains(".bss") {
                     let addr = s.address();
                     let size = s.size();
                     if size > 0 {

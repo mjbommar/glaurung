@@ -295,7 +295,11 @@ impl Function {
     /// also seeds the legacy `range` / `size` fields for back-compat with
     /// consumers that haven't been moved to `all_ranges()` yet.
     pub fn add_chunk(&mut self, chunk: AddressRange) {
-        if self.chunks.iter().any(|c| c.start.value == chunk.start.value && c.size == chunk.size) {
+        if self
+            .chunks
+            .iter()
+            .any(|c| c.start.value == chunk.start.value && c.size == chunk.size)
+        {
             return;
         }
         if self.chunks.is_empty() {
@@ -873,10 +877,22 @@ mod tests {
         let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
         let primary = _va_range(0x1000, 0x80);
         let func = Function::new_full(
-            "main".to_string(), entry, FunctionKind::Normal,
-            Some(primary.clone()), FunctionFlags::NONE,
-            None, None, None, None, None, None, None, None, None,
-        ).unwrap();
+            "main".to_string(),
+            entry,
+            FunctionKind::Normal,
+            Some(primary.clone()),
+            FunctionFlags::NONE,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         // new_full seeds chunks from `range` so consumers can iterate
         // `all_ranges()` without checking for a legacy single-chunk shape.
         assert_eq!(func.chunks.len(), 1);
@@ -890,17 +906,17 @@ mod tests {
     fn test_add_chunk_merges_cold_split() {
         let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
         let mut func = Function::new("main".to_string(), entry, FunctionKind::Normal).unwrap();
-        func.add_chunk(_va_range(0x1000, 0x80));   // hot path
-        func.add_chunk(_va_range(0x2000, 0x20));   // .cold split
-        // Re-adding the same chunk is a no-op (idempotent merge).
+        func.add_chunk(_va_range(0x1000, 0x80)); // hot path
+        func.add_chunk(_va_range(0x2000, 0x20)); // .cold split
+                                                 // Re-adding the same chunk is a no-op (idempotent merge).
         func.add_chunk(_va_range(0x2000, 0x20));
 
         assert_eq!(func.chunks.len(), 2);
         assert_eq!(func.total_size(), 0x80 + 0x20);
         assert!(func.contains_va(0x1010));
         assert!(func.contains_va(0x2010));
-        assert!(!func.contains_va(0x1100));         // gap between chunks
-        // Primary range tracks chunk[0] for legacy consumers.
+        assert!(!func.contains_va(0x1100)); // gap between chunks
+                                            // Primary range tracks chunk[0] for legacy consumers.
         assert_eq!(func.range.as_ref().unwrap().start.value, 0x1000);
     }
 

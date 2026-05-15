@@ -216,15 +216,10 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 };
                 if let Some(addr) = operand_to_memop(&ins.operands[1]) {
                     let base_reg = addr.base.clone();
-                    let mut out = vec![Op::Load {
-                        dst,
-                        addr,
-                    }];
+                    let mut out = vec![Op::Load { dst, addr }];
                     // Post-indexed: 3rd operand is the writeback amount.
                     if ins.operands.len() == 3 {
-                        if let (Some(base), Some(off)) =
-                            (base_reg, ins.operands[2].immediate)
-                        {
+                        if let (Some(base), Some(off)) = (base_reg, ins.operands[2].immediate) {
                             out.push(Op::Bin {
                                 dst: base.clone(),
                                 op: BinOp::Add,
@@ -293,13 +288,14 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                     addr.size = 8;
                     let mut out = vec![
                         Op::Load { dst: dst1, addr },
-                        Op::Load { dst: dst2, addr: addr2 },
+                        Op::Load {
+                            dst: dst2,
+                            addr: addr2,
+                        },
                     ];
                     // Post-indexed: 4th operand is the writeback amount.
                     if ins.operands.len() == 4 {
-                        if let (Some(base), Some(off)) =
-                            (base_reg, ins.operands[3].immediate)
-                        {
+                        if let (Some(base), Some(off)) = (base_reg, ins.operands[3].immediate) {
                             out.push(Op::Bin {
                                 dst: base.clone(),
                                 op: BinOp::Add,
@@ -331,12 +327,13 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                     addr.size = 8;
                     let mut out = vec![
                         Op::Store { addr, src: src1 },
-                        Op::Store { addr: addr2, src: src2 },
+                        Op::Store {
+                            addr: addr2,
+                            src: src2,
+                        },
                     ];
                     if ins.operands.len() == 4 {
-                        if let (Some(base), Some(off)) =
-                            (base_reg, ins.operands[3].immediate)
-                        {
+                        if let (Some(base), Some(off)) = (base_reg, ins.operands[3].immediate) {
                             out.push(Op::Bin {
                                 dst: base.clone(),
                                 op: BinOp::Add,

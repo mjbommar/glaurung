@@ -66,9 +66,7 @@ where
         let sec_name = sec.name().unwrap_or("");
         let scan = matches!(
             kind,
-            SectionKind::ReadOnlyData
-                | SectionKind::ReadOnlyDataWithRel
-                | SectionKind::Data
+            SectionKind::ReadOnlyData | SectionKind::ReadOnlyDataWithRel | SectionKind::Data
         ) || sec_name.starts_with(".rodata")
             || sec_name.contains("rel.ro");
         if !scan {
@@ -105,7 +103,10 @@ where
             }
             if run.len() >= 4 && !seen_tables.contains(&table_va) {
                 seen_tables.insert(table_va);
-                out.push(JumpTable { table_va, targets: run });
+                out.push(JumpTable {
+                    table_va,
+                    targets: run,
+                });
                 i = j;
             } else {
                 // Step by 4 (table entries are u32-aligned in practice).
@@ -123,9 +124,7 @@ mod tests {
 
     /// Mirror the inner-loop logic on a synthetic byte buffer so the
     /// scan invariants are testable without a real ELF.
-    fn _scan_section(
-        bytes: &[u8], vbase: u64, exec_lo: u64, exec_hi: u64,
-    ) -> Vec<JumpTable> {
+    fn _scan_section(bytes: &[u8], vbase: u64, exec_lo: u64, exec_hi: u64) -> Vec<JumpTable> {
         let is_exec = |va: u64| va >= exec_lo && va < exec_hi;
         let mut out: Vec<JumpTable> = Vec::new();
         let mut seen: BTreeSet<u64> = BTreeSet::new();
@@ -145,7 +144,10 @@ mod tests {
             }
             if run.len() >= 4 && !seen.contains(&table_va) {
                 seen.insert(table_va);
-                out.push(JumpTable { table_va, targets: run });
+                out.push(JumpTable {
+                    table_va,
+                    targets: run,
+                });
                 i = j;
             } else {
                 i += 4;

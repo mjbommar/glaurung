@@ -8,7 +8,6 @@ in the archive and prints a per-class summary.
 import argparse
 import zipfile
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import glaurung as g
 
@@ -58,9 +57,7 @@ def _render_class_summary(info: dict, formatter: BaseFormatter) -> None:
     elif info["super_class"]:
         formatter.output_plain(f"  extends {info['super_class']}")
     if info["interfaces"]:
-        formatter.output_plain(
-            f"  implements {', '.join(info['interfaces'])}"
-        )
+        formatter.output_plain(f"  implements {', '.join(info['interfaces'])}")
     formatter.output_plain(f"  access: {_format_access(info['access_flags'])}")
     formatter.output_plain(f"  fields: {len(info['fields'])}")
     for f in info["fields"]:
@@ -83,20 +80,12 @@ def _scan_jar(path: Path, formatter: BaseFormatter) -> int:
         formatter.output_plain(f"# {path.name}: {len(names)} class file(s)")
         for entry in names:
             data = zf.read(entry)
-            tmp = Path(f"/tmp/_glaurung_classfile_{abs(hash(entry)):x}.class")
-            tmp.write_bytes(data)
-            try:
-                info = g.analysis.parse_java_class_path(str(tmp))
-                if info is None:
-                    continue
-                formatter.output_plain("")
-                _render_class_summary(info, formatter)
-                parsed += 1
-            finally:
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
+            info = g.analysis.parse_java_class_bytes(data)
+            if info is None:
+                continue
+            formatter.output_plain("")
+            _render_class_summary(info, formatter)
+            parsed += 1
     return parsed
 
 

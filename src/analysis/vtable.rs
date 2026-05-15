@@ -61,9 +61,7 @@ where
         // toolchain could have parked a vtable.
         let interesting = matches!(
             kind,
-            SectionKind::ReadOnlyData
-                | SectionKind::ReadOnlyDataWithRel
-                | SectionKind::Data
+            SectionKind::ReadOnlyData | SectionKind::ReadOnlyDataWithRel | SectionKind::Data
         ) || sec_name.starts_with(".rodata")
             || sec_name.starts_with(".data.rel")
             || sec_name.contains("vtable")
@@ -140,7 +138,10 @@ mod tests {
                 buf.copy_from_slice(&bytes[j..j + 8]);
                 let target = u64::from_le_bytes(buf);
                 if target != 0 && is_exec(target) {
-                    run.push(VtableEntry { source_va: vbase + j as u64, target_va: target });
+                    run.push(VtableEntry {
+                        source_va: vbase + j as u64,
+                        target_va: target,
+                    });
                     j += 8;
                 } else {
                     break;
@@ -196,8 +197,7 @@ mod tests {
             data.extend_from_slice(&va.to_le_bytes());
         }
         let entries = _scan_section(&data, 0x4000, 0x1000, 0x2000);
-        let unique_targets: BTreeSet<u64> =
-            entries.iter().map(|e| e.target_va).collect();
+        let unique_targets: BTreeSet<u64> = entries.iter().map(|e| e.target_va).collect();
         assert_eq!(unique_targets.len(), 1);
     }
 

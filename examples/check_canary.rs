@@ -1,18 +1,25 @@
-use glaurung::ir::ast::{lower, render};
-use glaurung::ir::expr_reconstruct::reconstruct;
-use glaurung::ir::ssa::compute_ssa;
-use glaurung::ir::structure::recover;
-use glaurung::ir::lift_function::lift_function_from_bytes;
 use glaurung::analysis::cfg::{analyze_functions_bytes, Budgets};
 use glaurung::core::binary::Arch;
-use glaurung::ir::naming::apply_role_names;
+use glaurung::ir::ast::{lower, render};
 use glaurung::ir::call_args::CallConv;
-use glaurung::ir::{const_fold, dce, dead_stores, canary, name_resolve, strings_fold, stack_locals};
+use glaurung::ir::expr_reconstruct::reconstruct;
+use glaurung::ir::lift_function::lift_function_from_bytes;
+use glaurung::ir::naming::apply_role_names;
+use glaurung::ir::ssa::compute_ssa;
+use glaurung::ir::structure::recover;
+use glaurung::ir::{
+    canary, const_fold, dce, dead_stores, name_resolve, stack_locals, strings_fold,
+};
 
 fn main() {
-    let data = std::fs::read("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/c2_demo-gcc-O2").unwrap();
+    let data =
+        std::fs::read("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/c2_demo-gcc-O2")
+            .unwrap();
     let (funcs, _) = analyze_functions_bytes(&data, &Budgets::default());
-    let main_fn = funcs.iter().find(|f| f.entry_point.value == 0x10c0).unwrap();
+    let main_fn = funcs
+        .iter()
+        .find(|f| f.entry_point.value == 0x10c0)
+        .unwrap();
     let lf = lift_function_from_bytes(&data, main_fn, Arch::X86_64).unwrap();
     let ssa = compute_ssa(&lf);
     let r = recover(&lf, &ssa);

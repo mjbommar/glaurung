@@ -184,12 +184,7 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
             dst: dst.clone(),
             src: lower_value(src),
         }],
-        Op::Bin {
-            dst,
-            op,
-            lhs,
-            rhs,
-        } => vec![Stmt::Assign {
+        Op::Bin { dst, op, lhs, rhs } => vec![Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Bin {
                 op: *op,
@@ -204,12 +199,7 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
                 src: Box::new(lower_value(src)),
             },
         }],
-        Op::Cmp {
-            dst,
-            op,
-            lhs,
-            rhs,
-        } => vec![Stmt::Assign {
+        Op::Cmp { dst, op, lhs, rhs } => vec![Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Cmp {
                 op: *op,
@@ -349,7 +339,10 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
                     .sum::<usize>()
         }
         Stmt::If { cond, .. } | Stmt::While { cond, .. } => count_reg_uses_in_expr(cond, target),
-        Stmt::Return { value } => value.as_ref().map(|e| count_reg_uses_in_expr(e, target)).unwrap_or(0),
+        Stmt::Return { value } => value
+            .as_ref()
+            .map(|e| count_reg_uses_in_expr(e, target))
+            .unwrap_or(0),
         Stmt::Push { value } => count_reg_uses_in_expr(value, target),
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
@@ -424,8 +417,10 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
             let mut prefix = lower_block(&lf.blocks[*dispatch]);
             // Drop the trailing Goto/If-Goto if present — the switch
             // statement encodes the dispatch.
-            while matches!(prefix.last(), Some(Stmt::Goto { .. })
-                | Some(Stmt::If { .. })) {
+            while matches!(
+                prefix.last(),
+                Some(Stmt::Goto { .. }) | Some(Stmt::If { .. })
+            ) {
                 prefix.pop();
             }
             let cases: Vec<(Option<i64>, Vec<Stmt>)> = arms
@@ -437,7 +432,10 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
             // switched value requires walking the index computation
             // above the dispatch. Filed as a v1 follow-up.
             prefix.push(Stmt::Switch {
-                discriminant: Expr::Reg(VReg::Phys(format!("dispatch_{:x}", lf.blocks[*dispatch].start_va))),
+                discriminant: Expr::Reg(VReg::Phys(format!(
+                    "dispatch_{:x}",
+                    lf.blocks[*dispatch].start_va
+                ))),
                 cases,
                 default: None,
             });
@@ -469,8 +467,8 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
 /// rather than a single name so this pass works on both x86/x86-64 and
 /// AArch64 without having to thread arch info through the AST.
 const RETURN_REGS: &[&str] = &[
-    "rax", "eax", "ax", "al",            // x86 / x86-64
-    "x0", "w0",                          // AArch64
+    "rax", "eax", "ax", "al", // x86 / x86-64
+    "x0", "w0", // AArch64
 ];
 
 fn is_return_reg(v: &VReg) -> bool {
@@ -574,8 +572,10 @@ fn is_self_arith_on_stack_ptr(dst: &VReg, src: &Expr) -> bool {
             op: BinOp::Add | BinOp::Sub,
             lhs,
             rhs,
-        } => matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
-            && matches!(rhs.as_ref(), Expr::Const(_)),
+        } => {
+            matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
+                && matches!(rhs.as_ref(), Expr::Const(_))
+        }
         _ => false,
     }
 }
@@ -1404,7 +1404,11 @@ function f @ 0x1000 {
             vec![],
         )]);
         let text = lower_and_render(&lf, "f");
-        assert!(text.contains("%rbx = 1;"), "fold ate non-return reg: {}", text);
+        assert!(
+            text.contains("%rbx = 1;"),
+            "fold ate non-return reg: {}",
+            text
+        );
         assert!(text.contains("return;"), "return line missing: {}", text);
         assert!(!text.contains("return 1"), "folded wrong reg: {}", text);
     }
@@ -1424,7 +1428,11 @@ function f @ 0x1000 {
             vec![],
         )]);
         let text = lower_and_render(&lf, "f");
-        assert!(text.contains("return 42;"), "arm64 return fold failed: {}", text);
+        assert!(
+            text.contains("return 42;"),
+            "arm64 return fold failed: {}",
+            text
+        );
     }
 
     #[test]
@@ -1658,8 +1666,16 @@ function f @ 0x1000 {
         );
         // Plain render() must still work and not leak annotations.
         let plain = render(&f);
-        assert!(!plain.contains("(u64*)"), "plain render leaked annotations: {}", plain);
-        assert!(!plain.contains("(bool)"), "plain render leaked annotations: {}", plain);
+        assert!(
+            !plain.contains("(u64*)"),
+            "plain render leaked annotations: {}",
+            plain
+        );
+        assert!(
+            !plain.contains("(bool)"),
+            "plain render leaked annotations: {}",
+            plain
+        );
     }
 
     #[test]

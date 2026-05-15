@@ -57,14 +57,18 @@ pub fn extract_cil_methods(data: &[u8]) -> Result<Vec<CilMethod>, CilError> {
         object::read::File::Pe32(pe) => {
             let dirs = pe.data_directories();
             let dir = dirs.get(14).ok_or(CilError::NoCom)?;
-            (dir.virtual_address.get(object::LittleEndian),
-             dir.size.get(object::LittleEndian))
+            (
+                dir.virtual_address.get(object::LittleEndian),
+                dir.size.get(object::LittleEndian),
+            )
         }
         object::read::File::Pe64(pe) => {
             let dirs = pe.data_directories();
             let dir = dirs.get(14).ok_or(CilError::NoCom)?;
-            (dir.virtual_address.get(object::LittleEndian),
-             dir.size.get(object::LittleEndian))
+            (
+                dir.virtual_address.get(object::LittleEndian),
+                dir.size.get(object::LittleEndian),
+            )
         }
         _ => return Err(CilError::NoCom),
     };
@@ -73,8 +77,8 @@ pub fn extract_cil_methods(data: &[u8]) -> Result<Vec<CilMethod>, CilError> {
     }
 
     // CLR header is at the COM data dir RVA. We need it as a file slice.
-    let clr_header = read_at_rva(&obj, clr_rva as u64, 72)
-        .ok_or(CilError::Truncated("clr header"))?;
+    let clr_header =
+        read_at_rva(&obj, clr_rva as u64, 72).ok_or(CilError::Truncated("clr header"))?;
     if clr_header.len() < 16 {
         return Err(CilError::Truncated("clr header"));
     }
@@ -238,7 +242,11 @@ fn parse_tilde_stream(tilde: &[u8], strings: &[u8]) -> Result<Vec<CilMethod>, Ci
 
     // Helper: row-count-driven table-index width (2 or 4).
     let table_idx_size = |table_id: usize| -> usize {
-        if row_counts[table_id] < (1 << 16) { 2 } else { 4 }
+        if row_counts[table_id] < (1 << 16) {
+            2
+        } else {
+            4
+        }
     };
 
     // Coded-index widths (II.24.2.6). The bit count is the tag width;
@@ -246,7 +254,11 @@ fn parse_tilde_stream(tilde: &[u8], strings: &[u8]) -> Result<Vec<CilMethod>, Ci
     let coded_idx_size = |tables: &[usize], tag_bits: u32| -> usize {
         let max_rows = tables.iter().map(|&t| row_counts[t]).max().unwrap_or(0) as u64;
         let limit = 1u64 << (16 - tag_bits);
-        if max_rows < limit { 2 } else { 4 }
+        if max_rows < limit {
+            2
+        } else {
+            4
+        }
     };
 
     // ECMA-335 table IDs we touch, in walk order: 0..6.
@@ -272,8 +284,8 @@ fn parse_tilde_stream(tilde: &[u8], strings: &[u8]) -> Result<Vec<CilMethod>, Ci
 
     let module_row_size = 2 + string_idx_size + 3 * _guid_idx_size;
     let typeref_row_size = resolution_scope_idx + 2 * string_idx_size;
-    let typedef_row_size = 4 + 2 * string_idx_size + typedef_or_ref_idx
-        + field_idx_size + methoddef_idx_size;
+    let typedef_row_size =
+        4 + 2 * string_idx_size + typedef_or_ref_idx + field_idx_size + methoddef_idx_size;
     let field_row_size = 2 + string_idx_size + blob_idx_size;
     let methoddef_row_size = 4 + 2 + 2 + string_idx_size + blob_idx_size + param_idx_size;
 
@@ -366,8 +378,8 @@ fn parse_tilde_stream(tilde: &[u8], strings: &[u8]) -> Result<Vec<CilMethod>, Ci
 
     let mut out: Vec<CilMethod> = Vec::with_capacity(count);
     for i in 0..count {
-        let row = &tilde[methoddef_off + i * methoddef_row_size
-            ..methoddef_off + (i + 1) * methoddef_row_size];
+        let row = &tilde
+            [methoddef_off + i * methoddef_row_size..methoddef_off + (i + 1) * methoddef_row_size];
         let rva = u32::from_le_bytes(row[0..4].try_into().unwrap());
         let mut q = 4 + 2 + 2;
         let name_idx = read_index(&row[q..], string_idx_size);
@@ -395,9 +407,8 @@ mod tests {
 
     #[test]
     fn extracts_main_from_hello_mono() {
-        let path = Path::new(
-            "samples/binaries/platforms/linux/amd64/export/dotnet/mono/Hello-mono.exe",
-        );
+        let path =
+            Path::new("samples/binaries/platforms/linux/amd64/export/dotnet/mono/Hello-mono.exe");
         if !path.exists() {
             return;
         }

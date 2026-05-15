@@ -104,7 +104,11 @@ impl Region {
                         out.push(*e);
                     }
                 }
-                Region::Switch { dispatch, arms, join } => {
+                Region::Switch {
+                    dispatch,
+                    arms,
+                    join,
+                } => {
                     out.push(*dispatch);
                     for a in arms {
                         walk(a, out);
@@ -194,7 +198,9 @@ pub fn recover(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
 
     // Any blocks we never visited (unreachable or in an irreducible knot)
     // get tacked on as an Unstructured sibling so nothing is lost.
-    let leftover: Vec<usize> = (0..lf.blocks.len()).filter(|b| !visited.contains(b)).collect();
+    let leftover: Vec<usize> = (0..lf.blocks.len())
+        .filter(|b| !visited.contains(b))
+        .collect();
     if leftover.is_empty() {
         region
     } else {
@@ -213,12 +219,7 @@ fn flatten_seq(r: Region) -> Vec<Region> {
 
 /// Recursively build a Region starting at `start`, stopping at `stop_at`
 /// (exclusive). `visited` tracks blocks consumed into the output.
-fn build(
-    start: usize,
-    cfg: &Cfg,
-    visited: &mut HashSet<usize>,
-    stop_at: Option<usize>,
-) -> Region {
+fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<usize>) -> Region {
     let mut parts: Vec<Region> = Vec::new();
     let mut cur = start;
 
@@ -492,8 +493,7 @@ fn detect_if_shape(
     // (once per if-goto site, once at the tail), which is the right
     // semantics: each if statement is conceptually `if (cond) { return; }`.
     for &(body, cont) in &[(t, e), (e, t)] {
-        let body_is_shared_exit =
-            cfg.succs[body].is_empty() && cfg.preds[body].len() > 1;
+        let body_is_shared_exit = cfg.succs[body].is_empty() && cfg.preds[body].len() > 1;
         if body_is_shared_exit {
             visited.insert(cond);
             // Don't mark `body` as visited — let outer recursion emit it
@@ -612,11 +612,7 @@ fn find_switch_join(dispatch: usize, arms: &[usize], cfg: &Cfg) -> Option<usize>
     }
     let mut candidates: Vec<usize> = reachable
         .into_iter()
-        .filter(|&b| {
-            !arms.contains(&b)
-                && cfg.preds[b].len() > 1
-                && cfg.dominates(dispatch, b)
-        })
+        .filter(|&b| !arms.contains(&b) && cfg.preds[b].len() > 1 && cfg.dominates(dispatch, b))
         .collect();
     candidates.sort_unstable();
     candidates.into_iter().next()
@@ -853,7 +849,8 @@ mod tests {
         // Most importantly, the recovered region is NOT Unstructured.
         assert!(
             !matches!(&r, Region::Unstructured(_)),
-            "expected structured shape; got {:?}", r,
+            "expected structured shape; got {:?}",
+            r,
         );
     }
 
@@ -886,7 +883,8 @@ mod tests {
                     let mut bad = false;
                     for p in parts {
                         let (c, b) = count_block(p, target);
-                        count += c; bad |= b;
+                        count += c;
+                        bad |= b;
                     }
                     (count, bad)
                 }
@@ -902,7 +900,8 @@ mod tests {
                     let mut bad = false;
                     for a in arms {
                         let (c, b) = count_block(a, target);
-                        count += c; bad |= b;
+                        count += c;
+                        bad |= b;
                     }
                     (count, bad)
                 }
@@ -911,7 +910,12 @@ mod tests {
         }
         let (count, has_unstructured) = count_block(&r, 3);
         assert!(!has_unstructured, "expected no Unstructured; got {:?}", r);
-        assert!(count >= 2, "expected shared-exit block referenced >=2 times; got {} in {:?}", count, r);
+        assert!(
+            count >= 2,
+            "expected shared-exit block referenced >=2 times; got {} in {:?}",
+            count,
+            r
+        );
     }
 
     #[test]
@@ -969,7 +973,11 @@ mod tests {
             Region::Seq(parts) => {
                 assert!(parts.len() >= 2);
                 match &parts[0] {
-                    Region::Switch { dispatch, arms, join } => {
+                    Region::Switch {
+                        dispatch,
+                        arms,
+                        join,
+                    } => {
                         assert_eq!(*dispatch, 0);
                         assert_eq!(arms.len(), 3);
                         assert_eq!(*join, Some(4));
@@ -993,7 +1001,11 @@ mod tests {
         ]);
         let r = recover_for(&lf);
         match &r {
-            Region::Switch { dispatch, arms, join } => {
+            Region::Switch {
+                dispatch,
+                arms,
+                join,
+            } => {
                 assert_eq!(*dispatch, 0);
                 assert_eq!(arms.len(), 3);
                 assert_eq!(*join, None);
@@ -1028,8 +1040,7 @@ mod tests {
                 let ssa = compute_ssa(&lf);
                 let r = recover(&lf, &ssa);
                 // Every block must be covered at least once.
-                let covered: std::collections::HashSet<usize> =
-                    r.blocks().into_iter().collect();
+                let covered: std::collections::HashSet<usize> = r.blocks().into_iter().collect();
                 for i in 0..lf.blocks.len() {
                     assert!(
                         covered.contains(&i),

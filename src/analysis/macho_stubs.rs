@@ -334,9 +334,8 @@ mod tests {
         //     0x618 _free, 0x61e _puts, 0x624 _printf, 0x62a _strlen, 0x630 _malloc
         //   __DATA,__la_symbol_ptr (8-byte pointers starting at 0x100003000):
         //     0x3000 _free, 0x3008 _puts, 0x3010 _printf, 0x3018 _strlen, 0x3020 _malloc
-        let path = Path::new(
-            "samples/binaries/platforms/darwin/amd64/export/native/multi_import-macho",
-        );
+        let path =
+            Path::new("samples/binaries/platforms/darwin/amd64/export/native/multi_import-macho");
         if !path.exists() {
             eprintln!("sample missing: {}", path.display());
             return; // sample-optional test
@@ -346,25 +345,57 @@ mod tests {
         assert!(!map.is_empty(), "no entries produced for Mach-O sample");
 
         // Must contain all five imported symbols as stub entries.
-        let names: std::collections::HashSet<&str> =
-            map.iter().map(|(_, n)| n.as_str()).collect();
-        for want in ["free@stub", "puts@stub", "printf@stub", "strlen@stub", "malloc@stub"] {
+        let names: std::collections::HashSet<&str> = map.iter().map(|(_, n)| n.as_str()).collect();
+        for want in [
+            "free@stub",
+            "puts@stub",
+            "printf@stub",
+            "strlen@stub",
+            "malloc@stub",
+        ] {
             assert!(names.contains(want), "missing {want} in {names:?}");
         }
         // And the lazy-pointer equivalents.
-        for want in ["free@laptr", "puts@laptr", "printf@laptr", "strlen@laptr", "malloc@laptr"] {
+        for want in [
+            "free@laptr",
+            "puts@laptr",
+            "printf@laptr",
+            "strlen@laptr",
+            "malloc@laptr",
+        ] {
             assert!(names.contains(want), "missing {want} in {names:?}");
         }
 
         // Verify known VAs from llvm-otool.
         let lookup: std::collections::HashMap<u64, String> = map.into_iter().collect();
-        assert_eq!(lookup.get(&0x100000618).map(String::as_str), Some("free@stub"));
-        assert_eq!(lookup.get(&0x10000061e).map(String::as_str), Some("puts@stub"));
-        assert_eq!(lookup.get(&0x100000624).map(String::as_str), Some("printf@stub"));
-        assert_eq!(lookup.get(&0x10000062a).map(String::as_str), Some("strlen@stub"));
-        assert_eq!(lookup.get(&0x100000630).map(String::as_str), Some("malloc@stub"));
+        assert_eq!(
+            lookup.get(&0x100000618).map(String::as_str),
+            Some("free@stub")
+        );
+        assert_eq!(
+            lookup.get(&0x10000061e).map(String::as_str),
+            Some("puts@stub")
+        );
+        assert_eq!(
+            lookup.get(&0x100000624).map(String::as_str),
+            Some("printf@stub")
+        );
+        assert_eq!(
+            lookup.get(&0x10000062a).map(String::as_str),
+            Some("strlen@stub")
+        );
+        assert_eq!(
+            lookup.get(&0x100000630).map(String::as_str),
+            Some("malloc@stub")
+        );
 
-        assert_eq!(lookup.get(&0x100003000).map(String::as_str), Some("free@laptr"));
-        assert_eq!(lookup.get(&0x100003020).map(String::as_str), Some("malloc@laptr"));
+        assert_eq!(
+            lookup.get(&0x100003000).map(String::as_str),
+            Some("free@laptr")
+        );
+        assert_eq!(
+            lookup.get(&0x100003020).map(String::as_str),
+            Some("malloc@laptr")
+        );
     }
 }

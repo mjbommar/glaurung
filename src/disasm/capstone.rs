@@ -96,10 +96,7 @@ impl CapstoneDisassembler {
     /// Thumb target (e.g. address with LSB set, mapping-symbol `$t`) should
     /// invoke this before disassembling a window so that 16/32-bit Thumb
     /// encodings are decoded correctly.
-    pub fn set_thumb_mode(
-        &mut self,
-        thumb: bool,
-    ) -> Result<(), DisassemblerError> {
+    pub fn set_thumb_mode(&mut self, thumb: bool) -> Result<(), DisassemblerError> {
         if !matches!(self.arch, Architecture::ARM) {
             return Ok(());
         }

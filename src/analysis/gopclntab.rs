@@ -57,7 +57,10 @@ pub enum GoPclnError {
     Truncated(&'static str),
     /// The header parsed but a name offset pointed outside the funcname
     /// table — the section is corrupt or we're misreading the version.
-    BadNameOffset { name_off: u32, table_size: usize },
+    BadNameOffset {
+        name_off: u32,
+        table_size: usize,
+    },
 }
 
 /// Walk a binary's `.gopclntab` (or `__gopclntab` on Mach-O / `runtime.pclntab` on PE)
@@ -72,7 +75,12 @@ pub fn extract_go_functions(data: &[u8]) -> Result<Vec<GoFunc>, GoPclnError> {
     // PE: rdata-embedded, named runtime.pclntab — searchable via symbol.
     let pcln = obj
         .sections()
-        .find(|s| matches!(s.name().ok(), Some(".gopclntab" | "__gopclntab" | "runtime.pclntab")))
+        .find(|s| {
+            matches!(
+                s.name().ok(),
+                Some(".gopclntab" | "__gopclntab" | "runtime.pclntab")
+            )
+        })
         .ok_or(GoPclnError::NoSection)?;
 
     let bytes = pcln.data().map_err(|_| GoPclnError::NoSection)?;
@@ -145,7 +153,9 @@ fn parse_pclntab(bytes: &[u8]) -> Result<Vec<GoFunc>, GoPclnError> {
             continue; // skip malformed entries instead of failing the whole walk
         }
         let name_off = i32::from_le_bytes(
-            bytes[func_struct_off + 4..func_struct_off + 8].try_into().unwrap(),
+            bytes[func_struct_off + 4..func_struct_off + 8]
+                .try_into()
+                .unwrap(),
         );
         if name_off < 0 || (name_off as usize) >= funcnametab.len() {
             return Err(GoPclnError::BadNameOffset {
@@ -154,7 +164,10 @@ fn parse_pclntab(bytes: &[u8]) -> Result<Vec<GoFunc>, GoPclnError> {
             });
         }
         let name_bytes = &funcnametab[name_off as usize..];
-        let nul = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+        let nul = name_bytes
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(name_bytes.len());
         let name = String::from_utf8_lossy(&name_bytes[..nul]).into_owned();
         let entry_va = text_start + entry_off;
         out.push(GoFunc { entry_va, name });
@@ -169,9 +182,7 @@ mod tests {
 
     #[test]
     fn extracts_main_main_from_stripped_go_hello() {
-        let path = Path::new(
-            "samples/binaries/platforms/linux/amd64/export/go/hello-go",
-        );
+        let path = Path::new("samples/binaries/platforms/linux/amd64/export/go/hello-go");
         if !path.exists() {
             return;
         }
@@ -186,17 +197,22 @@ mod tests {
         );
         // And runtime.* names — the entire stdlib is reachable.
         assert!(
-            funcs.iter().filter(|f| f.name.starts_with("runtime.")).count() >= 50,
+            funcs
+                .iter()
+                .filter(|f| f.name.starts_with("runtime."))
+                .count()
+                >= 50,
             "expected >=50 runtime.* names; got {}",
-            funcs.iter().filter(|f| f.name.starts_with("runtime.")).count(),
+            funcs
+                .iter()
+                .filter(|f| f.name.starts_with("runtime."))
+                .count(),
         );
     }
 
     #[test]
     fn extracts_function_count_matches_metadata() {
-        let path = Path::new(
-            "samples/binaries/platforms/linux/amd64/export/go/hello-go-static",
-        );
+        let path = Path::new("samples/binaries/platforms/linux/amd64/export/go/hello-go-static");
         if !path.exists() {
             return;
         }
@@ -205,7 +221,8 @@ mod tests {
         // Static binary embeds the entire stdlib — should be hundreds.
         assert!(
             funcs.len() >= 100,
-            "expected hundreds of functions; got {}", funcs.len(),
+            "expected hundreds of functions; got {}",
+            funcs.len(),
         );
     }
 

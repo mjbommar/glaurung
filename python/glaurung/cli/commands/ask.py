@@ -167,13 +167,13 @@ class AskCommand(BaseCommand):
                 import json
 
                 return json.loads(result.to_json())
-        except:
+        except Exception:
             pass
         try:
             # Try __dict__ if available
             if hasattr(result, "__dict__"):
                 return self._serialize_result(result.__dict__)
-        except:
+        except Exception:
             pass
         # Last resort: convert to string - but return FULL string
         return str(result)
@@ -252,6 +252,75 @@ class AskCommand(BaseCommand):
         else:
             return []
 
+    @staticmethod
+    def _is_java_archive_path(path: str) -> bool:
+        return path.lower().endswith((".jar", ".war", ".ear"))
+
+    def _seed_high_signal_context(self, context: MemoryContext, args: Any) -> None:
+        """Populate KB with cheap first-touch facts before the agent runs."""
+        try:
+            if self._is_java_archive_path(context.file_path):
+                from ...llm.tools.java_index_archive import (
+                    build_tool as _build_java_index_archive,
+                )
+                from ...llm.tools.java_detect_obfuscation import (
+                    build_tool as _build_java_detect_obfuscation,
+                )
+                from ...llm.tools.minecraft_detect_archive import (
+                    build_tool as _build_minecraft_detect_archive,
+                )
+
+                max_functions = int(getattr(args, "max_functions", 5) or 5)
+                max_classes = min(max(max_functions * 16, 16), 256)
+                index_tool = _build_java_index_archive()
+                index_tool.run(
+                    context,
+                    context.kb,
+                    index_tool.input_model(max_classes=max_classes),
+                )
+                obfuscation_tool = _build_java_detect_obfuscation()
+                obfuscation_tool.run(
+                    context,
+                    context.kb,
+                    obfuscation_tool.input_model(max_classes=max_classes),
+                )
+                minecraft_tool = _build_minecraft_detect_archive()
+                minecraft_tool.run(
+                    context,
+                    context.kb,
+                    minecraft_tool.input_model(),
+                )
+                return
+
+            # Soft-fail: these helpers populate KB; ignore errors
+            from ...llm.tools.list_functions import build_tool as _build_list_functions
+            from ...llm.tools.map_symbol_addresses import (
+                build_tool as _build_map_symbol_addresses,
+            )
+            from ...llm.tools.map_elf_plt import build_tool as _build_map_elf_plt
+            from ...llm.tools.map_elf_got import build_tool as _build_map_elf_got
+            from ...llm.tools.map_pe_iat import build_tool as _build_map_pe_iat
+
+            _lf = _build_list_functions()
+            _lf.run(
+                context,
+                context.kb,
+                _lf.input_model(
+                    max_functions=min(getattr(args, "max_functions", 5), 16)
+                ),
+            )
+            _sa = _build_map_symbol_addresses()
+            _sa.run(context, context.kb, _sa.input_model())
+            # Try format-specific maps (they no-op if not applicable)
+            for _builder in (_build_map_elf_plt, _build_map_elf_got, _build_map_pe_iat):
+                try:
+                    _t = _builder()
+                    _t.run(context, context.kb, _t.input_model())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     async def _analyze_binary(
         self,
         binary_path: str,
@@ -294,33 +363,7 @@ class AskCommand(BaseCommand):
         # Initialize KB with triage summary
         kb_import_triage(context.kb, artifact, binary_path)
         # Seed high-signal context to help the agent plan well
-        try:
-            # Soft-fail: these helpers populate KB; ignore errors
-            from ...llm.tools.list_functions import build_tool as _build_list_functions
-            from ...llm.tools.map_symbol_addresses import (
-                build_tool as _build_map_symbol_addresses,
-            )
-            from ...llm.tools.map_elf_plt import build_tool as _build_map_elf_plt
-            from ...llm.tools.map_elf_got import build_tool as _build_map_elf_got
-            from ...llm.tools.map_pe_iat import build_tool as _build_map_pe_iat
-
-            _lf = _build_list_functions()
-            _lf.run(
-                context,
-                context.kb,
-                _lf.input_model(max_functions=min(args.max_functions, 16)),
-            )
-            _sa = _build_map_symbol_addresses()
-            _sa.run(context, context.kb, _sa.input_model())
-            # Try format-specific maps (they no-op if not applicable)
-            for _builder in (_build_map_elf_plt, _build_map_elf_got, _build_map_pe_iat):
-                try:
-                    _t = _builder()
-                    _t.run(context, context.kb, _t.input_model())
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        self._seed_high_signal_context(context, args)
 
         # Create agent based on strategy
         if args.strategy == "single":
@@ -428,67 +471,6 @@ class AskCommand(BaseCommand):
                             for tc in result_data["tool_calls"]
                         ):
                             result_data["tool_calls"].append(call)
-
-                # Skip old message extraction since new agents handle this differently
-                if False and hasattr(result, "all_messages"):
-                    try:
-                        messages = result.all_messages
-                        if callable(messages):
-                            messages = messages()  # Call if it's a method
-
-                        # Track tool calls by ID for matching with results
-                        tool_calls_by_id = {}
-
-                        for msg in messages:
-                            # Look for tool calls in message parts
-                            if hasattr(msg, "parts"):
-                                parts = msg.parts
-                                if callable(parts):
-                                    parts = parts()  # Call if it's a method
-                                for part in parts:
-                                    # Check if this is a tool call
-                                    if hasattr(part, "tool_name"):
-                                        tool_id = getattr(
-                                            part, "tool_call_id", id(part)
-                                        )
-                                        tool_calls_by_id[tool_id] = {
-                                            "tool": part.tool_name,
-                                            "args": self._serialize_args(
-                                                getattr(part, "args", {})
-                                            ),
-                                        }
-                                    # Check if this is a tool result
-                                    elif hasattr(part, "tool_call_id"):
-                                        tool_id = part.tool_call_id
-                                        if tool_id in tool_calls_by_id:
-                                            content = getattr(part, "content", None)
-                                            if content is not None:
-                                                tool_calls_by_id[tool_id]["result"] = (
-                                                    self._serialize_result(content)
-                                                )
-
-                        # Add all found tool calls to results (if not already tracked)
-                        for tool_call in tool_calls_by_id.values():
-                            if not any(
-                                tc.get("tool") == tool_call["tool"]
-                                and tc.get("args") == tool_call.get("args")
-                                for tc in result_data["tool_calls"]
-                            ):
-                                result_data["tool_calls"].append(tool_call)
-
-                    except Exception as e:
-                        if args.verbose:
-                            import traceback
-
-                            traceback.print_exc()
-                        # Add debug info about the error
-                        result_data["tool_calls"].append(
-                            {
-                                "tool": "ERROR_EXTRACTING_TOOLS",
-                                "args": {},
-                                "result": str(e),
-                            }
-                        )
 
             # Extract reasoning/planning if requested
             if args.show_plan:

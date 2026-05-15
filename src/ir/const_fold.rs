@@ -65,7 +65,11 @@ fn fold_body(body: &mut [Stmt]) {
                 fold_body(body);
             }
             Stmt::Push { value } => fold_expr(value),
-            Stmt::Switch { discriminant, cases, default } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
                 fold_expr(discriminant);
                 for (_, body) in cases.iter_mut() {
                     fold_body(body);
@@ -119,7 +123,13 @@ fn fold_expr(e: &mut Expr) {
         // Constant-with-anything identities.
         if let Expr::Const(0) = **rhs {
             match op {
-                BinOp::Add | BinOp::Sub | BinOp::Or | BinOp::Xor | BinOp::Shl | BinOp::Shr | BinOp::Sar => {
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Or
+                | BinOp::Xor
+                | BinOp::Shl
+                | BinOp::Shr
+                | BinOp::Sar => {
                     let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
                     *e = x;
                     return;

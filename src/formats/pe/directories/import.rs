@@ -179,11 +179,7 @@ fn parse_import_directory<'a>(
         // Update lookup tables
         for entry in &entries {
             if let Some(name) = entry.name {
-                table
-                    .by_name
-                    .entry(name)
-                    .or_default()
-                    .push(entry.clone());
+                table.by_name.entry(name).or_default().push(entry.clone());
             }
             if let Some(va) = entry.iat_va.into() {
                 if let Some(name) = entry.name {

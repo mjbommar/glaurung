@@ -27,10 +27,7 @@ use crate::ir::call_args::CallConv;
 use crate::ir::types::VReg;
 
 const STACK_KEEPERS: &[&str] = &[
-    "rsp", "esp", "sp",
-    "rbp", "ebp", "bp",
-    "x29", "w29", "fp",
-    "x30", "w30", "lr",
+    "rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp", "x30", "w30", "lr",
 ];
 
 fn return_reg_aliases(cc: CallConv) -> &'static [&'static str] {
@@ -81,7 +78,8 @@ pub fn apply_role_names(f: &mut Function, cc: CallConv) {
     for name in return_reg_aliases(cc) {
         // `ret` only wins if no arg-slot already claimed the name (x0 case
         // above keeps `arg0`).
-        role.entry(name.to_string()).or_insert_with(|| "ret".to_string());
+        role.entry(name.to_string())
+            .or_insert_with(|| "ret".to_string());
     }
 
     // Assign stable `varN` aliases for other physical registers in order of
@@ -174,7 +172,11 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
                 cb(n);
             }
         }
-        Stmt::Switch { discriminant, cases, default } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
             walk_expr_phys(discriminant, cb);
             for (_, body) in cases {
                 for s in body {
@@ -187,18 +189,19 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
                 }
             }
         }
-        Stmt::Goto { .. }
-        | Stmt::Label(_)
-        | Stmt::Nop
-        | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
     }
 }
 
 fn walk_expr_phys(e: &Expr, cb: &mut impl FnMut(&str)) {
     match e {
         Expr::Reg(VReg::Phys(n)) => cb(n),
-        Expr::Reg(_) | Expr::Const(_) | Expr::Addr(_) | Expr::Named { .. } | Expr::StringLit { .. } | Expr::Unknown(_) => {}
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => {}
         Expr::Lea { base, index, .. } => {
             if let Some(VReg::Phys(n)) = base {
                 cb(n);
@@ -227,7 +230,11 @@ fn rename_vreg(v: &mut VReg, role: &HashMap<String, String>) {
 fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
     match e {
         Expr::Reg(v) => rename_vreg(v, role),
-        Expr::Const(_) | Expr::Addr(_) | Expr::Named { .. } | Expr::StringLit { .. } | Expr::Unknown(_) => {}
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => {}
         Expr::Lea { base, index, .. } => {
             if let Some(v) = base {
                 rename_vreg(v, role);
@@ -284,7 +291,11 @@ fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
             }
             Stmt::Push { value } => rewrite_expr(value, role),
             Stmt::Pop { target } => rename_vreg(target, role),
-            Stmt::Switch { discriminant, cases, default } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
                 rewrite_expr(discriminant, role);
                 for (_, body) in cases.iter_mut() {
                     rewrite_body(body, role);
@@ -294,10 +305,10 @@ fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
                 }
             }
             Stmt::Goto { .. }
-        | Stmt::Label(_)
-        | Stmt::Nop
-        | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+            | Stmt::Label(_)
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_) => {}
         }
     }
 }

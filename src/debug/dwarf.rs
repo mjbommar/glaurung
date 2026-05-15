@@ -104,24 +104,25 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
         gimli::RunTimeEndian::Big
     };
 
-    let load_section = |id: gimli::SectionId| -> Result<gimli::EndianSlice<'_, gimli::RunTimeEndian>, ()> {
-        let name = id.name();
-        match obj.section_by_name(name) {
-            Some(sec) => match sec.uncompressed_data() {
-                Ok(cow) => {
-                    // SAFETY: leaking is fine — analysis is short-lived
-                    // per-call, and EndianSlice needs a borrow lasting
-                    // longer than the `Cow`. The buffer is dropped when
-                    // the leaked `Vec` is reclaimed at process exit; for
-                    // a CLI / one-shot pipeline this is bounded and small.
-                    let buf: &'static [u8] = Box::leak(cow.into_owned().into_boxed_slice());
-                    Ok(gimli::EndianSlice::new(buf, endian))
-                }
-                Err(_) => Ok(gimli::EndianSlice::new(&[], endian)),
-            },
-            None => Ok(gimli::EndianSlice::new(&[], endian)),
-        }
-    };
+    let load_section =
+        |id: gimli::SectionId| -> Result<gimli::EndianSlice<'_, gimli::RunTimeEndian>, ()> {
+            let name = id.name();
+            match obj.section_by_name(name) {
+                Some(sec) => match sec.uncompressed_data() {
+                    Ok(cow) => {
+                        // SAFETY: leaking is fine — analysis is short-lived
+                        // per-call, and EndianSlice needs a borrow lasting
+                        // longer than the `Cow`. The buffer is dropped when
+                        // the leaked `Vec` is reclaimed at process exit; for
+                        // a CLI / one-shot pipeline this is bounded and small.
+                        let buf: &'static [u8] = Box::leak(cow.into_owned().into_boxed_slice());
+                        Ok(gimli::EndianSlice::new(buf, endian))
+                    }
+                    Err(_) => Ok(gimli::EndianSlice::new(&[], endian)),
+                },
+                None => Ok(gimli::EndianSlice::new(&[], endian)),
+            }
+        };
 
     let dwarf = match gimli::Dwarf::load(&load_section) {
         Ok(d) => d,
@@ -242,7 +243,11 @@ fn pick_name(
 ) -> Option<String> {
     // DW_AT_linkage_name (mangled) wins — matches what's in the symbol
     // table. Fall back to DW_AT_name (unqualified) only if absent.
-    for attr in [gimli::DW_AT_linkage_name, gimli::DW_AT_MIPS_linkage_name, gimli::DW_AT_name] {
+    for attr in [
+        gimli::DW_AT_linkage_name,
+        gimli::DW_AT_MIPS_linkage_name,
+        gimli::DW_AT_name,
+    ] {
         if let Some(v) = entry.attr_value(attr) {
             if let Ok(s) = dwarf.attr_string(unit, v) {
                 if let Ok(t) = s.to_string() {
@@ -256,10 +261,7 @@ fn pick_name(
     None
 }
 
-fn unit_name(
-    dwarf: &gimli::Dwarf<Slice<'_>>,
-    unit: &Unit<'_>,
-) -> Option<String> {
+fn unit_name(dwarf: &gimli::Dwarf<Slice<'_>>, unit: &Unit<'_>) -> Option<String> {
     let mut cursor = unit.entries();
     let entry = cursor.next_dfs().ok().flatten()?;
     let v = entry.attr_value(gimli::DW_AT_name)?;
@@ -267,10 +269,7 @@ fn unit_name(
     Some(s.to_string().ok()?.to_string())
 }
 
-fn unit_language(
-    _dwarf: &gimli::Dwarf<Slice<'_>>,
-    unit: &Unit<'_>,
-) -> Option<String> {
+fn unit_language(_dwarf: &gimli::Dwarf<Slice<'_>>, unit: &Unit<'_>) -> Option<String> {
     let mut cursor = unit.entries();
     let entry = cursor.next_dfs().ok().flatten()?;
     let v = entry.attr_value(gimli::DW_AT_language)?;
@@ -321,7 +320,10 @@ fn collect_ranges(
             let mut out = Vec::new();
             while let Some(r) = iter.next()? {
                 if r.end > r.begin {
-                    out.push(DwarfRange { start: r.begin, size: r.end - r.begin });
+                    out.push(DwarfRange {
+                        start: r.begin,
+                        size: r.end - r.begin,
+                    });
                 }
             }
             out.sort_unstable_by_key(|r| r.start);
@@ -368,7 +370,10 @@ fn collect_ranges(
     if end <= low_pc {
         return Ok(Vec::new());
     }
-    Ok(vec![DwarfRange { start: low_pc, size: end - low_pc }])
+    Ok(vec![DwarfRange {
+        start: low_pc,
+        size: end - low_pc,
+    }])
 }
 
 // ---------------------------------------------------------------------------
@@ -391,19 +396,20 @@ pub fn extract_dwarf_types(data: &[u8]) -> Vec<DwarfType> {
         gimli::RunTimeEndian::Big
     };
 
-    let load_section = |id: gimli::SectionId| -> Result<gimli::EndianSlice<'_, gimli::RunTimeEndian>, ()> {
-        let name = id.name();
-        match obj.section_by_name(name) {
-            Some(sec) => match sec.uncompressed_data() {
-                Ok(cow) => {
-                    let buf: &'static [u8] = Box::leak(cow.into_owned().into_boxed_slice());
-                    Ok(gimli::EndianSlice::new(buf, endian))
-                }
-                Err(_) => Ok(gimli::EndianSlice::new(&[], endian)),
-            },
-            None => Ok(gimli::EndianSlice::new(&[], endian)),
-        }
-    };
+    let load_section =
+        |id: gimli::SectionId| -> Result<gimli::EndianSlice<'_, gimli::RunTimeEndian>, ()> {
+            let name = id.name();
+            match obj.section_by_name(name) {
+                Some(sec) => match sec.uncompressed_data() {
+                    Ok(cow) => {
+                        let buf: &'static [u8] = Box::leak(cow.into_owned().into_boxed_slice());
+                        Ok(gimli::EndianSlice::new(buf, endian))
+                    }
+                    Err(_) => Ok(gimli::EndianSlice::new(&[], endian)),
+                },
+                None => Ok(gimli::EndianSlice::new(&[], endian)),
+            }
+        };
 
     let dwarf = match gimli::Dwarf::load(&load_section) {
         Ok(d) => d,
@@ -447,7 +453,8 @@ pub fn extract_dwarf_types(data: &[u8]) -> Vec<DwarfType> {
             };
             match entry.tag() {
                 gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => {
-                    if let Some(t) = _build_struct_or_class(&dwarf, &unit, entry, &unit_src, false) {
+                    if let Some(t) = _build_struct_or_class(&dwarf, &unit, entry, &unit_src, false)
+                    {
                         open.push((t, depth_of_next));
                     }
                 }
@@ -471,10 +478,7 @@ pub fn extract_dwarf_types(data: &[u8]) -> Vec<DwarfType> {
                     // Add to the most recent open struct/union.
                     if let Some((parent, parent_depth)) = open.last_mut() {
                         if depth_of_next == *parent_depth + 1
-                            && matches!(
-                                parent.kind,
-                                DwarfTypeKind::Struct | DwarfTypeKind::Union
-                            )
+                            && matches!(parent.kind, DwarfTypeKind::Struct | DwarfTypeKind::Union)
                         {
                             if let Some(field) = _build_field(&dwarf, &unit, entry) {
                                 parent.fields.push(field);
@@ -521,9 +525,7 @@ fn _name_of(
     s.to_string().ok().map(|t| t.to_string())
 }
 
-fn _byte_size_of(
-    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
-) -> u64 {
+fn _byte_size_of(entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>) -> u64 {
     match entry.attr_value(gimli::DW_AT_byte_size) {
         Some(gimli::AttributeValue::Udata(v)) => v,
         Some(gimli::AttributeValue::Data1(v)) => v as u64,
@@ -548,9 +550,13 @@ fn _build_struct_or_class(
     ) {
         return None;
     }
-    let name = _name_of(dwarf, unit, entry)
-        .unwrap_or_else(|| format!("anon_{:x}", entry.offset().0));
-    let kind = if is_union { DwarfTypeKind::Union } else { DwarfTypeKind::Struct };
+    let name =
+        _name_of(dwarf, unit, entry).unwrap_or_else(|| format!("anon_{:x}", entry.offset().0));
+    let kind = if is_union {
+        DwarfTypeKind::Union
+    } else {
+        DwarfTypeKind::Struct
+    };
     Some(DwarfType {
         kind,
         name,
@@ -574,8 +580,8 @@ fn _build_enum(
     ) {
         return None;
     }
-    let name = _name_of(dwarf, unit, entry)
-        .unwrap_or_else(|| format!("anon_enum_{:x}", entry.offset().0));
+    let name =
+        _name_of(dwarf, unit, entry).unwrap_or_else(|| format!("anon_enum_{:x}", entry.offset().0));
     Some(DwarfType {
         kind: DwarfTypeKind::Enum,
         name,
@@ -674,9 +680,9 @@ fn _resolve_type_string(
         | gimli::DW_TAG_union_type
         | gimli::DW_TAG_class_type
         | gimli::DW_TAG_enumeration_type
-        | gimli::DW_TAG_typedef => Some(
-            _name_of(dwarf, unit, &entry).unwrap_or_else(|| "/* unknown */".to_string()),
-        ),
+        | gimli::DW_TAG_typedef => {
+            Some(_name_of(dwarf, unit, &entry).unwrap_or_else(|| "/* unknown */".to_string()))
+        }
         gimli::DW_TAG_pointer_type => {
             let inner = entry
                 .attr_value(gimli::DW_AT_type)
@@ -740,7 +746,8 @@ mod tests {
 
     #[test]
     fn extracts_struct_with_fields_from_clang_debug() {
-        let path = "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug";
+        let path =
+            "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug";
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
             Err(_) => return,
@@ -752,9 +759,11 @@ mod tests {
             .iter()
             .filter(|t| t.kind == DwarfTypeKind::Struct && !t.fields.is_empty())
             .count();
-        assert!(with_fields >= 1,
-                "expected at least one struct with fields; got 0 of {} types",
-                types.len());
+        assert!(
+            with_fields >= 1,
+            "expected at least one struct with fields; got 0 of {} types",
+            types.len()
+        );
     }
 
     /// End-to-end against a real ELF with DWARF: we expect to recover
@@ -762,7 +771,8 @@ mod tests {
     /// path is exercised. Skip if the sample binary isn't present.
     #[test]
     fn extracts_main_with_params_from_clang_debug() {
-        let path = "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug";
+        let path =
+            "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug";
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
             Err(_) => return, // sample absent — silently skip
@@ -770,12 +780,21 @@ mod tests {
         let funcs = extract_dwarf_functions(&bytes);
         assert!(!funcs.is_empty(), "DWARF reader returned 0 functions");
         let main = funcs.iter().find(|f| f.name.as_deref() == Some("main"));
-        assert!(main.is_some(), "main not found in DWARF — names seen: {:?}",
-                funcs.iter().filter_map(|f| f.name.as_deref()).take(10).collect::<Vec<_>>());
+        assert!(
+            main.is_some(),
+            "main not found in DWARF — names seen: {:?}",
+            funcs
+                .iter()
+                .filter_map(|f| f.name.as_deref())
+                .take(10)
+                .collect::<Vec<_>>()
+        );
         let m = main.unwrap();
         assert!(!m.chunks.is_empty(), "main has no chunks");
-        assert!(m.param_count >= 1,
-                "main should have at least 1 parameter (argc), got {}",
-                m.param_count);
+        assert!(
+            m.param_count >= 1,
+            "main should have at least 1 parameter (argc), got {}",
+            m.param_count
+        );
     }
 }

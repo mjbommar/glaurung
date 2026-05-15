@@ -302,10 +302,7 @@ mod tests {
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
-            body: vec![
-                rsp_add(32),
-                Stmt::Return { value: None },
-            ],
+            body: vec![rsp_add(32), Stmt::Return { value: None }],
         };
         rematerialise_stack_ops(&mut f);
         assert_eq!(f.body.len(), 1);

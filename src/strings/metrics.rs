@@ -101,12 +101,7 @@ pub fn is_base64(data: &[u8]) -> Base64Verdict {
     }
     let frac = alpha as f64 / n as f64;
     // Padding character count at the tail.
-    let pad = data
-        .iter()
-        .rev()
-        .take(2)
-        .filter(|&&b| b == b'=')
-        .count();
+    let pad = data.iter().rev().take(2).filter(|&&b| b == b'=').count();
     let aligned = (n % 4) == 0;
     let decoded = (n / 4) * 3 - pad;
 

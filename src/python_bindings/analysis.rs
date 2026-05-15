@@ -37,6 +37,7 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     analysis_mod.add_function(wrap_pyfunction!(cil_methods_path_py, &analysis_mod)?)?;
     // Java classfile parser for triaging .class files and JAR contents.
     analysis_mod.add_function(wrap_pyfunction!(parse_java_class_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(parse_java_class_bytes_py, &analysis_mod)?)?;
     // Lua bytecode recognizer / source-name extractor.
     analysis_mod.add_function(wrap_pyfunction!(parse_lua_bytecode_path_py, &analysis_mod)?)?;
 
@@ -214,7 +215,7 @@ fn parse_lua_bytecode_path_py(
     path: String,
     max_read_bytes: u64,
     max_file_size: u64,
-) -> PyResult<Option<PyObject>> {
+) -> PyResult<Option<Py<PyAny>>> {
     let limit = std::cmp::min(max_read_bytes, max_file_size);
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
@@ -238,7 +239,8 @@ fn parse_lua_bytecode_path_py(
         }
         Err(LuaError::BadMagic) => Ok(None),
         Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "lua parse failed: {:?}", e,
+            "lua parse failed: {:?}",
+            e,
         ))),
     }
 }
@@ -254,44 +256,95 @@ fn parse_java_class_path_py(
     path: String,
     max_read_bytes: u64,
     max_file_size: u64,
-) -> PyResult<Option<PyObject>> {
+) -> PyResult<Option<Py<PyAny>>> {
     let limit = std::cmp::min(max_read_bytes, max_file_size);
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
-    match crate::analysis::java_class::parse_class(&data) {
-        Ok(info) => {
-            let dict = pyo3::types::PyDict::new(py);
-            dict.set_item("class_name", info.class_name)?;
-            dict.set_item("super_class", info.super_class)?;
-            dict.set_item("interfaces", info.interfaces)?;
-            dict.set_item("major_version", info.major_version)?;
-            dict.set_item("minor_version", info.minor_version)?;
-            dict.set_item("access_flags", info.access_flags)?;
-            let methods = pyo3::types::PyList::empty(py);
-            for m in info.methods {
-                let mdict = pyo3::types::PyDict::new(py);
-                mdict.set_item("name", m.name)?;
-                mdict.set_item("descriptor", m.descriptor)?;
-                mdict.set_item("access_flags", m.access_flags)?;
-                methods.append(mdict)?;
-            }
-            dict.set_item("methods", methods)?;
-            let fields = pyo3::types::PyList::empty(py);
-            for f in info.fields {
-                let fdict = pyo3::types::PyDict::new(py);
-                fdict.set_item("name", f.name)?;
-                fdict.set_item("descriptor", f.descriptor)?;
-                fdict.set_item("access_flags", f.access_flags)?;
-                fields.append(fdict)?;
-            }
-            dict.set_item("fields", fields)?;
-            Ok(Some(dict.into()))
-        }
+    parse_java_class_bytes_inner(py, &data)
+}
+
+/// Parse Java `.class` bytes and return a structured dict with the
+/// class name, super class, interfaces, methods, and fields.
+/// Returns None for data that doesn't have the 0xCAFEBABE magic.
+#[pyfunction]
+#[pyo3(name = "parse_java_class_bytes")]
+fn parse_java_class_bytes_py(py: Python<'_>, data: &[u8]) -> PyResult<Option<Py<PyAny>>> {
+    parse_java_class_bytes_inner(py, data)
+}
+
+fn parse_java_class_bytes_inner(py: Python<'_>, data: &[u8]) -> PyResult<Option<Py<PyAny>>> {
+    match crate::analysis::java_class::parse_class(data) {
+        Ok(info) => java_class_info_to_py(py, info).map(Some),
         Err(crate::analysis::java_class::ClassError::BadMagic(_)) => Ok(None),
         Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "java class parse failed: {:?}", e,
+            "java class parse failed: {:?}",
+            e,
         ))),
     }
+}
+
+fn java_class_info_to_py(
+    py: Python<'_>,
+    info: crate::analysis::java_class::ClassInfo,
+) -> PyResult<Py<PyAny>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("class_name", info.class_name)?;
+    dict.set_item("super_class", info.super_class)?;
+    dict.set_item("interfaces", info.interfaces)?;
+    dict.set_item("major_version", info.major_version)?;
+    dict.set_item("minor_version", info.minor_version)?;
+    dict.set_item("access_flags", info.access_flags)?;
+    let methods = pyo3::types::PyList::empty(py);
+    for m in info.methods {
+        let mdict = pyo3::types::PyDict::new(py);
+        mdict.set_item("name", m.name)?;
+        mdict.set_item("descriptor", m.descriptor)?;
+        mdict.set_item("access_flags", m.access_flags)?;
+        mdict.set_item("code", java_code_to_py(py, m.code)?)?;
+        methods.append(mdict)?;
+    }
+    dict.set_item("methods", methods)?;
+    let fields = pyo3::types::PyList::empty(py);
+    for f in info.fields {
+        let fdict = pyo3::types::PyDict::new(py);
+        fdict.set_item("name", f.name)?;
+        fdict.set_item("descriptor", f.descriptor)?;
+        fdict.set_item("access_flags", f.access_flags)?;
+        fdict.set_item("code", java_code_to_py(py, f.code)?)?;
+        fields.append(fdict)?;
+    }
+    dict.set_item("fields", fields)?;
+    Ok(dict.into())
+}
+
+fn java_code_to_py(
+    py: Python<'_>,
+    code: Option<crate::analysis::java_class::JavaCode>,
+) -> PyResult<Py<PyAny>> {
+    let Some(code) = code else {
+        return Ok(py.None());
+    };
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("max_stack", code.max_stack)?;
+    dict.set_item("max_locals", code.max_locals)?;
+    dict.set_item("code_length", code.code_length)?;
+    dict.set_item("exception_table_len", code.exception_table_len)?;
+    dict.set_item("attributes_count", code.attributes_count)?;
+    let xrefs = pyo3::types::PyList::empty(py);
+    for xref in code.xrefs {
+        let xdict = pyo3::types::PyDict::new(py);
+        xdict.set_item("bci", xref.bci)?;
+        xdict.set_item("opcode", xref.opcode)?;
+        xdict.set_item("kind", xref.kind)?;
+        xdict.set_item("owner", xref.owner)?;
+        xdict.set_item("name", xref.name)?;
+        xdict.set_item("descriptor", xref.descriptor)?;
+        xdict.set_item("target", xref.target)?;
+        xdict.set_item("string_value", xref.string_value)?;
+        xrefs.append(xdict)?;
+    }
+    dict.set_item("xrefs", xrefs)?;
+    Ok(dict.into())
 }
 
 /// Walk a .NET PE assembly's CIL metadata and return every method's
@@ -312,7 +365,8 @@ fn cil_methods_path_py(
         Ok(methods) => Ok(methods.into_iter().map(|m| (m.rva, m.name)).collect()),
         Err(crate::analysis::cil_metadata::CilError::NoCom) => Ok(Vec::new()),
         Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "cil parse failed: {:?}", e,
+            "cil parse failed: {:?}",
+            e,
         ))),
     }
 }
@@ -339,7 +393,8 @@ fn gopclntab_names_path_py(
         Err(crate::analysis::gopclntab::GoPclnError::NoSection) => Ok(Vec::new()),
         Err(crate::analysis::gopclntab::GoPclnError::UnknownMagic(_)) => Ok(Vec::new()),
         Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "gopclntab parse failed: {:?}", e,
+            "gopclntab parse failed: {:?}",
+            e,
         ))),
     }
 }

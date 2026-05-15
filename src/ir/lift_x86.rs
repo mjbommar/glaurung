@@ -810,12 +810,7 @@ mod tests {
         let ops = lift64(&[0x48, 0x83, 0xc0, 0x05]);
         assert_eq!(ops.len(), 1);
         match &ops[0].op {
-            Op::Bin {
-                dst,
-                op,
-                lhs,
-                rhs,
-            } => {
+            Op::Bin { dst, op, lhs, rhs } => {
                 assert_eq!(*dst, VReg::phys("rax"));
                 assert_eq!(*op, BinOp::Add);
                 assert_eq!(*lhs, Value::Reg(VReg::phys("rax")));
@@ -829,10 +824,7 @@ mod tests {
     fn xor_self_is_recognised_as_xor() {
         // xor eax, eax  (31 c0)
         let ops = lift64(&[0x31, 0xc0]);
-        assert!(matches!(
-            &ops[0].op,
-            Op::Bin { op: BinOp::Xor, .. }
-        ));
+        assert!(matches!(&ops[0].op, Op::Bin { op: BinOp::Xor, .. }));
     }
 
     #[test]
@@ -1089,9 +1081,14 @@ mod tests {
         // LEA rax, [rbx + rcx*8]  (48 8d 04 cb)
         let ops = lift64(&[0x48, 0x8d, 0x04, 0xcb]);
         // Expect: tmp = rbx; tmp1 = rcx * 8; tmp = tmp + tmp1; rax = tmp.
-        assert!(ops
-            .iter()
-            .any(|i| matches!(&i.op, Op::Bin { op: BinOp::Mul, rhs: Value::Const(8), .. })));
+        assert!(ops.iter().any(|i| matches!(
+            &i.op,
+            Op::Bin {
+                op: BinOp::Mul,
+                rhs: Value::Const(8),
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -1126,7 +1123,10 @@ mod tests {
         // First op must be a Load of the memory operand.
         assert!(matches!(
             &ops[0].op,
-            Op::Load { dst: VReg::Temp(11), .. }
+            Op::Load {
+                dst: VReg::Temp(11),
+                ..
+            }
         ));
         // Subsequent ops should be the usual cmp flag writes, all of which
         // read the temp rather than a bare memory operand.
@@ -1213,7 +1213,13 @@ mod tests {
         let ops = lift64(&[0xff, 0x36]);
         // Expect: tmp = load [rsi]; rsp = rsp - 8; *[rsp] = tmp.
         assert_eq!(ops.len(), 3, "got: {:#?}", ops);
-        assert!(matches!(&ops[0].op, Op::Load { dst: VReg::Temp(0), .. }));
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(0),
+                ..
+            }
+        ));
         assert!(matches!(
             &ops[1].op,
             Op::Bin { dst, op: BinOp::Sub, rhs: Value::Const(8), .. }

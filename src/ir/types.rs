@@ -253,21 +253,13 @@ impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Op::Assign { dst, src } => write!(f, "{} = {}", dst, src),
-            Op::Bin {
-                dst,
-                op,
-                lhs,
-                rhs,
-            } => write!(f, "{} = {:?} {} {}", dst, op, lhs, rhs),
+            Op::Bin { dst, op, lhs, rhs } => write!(f, "{} = {:?} {} {}", dst, op, lhs, rhs),
             Op::Un { dst, op, src } => write!(f, "{} = {:?} {}", dst, op, src),
-            Op::Cmp {
-                dst,
-                op,
-                lhs,
-                rhs,
-            } => write!(f, "{} = cmp {:?} {} {}", dst, op, lhs, rhs),
+            Op::Cmp { dst, op, lhs, rhs } => write!(f, "{} = cmp {:?} {} {}", dst, op, lhs, rhs),
             Op::Load { dst, addr } => write!(f, "{} = load[{} bytes] {:?}", dst, addr.size, addr),
-            Op::Store { addr, src } => write!(f, "store[{} bytes] {:?} <- {}", addr.size, addr, src),
+            Op::Store { addr, src } => {
+                write!(f, "store[{} bytes] {:?} <- {}", addr.size, addr, src)
+            }
             Op::Jump { target } => write!(f, "jmp 0x{:x}", target),
             Op::CondJump { cond, target } => write!(f, "if {} jmp 0x{:x}", cond, target),
             Op::Call { target } => match target {

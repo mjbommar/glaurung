@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic_ai import Agent, RunContext
 
 from ..context import MemoryContext
+from ..tools.base import tool_to_pyd_ai
 from ..tools.annotate_binary import build_tool as build_annotate, AnnotateResult
 from ..tools.search_kb import build_tool as build_kb_search, KBSearchResult
 from ..tools.kb_add_note import build_tool as build_add_note, AddNoteResult
@@ -113,25 +114,61 @@ from ..tools.find_embedded_executables import (
     FindEmbeddedExecutablesResult,
 )
 from ..tools.find_encoded_blobs import (
-    build_find_base64_blobs, FindBase64BlobsResult,
-    build_find_hex_blobs, FindHexBlobsResult,
-    build_find_pem_blocks, FindPemBlocksResult,
-    build_try_xor_brute, TryXorBruteResult,
-    build_scan_xor_encoded_strings, ScanXorEncodedStringsResult,
-    build_find_compressed_blobs, FindCompressedBlobsResult,
+    build_find_base64_blobs,
+    FindBase64BlobsResult,
+    build_find_hex_blobs,
+    FindHexBlobsResult,
+    build_find_pem_blocks,
+    FindPemBlocksResult,
+    build_try_xor_brute,
+    TryXorBruteResult,
+    build_scan_xor_encoded_strings,
+    ScanXorEncodedStringsResult,
+    build_find_compressed_blobs,
+    FindCompressedBlobsResult,
 )
 from ..tools.find_structured_blobs import (
-    build_find_embedded_images, FindEmbeddedImagesResult,
-    build_find_xml_blobs, FindXmlBlobsResult,
-    build_find_json_blobs, FindJsonBlobsResult,
-    build_find_plist_blobs, FindPlistBlobsResult,
-    build_find_ini_blobs, FindIniBlobsResult,
-    build_extract_pe_overlay, ExtractPeOverlayResult,
-    build_extract_elf_section, ExtractElfSectionResult,
+    build_find_embedded_images,
+    FindEmbeddedImagesResult,
+    build_find_xml_blobs,
+    FindXmlBlobsResult,
+    build_find_json_blobs,
+    FindJsonBlobsResult,
+    build_find_plist_blobs,
+    FindPlistBlobsResult,
+    build_find_ini_blobs,
+    FindIniBlobsResult,
+    build_extract_pe_overlay,
+    ExtractPeOverlayResult,
+    build_extract_elf_section,
+    ExtractElfSectionResult,
 )
 from ..tools.analyze_recursively import (
     build_tool as build_analyze_recursively,
     AnalyzeRecursivelyResult,
+)
+from ..tools.java_index_archive import build_tool as build_java_index_archive
+from ..tools.java_detect_obfuscation import (
+    build_tool as build_java_detect_obfuscation,
+)
+from ..tools.java_detect_security_sensitive_behavior import (
+    build_tool as build_java_detect_sensitive_behavior,
+)
+from ..tools.java_detect_entrypoints import build_tool as build_java_detect_entrypoints
+from ..tools.java_extract_config_surface import (
+    build_tool as build_java_extract_config_surface,
+)
+from ..tools.java_view_class import build_tool as build_java_view_class
+from ..tools.java_annotate_mappings import build_tool as build_java_annotate_mappings
+from ..tools.java_lookup_mapping import build_tool as build_java_lookup_mapping
+from ..tools.minecraft_detect_archive import (
+    build_tool as build_minecraft_detect_archive,
+)
+from ..tools.minecraft_fetch_mappings import (
+    build_tool as build_minecraft_fetch_mappings,
+)
+from ..tools.minecraft_extract_bundled_server import (
+    build_tool as build_minecraft_extract_bundled_server,
 )
 from .memory_foundation import create_foundation_agent
 
@@ -435,9 +472,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
         return tool.run(
             ctx.deps,
             ctx.deps.kb,
-            tool.input_model(
-                entry_va=entry_va, new_name=new_name, rationale=rationale
-            ),
+            tool.input_model(entry_va=entry_va, new_name=new_name, rationale=rationale),
         )
 
     async def search_byte_pattern(
@@ -466,9 +501,11 @@ def register_analysis_tools(agent: Agent) -> Agent:
         the rewrite before claiming recovery is complete."""
         tool = build_verify_compile_tool()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
-                source=source, language=language,
+                source=source,
+                language=language,
                 timeout_seconds=timeout_seconds,
             ),
         )
@@ -487,7 +524,8 @@ def register_analysis_tools(agent: Agent) -> Agent:
         agreement — the behavioral-equivalence gate."""
         tool = build_verify_runtime_tool()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
                 source=source,
                 target_binary=target_binary,
@@ -511,6 +549,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
         when re-run on the same KB."""
         from glaurung.llm.kb.kickoff import kickoff_analysis as _kickoff
         from dataclasses import asdict
+
         # Best-effort: route through the context's persistent KB if
         # available, else run with a tmp DB.
         db_path = getattr(ctx.deps, "db_path", None)
@@ -582,9 +621,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
         ctx: RunContext, va: int, use_llm: bool = True
     ) -> ProposeTypesResult:
         tool = build_propose_types()
-        return tool.run(
-            ctx.deps, ctx.deps.kb, tool.input_model(va=va, use_llm=use_llm)
-        )
+        return tool.run(ctx.deps, ctx.deps.kb, tool.input_model(va=va, use_llm=use_llm))
 
     # Register canonical, human-friendly names only
     agent.tool(hash_file, name="hash_file")
@@ -626,9 +663,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(propose_types_for_function, name="propose_types_for_function")
 
     # Embedded-content tools (Sprint 1) — archive extraction + magic scan.
-    async def enumerate_archive(
-        ctx: RunContext, path: str
-    ) -> EnumerateArchiveResult:
+    async def enumerate_archive(ctx: RunContext, path: str) -> EnumerateArchiveResult:
         tool = build_enumerate_archive()
         return tool.run(ctx.deps, ctx.deps.kb, tool.input_model(path=path))
 
@@ -640,7 +675,8 @@ def register_analysis_tools(agent: Agent) -> Agent:
     ) -> ExtractArchiveEntryResult:
         tool = build_extract_archive_entry()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(path=path, entry_name=entry_name, out_path=out_path),
         )
 
@@ -653,10 +689,13 @@ def register_analysis_tools(agent: Agent) -> Agent:
     ) -> ExtractArchiveAllResult:
         tool = build_extract_archive_all()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
-                path=path, out_dir=out_dir,
-                max_files=max_files, max_bytes=max_bytes,
+                path=path,
+                out_dir=out_dir,
+                max_files=max_files,
+                max_bytes=max_bytes,
             ),
         )
 
@@ -669,10 +708,13 @@ def register_analysis_tools(agent: Agent) -> Agent:
     ) -> RecursiveUnpackResult:
         tool = build_recursive_unpack()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
-                path=path, out_dir=out_dir,
-                max_depth=max_depth, max_total_bytes=max_total_bytes,
+                path=path,
+                out_dir=out_dir,
+                max_depth=max_depth,
+                max_total_bytes=max_total_bytes,
             ),
         )
 
@@ -684,9 +726,11 @@ def register_analysis_tools(agent: Agent) -> Agent:
     ) -> FindEmbeddedExecutablesResult:
         tool = build_find_embedded_executables()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
-                path=path, skip_first_match=skip_first_match,
+                path=path,
+                skip_first_match=skip_first_match,
                 max_results=max_results,
             ),
         )
@@ -696,68 +740,117 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(extract_archive_all, name="extract_archive_all")
     agent.tool(recursive_unpack, name="recursive_unpack")
     agent.tool(find_embedded_executables, name="find_embedded_executables")
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_index_archive()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_obfuscation()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_java_detect_sensitive_behavior())
+    )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_entrypoints()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_java_extract_config_surface())
+    )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_view_class()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_annotate_mappings()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_lookup_mapping()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_minecraft_detect_archive()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_minecraft_fetch_mappings()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_minecraft_extract_bundled_server())
+    )
 
     # Embedded-content Sprint 2 — encoded-blob detection
     async def find_base64_blobs(
-        ctx: RunContext, path: str, min_len: int = 32, max_results: int = 64,
+        ctx: RunContext,
+        path: str,
+        min_len: int = 32,
+        max_results: int = 64,
     ) -> FindBase64BlobsResult:
         tool = build_find_base64_blobs()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(path=path, min_len=min_len, max_results=max_results),
         )
 
     async def find_hex_blobs(
-        ctx: RunContext, path: str, min_bytes: int = 64, max_results: int = 32,
+        ctx: RunContext,
+        path: str,
+        min_bytes: int = 64,
+        max_results: int = 32,
     ) -> FindHexBlobsResult:
         tool = build_find_hex_blobs()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(path=path, min_bytes=min_bytes, max_results=max_results),
         )
 
     async def find_pem_blocks(
-        ctx: RunContext, path: str, max_results: int = 32,
+        ctx: RunContext,
+        path: str,
+        max_results: int = 32,
     ) -> FindPemBlocksResult:
         tool = build_find_pem_blocks()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(path=path, max_results=max_results),
         )
 
     async def try_xor_brute(
-        ctx: RunContext, path: str, offset: int = 0,
-        length: int = 256, top_k: int = 3,
+        ctx: RunContext,
+        path: str,
+        offset: int = 0,
+        length: int = 256,
+        top_k: int = 3,
     ) -> TryXorBruteResult:
         tool = build_try_xor_brute()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
-                path=path, offset=offset, length=length, top_k=top_k,
+                path=path,
+                offset=offset,
+                length=length,
+                top_k=top_k,
             ),
         )
 
     async def scan_xor_encoded_strings(
-        ctx: RunContext, path: str, window: int = 32,
-        stride: int = 8, min_score: float = 0.06, max_results: int = 32,
+        ctx: RunContext,
+        path: str,
+        window: int = 32,
+        stride: int = 8,
+        min_score: float = 0.06,
+        max_results: int = 32,
     ) -> ScanXorEncodedStringsResult:
         tool = build_scan_xor_encoded_strings()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
-                path=path, window=window, stride=stride,
-                min_score=min_score, max_results=max_results,
+                path=path,
+                window=window,
+                stride=stride,
+                min_score=min_score,
+                max_results=max_results,
             ),
         )
 
     async def find_compressed_blobs(
-        ctx: RunContext, path: str, max_results: int = 32, probe_bytes: int = 4096,
+        ctx: RunContext,
+        path: str,
+        max_results: int = 32,
+        probe_bytes: int = 4096,
     ) -> FindCompressedBlobsResult:
         tool = build_find_compressed_blobs()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
-                path=path, max_results=max_results, probe_bytes=probe_bytes,
+                path=path,
+                max_results=max_results,
+                probe_bytes=probe_bytes,
             ),
         )
 
@@ -770,64 +863,87 @@ def register_analysis_tools(agent: Agent) -> Agent:
 
     # Embedded-content Sprint 3 — structured-blob + resource extraction
     async def find_embedded_images(
-        ctx: RunContext, path: str, max_results: int = 32,
+        ctx: RunContext,
+        path: str,
+        max_results: int = 32,
     ) -> FindEmbeddedImagesResult:
         tool = build_find_embedded_images()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(path=path, max_results=max_results),
         )
 
     async def find_xml_blobs(
-        ctx: RunContext, path: str, max_results: int = 16,
+        ctx: RunContext,
+        path: str,
+        max_results: int = 16,
     ) -> FindXmlBlobsResult:
         tool = build_find_xml_blobs()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(path=path, max_results=max_results),
         )
 
     async def find_json_blobs(
-        ctx: RunContext, path: str, min_size: int = 64, max_results: int = 16,
+        ctx: RunContext,
+        path: str,
+        min_size: int = 64,
+        max_results: int = 16,
     ) -> FindJsonBlobsResult:
         tool = build_find_json_blobs()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(path=path, min_size=min_size, max_results=max_results),
         )
 
     async def find_plist_blobs(
-        ctx: RunContext, path: str, max_results: int = 16,
+        ctx: RunContext,
+        path: str,
+        max_results: int = 16,
     ) -> FindPlistBlobsResult:
         tool = build_find_plist_blobs()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(path=path, max_results=max_results),
         )
 
     async def find_ini_blobs(
-        ctx: RunContext, path: str, min_sections: int = 2, max_results: int = 16,
+        ctx: RunContext,
+        path: str,
+        min_sections: int = 2,
+        max_results: int = 16,
     ) -> FindIniBlobsResult:
         tool = build_find_ini_blobs()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
-                path=path, min_sections=min_sections, max_results=max_results,
+                path=path,
+                min_sections=min_sections,
+                max_results=max_results,
             ),
         )
 
     async def extract_pe_overlay(
-        ctx: RunContext, path: str,
+        ctx: RunContext,
+        path: str,
     ) -> ExtractPeOverlayResult:
         tool = build_extract_pe_overlay()
         return tool.run(ctx.deps, ctx.deps.kb, tool.input_model(path=path))
 
     async def extract_elf_section(
-        ctx: RunContext, path: str, section_name: str,
+        ctx: RunContext,
+        path: str,
+        section_name: str,
     ) -> ExtractElfSectionResult:
         tool = build_extract_elf_section()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(path=path, section_name=section_name),
         )
 
@@ -852,10 +968,13 @@ def register_analysis_tools(agent: Agent) -> Agent:
     ) -> AnalyzeRecursivelyResult:
         tool = build_analyze_recursively()
         return tool.run(
-            ctx.deps, ctx.deps.kb,
+            ctx.deps,
+            ctx.deps.kb,
             tool.input_model(
-                path=path, out_dir=out_dir,
-                max_depth=max_depth, max_total_bytes=max_total_bytes,
+                path=path,
+                out_dir=out_dir,
+                max_depth=max_depth,
+                max_total_bytes=max_total_bytes,
                 max_nodes=max_nodes,
             ),
         )

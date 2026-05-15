@@ -24,8 +24,8 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use crate::ir::{lift_arm64, lift_x86};
 use crate::ir::types::{BinOp, CallTarget, CmpOp, Flag, LlirInstr, MemOp, Op, UnOp, VReg, Value};
+use crate::ir::{lift_arm64, lift_x86};
 
 fn flag_repr(f: Flag) -> &'static str {
     match f {
@@ -69,10 +69,7 @@ fn value_to_pyobj(py: Python<'_>, v: &Value) -> PyResult<PyObject> {
 
 fn memop_to_pyobj(py: Python<'_>, m: &MemOp) -> PyResult<PyObject> {
     let d = PyDict::new(py);
-    d.set_item(
-        "base",
-        m.base.as_ref().map(vreg_to_str).unwrap_or_default(),
-    )?;
+    d.set_item("base", m.base.as_ref().map(vreg_to_str).unwrap_or_default())?;
     d.set_item(
         "index",
         m.index.as_ref().map(vreg_to_str).unwrap_or_default(),
@@ -123,12 +120,7 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("dst", vreg_to_str(dst))?;
             d.set_item("src", value_to_pyobj(py, src)?)?;
         }
-        Op::Bin {
-            dst,
-            op,
-            lhs,
-            rhs,
-        } => {
+        Op::Bin { dst, op, lhs, rhs } => {
             d.set_item("kind", "bin")?;
             d.set_item("dst", vreg_to_str(dst))?;
             d.set_item("op", binop_str(*op))?;
@@ -141,12 +133,7 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("op", unop_str(*op))?;
             d.set_item("src", value_to_pyobj(py, src)?)?;
         }
-        Op::Cmp {
-            dst,
-            op,
-            lhs,
-            rhs,
-        } => {
+        Op::Cmp { dst, op, lhs, rhs } => {
             d.set_item("kind", "cmp")?;
             d.set_item("dst", vreg_to_str(dst))?;
             d.set_item("op", cmpop_str(*op))?;
@@ -202,12 +189,7 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
 }
 
 /// Dispatch lifting to the appropriate per-arch backend.
-fn lift_for_arch(
-    data: &[u8],
-    start_va: u64,
-    bits: u32,
-    arch: &str,
-) -> PyResult<Vec<LlirInstr>> {
+fn lift_for_arch(data: &[u8], start_va: u64, bits: u32, arch: &str) -> PyResult<Vec<LlirInstr>> {
     let a = arch.to_ascii_lowercase();
     match a.as_str() {
         "x86" => Ok(lift_x86::lift_bytes(data, start_va, 32)),
@@ -333,9 +315,7 @@ fn decompile_at_py(
         BArch::X86_64
     };
     let lf = lift_function_from_bytes(&data, func, arch).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err(
-            "LLIR lifter does not support this architecture",
-        )
+        pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
     let ssa = compute_ssa(&lf);
     let region = recover(&lf, &ssa);
@@ -406,8 +386,7 @@ fn remap_type_map(
     // Reconstruct the alias table the naming pass used for arg/ret slots;
     // `varN` aliases are assigned by first-appearance order and we can't
     // trivially recover them here, so those keys survive untouched.
-    let mut alias: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut alias: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let arg_slots: &[&[&str]] = match cc {
         crate::ir::call_args::CallConv::SysVAmd64 => &[
             &["rdi", "edi", "di", "dil"],
@@ -430,7 +409,9 @@ fn remap_type_map(
     };
     for (slot, names) in arg_slots.iter().enumerate() {
         for n in *names {
-            alias.entry(n.to_string()).or_insert_with(|| format!("arg{}", slot));
+            alias
+                .entry(n.to_string())
+                .or_insert_with(|| format!("arg{}", slot));
         }
     }
     let ret_aliases: &[&str] = match cc {
@@ -438,17 +419,16 @@ fn remap_type_map(
         crate::ir::call_args::CallConv::Aarch64 => &["x0", "w0"],
     };
     for n in ret_aliases {
-        alias.entry(n.to_string()).or_insert_with(|| "ret".to_string());
+        alias
+            .entry(n.to_string())
+            .or_insert_with(|| "ret".to_string());
     }
     let mut out = crate::ir::types_recover::TypeMap::default();
     for (reg, hint) in tm.iter() {
         match reg {
             crate::ir::types::VReg::Phys(n) => {
                 let new_name = alias.get(n).cloned().unwrap_or_else(|| n.clone());
-                out.upsert_public(
-                    crate::ir::types::VReg::Phys(new_name),
-                    *hint,
-                );
+                out.upsert_public(crate::ir::types::VReg::Phys(new_name), *hint);
             }
             _ => out.upsert_public(reg.clone(), *hint),
         }

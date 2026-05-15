@@ -11,8 +11,8 @@
 use crate::analysis::entry::va_to_file_offset;
 use crate::core::binary::Arch;
 use crate::core::function::Function;
-use crate::ir::{lift_arm64, lift_x86};
 use crate::ir::types::*;
+use crate::ir::{lift_arm64, lift_x86};
 
 /// Lift a byte window into LLIR using the appropriate per-arch lifter.
 fn lift_window(bytes: &[u8], start_va: u64, arch: Arch) -> Vec<LlirInstr> {
@@ -35,11 +35,7 @@ pub fn supports_arch(arch: Arch) -> bool {
 /// Individual blocks whose bytes cannot be located (e.g. VA outside any
 /// mapped segment) are skipped silently; the function's other blocks still
 /// produce LLIR.
-pub fn lift_function_from_bytes(
-    data: &[u8],
-    func: &Function,
-    arch: Arch,
-) -> Option<LlirFunction> {
+pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Option<LlirFunction> {
     if !supports_arch(arch) {
         return None;
     }
@@ -108,9 +104,8 @@ mod tests {
     fn lifts_hello_gcc_entry_function() {
         // Real-binary end-to-end: discover functions via cfg, lift the one
         // containing the entry VA, and check that we got sensible LLIR.
-        let path = Path::new(
-            "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
-        );
+        let path =
+            Path::new("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2");
         if !path.exists() {
             eprintln!("sample missing: {}", path.display());
             return;
@@ -127,20 +122,26 @@ mod tests {
 
         // Lift the first function (entry).
         let f = &funcs[0];
-        let lf = lift_function_from_bytes(&data, f, Arch::X86_64)
-            .expect("lift function");
+        let lf = lift_function_from_bytes(&data, f, Arch::X86_64).expect("lift function");
         assert_eq!(lf.entry_va, f.entry_point.value);
         assert!(!lf.blocks.is_empty(), "lifted function has no blocks");
         // Every block's start VA must match a block in the source function.
-        let src_starts: std::collections::HashSet<u64> =
-            f.basic_blocks.iter().map(|b| b.start_address.value).collect();
+        let src_starts: std::collections::HashSet<u64> = f
+            .basic_blocks
+            .iter()
+            .map(|b| b.start_address.value)
+            .collect();
         for b in &lf.blocks {
             assert!(
                 src_starts.contains(&b.start_va),
                 "block start 0x{:x} not in source function",
                 b.start_va
             );
-            assert!(!b.instrs.is_empty(), "empty LLIR block at 0x{:x}", b.start_va);
+            assert!(
+                !b.instrs.is_empty(),
+                "empty LLIR block at 0x{:x}",
+                b.start_va
+            );
         }
         // Entry's block should terminate in some recognised control-flow op.
         // A real compiler-emitted function body nearly always ends with ret,
@@ -154,7 +155,11 @@ mod tests {
         assert!(
             matches!(
                 &last.op,
-                Op::Return | Op::Call { .. } | Op::Jump { .. } | Op::CondJump { .. } | Op::Unknown { .. }
+                Op::Return
+                    | Op::Call { .. }
+                    | Op::Jump { .. }
+                    | Op::CondJump { .. }
+                    | Op::Unknown { .. }
             ),
             "unexpected terminator at 0x{:x}: {:?}",
             last.va,
@@ -184,9 +189,8 @@ mod tests {
 
     #[test]
     fn lifts_hello_arm64_entry_function() {
-        let path = Path::new(
-            "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc",
-        );
+        let path =
+            Path::new("samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc");
         if !path.exists() {
             eprintln!("sample missing: {}", path.display());
             return;
@@ -201,15 +205,14 @@ mod tests {
         let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
         assert!(!funcs.is_empty(), "cfg produced no functions for arm64");
         let f = &funcs[0];
-        let lf = lift_function_from_bytes(&data, f, Arch::AArch64)
-            .expect("lift arm64 function");
+        let lf = lift_function_from_bytes(&data, f, Arch::AArch64).expect("lift arm64 function");
         assert_eq!(lf.entry_va, f.entry_point.value);
         assert!(!lf.blocks.is_empty(), "no blocks lifted");
         // At least one block's instr list must be non-empty and contain a
         // recognised op kind.
-        assert!(lf
-            .blocks
+        assert!(lf.blocks.iter().any(|b| b
+            .instrs
             .iter()
-            .any(|b| b.instrs.iter().any(|i| !matches!(&i.op, Op::Unknown { .. }))));
+            .any(|i| !matches!(&i.op, Op::Unknown { .. }))));
     }
 }

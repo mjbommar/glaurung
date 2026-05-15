@@ -105,8 +105,7 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
     // a stable pointer or code-pointer — the pointer classification is
     // noise from an unrelated use-site and would produce `(fnptr)%ret = 0;`
     // style output. We'll use this to post-process the map below.
-    let mut gets_const: std::collections::HashSet<VReg> =
-        std::collections::HashSet::new();
+    let mut gets_const: std::collections::HashSet<VReg> = std::collections::HashSet::new();
     for block in &lf.blocks {
         for ins in &block.instrs {
             if let Op::Assign {
@@ -200,8 +199,7 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
         .inner
         .iter()
         .filter(|(k, v)| {
-            gets_const.contains(k)
-                && matches!(v, TypeHint::Pointer { .. } | TypeHint::CodePointer)
+            gets_const.contains(k) && matches!(v, TypeHint::Pointer { .. } | TypeHint::CodePointer)
         })
         .map(|(k, _)| k.clone())
         .collect();

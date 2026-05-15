@@ -5,20 +5,22 @@
 //! exports/PLT/etc.), disassembles within executable ranges only, splits basic
 //! blocks on control flow, and emits `Function`s plus a `CallGraph`.
 
+use crate::analysis::jump_table::discover_jump_tables;
+use crate::analysis::vtable::discover_vtables;
 use crate::core::address::{Address, AddressKind};
 use crate::core::address_range::AddressRange;
 use crate::core::basic_block::BasicBlock;
-use crate::debug::dwarf::{extract_dwarf_functions, DwarfFunction};
 use crate::core::binary::{Arch as BArch, Endianness};
 use crate::core::call_graph::{CallGraph, CallGraphEdge, CallType};
 use crate::core::control_flow_graph::ControlFlowEdgeKind;
 use crate::core::disassembler::Disassembler;
 use crate::core::function::{Function, FunctionFlags, FunctionKind};
 use crate::core::instruction::Instruction;
-use crate::analysis::jump_table::discover_jump_tables;
-use crate::analysis::vtable::discover_vtables;
-use crate::flirt::{apply_flirt_overrides, discover_flirt_seeds, load_default_library, FlirtLibrary};
+use crate::debug::dwarf::{extract_dwarf_functions, DwarfFunction};
 use crate::disasm::registry;
+use crate::flirt::{
+    apply_flirt_overrides, discover_flirt_seeds, load_default_library, FlirtLibrary,
+};
 use crate::triage::heuristics;
 
 use object::{Object, ObjectSegment};
@@ -509,14 +511,10 @@ fn apply_dwarf_overrides(data: &[u8], functions: &mut [Function]) -> usize {
 /// the same logical function as `<base>`. The first match wins per child;
 /// `<base>` is everything before the suffix in the raw symbol name.
 const COMPILER_SPLIT_SUFFIXES: &[&str] = &[
-    ".cold",       // GCC -O2: cold-path split (single)
-    ".cold.0",     // GCC: numbered cold splits when multiple cold paths
-    ".cold.1",
-    ".cold.2",
-    ".cold.3",
-    ".part.0",     // GCC: partial-inlining splits (.part.<n>)
-    ".part.1",
-    ".part.2",
+    ".cold",   // GCC -O2: cold-path split (single)
+    ".cold.0", // GCC: numbered cold splits when multiple cold paths
+    ".cold.1", ".cold.2", ".cold.3", ".part.0", // GCC: partial-inlining splits (.part.<n>)
+    ".part.1", ".part.2",
 ];
 
 /// Strip a known split suffix from `raw_name` and return the parent name,
@@ -632,10 +630,8 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         Vec::new()
     };
     let bits = if arch.is_64_bit() { 64 } else { 32 };
-    let flirt_name_by_va: std::collections::HashMap<u64, String> = flirt_seeds
-        .iter()
-        .cloned()
-        .collect();
+    let flirt_name_by_va: std::collections::HashMap<u64, String> =
+        flirt_seeds.iter().cloned().collect();
     let mut known: std::collections::HashSet<u64> = seeds.iter().map(|a| a.value).collect();
     for (va, _name) in &flirt_seeds {
         if known.contains(va) {
@@ -654,7 +650,9 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     // because they're called indirectly through `this->vtable[N]`.
     let regions_for_check = regions.clone();
     let is_executable = |va: u64| -> bool {
-        regions_for_check.iter().any(|r| va >= r.start && va < r.end)
+        regions_for_check
+            .iter()
+            .any(|r| va >= r.start && va < r.end)
     };
     let vtable_entries = discover_vtables(data, is_executable);
     let mut vtable_method_count = 0usize;
@@ -676,7 +674,9 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     // code branch as far as direct-call discovery is concerned.
     let regions_for_check2 = regions.clone();
     let is_executable2 = move |va: u64| -> bool {
-        regions_for_check2.iter().any(|r| va >= r.start && va < r.end)
+        regions_for_check2
+            .iter()
+            .any(|r| va >= r.start && va < r.end)
     };
     let jump_tables = discover_jump_tables(data, is_executable2);
     for jt in &jump_tables {
@@ -807,10 +807,22 @@ mod chunk_tests {
     fn _func(name: &str, va: u64, size: u64) -> Function {
         let entry = Address::new(AddressKind::VA, va, 64, None, None).unwrap();
         Function::new_full(
-            name.to_string(), entry, FunctionKind::Normal,
-            Some(_va_range(va, size)), FunctionFlags::NONE,
-            None, None, None, None, None, None, None, None, None,
-        ).unwrap()
+            name.to_string(),
+            entry,
+            FunctionKind::Normal,
+            Some(_va_range(va, size)),
+            FunctionFlags::NONE,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
     }
 
     #[test]

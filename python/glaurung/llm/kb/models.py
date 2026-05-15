@@ -20,6 +20,15 @@ class NodeKind(str, Enum):
     note = "note"
     hash = "hash"
     ioc = "ioc"
+    java_archive = "java_archive"
+    java_class = "java_class"
+    java_method = "java_method"
+    java_field = "java_field"
+    java_resource = "java_resource"
+    java_mapping = "java_mapping"
+    java_sensitive_sink = "java_sensitive_sink"
+    java_entrypoint = "java_entrypoint"
+    java_config_key = "java_config_key"
 
 
 class Node(BaseModel):

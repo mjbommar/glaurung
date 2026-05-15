@@ -39,10 +39,7 @@ const CANARY_NAME: &str = "__stack_chk_guard";
 /// Only entries that are unambiguous and widely documented belong here.
 /// Anything implementation-private should stay as the raw `fs:&[off]`
 /// form so a reader knows it's unresolved.
-const KNOWN_TLS_OFFSETS: &[(i64, &str)] = &[
-    (0x00, "__tls_self"),
-    (0x30, "__pointer_chk_guard"),
-];
+const KNOWN_TLS_OFFSETS: &[(i64, &str)] = &[(0x00, "__tls_self"), (0x30, "__pointer_chk_guard")];
 
 /// Rewrite every TLS canary load in `f` to reference `__stack_chk_guard`.
 ///
@@ -216,10 +213,7 @@ fn collapse_body(body: &mut Vec<Stmt>) {
         };
         if let Some(slot) = store_match {
             body.remove(i + 1);
-            body[i] = Stmt::Comment(format!(
-                "stack canary: save guard to %{}",
-                slot
-            ));
+            body[i] = Stmt::Comment(format!("stack canary: save guard to %{}", slot));
         }
         i += 1;
     }
@@ -260,7 +254,11 @@ fn rewrite_body(body: &mut [Stmt]) {
                 rewrite_body(body);
             }
             Stmt::Push { value } => rewrite_expr(value),
-            Stmt::Switch { discriminant, cases, default } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
                 rewrite_expr(discriminant);
                 for (_, body) in cases.iter_mut() {
                     rewrite_body(body);

@@ -137,7 +137,11 @@ fn count_reads_in_stmt(s: &Stmt, target: &VReg) -> usize {
             n
         }
         Stmt::Push { value } => count_reads_in_expr(value, target),
-        Stmt::Switch { discriminant, cases, default } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
             let mut n = count_reads_in_expr(discriminant, target);
             for (_, body) in cases {
                 for st in body {

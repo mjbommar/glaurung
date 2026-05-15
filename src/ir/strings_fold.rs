@@ -159,7 +159,11 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 fold_body(body, pool);
             }
             Stmt::Push { value } => fold_expr(value, pool),
-            Stmt::Switch { discriminant, cases, default } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
                 fold_expr(discriminant, pool);
                 for (_, body) in cases.iter_mut() {
                     fold_body(body, pool);
@@ -182,16 +186,12 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
     match e {
         Expr::Addr(v) => {
             if let Some(s) = pool.get(v) {
-                *e = Expr::StringLit {
-                    value: shorten(s),
-                };
+                *e = Expr::StringLit { value: shorten(s) };
             }
         }
         Expr::Named { va, .. } => {
             if let Some(s) = pool.get(va) {
-                *e = Expr::StringLit {
-                    value: shorten(s),
-                };
+                *e = Expr::StringLit { value: shorten(s) };
             }
         }
         Expr::Deref { addr, .. } => fold_expr(addr, pool),
@@ -317,10 +317,9 @@ mod tests {
         // Every value must be non-empty and purely printable.
         for v in pool.values() {
             assert!(!v.is_empty());
-            assert!(v.chars().all(|c| c == '\t'
-                || c == '\n'
-                || c == '\r'
-                || (' '..='~').contains(&c)));
+            assert!(v
+                .chars()
+                .all(|c| c == '\t' || c == '\n' || c == '\r' || (' '..='~').contains(&c)));
         }
     }
 }

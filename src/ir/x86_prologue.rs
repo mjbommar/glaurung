@@ -122,14 +122,15 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         {
             body.drain(ret_idx - 2..ret_idx);
             ret_idx -= 2;
-            body.insert(ret_idx, Stmt::Comment("x86-64 epilogue: restore rbp".to_string()));
+            body.insert(
+                ret_idx,
+                Stmt::Comment("x86-64 epilogue: restore rbp".to_string()),
+            );
             continue;
         }
         // Pattern B: `pop rbp; return;` (no leave, just pop), optionally
         // preceded by a `%rsp = (%rsp + N);` teardown.
-        if ret_idx >= 1
-            && matches!(&body[ret_idx - 1], Stmt::Pop { target: t } if is_rbp(t))
-        {
+        if ret_idx >= 1 && matches!(&body[ret_idx - 1], Stmt::Pop { target: t } if is_rbp(t)) {
             body.remove(ret_idx - 1);
             ret_idx -= 1;
             // Pattern B': `%rsp += N;` immediately before the pop — fold it
@@ -226,11 +227,7 @@ mod tests {
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
-            body: vec![
-                push_rbp(),
-                mov_rbp_rsp(),
-                Stmt::Return { value: None },
-            ],
+            body: vec![push_rbp(), mov_rbp_rsp(), Stmt::Return { value: None }],
         };
         recognise_x86_prologue(&mut f);
         assert!(matches!(
@@ -244,11 +241,7 @@ mod tests {
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
-            body: vec![
-                push_rbp(),
-                sub_rsp(0x20),
-                Stmt::Return { value: None },
-            ],
+            body: vec![push_rbp(), sub_rsp(0x20), Stmt::Return { value: None }],
         };
         let orig = f.clone();
         recognise_x86_prologue(&mut f);
@@ -267,9 +260,7 @@ mod tests {
                     dst: reg("rsp"),
                     src: Expr::Reg(reg("rbp")),
                 },
-                Stmt::Pop {
-                    target: reg("rbp"),
-                },
+                Stmt::Pop { target: reg("rbp") },
                 Stmt::Return { value: None },
             ],
         };
@@ -287,7 +278,10 @@ mod tests {
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
-            body: vec![Stmt::Pop { target: reg("rbp") }, Stmt::Return { value: None }],
+            body: vec![
+                Stmt::Pop { target: reg("rbp") },
+                Stmt::Return { value: None },
+            ],
         };
         recognise_x86_prologue(&mut f);
         assert_eq!(f.body.len(), 2);

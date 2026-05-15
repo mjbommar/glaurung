@@ -326,7 +326,11 @@ fn rename(
     let mut phi_dst: Vec<HashMap<VReg, u32>> = vec![HashMap::new(); n];
     let mut phi_inputs: Vec<HashMap<VReg, HashMap<usize, u32>>> = vec![HashMap::new(); n];
 
-    fn new_version(counter: &mut HashMap<VReg, u32>, stack: &mut HashMap<VReg, Vec<u32>>, v: &VReg) -> u32 {
+    fn new_version(
+        counter: &mut HashMap<VReg, u32>,
+        stack: &mut HashMap<VReg, Vec<u32>>,
+        v: &VReg,
+    ) -> u32 {
         let c = counter.entry(v.clone()).or_insert(0);
         let ver = *c;
         *c += 1;
@@ -539,7 +543,10 @@ mod tests {
             block_idx: 0,
             instr_idx: 1,
         }];
-        assert_ne!(defs_a, defs_b, "two defs of rax must have distinct versions");
+        assert_ne!(
+            defs_a, defs_b,
+            "two defs of rax must have distinct versions"
+        );
         // rbx read uses rax at its second version.
         let read_ver = info.use_versions[&(
             InstrAddr {

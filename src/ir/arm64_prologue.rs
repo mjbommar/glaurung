@@ -150,8 +150,7 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         let mut lr_seen = false;
         for s in run {
             if let Stmt::Assign {
-                dst: VReg::Phys(n),
-                ..
+                dst: VReg::Phys(n), ..
             } = s
             {
                 if n == "fp" || n == "x29" {
@@ -267,7 +266,11 @@ mod tests {
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
-            body: vec![store("stack_0", "fp"), sp_sub(48), Stmt::Return { value: None }],
+            body: vec![
+                store("stack_0", "fp"),
+                sp_sub(48),
+                Stmt::Return { value: None },
+            ],
         };
         let orig = f.clone();
         recognise_arm64_prologue(&mut f);
@@ -325,11 +328,7 @@ mod tests {
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
-            body: vec![
-                Stmt::Nop,
-                sp_add(48),
-                Stmt::Return { value: None },
-            ],
+            body: vec![Stmt::Nop, sp_add(48), Stmt::Return { value: None }],
         };
         recognise_arm64_prologue(&mut f);
         // Expected remaining: Nop, Return (sp_add dropped).

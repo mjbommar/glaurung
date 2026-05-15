@@ -26,11 +26,7 @@ use std::collections::HashMap;
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::VReg;
 
-const STACK_BASES: &[&str] = &[
-    "rsp", "esp", "sp",
-    "rbp", "ebp", "bp",
-    "x29", "w29", "fp",
-];
+const STACK_BASES: &[&str] = &["rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp"];
 const FRAME_POINTER_BASES: &[&str] = &["rbp", "ebp", "bp", "x29", "w29", "fp"];
 
 fn is_stack_base(name: &str) -> bool {
@@ -104,7 +100,11 @@ fn rewrite_body(
                 rewrite_body(body, map, stack_counter, local_counter);
             }
             Stmt::Push { value } => rewrite_expr(value, map, stack_counter, local_counter),
-            Stmt::Switch { discriminant, cases, default } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
                 rewrite_expr(discriminant, map, stack_counter, local_counter);
                 for (_, body) in cases.iter_mut() {
                     rewrite_body(body, map, stack_counter, local_counter);
@@ -153,9 +153,7 @@ fn rewrite_expr(
                     };
                     let alias = map
                         .entry(key)
-                        .or_insert_with(|| {
-                            alloc_name(name, *disp, stack_counter, local_counter)
-                        })
+                        .or_insert_with(|| alloc_name(name, *disp, stack_counter, local_counter))
                         .clone();
                     *e = Expr::Reg(VReg::phys(alias));
                     return;

@@ -93,7 +93,13 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv) {
     let mut call_positions: Vec<usize> = body
         .iter()
         .enumerate()
-        .filter_map(|(i, s)| if matches!(s, Stmt::Call { .. }) { Some(i) } else { None })
+        .filter_map(|(i, s)| {
+            if matches!(s, Stmt::Call { .. }) {
+                Some(i)
+            } else {
+                None
+            }
+        })
         .collect();
 
     // Process right-to-left so earlier indices stay stable as we remove
@@ -106,10 +112,13 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv) {
 
 fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
     // Map slot → (stmt_index, expression) for assignments we will eat.
-    let mut found: Vec<Option<(usize, Expr)>> = vec![None; match arch {
-        CallConv::SysVAmd64 => X86_64_ARG_SLOTS.len(),
-        CallConv::Aarch64 => AARCH64_ARG_SLOTS.len(),
-    }];
+    let mut found: Vec<Option<(usize, Expr)>> = vec![
+        None;
+        match arch {
+            CallConv::SysVAmd64 => X86_64_ARG_SLOTS.len(),
+            CallConv::Aarch64 => AARCH64_ARG_SLOTS.len(),
+        }
+    ];
 
     // Walk backwards from the call.
     let mut i = call_idx;
@@ -124,9 +133,9 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
                         // captured arg expression reads this register. If
                         // one does, folding this assignment would leave a
                         // dangling reference in the higher slot's expr.
-                        let would_dangle = found.iter().any(|f| {
-                            f.as_ref().is_some_and(|(_, e)| reads_reg_in_expr(e, dst))
-                        });
+                        let would_dangle = found
+                            .iter()
+                            .any(|f| f.as_ref().is_some_and(|(_, e)| reads_reg_in_expr(e, dst)));
                         if !would_dangle {
                             found[slot] = Some((i, src.clone()));
                         }
@@ -219,10 +228,9 @@ fn reads_reg_in_stmt(s: &Stmt, target: &VReg) -> bool {
         Stmt::Store { addr, src } => {
             reads_reg_in_expr(addr, target) || reads_reg_in_expr(src, target)
         }
-        Stmt::Call {
-            target: t,
-            args,
-        } => reads_reg_in_expr(t, target) || args.iter().any(|a| reads_reg_in_expr(a, target)),
+        Stmt::Call { target: t, args } => {
+            reads_reg_in_expr(t, target) || args.iter().any(|a| reads_reg_in_expr(a, target))
+        }
         Stmt::Return { value } => value.as_ref().is_some_and(|e| reads_reg_in_expr(e, target)),
         Stmt::If {
             cond,
@@ -236,25 +244,26 @@ fn reads_reg_in_stmt(s: &Stmt, target: &VReg) -> bool {
                     .is_some_and(|eb| eb.iter().any(|s| reads_reg_in_stmt(s, target)))
         }
         Stmt::While { cond, body } => {
-            reads_reg_in_expr(cond, target)
-                || body.iter().any(|s| reads_reg_in_stmt(s, target))
+            reads_reg_in_expr(cond, target) || body.iter().any(|s| reads_reg_in_stmt(s, target))
         }
         Stmt::Push { value } => reads_reg_in_expr(value, target),
         Stmt::Pop { target: t } => t == target,
-        Stmt::Switch { discriminant, cases, default } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
             reads_reg_in_expr(discriminant, target)
-                || cases.iter().any(|(_, body)| {
-                    body.iter().any(|s| reads_reg_in_stmt(s, target))
-                })
-                || default.as_ref().is_some_and(|b| {
-                    b.iter().any(|s| reads_reg_in_stmt(s, target))
-                })
+                || cases
+                    .iter()
+                    .any(|(_, body)| body.iter().any(|s| reads_reg_in_stmt(s, target)))
+                || default
+                    .as_ref()
+                    .is_some_and(|b| b.iter().any(|s| reads_reg_in_stmt(s, target)))
         }
-        Stmt::Goto { .. }
-        | Stmt::Label(_)
-        | Stmt::Nop
-        | Stmt::Unknown(_)
-        | Stmt::Comment(_) => false,
+        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {
+            false
+        }
     }
 }
 

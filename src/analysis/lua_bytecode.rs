@@ -130,16 +130,20 @@ fn extract_source_53(data: &[u8]) -> Option<String> {
     let sizeof_lua_int;
     let sizeof_lua_num;
     if version == 0x53 {
-        sizeof_lua_int = data[p] as usize; p += 1;
-        sizeof_lua_num = data[p] as usize; p += 1;
+        sizeof_lua_int = data[p] as usize;
+        p += 1;
+        sizeof_lua_num = data[p] as usize;
+        p += 1;
         // Skip LUAC_INT and LUAC_NUM tag values.
         p += sizeof_lua_int + sizeof_lua_num;
     } else if version == 0x54 {
         // 5.4 layout: sizeof(Instruction), sizeof(lua_Integer), sizeof(lua_Number)
         // already consumed sizeof_inst above; the next bytes are
         // sizeof(lua_Integer) then sizeof(lua_Number).
-        sizeof_lua_int = data[p] as usize; p += 1;
-        sizeof_lua_num = data[p] as usize; p += 1;
+        sizeof_lua_int = data[p] as usize;
+        p += 1;
+        sizeof_lua_num = data[p] as usize;
+        p += 1;
         p += sizeof_lua_int + sizeof_lua_num;
     } else {
         return None;
@@ -223,9 +227,7 @@ mod tests {
 
     #[test]
     fn detects_lua_53_bytecode() {
-        let path = Path::new(
-            "samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.3.luac",
-        );
+        let path = Path::new("samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.3.luac");
         if !path.exists() {
             return;
         }
@@ -237,9 +239,7 @@ mod tests {
 
     #[test]
     fn detects_luajit_bytecode() {
-        let path = Path::new(
-            "samples/binaries/platforms/linux/amd64/export/lua/hello-luajit.luac",
-        );
+        let path = Path::new("samples/binaries/platforms/linux/amd64/export/lua/hello-luajit.luac");
         if !path.exists() {
             return;
         }
@@ -262,9 +262,7 @@ mod tests {
         // — depending on whether luac -s was used the source field may
         // be the full path, the basename, or absent. Just check it
         // parses without error.
-        let path = Path::new(
-            "samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.3.luac",
-        );
+        let path = Path::new("samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.3.luac");
         if !path.exists() {
             return;
         }
