@@ -15,6 +15,7 @@ pub struct JavaMethod {
     pub access_flags: u16,
     pub name: String,
     pub descriptor: String,
+    pub exceptions: Vec<String>,
     pub code: Option<JavaCode>,
 }
 
@@ -26,6 +27,8 @@ pub struct JavaCode {
     pub exception_table_len: u16,
     pub attributes_count: u16,
     pub line_numbers: Vec<JavaLineNumber>,
+    pub local_variables: Vec<JavaLocalVariable>,
+    pub local_variable_types: Vec<JavaLocalVariableType>,
     pub instructions: Vec<JavaInstruction>,
     pub xrefs: Vec<JavaXref>,
 }
@@ -34,6 +37,24 @@ pub struct JavaCode {
 pub struct JavaLineNumber {
     pub start_pc: u16,
     pub line_number: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaLocalVariable {
+    pub start_pc: u16,
+    pub length: u16,
+    pub name: String,
+    pub descriptor: String,
+    pub index: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaLocalVariableType {
+    pub start_pc: u16,
+    pub length: u16,
+    pub name: String,
+    pub signature: String,
+    pub index: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +85,7 @@ pub struct ClassInfo {
     pub access_flags: u16,
     pub class_name: String,
     pub super_class: String,
+    pub source_file: Option<String>,
     pub interfaces: Vec<String>,
     pub methods: Vec<JavaMethod>,
     pub fields: Vec<JavaMethod>, // same shape — name + descriptor + flags
@@ -284,7 +306,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
     p = walk_member_table(data, p, &cp, false, &mut fields)?;
     let mut methods: Vec<JavaMethod> = Vec::new();
     p = walk_member_table(data, p, &cp, true, &mut methods)?;
-    let _ = p; // class-level attributes ignored for v0
+    let (_p, source_file) = parse_class_attributes(data, p, &cp)?;
 
     Ok(ClassInfo {
         minor_version: minor,
@@ -292,6 +314,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         access_flags,
         class_name,
         super_class: super_class_name,
+        source_file,
         interfaces,
         methods,
         fields,
@@ -320,11 +343,13 @@ fn walk_member_table(
         let attrs = u16::from_be_bytes(data[p + 6..p + 8].try_into().unwrap()) as usize;
         p += 8;
         let mut code = None;
+        let mut exceptions = Vec::new();
         for _ in 0..attrs {
             if p + 6 > data.len() {
                 return Err(ClassError::Truncated("attribute header"));
             }
             let attr_name_idx = u16::from_be_bytes(data[p..p + 2].try_into().unwrap());
+            let attr_name = read_utf8(cp, attr_name_idx)?;
             let alen = u32::from_be_bytes(data[p + 2..p + 6].try_into().unwrap()) as usize;
             let body_start = p + 6;
             let body_end = body_start
@@ -333,8 +358,10 @@ fn walk_member_table(
             if body_end > data.len() {
                 return Err(ClassError::Truncated("attribute body"));
             }
-            if capture_code && read_utf8(cp, attr_name_idx)? == "Code" {
+            if capture_code && attr_name == "Code" {
                 code = Some(parse_code_attribute(&data[body_start..body_end], cp)?);
+            } else if capture_code && attr_name == "Exceptions" {
+                exceptions = parse_exceptions_attribute(&data[body_start..body_end], cp)?;
             }
             p = body_end;
         }
@@ -344,10 +371,45 @@ fn walk_member_table(
             access_flags,
             name,
             descriptor,
+            exceptions,
             code,
         });
     }
     Ok(p)
+}
+
+fn parse_class_attributes(
+    data: &[u8],
+    mut p: usize,
+    cp: &[CpEntry],
+) -> Result<(usize, Option<String>), ClassError> {
+    if p + 2 > data.len() {
+        return Err(ClassError::Truncated("class attributes count"));
+    }
+    let attrs = u16::from_be_bytes(data[p..p + 2].try_into().unwrap()) as usize;
+    p += 2;
+    let mut source_file = None;
+    for _ in 0..attrs {
+        if p + 6 > data.len() {
+            return Err(ClassError::Truncated("class attribute header"));
+        }
+        let attr_name_idx = u16::from_be_bytes(data[p..p + 2].try_into().unwrap());
+        let attr_name = read_utf8(cp, attr_name_idx)?;
+        let alen = u32::from_be_bytes(data[p + 2..p + 6].try_into().unwrap()) as usize;
+        let body_start = p + 6;
+        let body_end = body_start
+            .checked_add(alen)
+            .ok_or(ClassError::Truncated("class attribute body"))?;
+        if body_end > data.len() {
+            return Err(ClassError::Truncated("class attribute body"));
+        }
+        if attr_name == "SourceFile" && alen == 2 {
+            let source_idx = u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
+            source_file = Some(read_utf8(cp, source_idx)?);
+        }
+        p = body_end;
+    }
+    Ok((p, source_file))
 }
 
 fn read_utf8(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
@@ -404,6 +466,8 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
     );
     let mut p = exception_table_end + 2;
     let mut line_numbers = Vec::new();
+    let mut local_variables = Vec::new();
+    let mut local_variable_types = Vec::new();
     for _ in 0..attributes_count {
         if p + 6 > body.len() {
             return Err(ClassError::Truncated("code nested attribute header"));
@@ -420,6 +484,13 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         }
         if name == "LineNumberTable" {
             line_numbers.extend(parse_line_number_table(&body[attr_start..attr_end])?);
+        } else if name == "LocalVariableTable" {
+            local_variables.extend(parse_local_variable_table(&body[attr_start..attr_end], cp)?);
+        } else if name == "LocalVariableTypeTable" {
+            local_variable_types.extend(parse_local_variable_type_table(
+                &body[attr_start..attr_end],
+                cp,
+            )?);
         }
         p = attr_end;
     }
@@ -433,9 +504,36 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         exception_table_len,
         attributes_count,
         line_numbers,
+        local_variables,
+        local_variable_types,
         instructions,
         xrefs,
     })
+}
+
+fn parse_exceptions_attribute(body: &[u8], cp: &[CpEntry]) -> Result<Vec<String>, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("Exceptions length"));
+    }
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let expected_len = 2usize
+        .checked_add(
+            count
+                .checked_mul(2)
+                .ok_or(ClassError::Truncated("Exceptions body"))?,
+        )
+        .ok_or(ClassError::Truncated("Exceptions body"))?;
+    if expected_len > body.len() {
+        return Err(ClassError::Truncated("Exceptions body"));
+    }
+    let mut out = Vec::with_capacity(count);
+    let mut p = 2usize;
+    for _ in 0..count {
+        let class_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        out.push(read_class_name(cp, class_idx)?);
+        p += 2;
+    }
+    Ok(out)
 }
 
 fn parse_line_number_table(body: &[u8]) -> Result<Vec<JavaLineNumber>, ClassError> {
@@ -463,6 +561,82 @@ fn parse_line_number_table(body: &[u8]) -> Result<Vec<JavaLineNumber>, ClassErro
             line_number,
         });
         p += 4;
+    }
+    Ok(out)
+}
+
+fn parse_local_variable_table(
+    body: &[u8],
+    cp: &[CpEntry],
+) -> Result<Vec<JavaLocalVariable>, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("LocalVariableTable length"));
+    }
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let expected_len = 2usize
+        .checked_add(
+            count
+                .checked_mul(10)
+                .ok_or(ClassError::Truncated("LocalVariableTable body"))?,
+        )
+        .ok_or(ClassError::Truncated("LocalVariableTable body"))?;
+    if expected_len > body.len() {
+        return Err(ClassError::Truncated("LocalVariableTable body"));
+    }
+    let mut out = Vec::with_capacity(count);
+    let mut p = 2usize;
+    for _ in 0..count {
+        let start_pc = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        let length = u16::from_be_bytes(body[p + 2..p + 4].try_into().unwrap());
+        let name_idx = u16::from_be_bytes(body[p + 4..p + 6].try_into().unwrap());
+        let descriptor_idx = u16::from_be_bytes(body[p + 6..p + 8].try_into().unwrap());
+        let index = u16::from_be_bytes(body[p + 8..p + 10].try_into().unwrap());
+        out.push(JavaLocalVariable {
+            start_pc,
+            length,
+            name: read_utf8(cp, name_idx)?,
+            descriptor: read_utf8(cp, descriptor_idx)?,
+            index,
+        });
+        p += 10;
+    }
+    Ok(out)
+}
+
+fn parse_local_variable_type_table(
+    body: &[u8],
+    cp: &[CpEntry],
+) -> Result<Vec<JavaLocalVariableType>, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("LocalVariableTypeTable length"));
+    }
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let expected_len = 2usize
+        .checked_add(
+            count
+                .checked_mul(10)
+                .ok_or(ClassError::Truncated("LocalVariableTypeTable body"))?,
+        )
+        .ok_or(ClassError::Truncated("LocalVariableTypeTable body"))?;
+    if expected_len > body.len() {
+        return Err(ClassError::Truncated("LocalVariableTypeTable body"));
+    }
+    let mut out = Vec::with_capacity(count);
+    let mut p = 2usize;
+    for _ in 0..count {
+        let start_pc = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        let length = u16::from_be_bytes(body[p + 2..p + 4].try_into().unwrap());
+        let name_idx = u16::from_be_bytes(body[p + 4..p + 6].try_into().unwrap());
+        let signature_idx = u16::from_be_bytes(body[p + 6..p + 8].try_into().unwrap());
+        let index = u16::from_be_bytes(body[p + 8..p + 10].try_into().unwrap());
+        out.push(JavaLocalVariableType {
+            start_pc,
+            length,
+            name: read_utf8(cp, name_idx)?,
+            signature: read_utf8(cp, signature_idx)?,
+            index,
+        });
+        p += 10;
     }
     Ok(out)
 }
@@ -1188,6 +1362,7 @@ mod tests {
         assert!(main_code.max_locals >= 1);
         assert!(main_code.code_length > 0);
         assert!(info.fields.iter().all(|f| f.code.is_none()));
+        assert_eq!(info.source_file.as_deref(), Some("HelloWorld.java"));
     }
 
     #[test]

@@ -37,8 +37,10 @@ Glaurung already has a growing Java path:
 
 - `src/analysis/java_class.rs` parses a `.class` header, constant-pool names, class
   name, superclass, interfaces, fields, method descriptors, `Code` metadata, and
-  `LineNumberTable` entries, plus initial JVM instruction listings and lightweight
-  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  source/debug attributes (`SourceFile`, method `Exceptions`, `LineNumberTable`,
+  `LocalVariableTable`, and `LocalVariableTypeTable`), plus initial JVM instruction
+  listings and lightweight method-level bytecode xrefs for invokes, fields, class
+  refs, and loaded strings.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
@@ -76,9 +78,9 @@ Glaurung already has a growing Java path:
 
 Known limitations:
 
-- The Rust parser still skips most attributes after `Code`, including local variables,
-  annotations, bootstrap methods, records, modules, nestmates, generic signatures, and
-  stack maps.
+- The Rust parser still skips many attributes after the initial source/debug subset,
+  including annotations, bootstrap methods, records, modules, nestmates, generic
+  signatures, and stack maps.
 - There is no bytecode CFG/frame model, advanced Java xref model, Java call graph,
   decompiler helper, or JVM runtime tool surface.
 - There is no dependency resolver, build-system inference, source tree emitter,
@@ -114,7 +116,7 @@ here, it is probably not represented strongly enough in the plan.
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
 | Bytecode CFG and xrefs | `java_cfg`, `java_xrefs_from`, `java_xrefs_to`, `java_call_graph` |
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
-| Attributes and annotations | Initial `LineNumberTable` support exists; continue Rust parser responsibilities, `java_view_class`, source recovery validation |
+| Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, and local-variable table support exists; continue annotations/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | `java_annotate_mappings`, `java_lookup_mapping`, `minecraft_fetch_mappings`, `minecraft_apply_mappings` |
 | Dependency and classpath recovery | `java_infer_dependencies`, `java_infer_build_system` |

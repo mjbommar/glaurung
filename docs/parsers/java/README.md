@@ -48,9 +48,10 @@ Java class files (.class) contain Java bytecode that runs on the Java Virtual Ma
 Implemented pieces now include:
 
 - Rust classfile parsing for magic/version, constant-pool names, class/super names,
-  fields, methods, descriptors, `Code` attribute metadata, `LineNumberTable`
-  entries, JVM instruction listings, and lightweight method-level bytecode xrefs for
-  invokes, fields, class refs, and loaded strings.
+  fields, methods, descriptors, `SourceFile`, method `Exceptions`, `Code` attribute
+  metadata, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, JVM
+  instruction listings, and lightweight method-level bytecode xrefs for invokes,
+  fields, class refs, and loaded strings.
 - Python binding `g.analysis.parse_java_class_bytes(data)` for in-memory `.class`
   parsing without extracting JAR entries to temporary files.
 - CLI JAR/class summarization through `glaurung classfile`.
@@ -103,8 +104,9 @@ Implemented pieces now include:
 Not yet implemented:
 
 - Bytecode CFG, stack/local frames, advanced Java xrefs, and call graph.
-- Full attribute parsing for local variables, annotations, modules, records, sealed
-  classes, nestmates, bootstrap methods, and stack maps.
+- Full attribute parsing for annotations, modules, records, sealed classes, nestmates,
+  bootstrap methods, stack maps, and runtime-visible metadata beyond the initial
+  source/debug attributes.
 - Decompiler helper integration with Vineflower/CFR.
 - Clean source-project recovery: dependency inference, source tree emission, build
   file generation, compilation, compiler-diagnostic repair, and ABI/resource
@@ -135,6 +137,8 @@ Not yet implemented:
 - [x] Field enumeration
 - [x] Method signature parsing
 - [x] `Code` attribute metadata
+- [x] `SourceFile`, `Exceptions`, `LocalVariableTable`, and `LocalVariableTypeTable`
+  parsing
 - [x] `LineNumberTable` parsing
 - [x] Lightweight bytecode xref extraction for invokes, fields, classes, and strings
 - [x] Initial bytecode instruction decode and `java_view_bytecode`
@@ -208,6 +212,7 @@ pub struct ClassFile {
     pub access_flags: u16,
     pub this_class: String,
     pub super_class: Option<String>,
+    pub source_file: Option<String>,
     pub interfaces: Vec<String>,
     pub fields: Vec<Field>,
     pub methods: Vec<Method>,
@@ -221,6 +226,7 @@ pub struct Method {
     pub bytecode: Option<Vec<u8>>,
     pub instructions: Vec<JavaInstruction>,
     pub exceptions: Vec<String>,
+    pub local_variables: Vec<JavaLocalVariable>,
     pub annotations: Vec<Annotation>,
 }
 
@@ -230,6 +236,14 @@ pub struct JavaInstruction {
     pub mnemonic: String,
     pub operands: Vec<String>,
     pub length: u32,
+}
+
+pub struct JavaLocalVariable {
+    pub start_pc: u16,
+    pub length: u16,
+    pub name: String,
+    pub descriptor: String,
+    pub index: u16,
 }
 
 pub struct JavaXref {

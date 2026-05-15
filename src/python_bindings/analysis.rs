@@ -290,6 +290,7 @@ fn java_class_info_to_py(
     let dict = pyo3::types::PyDict::new(py);
     dict.set_item("class_name", info.class_name)?;
     dict.set_item("super_class", info.super_class)?;
+    dict.set_item("source_file", info.source_file)?;
     dict.set_item("interfaces", info.interfaces)?;
     dict.set_item("major_version", info.major_version)?;
     dict.set_item("minor_version", info.minor_version)?;
@@ -300,6 +301,7 @@ fn java_class_info_to_py(
         mdict.set_item("name", m.name)?;
         mdict.set_item("descriptor", m.descriptor)?;
         mdict.set_item("access_flags", m.access_flags)?;
+        mdict.set_item("exceptions", m.exceptions)?;
         mdict.set_item("code", java_code_to_py(py, m.code)?)?;
         methods.append(mdict)?;
     }
@@ -310,6 +312,7 @@ fn java_class_info_to_py(
         fdict.set_item("name", f.name)?;
         fdict.set_item("descriptor", f.descriptor)?;
         fdict.set_item("access_flags", f.access_flags)?;
+        fdict.set_item("exceptions", f.exceptions)?;
         fdict.set_item("code", java_code_to_py(py, f.code)?)?;
         fields.append(fdict)?;
     }
@@ -338,6 +341,28 @@ fn java_code_to_py(
         line_numbers.append(ldict)?;
     }
     dict.set_item("line_numbers", line_numbers)?;
+    let local_variables = pyo3::types::PyList::empty(py);
+    for local in code.local_variables {
+        let ldict = pyo3::types::PyDict::new(py);
+        ldict.set_item("start_pc", local.start_pc)?;
+        ldict.set_item("length", local.length)?;
+        ldict.set_item("name", local.name)?;
+        ldict.set_item("descriptor", local.descriptor)?;
+        ldict.set_item("index", local.index)?;
+        local_variables.append(ldict)?;
+    }
+    dict.set_item("local_variables", local_variables)?;
+    let local_variable_types = pyo3::types::PyList::empty(py);
+    for local_type in code.local_variable_types {
+        let ldict = pyo3::types::PyDict::new(py);
+        ldict.set_item("start_pc", local_type.start_pc)?;
+        ldict.set_item("length", local_type.length)?;
+        ldict.set_item("name", local_type.name)?;
+        ldict.set_item("signature", local_type.signature)?;
+        ldict.set_item("index", local_type.index)?;
+        local_variable_types.append(ldict)?;
+    }
+    dict.set_item("local_variable_types", local_variable_types)?;
     let instructions = pyo3::types::PyList::empty(py);
     for instruction in code.instructions {
         let idict = pyo3::types::PyDict::new(py);
