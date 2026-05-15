@@ -45,7 +45,8 @@ Glaurung already has a growing Java path:
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang
   mappings, look up mapping entries, detect Minecraft archives, fetch Mojang mappings,
   extract vanilla bundled server JARs, and detect security-sensitive Java API sinks
-  with optional ProGuard/Mojang class-name annotations.
+  with optional ProGuard/Mojang class-name and descriptor-aware method-name
+  annotations.
 - Python memory tools can now detect initial Java entrypoints from manifests, main
   methods, agent manifests, ServiceLoader descriptors, static initializers, and
   scheduler registrations.
@@ -111,7 +112,7 @@ here, it is probably not represented strongly enough in the plan.
 | Config/resource correlation | Initial `java_extract_config_surface` exists; add behavior correlation through `java_correlate_behavior_config` |
 | Secret and token handling | `java_detect_secrets`, redacted value hashes, no raw output by default |
 | Directory/modpack risk review | `java_audit_archive_set`, `java_risk_report` |
-| Deobfuscated behavior annotation | mapping tools, string/constant evidence, sink annotations, agent enrichment |
+| Deobfuscated behavior annotation | Initial mapped class/method sensitive-sink annotations exist; continue with mapping tools, string/constant evidence, sink annotations, and agent enrichment |
 
 ## Design Goals
 

@@ -114,7 +114,7 @@ def _mapping_file(tmp_path: Path) -> Path:
     path.write_text(
         """
 com.example.SensitiveFixture -> SensitiveFixture:
-    void process() -> process
+    void launchProcess() -> process
     void network() -> network
     void files(java.nio.file.Path) -> files
     void reflect() -> reflect
@@ -159,6 +159,7 @@ def test_java_detect_sensitive_behavior_reports_static_sinks(tmp_path: Path) -> 
     assert any(
         finding.class_name == "SensitiveFixture"
         and finding.mapped_class_name == "com.example.SensitiveFixture"
+        and finding.mapped_method_names == ["launchProcess"]
         and finding.method_name == "process"
         and finding.owner == "java/lang/ProcessBuilder"
         and finding.bci is not None

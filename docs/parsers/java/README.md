@@ -67,6 +67,9 @@ Implemented pieces now include:
   - `minecraft_extract_bundled_server`
 - Ask-command Java seeding for archive summaries, obfuscation annotations, and
   Minecraft loader/version/mapping hints.
+- Descriptor-aware deobfuscation annotations on sensitive-behavior findings,
+  including mapped class names and mapped method names/signatures when a
+  ProGuard/Mojang mapping file is supplied.
 - Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
   mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
   jars remain in ignored `tmp/` for smoke tests only.
@@ -199,7 +202,9 @@ pub struct JavaSensitiveFinding {
     pub severity: String,
     pub confidence: f32,
     pub class_internal_name: String,
+    pub mapped_class_name: Option<String>,
     pub method_name: String,
+    pub mapped_method_names: Vec<String>,
     pub method_descriptor: String,
     pub bci: Option<u32>,
     pub matched_symbol: String,

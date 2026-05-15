@@ -14,7 +14,12 @@ from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
-from .java_proguard_mappings import ProguardMappings, parse_proguard_mappings
+from .java_proguard_mappings import (
+    ProguardClassMapping,
+    ProguardMappings,
+    ProguardMemberMapping,
+    parse_proguard_mappings,
+)
 
 
 class JavaDetectSensitiveBehaviorArgs(BaseModel):
@@ -35,6 +40,8 @@ class JavaSensitiveFinding(BaseModel):
     confidence: float
     class_name: str
     mapped_class_name: str | None = None
+    mapped_method_names: list[str] = Field(default_factory=list)
+    mapped_method_signatures: list[str] = Field(default_factory=list)
     method_name: str
     method_descriptor: str
     bci: int | None
@@ -353,7 +360,10 @@ def _findings_for_class(
     if max_findings <= 0:
         return []
     class_name = str(parsed["class_name"])
-    mapped_class_name = _mapped_class_name(mappings, class_name)
+    class_mapping = _class_mapping(mappings, class_name)
+    mapped_class_name = (
+        class_mapping.official_name if class_mapping is not None else None
+    )
     out: list[JavaSensitiveFinding] = []
     for method in parsed["methods"]:
         code = method.get("code")
@@ -370,6 +380,16 @@ def _findings_for_class(
                         rule=rule,
                         class_name=class_name,
                         mapped_class_name=mapped_class_name,
+                        mapped_method_names=_mapped_method_names(
+                            mappings=mappings,
+                            class_mapping=class_mapping,
+                            method=method,
+                        ),
+                        mapped_method_signatures=_mapped_method_signatures(
+                            mappings=mappings,
+                            class_mapping=class_mapping,
+                            method=method,
+                        ),
                         method=method,
                         xref=xref,
                     )
@@ -385,6 +405,8 @@ def _finding_from_rule(
     rule: SensitiveRule,
     class_name: str,
     mapped_class_name: str | None,
+    mapped_method_names: list[str],
+    mapped_method_signatures: list[str],
     method: dict[str, Any],
     xref: dict[str, Any],
 ) -> JavaSensitiveFinding:
@@ -407,6 +429,8 @@ def _finding_from_rule(
         confidence=rule.confidence,
         class_name=class_name,
         mapped_class_name=mapped_class_name,
+        mapped_method_names=mapped_method_names,
+        mapped_method_signatures=mapped_method_signatures,
         method_name=method_name,
         method_descriptor=method_descriptor,
         bci=bci,
@@ -425,12 +449,17 @@ def _add_finding_node(
     archive_path: Path,
     finding: JavaSensitiveFinding,
 ) -> None:
+    display_method = (
+        finding.mapped_method_names[0]
+        if finding.mapped_method_names
+        else finding.method_name
+    )
     kb.add_node(
         Node(
             kind=NodeKind.java_sensitive_sink,
             label=(
                 f"{finding.category}: {finding.mapped_class_name or finding.class_name}#"
-                f"{finding.method_name}{finding.method_descriptor}"
+                f"{display_method}{finding.method_descriptor}"
             ),
             props={
                 "tool": "java_detect_security_sensitive_behavior",
@@ -442,15 +471,64 @@ def _add_finding_node(
     )
 
 
-def _mapped_class_name(
-    mappings: ProguardMappings | None, class_name: str
-) -> str | None:
+def _class_mapping(
+    mappings: ProguardMappings | None,
+    class_name: str,
+) -> ProguardClassMapping | None:
     if mappings is None:
         return None
     mapping, match_kind = mappings.lookup_class(class_name)
     if mapping is None or match_kind == "none":
         return None
-    return mapping.official_name
+    return mapping
+
+
+def _mapped_method_names(
+    *,
+    mappings: ProguardMappings | None,
+    class_mapping: ProguardClassMapping | None,
+    method: dict[str, Any],
+) -> list[str]:
+    return [
+        member.official_name
+        for member in _mapped_method_members(
+            mappings=mappings,
+            class_mapping=class_mapping,
+            method=method,
+        )
+    ]
+
+
+def _mapped_method_signatures(
+    *,
+    mappings: ProguardMappings | None,
+    class_mapping: ProguardClassMapping | None,
+    method: dict[str, Any],
+) -> list[str]:
+    return [
+        member.official_signature
+        for member in _mapped_method_members(
+            mappings=mappings,
+            class_mapping=class_mapping,
+            method=method,
+        )
+    ]
+
+
+def _mapped_method_members(
+    *,
+    mappings: ProguardMappings | None,
+    class_mapping: ProguardClassMapping | None,
+    method: dict[str, Any],
+) -> list[ProguardMemberMapping]:
+    if mappings is None or class_mapping is None:
+        return []
+    return mappings.matching_member_mappings(
+        class_mapping,
+        kind="method",
+        obfuscated_name=str(method["name"]),
+        descriptor=str(method["descriptor"]),
+    )
 
 
 def _sha256(path: Path) -> str:
