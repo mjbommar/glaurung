@@ -29,6 +29,25 @@ class JavaReachabilityArgs(BaseModel):
     target_descriptor: str | None = Field(
         None, description="Optional target descriptor"
     )
+    target_source_class_name: str | None = Field(
+        None,
+        description=(
+            "Optional source class containing the target call site, internal, "
+            "dotted, obfuscated, or mapped"
+        ),
+    )
+    target_source_method_name: str | None = Field(
+        None, description="Optional source method containing the target call site"
+    )
+    target_source_method_descriptor: str | None = Field(
+        None,
+        description="Optional source method descriptor containing the target call site",
+    )
+    target_bci: int | None = Field(
+        None,
+        ge=0,
+        description="Optional bytecode index of the target call site",
+    )
     entrypoint_categories: list[str] = Field(default_factory=list)
     max_classes: int = Field(50_000, ge=0)
     max_edges: int = Field(50_000, ge=0)
@@ -218,7 +237,32 @@ def _edge_matches_target(edge: JavaCallGraphEdge, args: JavaReachabilityArgs) ->
         or edge.target_descriptor == args.target_descriptor
         or edge.mapped_target_descriptor == args.target_descriptor
     )
-    return owner_matches and name_matches and descriptor_matches
+    source_class_matches = (
+        args.target_source_class_name is None
+        or edge.source_class_name == _internal(args.target_source_class_name)
+        or edge.mapped_source_class_name == args.target_source_class_name
+    )
+    source_method_matches = (
+        args.target_source_method_name is None
+        or edge.source_method_name == args.target_source_method_name
+        or args.target_source_method_name in edge.mapped_source_method_names
+    )
+    source_descriptor_matches = (
+        args.target_source_method_descriptor is None
+        or edge.source_method_descriptor == args.target_source_method_descriptor
+    )
+    bci_matches = args.target_bci is None or edge.bci == args.target_bci
+    return all(
+        (
+            owner_matches,
+            name_matches,
+            descriptor_matches,
+            source_class_matches,
+            source_method_matches,
+            source_descriptor_matches,
+            bci_matches,
+        )
+    )
 
 
 def _path(

@@ -1369,12 +1369,15 @@ Inputs:
 - JAR path/archive locator.
 - Optional mapping path/namespace.
 - Target owner, method name, and optional descriptor.
+- Optional target source class, source method, source descriptor, and BCI for exact
+  call-site reachability.
 - Optional entrypoint category filters.
 - `max_depth`, `max_edges`, `max_entrypoints`, and `max_paths`.
 
 Outputs:
 
-- Bounded call-graph paths from detected entrypoint methods to the requested target.
+- Bounded call-graph paths from detected entrypoint methods to the requested target,
+  optionally narrowed to one source call site.
 - Edge evidence with source method, target method, invoke kind, BCI, and source-line
   anchors where available.
 - Target match counts and stop reasons for truncated call graphs, truncated
@@ -1442,24 +1445,36 @@ Inputs:
 - `max_secret_candidates`
 - `include_secrets`
 - `include_entrypoints`
+- `include_reachability`
+- `max_reachability_targets`
+- `max_reachability_depth`
+- `max_reachability_edges`
+- `max_reachability_paths`
+- `max_reachability_entrypoints`
 
 Outputs:
 
 - Archive-level report with ranked risk items.
 - Sensitive finding count, config correlation count, config binding count, redacted
-  secret candidate count, and entrypoint count.
-- Summary counts by category and config state.
+  secret candidate count, entrypoint count, and reachability analysis count.
+- Summary counts by category, config state, and reachability state.
+- Per-risk reachability state: `not_analyzed`, `unknown`, `direct_entrypoint`,
+  `reachable`, `library_only`, or `dead_code_candidate`.
+- Dynamic observation state placeholder, currently `not_analyzed` until runtime
+  observation tooling is implemented.
 - Highest severity and max risk score.
 - Evidence IDs and locators for every claim.
 - A clear distinction between "this code can do X" and "this JAR is configured or
-  observed to do X".
+  observed to do X"; reachability is computed against the exact sensitive call site
+  when source method and BCI evidence are available.
 - `java_risk_finding` KB nodes for each ranked item.
 
 Current limitations:
 
-- The initial implementation ranks a single archive and uses config state plus
-  entrypoint counts as context. Framework-aware reachability, policy files, dynamic
-  observation, and multi-archive rollups are planned follow-on work.
+- The implementation ranks a single archive and uses config state plus bounded
+  constant-pool reachability as context. Framework lifecycle hooks, policy files,
+  dynamic observation, deeper source-to-sink slicing, and multi-archive rollups are
+  planned follow-on work.
 
 `java_audit_archive_set`
 
@@ -2115,13 +2130,15 @@ Tasks:
 - Implement `java_detect_secrets` with redaction and stable hashes.
 - Implement `java_trace_to_sink` for bounded source-to-sink evidence.
 - Implement `java_reachability` for bounded entrypoint-to-target call graph paths.
-  Initial constant-pool call graph reachability exists; framework lifecycle expansion
-  and source-to-sink argument slicing remain future work.
+  Initial constant-pool call graph reachability exists, including exact source
+  call-site filters for risk-report evidence; framework lifecycle expansion and
+  source-to-sink argument slicing remain future work.
 - Implement `java_correlate_behavior_config`.
 - Implement `java_risk_report` and `java_audit_archive_set`. Initial versions exist:
   `java_risk_report` ranks sensitive behavior/config correlations plus redacted
-  secrets and entrypoint counts for a single archive; `java_audit_archive_set`
-  summarizes sensitive categories across archive sets.
+  secrets, exact call-site reachability states, and entrypoint counts for a single
+  archive; `java_audit_archive_set` summarizes sensitive categories across archive
+  sets.
 - Connect findings to KB nodes and agent evidence logs through `tool_to_pyd_ai`.
 - Add deobfuscation-aware annotations so mapped names appear in findings when
   mappings are available.

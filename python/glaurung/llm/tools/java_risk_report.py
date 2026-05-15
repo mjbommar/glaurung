@@ -20,9 +20,22 @@ from .java_detect_secrets import (
     JavaSecretCandidate,
     build_tool as build_secrets_tool,
 )
+from .java_reachability import (
+    JavaReachabilityResult,
+    build_tool as build_reachability_tool,
+)
 
 
 RiskItemKind = Literal["sensitive_behavior", "secret"]
+ReachabilityState = Literal[
+    "not_analyzed",
+    "unknown",
+    "direct_entrypoint",
+    "reachable",
+    "library_only",
+    "dead_code_candidate",
+]
+DynamicObservationState = Literal["not_analyzed", "not_observed", "observed"]
 
 
 class JavaRiskReportArgs(BaseModel):
@@ -38,6 +51,12 @@ class JavaRiskReportArgs(BaseModel):
     max_secret_candidates: int = Field(128, ge=0)
     include_secrets: bool = True
     include_entrypoints: bool = True
+    include_reachability: bool = True
+    max_reachability_targets: int = Field(16, ge=0)
+    max_reachability_depth: int = Field(6, ge=0)
+    max_reachability_edges: int = Field(50_000, ge=0)
+    max_reachability_paths: int = Field(4, ge=0)
+    max_reachability_entrypoints: int = Field(1_000, ge=0)
 
 
 class JavaRiskItem(BaseModel):
@@ -56,6 +75,12 @@ class JavaRiskItem(BaseModel):
     rule_id: str | None = None
     config_state: ConfigState | None = None
     matched_config_keys: list[str] = Field(default_factory=list)
+    reachability_state: ReachabilityState = "not_analyzed"
+    reachability_path_count: int = 0
+    reachability_target_match_count: int = 0
+    reachability_stop_reasons: list[str] = Field(default_factory=list)
+    reachability_entrypoint_count: int = 0
+    dynamic_observation_state: DynamicObservationState = "not_analyzed"
     source_path: str | None = None
     redacted_value_hash: str | None = None
     message: str
@@ -72,8 +97,10 @@ class JavaRiskReportResult(BaseModel):
     config_binding_count: int
     secret_candidate_count: int
     entrypoint_count: int
+    reachability_analysis_count: int
     summary_by_category: dict[str, int]
     summary_by_config_state: dict[str, int]
+    summary_by_reachability_state: dict[str, int]
     highest_severity: str
     max_risk_score: int
     truncated: bool = False
@@ -119,8 +146,39 @@ class JavaRiskReportTool(MemoryTool[JavaRiskReportArgs, JavaRiskReportResult]):
                 max_correlations=args.max_findings,
             ),
         )
+
+        reachability_by_correlation_id: dict[str, JavaReachabilityResult] = {}
+        reachability_truncated = False
+        if (
+            args.include_reachability
+            and args.max_reachability_targets > 0
+            and correlations.correlations
+        ):
+            for correlation in _reachability_candidates(
+                correlations.correlations,
+                args.max_reachability_targets,
+            ):
+                reachability = _reachability_for_correlation(
+                    ctx=ctx,
+                    kb=kb,
+                    path=path,
+                    correlation=correlation,
+                    args=args,
+                )
+                reachability_by_correlation_id[correlation.correlation_id] = (
+                    reachability
+                )
+                reachability_truncated = (
+                    reachability_truncated or reachability.truncated
+                )
+
         for correlation in correlations.correlations:
-            risk_items.append(_risk_item_from_correlation(correlation))
+            risk_items.append(
+                _risk_item_from_correlation(
+                    correlation,
+                    reachability_by_correlation_id.get(correlation.correlation_id),
+                )
+            )
 
         secret_candidate_count = 0
         secrets_truncated = False
@@ -190,10 +248,15 @@ class JavaRiskReportTool(MemoryTool[JavaRiskReportArgs, JavaRiskReportResult]):
                     "config_binding_count": correlations.config_binding_count,
                     "secret_candidate_count": secret_candidate_count,
                     "entrypoint_count": entrypoint_count,
+                    "reachability_analysis_count": len(reachability_by_correlation_id),
+                    "summary_by_reachability_state": (
+                        _summary_by_reachability_state(risk_items)
+                    ),
                     "truncated": truncated
                     or correlations.truncated
                     or secrets_truncated
-                    or entrypoints_truncated,
+                    or entrypoints_truncated
+                    or reachability_truncated,
                 },
                 tags=["java", "risk-report", "audit"],
             )
@@ -209,27 +272,35 @@ class JavaRiskReportTool(MemoryTool[JavaRiskReportArgs, JavaRiskReportResult]):
             config_binding_count=correlations.config_binding_count,
             secret_candidate_count=secret_candidate_count,
             entrypoint_count=entrypoint_count,
+            reachability_analysis_count=len(reachability_by_correlation_id),
             summary_by_category=_summary_by_category(risk_items),
             summary_by_config_state=_summary_by_config_state(risk_items),
+            summary_by_reachability_state=_summary_by_reachability_state(risk_items),
             highest_severity=_highest_severity(risk_items),
             max_risk_score=_max_risk_score(risk_items),
             truncated=truncated
             or correlations.truncated
             or secrets_truncated
-            or entrypoints_truncated,
+            or entrypoints_truncated
+            or reachability_truncated,
             report_node_id=report_node.id,
         )
 
 
 def _risk_item_from_correlation(
     correlation: JavaBehaviorConfigCorrelation,
+    reachability: JavaReachabilityResult | None = None,
 ) -> JavaRiskItem:
     finding = correlation.finding
     risk_id = f"risk:{correlation.correlation_id}"
+    reachability_state = _reachability_state(reachability)
     message = (
         f"{finding.category} behavior via {finding.owner}.{finding.name}"
         f"{finding.descriptor}; {correlation.rationale}"
     )
+    evidence_ids = [finding.finding_id, correlation.correlation_id]
+    if reachability is not None and reachability.reachability_node_id is not None:
+        evidence_ids.append(reachability.reachability_node_id)
     return JavaRiskItem(
         risk_id=risk_id,
         kind="sensitive_behavior",
@@ -237,7 +308,10 @@ def _risk_item_from_correlation(
         severity=finding.severity,
         confidence=correlation.confidence,
         risk_score=_risk_score(
-            finding.severity, correlation.confidence, correlation.config_state
+            finding.severity,
+            correlation.confidence,
+            correlation.config_state,
+            reachability_state,
         ),
         class_name=finding.class_name,
         mapped_class_name=finding.mapped_class_name,
@@ -248,8 +322,19 @@ def _risk_item_from_correlation(
         rule_id=finding.rule_id,
         config_state=correlation.config_state,
         matched_config_keys=correlation.matched_config_keys,
+        reachability_state=reachability_state,
+        reachability_path_count=reachability.path_count if reachability else 0,
+        reachability_target_match_count=(
+            reachability.target_match_count if reachability else 0
+        ),
+        reachability_stop_reasons=(
+            list(reachability.stop_reasons) if reachability else []
+        ),
+        reachability_entrypoint_count=(
+            reachability.entrypoint_count if reachability else 0
+        ),
         message=message,
-        evidence_ids=[finding.finding_id, correlation.correlation_id],
+        evidence_ids=evidence_ids,
     )
 
 
@@ -261,7 +346,7 @@ def _risk_item_from_secret(candidate: JavaSecretCandidate) -> JavaRiskItem:
         category=candidate.category,
         severity=candidate.severity,
         confidence=candidate.confidence,
-        risk_score=_risk_score(candidate.severity, candidate.confidence, None),
+        risk_score=_risk_score(candidate.severity, candidate.confidence, None, None),
         class_name=candidate.class_name,
         method_name=candidate.method_name,
         method_descriptor=candidate.method_descriptor,
@@ -301,16 +386,93 @@ _STATE_SCORE_ADJUSTMENT: dict[ConfigState, int] = {
     "configured_disabled": -15,
 }
 
+_REACHABILITY_SCORE_ADJUSTMENT: dict[ReachabilityState, int] = {
+    "not_analyzed": 0,
+    "unknown": 0,
+    "direct_entrypoint": 15,
+    "reachable": 10,
+    "library_only": 0,
+    "dead_code_candidate": -10,
+}
+
 
 def _risk_score(
     severity: str,
     confidence: float,
     config_state: ConfigState | None,
+    reachability_state: ReachabilityState | None,
 ) -> int:
     score = _SEVERITY_BASE_SCORE.get(severity, 10)
     if config_state is not None:
         score += _STATE_SCORE_ADJUSTMENT[config_state]
+    if reachability_state is not None:
+        score += _REACHABILITY_SCORE_ADJUSTMENT[reachability_state]
     return max(0, min(100, round(score * confidence)))
+
+
+def _reachability_candidates(
+    correlations: list[JavaBehaviorConfigCorrelation],
+    limit: int,
+) -> list[JavaBehaviorConfigCorrelation]:
+    ordered = sorted(
+        correlations,
+        key=lambda correlation: _risk_score(
+            correlation.finding.severity,
+            correlation.confidence,
+            correlation.config_state,
+            None,
+        ),
+        reverse=True,
+    )
+    return ordered[:limit]
+
+
+def _reachability_for_correlation(
+    *,
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    path: Path,
+    correlation: JavaBehaviorConfigCorrelation,
+    args: JavaRiskReportArgs,
+) -> JavaReachabilityResult:
+    finding = correlation.finding
+    reachability_tool = build_reachability_tool()
+    return reachability_tool.run(
+        ctx,
+        kb,
+        reachability_tool.input_model(
+            path=str(path),
+            mapping_path=args.mapping_path,
+            target_owner=finding.owner,
+            target_name=finding.name,
+            target_descriptor=finding.descriptor,
+            target_source_class_name=finding.class_name,
+            target_source_method_name=finding.method_name,
+            target_source_method_descriptor=finding.method_descriptor,
+            target_bci=finding.bci,
+            max_classes=args.max_classes,
+            max_edges=args.max_reachability_edges,
+            max_entrypoints=args.max_reachability_entrypoints,
+            max_depth=args.max_reachability_depth,
+            max_paths=args.max_reachability_paths,
+        ),
+    )
+
+
+def _reachability_state(
+    reachability: JavaReachabilityResult | None,
+) -> ReachabilityState:
+    if reachability is None:
+        return "not_analyzed"
+    if reachability.reachable:
+        if any(path.depth == 1 for path in reachability.paths):
+            return "direct_entrypoint"
+        return "reachable"
+    if reachability.truncated or reachability.target_match_count == 0:
+        return "unknown"
+    if reachability.entrypoint_count == 0:
+        return "library_only"
+    return "dead_code_candidate"
 
 
 def _summary_by_category(risk_items: list[JavaRiskItem]) -> dict[str, int]:
@@ -326,6 +488,15 @@ def _summary_by_config_state(risk_items: list[JavaRiskItem]) -> dict[str, int]:
         if item.config_state is None:
             continue
         summary[item.config_state] = summary.get(item.config_state, 0) + 1
+    return summary
+
+
+def _summary_by_reachability_state(
+    risk_items: list[JavaRiskItem],
+) -> dict[str, int]:
+    summary: dict[str, int] = {}
+    for item in risk_items:
+        summary[item.reachability_state] = summary.get(item.reachability_state, 0) + 1
     return summary
 
 

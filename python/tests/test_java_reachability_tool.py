@@ -61,6 +61,10 @@ public class Worker {
     public static void write(Path path) throws Exception {
         Files.writeString(path, "reachable");
     }
+
+    public static void unused(Path path) throws Exception {
+        Files.writeString(path, "unreachable");
+    }
 }
 """.strip()
         + "\n",
@@ -129,6 +133,53 @@ def test_java_reachability_finds_entrypoint_to_external_sink_path(
         and node.props.get("reachable") is True
         for node in ctx.kb.nodes()
     )
+
+
+def test_java_reachability_can_match_exact_call_site(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_call_graph import build_tool as build_call_graph_tool
+    from glaurung.llm.tools.java_reachability import build_tool
+
+    jar = _compile_reachability_jar(tmp_path)
+    ctx = _ctx(jar)
+    call_graph_tool = build_call_graph_tool()
+    graph = call_graph_tool.run(
+        ctx,
+        ctx.kb,
+        call_graph_tool.input_model(
+            path=str(jar),
+            class_name="Worker",
+            method_name="unused",
+            method_descriptor="(Ljava/nio/file/Path;)V",
+        ),
+    )
+    unused_call = next(
+        edge
+        for edge in graph.edges
+        if edge.target_owner == "java/nio/file/Files"
+        and edge.target_name == "writeString"
+    )
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            target_owner="java/nio/file/Files",
+            target_name="writeString",
+            target_descriptor="(Ljava/nio/file/Path;Ljava/lang/CharSequence;[Ljava/nio/file/OpenOption;)Ljava/nio/file/Path;",
+            target_source_class_name="Worker",
+            target_source_method_name="unused",
+            target_source_method_descriptor="(Ljava/nio/file/Path;)V",
+            target_bci=unused_call.bci,
+            max_depth=4,
+        ),
+    )
+
+    assert not result.reachable
+    assert result.path_count == 0
+    assert result.target_match_count == 1
+    assert "target_not_reached" in result.stop_reasons
 
 
 def test_java_reachability_reports_unreachable_target(tmp_path: Path) -> None:

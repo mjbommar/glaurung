@@ -97,7 +97,9 @@ Implemented pieces now include:
   sink, constants, and neighboring xrefs.
 - Initial entrypoint-to-target reachability through `java_reachability`, using
   detected entrypoints and the bounded constant-pool call graph to find paths to a
-  requested method or external sink.
+  requested method or external sink. Reachability queries can now optionally pin the
+  target to a specific source class, source method descriptor, and BCI so reports can
+  distinguish one call site from another call to the same API.
 - Initial bytecode viewing for selected methods, exposing BCI, opcode, mnemonic,
   normalized operands, line anchors, local-variable scopes, xrefs, bounded windows,
   and mapping context.
@@ -124,8 +126,8 @@ Implemented pieces now include:
   modules, OSGi bundles, Spring Boot, Forge/NeoForge/Fabric/Quilt mods, and
   Bukkit/Paper/Velocity-style plugin descriptors.
 - Initial generic risk reporting that rolls up sensitive behavior, config
-  correlation, entrypoints, and redacted secret candidates into ranked
-  `java_risk_finding` evidence nodes.
+  correlation, exact call-site reachability, entrypoints, and redacted secret
+  candidates into ranked `java_risk_finding` evidence nodes.
 - Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
   mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
   jars remain in ignored `tmp/` for smoke tests only.
@@ -154,8 +156,8 @@ priority is not another broad scanner. The next priority is structure:
 1. Harden JAR indexing for nested archives, multi-release variants, signed metadata,
    module/Maven/service metadata, and budget reporting.
 2. Build bytecode CFG, normalized xrefs, and an initial call graph.
-3. Add framework/mod-loader reachability so findings can move from "capability" to
-   "reachable from lifecycle or entrypoint" when evidence supports it.
+3. Add framework/mod-loader lifecycle reachability so findings can move from
+   "capability" to "reachable from lifecycle callback" when evidence supports it.
 4. Calibrate risk reports, especially secret false positives and config semantics.
 5. Add ASM/Vineflower/CFR helper tooling for decompiler output and source/bytecode
    correlation.
@@ -253,7 +255,8 @@ Important lessons:
 - [x] Initial `java_trace_to_sink` for bounded method-local evidence from a
   sensitive call to constants, environment/system property strings, nearby xrefs,
   mapping context, and trace stop reasons.
-- [x] Initial `java_reachability` for bounded entrypoint-to-target call graph paths.
+- [x] Initial `java_reachability` for bounded entrypoint-to-target call graph paths,
+  including exact source call-site filters for risk-report evidence.
 - [ ] Full source-to-sink slicing across CFG blocks, callers/callees, config reads,
   argument builders, and entrypoints.
 - [x] Initial `java_correlate_behavior_config` to distinguish capability-only,
@@ -265,9 +268,10 @@ Important lessons:
   entropy/context evidence, and no default raw secret output.
 - [x] Initial `java_audit_archive_set` for directory-level audit summaries across
   large JAR sets.
-- [x] Initial `java_risk_report` with config correlation, entrypoint/secret counts,
-  ranked findings, and `java_risk_finding` KB nodes.
-- [ ] Framework-aware reachability and dynamic observation states for
+- [x] Initial `java_risk_report` with config correlation, exact call-site
+  reachability states, entrypoint/secret counts, ranked findings, and
+  `java_risk_finding` KB nodes.
+- [ ] Framework lifecycle reachability and dynamic observation states for
   `java_risk_report`.
 - [ ] Agent prompt and Pydantic models for cited audit findings rather than
   free-form security claims.

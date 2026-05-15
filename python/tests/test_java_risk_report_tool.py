@@ -111,6 +111,7 @@ def test_java_risk_report_ranks_configured_behavior_and_secrets(
             config_roots=[str(config)],
             max_findings=64,
             max_risk_items=32,
+            max_reachability_targets=64,
         ),
     )
 
@@ -133,10 +134,31 @@ def test_java_risk_report_ranks_configured_behavior_and_secrets(
         and item.matched_config_keys == ["network.endpoint"]
         for item in result.risk_items
     )
+    assert any(
+        item.category == "environment"
+        and item.method_name == "main"
+        and item.reachability_state == "direct_entrypoint"
+        and item.reachability_path_count >= 1
+        for item in result.risk_items
+    )
+    assert any(
+        item.category == "filesystem"
+        and item.method_name == "telemetry"
+        and item.reachability_state == "dead_code_candidate"
+        and item.reachability_target_match_count == 1
+        for item in result.risk_items
+    )
+    assert any(
+        item.category == "network"
+        and item.method_name == "connect"
+        and item.reachability_state == "dead_code_candidate"
+        for item in result.risk_items
+    )
     assert any(item.kind == "secret" for item in result.risk_items)
     assert any(
         n.kind == NodeKind.java_risk_finding
         and n.props.get("tool") == "java_risk_report"
+        and "reachability_state" in n.props
         for n in ctx.kb.nodes()
     )
 
