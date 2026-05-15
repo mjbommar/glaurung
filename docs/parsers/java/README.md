@@ -87,6 +87,7 @@ Implemented pieces now include:
   - `java_compile_recovered_project`
   - `java_reconstruct_source_tree`
   - `java_compare_rebuilt_abi`
+  - `java_validate_recovered_application`
   - `java_view_bytecode`
   - `java_cfg`
   - `java_xrefs_from`
@@ -154,6 +155,11 @@ Implemented pieces now include:
 - Initial ABI comparison through `java_compare_rebuilt_abi`, comparing original and
   rebuilt JARs or class directories by class names, field descriptors, method
   descriptors, and access flags, with `java_abi_comparison` KB evidence.
+- Initial recovered-application validation through
+  `java_validate_recovered_application`, orchestrating bounded `javac`
+  compilation, rebuilt ABI comparison, original archive resource parity against
+  `src/main/resources`, generated-stub rejection unless explicitly allowed, and
+  `java_recovery_validation` KB evidence.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -178,10 +184,10 @@ Not yet implemented:
   runtime-visible metadata beyond the initial source/debug and class/member
   annotation attributes.
 - Decompiler helper integration with Vineflower/CFR.
-- Clean source-project recovery after the initial dependency/build/scaffold/compile
-  and ABI-comparison layers: dependency resolution policy, decompiler source
-  emission, Maven/Gradle execution, compiler-diagnostic repair, and resource
-  validation.
+- Clean source-project recovery after the initial dependency/build/scaffold/compile,
+  ABI-comparison, and validation-report layers: dependency resolution policy,
+  decompiler source emission, Maven/Gradle execution, compiler-diagnostic repair,
+  annotation/module parity, and richer resource policy.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
   correlation, framework-aware reachability, and richer directory-level risk
   reporting.
@@ -203,7 +209,8 @@ priority is not another broad scanner. The next priority is structure:
 5. Add ASM/Vineflower/CFR helper tooling for decompiler output and source/bytecode
    correlation.
 6. Start clean source recovery: extend dependency/build inference, emit
-   source/resources, compile, repair diagnostics, and compare rebuilt ABI/resources.
+   source/resources, compile, repair diagnostics, compare rebuilt ABI/resources,
+   and summarize whether the recovered application is currently acceptable.
 
 Important lessons:
 
@@ -295,8 +302,10 @@ Important lessons:
 - [ ] Maven/Gradle compile execution and richer structured diagnostics
 - [ ] Agentic compile-repair loop for decompiler syntax and build/classpath failures
 - [x] Initial ABI/API comparison between original and rebuilt classes
-- [ ] Annotation/resource/module validation between original and rebuilt artifacts
-- [ ] Recovered application validation report
+- [x] Initial resource validation between original archives and recovered
+  `src/main/resources`
+- [ ] Annotation/module validation between original and rebuilt artifacts
+- [x] Initial recovered application validation report
 
 ### Phase 7: Static Behavior Audit and Risk Reporting
 - [ ] Sensitive API rule packs for process execution, filesystem mutation,

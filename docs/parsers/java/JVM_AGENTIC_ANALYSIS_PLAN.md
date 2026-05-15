@@ -121,6 +121,11 @@ Glaurung already has a growing Java path:
   `java_compare_rebuilt_abi`, checking class presence, field/method descriptors, and
   access flags across JARs, class directories, or single class files while emitting
   `java_abi_comparison` evidence nodes.
+- Python memory tools can now emit an initial recovered-application validation report
+  with `java_validate_recovered_application`, orchestrating bounded `javac`
+  compilation, rebuilt ABI comparison, original archive resource parity against
+  `src/main/resources`, generated-stub rejection unless explicitly allowed, and
+  `java_recovery_validation` evidence nodes.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -140,9 +145,10 @@ Known limitations:
 - There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
 - There is initial dependency inference, build-system inference, source-tree
-  scaffolding, bounded `javac` compile diagnostics, and ABI comparison, but no
-  dependency resolver, Java decompiler source emitter, Maven/Gradle compile
-  execution, repair loop, or resource/module validation for recovered Java source.
+  scaffolding, bounded `javac` compile diagnostics, ABI comparison, resource parity
+  checking, and a validation rollup, but no dependency resolver, Java decompiler
+  source emitter, Maven/Gradle compile execution, repair loop, annotation/module
+  parity, or mature recovered-artifact compatibility scoring.
 - The generic static-audit layer now has initial sensitive sinks, entrypoints,
   config/resource extraction, config correlation, redacted secret scanning,
   archive-set summaries, and per-archive risk reports. It still lacks precise
@@ -254,7 +260,7 @@ here, it is probably not represented strongly enough in the plan.
 | Source tree/project reconstruction | Initial `java_reconstruct_source_tree` and `java_infer_build_system` exist for resource/metadata preservation, explicit stubs, generated source lists, and build planning; continue with decompiler source emission, module source recovery, and source/resource validation |
 | Compile diagnostics | `java_compile_recovered_project` |
 | Agentic compile-repair loop | `java_repair_decompiled_source` plus compile iteration budgets |
-| ABI/API and resource validation | Initial `java_compare_rebuilt_abi` exists for class/member descriptor and access-flag comparison; continue with annotation/resource/module validation and `java_validate_recovered_application` |
+| ABI/API and resource validation | Initial `java_compare_rebuilt_abi` and `java_validate_recovered_application` exist for descriptor/access ABI checks, resource parity, compile status, and generated-stub policy; continue with annotation/module validation and public-vs-private compatibility scoring |
 | Runtime behavior validation | `java_launch_target`, JDI/JFR/javaagent tools, opt-in smoke profile |
 | Sensitive Java behavior detection | Initial `java_detect_security_sensitive_behavior` exists; expand sink rule packs and config correlation in Phase 3.5 |
 | Entrypoint and reachability context | Initial `java_detect_entrypoints`, `java_detect_frameworks`, `java_reachability`, and method-local `java_trace_to_sink` exist; expand framework hooks and interprocedural source-to-sink traces |
@@ -595,15 +601,21 @@ Suggested node kinds:
 - `java_runtime_event`
 - `java_decompile_unit`
 - `java_dependency`
+- `java_build_system`
 - `java_source_project`
 - `java_source_file`
+- `java_source_tree`
+- `java_compile_result`
 - `java_compile_diagnostic`
 - `java_rebuild_artifact`
+- `java_abi_comparison`
+- `java_recovery_validation`
 - `java_entrypoint`
 - `java_sensitive_sink`
 - `java_config_key`
 - `java_external_endpoint`
 - `java_secret_candidate`
+- `java_suspicious_blob`
 - `java_risk_finding`
 - `java_rule`
 
@@ -1232,18 +1244,43 @@ This is the Java equivalent of checking recovered C/C++ output against the binar
 surface. The first goal is ABI/API compatibility, not byte-for-byte classfile
 equivalence.
 
-Continue by adding annotation parity, resource parity, module/service metadata
-validation, and compatibility scoring that distinguishes public API breaks from
+Continue by adding annotation parity, module/service metadata validation, richer
+resource policy, and compatibility scoring that distinguishes public API breaks from
 private implementation differences.
 
 `java_validate_recovered_application`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_recovery_validation` KB nodes.
+- Runs bounded `javac` through `java_compile_recovered_project` when requested.
+- Uses `java_compare_rebuilt_abi` against the generated classes directory or a
+  caller-supplied rebuilt JAR/classes path for `abi` and `full_static` profiles.
+- Compares original archive resources against recovered `src/main/resources`,
+  skipping `.class` and signature metadata while reporting missing, extra, and
+  changed resources with SHA-256 evidence.
+- Rejects `GLAURUNG GENERATED STUB` sources unless the caller explicitly allows
+  generated stubs.
+- Current status values are `valid`, `invalid`, `partial`, and `unsupported`.
+
+Remaining work:
+
+- Add annotation, module-info, manifest, and service semantic comparison instead of
+  byte-for-byte resource-only checks.
+- Add compatibility scores and selected-scope policy such as public API only,
+  package-visible API, or all implementation classes.
+- Add Maven/Gradle build execution and rebuilt JAR packaging once offline resolver
+  policy exists.
+- Add optional runtime smoke validation behind strict execution gates.
 
 Inputs:
 
 - Original JAR.
 - Source project root.
 - Rebuilt JAR/classes.
-- Validation profile: `compile_only`, `abi`, `resources`, `smoke_runtime`.
+- Validation profile: `compile_only`, `abi`, `resources`, `full_static`, later
+  `smoke_runtime`.
 
 Outputs:
 
@@ -2002,6 +2039,7 @@ Java support will add many tools. To keep agent prompts manageable:
   - `java_compile_recovered_project`
   - `java_repair_decompiled_source`
   - `java_compare_rebuilt_abi`
+  - `java_validate_recovered_application`
   - `java_detect_entrypoints`
   - `java_detect_security_sensitive_behavior`
   - `java_extract_config_surface`
@@ -2445,9 +2483,11 @@ Tasks:
 - Extend `java_compile_recovered_project` with Maven/Gradle execution, richer
   structured diagnostics, rebuilt JAR packaging, and build-log cache keys.
 - Implement `java_repair_decompiled_source` with narrow, evidence-grounded patches.
-- Extend `java_compare_rebuilt_abi` with annotation/resource/module validation and
+- Extend `java_compare_rebuilt_abi` with annotation/module validation and
   public-vs-private compatibility scoring.
-- Implement `java_validate_recovered_application`.
+- Extend `java_validate_recovered_application` with manifest/service/module semantic
+  validation, compatibility scoring, Maven/Gradle build execution, and optional
+  runtime smoke profiles.
 - Add fixtures for:
   - single-class application
   - resources and `META-INF/services`
@@ -2469,8 +2509,8 @@ Acceptance:
   metadata/classpath failure without broad rewrites.
 - `java_compare_rebuilt_abi` reports public class/method/field descriptor parity for
   recovered fixtures.
-- Resource, manifest, service, and module files are preserved or explicitly reported
-  as omitted.
+- Resource files are preserved or explicitly reported as omitted by the initial
+  validation report; manifest, service, and module semantic validation is added next.
 - The final recovery report distinguishes:
   - compiles cleanly
   - compiles with marked stubs

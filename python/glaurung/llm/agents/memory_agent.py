@@ -180,6 +180,9 @@ from ..tools.java_reconstruct_source_tree import (
 from ..tools.java_compare_rebuilt_abi import (
     build_tool as build_java_compare_rebuilt_abi,
 )
+from ..tools.java_validate_recovered_application import (
+    build_tool as build_java_validate_recovered_application,
+)
 from ..tools.java_view_bytecode import build_tool as build_java_view_bytecode
 from ..tools.java_cfg import build_tool as build_java_cfg
 from ..tools.java_xrefs_from import build_tool as build_java_xrefs_from
@@ -798,6 +801,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
         tool_to_pyd_ai(build_java_reconstruct_source_tree())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_compare_rebuilt_abi()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_java_validate_recovered_application())
+    )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_view_bytecode()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_cfg()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_xrefs_from()))
