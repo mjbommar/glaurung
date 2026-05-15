@@ -655,6 +655,7 @@ Outputs:
 - Operands resolved to constant-pool refs.
 - Opcode and mnemonic for decoded JVM instructions.
 - Line table mapping when debug metadata exists.
+- Local-variable and local-variable-type scopes when debug metadata exists.
 - Optional method xrefs at matching BCI offsets.
 - Descriptor-aware mapping context where ProGuard/Mojang mappings are supplied.
 - Stack/local frame snapshots and exception handlers in a later ASM-backed revision.

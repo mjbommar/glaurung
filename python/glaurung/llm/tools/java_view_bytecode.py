@@ -65,6 +65,24 @@ class JavaBytecodeXref(BaseModel):
     string_value: str | None = None
 
 
+class JavaBytecodeLocalVariable(BaseModel):
+    start_pc: int
+    length: int
+    end_pc: int
+    name: str
+    descriptor: str
+    index: int
+
+
+class JavaBytecodeLocalVariableType(BaseModel):
+    start_pc: int
+    length: int
+    end_pc: int
+    name: str
+    signature: str
+    index: int
+
+
 class JavaViewBytecodeResult(BaseModel):
     archive_path: str
     class_found: bool
@@ -83,6 +101,10 @@ class JavaViewBytecodeResult(BaseModel):
     code_length: int | None = None
     instructions: list[JavaBytecodeInstruction] = Field(default_factory=list)
     xrefs: list[JavaBytecodeXref] = Field(default_factory=list)
+    local_variables: list[JavaBytecodeLocalVariable] = Field(default_factory=list)
+    local_variable_types: list[JavaBytecodeLocalVariableType] = Field(
+        default_factory=list
+    )
     truncated: bool = False
     bytecode_node_id: str | None = None
 
@@ -249,6 +271,28 @@ def _result_for_method(
         if include_xrefs
         else []
     )
+    local_variables = [
+        _local_variable_summary(local)
+        for local in code.get("local_variables", [])
+        if isinstance(local, dict)
+        and _scope_intersects_range(
+            int(local.get("start_pc", 0)),
+            int(local.get("length", 0)),
+            bci_start,
+            bci_end,
+        )
+    ]
+    local_variable_types = [
+        _local_variable_type_summary(local_type)
+        for local_type in code.get("local_variable_types", [])
+        if isinstance(local_type, dict)
+        and _scope_intersects_range(
+            int(local_type.get("start_pc", 0)),
+            int(local_type.get("length", 0)),
+            bci_start,
+            bci_end,
+        )
+    ]
     mapped_method_members = _mapped_method_members(
         mappings=mappings,
         class_mapping=class_mapping,
@@ -277,6 +321,8 @@ def _result_for_method(
                 "method_descriptor": str(method["descriptor"]),
                 "instruction_count": len(instructions),
                 "xref_count": len(xrefs),
+                "local_variable_count": len(local_variables),
+                "local_variable_type_count": len(local_variable_types),
                 "truncated": truncated,
                 "bci_start": bci_start,
                 "bci_end": bci_end,
@@ -307,6 +353,8 @@ def _result_for_method(
         code_length=int(code["code_length"]),
         instructions=instructions,
         xrefs=xrefs,
+        local_variables=local_variables,
+        local_variable_types=local_variable_types,
         truncated=truncated,
         bytecode_node_id=bytecode_node.id,
     )
@@ -379,6 +427,36 @@ def _xref_summary(
     )
 
 
+def _local_variable_summary(
+    local: dict[str, Any],
+) -> JavaBytecodeLocalVariable:
+    start_pc = int(local["start_pc"])
+    length = int(local["length"])
+    return JavaBytecodeLocalVariable(
+        start_pc=start_pc,
+        length=length,
+        end_pc=start_pc + length,
+        name=str(local["name"]),
+        descriptor=str(local["descriptor"]),
+        index=int(local["index"]),
+    )
+
+
+def _local_variable_type_summary(
+    local_type: dict[str, Any],
+) -> JavaBytecodeLocalVariableType:
+    start_pc = int(local_type["start_pc"])
+    length = int(local_type["length"])
+    return JavaBytecodeLocalVariableType(
+        start_pc=start_pc,
+        length=length,
+        end_pc=start_pc + length,
+        name=str(local_type["name"]),
+        signature=str(local_type["signature"]),
+        index=int(local_type["index"]),
+    )
+
+
 def _line_numbers(code: dict[str, Any]) -> list[dict[str, int]]:
     return [
         {"start_pc": int(item["start_pc"]), "line_number": int(item["line_number"])}
@@ -411,6 +489,18 @@ def _bci_in_range(
     if bci_start is not None and bci < bci_start:
         return False
     return not (bci_end is not None and bci > bci_end)
+
+
+def _scope_intersects_range(
+    start_pc: int,
+    length: int,
+    bci_start: int | None,
+    bci_end: int | None,
+) -> bool:
+    end_pc = start_pc + length
+    if bci_start is not None and end_pc < bci_start:
+        return False
+    return not (bci_end is not None and start_pc > bci_end)
 
 
 def _lookup_class_mapping(

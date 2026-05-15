@@ -86,7 +86,8 @@ Implemented pieces now include:
   `LineNumberTable` data exists, trace results include source-line anchors for the
   sink, constants, and neighboring xrefs.
 - Initial bytecode viewing for selected methods, exposing BCI, opcode, mnemonic,
-  normalized operands, line anchors, xrefs, bounded windows, and mapping context.
+  normalized operands, line anchors, local-variable scopes, xrefs, bounded windows,
+  and mapping context.
 - Initial redacted secret detection across method string constants and text
   resources. Findings store category, source location, length, context with the
   candidate replaced, and stable hashes, not raw values.

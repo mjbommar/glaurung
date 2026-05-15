@@ -45,7 +45,15 @@ public class BytecodeFixture {
         encoding="utf-8",
     )
     subprocess.run(
-        ["javac", "--release", "17", "-d", str(out), str(src / "BytecodeFixture.java")],
+        [
+            "javac",
+            "-g",
+            "--release",
+            "17",
+            "-d",
+            str(out),
+            str(src / "BytecodeFixture.java"),
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -125,6 +133,10 @@ def test_java_view_bytecode_can_show_branch_targets(tmp_path: Path) -> None:
         ins.mnemonic.startswith("if_")
         and any(op.startswith("target=") for op in ins.operands)
         for ins in result.instructions
+    )
+    assert any(
+        local.name == "value" and local.descriptor == "I" and local.index == 0
+        for local in result.local_variables
     )
 
 
