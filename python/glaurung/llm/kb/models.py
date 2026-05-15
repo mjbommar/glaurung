@@ -29,6 +29,7 @@ class NodeKind(str, Enum):
     java_sensitive_sink = "java_sensitive_sink"
     java_entrypoint = "java_entrypoint"
     java_config_key = "java_config_key"
+    java_secret = "java_secret"
 
 
 class Node(BaseModel):

@@ -65,6 +65,7 @@ Implemented pieces now include:
   - `java_lookup_mapping`
   - `java_audit_archive_set`
   - `java_trace_to_sink`
+  - `java_detect_secrets`
   - `minecraft_detect_archive`
   - `minecraft_fetch_mappings`
   - `minecraft_extract_bundled_server`
@@ -80,6 +81,9 @@ Implemented pieces now include:
   reasons where precise dataflow/call graph support is not available yet. When
   `LineNumberTable` data exists, trace results include source-line anchors for the
   sink, constants, and neighboring xrefs.
+- Initial redacted secret detection across method string constants and text
+  resources. Findings store category, source location, length, context with the
+  candidate replaced, and stable hashes, not raw values.
 - Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
   mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
   jars remain in ignored `tmp/` for smoke tests only.
@@ -169,8 +173,8 @@ Not yet implemented:
   argument builders, and entrypoints.
 - [ ] `java_correlate_behavior_config` to distinguish capability, configured
   behavior, enabled behavior, dormant behavior, and unknown behavior.
-- [ ] `java_detect_secrets` with strict redaction, value hashing, entropy/context
-  evidence, and no default raw secret output.
+- [x] Initial `java_detect_secrets` with strict redaction, value hashing,
+  entropy/context evidence, and no default raw secret output.
 - [x] Initial `java_audit_archive_set` for directory-level audit summaries across
   large JAR sets.
 - [ ] `java_risk_report` with reachability/config correlation and ranked findings.

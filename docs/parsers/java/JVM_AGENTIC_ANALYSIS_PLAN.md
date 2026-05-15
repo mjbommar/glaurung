@@ -60,6 +60,8 @@ Glaurung already has a growing Java path:
   constants, nearby bytecode xrefs, mapping-aware names, source-line anchors from
   `LineNumberTable`, and explicit stop reasons for unavailable
   CFG/call-graph/dataflow precision.
+- Python memory tools can now detect likely secrets in class string constants and
+  text resources while redacting raw values and emitting stable hashes.
 - Existing archive tools can enumerate and extract JAR contents because JAR is a ZIP
   container.
 - `glaurung ask` can seed Java archive summaries and Minecraft mapping hints.
@@ -117,7 +119,7 @@ here, it is probably not represented strongly enough in the plan.
 | Sensitive Java behavior detection | Initial `java_detect_security_sensitive_behavior` exists; expand sink rule packs and config correlation in Phase 3.5 |
 | Entrypoint and reachability context | Initial `java_detect_entrypoints` and method-local `java_trace_to_sink` exist; expand framework hooks, call graph, and interprocedural traces |
 | Config/resource correlation | Initial `java_extract_config_surface` exists; add behavior correlation through `java_correlate_behavior_config` |
-| Secret and token handling | `java_detect_secrets`, redacted value hashes, no raw output by default |
+| Secret and token handling | Initial `java_detect_secrets` exists with redacted value hashes and no raw output by default |
 | Directory/modpack risk review | Initial `java_audit_archive_set` exists; continue with `java_risk_report` |
 | Deobfuscated behavior annotation | Initial mapped class/method sensitive-sink annotations exist; continue with mapping tools, string/constant evidence, sink annotations, and agent enrichment |
 
