@@ -127,6 +127,10 @@ Glaurung already has a growing Java path:
   compilation, rebuilt ABI comparison, original archive resource parity against
   `src/main/resources`, generated-stub rejection unless explicitly allowed, and
   `java_recovery_validation` evidence nodes.
+- Python memory tools can now list candidate methods with `java_list_methods`,
+  exposing bounded class/name/descriptor filtering, code-size summaries, optional
+  annotation descriptors, optional ProGuard/Mojang mapped names, and `java_method`
+  evidence nodes.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -764,21 +768,34 @@ Outputs:
 
 `java_list_methods`
 
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_method` KB nodes for returned methods.
+- Scans JAR/ZIP class entries with the Rust class parser.
+- Supports class, method-name, and descriptor substring filters.
+- Supports constructor inclusion/exclusion, result limits, code-size summaries, and
+  optional method annotation descriptors.
+- Supports optional ProGuard/Mojang mapped class and method names when a mapping file
+  is supplied.
+
 Inputs:
 
 - `class_filter`
 - `name_filter`
 - `descriptor_filter`
+- Optional mapping path/namespace.
 - `include_constructors`
+- `include_annotations`
 - `limit`
 
 Outputs:
 
 - Method locators.
 - Access flags.
-- Descriptor and decoded signature.
+- Descriptor and mapped names/signatures when available.
 - Code size, max stack, max locals.
-- Line table availability.
+- Annotation descriptors when requested.
 
 `java_view_bytecode`
 
@@ -2035,6 +2052,7 @@ Java support will add many tools. To keep agent prompts manageable:
 - Expose only first-touch tools by default:
   - `java_index_archive`
   - `java_list_classes`
+  - `java_list_methods`
   - `java_view_class`
   - `java_decompile_method`
   - `java_xrefs_to`

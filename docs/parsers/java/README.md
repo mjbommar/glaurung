@@ -76,6 +76,7 @@ Implemented pieces now include:
   - `java_view_class`
   - `java_annotate_mappings`
   - `java_lookup_mapping`
+  - `java_list_methods`
   - `java_audit_archive_set`
   - `java_trace_to_sink`
   - `java_reachability`
@@ -118,6 +119,10 @@ Implemented pieces now include:
 - Initial bytecode viewing for selected methods, exposing BCI, opcode, mnemonic,
   normalized operands, line anchors, local-variable scopes, xrefs, bounded windows,
   and mapping context.
+- Initial method listing through `java_list_methods`, exposing bounded method
+  summaries with class/name/descriptor filters, code-size metadata, optional
+  annotation descriptors, optional ProGuard/Mojang mapped names, and `java_method`
+  KB evidence.
 - Initial bytecode CFG construction for selected methods, exposing basic blocks,
   conditional/goto/fallthrough/default-switch/exception edges, line anchors,
   exception handler ranges, stop reasons, and KB `java_cfg` nodes.
@@ -257,6 +262,8 @@ Important lessons:
 - [x] Initial normalized xref queries via `java_xrefs_from` and `java_xrefs_to`
 - [x] Mapping-aware xref and call graph annotations for ProGuard/Mojang names
 - [x] Initial bytecode instruction decode and `java_view_bytecode`
+- [x] Initial bounded method listing with filters, code summaries, annotations, and
+  mapping names
 - [x] Initial bytecode CFG via `java_cfg`
 - [x] Initial constant-pool call graph via `java_call_graph`
 - [x] Exception-handler table parsing and CFG exception edges
