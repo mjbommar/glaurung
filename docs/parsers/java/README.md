@@ -63,6 +63,7 @@ Implemented pieces now include:
   - `java_annotate_mappings`
   - `java_lookup_mapping`
   - `java_audit_archive_set`
+  - `java_trace_to_sink`
   - `minecraft_detect_archive`
   - `minecraft_fetch_mappings`
   - `minecraft_extract_bundled_server`
@@ -73,6 +74,9 @@ Implemented pieces now include:
   ProGuard/Mojang mapping file is supplied.
 - Archive-set auditing for modpack-style directories, combining Minecraft metadata
   and security-sensitive sink summaries across many JARs.
+- Initial trace-to-sink evidence around sensitive calls, joining the selected sink
+  finding with method-local constants, nearby xrefs, mappings, and explicit stop
+  reasons where precise dataflow/call graph support is not available yet.
 - Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
   mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
   jars remain in ignored `tmp/` for smoke tests only.
@@ -154,9 +158,11 @@ Not yet implemented:
   config roots using properties, TOML, JSON, XML, service descriptors, and manifests.
 - [x] Initial `java_detect_entrypoints` for main classes, agents, ServiceLoader providers,
   static initializers, and scheduled job registrations.
-- [ ] `java_trace_to_sink` for bounded backward slices from a sensitive call to
-  constants, config reads, environment/system property reads, argument builders,
-  and entrypoints.
+- [x] Initial `java_trace_to_sink` for bounded method-local evidence from a
+  sensitive call to constants, environment/system property strings, nearby xrefs,
+  mapping context, and trace stop reasons.
+- [ ] Full source-to-sink slicing across CFG blocks, callers/callees, config reads,
+  argument builders, and entrypoints.
 - [ ] `java_correlate_behavior_config` to distinguish capability, configured
   behavior, enabled behavior, dormant behavior, and unknown behavior.
 - [ ] `java_detect_secrets` with strict redaction, value hashing, entropy/context

@@ -56,6 +56,9 @@ Glaurung already has a growing Java path:
 - Python memory tools can now run an initial archive-set audit over JAR files or
   directories, aggregating Minecraft metadata and sensitive sink categories for
   modpack-style review.
+- Python memory tools can now trace a selected sensitive sink to method-local
+  constants, nearby bytecode xrefs, mapping-aware names, and explicit stop reasons
+  for unavailable CFG/call-graph/dataflow precision.
 - Existing archive tools can enumerate and extract JAR contents because JAR is a ZIP
   container.
 - `glaurung ask` can seed Java archive summaries and Minecraft mapping hints.
@@ -111,7 +114,7 @@ here, it is probably not represented strongly enough in the plan.
 | ABI/API and resource validation | `java_compare_rebuilt_abi`, `java_validate_recovered_application` |
 | Runtime behavior validation | `java_launch_target`, JDI/JFR/javaagent tools, opt-in smoke profile |
 | Sensitive Java behavior detection | Initial `java_detect_security_sensitive_behavior` exists; expand sink rule packs and config correlation in Phase 3.5 |
-| Entrypoint and reachability context | Initial `java_detect_entrypoints` exists; expand framework hooks, call graph, and source-to-sink traces |
+| Entrypoint and reachability context | Initial `java_detect_entrypoints` and method-local `java_trace_to_sink` exist; expand framework hooks, call graph, and interprocedural traces |
 | Config/resource correlation | Initial `java_extract_config_surface` exists; add behavior correlation through `java_correlate_behavior_config` |
 | Secret and token handling | `java_detect_secrets`, redacted value hashes, no raw output by default |
 | Directory/modpack risk review | Initial `java_audit_archive_set` exists; continue with `java_risk_report` |
