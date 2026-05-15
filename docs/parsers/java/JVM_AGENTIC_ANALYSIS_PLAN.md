@@ -74,6 +74,9 @@ Glaurung already has a growing Java path:
 - Python memory tools can now query normalized bytecode xrefs from a selected source
   class/method or to a selected target owner/name/descriptor, emitting `java_xref`
   evidence nodes.
+- Python memory tools can now build an initial constant-pool call graph from method
+  invocation xrefs, including invoke kinds, source BCI/line anchors, and
+  defined-vs-external target classification.
 - Python memory tools can now detect likely secrets in class string constants and
   text resources while redacting raw values and emitting stable hashes.
 - Python memory tools can now correlate sensitive sink findings with method-local
@@ -91,7 +94,7 @@ Known limitations:
 - The Rust parser still skips many attributes after the initial source/debug subset,
   including annotations, bootstrap methods, records, modules, nestmates, generic
   signatures, and stack maps.
-- There is no bytecode CFG/frame model, advanced Java xref model, Java call graph,
+- There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
 - There is no dependency resolver, build-system inference, source tree emitter,
   compile diagnostic parser, repair loop, or ABI comparison for recovered Java source.
@@ -181,7 +184,7 @@ here, it is probably not represented strongly enough in the plan.
 | Gap | Planned coverage |
 | --- | --- |
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
-| Bytecode CFG and xrefs | Initial `java_cfg`, `java_xrefs_from`, and `java_xrefs_to` exist; continue with exception edges, interprocedural xrefs, and `java_call_graph` |
+| Bytecode CFG, xrefs, and call graph | Initial `java_cfg`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with exception edges, interprocedural xrefs, and CHA/RTA dispatch |
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, and local-variable table support exists; continue annotations/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
@@ -791,17 +794,25 @@ Outputs:
 
 Inputs:
 
-- `entrypoints`
-- `mode: "constant_pool" | "cha" | "rta"`
-- `max_nodes`
+- `path`
+- `class_name`
+- `method_name`
+- `method_descriptor`
+- `mode: "constant_pool"` initially; later `"cha"` and `"rta"`
+- `include_external`
+- `max_classes`
 - `max_edges`
 
 Outputs:
 
-- Nodes and edges.
-- Unresolved virtual calls.
-- Interface dispatch candidates.
-- Reflection warnings.
+- Method nodes and invocation edges.
+- Invoke kind (`invokestatic`, `invokevirtual`, `invokeinterface`, etc.).
+- Source BCI and source-line anchors when `LineNumberTable` exists.
+- Defined-vs-external target classification.
+- Dynamic-dispatch edge counts and stop reasons.
+- Later revisions should add unresolved virtual call candidate sets, interface
+  dispatch candidates, reflection warnings, CHA/RTA reachability, and entrypoint
+  slicing.
 
 Initial modes:
 
