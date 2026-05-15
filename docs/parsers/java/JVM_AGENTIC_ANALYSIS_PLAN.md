@@ -67,6 +67,9 @@ Glaurung already has a growing Java path:
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
+- Python memory tools can now build an initial generic Java risk report that ranks
+  sensitive behavior, config correlation, entrypoint counts, and redacted secret
+  candidates into `java_risk_finding` evidence nodes.
 - Existing archive tools can enumerate and extract JAR contents because JAR is a ZIP
   container.
 - `glaurung ask` can seed Java archive summaries and Minecraft mapping hints.
@@ -124,7 +127,7 @@ here, it is probably not represented strongly enough in the plan.
 | Entrypoint and reachability context | Initial `java_detect_entrypoints` and method-local `java_trace_to_sink` exist; expand framework hooks, call graph, and interprocedural traces |
 | Config/resource correlation | Initial `java_extract_config_surface` and `java_correlate_behavior_config` exist; expand framework-aware and indirect-key correlation |
 | Secret and token handling | Initial `java_detect_secrets` exists with redacted value hashes and no raw output by default |
-| Directory/modpack risk review | Initial `java_audit_archive_set` exists; continue with `java_risk_report` |
+| Directory/modpack risk review | Initial `java_audit_archive_set` and `java_risk_report` exist; expand framework-aware reachability and multi-archive reporting |
 | Deobfuscated behavior annotation | Initial mapped class/method sensitive-sink annotations exist; continue with mapping tools, string/constant evidence, sink annotations, and agent enrichment |
 
 ## Design Goals
@@ -390,6 +393,7 @@ python/glaurung/llm/tools/
   java_index_archive.py
   java_view_class.py
   java_view_bytecode.py
+  java_risk_report.py
   java_decompile.py
   java_source_recovery.py
   java_dependencies.py
@@ -1302,20 +1306,33 @@ Implementation notes:
 
 Inputs:
 
-- JAR path/archive locator.
-- Optional prior outputs from index, framework, obfuscation, entrypoint, sensitive,
-  config, secret, and trace tools.
-- Optional policy file.
+- `path`
+- `config_roots`
+- `mapping_path`
+- `max_classes`
 - `max_findings`
+- `max_risk_items`
+- `max_secret_candidates`
+- `include_secrets`
+- `include_entrypoints`
 
 Outputs:
 
-- Archive-level report with top risks, benign explanations, unknowns, and recommended
-  next static tools.
-- Summary counts by category, severity, reachability state, and config state.
+- Archive-level report with ranked risk items.
+- Sensitive finding count, config correlation count, config binding count, redacted
+  secret candidate count, and entrypoint count.
+- Summary counts by category and config state.
+- Highest severity and max risk score.
 - Evidence IDs and locators for every claim.
 - A clear distinction between "this code can do X" and "this JAR is configured or
   observed to do X".
+- `java_risk_finding` KB nodes for each ranked item.
+
+Current limitations:
+
+- The initial implementation ranks a single archive and uses config state plus
+  entrypoint counts as context. Framework-aware reachability, policy files, dynamic
+  observation, and multi-archive rollups are planned follow-on work.
 
 `java_audit_archive_set`
 
@@ -1967,7 +1984,10 @@ Tasks:
 - Implement `java_detect_secrets` with redaction and stable hashes.
 - Implement `java_trace_to_sink` for bounded source-to-sink evidence.
 - Implement `java_correlate_behavior_config`.
-- Implement `java_risk_report` and `java_audit_archive_set`.
+- Implement `java_risk_report` and `java_audit_archive_set`. Initial versions exist:
+  `java_risk_report` ranks sensitive behavior/config correlations plus redacted
+  secrets and entrypoint counts for a single archive; `java_audit_archive_set`
+  summarizes sensitive categories across archive sets.
 - Connect findings to KB nodes and agent evidence logs through `tool_to_pyd_ai`.
 - Add deobfuscation-aware annotations so mapped names appear in findings when
   mappings are available.

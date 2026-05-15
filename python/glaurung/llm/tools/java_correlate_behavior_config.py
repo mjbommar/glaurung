@@ -27,6 +27,10 @@ ConfigState = Literal[
 class JavaCorrelateBehaviorConfigArgs(BaseModel):
     path: str | None = Field(None, description="Path to the JAR/ZIP archive")
     config_roots: list[str] = Field(default_factory=list)
+    mapping_path: str | None = Field(
+        None,
+        description="Optional ProGuard/Mojang mapping file for de-obfuscating names",
+    )
     category: str | None = None
     rule_id: str | None = None
     max_classes: int = Field(50_000, ge=0)
@@ -97,6 +101,7 @@ class JavaCorrelateBehaviorConfigTool(
             kb,
             sensitive_tool.input_model(
                 path=path,
+                mapping_path=args.mapping_path,
                 max_classes=args.max_classes,
                 max_findings=args.max_findings,
             ),
@@ -127,6 +132,7 @@ class JavaCorrelateBehaviorConfigTool(
                 kb=kb,
                 path=path,
                 finding=finding,
+                mapping_path=args.mapping_path,
                 max_constants=args.max_trace_constants,
             )
             matched_constants = _matched_constants(trace_constants, bindings_by_key)
@@ -166,6 +172,7 @@ def _trace_constants_for_finding(
     kb: KnowledgeBase,
     path: str,
     finding: JavaSensitiveFinding,
+    mapping_path: str | None,
     max_constants: int,
 ) -> list[str]:
     trace_tool = build_trace_tool()
@@ -175,6 +182,7 @@ def _trace_constants_for_finding(
         trace_tool.input_model(
             path=path,
             finding_id=finding.finding_id,
+            mapping_path=mapping_path,
             max_constants=max_constants,
             max_neighbor_xrefs=0,
         ),

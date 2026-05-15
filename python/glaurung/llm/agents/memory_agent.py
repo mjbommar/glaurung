@@ -168,6 +168,7 @@ from ..tools.java_view_bytecode import build_tool as build_java_view_bytecode
 from ..tools.java_correlate_behavior_config import (
     build_tool as build_java_correlate_behavior_config,
 )
+from ..tools.java_risk_report import build_tool as build_java_risk_report
 from ..tools.minecraft_detect_archive import (
     build_tool as build_minecraft_detect_archive,
 )
@@ -766,6 +767,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_correlate_behavior_config())
     )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_risk_report()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_minecraft_detect_archive()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_minecraft_fetch_mappings()))
     agent._function_toolset.add_tool(

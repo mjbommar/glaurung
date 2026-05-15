@@ -68,6 +68,7 @@ Implemented pieces now include:
   - `java_detect_secrets`
   - `java_view_bytecode`
   - `java_correlate_behavior_config`
+  - `java_risk_report`
   - `minecraft_detect_archive`
   - `minecraft_fetch_mappings`
   - `minecraft_extract_bundled_server`
@@ -92,6 +93,9 @@ Implemented pieces now include:
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
   `configured_unknown`.
+- Initial generic risk reporting that rolls up sensitive behavior, config
+  correlation, entrypoints, and redacted secret candidates into ranked
+  `java_risk_finding` evidence nodes.
 - Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
   mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
   jars remain in ignored `tmp/` for smoke tests only.
@@ -106,8 +110,8 @@ Not yet implemented:
   file generation, compilation, compiler-diagnostic repair, and ABI/resource
   validation.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
-  correlation, secret scanning beyond config values, risk ranking, and directory-level
-  archive scans.
+  correlation, framework-aware reachability, and richer directory-level risk
+  reporting.
 
 ### Phase 1: Header Validation
 - [x] Magic number (0xCAFEBABE)
@@ -188,7 +192,10 @@ Not yet implemented:
   entropy/context evidence, and no default raw secret output.
 - [x] Initial `java_audit_archive_set` for directory-level audit summaries across
   large JAR sets.
-- [ ] `java_risk_report` with reachability/config correlation and ranked findings.
+- [x] Initial `java_risk_report` with config correlation, entrypoint/secret counts,
+  ranked findings, and `java_risk_finding` KB nodes.
+- [ ] Framework-aware reachability and dynamic observation states for
+  `java_risk_report`.
 - [ ] Agent prompt and Pydantic models for cited audit findings rather than
   free-form security claims.
 
