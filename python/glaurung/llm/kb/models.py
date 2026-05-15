@@ -30,6 +30,7 @@ class NodeKind(str, Enum):
     java_entrypoint = "java_entrypoint"
     java_config_key = "java_config_key"
     java_secret = "java_secret"
+    java_config_correlation = "java_config_correlation"
 
 
 class Node(BaseModel):

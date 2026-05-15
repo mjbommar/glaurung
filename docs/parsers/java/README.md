@@ -66,6 +66,7 @@ Implemented pieces now include:
   - `java_audit_archive_set`
   - `java_trace_to_sink`
   - `java_detect_secrets`
+  - `java_correlate_behavior_config`
   - `minecraft_detect_archive`
   - `minecraft_fetch_mappings`
   - `minecraft_extract_bundled_server`
@@ -84,6 +85,10 @@ Implemented pieces now include:
 - Initial redacted secret detection across method string constants and text
   resources. Findings store category, source location, length, context with the
   candidate replaced, and stable hashes, not raw values.
+- Initial behavior/config correlation that joins sensitive sink findings, method-local
+  trace constants, and embedded or caller-supplied config keys to classify
+  `capability_only`, `configured_enabled`, `configured_disabled`, or
+  `configured_unknown`.
 - Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
   mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
   jars remain in ignored `tmp/` for smoke tests only.
@@ -171,8 +176,11 @@ Not yet implemented:
   mapping context, and trace stop reasons.
 - [ ] Full source-to-sink slicing across CFG blocks, callers/callees, config reads,
   argument builders, and entrypoints.
-- [ ] `java_correlate_behavior_config` to distinguish capability, configured
-  behavior, enabled behavior, dormant behavior, and unknown behavior.
+- [x] Initial `java_correlate_behavior_config` to distinguish capability-only,
+  configured enabled, configured disabled, and configured unknown behavior using
+  exact config-key evidence.
+- [ ] Broader framework-aware config correlation for lifecycle hooks, default
+  config generation, policy files, and indirect key construction.
 - [x] Initial `java_detect_secrets` with strict redaction, value hashing,
   entropy/context evidence, and no default raw secret output.
 - [x] Initial `java_audit_archive_set` for directory-level audit summaries across
