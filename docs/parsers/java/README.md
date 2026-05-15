@@ -64,6 +64,7 @@ Implemented pieces now include:
   - `java_detect_obfuscation`
   - `java_detect_security_sensitive_behavior`
   - `java_detect_entrypoints`
+  - `java_detect_frameworks`
   - `java_extract_config_surface`
   - `java_view_class`
   - `java_annotate_mappings`
@@ -114,6 +115,10 @@ Implemented pieces now include:
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
   `configured_unknown`.
+- Initial generic framework and metadata detection through `java_detect_frameworks`,
+  covering manifest applications/agents, ServiceLoader, Maven coordinates, JPMS
+  modules, OSGi bundles, Spring Boot, Forge/NeoForge/Fabric/Quilt mods, and
+  Bukkit/Paper/Velocity-style plugin descriptors.
 - Initial generic risk reporting that rolls up sensitive behavior, config
   correlation, entrypoints, and redacted secret candidates into ranked
   `java_risk_finding` evidence nodes.
@@ -240,6 +245,7 @@ Important lessons:
   config roots using properties, TOML, JSON, XML, service descriptors, and manifests.
 - [x] Initial `java_detect_entrypoints` for main classes, agents, ServiceLoader providers,
   static initializers, and scheduled job registrations.
+- [x] Initial `java_detect_frameworks` for generic JVM framework/mod/plugin metadata.
 - [x] Initial `java_trace_to_sink` for bounded method-local evidence from a
   sensitive call to constants, environment/system property strings, nearby xrefs,
   mapping context, and trace stop reasons.

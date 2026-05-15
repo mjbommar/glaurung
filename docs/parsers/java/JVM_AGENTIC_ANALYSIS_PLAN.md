@@ -56,6 +56,9 @@ Glaurung already has a growing Java path:
 - Python memory tools can now detect initial Java entrypoints from manifests, main
   methods, agent manifests, ServiceLoader descriptors, static initializers, and
   scheduler registrations.
+- Python memory tools can now detect generic framework and metadata context from
+  manifests, ServiceLoader descriptors, Maven coordinates, JPMS modules, OSGi bundles,
+  Spring Boot metadata, Minecraft mod-loader metadata, and plugin descriptors.
 - Python memory tools can now extract an initial config/resource surface from
   manifests, ServiceLoader descriptors, embedded properties/JSON/TOML/XML resources,
   external config roots, and redacted sensitive config values.
@@ -199,7 +202,7 @@ here, it is probably not represented strongly enough in the plan.
 | ABI/API and resource validation | `java_compare_rebuilt_abi`, `java_validate_recovered_application` |
 | Runtime behavior validation | `java_launch_target`, JDI/JFR/javaagent tools, opt-in smoke profile |
 | Sensitive Java behavior detection | Initial `java_detect_security_sensitive_behavior` exists; expand sink rule packs and config correlation in Phase 3.5 |
-| Entrypoint and reachability context | Initial `java_detect_entrypoints` and method-local `java_trace_to_sink` exist; expand framework hooks, call graph, and interprocedural traces |
+| Entrypoint and reachability context | Initial `java_detect_entrypoints`, `java_detect_frameworks`, and method-local `java_trace_to_sink` exist; expand framework hooks, call graph, and interprocedural traces |
 | Config/resource correlation | Initial `java_extract_config_surface` and `java_correlate_behavior_config` exist; expand framework-aware and indirect-key correlation |
 | Secret and token handling | Initial `java_detect_secrets` exists with redacted value hashes and no raw output by default |
 | Directory/modpack risk review | Initial `java_audit_archive_set` and `java_risk_report` exist; expand framework-aware reachability and multi-archive reporting |
@@ -1136,12 +1139,17 @@ Inputs:
 
 Detect:
 
-- Forge/NeoForge.
-- Fabric/Quilt.
+- Forge/NeoForge from `META-INF/mods.toml`.
+- Fabric/Quilt from `fabric.mod.json` and `quilt.mod.json`.
 - Sponge Mixin.
 - Java agents (`Premain-Class`, `Agent-Class`).
 - `Main-Class` applications.
-- ServiceLoader providers and consumers.
+- ServiceLoader providers.
+- Maven coordinates from `META-INF/maven/**/pom.properties`.
+- JPMS modules from `module-info.class`.
+- OSGi bundles from manifest headers.
+- Spring Boot from manifest headers and executable-JAR layout.
+- Bukkit/Paper/Velocity-style plugin descriptors.
 - Spring and other application frameworks.
 - Logging frameworks and risky logging versions when metadata is available.
 - JNI/JNA/FFM/native libraries.
@@ -1154,6 +1162,8 @@ Outputs:
 - Framework IDs, versions when extractable, confidence, and evidence locators.
 - Entrypoint resource paths and class/method locators.
 - Loader-provided dependency assumptions, especially for mod loaders.
+- Initial implementation emits `java_framework` KB nodes for the generic metadata
+  categories above; lifecycle method expansion remains future work.
 
 `java_detect_obfuscation`
 
@@ -2064,6 +2074,8 @@ Tasks:
 - Expand the initial versioned sensitive API rule packs and unit tests for rule
   matching.
 - Implement `java_detect_frameworks` output as reusable context for audit tools.
+  Initial metadata detection exists for manifests, ServiceLoader, Maven, JPMS, OSGi,
+  Spring Boot, Forge/NeoForge/Fabric/Quilt, and common plugin descriptors.
 - Extend `java_detect_entrypoints` for common frameworks, mod loaders, thread starts,
   and richer lifecycle metadata. The initial version detects manifest main classes,
   Java agents, `public static main`, ServiceLoader providers, static initializers, and

@@ -155,6 +155,7 @@ from ..tools.java_detect_security_sensitive_behavior import (
     build_tool as build_java_detect_sensitive_behavior,
 )
 from ..tools.java_detect_entrypoints import build_tool as build_java_detect_entrypoints
+from ..tools.java_detect_frameworks import build_tool as build_java_detect_frameworks
 from ..tools.java_extract_config_surface import (
     build_tool as build_java_extract_config_surface,
 )
@@ -758,6 +759,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
         tool_to_pyd_ai(build_java_detect_sensitive_behavior())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_entrypoints()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_frameworks()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_extract_config_surface())
     )
