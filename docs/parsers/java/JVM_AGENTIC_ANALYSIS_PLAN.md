@@ -68,6 +68,9 @@ Glaurung already has a growing Java path:
   CFG/call-graph/dataflow precision.
 - Python memory tools can now view a selected method's JVM bytecode with BCI, opcode,
   mnemonic, operands, source-line anchors, xrefs, bounded windows, and mapping context.
+- Python memory tools can now build an initial bytecode CFG for a selected method,
+  with basic blocks, conditional/goto/fallthrough/default-switch edges, line anchors,
+  and explicit stop reasons for missing exception edges and frame analysis.
 - Python memory tools can now detect likely secrets in class string constants and
   text resources while redacting raw values and emitting stable hashes.
 - Python memory tools can now correlate sensitive sink findings with method-local
@@ -175,7 +178,7 @@ here, it is probably not represented strongly enough in the plan.
 | Gap | Planned coverage |
 | --- | --- |
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
-| Bytecode CFG and xrefs | `java_cfg`, `java_xrefs_from`, `java_xrefs_to`, `java_call_graph` |
+| Bytecode CFG and xrefs | Initial `java_cfg` exists for block/branch/fallthrough edges; continue with exception edges, normalized xrefs, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` |
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, and local-variable table support exists; continue annotations/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
@@ -456,6 +459,7 @@ python/glaurung/llm/tools/
   java_index_archive.py
   java_view_class.py
   java_view_bytecode.py
+  java_cfg.py
   java_risk_report.py
   java_decompile.py
   java_source_recovery.py
@@ -731,11 +735,11 @@ Inputs:
 
 Outputs:
 
-- Basic blocks.
-- Edges.
+- Basic blocks with BCI ranges, instruction counts, line anchors, and terminators.
+- Conditional true/false, goto, fallthrough, and default-switch edges.
 - Dominator-friendly block IDs.
-- Exception regions.
-- Loop hints.
+- Stop reasons for missing exception regions and stack/local frame analysis.
+- Exception regions and loop hints in a later revision.
 
 Implementation notes:
 

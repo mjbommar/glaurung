@@ -165,6 +165,7 @@ from ..tools.java_audit_archive_set import build_tool as build_java_audit_archiv
 from ..tools.java_trace_to_sink import build_tool as build_java_trace_to_sink
 from ..tools.java_detect_secrets import build_tool as build_java_detect_secrets
 from ..tools.java_view_bytecode import build_tool as build_java_view_bytecode
+from ..tools.java_cfg import build_tool as build_java_cfg
 from ..tools.java_correlate_behavior_config import (
     build_tool as build_java_correlate_behavior_config,
 )
@@ -764,6 +765,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_trace_to_sink()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_secrets()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_view_bytecode()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_cfg()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_correlate_behavior_config())
     )
