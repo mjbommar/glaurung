@@ -28,9 +28,19 @@ def _compile_obfuscated_jar(tmp_path: Path) -> Path:
     out.mkdir()
     (src / "a.java").write_text(
         """
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+@interface Marker {
+    String value();
+}
+
+@Marker("game-thing")
 public class a {
     public int b = 1;
     public String d = "hello";
+    @Marker("tick")
     public void c() { b++; }
     public int e(int value) { return b + value; }
 }
@@ -95,15 +105,19 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert result.matched_by == "official"
     assert result.class_name == "a"
     assert result.mapped_class_name == "com.example.GameThing"
+    assert result.annotations[0].descriptor == "LMarker;"
+    assert result.annotations[0].elements[0].value.value == "game-thing"
     field_b = next(f for f in result.fields if f.name == "b")
     method_c = next(m for m in result.methods if m.name == "c")
     assert field_b.mapped_names == ["health"]
     assert method_c.mapped_names == ["tick"]
+    assert method_c.annotations[0].elements[0].value.value == "tick"
     assert method_c.code is not None
     assert method_c.code.code_length > 0
     assert any(
         n.kind == NodeKind.java_class
         and n.props.get("mapped_class_name") == "com.example.GameThing"
+        and n.props.get("annotations", [{}])[0].get("descriptor") == "LMarker;"
         for n in ctx.kb.nodes()
     )
     assert any(

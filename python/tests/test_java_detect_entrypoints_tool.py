@@ -27,7 +27,39 @@ def _compile_entrypoint_fixture(tmp_path: Path) -> Path:
     manifest = tmp_path / "MANIFEST.MF"
     src.mkdir()
     (src / "demo").mkdir()
+    (src / "net" / "minecraftforge" / "fml" / "common").mkdir(parents=True)
+    (src / "net" / "minecraftforge" / "eventbus" / "api").mkdir(parents=True)
     classes.mkdir()
+    (src / "net" / "minecraftforge" / "fml" / "common" / "Mod.java").write_text(
+        """
+package net.minecraftforge.fml.common;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Mod {
+    String value();
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (
+        src / "net" / "minecraftforge" / "eventbus" / "api" / "SubscribeEvent.java"
+    ).write_text(
+        """
+package net.minecraftforge.eventbus.api;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+@Retention(RetentionPolicy.RUNTIME)
+public @interface SubscribeEvent {}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
     (src / "demo" / "App.java").write_text(
         """
 package demo;
@@ -36,6 +68,26 @@ public class App {
     public static void main(String[] args) {
         new SchedulerThing().install(null);
     }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (src / "demo" / "ForgeMod.java").write_text(
+        """
+package demo;
+
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+
+@Mod("demo_mod")
+public class ForgeMod {
+    public ForgeMod() {
+        new SchedulerThing();
+    }
+
+    @SubscribeEvent
+    public void onServerStarting(String event) {}
 }
 """.strip()
         + "\n",
@@ -89,7 +141,7 @@ public class SchedulerThing {
             "17",
             "-d",
             str(classes),
-            *[str(path) for path in (src / "demo").glob("*.java")],
+            *[str(path) for path in src.rglob("*.java")],
         ],
         check=True,
         capture_output=True,
@@ -148,8 +200,10 @@ def test_java_detect_entrypoints_reports_manifest_services_and_schedulers(
         "java_agent_agentmain",
         "service_provider",
         "scheduler_registration",
+        "forge_mod_constructor",
+        "forge_subscribe_event",
     } <= categories
-    assert result.class_count == 4
+    assert result.class_count == 7
     assert result.entrypoint_count == len(result.entrypoints)
     assert any(
         entry.category == "manifest_main"
@@ -162,6 +216,21 @@ def test_java_detect_entrypoints_reports_manifest_services_and_schedulers(
         and entry.class_name == "demo/SchedulerThing"
         and entry.method_name == "install"
         and entry.bci is not None
+        for entry in result.entrypoints
+    )
+    assert any(
+        entry.category == "forge_mod_constructor"
+        and entry.class_name == "demo/ForgeMod"
+        and entry.method_name == "<init>"
+        and entry.method_descriptor == "()V"
+        and "demo_mod" in entry.detail
+        for entry in result.entrypoints
+    )
+    assert any(
+        entry.category == "forge_subscribe_event"
+        and entry.class_name == "demo/ForgeMod"
+        and entry.method_name == "onServerStarting"
+        and entry.method_descriptor == "(Ljava/lang/String;)V"
         for entry in result.entrypoints
     )
     assert any(n.kind == NodeKind.java_entrypoint for n in ctx.kb.nodes())

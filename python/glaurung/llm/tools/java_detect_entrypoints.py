@@ -217,12 +217,23 @@ def _append_class_entrypoints(
     limit: int,
 ) -> None:
     class_name = str(parsed["class_name"])
+    _append_mod_annotation_entrypoints(out, parsed, class_name, limit)
     for method in parsed["methods"]:
         if len(out) >= limit:
             return
         method_name = str(method["name"])
         descriptor = str(method["descriptor"])
         access_flags = int(method["access_flags"])
+        _append_method_annotation_entrypoints(
+            out,
+            class_name=class_name,
+            method_name=method_name,
+            descriptor=descriptor,
+            annotations=method.get("annotations"),
+            limit=limit,
+        )
+        if len(out) >= limit:
+            return
         if (
             method_name == "main"
             and descriptor == "([Ljava/lang/String;)V"
@@ -274,6 +285,127 @@ def _append_class_entrypoints(
                         confidence=0.8,
                     )
                 )
+
+
+_MOD_ANNOTATION_CATEGORIES = {
+    "Lnet/minecraftforge/fml/common/Mod;": "forge_mod_constructor",
+    "Lnet/neoforged/fml/common/Mod;": "neoforge_mod_constructor",
+}
+
+_METHOD_ANNOTATION_CATEGORIES = {
+    "Lnet/minecraftforge/eventbus/api/SubscribeEvent;": "forge_subscribe_event",
+    "Lnet/neoforged/bus/api/SubscribeEvent;": "neoforge_subscribe_event",
+}
+
+
+def _append_method_annotation_entrypoints(
+    out: list[JavaEntrypointSummary],
+    *,
+    class_name: str,
+    method_name: str,
+    descriptor: str,
+    annotations: Any,
+    limit: int,
+) -> None:
+    if len(out) >= limit or not isinstance(annotations, list):
+        return
+    for annotation in annotations:
+        if len(out) >= limit:
+            return
+        if not isinstance(annotation, dict):
+            continue
+        annotation_descriptor = str(annotation.get("descriptor", ""))
+        category = _METHOD_ANNOTATION_CATEGORIES.get(annotation_descriptor)
+        if category is None:
+            continue
+        out.append(
+            _entrypoint(
+                category=category,
+                class_name=class_name,
+                method_name=method_name,
+                method_descriptor=descriptor,
+                source=f"{class_name}.class",
+                detail=annotation_descriptor,
+                confidence=0.9,
+            )
+        )
+
+
+def _append_mod_annotation_entrypoints(
+    out: list[JavaEntrypointSummary],
+    parsed: dict[str, Any],
+    class_name: str,
+    limit: int,
+) -> None:
+    mod_annotation = _mod_annotation(parsed.get("annotations"))
+    if mod_annotation is None:
+        return
+    descriptor = str(mod_annotation.get("descriptor", ""))
+    category = _MOD_ANNOTATION_CATEGORIES.get(descriptor)
+    if category is None:
+        return
+    mod_id = _annotation_element_const(mod_annotation, "value")
+    constructors = [
+        method
+        for method in parsed["methods"]
+        if isinstance(method, dict) and str(method.get("name", "")) == "<init>"
+    ]
+    if not constructors and len(out) < limit:
+        out.append(
+            _entrypoint(
+                category=category,
+                class_name=class_name,
+                source=f"{class_name}.class",
+                detail=_mod_detail(descriptor, mod_id),
+                confidence=0.9,
+            )
+        )
+        return
+    for constructor in constructors:
+        if len(out) >= limit:
+            return
+        out.append(
+            _entrypoint(
+                category=category,
+                class_name=class_name,
+                method_name="<init>",
+                method_descriptor=str(constructor.get("descriptor", "")),
+                source=f"{class_name}.class",
+                detail=_mod_detail(descriptor, mod_id),
+                confidence=0.95,
+            )
+        )
+
+
+def _mod_annotation(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return None
+    for annotation in value:
+        if not isinstance(annotation, dict):
+            continue
+        if str(annotation.get("descriptor", "")) in _MOD_ANNOTATION_CATEGORIES:
+            return annotation
+    return None
+
+
+def _annotation_element_const(annotation: dict[str, Any], name: str) -> str | None:
+    elements = annotation.get("elements")
+    if not isinstance(elements, list):
+        return None
+    for element in elements:
+        if not isinstance(element, dict) or element.get("name") != name:
+            continue
+        value = element.get("value")
+        if isinstance(value, dict) and value.get("kind") == "const":
+            raw = value.get("value")
+            return str(raw) if raw is not None else None
+    return None
+
+
+def _mod_detail(descriptor: str, mod_id: str | None) -> str:
+    if mod_id:
+        return f"{descriptor} value={mod_id}"
+    return descriptor
 
 
 def _is_scheduler_registration(xref: dict[str, Any]) -> bool:

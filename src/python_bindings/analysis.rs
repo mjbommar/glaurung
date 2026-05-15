@@ -296,6 +296,7 @@ fn java_class_info_to_py(
     dict.set_item("class_name", info.class_name)?;
     dict.set_item("super_class", info.super_class)?;
     dict.set_item("source_file", info.source_file)?;
+    dict.set_item("annotations", java_annotations_to_py(py, info.annotations)?)?;
     dict.set_item("interfaces", info.interfaces)?;
     dict.set_item("major_version", info.major_version)?;
     dict.set_item("minor_version", info.minor_version)?;
@@ -307,6 +308,7 @@ fn java_class_info_to_py(
         mdict.set_item("descriptor", m.descriptor)?;
         mdict.set_item("access_flags", m.access_flags)?;
         mdict.set_item("exceptions", m.exceptions)?;
+        mdict.set_item("annotations", java_annotations_to_py(py, m.annotations)?)?;
         mdict.set_item("code", java_code_to_py(py, m.code)?)?;
         methods.append(mdict)?;
     }
@@ -318,10 +320,59 @@ fn java_class_info_to_py(
         fdict.set_item("descriptor", f.descriptor)?;
         fdict.set_item("access_flags", f.access_flags)?;
         fdict.set_item("exceptions", f.exceptions)?;
+        fdict.set_item("annotations", java_annotations_to_py(py, f.annotations)?)?;
         fdict.set_item("code", java_code_to_py(py, f.code)?)?;
         fields.append(fdict)?;
     }
     dict.set_item("fields", fields)?;
+    Ok(dict.into())
+}
+
+fn java_annotations_to_py(
+    py: Python<'_>,
+    annotations: Vec<crate::analysis::java_class::JavaAnnotation>,
+) -> PyResult<Py<PyAny>> {
+    let out = pyo3::types::PyList::empty(py);
+    for annotation in annotations {
+        let adict = pyo3::types::PyDict::new(py);
+        adict.set_item("visibility", annotation.visibility)?;
+        adict.set_item("descriptor", annotation.descriptor)?;
+        let elements = pyo3::types::PyList::empty(py);
+        for element in annotation.elements {
+            let edict = pyo3::types::PyDict::new(py);
+            edict.set_item("name", element.name)?;
+            edict.set_item("value", java_annotation_value_to_py(py, element.value)?)?;
+            elements.append(edict)?;
+        }
+        adict.set_item("elements", elements)?;
+        out.append(adict)?;
+    }
+    Ok(out.into())
+}
+
+fn java_annotation_value_to_py(
+    py: Python<'_>,
+    value: crate::analysis::java_class::JavaAnnotationValue,
+) -> PyResult<Py<PyAny>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("tag", value.tag)?;
+    dict.set_item("kind", value.kind.clone())?;
+    if let Some(const_value) = value.value {
+        dict.set_item("value", const_value)?;
+    }
+    if let Some(type_name) = value.type_name {
+        dict.set_item("type_name", type_name)?;
+    }
+    if let Some(const_name) = value.const_name {
+        dict.set_item("const_name", const_name)?;
+    }
+    if value.kind == "array" {
+        let values = pyo3::types::PyList::empty(py);
+        for item in value.values {
+            values.append(java_annotation_value_to_py(py, item)?)?;
+        }
+        dict.set_item("values", values)?;
+    }
     Ok(dict.into())
 }
 

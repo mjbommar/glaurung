@@ -39,8 +39,9 @@ Glaurung already has a growing Java path:
   name, superclass, interfaces, fields, method descriptors, `Code` metadata, and
   source/debug attributes (`SourceFile`, method `Exceptions`, `LineNumberTable`,
   `LocalVariableTable`, and `LocalVariableTypeTable`), exception handler tables, plus
-  initial JVM instruction listings and lightweight method-level bytecode xrefs for
-  invokes, fields, class refs, and loaded strings.
+  runtime-visible/runtime-invisible class/member annotations, initial JVM
+  instruction listings, and lightweight method-level bytecode xrefs for invokes,
+  fields, class refs, and loaded strings.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `src/analysis/java_jar.rs` and the Python bindings expose bounded central-directory
   JAR metadata, including nested archive entries, multi-release class variants,
@@ -54,8 +55,9 @@ Glaurung already has a growing Java path:
   with optional ProGuard/Mojang class-name and descriptor-aware method-name
   annotations.
 - Python memory tools can now detect initial Java entrypoints from manifests, main
-  methods, agent manifests, ServiceLoader descriptors, static initializers, and
-  scheduler registrations.
+  methods, agent manifests, ServiceLoader descriptors, static initializers,
+  scheduler registrations, Forge/NeoForge `@Mod` constructors, and Forge/NeoForge
+  event subscriber methods.
 - Python memory tools can now detect generic framework and metadata context from
   manifests, ServiceLoader descriptors, Maven coordinates, JPMS modules, OSGi bundles,
   Spring Boot metadata, Minecraft mod-loader metadata, and plugin descriptors.
@@ -194,7 +196,7 @@ here, it is probably not represented strongly enough in the plan.
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
 | Bytecode CFG, xrefs, and call graph | Initial `java_cfg`, exception edges, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with frame analysis, interprocedural xrefs, and CHA/RTA dispatch |
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
-| Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, and local-variable table support exists; continue annotations/modules/records/nestmates/stack maps |
+| Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, and runtime-visible/runtime-invisible class/member annotation support exists; continue parameter annotations/defaults/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
 | Dependency and classpath recovery | Initial Maven/service metadata path detection exists; continue with `java_infer_dependencies`, `java_infer_build_system`, manifest class paths, modules, and nested library handling |
@@ -340,9 +342,9 @@ Rust responsibilities:
   - `Exceptions`
   - `InnerClasses`
   - `EnclosingMethod`
-  - `RuntimeVisibleAnnotations`
-  - `RuntimeInvisibleAnnotations`
-  - `RuntimeVisibleParameterAnnotations`
+- `RuntimeVisibleAnnotations`
+- `RuntimeInvisibleAnnotations`
+- `RuntimeVisibleParameterAnnotations`
   - `AnnotationDefault`
   - `BootstrapMethods`
   - `MethodParameters`
@@ -2119,7 +2121,8 @@ Tasks:
 - Extend `java_detect_entrypoints` for common frameworks, mod loaders, thread starts,
   and richer lifecycle metadata. The initial version detects manifest main classes,
   Java agents, `public static main`, ServiceLoader providers, static initializers, and
-  scheduler registrations.
+  scheduler registrations; it also promotes Forge/NeoForge `@Mod` constructors and
+  Forge/NeoForge event subscriber methods from annotation metadata into entrypoints.
 - Extend `java_detect_security_sensitive_behavior` over normalized xrefs and bytecode
   operands. The initial version detects process, filesystem, network, reflection,
   classloading, native loading, serialization, crypto, scheduler, and environment

@@ -41,6 +41,26 @@ class JavaCodeSummary(BaseModel):
     attributes_count: int
 
 
+class JavaAnnotationValueSummary(BaseModel):
+    tag: str
+    kind: str
+    value: str | None = None
+    type_name: str | None = None
+    const_name: str | None = None
+    values: list[JavaAnnotationValueSummary] = Field(default_factory=list)
+
+
+class JavaAnnotationElementSummary(BaseModel):
+    name: str
+    value: JavaAnnotationValueSummary
+
+
+class JavaAnnotationSummary(BaseModel):
+    visibility: str
+    descriptor: str
+    elements: list[JavaAnnotationElementSummary] = Field(default_factory=list)
+
+
 class JavaClassMemberSummary(BaseModel):
     kind: Literal["field", "method"]
     name: str
@@ -48,6 +68,7 @@ class JavaClassMemberSummary(BaseModel):
     access_flags: int
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
+    annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
     code: JavaCodeSummary | None = None
 
 
@@ -63,6 +84,7 @@ class JavaViewClassResult(BaseModel):
     major_version: int | None = None
     minor_version: int | None = None
     access_flags: int | None = None
+    annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
     fields: list[JavaClassMemberSummary] = Field(default_factory=list)
     methods: list[JavaClassMemberSummary] = Field(default_factory=list)
     class_node_id: str | None = None
@@ -162,6 +184,7 @@ def _result_for_class(
     mapped_class_name = (
         class_mapping.official_name if class_mapping is not None else None
     )
+    annotations = _annotation_summaries(parsed.get("annotations"))
     fields = (
         [
             _member_summary("field", member, class_mapping, mappings)
@@ -194,6 +217,7 @@ def _result_for_class(
                 "major_version": parsed["major_version"],
                 "minor_version": parsed["minor_version"],
                 "access_flags": parsed["access_flags"],
+                "annotations": [annotation.model_dump() for annotation in annotations],
             },
             tags=["java", "class", "deobfuscated" if mapped_class_name else "raw"],
         )
@@ -221,6 +245,9 @@ def _result_for_class(
                     "descriptor": member.descriptor,
                     "mapped_names": member.mapped_names,
                     "mapped_signatures": member.mapped_signatures,
+                    "annotations": [
+                        annotation.model_dump() for annotation in member.annotations
+                    ],
                     "access_flags": member.access_flags,
                     "code": member.code.model_dump() if member.code else None,
                 },
@@ -243,6 +270,7 @@ def _result_for_class(
         major_version=parsed["major_version"],
         minor_version=parsed["minor_version"],
         access_flags=parsed["access_flags"],
+        annotations=annotations,
         fields=fields,
         methods=methods,
         class_node_id=class_node.id,
@@ -272,8 +300,19 @@ def _member_summary(
         access_flags=int(member["access_flags"]),
         mapped_names=[mapping.official_name for mapping in mapped_members],
         mapped_signatures=[mapping.official_signature for mapping in mapped_members],
+        annotations=_annotation_summaries(member.get("annotations")),
         code=_code_summary(member.get("code")),
     )
+
+
+def _annotation_summaries(value: Any) -> list[JavaAnnotationSummary]:
+    if not isinstance(value, list):
+        return []
+    return [
+        JavaAnnotationSummary.model_validate(annotation)
+        for annotation in value
+        if isinstance(annotation, dict)
+    ]
 
 
 def _code_summary(value: Any) -> JavaCodeSummary | None:

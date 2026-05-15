@@ -50,8 +50,9 @@ Implemented pieces now include:
 - Rust classfile parsing for magic/version, constant-pool names, class/super names,
   fields, methods, descriptors, `SourceFile`, method `Exceptions`, `Code` attribute
   metadata, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, JVM
-  exception handler tables, instruction listings, and lightweight method-level
-  bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  exception handler tables, runtime-visible/runtime-invisible class/member
+  annotations, instruction listings, and lightweight method-level bytecode xrefs for
+  invokes, fields, class refs, and loaded strings.
 - Rust central-directory JAR indexing for bounded archive metadata: entry counts,
   compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
   signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
@@ -136,9 +137,10 @@ Not yet implemented:
 
 - Stack/local frames, interprocedural xrefs, and advanced call graphs such as
   CHA/RTA with precise virtual dispatch candidates.
-- Full attribute parsing for annotations, modules, records, sealed classes, nestmates,
-  bootstrap methods, stack maps, and runtime-visible metadata beyond the initial
-  source/debug attributes.
+- Full attribute parsing for parameter annotations, annotation defaults, modules,
+  records, sealed classes, nestmates, bootstrap methods, stack maps, and
+  runtime-visible metadata beyond the initial source/debug and class/member
+  annotation attributes.
 - Decompiler helper integration with Vineflower/CFR.
 - Clean source-project recovery: dependency inference, source tree emission, build
   file generation, compilation, compiler-diagnostic repair, and ABI/resource
@@ -156,8 +158,10 @@ priority is not another broad scanner. The next priority is structure:
 1. Harden JAR indexing for nested archives, multi-release variants, signed metadata,
    module/Maven/service metadata, and budget reporting.
 2. Build bytecode CFG, normalized xrefs, and an initial call graph.
-3. Add framework/mod-loader lifecycle reachability so findings can move from
-   "capability" to "reachable from lifecycle callback" when evidence supports it.
+3. Expand framework/mod-loader lifecycle reachability beyond the initial
+   annotation-based Forge/NeoForge constructors and event subscribers so findings
+   can move from "capability" to "reachable from lifecycle callback" when evidence
+   supports it.
 4. Calibrate risk reports, especially secret false positives and config semantics.
 5. Add ASM/Vineflower/CFR helper tooling for decompiler output and source/bytecode
    correlation.
@@ -206,8 +210,10 @@ Important lessons:
 - [x] Initial bytecode CFG via `java_cfg`
 - [x] Initial constant-pool call graph via `java_call_graph`
 - [x] Exception-handler table parsing and CFG exception edges
+- [x] Initial runtime-visible/runtime-invisible class/member annotation parsing
 - [ ] Stack/local frame analysis
-- [ ] Annotation processing
+- [ ] Parameter annotations, annotation defaults, and richer framework annotation
+  semantics
 
 ### Phase 5: JAR Processing
 - [x] Manifest parsing
@@ -250,7 +256,8 @@ Important lessons:
 - [x] Initial `java_extract_config_surface` for embedded resources plus caller-supplied
   config roots using properties, TOML, JSON, XML, service descriptors, and manifests.
 - [x] Initial `java_detect_entrypoints` for main classes, agents, ServiceLoader providers,
-  static initializers, and scheduled job registrations.
+  static initializers, scheduled job registrations, Forge/NeoForge `@Mod`
+  constructors, and Forge/NeoForge event subscriber methods.
 - [x] Initial `java_detect_frameworks` for generic JVM framework/mod/plugin metadata.
 - [x] Initial `java_trace_to_sink` for bounded method-local evidence from a
   sensitive call to constants, environment/system property strings, nearby xrefs,

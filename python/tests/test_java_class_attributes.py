@@ -20,8 +20,25 @@ def _compile_attribute_class(tmp_path: Path) -> Path:
     source.write_text(
         """
 import java.io.IOException;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 
+enum AttributeMode {
+    ALPHA,
+    BETA
+}
+
+@Retention(RetentionPolicy.RUNTIME)
+@interface AttributeTag {
+    String value();
+    Class<?> type() default String.class;
+    AttributeMode mode() default AttributeMode.ALPHA;
+    String[] flags() default {};
+}
+
+@AttributeTag(value = "class-level", type = Integer.class, mode = AttributeMode.BETA, flags = {"fast", "safe"})
 public class AttributeFixture {
+    @AttributeTag("method-level")
     public static int checked(String input) throws IOException {
         int base = input.length();
         if (base == 0) {
@@ -85,3 +102,53 @@ def test_parse_java_class_recovers_exception_handlers(tmp_path: Path) -> None:
     assert handler["start_pc"] == 0
     assert handler["end_pc"] > handler["start_pc"]
     assert handler["handler_pc"] >= handler["end_pc"]
+
+
+def test_parse_java_class_recovers_runtime_visible_annotations(
+    tmp_path: Path,
+) -> None:
+    class_file = _compile_attribute_class(tmp_path)
+
+    info = getattr(g, "analysis").parse_java_class_bytes(class_file.read_bytes())
+
+    assert info is not None
+    class_tag = next(
+        annotation
+        for annotation in info["annotations"]
+        if annotation["descriptor"] == "LAttributeTag;"
+    )
+    assert class_tag["visibility"] == "runtime_visible"
+    elements = {item["name"]: item["value"] for item in class_tag["elements"]}
+    assert elements["value"] == {
+        "tag": "s",
+        "kind": "const",
+        "value": "class-level",
+    }
+    assert elements["type"] == {
+        "tag": "c",
+        "kind": "class",
+        "value": "Ljava/lang/Integer;",
+    }
+    assert elements["mode"] == {
+        "tag": "e",
+        "kind": "enum",
+        "type_name": "LAttributeMode;",
+        "const_name": "BETA",
+    }
+    assert elements["flags"] == {
+        "tag": "[",
+        "kind": "array",
+        "values": [
+            {"tag": "s", "kind": "const", "value": "fast"},
+            {"tag": "s", "kind": "const", "value": "safe"},
+        ],
+    }
+
+    checked = next(method for method in info["methods"] if method["name"] == "checked")
+    method_tag = next(
+        annotation
+        for annotation in checked["annotations"]
+        if annotation["descriptor"] == "LAttributeTag;"
+    )
+    method_elements = {item["name"]: item["value"] for item in method_tag["elements"]}
+    assert method_elements["value"]["value"] == "method-level"

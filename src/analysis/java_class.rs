@@ -16,6 +16,7 @@ pub struct JavaMethod {
     pub name: String,
     pub descriptor: String,
     pub exceptions: Vec<String>,
+    pub annotations: Vec<JavaAnnotation>,
     pub code: Option<JavaCode>,
 }
 
@@ -40,6 +41,29 @@ pub struct JavaExceptionHandler {
     pub end_pc: u16,
     pub handler_pc: u16,
     pub catch_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaAnnotation {
+    pub visibility: String,
+    pub descriptor: String,
+    pub elements: Vec<JavaAnnotationElement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaAnnotationElement {
+    pub name: String,
+    pub value: JavaAnnotationValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaAnnotationValue {
+    pub tag: String,
+    pub kind: String,
+    pub value: Option<String>,
+    pub type_name: Option<String>,
+    pub const_name: Option<String>,
+    pub values: Vec<JavaAnnotationValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +119,7 @@ pub struct ClassInfo {
     pub class_name: String,
     pub super_class: String,
     pub source_file: Option<String>,
+    pub annotations: Vec<JavaAnnotation>,
     pub interfaces: Vec<String>,
     pub methods: Vec<JavaMethod>,
     pub fields: Vec<JavaMethod>, // same shape — name + descriptor + flags
@@ -315,7 +340,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
     p = walk_member_table(data, p, &cp, false, &mut fields)?;
     let mut methods: Vec<JavaMethod> = Vec::new();
     p = walk_member_table(data, p, &cp, true, &mut methods)?;
-    let (_p, source_file) = parse_class_attributes(data, p, &cp)?;
+    let (_p, source_file, annotations) = parse_class_attributes(data, p, &cp)?;
 
     Ok(ClassInfo {
         minor_version: minor,
@@ -324,6 +349,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         class_name,
         super_class: super_class_name,
         source_file,
+        annotations,
         interfaces,
         methods,
         fields,
@@ -353,6 +379,7 @@ fn walk_member_table(
         p += 8;
         let mut code = None;
         let mut exceptions = Vec::new();
+        let mut annotations = Vec::new();
         for _ in 0..attrs {
             if p + 6 > data.len() {
                 return Err(ClassError::Truncated("attribute header"));
@@ -371,6 +398,18 @@ fn walk_member_table(
                 code = Some(parse_code_attribute(&data[body_start..body_end], cp)?);
             } else if capture_code && attr_name == "Exceptions" {
                 exceptions = parse_exceptions_attribute(&data[body_start..body_end], cp)?;
+            } else if attr_name == "RuntimeVisibleAnnotations" {
+                annotations.extend(parse_annotations_attribute(
+                    &data[body_start..body_end],
+                    cp,
+                    "runtime_visible",
+                )?);
+            } else if attr_name == "RuntimeInvisibleAnnotations" {
+                annotations.extend(parse_annotations_attribute(
+                    &data[body_start..body_end],
+                    cp,
+                    "runtime_invisible",
+                )?);
             }
             p = body_end;
         }
@@ -381,6 +420,7 @@ fn walk_member_table(
             name,
             descriptor,
             exceptions,
+            annotations,
             code,
         });
     }
@@ -391,13 +431,14 @@ fn parse_class_attributes(
     data: &[u8],
     mut p: usize,
     cp: &[CpEntry],
-) -> Result<(usize, Option<String>), ClassError> {
+) -> Result<(usize, Option<String>, Vec<JavaAnnotation>), ClassError> {
     if p + 2 > data.len() {
         return Err(ClassError::Truncated("class attributes count"));
     }
     let attrs = u16::from_be_bytes(data[p..p + 2].try_into().unwrap()) as usize;
     p += 2;
     let mut source_file = None;
+    let mut annotations = Vec::new();
     for _ in 0..attrs {
         if p + 6 > data.len() {
             return Err(ClassError::Truncated("class attribute header"));
@@ -415,10 +456,22 @@ fn parse_class_attributes(
         if attr_name == "SourceFile" && alen == 2 {
             let source_idx = u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
             source_file = Some(read_utf8(cp, source_idx)?);
+        } else if attr_name == "RuntimeVisibleAnnotations" {
+            annotations.extend(parse_annotations_attribute(
+                &data[body_start..body_end],
+                cp,
+                "runtime_visible",
+            )?);
+        } else if attr_name == "RuntimeInvisibleAnnotations" {
+            annotations.extend(parse_annotations_attribute(
+                &data[body_start..body_end],
+                cp,
+                "runtime_invisible",
+            )?);
         }
         p = body_end;
     }
-    Ok((p, source_file))
+    Ok((p, source_file, annotations))
 }
 
 fn read_utf8(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
@@ -468,8 +521,11 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
     if exception_table_end + 2 > body.len() {
         return Err(ClassError::Truncated("exception table"));
     }
-    let exception_handlers =
-        parse_exception_table(&body[code_end + 2..exception_table_end], exception_table_len, cp)?;
+    let exception_handlers = parse_exception_table(
+        &body[code_end + 2..exception_table_end],
+        exception_table_len,
+        cp,
+    )?;
     let attributes_count = u16::from_be_bytes(
         body[exception_table_end..exception_table_end + 2]
             .try_into()
@@ -580,6 +636,183 @@ fn parse_exceptions_attribute(body: &[u8], cp: &[CpEntry]) -> Result<Vec<String>
         p += 2;
     }
     Ok(out)
+}
+
+fn parse_annotations_attribute(
+    body: &[u8],
+    cp: &[CpEntry],
+    visibility: &str,
+) -> Result<Vec<JavaAnnotation>, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("annotations length"));
+    }
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let mut out = Vec::with_capacity(count);
+    let mut p = 2usize;
+    for _ in 0..count {
+        let (next, annotation) = parse_annotation(body, p, cp, visibility)?;
+        p = next;
+        out.push(annotation);
+    }
+    Ok(out)
+}
+
+fn parse_annotation(
+    body: &[u8],
+    mut p: usize,
+    cp: &[CpEntry],
+    visibility: &str,
+) -> Result<(usize, JavaAnnotation), ClassError> {
+    if p + 4 > body.len() {
+        return Err(ClassError::Truncated("annotation header"));
+    }
+    let type_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+    p += 2;
+    let pair_count = u16::from_be_bytes(body[p..p + 2].try_into().unwrap()) as usize;
+    p += 2;
+    let mut elements = Vec::with_capacity(pair_count);
+    for _ in 0..pair_count {
+        if p + 2 > body.len() {
+            return Err(ClassError::Truncated("annotation element name"));
+        }
+        let name_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        p += 2;
+        let (next, value) = parse_annotation_element_value(body, p, cp)?;
+        p = next;
+        elements.push(JavaAnnotationElement {
+            name: read_utf8(cp, name_idx)?,
+            value,
+        });
+    }
+    Ok((
+        p,
+        JavaAnnotation {
+            visibility: visibility.to_string(),
+            descriptor: read_utf8(cp, type_idx)?,
+            elements,
+        },
+    ))
+}
+
+fn parse_annotation_element_value(
+    body: &[u8],
+    mut p: usize,
+    cp: &[CpEntry],
+) -> Result<(usize, JavaAnnotationValue), ClassError> {
+    if p >= body.len() {
+        return Err(ClassError::Truncated("annotation element tag"));
+    }
+    let tag_byte = body[p];
+    p += 1;
+    let tag = (tag_byte as char).to_string();
+    match tag_byte as char {
+        'B' | 'C' | 'D' | 'F' | 'I' | 'J' | 'S' | 'Z' | 's' => {
+            if p + 2 > body.len() {
+                return Err(ClassError::Truncated("annotation const value"));
+            }
+            let const_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+            p += 2;
+            Ok((
+                p,
+                JavaAnnotationValue {
+                    tag,
+                    kind: "const".to_string(),
+                    value: Some(read_annotation_const_value(cp, const_idx)?),
+                    type_name: None,
+                    const_name: None,
+                    values: Vec::new(),
+                },
+            ))
+        }
+        'e' => {
+            if p + 4 > body.len() {
+                return Err(ClassError::Truncated("annotation enum value"));
+            }
+            let type_name_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+            let const_name_idx = u16::from_be_bytes(body[p + 2..p + 4].try_into().unwrap());
+            p += 4;
+            Ok((
+                p,
+                JavaAnnotationValue {
+                    tag,
+                    kind: "enum".to_string(),
+                    value: None,
+                    type_name: Some(read_utf8(cp, type_name_idx)?),
+                    const_name: Some(read_utf8(cp, const_name_idx)?),
+                    values: Vec::new(),
+                },
+            ))
+        }
+        'c' => {
+            if p + 2 > body.len() {
+                return Err(ClassError::Truncated("annotation class value"));
+            }
+            let class_info_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+            p += 2;
+            Ok((
+                p,
+                JavaAnnotationValue {
+                    tag,
+                    kind: "class".to_string(),
+                    value: Some(read_utf8(cp, class_info_idx)?),
+                    type_name: None,
+                    const_name: None,
+                    values: Vec::new(),
+                },
+            ))
+        }
+        '@' => {
+            let (next, annotation) = parse_annotation(body, p, cp, "nested")?;
+            Ok((
+                next,
+                JavaAnnotationValue {
+                    tag,
+                    kind: "annotation".to_string(),
+                    value: Some(annotation.descriptor),
+                    type_name: None,
+                    const_name: None,
+                    values: Vec::new(),
+                },
+            ))
+        }
+        '[' => {
+            if p + 2 > body.len() {
+                return Err(ClassError::Truncated("annotation array length"));
+            }
+            let count = u16::from_be_bytes(body[p..p + 2].try_into().unwrap()) as usize;
+            p += 2;
+            let mut values = Vec::with_capacity(count);
+            for _ in 0..count {
+                let (next, value) = parse_annotation_element_value(body, p, cp)?;
+                p = next;
+                values.push(value);
+            }
+            Ok((
+                p,
+                JavaAnnotationValue {
+                    tag,
+                    kind: "array".to_string(),
+                    value: None,
+                    type_name: None,
+                    const_name: None,
+                    values,
+                },
+            ))
+        }
+        _ => Err(ClassError::BadCpTag(tag_byte)),
+    }
+}
+
+fn read_annotation_const_value(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
+    if (idx as usize) >= cp.len() {
+        return Err(ClassError::BadCpIndex(idx));
+    }
+    match &cp[idx as usize] {
+        CpEntry::Utf8(s) => Ok(s.clone()),
+        CpEntry::String { string_idx } => read_utf8(cp, *string_idx),
+        CpEntry::Class { name_idx } => read_utf8(cp, *name_idx),
+        _ => Ok(format!("cp#{idx}")),
+    }
 }
 
 fn parse_line_number_table(body: &[u8]) -> Result<Vec<JavaLineNumber>, ClassError> {
