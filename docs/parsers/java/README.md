@@ -101,10 +101,12 @@ Implemented pieces now include:
   KB `java_cfg` nodes.
 - Initial normalized xref queries through `java_xrefs_from` and `java_xrefs_to`,
   exposing source class/method, BCI, line anchors, target owner/name/descriptor,
-  xref kind, and KB `java_xref` nodes.
+  xref kind, optional mapping-aware source/target annotations, and KB `java_xref`
+  nodes.
 - Initial constant-pool call graph construction through `java_call_graph`, exposing
   method invocation edges, invoke kinds, source BCI/line anchors, defined-vs-external
-  target classification, and KB `java_call_graph` nodes.
+  target classification, optional mapping-aware source/target annotations, and KB
+  `java_call_graph` nodes.
 - Initial redacted secret detection across method string constants and text
   resources. Findings store category, source location, length, context with the
   candidate replaced, and stable hashes, not raw values.
@@ -188,6 +190,7 @@ Important lessons:
 - [x] `LineNumberTable` parsing
 - [x] Lightweight bytecode xref extraction for invokes, fields, classes, and strings
 - [x] Initial normalized xref queries via `java_xrefs_from` and `java_xrefs_to`
+- [x] Mapping-aware xref and call graph annotations for ProGuard/Mojang names
 - [x] Initial bytecode instruction decode and `java_view_bytecode`
 - [x] Initial bytecode CFG via `java_cfg`
 - [x] Initial constant-pool call graph via `java_call_graph`

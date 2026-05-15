@@ -75,6 +75,71 @@ public class Caller {
     return jar_path
 
 
+def _compile_mapped_xref_jar(tmp_path: Path) -> tuple[Path, Path]:
+    if shutil.which("javac") is None or shutil.which("jar") is None:
+        pytest.skip("javac and jar are required for generated Java fixture")
+    src = tmp_path / "mapped-src"
+    out = tmp_path / "mapped-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "a.java").write_text(
+        """
+public class a {
+    public static int b() {
+        return c.c();
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (src / "c.java").write_text(
+        """
+public class c {
+    public static int c() {
+        return 42;
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "javac",
+            "-g",
+            "--release",
+            "17",
+            "-d",
+            str(out),
+            str(src / "a.java"),
+            str(src / "c.java"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar_path = tmp_path / "mapped-xrefs.jar"
+    subprocess.run(
+        ["jar", "--create", "--file", str(jar_path), "-C", str(out), "."],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    mapping_path = tmp_path / "mapped.txt"
+    mapping_path.write_text(
+        """
+com.example.Caller -> a:
+    int run() -> b
+com.example.Helper -> c:
+    int compute() -> c
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return jar_path, mapping_path
+
+
 def test_java_xrefs_from_lists_method_references(tmp_path: Path) -> None:
     from glaurung.llm.tools.java_xrefs_from import build_tool
 
@@ -142,3 +207,57 @@ def test_memory_agent_registers_java_xref_tools() -> None:
 
     assert "java_xrefs_from" in agent._function_toolset.tools
     assert "java_xrefs_to" in agent._function_toolset.tools
+
+
+def test_java_xrefs_apply_mapping_annotations(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_xrefs_from import build_tool
+
+    jar, mapping = _compile_mapped_xref_jar(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            mapping_path=str(mapping),
+            class_name="com.example.Caller",
+            method_name="run",
+            method_descriptor="()I",
+        ),
+    )
+
+    assert result.method_found
+    target = next(xref for xref in result.xrefs if xref.owner == "c")
+    assert target.mapped_source_class_name == "com.example.Caller"
+    assert target.mapped_source_method_names == ["run"]
+    assert target.mapped_source_method_descriptors == ["()I"]
+    assert target.mapped_owner == "com.example.Helper"
+    assert target.mapped_names == ["compute"]
+    assert target.mapped_descriptor == "()I"
+
+
+def test_java_xrefs_to_accepts_mapped_target_names(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_xrefs_to import build_tool
+
+    jar, mapping = _compile_mapped_xref_jar(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            mapping_path=str(mapping),
+            target_owner="com.example.Helper",
+            target_name="compute",
+            target_descriptor="()I",
+        ),
+    )
+
+    assert result.xref_count == 1
+    assert result.xrefs[0].source_class_name == "a"
+    assert result.xrefs[0].mapped_source_class_name == "com.example.Caller"
+    assert result.xrefs[0].mapped_owner == "com.example.Helper"

@@ -90,6 +90,71 @@ public class Caller {
     return jar_path
 
 
+def _compile_mapped_call_graph_jar(tmp_path: Path) -> tuple[Path, Path]:
+    if shutil.which("javac") is None or shutil.which("jar") is None:
+        pytest.skip("javac and jar are required for generated Java fixture")
+    src = tmp_path / "mapped-src"
+    out = tmp_path / "mapped-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "a.java").write_text(
+        """
+public class a {
+    public static int b() {
+        return c.c();
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (src / "c.java").write_text(
+        """
+public class c {
+    public static int c() {
+        return 42;
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "javac",
+            "-g",
+            "--release",
+            "17",
+            "-d",
+            str(out),
+            str(src / "a.java"),
+            str(src / "c.java"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar_path = tmp_path / "mapped-call-graph.jar"
+    subprocess.run(
+        ["jar", "--create", "--file", str(jar_path), "-C", str(out), "."],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    mapping_path = tmp_path / "mapped.txt"
+    mapping_path.write_text(
+        """
+com.example.Caller -> a:
+    int run() -> b
+com.example.Helper -> c:
+    int compute() -> c
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return jar_path, mapping_path
+
+
 def test_java_call_graph_lists_invocation_edges(tmp_path: Path) -> None:
     from glaurung.llm.tools.java_call_graph import build_tool
 
@@ -162,3 +227,33 @@ def test_memory_agent_registers_java_call_graph() -> None:
     agent = create_memory_agent(model="test")
 
     assert "java_call_graph" in agent._function_toolset.tools
+
+
+def test_java_call_graph_applies_mapping_annotations(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_call_graph import build_tool
+
+    jar, mapping = _compile_mapped_call_graph_jar(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            mapping_path=str(mapping),
+            class_name="com.example.Caller",
+            method_name="run",
+            method_descriptor="()I",
+        ),
+    )
+
+    assert result.edge_count == 1
+    edge = result.edges[0]
+    assert edge.source_class_name == "a"
+    assert edge.mapped_source_class_name == "com.example.Caller"
+    assert edge.mapped_source_method_names == ["run"]
+    assert edge.target_owner == "c"
+    assert edge.mapped_target_owner == "com.example.Helper"
+    assert edge.mapped_target_names == ["compute"]
+    assert edge.mapped_target_descriptor == "()I"

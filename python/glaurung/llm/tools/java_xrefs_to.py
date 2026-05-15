@@ -18,6 +18,10 @@ class JavaXrefsToArgs(BaseModel):
     )
     target_name: str | None = None
     target_descriptor: str | None = None
+    mapping_path: str | None = Field(
+        None,
+        description="Optional ProGuard/Mojang mapping file for de-obfuscation",
+    )
     kind: str | None = Field(None, description="Optional xref kind filter")
     max_classes: int = Field(50_000, ge=0)
     max_xrefs: int = Field(512, ge=0)
@@ -56,6 +60,9 @@ class JavaXrefsToTool(MemoryTool[JavaXrefsToArgs, JavaXrefsToResult]):
             target_owner=args.target_owner,
             target_name=args.target_name,
             target_descriptor=args.target_descriptor,
+            mapping_path=Path(args.mapping_path)
+            if args.mapping_path is not None
+            else None,
             kind=args.kind,
             max_classes=args.max_classes,
             max_xrefs=args.max_xrefs,

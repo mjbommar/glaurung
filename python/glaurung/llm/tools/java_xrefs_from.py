@@ -18,6 +18,10 @@ class JavaXrefsFromArgs(BaseModel):
     )
     method_name: str | None = None
     method_descriptor: str | None = None
+    mapping_path: str | None = Field(
+        None,
+        description="Optional ProGuard/Mojang mapping file for de-obfuscation",
+    )
     kind: str | None = Field(None, description="Optional xref kind filter")
     max_classes: int = Field(50_000, ge=0)
     max_xrefs: int = Field(512, ge=0)
@@ -57,6 +61,9 @@ class JavaXrefsFromTool(MemoryTool[JavaXrefsFromArgs, JavaXrefsFromResult]):
             source_class_name=args.class_name,
             source_method_name=args.method_name,
             source_method_descriptor=args.method_descriptor,
+            mapping_path=Path(args.mapping_path)
+            if args.mapping_path is not None
+            else None,
             kind=args.kind,
             max_classes=args.max_classes,
             max_xrefs=args.max_xrefs,
@@ -81,10 +88,15 @@ def _method_found(
     if method_name is None and method_descriptor is None:
         return bool(xrefs)
     return any(
-        (method_name is None or xref.source_method_name == method_name)
+        (
+            method_name is None
+            or xref.source_method_name == method_name
+            or method_name in xref.mapped_source_method_names
+        )
         and (
             method_descriptor is None
             or xref.source_method_descriptor == method_descriptor
+            or method_descriptor in xref.mapped_source_method_descriptors
         )
         for xref in xrefs
     )

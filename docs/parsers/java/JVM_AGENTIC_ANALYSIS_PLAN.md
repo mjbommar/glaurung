@@ -73,10 +73,12 @@ Glaurung already has a growing Java path:
   and explicit stop reasons for missing exception edges and frame analysis.
 - Python memory tools can now query normalized bytecode xrefs from a selected source
   class/method or to a selected target owner/name/descriptor, emitting `java_xref`
-  evidence nodes.
+  evidence nodes with optional ProGuard/Mojang mapping-aware source and target
+  annotations.
 - Python memory tools can now build an initial constant-pool call graph from method
   invocation xrefs, including invoke kinds, source BCI/line anchors, and
-  defined-vs-external target classification.
+  defined-vs-external target classification, with optional mapping-aware source and
+  target annotations.
 - Python memory tools can now detect likely secrets in class string constants and
   text resources while redacting raw values and emitting stable hashes.
 - Python memory tools can now correlate sensitive sink findings with method-local
@@ -188,7 +190,7 @@ here, it is probably not represented strongly enough in the plan.
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, and local-variable table support exists; continue annotations/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
-| Mapping/de-obfuscation | `java_annotate_mappings`, `java_lookup_mapping`, `minecraft_fetch_mappings`, `minecraft_apply_mappings` |
+| Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
 | Dependency and classpath recovery | Initial Maven/service metadata path detection exists; continue with `java_infer_dependencies`, `java_infer_build_system`, manifest class paths, modules, and nested library handling |
 | Source tree/project reconstruction | `java_reconstruct_source_tree`, `java_infer_build_system` |
 | Compile diagnostics | `java_compile_recovered_project` |
@@ -772,6 +774,8 @@ Outputs:
 - Normalized xrefs emitted by a source class or method.
 - Source class, source method, descriptor, BCI, and line anchor.
 - Target owner, name, descriptor, xref kind, and loaded string value where present.
+- Optional mapped source class/method names and mapped target owner/member names
+  when a ProGuard/Mojang mapping file is supplied.
 
 `java_xrefs_to`
 
@@ -789,6 +793,7 @@ Outputs:
 - Normalized callers/references to the requested target.
 - Source class/method/BCI/line anchors for each reference.
 - `java_xref` KB nodes for evidence-backed agent answers.
+- Official mapped target names can be used as query inputs when mappings are supplied.
 
 `java_call_graph`
 
@@ -809,6 +814,8 @@ Outputs:
 - Invoke kind (`invokestatic`, `invokevirtual`, `invokeinterface`, etc.).
 - Source BCI and source-line anchors when `LineNumberTable` exists.
 - Defined-vs-external target classification.
+- Optional mapped source class/method names and mapped target owner/member names
+  when a ProGuard/Mojang mapping file is supplied.
 - Dynamic-dispatch edge counts and stop reasons.
 - Later revisions should add unresolved virtual call candidate sets, interface
   dispatch candidates, reflection warnings, CHA/RTA reachability, and entrypoint

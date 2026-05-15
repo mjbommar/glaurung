@@ -13,7 +13,17 @@ from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
-from .java_xrefs_common import _internal, _line_number_for_bci, _line_numbers
+from .java_proguard_mappings import parse_proguard_mappings
+from .java_xrefs_common import (
+    _class_candidates,
+    _line_number_for_bci,
+    _line_numbers,
+    _lookup_class_mapping,
+    _member_mapping_annotation,
+    _method_descriptor_matches,
+    _method_name_matches,
+    _mapped_method_names,
+)
 
 
 JavaCallGraphMode = Literal["constant_pool"]
@@ -29,6 +39,10 @@ class JavaCallGraphArgs(BaseModel):
     method_descriptor: str | None = Field(
         None,
         description="Optional source method descriptor",
+    )
+    mapping_path: str | None = Field(
+        None,
+        description="Optional ProGuard/Mojang mapping file for de-obfuscation",
     )
     mode: JavaCallGraphMode = Field(
         "constant_pool",
@@ -57,9 +71,14 @@ class JavaCallGraphEdge(BaseModel):
     source_class_name: str
     source_method_name: str
     source_method_descriptor: str
+    mapped_source_class_name: str | None = None
+    mapped_source_method_names: list[str] = Field(default_factory=list)
     target_owner: str
     target_name: str
     target_descriptor: str
+    mapped_target_owner: str | None = None
+    mapped_target_names: list[str] = Field(default_factory=list)
+    mapped_target_descriptor: str | None = None
     target_defined: bool
     bci: int
     line_number: int | None = None
@@ -149,7 +168,14 @@ def _build_call_graph(
     method_count = 0
     truncated = False
     stop_reasons: list[str] = []
-    source_class_filter = _internal(args.class_name) if args.class_name else None
+    mappings = (
+        parse_proguard_mappings(Path(args.mapping_path))
+        if args.mapping_path is not None
+        else None
+    )
+    source_class_filter = (
+        _class_candidates(mappings, args.class_name) if args.class_name else None
+    )
 
     if not zipfile.is_zipfile(archive_path):
         return JavaCallGraphResult(
@@ -186,6 +212,7 @@ def _build_call_graph(
                 continue
             parsed_class_count += 1
             class_name = str(parsed["class_name"])
+            source_class_mapping = _lookup_class_mapping(mappings, class_name)
             for method in parsed["methods"]:
                 if not isinstance(method, dict):
                     continue
@@ -195,11 +222,13 @@ def _build_call_graph(
                 method_count += 1
                 if not _source_matches(
                     class_name=class_name,
-                    method_name=method_name,
+                    method=method,
                     method_descriptor=method_descriptor,
                     source_class_filter=source_class_filter,
                     source_method_name=args.method_name,
                     source_method_descriptor=args.method_descriptor,
+                    mappings=mappings,
+                    source_class_mapping=source_class_mapping,
                 ):
                     continue
                 code = method.get("code")
@@ -209,14 +238,42 @@ def _build_call_graph(
                 for xref in code.get("xrefs", []):
                     if not isinstance(xref, dict) or not _is_method_xref(xref):
                         continue
+                    target_owner = str(xref.get("owner", ""))
+                    target_name = str(xref.get("name", ""))
+                    target_descriptor = str(xref.get("descriptor", ""))
+                    (
+                        mapped_target_owner,
+                        mapped_target_names,
+                        mapped_target_descriptor,
+                    ) = _member_mapping_annotation(
+                        mappings=mappings,
+                        owner=target_owner,
+                        kind=str(xref.get("kind", "")),
+                        name=target_name,
+                        descriptor=target_descriptor,
+                    )
                     edge_inputs.append(
                         {
                             "source_class_name": class_name,
                             "source_method_name": method_name,
                             "source_method_descriptor": method_descriptor,
-                            "target_owner": str(xref.get("owner", "")),
-                            "target_name": str(xref.get("name", "")),
-                            "target_descriptor": str(xref.get("descriptor", "")),
+                            "mapped_source_class_name": (
+                                source_class_mapping.official_name
+                                if source_class_mapping is not None
+                                else None
+                            ),
+                            "mapped_source_method_names": _mapped_method_names(
+                                mappings=mappings,
+                                class_mapping=source_class_mapping,
+                                method_name=method_name,
+                                descriptor=method_descriptor,
+                            ),
+                            "target_owner": target_owner,
+                            "target_name": target_name,
+                            "target_descriptor": target_descriptor,
+                            "mapped_target_owner": mapped_target_owner,
+                            "mapped_target_names": mapped_target_names,
+                            "mapped_target_descriptor": mapped_target_descriptor,
                             "bci": int(xref.get("bci", 0)),
                             "line_number": _line_number_for_bci(
                                 line_numbers,
@@ -286,9 +343,34 @@ def _build_call_graph(
                 source_class_name=str(item["source_class_name"]),
                 source_method_name=str(item["source_method_name"]),
                 source_method_descriptor=str(item["source_method_descriptor"]),
+                mapped_source_class_name=(
+                    str(item["mapped_source_class_name"])
+                    if isinstance(item["mapped_source_class_name"], str)
+                    else None
+                ),
+                mapped_source_method_names=[
+                    str(name)
+                    for name in item["mapped_source_method_names"]
+                    if isinstance(name, str)
+                ],
                 target_owner=target_key[0],
                 target_name=target_key[1],
                 target_descriptor=target_key[2],
+                mapped_target_owner=(
+                    str(item["mapped_target_owner"])
+                    if isinstance(item["mapped_target_owner"], str)
+                    else None
+                ),
+                mapped_target_names=[
+                    str(name)
+                    for name in item["mapped_target_names"]
+                    if isinstance(name, str)
+                ],
+                mapped_target_descriptor=(
+                    str(item["mapped_target_descriptor"])
+                    if isinstance(item["mapped_target_descriptor"], str)
+                    else None
+                ),
                 target_defined=target_defined,
                 bci=int(item["bci"]),
                 line_number=(
@@ -323,18 +405,31 @@ def _build_call_graph(
 def _source_matches(
     *,
     class_name: str,
-    method_name: str,
+    method: dict[str, Any],
     method_descriptor: str,
-    source_class_filter: str | None,
+    source_class_filter: set[str] | None,
     source_method_name: str | None,
     source_method_descriptor: str | None,
+    mappings: Any,
+    source_class_mapping: Any,
 ) -> bool:
     return all(
         (
-            source_class_filter is None or class_name == source_class_filter,
-            source_method_name is None or method_name == source_method_name,
+            source_class_filter is None or class_name in source_class_filter,
+            source_method_name is None
+            or _method_name_matches(
+                mappings=mappings,
+                class_mapping=source_class_mapping,
+                method=method,
+                method_name=source_method_name,
+            ),
             source_method_descriptor is None
-            or method_descriptor == source_method_descriptor,
+            or _method_descriptor_matches(
+                mappings=mappings,
+                class_mapping=source_class_mapping,
+                method=method,
+                method_descriptor=source_method_descriptor,
+            ),
         )
     )
 
