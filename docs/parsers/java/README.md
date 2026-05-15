@@ -60,6 +60,9 @@ Implemented pieces now include:
 - Opt-in recursive nested archive indexing in `java_index_archive`, producing bounded
   summaries for selected nested JAR/ZIP payloads without extracting or executing
   archive code.
+- Manifest-aware multi-release selection in `java_index_archive`, reporting which
+  base or `META-INF/versions/<N>/` class entry is selected for a requested Java
+  target version.
 - Python binding `g.analysis.parse_java_class_bytes(data)` for in-memory `.class`
   parsing without extracting JAR entries to temporary files.
 - CLI JAR/class summarization through `glaurung classfile`.
@@ -242,6 +245,7 @@ Important lessons:
 - [x] Descriptor-aware mapped class/member view annotations
 - [x] Vanilla server bundler extraction
 - [x] Initial multi-release JAR variant detection
+- [x] Manifest-aware multi-release target class selection
 - [x] Initial signed JAR metadata detection
 - [x] Initial signed JAR cryptographic validation via `java_verify_signatures`
 

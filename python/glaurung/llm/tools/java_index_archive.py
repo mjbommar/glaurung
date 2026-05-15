@@ -25,6 +25,7 @@ class JavaIndexArchiveArgs(BaseModel):
     max_nested_archives: int = Field(16, ge=0)
     max_nested_archive_bytes: int = Field(64 * 1024 * 1024, ge=0)
     max_nested_entries: int = Field(4_096, ge=0)
+    multi_release_target_version: int | None = Field(None, ge=8)
 
 
 class JavaClassSummary(BaseModel):
@@ -42,6 +43,15 @@ class JavaClassSummary(BaseModel):
 class JavaResourceSummary(BaseModel):
     entry_name: str
     size: int
+
+
+class JavaMultiReleaseSelectionSummary(BaseModel):
+    class_name: str
+    selected_entry_name: str
+    selected_version: int | None = None
+    base_entry_name: str | None = None
+    available_versions: list[int] = Field(default_factory=list)
+    versioned_entries: list[str] = Field(default_factory=list)
 
 
 class JavaArchiveEntrySummary(BaseModel):
@@ -131,6 +141,7 @@ class JavaIndexArchiveResult(BaseModel):
     parse_error_count: int
     resource_count: int
     manifest_main_class: str | None = None
+    manifest_multi_release: bool = False
     entries: list[JavaArchiveEntrySummary] = Field(default_factory=list)
     classes: list[JavaClassSummary]
     resources: list[JavaResourceSummary]
@@ -146,6 +157,11 @@ class JavaIndexArchiveResult(BaseModel):
     )
     multi_release_class_count: int = 0
     multi_release_versions: list[int] = Field(default_factory=list)
+    multi_release_target_version: int | None = None
+    multi_release_effective_class_count: int = 0
+    multi_release_selected_classes: list[JavaMultiReleaseSelectionSummary] = Field(
+        default_factory=list
+    )
     signed: bool = False
     signature_file_count: int = 0
     signature_files: list[JavaSignatureFileSummary] = Field(default_factory=list)
@@ -214,6 +230,8 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
         zip_slip_entry_count = 0
         zip64_locator_present = False
         manifest_main_class: str | None = None
+        manifest_multi_release = False
+        multi_release_selected_classes: list[JavaMultiReleaseSelectionSummary] = []
         truncated = False
         java_analysis = getattr(g, "analysis")
         native_index = java_analysis.index_java_archive_path(
@@ -235,6 +253,7 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                 parse_error_count=1,
                 resource_count=0,
                 manifest_main_class=None,
+                manifest_multi_release=False,
                 entries=[],
                 classes=[],
                 resources=[],
@@ -296,7 +315,16 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
             if native_index is None:
                 entry_count = len(infos)
                 total_uncompressed_size = sum(info.file_size for info in infos)
-            manifest_main_class = _manifest_main_class(zf)
+            manifest_attrs = _manifest_attrs(zf)
+            manifest_main_class = manifest_attrs.get("Main-Class")
+            manifest_multi_release = (
+                manifest_attrs.get("Multi-Release", "").lower() == "true"
+            )
+            multi_release_selected_classes = _multi_release_selected_classes(
+                infos=infos,
+                target_version=args.multi_release_target_version,
+                manifest_multi_release=manifest_multi_release,
+            )
             maven_artifacts = _maven_artifacts(zf, entries)
             service_descriptors = _service_descriptors(zf, entries)
             if args.include_nested_indexes:
@@ -371,6 +399,11 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                     "module_info_present": module_info_present,
                     "zip_slip_entry_count": zip_slip_entry_count,
                     "manifest_main_class": manifest_main_class,
+                    "manifest_multi_release": manifest_multi_release,
+                    "multi_release_target_version": args.multi_release_target_version,
+                    "multi_release_effective_class_count": len(
+                        multi_release_selected_classes
+                    ),
                 },
                 tags=["java", "jar"],
             )
@@ -411,6 +444,7 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
             parse_error_count=parse_error_count,
             resource_count=resource_count,
             manifest_main_class=manifest_main_class,
+            manifest_multi_release=manifest_multi_release,
             entries=entries,
             classes=classes,
             resources=resources,
@@ -422,6 +456,9 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
             skipped_nested_archives=skipped_nested_archives,
             multi_release_class_count=multi_release_class_count,
             multi_release_versions=multi_release_versions,
+            multi_release_target_version=args.multi_release_target_version,
+            multi_release_effective_class_count=len(multi_release_selected_classes),
+            multi_release_selected_classes=multi_release_selected_classes,
             signed=signed,
             signature_file_count=signature_file_count,
             signature_files=signature_files,
@@ -445,14 +482,75 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _manifest_main_class(zf: zipfile.ZipFile) -> str | None:
+def _manifest_attrs(zf: zipfile.ZipFile) -> dict[str, str]:
     try:
         raw = zf.read("META-INF/MANIFEST.MF")
     except KeyError:
-        return None
+        return {}
     text = raw.decode("utf-8", errors="replace")
-    attrs = _parse_manifest(text)
-    return attrs.get("Main-Class")
+    return _parse_manifest(text)
+
+
+def _multi_release_selected_classes(
+    *,
+    infos: list[zipfile.ZipInfo],
+    target_version: int | None,
+    manifest_multi_release: bool,
+) -> list[JavaMultiReleaseSelectionSummary]:
+    if target_version is None or not manifest_multi_release:
+        return []
+
+    base_entries: dict[str, str] = {}
+    versioned_entries: dict[str, dict[int, str]] = {}
+    for info in infos:
+        if info.is_dir() or not info.filename.endswith(".class"):
+            continue
+        normalized = info.filename.replace("\\", "/")
+        version, base_name = _multi_release_entry(normalized)
+        if version is None:
+            base_entries[normalized] = info.filename
+            continue
+        versioned_entries.setdefault(base_name, {})[version] = info.filename
+
+    out: list[JavaMultiReleaseSelectionSummary] = []
+    for base_name, versions in sorted(versioned_entries.items()):
+        eligible_versions = [
+            version for version in versions if 9 <= version <= target_version
+        ]
+        if eligible_versions:
+            selected_version: int | None = max(eligible_versions)
+            selected_entry = versions[selected_version]
+        else:
+            selected_version = None
+            selected_entry = base_entries.get(base_name)
+        if selected_entry is None:
+            continue
+        out.append(
+            JavaMultiReleaseSelectionSummary(
+                class_name=base_name.removesuffix(".class"),
+                selected_entry_name=selected_entry,
+                selected_version=selected_version,
+                base_entry_name=base_entries.get(base_name),
+                available_versions=sorted(versions),
+                versioned_entries=[versions[version] for version in sorted(versions)],
+            )
+        )
+    return out
+
+
+def _multi_release_entry(entry_name: str) -> tuple[int | None, str]:
+    prefix = "META-INF/versions/"
+    if not entry_name.startswith(prefix):
+        return None, entry_name
+    rest = entry_name.removeprefix(prefix)
+    version_text, sep, base_name = rest.partition("/")
+    if not sep:
+        return None, entry_name
+    try:
+        version = int(version_text)
+    except ValueError:
+        return None, entry_name
+    return version, base_name
 
 
 def _nested_archive_indexes(

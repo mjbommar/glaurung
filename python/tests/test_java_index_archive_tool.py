@@ -69,7 +69,11 @@ def _hardened_index_fixture(tmp_path: Path) -> Path:
     with zipfile.ZipFile(jar, "w") as zf:
         zf.writestr(
             "META-INF/MANIFEST.MF",
-            "Manifest-Version: 1.0\nMain-Class: fixture.VersionedFixture\n",
+            (
+                "Manifest-Version: 1.0\n"
+                "Main-Class: fixture.VersionedFixture\n"
+                "Multi-Release: true\n"
+            ),
         )
         zf.writestr("fixture/VersionedFixture.class", class_bytes)
         zf.writestr("META-INF/versions/17/fixture/VersionedFixture.class", class_bytes)
@@ -151,6 +155,7 @@ def test_java_index_archive_reports_hardened_jar_metadata(tmp_path: Path) -> Non
     assert result.entry_count >= 10
     assert result.nested_archive_count == 1
     assert result.nested_archives[0].entry_name == "libs/nested.jar"
+    assert result.manifest_multi_release
     assert result.multi_release_class_count == 1
     assert result.multi_release_versions == [17]
     assert result.signed
@@ -172,6 +177,45 @@ def test_java_index_archive_reports_hardened_jar_metadata(tmp_path: Path) -> Non
         and n.props.get("nested_archive_count") == 1
         and n.props.get("signed") is True
         for n in ctx.kb.nodes()
+    )
+
+
+def test_java_index_archive_resolves_multi_release_target_classes(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_index_archive import build_tool
+
+    jar = _hardened_index_fixture(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    java17 = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(path=str(jar), multi_release_target_version=17),
+    )
+    java11 = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(path=str(jar), multi_release_target_version=11),
+    )
+
+    assert java17.multi_release_effective_class_count == 1
+    selected = java17.multi_release_selected_classes[0]
+    assert selected.class_name == "fixture/VersionedFixture"
+    assert selected.selected_version == 17
+    assert (
+        selected.selected_entry_name
+        == "META-INF/versions/17/fixture/VersionedFixture.class"
+    )
+    assert selected.base_entry_name == "fixture/VersionedFixture.class"
+    assert selected.available_versions == [17]
+
+    assert java11.multi_release_effective_class_count == 1
+    assert java11.multi_release_selected_classes[0].selected_version is None
+    assert (
+        java11.multi_release_selected_classes[0].selected_entry_name
+        == "fixture/VersionedFixture.class"
     )
 
 

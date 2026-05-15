@@ -50,6 +50,9 @@ Glaurung already has a growing Java path:
 - `java_index_archive` can now optionally recurse into selected nested JAR/ZIP entries
   and return bounded inner archive summaries without writing the nested payloads to
   disk.
+- `java_index_archive` can now apply manifest-aware multi-release selection for a
+  requested Java target version, so agents can distinguish detected versioned class
+  entries from the class entry that the JVM would actually load.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang
@@ -173,6 +176,10 @@ These observations should steer the next execution steps.
   Minecraft 1.20.1 server launcher has only a few outer bundler classes, but nested
   indexing reveals the actual gameplay server payload plus large libraries such as
   `fastutil`.
+- Multi-release policy must check the manifest, not just the presence of
+  `META-INF/versions/*`. Minecraft smoke tests found Java 9 class variants in nested
+  dependencies such as SLF4J, Log4j, and Gson, while Kotlin-for-Forge contains
+  versioned entries without a multi-release manifest flag.
 - Source recovery will need both bytecode truth and decompiler output. The parser
   now captures the source/debug anchors needed to compare and repair decompiled code,
   but it does not yet produce a compilable project.
@@ -186,7 +193,8 @@ detour:
    model multi-release class selection policy, parse Maven/service metadata contents
    at scale, and use `java_verify_signatures` where cryptographic signature state
    matters. Initial nested archive summaries and signature verification now exist;
-   remaining work should focus on policy, rollups, and classpath/dependency use.
+   initial multi-release target selection now exists; remaining work should focus on
+   policy, rollups, and classpath/dependency use.
 2. **Bytecode CFG and xrefs**: basic blocks, branch/switch/exception edges, normalized
    xref tables, `java_xrefs_from`, `java_xrefs_to`, and a first call graph.
 3. **Reachability and framework context**: connect entrypoints, ServiceLoader,
@@ -216,7 +224,7 @@ here, it is probably not represented strongly enough in the plan.
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, and runtime-visible/runtime-invisible class/member annotation support exists; continue parameter annotations/defaults/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
-| Dependency and classpath recovery | Initial Maven/service metadata path detection and nested archive summaries exist; continue with `java_infer_dependencies`, `java_infer_build_system`, manifest class paths, modules, and nested library handling |
+| Dependency and classpath recovery | Initial Maven/service metadata path detection, nested archive summaries, and multi-release target selection exist; continue with `java_infer_dependencies`, `java_infer_build_system`, manifest class paths, modules, and nested library handling |
 | Signed archive validation | Initial `java_verify_signatures` exists using `jarsigner -verify`; continue with policy scoring, certificate/timestamp summaries, and archive-set rollups |
 | Source tree/project reconstruction | `java_reconstruct_source_tree`, `java_infer_build_system` |
 | Compile diagnostics | `java_compile_recovered_project` |
