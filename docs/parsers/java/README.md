@@ -86,6 +86,7 @@ Implemented pieces now include:
   - `java_infer_build_system`
   - `java_compile_recovered_project`
   - `java_reconstruct_source_tree`
+  - `java_compare_rebuilt_abi`
   - `java_view_bytecode`
   - `java_cfg`
   - `java_xrefs_from`
@@ -150,6 +151,9 @@ Implemented pieces now include:
   creating `src/main/java` and `src/main/resources` scaffolds, preserving runtime
   resources and metadata, skipping signed-JAR signature files, tracking classes that
   still need decompilation, and emitting explicit generated stubs only when requested.
+- Initial ABI comparison through `java_compare_rebuilt_abi`, comparing original and
+  rebuilt JARs or class directories by class names, field descriptors, method
+  descriptors, and access flags, with `java_abi_comparison` KB evidence.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -175,8 +179,9 @@ Not yet implemented:
   annotation attributes.
 - Decompiler helper integration with Vineflower/CFR.
 - Clean source-project recovery after the initial dependency/build/scaffold/compile
-  layers: dependency resolution policy, decompiler source emission, Maven/Gradle execution,
-  compiler-diagnostic repair, and ABI/resource validation.
+  and ABI-comparison layers: dependency resolution policy, decompiler source
+  emission, Maven/Gradle execution, compiler-diagnostic repair, and resource
+  validation.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
   correlation, framework-aware reachability, and richer directory-level risk
   reporting.
@@ -289,7 +294,8 @@ Important lessons:
 - [x] Initial bounded `javac` compilation and structured diagnostics
 - [ ] Maven/Gradle compile execution and richer structured diagnostics
 - [ ] Agentic compile-repair loop for decompiler syntax and build/classpath failures
-- [ ] ABI/API comparison between original and rebuilt classes
+- [x] Initial ABI/API comparison between original and rebuilt classes
+- [ ] Annotation/resource/module validation between original and rebuilt artifacts
 - [ ] Recovered application validation report
 
 ### Phase 7: Static Behavior Audit and Risk Reporting

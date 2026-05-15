@@ -41,6 +41,7 @@ class NodeKind(str, Enum):
     java_build_system = "java_build_system"
     java_compile_result = "java_compile_result"
     java_source_tree = "java_source_tree"
+    java_abi_comparison = "java_abi_comparison"
     java_config_correlation = "java_config_correlation"
     java_risk_finding = "java_risk_finding"
 
