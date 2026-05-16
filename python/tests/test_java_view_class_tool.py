@@ -38,7 +38,7 @@ import java.util.List;
 }
 
 @Marker("game-thing")
-public class a {
+public class a implements Runnable {
     public int b = 1;
     public String d = "hello";
     public List<String> g = List.of("hello");
@@ -53,6 +53,7 @@ public class a {
         }
         return 2;
     }
+    public void run() {}
 }
 
 record r(String token, int count) {}
@@ -265,6 +266,18 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
         and n.props.get("mapped_names") == ["tick"]
         and n.props.get("source_file") == "a.java"
         for n in ctx.kb.nodes()
+    )
+    class_node = next(
+        node
+        for node in ctx.kb.nodes()
+        if node.kind == NodeKind.java_class
+        and node.props.get("mapped_class_name") == "com.example.GameThing"
+    )
+    assert any(
+        edge.src == class_node.id
+        and edge.kind == "implements"
+        and edge.props.get("target_class") == "java/lang/Runnable"
+        for edge in ctx.kb.edges()
     )
 
 

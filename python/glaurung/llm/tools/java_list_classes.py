@@ -16,6 +16,7 @@ from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .java_access_flags import access_flag_names
 from .java_class_kind import JavaClassKind, class_kind
+from .java_hierarchy_edges import add_java_hierarchy_edges
 from .java_proguard_mappings import (
     ProguardClassMapping,
     ProguardMappings,
@@ -351,7 +352,7 @@ def _add_class_node(
     digest = hashlib.sha256(
         "|".join([str(archive_path), summary.class_name]).encode("utf-8")
     ).hexdigest()[:16]
-    kb.add_node(
+    class_node = kb.add_node(
         Node(
             kind=NodeKind.java_class,
             label=summary.mapped_class_name or summary.dotted_class_name,
@@ -363,6 +364,13 @@ def _add_class_node(
             },
             tags=["java", "class", "mapping" if summary.mapped_class_name else "raw"],
         )
+    )
+    add_java_hierarchy_edges(
+        kb,
+        archive_path=archive_path,
+        class_node_id=class_node.id,
+        super_class=summary.super_class,
+        interfaces=summary.interfaces,
     )
 
 

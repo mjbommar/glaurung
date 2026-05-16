@@ -67,6 +67,9 @@ Implemented pieces now include:
 - Normalized class-kind summaries in parser-facing tools, classifying declarations
   as module, annotation, interface, enum, record, or class without requiring agents
   to decode JVM access flags themselves.
+- Initial Java hierarchy KB edges from class listing/view tools, adding `extends`
+  and `implements` relationships to placeholder `java_class` nodes for graph
+  traversal even when the target class is outside the current scan window.
 - Opt-in recursive nested archive indexing in `java_index_archive`, producing bounded
   summaries for selected nested JAR/ZIP payloads without extracting or executing
   archive code.

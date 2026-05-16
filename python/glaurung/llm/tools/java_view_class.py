@@ -16,6 +16,7 @@ from .base import MemoryTool, ToolMeta
 from .java_access_flags import access_flag_names
 from .java_class_kind import JavaClassKind, class_kind
 from .java_descriptors import decode_field_descriptor, decode_method_descriptor
+from .java_hierarchy_edges import add_java_hierarchy_edges
 from .java_module_info import JavaModuleSummary, module_summary
 from .java_proguard_mappings import (
     ProguardClassMapping,
@@ -379,6 +380,14 @@ def _result_for_class(
             },
             tags=["java", "class", "deobfuscated" if mapped_class_name else "raw"],
         )
+    )
+    interfaces = _string_list(parsed.get("interfaces"))
+    add_java_hierarchy_edges(
+        kb,
+        archive_path=archive_path,
+        class_node_id=class_node.id,
+        super_class=str(parsed["super_class"]),
+        interfaces=interfaces,
     )
     for member in [*fields, *methods]:
         member_node = kb.add_node(

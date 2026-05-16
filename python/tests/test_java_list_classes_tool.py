@@ -140,6 +140,25 @@ def test_java_list_classes_filters_and_records_kb_nodes(tmp_path: Path) -> None:
         and node.props.get("source_file") == "Main.java"
         for node in ctx.kb.nodes()
     )
+    main_node = next(
+        node
+        for node in ctx.kb.nodes()
+        if node.kind == NodeKind.java_class
+        and node.props.get("tool") == "java_list_classes"
+        and node.props.get("class_name") == "app/Main"
+    )
+    assert any(
+        edge.src == main_node.id
+        and edge.kind == "extends"
+        and edge.props.get("target_class") == "app/Base"
+        for edge in ctx.kb.edges()
+    )
+    assert any(
+        edge.src == main_node.id
+        and edge.kind == "implements"
+        and edge.props.get("target_class") == "java/lang/Runnable"
+        for edge in ctx.kb.edges()
+    )
 
 
 def test_java_list_classes_supports_access_flag_filters(tmp_path: Path) -> None:

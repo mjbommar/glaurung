@@ -64,6 +64,9 @@ Glaurung already has a growing Java path:
   including module name, requires, exports, opens, uses, and provides clauses.
 - Parser-facing Python tools now expose normalized class kinds (`module`,
   `annotation`, `interface`, `enum`, `record`, `class`) plus boolean kind helpers.
+- Class listing and class viewing tools now emit KB `extends` and `implements`
+  edges to placeholder `java_class` nodes so hierarchy traversal does not require
+  every target class to be returned in the same result window.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang
