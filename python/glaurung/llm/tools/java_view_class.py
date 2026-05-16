@@ -65,6 +65,16 @@ class JavaAnnotationSummary(BaseModel):
     elements: list[JavaAnnotationElementSummary] = Field(default_factory=list)
 
 
+class JavaMethodParameterSummary(BaseModel):
+    name: str | None = None
+    access_flags: int
+
+
+class JavaParameterAnnotationsSummary(BaseModel):
+    parameter_index: int
+    annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
+
+
 class JavaInnerClassSummary(BaseModel):
     inner_class: str
     outer_class: str | None = None
@@ -95,6 +105,11 @@ class JavaClassMemberSummary(BaseModel):
     parameter_count: int = 0
     return_type: str | None = None
     descriptor_error: str | None = None
+    method_parameters: list[JavaMethodParameterSummary] = Field(default_factory=list)
+    parameter_annotations: list[JavaParameterAnnotationsSummary] = Field(
+        default_factory=list
+    )
+    annotation_default: JavaAnnotationValueSummary | None = None
     access_flags: int
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
@@ -313,6 +328,18 @@ def _result_for_class(
                     "parameter_count": member.parameter_count,
                     "return_type": member.return_type,
                     "descriptor_error": member.descriptor_error,
+                    "method_parameters": [
+                        parameter.model_dump() for parameter in member.method_parameters
+                    ],
+                    "parameter_annotations": [
+                        parameter.model_dump()
+                        for parameter in member.parameter_annotations
+                    ],
+                    "annotation_default": (
+                        member.annotation_default.model_dump()
+                        if member.annotation_default
+                        else None
+                    ),
                     "mapped_names": member.mapped_names,
                     "mapped_signatures": member.mapped_signatures,
                     "annotations": [
@@ -387,6 +414,11 @@ def _member_summary(
         parameter_count=decoded_descriptor.parameter_count,
         return_type=decoded_descriptor.return_type,
         descriptor_error=decoded_descriptor.error,
+        method_parameters=_method_parameter_summaries(member.get("method_parameters")),
+        parameter_annotations=_parameter_annotation_summaries(
+            member.get("parameter_annotations")
+        ),
+        annotation_default=_annotation_value_summary(member.get("annotation_default")),
         access_flags=int(member["access_flags"]),
         mapped_names=[mapping.official_name for mapping in mapped_members],
         mapped_signatures=[mapping.official_signature for mapping in mapped_members],
@@ -403,6 +435,34 @@ def _annotation_summaries(value: Any) -> list[JavaAnnotationSummary]:
         for annotation in value
         if isinstance(annotation, dict)
     ]
+
+
+def _method_parameter_summaries(value: Any) -> list[JavaMethodParameterSummary]:
+    if not isinstance(value, list):
+        return []
+    return [
+        JavaMethodParameterSummary.model_validate(parameter)
+        for parameter in value
+        if isinstance(parameter, dict)
+    ]
+
+
+def _parameter_annotation_summaries(
+    value: Any,
+) -> list[JavaParameterAnnotationsSummary]:
+    if not isinstance(value, list):
+        return []
+    return [
+        JavaParameterAnnotationsSummary.model_validate(parameter)
+        for parameter in value
+        if isinstance(parameter, dict)
+    ]
+
+
+def _annotation_value_summary(value: Any) -> JavaAnnotationValueSummary | None:
+    if not isinstance(value, dict):
+        return None
+    return JavaAnnotationValueSummary.model_validate(value)
 
 
 def _inner_class_summaries(value: Any) -> list[JavaInnerClassSummary]:

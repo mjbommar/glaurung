@@ -145,6 +145,52 @@ public class GenericFixture<T extends Number> {
     return out / "GenericFixture.class"
 
 
+def _compile_parameter_metadata_classes(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java fixture")
+    src = tmp_path / "parameter-src"
+    out = tmp_path / "parameter-classes"
+    src.mkdir()
+    out.mkdir()
+    source = src / "ParameterFixture.java"
+    source.write_text(
+        """
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.PARAMETER, ElementType.METHOD})
+@interface ParamTag {
+    String value() default "fallback";
+}
+
+public class ParameterFixture {
+    public void handle(@ParamTag("path") String path, int count) {}
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "javac",
+            "-g",
+            "-parameters",
+            "--release",
+            "17",
+            "-d",
+            str(out),
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out
+
+
 def test_parse_java_class_recovers_source_exceptions_and_local_variables(
     tmp_path: Path,
 ) -> None:
@@ -176,6 +222,56 @@ def test_parse_java_class_recovers_generic_signatures(tmp_path: Path) -> None:
     assert lookup["signature"] == (
         "(Ljava/util/List<TT;>;)Ljava/util/Map<Ljava/lang/String;TT;>;"
     )
+
+
+def test_parse_java_class_recovers_parameter_metadata_and_annotation_defaults(
+    tmp_path: Path,
+) -> None:
+    class_dir = _compile_parameter_metadata_classes(tmp_path)
+    java_analysis = getattr(g, "analysis")
+
+    fixture = java_analysis.parse_java_class_bytes(
+        (class_dir / "ParameterFixture.class").read_bytes()
+    )
+    annotation = java_analysis.parse_java_class_bytes(
+        (class_dir / "ParamTag.class").read_bytes()
+    )
+
+    assert fixture is not None
+    handle = next(method for method in fixture["methods"] if method["name"] == "handle")
+    assert handle["method_parameters"] == [
+        {"name": "path", "access_flags": 0},
+        {"name": "count", "access_flags": 0},
+    ]
+    assert len(handle["parameter_annotations"]) == 2
+    assert handle["parameter_annotations"][0]["parameter_index"] == 0
+    assert handle["parameter_annotations"][0]["annotations"][0]["descriptor"] == (
+        "LParamTag;"
+    )
+    assert handle["parameter_annotations"][0]["annotations"][0]["elements"] == [
+        {
+            "name": "value",
+            "value": {
+                "tag": "s",
+                "kind": "const",
+                "value": "path",
+            },
+        }
+    ]
+    assert handle["parameter_annotations"][1] == {
+        "parameter_index": 1,
+        "annotations": [],
+    }
+
+    assert annotation is not None
+    value = next(
+        method for method in annotation["methods"] if method["name"] == "value"
+    )
+    assert value["annotation_default"] == {
+        "tag": "s",
+        "kind": "const",
+        "value": "fallback",
+    }
 
 
 def test_parse_java_class_recovers_inner_record_and_nest_metadata(

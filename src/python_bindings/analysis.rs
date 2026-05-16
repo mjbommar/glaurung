@@ -325,6 +325,18 @@ fn java_class_info_to_py(
         mdict.set_item("access_flags", m.access_flags)?;
         mdict.set_item("exceptions", m.exceptions)?;
         mdict.set_item("annotations", java_annotations_to_py(py, m.annotations)?)?;
+        mdict.set_item(
+            "method_parameters",
+            java_method_parameters_to_py(py, m.method_parameters)?,
+        )?;
+        mdict.set_item(
+            "parameter_annotations",
+            java_parameter_annotations_to_py(py, m.parameter_annotations)?,
+        )?;
+        mdict.set_item(
+            "annotation_default",
+            java_annotation_value_option_to_py(py, m.annotation_default)?,
+        )?;
         mdict.set_item("code", java_code_to_py(py, m.code)?)?;
         methods.append(mdict)?;
     }
@@ -338,6 +350,18 @@ fn java_class_info_to_py(
         fdict.set_item("access_flags", f.access_flags)?;
         fdict.set_item("exceptions", f.exceptions)?;
         fdict.set_item("annotations", java_annotations_to_py(py, f.annotations)?)?;
+        fdict.set_item(
+            "method_parameters",
+            java_method_parameters_to_py(py, f.method_parameters)?,
+        )?;
+        fdict.set_item(
+            "parameter_annotations",
+            java_parameter_annotations_to_py(py, f.parameter_annotations)?,
+        )?;
+        fdict.set_item(
+            "annotation_default",
+            java_annotation_value_option_to_py(py, f.annotation_default)?,
+        )?;
         fdict.set_item("code", java_code_to_py(py, f.code)?)?;
         fields.append(fdict)?;
     }
@@ -414,6 +438,47 @@ fn java_annotations_to_py(
         out.append(adict)?;
     }
     Ok(out.into())
+}
+
+fn java_method_parameters_to_py(
+    py: Python<'_>,
+    parameters: Vec<crate::analysis::java_class::JavaMethodParameter>,
+) -> PyResult<Py<PyAny>> {
+    let out = pyo3::types::PyList::empty(py);
+    for parameter in parameters {
+        let pdict = pyo3::types::PyDict::new(py);
+        pdict.set_item("name", parameter.name)?;
+        pdict.set_item("access_flags", parameter.access_flags)?;
+        out.append(pdict)?;
+    }
+    Ok(out.into())
+}
+
+fn java_parameter_annotations_to_py(
+    py: Python<'_>,
+    parameter_annotations: Vec<crate::analysis::java_class::JavaParameterAnnotations>,
+) -> PyResult<Py<PyAny>> {
+    let out = pyo3::types::PyList::empty(py);
+    for parameter in parameter_annotations {
+        let pdict = pyo3::types::PyDict::new(py);
+        pdict.set_item("parameter_index", parameter.parameter_index)?;
+        pdict.set_item(
+            "annotations",
+            java_annotations_to_py(py, parameter.annotations)?,
+        )?;
+        out.append(pdict)?;
+    }
+    Ok(out.into())
+}
+
+fn java_annotation_value_option_to_py(
+    py: Python<'_>,
+    value: Option<crate::analysis::java_class::JavaAnnotationValue>,
+) -> PyResult<Py<PyAny>> {
+    let Some(value) = value else {
+        return Ok(py.None());
+    };
+    java_annotation_value_to_py(py, value)
 }
 
 fn java_annotation_value_to_py(

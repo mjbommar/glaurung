@@ -56,6 +56,11 @@ class JavaListedMethod(BaseModel):
     parameter_count: int = 0
     return_type: str | None = None
     descriptor_error: str | None = None
+    method_parameter_names: list[str | None] = Field(default_factory=list)
+    method_parameter_count: int = 0
+    parameter_annotation_count: int = 0
+    has_annotation_default: bool = False
+    annotation_default: dict[str, Any] | None = None
     access_flags: int
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
@@ -225,6 +230,11 @@ def _method_summary(
         parameter_count=decoded_descriptor.parameter_count,
         return_type=decoded_descriptor.return_type,
         descriptor_error=decoded_descriptor.error,
+        method_parameter_names=_method_parameter_names(method),
+        method_parameter_count=_list_count(method.get("method_parameters")),
+        parameter_annotation_count=_parameter_annotation_count(method),
+        has_annotation_default=isinstance(method.get("annotation_default"), dict),
+        annotation_default=_optional_dict(method.get("annotation_default")),
         access_flags=int(method.get("access_flags", 0)),
         mapped_names=[member.official_name for member in mapped_members],
         mapped_signatures=[member.official_signature for member in mapped_members],
@@ -321,8 +331,43 @@ def _line_numbers(code: dict[str, Any]) -> list[int]:
     return out
 
 
+def _method_parameter_names(method: dict[str, Any]) -> list[str | None]:
+    parameters = method.get("method_parameters")
+    if not isinstance(parameters, list):
+        return []
+    out: list[str | None] = []
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
+        value = parameter.get("name")
+        out.append(value if isinstance(value, str) else None)
+    return out
+
+
+def _parameter_annotation_count(method: dict[str, Any]) -> int:
+    parameter_annotations = method.get("parameter_annotations")
+    if not isinstance(parameter_annotations, list):
+        return 0
+    count = 0
+    for parameter in parameter_annotations:
+        if not isinstance(parameter, dict):
+            continue
+        annotations = parameter.get("annotations")
+        if isinstance(annotations, list):
+            count += len(annotations)
+    return count
+
+
+def _list_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
 def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _optional_dict(value: Any) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
 
 
 def _add_method_node(

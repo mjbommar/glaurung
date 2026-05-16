@@ -19,7 +19,11 @@ def _ctx(path: Path) -> MemoryContext:
     return ctx
 
 
-def _compile_source(tmp_path: Path, source: str) -> Path:
+def _compile_source(
+    tmp_path: Path,
+    source: str,
+    javac_args: list[str] | None = None,
+) -> Path:
     if shutil.which("javac") is None or shutil.which("jar") is None:
         pytest.skip("javac and jar are required for generated Java method fixture")
     src = tmp_path / "src"
@@ -29,7 +33,15 @@ def _compile_source(tmp_path: Path, source: str) -> Path:
     source_path = src / "Main.java"
     source_path.write_text(source.strip() + "\n", encoding="utf-8")
     subprocess.run(
-        ["javac", "--release", "17", "-d", str(classes), str(source_path)],
+        [
+            "javac",
+            *(javac_args or []),
+            "--release",
+            "17",
+            "-d",
+            str(classes),
+            str(source_path),
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -184,6 +196,74 @@ public class Main {
     assert method.generic_signature == (
         "([Ljava/lang/String;[[ILjava/util/List<Ljava/lang/String;>;)I"
     )
+
+
+def test_java_list_methods_reports_parameter_metadata_and_annotation_defaults(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_list_methods import build_tool
+
+    jar = _compile_source(
+        tmp_path,
+        """
+package app;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.PARAMETER, ElementType.METHOD})
+@interface ParamTag {
+    String value() default "fallback";
+}
+
+public class Main {
+    public void handle(@ParamTag("path") String path, int count) {}
+}
+""",
+        javac_args=["-parameters"],
+    )
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    handle_result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            class_filter="app.Main",
+            name_filter="handle",
+            include_constructors=False,
+        ),
+    )
+    default_result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            class_filter="app.ParamTag",
+            name_filter="value",
+            include_constructors=False,
+        ),
+    )
+
+    assert handle_result.matched_method_count == 1
+    handle = handle_result.methods[0]
+    assert handle.method_parameter_names == ["path", "count"]
+    assert handle.method_parameter_count == 2
+    assert handle.parameter_annotation_count == 1
+    assert handle.has_annotation_default is False
+
+    assert default_result.matched_method_count == 1
+    default = default_result.methods[0]
+    assert default.has_annotation_default is True
+    assert default.annotation_default == {
+        "tag": "s",
+        "kind": "const",
+        "value": "fallback",
+    }
 
 
 def test_java_list_methods_respects_limit(tmp_path: Path) -> None:

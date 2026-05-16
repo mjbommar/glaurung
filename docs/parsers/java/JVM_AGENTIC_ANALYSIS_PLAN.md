@@ -40,9 +40,11 @@ Glaurung already has a growing Java path:
   source/debug attributes (`SourceFile`, method `Exceptions`, `LineNumberTable`,
   `LocalVariableTable`, and `LocalVariableTypeTable`), exception handler tables, plus
   class/member `Signature` attributes, runtime-visible/runtime-invisible class/member
-  annotations, initial JVM instruction listings, structural class attributes
-  (`InnerClasses`, `EnclosingMethod`, `NestHost`, `NestMembers`, `Record`), and lightweight
-  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  annotations, `MethodParameters`, runtime-visible/runtime-invisible parameter
+  annotations, method `AnnotationDefault` values, initial JVM instruction listings,
+  structural class attributes (`InnerClasses`, `EnclosingMethod`, `NestHost`,
+  `NestMembers`, `Record`), and lightweight method-level bytecode xrefs for invokes,
+  fields, class refs, and loaded strings.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `src/analysis/java_jar.rs` and the Python bindings expose bounded central-directory
   JAR metadata, including nested archive entries, multi-release class variants,
@@ -135,7 +137,8 @@ Glaurung already has a growing Java path:
 - Python memory tools can now list candidate methods with `java_list_methods`,
   exposing bounded class/name/descriptor filtering, code-size summaries,
   line-number counts/ranges, decoded parameter/return types, generic signatures,
-  `SourceFile` metadata, optional annotation descriptors, optional ProGuard/Mojang
+  `SourceFile` metadata, `MethodParameters` names, parameter annotation counts,
+  annotation defaults, optional annotation descriptors, optional ProGuard/Mojang
   mapped names, and `java_method` evidence nodes.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
@@ -263,7 +266,7 @@ here, it is probably not represented strongly enough in the plan.
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
 | Bytecode CFG, xrefs, and call graph | Initial `java_cfg`, exception edges, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with frame analysis, interprocedural xrefs, and CHA/RTA dispatch |
 | Descriptors and generic signatures | Initial erased JVM descriptor decoding exists for field types and method parameter/return types in class/method tools; class/member `Signature` attributes are preserved; continue parsing generic grammar, type-use annotations, and bridge/synthetic correlation |
-| Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, runtime-visible/runtime-invisible class/member annotation support, inner/enclosing/nest metadata, and record components exist; continue parameter annotations/defaults/modules/stack maps/permitted subclasses |
+| Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, runtime-visible/runtime-invisible class/member and parameter annotation support, method parameters, annotation defaults, inner/enclosing/nest metadata, and record components exist; continue modules/stack maps/permitted subclasses and richer framework semantics |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
 | Dependency and classpath recovery | Initial `java_infer_dependencies` and `java_infer_build_system` exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, optional `jdeps` package evidence, Java release, and `javac`/Maven/Gradle planning; continue with module `requires`, supplied classpath comparison, missing-class diagnostics, resolver/cache policy, and annotation processors |
@@ -413,7 +416,8 @@ Rust responsibilities:
 - `RuntimeVisibleAnnotations`
 - `RuntimeInvisibleAnnotations`
 - `RuntimeVisibleParameterAnnotations`
-  - `AnnotationDefault`
+- `RuntimeInvisibleParameterAnnotations`
+- `AnnotationDefault`
   - `BootstrapMethods`
   - `MethodParameters`
   - `Module`
@@ -807,6 +811,8 @@ Initial Python implementation status:
   line-number counts/ranges when `LineNumberTable` data exists.
 - Reports decoded erased parameter and return types from JVM method descriptors.
 - Reports generic `Signature` attributes when present.
+- Reports `MethodParameters` names, parameter annotation counts, and annotation
+  defaults when present.
 - Reports class-level `SourceFile` metadata on returned methods when present.
 - Supports optional method annotation descriptors.
 - Supports optional ProGuard/Mojang mapped class and method names when a mapping file
@@ -828,6 +834,7 @@ Outputs:
 - Access flags.
 - Descriptor, decoded erased parameter/return types, generic signatures, and mapped
   names/signatures when available.
+- Method parameter names, parameter annotation counts, and annotation default values.
 - Code size, max stack, max locals.
 - Line table availability and first/last source line when present.
 - Annotation descriptors when requested.

@@ -18,6 +18,9 @@ pub struct JavaMethod {
     pub signature: Option<String>,
     pub exceptions: Vec<String>,
     pub annotations: Vec<JavaAnnotation>,
+    pub method_parameters: Vec<JavaMethodParameter>,
+    pub parameter_annotations: Vec<JavaParameterAnnotations>,
+    pub annotation_default: Option<JavaAnnotationValue>,
     pub code: Option<JavaCode>,
 }
 
@@ -65,6 +68,18 @@ pub struct JavaAnnotationValue {
     pub type_name: Option<String>,
     pub const_name: Option<String>,
     pub values: Vec<JavaAnnotationValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaMethodParameter {
+    pub name: Option<String>,
+    pub access_flags: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaParameterAnnotations {
+    pub parameter_index: u16,
+    pub annotations: Vec<JavaAnnotation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,6 +444,9 @@ fn walk_member_table(
         let mut exceptions = Vec::new();
         let mut annotations = Vec::new();
         let mut signature = None;
+        let mut method_parameters = Vec::new();
+        let mut parameter_annotations = Vec::new();
+        let mut annotation_default = None;
         for _ in 0..attrs {
             if p + 6 > data.len() {
                 return Err(ClassError::Truncated("attribute header"));
@@ -451,6 +469,27 @@ fn walk_member_table(
                 let signature_idx =
                     u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
                 signature = Some(read_utf8(cp, signature_idx)?);
+            } else if attr_name == "MethodParameters" {
+                method_parameters =
+                    parse_method_parameters_attribute(&data[body_start..body_end], cp)?;
+            } else if attr_name == "RuntimeVisibleParameterAnnotations" {
+                parameter_annotations.extend(parse_parameter_annotations_attribute(
+                    &data[body_start..body_end],
+                    cp,
+                    "runtime_visible",
+                )?);
+            } else if attr_name == "RuntimeInvisibleParameterAnnotations" {
+                parameter_annotations.extend(parse_parameter_annotations_attribute(
+                    &data[body_start..body_end],
+                    cp,
+                    "runtime_invisible",
+                )?);
+            } else if attr_name == "AnnotationDefault" {
+                let (next, value) =
+                    parse_annotation_element_value(&data[body_start..body_end], 0, cp)?;
+                if next == alen {
+                    annotation_default = Some(value);
+                }
             } else if attr_name == "RuntimeVisibleAnnotations" {
                 annotations.extend(parse_annotations_attribute(
                     &data[body_start..body_end],
@@ -475,6 +514,9 @@ fn walk_member_table(
             signature,
             exceptions,
             annotations,
+            method_parameters,
+            parameter_annotations,
+            annotation_default,
             code,
         });
     }
@@ -883,6 +925,62 @@ fn parse_annotations_attribute(
         let (next, annotation) = parse_annotation(body, p, cp, visibility)?;
         p = next;
         out.push(annotation);
+    }
+    Ok(out)
+}
+
+fn parse_method_parameters_attribute(
+    body: &[u8],
+    cp: &[CpEntry],
+) -> Result<Vec<JavaMethodParameter>, ClassError> {
+    if body.is_empty() {
+        return Err(ClassError::Truncated("MethodParameters length"));
+    }
+    let count = body[0] as usize;
+    let mut p = 1usize;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if p + 4 > body.len() {
+            return Err(ClassError::Truncated("MethodParameters body"));
+        }
+        let name_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        let access_flags = u16::from_be_bytes(body[p + 2..p + 4].try_into().unwrap());
+        p += 4;
+        out.push(JavaMethodParameter {
+            name: read_optional_utf8(cp, name_idx)?,
+            access_flags,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_parameter_annotations_attribute(
+    body: &[u8],
+    cp: &[CpEntry],
+    visibility: &str,
+) -> Result<Vec<JavaParameterAnnotations>, ClassError> {
+    if body.is_empty() {
+        return Err(ClassError::Truncated("parameter annotations length"));
+    }
+    let count = body[0] as usize;
+    let mut p = 1usize;
+    let mut out = Vec::with_capacity(count);
+    for parameter_index in 0..count {
+        if p + 2 > body.len() {
+            return Err(ClassError::Truncated("parameter annotations body"));
+        }
+        let annotation_count = u16::from_be_bytes(body[p..p + 2].try_into().unwrap()) as usize;
+        p += 2;
+        let mut annotations = Vec::with_capacity(annotation_count);
+        for _ in 0..annotation_count {
+            let (next, annotation) = parse_annotation(body, p, cp, visibility)?;
+            p = next;
+            annotations.push(annotation);
+        }
+        out.push(JavaParameterAnnotations {
+            parameter_index: parameter_index as u16,
+            annotations,
+        });
     }
     Ok(out)
 }

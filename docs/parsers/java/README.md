@@ -52,9 +52,11 @@ Implemented pieces now include:
   metadata, class/member `Signature` attributes, `LineNumberTable`,
   `LocalVariableTable`, `LocalVariableTypeTable`, JVM exception handler tables,
   runtime-visible/runtime-invisible class/member
-  annotations, structural class attributes (`InnerClasses`, `EnclosingMethod`,
-  `NestHost`, `NestMembers`, `Record`), instruction listings, and lightweight
-  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  annotations, `MethodParameters`, runtime-visible/runtime-invisible parameter
+  annotations, method `AnnotationDefault` values, structural class attributes
+  (`InnerClasses`, `EnclosingMethod`, `NestHost`, `NestMembers`, `Record`),
+  instruction listings, and lightweight method-level bytecode xrefs for invokes,
+  fields, class refs, and loaded strings.
 - Rust central-directory JAR indexing for bounded archive metadata: entry counts,
   compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
   signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
@@ -129,7 +131,8 @@ Implemented pieces now include:
 - Initial method listing through `java_list_methods`, exposing bounded method
   summaries with class/name/descriptor filters, code-size metadata, line-number
   counts/ranges, decoded parameter/return types, generic signatures, `SourceFile`
-  metadata, optional annotation descriptors, optional ProGuard/Mojang mapped names,
+  metadata, `MethodParameters` names, parameter annotation counts, annotation
+  defaults, optional annotation descriptors, optional ProGuard/Mojang mapped names,
   and `java_method` KB evidence.
 - Initial bytecode CFG construction for selected methods, exposing basic blocks,
   conditional/goto/fallthrough/default-switch/exception edges, line anchors,
@@ -283,10 +286,11 @@ Important lessons:
 - [x] Initial constant-pool call graph via `java_call_graph`
 - [x] Exception-handler table parsing and CFG exception edges
 - [x] Initial runtime-visible/runtime-invisible class/member annotation parsing
+- [x] Initial `MethodParameters`, parameter annotation, and annotation-default
+  parsing and tool surfacing
 - [x] Initial record component parsing and class-view surfacing
 - [ ] Stack/local frame analysis
-- [ ] Parameter annotations, annotation defaults, and richer framework annotation
-  semantics
+- [ ] Richer framework annotation semantics
 
 ### Phase 5: JAR Processing
 - [x] Manifest parsing

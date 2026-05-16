@@ -46,6 +46,7 @@ public class a {
     @Marker("tick")
     public void c() { b++; }
     public int e(int value) { return b + value; }
+    public void h(@Marker("param") String input) {}
 }
 
 record r(String token, int count) {}
@@ -54,7 +55,15 @@ record r(String token, int count) {}
         encoding="utf-8",
     )
     subprocess.run(
-        ["javac", "--release", "17", "-d", str(out), str(src / "a.java")],
+        [
+            "javac",
+            "-parameters",
+            "--release",
+            "17",
+            "-d",
+            str(out),
+            str(src / "a.java"),
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -117,6 +126,7 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     field_b = next(f for f in result.fields if f.name == "b")
     field_g = next(f for f in result.fields if f.name == "g")
     method_c = next(m for m in result.methods if m.name == "c")
+    method_h = next(m for m in result.methods if m.name == "h")
     assert field_b.mapped_names == ["health"]
     assert field_b.field_type == "int"
     assert field_g.field_type == "java.util.List"
@@ -125,6 +135,11 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert method_c.parameter_types == []
     assert method_c.return_type == "void"
     assert method_c.annotations[0].elements[0].value.value == "tick"
+    assert method_h.method_parameters[0].name == "input"
+    assert method_h.parameter_annotations[0].parameter_index == 0
+    assert method_h.parameter_annotations[0].annotations[0].elements[0].value.value == (
+        "param"
+    )
     assert method_c.code is not None
     assert method_c.code.code_length > 0
     assert method_c.code.line_number_count >= 1
