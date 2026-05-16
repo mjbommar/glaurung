@@ -153,6 +153,11 @@ def test_java_recovery_report_summarizes_clean_recovery(tmp_path: Path) -> None:
     assert result.blocker_count == 0
     assert result.progress.compile_success is True
     assert result.progress.validation_passed is True
+    assert result.validation_summary is not None
+    assert result.validation_summary.rebuilt_path is not None
+    assert result.validation_summary.compatibility_score == 1.0
+    assert result.validation_summary.abi_match is True
+    assert result.validation_summary.resource_match is True
     assert result.progress.generated_source_count == 1
     assert result.progress.parsed_source_count == 1
     assert result.report_markdown_path is not None
@@ -181,6 +186,8 @@ def test_java_recovery_report_summarizes_clean_recovery(tmp_path: Path) -> None:
     assert "Status: clean" in result.markdown
     assert "No blocking recovery issues" in result.markdown
     assert "## Rollups" in result.markdown
+    assert "## Validation Summary" in result.markdown
+    assert "Compatibility: 1.00" in result.markdown
     assert "## Source/Bytecode Links" in result.markdown
     assert "value()Ljava/lang/String;" in result.markdown
     assert "## Class Summary" in result.markdown

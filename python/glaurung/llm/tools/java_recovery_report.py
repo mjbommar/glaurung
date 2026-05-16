@@ -136,6 +136,8 @@ class JavaRecoveryReportClassSummary(BaseModel):
     compile_success: bool | None = None
     source_file: str | None = None
     inner_class_action: str
+    inner_reconstruction_compile_success: bool | None = None
+    inner_reconstruction_notes: list[str] = Field(default_factory=list)
     method_count_delta: int | None = None
     attempted_engines: list[str] = Field(default_factory=list)
     bytecode_method_count: int | None = None
@@ -155,6 +157,24 @@ class JavaRecoveryReportRepairSummary(BaseModel):
     new_file: str
     message: str
     recommended_action: str = ""
+
+
+class JavaRecoveryReportValidationSummary(BaseModel):
+    profile: str
+    status: str
+    rebuilt_path: str | None = None
+    quality_summary: str = ""
+    compatibility_score: float
+    compile_success: bool | None = None
+    abi_match: bool | None = None
+    abi_difference_count: int = 0
+    resource_match: bool | None = None
+    resource_difference_count: int = 0
+    metadata_match: bool | None = None
+    metadata_difference_count: int = 0
+    semantic_match: bool | None = None
+    semantic_difference_count: int = 0
+    check_summaries: list[str] = Field(default_factory=list)
 
 
 class JavaRecoveryReportRollups(BaseModel):
@@ -186,6 +206,7 @@ class JavaRecoveryReportResult(BaseModel):
     repair_summaries: list[JavaRecoveryReportRepairSummary] = Field(
         default_factory=list
     )
+    validation_summary: JavaRecoveryReportValidationSummary | None = None
     rollups: JavaRecoveryReportRollups = Field(
         default_factory=JavaRecoveryReportRollups
     )
@@ -242,6 +263,7 @@ class JavaRecoveryReportTool(
                 args.max_class_summaries,
             )
         repair_summaries = _repair_summaries(recovery, args)
+        validation_summary = _validation_summary(recovery)
         rollups = _rollups(recovery, class_summaries, blockers, repair_summaries, args)
         if recovery.cache_hit and rollups.total_class_summary_count == len(
             class_summaries
@@ -267,6 +289,7 @@ class JavaRecoveryReportTool(
             class_summaries=class_summaries,
             repair_summary_count=len(repair_summaries),
             repair_summaries=repair_summaries,
+            validation_summary=validation_summary,
             rollups=rollups,
             next_actions=next_actions,
             commands=commands,
@@ -277,6 +300,7 @@ class JavaRecoveryReportTool(
                 blockers=blockers,
                 class_summaries=class_summaries,
                 repair_summaries=repair_summaries,
+                validation_summary=validation_summary,
                 rollups=rollups,
                 next_actions=next_actions,
                 commands=commands,
@@ -382,6 +406,10 @@ def _class_summaries(
                 compile_success=item.compile_success,
                 source_file=item.source_file,
                 inner_class_action=item.inner_class_action,
+                inner_reconstruction_compile_success=(
+                    item.inner_reconstruction_compile_success
+                ),
+                inner_reconstruction_notes=item.inner_reconstruction_notes[:8],
                 method_count_delta=item.method_count_delta,
                 attempted_engines=[
                     attempt.engine for attempt in item.attempted_engines
@@ -396,6 +424,33 @@ def _class_summaries(
             )
         )
     return out
+
+
+def _validation_summary(
+    recovery: JavaRecoverProjectResult,
+) -> JavaRecoveryReportValidationSummary | None:
+    validation = recovery.validation_result
+    if validation is None:
+        return None
+    return JavaRecoveryReportValidationSummary(
+        profile=validation.profile,
+        status=validation.status,
+        rebuilt_path=validation.rebuilt_path,
+        quality_summary=validation.quality_summary,
+        compatibility_score=validation.compatibility_score,
+        compile_success=validation.compile_success,
+        abi_match=validation.abi_match,
+        abi_difference_count=validation.abi_difference_count,
+        resource_match=validation.resource_match,
+        resource_difference_count=validation.resource_difference_count,
+        metadata_match=validation.metadata_match,
+        metadata_difference_count=validation.metadata_difference_count,
+        semantic_match=validation.semantic_match,
+        semantic_difference_count=validation.semantic_difference_count,
+        check_summaries=[
+            f"{check.name}:{check.status}" for check in validation.checks[:12]
+        ],
+    )
 
 
 def _cached_class_summaries(
@@ -949,6 +1004,7 @@ def _markdown(
     blockers: list[JavaRecoveryReportBlocker],
     class_summaries: list[JavaRecoveryReportClassSummary],
     repair_summaries: list[JavaRecoveryReportRepairSummary],
+    validation_summary: JavaRecoveryReportValidationSummary | None,
     rollups: JavaRecoveryReportRollups,
     next_actions: list[str],
     commands: list[str],
@@ -991,6 +1047,35 @@ def _markdown(
     )
     if progress.compatibility_score is not None:
         lines.append(f"- Compatibility: {progress.compatibility_score:.2f}")
+    lines.extend(["", "## Validation Summary"])
+    if validation_summary is None:
+        lines.append("- Validation was not run.")
+    else:
+        lines.extend(
+            [
+                f"- Profile: {validation_summary.profile}",
+                f"- Status: {validation_summary.status}",
+                f"- Rebuilt: `{validation_summary.rebuilt_path or 'n/a'}`",
+                f"- Quality: {validation_summary.quality_summary}",
+                f"- Compatibility: {validation_summary.compatibility_score:.2f}",
+                (
+                    "- Checks: "
+                    f"compile={_bool_label(validation_summary.compile_success)}, "
+                    f"abi={_bool_label(validation_summary.abi_match)} "
+                    f"({validation_summary.abi_difference_count} differences), "
+                    f"resources={_bool_label(validation_summary.resource_match)} "
+                    f"({validation_summary.resource_difference_count} differences), "
+                    f"metadata={_bool_label(validation_summary.metadata_match)} "
+                    f"({validation_summary.metadata_difference_count} differences), "
+                    f"semantics={_bool_label(validation_summary.semantic_match)} "
+                    f"({validation_summary.semantic_difference_count} differences)"
+                ),
+            ]
+        )
+        if validation_summary.check_summaries:
+            lines.append(
+                f"- Check statuses: {', '.join(validation_summary.check_summaries)}"
+            )
     lines.extend(
         [
             "",
@@ -1059,12 +1144,23 @@ def _markdown(
                 if item.attempted_engines
                 else ""
             )
+            inner_compile = (
+                ", inner_compile="
+                f"{_bool_label(item.inner_reconstruction_compile_success)}"
+                if item.inner_reconstruction_compile_success is not None
+                else ""
+            )
+            inner_notes = (
+                f", inner_notes={','.join(item.inner_reconstruction_notes)}"
+                if item.inner_reconstruction_notes
+                else ""
+            )
             lines.append(
                 "- "
                 f"`{item.class_name}`: engine={item.selected_engine or 'n/a'}, "
                 f"quality={item.quality}, parse={_bool_label(item.parse_success)}, "
                 f"candidate_compile={compile_status}, action={item.inner_class_action}"
-                f"{delta}{engines}{source}"
+                f"{inner_compile}{delta}{engines}{inner_notes}{source}"
             )
     else:
         lines.append("- No per-class decompile summaries available for this run.")

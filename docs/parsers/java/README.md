@@ -497,6 +497,10 @@ Important lessons:
 - [x] Initial local Maven cache dependency repair and explicit offline/online
   resolver policy in build repair plans
 - [x] Initial rebuilt JAR emission for plain `javac` recovery projects
+- [x] Initial compile-outcome evidence for named-inner merge reconstruction and
+  unavailable anonymous-inner placeholder repair
+- [x] Initial validation summary in recovery reports for rebuilt JAR ABI,
+  resources, manifest/services/modules, semantic checks, and compatibility score
 - [x] Initial owned Java 17 corpus fixture for records, enums, JPMS modules,
   ServiceLoader metadata, and resources
 - [ ] Module source recovery and semantic source/resource validation

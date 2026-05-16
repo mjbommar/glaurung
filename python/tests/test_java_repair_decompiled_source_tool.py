@@ -235,6 +235,49 @@ def test_java_repair_decompiled_source_rewrites_inner_companion_declaration(
     assert (project / "build" / "classes" / "app" / "Main$Nested.class").is_file()
 
 
+def test_java_repair_decompiled_source_replaces_unavailable_anonymous_placeholder(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_repair_decompiled_source import build_tool
+
+    project = tmp_path / "project"
+    src = project / "src" / "main" / "java" / "app"
+    src.mkdir(parents=True)
+    source = src / "Outer.java"
+    source.write_text(
+        """
+package app;
+
+public class Outer {
+    public Object anonymous() {
+        return new /* Unavailable Anonymous Inner Class!! */;
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    ctx = _ctx(source)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(source_project_root=str(project), java_release=17),
+    )
+
+    assert result.success is True
+    assert any(
+        repair.kind == "replace_unavailable_anonymous_placeholder"
+        and repair.applied
+        for repair in result.repairs
+    )
+    repaired = source.read_text(encoding="utf-8")
+    assert "new Object()" in repaired
+    assert "Unavailable Anonymous Inner Class" not in repaired
+    assert (project / "build" / "classes" / "app" / "Outer.class").is_file()
+
+
 def test_java_repair_decompiled_source_adds_matching_local_classpath_jar(
     tmp_path: Path,
 ) -> None:

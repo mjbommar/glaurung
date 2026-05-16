@@ -121,6 +121,13 @@ class JavaDecompileArchiveArgs(BaseModel):
             "in fallback quality scoring."
         ),
     )
+    verify_inner_reconstruction: bool = Field(
+        True,
+        description=(
+            "When writing merged named inner classes and candidate compilation is "
+            "enabled, compile the emitted source tree and record the outcome."
+        ),
+    )
     candidate_project_root: str | None = Field(
         None,
         description=(
@@ -183,6 +190,8 @@ class JavaDecompiledClassSummary(BaseModel):
     compile_diagnostic_count: int = 0
     attempted_engines: list[JavaDecompileAttempt] = Field(default_factory=list)
     source_file: str | None = None
+    inner_reconstruction_compile_success: bool | None = None
+    inner_reconstruction_notes: list[str] = Field(default_factory=list)
     bytecode_method_count: int | None = None
     bytecode_field_count: int | None = None
     bytecode_methods: list[str] = Field(default_factory=list)
@@ -420,6 +429,8 @@ def _decompile_one_class(
     source_file: str | None = None
     inner_action: JavaInnerClassAction = "not_written"
     write_stop_reasons: list[str] = []
+    inner_reconstruction_compile_success: bool | None = None
+    inner_reconstruction_notes: list[str] = []
     if selected is not None and selected.success and args.write_sources:
         source = selected_raw.get("source")
         if isinstance(source, str) and source.strip() and source_root is not None:
@@ -453,6 +464,25 @@ def _decompile_one_class(
                     ):
                         source_file = _relative(project_root or source_root, outer_dest)
                         inner_action = "merged_into_outer"
+                        compile_check = _verify_inner_reconstruction_compile(
+                            project_root=project_root,
+                            source_root=source_root,
+                            args=args,
+                        )
+                        if compile_check is not None:
+                            compile_success, diagnostics = compile_check
+                            inner_reconstruction_compile_success = compile_success
+                            if compile_success:
+                                inner_reconstruction_notes.append(
+                                    "merge_compile_verified"
+                                )
+                            else:
+                                write_stop_reasons.append(
+                                    "inner_merge_compile_failed"
+                                )
+                                inner_reconstruction_notes.append(
+                                    f"merge_compile_failed diagnostics={diagnostics}"
+                                )
                     else:
                         write_stop_reasons.append("inner_merge_failed")
             else:
@@ -507,6 +537,10 @@ def _decompile_one_class(
         compile_diagnostic_count=selected.compile_diagnostic_count if selected else 0,
         attempted_engines=attempts,
         source_file=source_file,
+        inner_reconstruction_compile_success=(
+            inner_reconstruction_compile_success
+        ),
+        inner_reconstruction_notes=inner_reconstruction_notes,
         bytecode_method_count=correlation.bytecode_method_count,
         bytecode_field_count=correlation.bytecode_field_count,
         bytecode_methods=correlation.bytecode_methods,
@@ -738,7 +772,7 @@ def _compile_candidate_source(
         except subprocess.TimeoutExpired:
             return False, 1, "isolated"
         output = "\n".join(part for part in (proc.stderr, proc.stdout) if part)
-        diagnostic_count = output.count(": error:") + output.count(": warning:")
+        diagnostic_count = _javac_diagnostic_count(output, proc.returncode != 0)
         return proc.returncode == 0, diagnostic_count, "isolated"
 
 
@@ -800,7 +834,7 @@ def _compile_candidate_in_project_context(
         except subprocess.TimeoutExpired:
             return False, 1, "project"
         output = "\n".join(part for part in (proc.stderr, proc.stdout) if part)
-        diagnostic_count = output.count(": error:") + output.count(": warning:")
+        diagnostic_count = _javac_diagnostic_count(output, proc.returncode != 0)
         return proc.returncode == 0, diagnostic_count, "project"
 
 
@@ -834,6 +868,63 @@ def _candidate_project_sources(
 def _candidate_classpath(classpath: list[str]) -> str:
     existing = [str(Path(item)) for item in classpath if item and Path(item).exists()]
     return os.pathsep.join(dict.fromkeys(existing))
+
+
+def _verify_inner_reconstruction_compile(
+    *,
+    project_root: Path | None,
+    source_root: Path | None,
+    args: JavaDecompileArchiveArgs,
+) -> tuple[bool, int] | None:
+    if (
+        not args.verify_inner_reconstruction
+        or not args.compile_candidates
+        or project_root is None
+        or source_root is None
+        or not source_root.is_dir()
+    ):
+        return None
+    javac = shutil.which("javac")
+    if javac is None:
+        return None
+    sources = sorted(path for path in source_root.rglob("*.java") if path.is_file())
+    if not sources or len(sources) > args.max_candidate_project_sources:
+        return None
+    with tempfile.TemporaryDirectory(prefix="glaurung-java-inner-verify-") as tmp:
+        classes_dir = Path(tmp) / "classes"
+        classes_dir.mkdir()
+        command = [
+            javac,
+            "--release",
+            str(args.java_release),
+            "-d",
+            str(classes_dir),
+        ]
+        classpath = _candidate_classpath(args.candidate_classpath)
+        if classpath:
+            command.extend(["-classpath", classpath])
+        command.extend(str(path) for path in sources)
+        try:
+            proc = subprocess.run(
+                command,
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=min(args.timeout_seconds_per_class, 60),
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return False, 1
+        output = "\n".join(part for part in (proc.stderr, proc.stdout) if part)
+        diagnostic_count = _javac_diagnostic_count(output, proc.returncode != 0)
+        return proc.returncode == 0, diagnostic_count
+
+
+def _javac_diagnostic_count(output: str, failed: bool) -> int:
+    count = output.count(": error:") + output.count(": warning:")
+    if count == 0 and failed:
+        return 1
+    return count
 
 
 def _merge_inner_source_into_outer(

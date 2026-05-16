@@ -28,6 +28,7 @@ JavaRepairKind = Literal[
     "write_build_repair_plan",
     "parameterize_raw_iterable_for_each",
     "cast_generic_sneaky_throw",
+    "replace_unavailable_anonymous_placeholder",
     "report_signature_mismatch",
     "report_enum_record_sealed_reconstruction",
     "report_malformed_anonymous_class",
@@ -229,6 +230,16 @@ class JavaRepairDecompiledSourceTool(
                         max_repairs=args.max_repairs_per_iteration - len(repairs),
                     )
                 )
+            if len(repairs) < args.max_repairs_per_iteration:
+                repairs.extend(
+                    _repair_unavailable_anonymous_placeholders(
+                        root,
+                        compile_result,
+                        iteration=iteration,
+                        dry_run=args.dry_run,
+                        max_repairs=args.max_repairs_per_iteration - len(repairs),
+                    )
+                )
             if len(repairs) < args.max_repairs_per_iteration and not any(
                 repair.applied for repair in repairs
             ):
@@ -309,6 +320,9 @@ _INNER_COMPANION_DECL_RE = re.compile(
     r"(?P<outer>[A-Za-z_$][A-Za-z0-9_$]*)\."
     r"(?P<inner>[A-Za-z_$][A-Za-z0-9_$]*)"
     r"(?P<suffix>\s*(?:<[^>{;]+>)?)"
+)
+_UNAVAILABLE_ANONYMOUS_RE = re.compile(
+    r"new\s*/\*\s*Unavailable\s+Anonymous\s+Inner\s+Class!!\s*\*/"
 )
 
 
@@ -1065,6 +1079,55 @@ def _cast_generic_sneaky_throw_text(
         f"{throw_match.group('indent')}throw ({type_variable}){value};"
     )
     return "\n".join(lines).rstrip() + "\n", type_variable
+
+
+def _repair_unavailable_anonymous_placeholders(
+    root: Path,
+    compile_result: JavaCompileRecoveredProjectResult,
+    *,
+    iteration: int,
+    dry_run: bool,
+    max_repairs: int,
+) -> list[JavaSourceRepair]:
+    if max_repairs == 0 or compile_result.selected_build_tool != "javac":
+        return []
+    repairs: list[JavaSourceRepair] = []
+    repaired_files: set[Path] = set()
+    for diagnostic in compile_result.diagnostics:
+        if len(repairs) >= max_repairs:
+            break
+        raw = diagnostic.raw_excerpt.lower()
+        if "unavailable anonymous inner class" not in raw:
+            continue
+        source_file = (
+            _resolve_under_root(root, diagnostic.file) if diagnostic.file else None
+        )
+        if source_file is None or not source_file.is_file():
+            continue
+        if source_file in repaired_files:
+            continue
+        text = source_file.read_text(encoding="utf-8", errors="replace")
+        rewritten, count = _UNAVAILABLE_ANONYMOUS_RE.subn("new Object()", text)
+        if count == 0 or rewritten == text:
+            continue
+        if not dry_run:
+            source_file.write_text(rewritten, encoding="utf-8")
+        repaired_files.add(source_file)
+        repairs.append(
+            JavaSourceRepair(
+                iteration=iteration,
+                kind="replace_unavailable_anonymous_placeholder",
+                file=_relative(root, source_file),
+                new_file=_relative(root, source_file),
+                applied=not dry_run,
+                message=(
+                    "Replaced decompiler anonymous-inner placeholder with a "
+                    "compilable Object allocation so later validation can expose "
+                    "any remaining behavioral gap."
+                ),
+            )
+        )
+    return repairs
 
 
 def _nearest_throws_type_variable(

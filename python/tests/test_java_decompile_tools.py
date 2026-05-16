@@ -559,6 +559,11 @@ def test_java_decompile_archive_merges_named_inner_and_suppresses_anonymous(
         item for item in result.classes if item.class_name == "app/Outer$Named"
     )
     assert named.inner_class_action == "merged_into_outer"
+    assert named.inner_reconstruction_compile_success is False
+    assert any(
+        note.startswith("merge_compile_failed")
+        for note in named.inner_reconstruction_notes
+    )
     assert named.source_file == "src/main/java/app/Outer.java"
     assert not (output / "src" / "main" / "java" / "app" / "Outer$Named.java").exists()
     outer = output / "src" / "main" / "java" / "app" / "Outer.java"
