@@ -314,6 +314,7 @@ fn java_class_info_to_py(
     )?;
     dict.set_item("permitted_subclasses", info.permitted_subclasses)?;
     dict.set_item("module", java_module_info_to_py(py, info.module)?)?;
+    dict.set_item("bootstrap_method_count", info.bootstrap_method_count)?;
     dict.set_item("interfaces", info.interfaces)?;
     dict.set_item("major_version", info.major_version)?;
     dict.set_item("minor_version", info.minor_version)?;

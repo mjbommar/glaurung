@@ -98,6 +98,7 @@ class JavaListedClass(BaseModel):
     inner_class_count: int = 0
     record_component_count: int = 0
     nest_member_count: int = 0
+    bootstrap_method_count: int = 0
     has_enclosing_method: bool = False
     annotation_descriptors: list[str] = Field(default_factory=list)
 
@@ -259,6 +260,7 @@ def _class_summary(
         inner_class_count=_list_count(parsed.get("inner_classes")),
         record_component_count=_list_count(parsed.get("record_components")),
         nest_member_count=_list_count(parsed.get("nest_members")),
+        bootstrap_method_count=int(parsed.get("bootstrap_method_count", 0)),
         has_enclosing_method=isinstance(parsed.get("enclosing_method"), dict),
         annotation_descriptors=_annotation_descriptors(parsed)
         if include_annotations

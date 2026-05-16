@@ -53,6 +53,9 @@ public class a implements Runnable {
         }
         return 2;
     }
+    public Runnable k() {
+        return () -> System.out.println("lambda");
+    }
     public void run() {}
 }
 
@@ -223,6 +226,7 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert result.classfile_version_label == "Java 17 (classfile 61.0)"
     assert result.classfile_size is not None and result.classfile_size > 0
     assert result.classfile_warnings == []
+    assert result.bootstrap_method_count > 0
     assert result.annotations[0].descriptor == "LMarker;"
     assert result.annotations[0].elements[0].value.value == "game-thing"
     assert any(item.inner_class == "a$f" for item in result.inner_classes)

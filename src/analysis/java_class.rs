@@ -207,6 +207,7 @@ pub struct ClassInfo {
     pub record_components: Vec<JavaRecordComponent>,
     pub permitted_subclasses: Vec<String>,
     pub module: Option<JavaModuleInfo>,
+    pub bootstrap_method_count: u16,
     pub interfaces: Vec<String>,
     pub methods: Vec<JavaMethod>,
     pub fields: Vec<JavaMethod>, // same shape — name + descriptor + flags
@@ -275,6 +276,7 @@ struct JavaClassAttributes {
     record_components: Vec<JavaRecordComponent>,
     permitted_subclasses: Vec<String>,
     module: Option<JavaModuleInfo>,
+    bootstrap_method_count: u16,
 }
 
 /// Parse a `.class` file and return its `ClassInfo`.
@@ -473,6 +475,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         record_components: class_attrs.record_components,
         permitted_subclasses: class_attrs.permitted_subclasses,
         module: class_attrs.module,
+        bootstrap_method_count: class_attrs.bootstrap_method_count,
         interfaces,
         methods,
         fields,
@@ -654,6 +657,9 @@ fn parse_class_attributes(
             )?);
         } else if attr_name == "Module" {
             out.module = Some(parse_module_attribute(&data[body_start..body_end], cp)?);
+        } else if attr_name == "BootstrapMethods" {
+            out.bootstrap_method_count =
+                parse_bootstrap_methods_count(&data[body_start..body_end])?;
         }
         p = body_end;
     }
@@ -823,6 +829,13 @@ fn parse_module_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaModuleInfo,
         uses,
         provides,
     })
+}
+
+fn parse_bootstrap_methods_count(body: &[u8]) -> Result<u16, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("BootstrapMethods length"));
+    }
+    Ok(u16::from_be_bytes(body[0..2].try_into().unwrap()))
 }
 
 fn read_module_targets(

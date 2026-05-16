@@ -54,6 +54,7 @@ class JavaClassSummary(BaseModel):
     is_enum: bool = False
     is_sealed: bool = False
     permitted_subclass_count: int = 0
+    bootstrap_method_count: int = 0
 
 
 class JavaResourceSummary(BaseModel):
@@ -410,6 +411,9 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                         is_sealed=_list_count(parsed.get("permitted_subclasses")) > 0,
                         permitted_subclass_count=_list_count(
                             parsed.get("permitted_subclasses")
+                        ),
+                        bootstrap_method_count=int(
+                            parsed.get("bootstrap_method_count", 0)
                         ),
                     )
                     parsed_class_count += 1

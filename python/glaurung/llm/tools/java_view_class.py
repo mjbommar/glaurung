@@ -183,6 +183,7 @@ class JavaViewClassResult(BaseModel):
     nest_members: list[str] = Field(default_factory=list)
     record_components: list[JavaRecordComponentSummary] = Field(default_factory=list)
     module_info: JavaModuleSummary | None = None
+    bootstrap_method_count: int = 0
     annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
     fields: list[JavaClassMemberSummary] = Field(default_factory=list)
     methods: list[JavaClassMemberSummary] = Field(default_factory=list)
@@ -383,6 +384,7 @@ def _result_for_class(
                 "module_info": (
                     parsed_module_info.model_dump() if parsed_module_info else None
                 ),
+                "bootstrap_method_count": int(parsed.get("bootstrap_method_count", 0)),
                 "annotations": [annotation.model_dump() for annotation in annotations],
             },
             tags=["java", "class", "deobfuscated" if mapped_class_name else "raw"],
@@ -497,6 +499,7 @@ def _result_for_class(
         nest_members=nest_members,
         record_components=record_components,
         module_info=parsed_module_info,
+        bootstrap_method_count=int(parsed.get("bootstrap_method_count", 0)),
         annotations=annotations,
         fields=fields,
         methods=methods,

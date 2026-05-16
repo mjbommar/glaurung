@@ -138,6 +138,9 @@ Implemented pieces now include:
 - Initial method/code xref summaries in class and method tools, exposing total,
   method/interface-method, field, class, string, and dynamic/invokedynamic reference
   counts from parsed bytecode xrefs.
+- Initial `BootstrapMethods` summaries in parser-facing class tools, exposing
+  per-class bootstrap method counts for lambda, string-concat, and invokedynamic
+  triage.
 - Initial class listing through `java_list_classes`, exposing bounded package/name
   and access-flag filters, superclass/interface/member counts, optional annotation
   descriptors, `SourceFile` metadata, decoded access-flag names, normalized

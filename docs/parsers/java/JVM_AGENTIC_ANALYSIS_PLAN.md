@@ -69,6 +69,8 @@ Glaurung already has a growing Java path:
   every target class to be returned in the same result window.
 - Method and class-view code summaries now expose bytecode xref count buckets:
   total, method/interface-method, field, class, string, and dynamic/invokedynamic.
+- Parser-facing class summaries now expose `BootstrapMethods` counts for quick
+  lambda, string-concat, and invokedynamic triage.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang

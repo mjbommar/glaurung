@@ -76,6 +76,10 @@ public class Main extends Base implements Runnable {
     public static class Inner {}
 
     public void run() {}
+
+    public Runnable task() {
+        return () -> System.out.println("task");
+    }
 }
 
 abstract class Base {}
@@ -132,6 +136,7 @@ def test_java_list_classes_filters_and_records_kb_nodes(tmp_path: Path) -> None:
     assert main.classfile_version_label == "Java 17 (classfile 61.0)"
     assert main.classfile_size is not None and main.classfile_size > 0
     assert main.classfile_warnings == []
+    assert main.bootstrap_method_count > 0
     assert main.annotation_descriptors == ["Ljava/lang/Deprecated;"]
     assert any(
         node.kind == NodeKind.java_class

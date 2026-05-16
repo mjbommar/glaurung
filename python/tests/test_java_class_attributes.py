@@ -198,6 +198,34 @@ public class ServiceImpl implements com.example.api.Service {
     return out
 
 
+def _compile_lambda_class(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java fixture")
+    src = tmp_path / "lambda-src"
+    out = tmp_path / "lambda-classes"
+    src.mkdir()
+    out.mkdir()
+    source = src / "LambdaFixture.java"
+    source.write_text(
+        """
+public class LambdaFixture {
+    public Runnable makeTask() {
+        return () -> System.out.println("lambda");
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["javac", "-g", "--release", "17", "-d", str(out), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out / "LambdaFixture.class"
+
+
 def _compile_generic_class(tmp_path: Path) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java fixture")
@@ -464,6 +492,21 @@ def test_parse_java_class_recovers_module_info(tmp_path: Path) -> None:
             "implementations": ["com/example/internal/ServiceImpl"],
         }
     ]
+
+
+def test_parse_java_class_recovers_bootstrap_method_count(tmp_path: Path) -> None:
+    class_file = _compile_lambda_class(tmp_path)
+    java_analysis = getattr(g, "analysis")
+
+    info = java_analysis.parse_java_class_bytes(class_file.read_bytes())
+
+    assert info is not None
+    assert info["bootstrap_method_count"] > 0
+    make_task = next(
+        method for method in info["methods"] if method["name"] == "makeTask"
+    )
+    assert make_task["code"] is not None
+    assert any(xref["kind"] == "invokedynamic" for xref in make_task["code"]["xrefs"])
 
 
 def test_parse_java_class_recovers_exception_handlers(tmp_path: Path) -> None:
