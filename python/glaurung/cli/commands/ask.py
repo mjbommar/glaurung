@@ -260,35 +260,21 @@ class AskCommand(BaseCommand):
         """Populate KB with cheap first-touch facts before the agent runs."""
         try:
             if self._is_java_archive_path(context.file_path):
-                from ...llm.tools.java_index_archive import (
-                    build_tool as _build_java_index_archive,
-                )
-                from ...llm.tools.java_detect_obfuscation import (
-                    build_tool as _build_java_detect_obfuscation,
-                )
-                from ...llm.tools.minecraft_detect_archive import (
-                    build_tool as _build_minecraft_detect_archive,
+                from ...llm.tools.java_agent_context import (
+                    build_tool as _build_java_agent_context,
                 )
 
                 max_functions = int(getattr(args, "max_functions", 5) or 5)
                 max_classes = min(max(max_functions * 16, 16), 256)
-                index_tool = _build_java_index_archive()
-                index_tool.run(
+                context_tool = _build_java_agent_context()
+                context_tool.run(
                     context,
                     context.kb,
-                    index_tool.input_model(max_classes=max_classes),
-                )
-                obfuscation_tool = _build_java_detect_obfuscation()
-                obfuscation_tool.run(
-                    context,
-                    context.kb,
-                    obfuscation_tool.input_model(max_classes=max_classes),
-                )
-                minecraft_tool = _build_minecraft_detect_archive()
-                minecraft_tool.run(
-                    context,
-                    context.kb,
-                    minecraft_tool.input_model(),
+                    context_tool.input_model(
+                        profile="triage",
+                        max_classes=max_classes,
+                        max_findings=max_classes,
+                    ),
                 )
                 return
 
@@ -312,12 +298,21 @@ class AskCommand(BaseCommand):
             _sa = _build_map_symbol_addresses()
             _sa.run(context, context.kb, _sa.input_model())
             # Try format-specific maps (they no-op if not applicable)
-            for _builder in (_build_map_elf_plt, _build_map_elf_got, _build_map_pe_iat):
-                try:
-                    _t = _builder()
-                    _t.run(context, context.kb, _t.input_model())
-                except Exception:
-                    pass
+            try:
+                _plt = _build_map_elf_plt()
+                _plt.run(context, context.kb, _plt.input_model())
+            except Exception:
+                pass
+            try:
+                _got = _build_map_elf_got()
+                _got.run(context, context.kb, _got.input_model())
+            except Exception:
+                pass
+            try:
+                _iat = _build_map_pe_iat()
+                _iat.run(context, context.kb, _iat.input_model())
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -340,9 +335,9 @@ class AskCommand(BaseCommand):
 
         artifact = g.triage.analyze_path(
             binary_path,
-            _max_read_bytes=args.max_read_bytes,
-            _max_file_size=args.max_file_size,
-            _max_recursion_depth=1,
+            max_read_bytes=args.max_read_bytes,
+            max_file_size=args.max_file_size,
+            max_recursion_depth=1,
         )
 
         # Memory-first agent/context setup
@@ -414,6 +409,7 @@ class AskCommand(BaseCommand):
                     iterations = analysis_result.iterations_used
                 else:
                     # Use pre-created agent
+                    assert agent is not None
                     analysis_result = await agent.analyze(
                         question, context, hyperparams
                     )
@@ -464,8 +460,9 @@ class AskCommand(BaseCommand):
                         )
 
                 # Check if context tracked tool calls
-                if hasattr(context, "_tool_calls") and context._tool_calls:
-                    for call in context._tool_calls:
+                tool_calls = getattr(context, "_tool_calls", None)
+                if tool_calls:
+                    for call in tool_calls:
                         if not any(
                             tc.get("tool") == call.get("tool")
                             for tc in result_data["tool_calls"]
@@ -512,9 +509,9 @@ class AskCommand(BaseCommand):
         formatter.format_progress(f"Analyzing {binary_path}...")
         artifact = g.triage.analyze_path(
             binary_path,
-            _max_read_bytes=args.max_read_bytes,
-            _max_file_size=args.max_file_size,
-            _max_recursion_depth=1,
+            max_read_bytes=args.max_read_bytes,
+            max_file_size=args.max_file_size,
+            max_recursion_depth=1,
         )
 
         budgets = Budgets(

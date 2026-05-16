@@ -54,6 +54,7 @@ class NodeKind(str, Enum):
     java_recovery_report = "java_recovery_report"
     java_config_correlation = "java_config_correlation"
     java_risk_finding = "java_risk_finding"
+    java_agent_context = "java_agent_context"
 
 
 class Node(BaseModel):

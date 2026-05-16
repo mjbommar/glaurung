@@ -35,6 +35,7 @@ def test_ask_command_seeds_java_archive_context_for_jar() -> None:
     )
 
     nodes = list(ctx.kb.nodes())
+    assert any(n.kind == NodeKind.java_agent_context for n in nodes)
     assert any(n.kind == NodeKind.java_archive for n in nodes)
     assert any(n.kind == NodeKind.java_class and n.label == "HelloWorld" for n in nodes)
     assert any(n.kind == NodeKind.note and "obfuscation" in n.tags for n in nodes)

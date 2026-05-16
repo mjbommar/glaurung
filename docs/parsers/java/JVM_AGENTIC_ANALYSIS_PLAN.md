@@ -2867,11 +2867,19 @@ Tasks:
 - Register via `tool_to_pyd_ai`.
 - Extend KB import with Java nodes/edges.
 - Add `java_index_archive` seeding in `glaurung ask`.
+- Add `java_agent_context` as the agent-facing Java kickoff/runbook tool for
+  triage, security, recovery, and deobfuscation profiles.
+- Add Java-specific pydantic-ai agents with structured triage, security, and
+  recovery output models.
 - Add tool tests for schemas, evidence log entries, and budget truncation.
 
 Acceptance:
 
 - Agent can answer "what classes/methods are in this JAR?" using Java tools.
+- Agent can call `java_agent_context` first and receive a compact runbook,
+  recommended next tools, and cited Java evidence summaries.
+- Java triage/security/recovery agents return structured Pydantic findings
+  instead of free-form claims.
 - Tool calls appear in `_tool_calls` and persistent evidence logs.
 - No native disassembly/function tools are used for plain JARs during first-touch
   ask seeding.

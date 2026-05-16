@@ -89,6 +89,7 @@ Implemented pieces now include:
   parsing without extracting JAR entries to temporary files.
 - CLI JAR/class summarization through `glaurung classfile`.
 - Agent memory tools:
+  - `java_agent_context`
   - `java_index_archive`
   - `java_detect_obfuscation`
   - `java_detect_security_sensitive_behavior`
@@ -132,6 +133,9 @@ Implemented pieces now include:
   - `minecraft_extract_bundled_server`
 - Ask-command Java seeding for archive summaries, obfuscation annotations, and
   Minecraft loader/version/mapping hints.
+- Initial Java-specific pydantic-ai agents for triage, security review, and
+  source recovery. These agents start from `java_agent_context` and return
+  structured findings with evidence references and recommended follow-up tools.
 - Descriptor-aware deobfuscation annotations on sensitive-behavior findings,
   including mapped class names and mapped method names/signatures when a
   ProGuard/Mojang mapping file is supplied.
@@ -567,8 +571,8 @@ Important lessons:
   `java_risk_finding` KB nodes.
 - [ ] Framework lifecycle reachability and dynamic observation states for
   `java_risk_report`.
-- [ ] Agent prompt and Pydantic models for cited audit findings rather than
-  free-form security claims.
+- [x] Initial agent prompt and Pydantic models for cited Java triage, security,
+  and recovery findings rather than free-form claims.
 
 ## Data Model
 

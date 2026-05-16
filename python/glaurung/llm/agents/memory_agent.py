@@ -148,6 +148,7 @@ from ..tools.analyze_recursively import (
     AnalyzeRecursivelyResult,
 )
 from ..tools.java_index_archive import build_tool as build_java_index_archive
+from ..tools.java_agent_context import build_tool as build_java_agent_context
 from ..tools.java_detect_obfuscation import (
     build_tool as build_java_detect_obfuscation,
 )
@@ -799,6 +800,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(extract_archive_all, name="extract_archive_all")
     agent.tool(recursive_unpack, name="recursive_unpack")
     agent.tool(find_embedded_executables, name="find_embedded_executables")
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_agent_context()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_index_archive()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_obfuscation()))
     agent._function_toolset.add_tool(
