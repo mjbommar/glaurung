@@ -147,7 +147,8 @@ Implemented pieces now include:
   output excerpts, and KB evidence without executing archive code.
 - Initial dependency inference through `java_infer_dependencies`, combining manifest
   `Class-Path`, Maven `pom.properties`, nested JAR paths, and bytecode external
-  package references into `java_dependency` KB nodes without downloading code.
+  package references, plus optional bounded `jdeps -verbose:package` evidence, into
+  `java_dependency` KB nodes without downloading code.
 - Initial build-system inference through `java_infer_build_system`, selecting
   `javac`, Maven, or Gradle from recovered source-root build files, embedded Maven
   metadata, Gradle/plugin metadata, Minecraft mod metadata, classfile Java release,
@@ -303,9 +304,10 @@ Important lessons:
 - [ ] `java_decompile_archive`
 - [ ] Source/bytecode line correlation
 - [x] Initial `java_infer_dependencies` from manifest `Class-Path`, Maven metadata,
-  nested archives, and bytecode external package references
-- [ ] Dependency resolution from modules, `jdeps`, supplied classpaths, and missing
-  class diagnostics
+  nested archives, bytecode external package references, and optional `jdeps`
+  package evidence
+- [ ] Dependency resolution from modules, supplied classpaths, and missing class
+  diagnostics
 - [x] Initial source tree scaffold under `src/main/java` and `src/main/resources`
 - [x] Initial manifest, ServiceLoader, framework metadata, and resource preservation
 - [ ] Decompiled source emission, module source recovery, and semantic source/resource

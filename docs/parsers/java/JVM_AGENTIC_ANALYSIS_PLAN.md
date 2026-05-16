@@ -100,9 +100,9 @@ Glaurung already has a growing Java path:
   signature metadata entries, bounded output excerpts, and KB evidence without
   executing archive code.
 - Python memory tools can now infer an initial dependency/classpath profile from
-  manifest `Class-Path`, Maven `pom.properties`, nested JAR paths, and bytecode
-  external package references, emitting `java_dependency` evidence nodes without
-  downloading dependencies.
+  manifest `Class-Path`, Maven `pom.properties`, nested JAR paths, bytecode external
+  package references, and optional bounded `jdeps -verbose:package` output, emitting
+  `java_dependency` evidence nodes without downloading dependencies.
 - Python memory tools can now infer an initial source-recovery build plan with
   `java_infer_build_system`, selecting `javac`, Maven, or Gradle from recovered
   source-root build files, embedded Maven/Gradle/plugin metadata, Minecraft mod
@@ -264,7 +264,7 @@ here, it is probably not represented strongly enough in the plan.
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, and runtime-visible/runtime-invisible class/member annotation support exists; continue parameter annotations/defaults/modules/records/nestmates/stack maps |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
-| Dependency and classpath recovery | Initial `java_infer_dependencies` and `java_infer_build_system` exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, Java release, and `javac`/Maven/Gradle planning; continue with module `requires`, `jdeps`, supplied classpath comparison, missing-class diagnostics, resolver/cache policy, and annotation processors |
+| Dependency and classpath recovery | Initial `java_infer_dependencies` and `java_infer_build_system` exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, optional `jdeps` package evidence, Java release, and `javac`/Maven/Gradle planning; continue with module `requires`, supplied classpath comparison, missing-class diagnostics, resolver/cache policy, and annotation processors |
 | Signed archive validation | Initial `java_verify_signatures` exists using `jarsigner -verify`; continue with policy scoring, certificate/timestamp summaries, and archive-set rollups |
 | Source tree/project reconstruction | Initial `java_reconstruct_source_tree` and `java_infer_build_system` exist for resource/metadata preservation, explicit stubs, generated source lists, and build planning; continue with decompiler source emission, module source recovery, and source/resource validation |
 | Compile diagnostics | `java_compile_recovered_project` |
@@ -1045,6 +1045,9 @@ Inputs:
 - Optional classpath roots.
 - Optional package ownership hints.
 - `include_jdeps: bool`
+- `java_home`
+- `jdeps_timeout_seconds`
+- `jdeps_multi_release`
 - `include_maven_metadata: bool`
 
 Outputs:
@@ -1054,12 +1057,17 @@ Outputs:
 - `META-INF/maven/**/pom.xml` and `pom.properties` dependencies.
 - ServiceLoader providers/consumers.
 - External package refs derived from constant-pool and bytecode refs.
+- Optional `jdeps -verbose:package` package edges and resolved module/not-found
+  status.
 - Missing classes/packages after comparing archive contents and supplied classpath.
 - Suggested Maven coordinates when metadata is available.
 - Confidence per dependency source.
 
 Implementation notes:
 
+- Initial Python implementation uses bounded `jdeps -verbose:package` as optional
+  evidence, records `jdeps_package` dependencies, preserves the target module name
+  or `not found` state, and adds timeout/failure stop reasons.
 - Use `jdeps` as optional evidence, not the only dependency source.
 - Treat shaded dependencies carefully: classes present in the JAR should not become
   external dependencies just because their package normally belongs to a library.

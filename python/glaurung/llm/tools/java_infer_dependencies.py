@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
+import subprocess
 import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -22,6 +24,7 @@ DependencySource = Literal[
     "maven_metadata",
     "nested_archive_path",
     "bytecode_external_package",
+    "jdeps_package",
 ]
 DependencyScope = Literal[
     "archive_identity", "embedded", "external", "provided", "unknown"
@@ -34,6 +37,14 @@ class JavaInferDependenciesArgs(BaseModel):
     include_maven_metadata: bool = True
     include_nested_archives: bool = True
     include_bytecode_refs: bool = True
+    include_jdeps: bool = False
+    java_home: str | None = None
+    jdeps_timeout_seconds: int = Field(30, ge=1, le=600)
+    jdeps_max_lines: int = Field(2_000, ge=0)
+    jdeps_multi_release: str | None = Field(
+        None,
+        description=("Optional jdeps --multi-release value, such as 17, 21, or base."),
+    )
     max_classes: int = Field(10_000, ge=0)
     max_dependencies: int = Field(256, ge=0)
     max_external_packages: int = Field(128, ge=0)
@@ -49,6 +60,7 @@ class JavaDependencyFinding(BaseModel):
     artifact_id: str | None = None
     version: str | None = None
     package_prefix: str | None = None
+    module_name: str | None = None
     class_path_entry: str | None = None
     archive_entry: str | None = None
     reference_count: int = 0
@@ -66,6 +78,9 @@ class JavaInferDependenciesResult(BaseModel):
     maven_metadata_count: int = 0
     nested_archive_count: int = 0
     external_package_count: int = 0
+    jdeps_dependency_count: int = 0
+    jdeps_exit_code: int | None = None
+    jdeps_timed_out: bool = False
     parsed_class_count: int = 0
     parse_error_count: int = 0
     summary_by_source: dict[str, int] = Field(default_factory=dict)
@@ -83,7 +98,8 @@ class JavaInferDependenciesTool(
                 description=(
                     "Infer Java classpath dependencies from manifest Class-Path, "
                     "Maven metadata, nested JAR paths, and bytecode references to "
-                    "external packages. Does not download dependencies."
+                    "external packages, with optional bounded jdeps package evidence. "
+                    "Does not download dependencies."
                 ),
                 tags=("java", "jar", "dependencies", "classpath", "kb"),
             ),
@@ -132,6 +148,14 @@ class JavaInferDependenciesTool(
                 truncated = truncated or bytecode_truncated
                 if bytecode_truncated:
                     stop_reasons.append("max_classes")
+        jdeps_exit_code: int | None = None
+        jdeps_timed_out = False
+        if args.include_jdeps:
+            jdeps_deps, jdeps_exit_code, jdeps_timed_out, jdeps_reasons = (
+                _jdeps_package_dependencies(path, args)
+            )
+            dependencies.extend(jdeps_deps)
+            stop_reasons.extend(jdeps_reasons)
 
         dependencies = _dedupe_dependencies(dependencies)
         dependencies = sorted(
@@ -169,6 +193,11 @@ class JavaInferDependenciesTool(
             external_package_count=sum(
                 1 for dep in dependencies if dep.source == "bytecode_external_package"
             ),
+            jdeps_dependency_count=sum(
+                1 for dep in dependencies if dep.source == "jdeps_package"
+            ),
+            jdeps_exit_code=jdeps_exit_code,
+            jdeps_timed_out=jdeps_timed_out,
             parsed_class_count=parsed_class_count,
             parse_error_count=parse_error_count,
             summary_by_source=_count_by_source(dependencies),
@@ -347,6 +376,107 @@ def _bytecode_external_dependencies(
     return out, parsed_class_count, parse_error_count, truncated
 
 
+def _jdeps_package_dependencies(
+    path: Path,
+    args: JavaInferDependenciesArgs,
+) -> tuple[list[JavaDependencyFinding], int | None, bool, list[str]]:
+    jdeps = _jdeps_path(args.java_home)
+    if jdeps is None:
+        return [], None, False, ["jdeps_missing"]
+
+    command = [jdeps, "-verbose:package"]
+    if args.jdeps_multi_release:
+        command.extend(["--multi-release", args.jdeps_multi_release])
+    command.append(str(path))
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=args.jdeps_timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return [], None, True, ["jdeps_timeout"]
+
+    lines = proc.stdout.splitlines()
+    if args.jdeps_max_lines:
+        lines = lines[: args.jdeps_max_lines]
+    dependencies = _parse_jdeps_package_output(lines, archive_name=path.name)
+    stop_reasons: list[str] = []
+    if args.jdeps_max_lines and len(proc.stdout.splitlines()) > args.jdeps_max_lines:
+        stop_reasons.append("jdeps_max_lines")
+    if proc.returncode != 0:
+        stop_reasons.append("jdeps_failed")
+    return dependencies, proc.returncode, False, stop_reasons
+
+
+_JDEPS_PACKAGE_RE = re.compile(
+    r"^\s+(?P<source>\S+)\s+->\s+(?P<target>\S+)\s+(?P<module>.+?)\s*$"
+)
+
+
+def _parse_jdeps_package_output(
+    lines: list[str],
+    *,
+    archive_name: str | None = None,
+) -> list[JavaDependencyFinding]:
+    edge_counts: Counter[tuple[str, str]] = Counter()
+    source_packages: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for line in lines:
+        match = _JDEPS_PACKAGE_RE.match(line)
+        if match is None:
+            continue
+        source_package = match.group("source")
+        target_package = match.group("target")
+        module_name = match.group("module").strip()
+        if target_package.startswith("<"):
+            continue
+        if _is_jdk_or_platform_package(target_package):
+            continue
+        if archive_name and module_name == archive_name:
+            continue
+        key = (target_package, module_name)
+        edge_counts[key] += 1
+        if len(source_packages[key]) < 8:
+            source_packages[key].add(source_package)
+
+    out: list[JavaDependencyFinding] = []
+    for (target_package, module_name), count in edge_counts.items():
+        prefix = _package_prefix_from_dotted(target_package)
+        hint = _known_dependency_hint(prefix)
+        group_id, artifact_id = hint if hint is not None else (None, None)
+        scope: DependencyScope = (
+            "provided" if _is_common_provided_prefix(prefix) else "external"
+        )
+        confidence = 0.82 if module_name == "not found" else 0.7
+        if hint is not None:
+            confidence = max(confidence, 0.86)
+        out.append(
+            _finding(
+                source="jdeps_package",
+                scope=scope,
+                confidence=confidence,
+                group_id=group_id,
+                artifact_id=artifact_id,
+                package_prefix=prefix,
+                module_name=module_name,
+                reference_count=count,
+                sample_owners=sorted(source_packages[(target_package, module_name)]),
+                evidence=[
+                    f"jdeps_target_package={target_package}",
+                    f"jdeps_module={module_name}",
+                    f"jdeps_package_edges={count}",
+                ],
+                message=(
+                    f"jdeps reports package dependency {target_package} "
+                    f"resolved to {module_name}."
+                ),
+            )
+        )
+    return out
+
+
 def _method_xref_owners(parsed: dict[str, Any]) -> list[str]:
     owners: list[str] = []
     for method in parsed.get("methods", []):
@@ -476,6 +606,20 @@ def _is_jdk_or_platform_owner(owner: str) -> bool:
     )
 
 
+def _is_jdk_or_platform_package(package_name: str) -> bool:
+    return package_name.startswith(
+        (
+            "java.",
+            "javax.",
+            "jdk.",
+            "sun.",
+            "com.sun.",
+            "org.w3c.",
+            "org.xml.",
+        )
+    )
+
+
 def _package_prefix(owner: str) -> str | None:
     parts = owner.split("/")
     if not parts:
@@ -526,6 +670,11 @@ def _package_prefix(owner: str) -> str | None:
     if len(parts) == 1:
         return parts[0]
     return ".".join(parts[:2])
+
+
+def _package_prefix_from_dotted(package_name: str) -> str:
+    owner = package_name.replace(".", "/")
+    return _package_prefix(owner) or package_name
 
 
 def _looks_like_class_segment(segment: str) -> bool:
@@ -599,6 +748,7 @@ def _dedupe_dependencies(
             dep.artifact_id,
             dep.version,
             dep.package_prefix,
+            dep.module_name,
             dep.class_path_entry,
             dep.archive_entry,
         )
@@ -623,6 +773,7 @@ def _finding(
     artifact_id: str | None = None,
     version: str | None = None,
     package_prefix: str | None = None,
+    module_name: str | None = None,
     class_path_entry: str | None = None,
     archive_entry: str | None = None,
     reference_count: int = 0,
@@ -637,6 +788,7 @@ def _finding(
             artifact_id or "",
             version or "",
             package_prefix or "",
+            module_name or "",
             class_path_entry or "",
             archive_entry or "",
         ]
@@ -650,6 +802,7 @@ def _finding(
         artifact_id=artifact_id,
         version=version,
         package_prefix=package_prefix,
+        module_name=module_name,
         class_path_entry=class_path_entry,
         archive_entry=archive_entry,
         reference_count=reference_count,
@@ -665,6 +818,14 @@ def _coordinate(
     version: str | None,
 ) -> str:
     return ":".join(part for part in (group_id, artifact_id, version) if part)
+
+
+def _jdeps_path(java_home: str | None) -> str | None:
+    if java_home:
+        candidate = Path(java_home) / "bin" / "jdeps"
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("jdeps")
 
 
 def _add_dependency_node(

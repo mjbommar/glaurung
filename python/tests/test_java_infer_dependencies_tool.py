@@ -173,6 +173,41 @@ def test_java_infer_dependencies_combines_metadata_and_bytecode_refs(
     )
 
 
+def test_java_infer_dependencies_can_include_jdeps_package_evidence(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_infer_dependencies import build_tool
+
+    if shutil.which("jdeps") is None:
+        pytest.skip("jdeps is required for generated Java dependency fixture")
+
+    jar = _compile_dependency_fixture(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            include_jdeps=True,
+            jdeps_timeout_seconds=20,
+        ),
+    )
+
+    assert result.jdeps_dependency_count >= 1
+    assert result.summary_by_source["jdeps_package"] >= 1
+    assert any(
+        dep.source == "jdeps_package"
+        and dep.package_prefix == "org.slf4j"
+        and dep.group_id == "org.slf4j"
+        and dep.artifact_id == "slf4j-api"
+        and dep.reference_count >= 1
+        and any("jdeps" in evidence for evidence in dep.evidence)
+        for dep in result.dependencies
+    )
+
+
 def test_java_infer_dependencies_handles_non_zip(tmp_path: Path) -> None:
     from glaurung.llm.tools.java_infer_dependencies import build_tool
 
