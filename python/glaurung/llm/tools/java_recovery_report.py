@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -69,10 +70,16 @@ class JavaRecoveryReportArgs(BaseModel):
     max_blockers: int = Field(8, ge=0)
     snippet_context_lines: int = Field(2, ge=0, le=8)
     max_snippet_line_chars: int = Field(180, ge=40, le=500)
+    max_class_summaries: int = Field(12, ge=0)
+    max_repair_summaries: int = Field(12, ge=0)
+    write_report_files: bool = True
+    report_markdown_file: str = ".glaurung/recovery-report.md"
+    report_json_file: str = ".glaurung/recovery-report.json"
 
 
 class JavaRecoveryReportLocation(BaseModel):
     file: str
+    absolute_file: str | None = None
     line: int | None = None
     column: int | None = None
 
@@ -116,6 +123,26 @@ class JavaRecoveryReportProgress(BaseModel):
     compatibility_score: float | None = None
 
 
+class JavaRecoveryReportClassSummary(BaseModel):
+    class_name: str
+    selected_engine: str | None = None
+    quality: str
+    parse_success: bool
+    compile_success: bool | None = None
+    source_file: str | None = None
+    inner_class_action: str
+    method_count_delta: int | None = None
+    attempted_engines: list[str] = Field(default_factory=list)
+
+
+class JavaRecoveryReportRepairSummary(BaseModel):
+    kind: str
+    applied: bool
+    file: str
+    new_file: str
+    message: str
+
+
 class JavaRecoveryReportResult(BaseModel):
     archive_path: str
     source_project_root: str | None = None
@@ -125,9 +152,18 @@ class JavaRecoveryReportResult(BaseModel):
     progress: JavaRecoveryReportProgress
     blocker_count: int
     blockers: list[JavaRecoveryReportBlocker] = Field(default_factory=list)
+    class_summary_count: int = 0
+    class_summaries: list[JavaRecoveryReportClassSummary] = Field(default_factory=list)
+    repair_summary_count: int = 0
+    repair_summaries: list[JavaRecoveryReportRepairSummary] = Field(
+        default_factory=list
+    )
     next_actions: list[str] = Field(default_factory=list)
+    commands: list[str] = Field(default_factory=list)
     markdown: str
     recovery_result: JavaRecoverProjectResult
+    report_markdown_path: str | None = None
+    report_json_path: str | None = None
     report_node_id: str | None = None
 
 
@@ -161,12 +197,25 @@ class JavaRecoveryReportTool(
             kb,
             _recovery_args(args),
         )
+        root = (
+            Path(recovery.source_project_root) if recovery.source_project_root else None
+        )
+        report_markdown_path = _report_path(root, args.report_markdown_file)
+        report_json_path = _report_path(root, args.report_json_file)
         progress = _progress(recovery)
         blockers = _rank_blockers(recovery, args)
+        class_summaries = _class_summaries(recovery, args)
+        if not class_summaries and recovery.cache_hit:
+            class_summaries = _cached_class_summaries(
+                report_json_path,
+                args.max_class_summaries,
+            )
+        repair_summaries = _repair_summaries(recovery, args)
         next_actions = _next_actions(recovery, blockers)
         status = _status(recovery, blockers)
         headline = _headline(status, recovery, blockers)
         summary = _summary(status, progress, blockers)
+        commands = _commands(recovery, blockers, report_markdown_path)
         result = JavaRecoveryReportResult(
             archive_path=recovery.archive_path,
             source_project_root=recovery.source_project_root,
@@ -176,17 +225,33 @@ class JavaRecoveryReportTool(
             progress=progress,
             blocker_count=len(blockers),
             blockers=blockers,
+            class_summary_count=len(class_summaries),
+            class_summaries=class_summaries,
+            repair_summary_count=len(repair_summaries),
+            repair_summaries=repair_summaries,
             next_actions=next_actions,
+            commands=commands,
             markdown=_markdown(
                 status=status,
                 headline=headline,
                 progress=progress,
                 blockers=blockers,
+                class_summaries=class_summaries,
+                repair_summaries=repair_summaries,
                 next_actions=next_actions,
+                commands=commands,
                 recovery=recovery,
             ),
             recovery_result=recovery,
+            report_markdown_path=str(report_markdown_path)
+            if report_markdown_path is not None
+            else None,
+            report_json_path=str(report_json_path)
+            if report_json_path is not None
+            else None,
         )
+        if args.write_report_files:
+            _write_report_files(result, report_markdown_path, report_json_path)
         _add_report_node(kb, result)
         return result
 
@@ -255,6 +320,91 @@ def _progress(recovery: JavaRecoverProjectResult) -> JavaRecoveryReportProgress:
     )
 
 
+def _class_summaries(
+    recovery: JavaRecoverProjectResult,
+    args: JavaRecoveryReportArgs,
+) -> list[JavaRecoveryReportClassSummary]:
+    decompile = recovery.decompile_result
+    if decompile is None:
+        return []
+    out: list[JavaRecoveryReportClassSummary] = []
+    for item in decompile.classes[: args.max_class_summaries]:
+        out.append(
+            JavaRecoveryReportClassSummary(
+                class_name=item.class_name,
+                selected_engine=item.selected_engine,
+                quality=item.quality,
+                parse_success=item.parse_success,
+                compile_success=item.compile_success,
+                source_file=item.source_file,
+                inner_class_action=item.inner_class_action,
+                method_count_delta=item.method_count_delta,
+                attempted_engines=[
+                    attempt.engine for attempt in item.attempted_engines
+                ],
+            )
+        )
+    return out
+
+
+def _cached_class_summaries(
+    report_json_path: Path | None,
+    max_class_summaries: int,
+) -> list[JavaRecoveryReportClassSummary]:
+    if report_json_path is None or not report_json_path.is_file():
+        return []
+    try:
+        data = json.loads(report_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    raw = data.get("class_summaries") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return []
+    out: list[JavaRecoveryReportClassSummary] = []
+    for item in raw[:max_class_summaries]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            out.append(JavaRecoveryReportClassSummary(**item))
+        except ValueError:
+            continue
+    return out
+
+
+def _repair_summaries(
+    recovery: JavaRecoverProjectResult,
+    args: JavaRecoveryReportArgs,
+) -> list[JavaRecoveryReportRepairSummary]:
+    repair_result = recovery.repair_result
+    if repair_result is None:
+        return []
+    summaries = [
+        JavaRecoveryReportRepairSummary(
+            kind=repair.kind,
+            applied=repair.applied,
+            file=repair.file,
+            new_file=repair.new_file,
+            message=repair.message,
+        )
+        for repair in repair_result.repairs
+    ]
+    return _dedupe_repair_summaries(summaries)[: args.max_repair_summaries]
+
+
+def _dedupe_repair_summaries(
+    repairs: list[JavaRecoveryReportRepairSummary],
+) -> list[JavaRecoveryReportRepairSummary]:
+    seen: set[tuple[str, bool, str, str]] = set()
+    out: list[JavaRecoveryReportRepairSummary] = []
+    for repair in repairs:
+        key = (repair.kind, repair.applied, repair.file, repair.new_file)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(repair)
+    return out
+
+
 def _rank_blockers(
     recovery: JavaRecoverProjectResult,
     args: JavaRecoveryReportArgs,
@@ -268,7 +418,10 @@ def _rank_blockers(
 
     if recovery.source_index_result is not None:
         for problem in recovery.source_index_result.syntax_problems:
-            location = JavaRecoveryReportLocation(file=problem.source_path)
+            location = _location(
+                file=problem.source_path,
+                root=root,
+            )
             blockers.append(
                 JavaRecoveryReportBlocker(
                     kind="parse_error",
@@ -293,7 +446,7 @@ def _rank_blockers(
         for repair in recovery.repair_result.repairs:
             if repair.applied:
                 continue
-            location = JavaRecoveryReportLocation(file=repair.file)
+            location = _location(file=repair.file, root=root)
             blockers.append(
                 JavaRecoveryReportBlocker(
                     kind="repair_deferred",
@@ -356,8 +509,9 @@ def _blocker_from_diagnostic(
     args: JavaRecoveryReportArgs,
 ) -> JavaRecoveryReportBlocker:
     location = (
-        JavaRecoveryReportLocation(
+        _location(
             file=diagnostic.file,
+            root=root,
             line=diagnostic.line,
             column=diagnostic.column,
         )
@@ -376,6 +530,26 @@ def _blocker_from_diagnostic(
         next_action=_diagnostic_next_action(diagnostic),
         snippet=_snippet(root, location, args) if root and location else [],
         evidence=[diagnostic.raw_excerpt] if diagnostic.raw_excerpt else [],
+    )
+
+
+def _location(
+    *,
+    file: str,
+    root: Path | None,
+    line: int | None = None,
+    column: int | None = None,
+) -> JavaRecoveryReportLocation:
+    absolute_file = None
+    if root is not None:
+        candidate = root / file
+        if candidate.exists():
+            absolute_file = str(candidate)
+    return JavaRecoveryReportLocation(
+        file=file,
+        absolute_file=absolute_file,
+        line=line,
+        column=column,
     )
 
 
@@ -530,6 +704,35 @@ def _next_actions(
     return actions[:8]
 
 
+def _commands(
+    recovery: JavaRecoverProjectResult,
+    blockers: list[JavaRecoveryReportBlocker],
+    report_markdown_path: Path | None,
+) -> list[str]:
+    commands: list[str] = []
+    root = recovery.source_project_root
+    if report_markdown_path is not None:
+        commands.append(f"sed -n '1,220p' {report_markdown_path}")
+    if root is not None:
+        commands.append(f"cd {root} && javac @javac.args")
+    first_location = next(
+        (blocker.location for blocker in blockers if blocker.location is not None),
+        None,
+    )
+    if first_location is not None and first_location.absolute_file is not None:
+        line = first_location.line or 1
+        commands.append(
+            f"nl -ba {first_location.absolute_file} | sed -n '{max(1, line - 5)},{line + 5}p'"
+        )
+    if any(
+        blocker.category in {"missing_classpath_dependency", "write_build_repair_plan"}
+        or "classpath" in blocker.next_action.lower()
+        for blocker in blockers
+    ):
+        commands.append("rerun java_recovery_report with extract_nested_archives=True")
+    return commands[:8]
+
+
 def _status(
     recovery: JavaRecoverProjectResult,
     blockers: list[JavaRecoveryReportBlocker],
@@ -579,7 +782,10 @@ def _markdown(
     headline: str,
     progress: JavaRecoveryReportProgress,
     blockers: list[JavaRecoveryReportBlocker],
+    class_summaries: list[JavaRecoveryReportClassSummary],
+    repair_summaries: list[JavaRecoveryReportRepairSummary],
     next_actions: list[str],
+    commands: list[str],
     recovery: JavaRecoverProjectResult,
 ) -> str:
     lines = [
@@ -619,6 +825,42 @@ def _markdown(
     )
     if progress.compatibility_score is not None:
         lines.append(f"- Compatibility: {progress.compatibility_score:.2f}")
+    lines.extend(["", "## Class Summary"])
+    if class_summaries:
+        for item in class_summaries:
+            source = f" -> `{item.source_file}`" if item.source_file else ""
+            compile_status = _bool_label(item.compile_success)
+            delta = (
+                f", method_delta={item.method_count_delta}"
+                if item.method_count_delta is not None
+                else ""
+            )
+            engines = (
+                f", attempted={','.join(item.attempted_engines)}"
+                if item.attempted_engines
+                else ""
+            )
+            lines.append(
+                "- "
+                f"`{item.class_name}`: engine={item.selected_engine or 'n/a'}, "
+                f"quality={item.quality}, parse={_bool_label(item.parse_success)}, "
+                f"compile={compile_status}, action={item.inner_class_action}"
+                f"{delta}{engines}{source}"
+            )
+    else:
+        lines.append("- No per-class decompile summaries available for this run.")
+    lines.extend(["", "## Repair Summary"])
+    if repair_summaries:
+        for repair in repair_summaries:
+            repair_status = "applied" if repair.applied else "deferred"
+            target = (
+                repair.new_file if repair.applied and repair.new_file else repair.file
+            )
+            lines.append(
+                f"- {repair_status}: {repair.kind} on `{target}` - {repair.message}"
+            )
+    else:
+        lines.append("- No repair attempts were needed or recorded.")
     lines.extend(["", "## Top Blockers"])
     if blockers:
         for index, blocker in enumerate(blockers, start=1):
@@ -640,6 +882,9 @@ def _markdown(
     lines.extend(["", "## Next Actions"])
     for action in next_actions:
         lines.append(f"- {action}")
+    lines.extend(["", "## Commands"])
+    for command in commands:
+        lines.append(f"- `{command}`")
     return "\n".join(lines).strip() + "\n"
 
 
@@ -657,6 +902,36 @@ def _bool_label(value: bool | None) -> str:
     if value is False:
         return "fail"
     return "skip"
+
+
+def _report_path(root: Path | None, value: str) -> Path | None:
+    if root is None or not value:
+        return None
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return root / path
+
+
+def _write_report_files(
+    result: JavaRecoveryReportResult,
+    markdown_path: Path | None,
+    json_path: Path | None,
+) -> None:
+    if markdown_path is not None:
+        markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        markdown_path.write_text(result.markdown, encoding="utf-8")
+    if json_path is not None:
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(
+            json.dumps(
+                result.model_dump(exclude={"recovery_result", "report_node_id"}),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
 
 def _add_report_node(kb: KnowledgeBase, result: JavaRecoveryReportResult) -> None:

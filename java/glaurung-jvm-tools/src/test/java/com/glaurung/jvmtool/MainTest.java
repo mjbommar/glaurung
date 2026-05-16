@@ -113,6 +113,33 @@ class MainTest {
         assertEquals(java.util.List.of("IOException"), methods.get(0).get("thrown_exceptions"));
     }
 
+    @Test
+    void javaParserAcceptsModernRecordSource() throws Exception {
+        Path source = tmp.resolve("Entry.java");
+        Files.writeString(
+                source,
+                """
+                package app;
+
+                public record Entry(String path, String hash) {
+                    public static Entry parse(String line) {
+                        String[] parts = line.split(" ");
+                        return new Entry(parts[0], parts[1]);
+                    }
+                }
+                """,
+                StandardCharsets.UTF_8);
+
+        Map<String, Object> result = Main.run(new String[] {"parse-source", "--source", source.toString()});
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ast = (Map<String, Object>) result.get("ast");
+        assertEquals(true, ast.get("parse_success"));
+        @SuppressWarnings("unchecked")
+        java.util.List<Map<String, Object>> types = (java.util.List<Map<String, Object>>) ast.get("types");
+        assertEquals("record", types.get(0).get("kind"));
+    }
+
     private Path fixtureJar() throws IOException {
         Path sourceRoot = tmp.resolve("src");
         Path classes = tmp.resolve("classes");

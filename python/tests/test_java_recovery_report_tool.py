@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import zipfile
+import json
 from pathlib import Path
 
 import pytest
@@ -154,8 +155,35 @@ def test_java_recovery_report_summarizes_clean_recovery(tmp_path: Path) -> None:
     assert result.progress.validation_passed is True
     assert result.progress.generated_source_count == 1
     assert result.progress.parsed_source_count == 1
+    assert result.report_markdown_path is not None
+    assert result.report_json_path is not None
+    assert Path(result.report_markdown_path).is_file()
+    assert Path(result.report_json_path).is_file()
+    assert result.report_markdown_path.endswith(".glaurung/recovery-report.md")
+    assert result.class_summary_count == 1
+    assert result.class_summaries[0].class_name == "app/Main"
+    assert result.class_summaries[0].selected_engine in {"cfr", "vineflower"}
+    assert any("javac" in command for command in result.commands)
     assert "Status: clean" in result.markdown
     assert "No blocking recovery issues" in result.markdown
+    assert "## Class Summary" in result.markdown
+    assert "## Commands" in result.markdown
+    persisted = json.loads(Path(result.report_json_path).read_text(encoding="utf-8"))
+    assert persisted["status"] == "clean"
+    assert "recovery_result" not in persisted
+    second = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            output_root=str(output),
+            java_release=17,
+            max_classes=4,
+        ),
+    )
+    assert second.progress.cache_hit is True
+    assert second.class_summary_count == 1
+    assert second.class_summaries[0].class_name == "app/Main"
     assert any(
         node.kind == NodeKind.java_recovery_report
         and node.props.get("tool") == "java_recovery_report"
@@ -190,15 +218,23 @@ def test_java_recovery_report_ranks_dependency_blocker_with_excerpt(
 
     assert result.status in {"blocked", "partial"}
     assert result.blocker_count >= 1
+    assert result.repair_summary_count >= 1
+    assert any(
+        repair.kind == "write_build_repair_plan" for repair in result.repair_summaries
+    )
+    assert any("recovery-report.md" in command for command in result.commands)
     blocker = result.blockers[0]
     assert blocker.kind in {"compile_error", "repair_deferred"}
     assert blocker.location is not None
     assert blocker.location.file.endswith("UsesDep.java")
+    assert blocker.location.absolute_file is not None
+    assert Path(blocker.location.absolute_file).is_file()
     assert blocker.next_action
     assert "classpath" in " ".join(result.next_actions).lower()
     assert "Top Blockers" in result.markdown
     assert "Error:" in result.markdown
     assert "UsesDep.java" in result.markdown
+    assert "## Repair Summary" in result.markdown
     assert any("Helper" in line.text or "dep" in line.text for line in blocker.snippet)
 
 

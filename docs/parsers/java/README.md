@@ -283,7 +283,9 @@ Implemented pieces now include:
 - Initial daily-use recovery reporting through `java_recovery_report`, which wraps
   `java_recover_project` and renders a human report with status, headline, progress
   counters, ranked blockers, raw compiler/parser/validation messages, source
-  snippets, likely causes, next actions, cache state, and KB evidence.
+  snippets, likely causes, next actions, cache state, per-class decompiler summaries,
+  repair summaries, copyable commands, persisted `.glaurung/recovery-report.md` and
+  `.glaurung/recovery-report.json` files, and KB evidence.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -358,6 +360,9 @@ Important lessons:
   synthetic classes are suppressed, and the next real failure is a bytecode-guided
   generic/signature repair (`Object` to `FileEntry`) rather than a source-layout
   failure.
+- JavaParser source indexing now uses a modern language level in the JVM helper, so
+  recovered record sources from Minecraft-style jars are not misreported as parser
+  failures.
 
 ### Phase 1: Header Validation
 - [x] Magic number (0xCAFEBABE)

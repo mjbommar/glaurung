@@ -167,7 +167,9 @@ Glaurung already has a growing Java path:
 - Glaurung now has a local JVM helper project under `java/glaurung-jvm-tools` that
   packages ASM, CFR, Vineflower, and JavaParser behind a JSON CLI. Python tools call
   this helper for bytecode summaries, decompiled source, and AST summaries without
-  executing recovered application code.
+  executing recovered application code. JavaParser is configured for a modern
+  language level so recovered records and other recent Java syntax are accepted
+  during AST indexing.
 - Python memory tools can now decompile one class with `java_decompile_class`,
   decompile bounded archive slices with `java_decompile_archive`, and parse
   recovered source with `java_parse_decompiled_source`, emitting
@@ -218,7 +220,9 @@ Glaurung already has a growing Java path:
 - Python memory tools can now render a daily-use recovery report with
   `java_recovery_report`, wrapping the recovery flow with a concise status,
   headline, progress counters, ranked blockers, exact source snippets, raw compiler
-  and parser messages, likely causes, next actions, cache state, and KB evidence.
+  and parser messages, likely causes, next actions, cache state, per-class decompiler
+  summaries, repair summaries, persisted markdown/JSON report files, copyable
+  commands, and KB evidence.
 - Python memory tools can now list candidate classes with `java_list_classes`,
   exposing bounded package/name/access-flag filtering, superclass/interface/member
   counts, `SourceFile` metadata, optional annotation descriptors, optional
@@ -1510,7 +1514,14 @@ Initial Python implementation status:
   - ranked blockers from compile diagnostics, JavaParser syntax problems, deferred
     repairs, and validation failures
   - exact source snippets around compiler diagnostics
+  - per-class engine/quality/parse/compile summaries
+  - applied and deferred repair summaries
   - likely cause and next action for each blocker
+  - copyable commands for reading the report, rerunning `javac`, and opening the
+    first blocking source location
+- Persists `.glaurung/recovery-report.md` and `.glaurung/recovery-report.json`.
+- Retains class summaries across cache-hit report runs by reading the previous
+  report JSON when decompilation is resumed.
 - The report keeps the full structured recovery result for agents, but puts the
   human workflow first.
 

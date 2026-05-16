@@ -1,6 +1,7 @@
 package com.glaurung.jvmtool;
 
 import com.github.javaparser.JavaParser;
+import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ParseResult;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Modifier;
@@ -26,7 +27,9 @@ final class AstSummary {
 
     static Map<String, Object> fromSource(String source) {
         Map<String, Object> out = new LinkedHashMap<>();
-        ParseResult<CompilationUnit> parsed = new JavaParser().parse(source);
+        ParserConfiguration configuration = new ParserConfiguration()
+                .setLanguageLevel(ParserConfiguration.LanguageLevel.BLEEDING_EDGE);
+        ParseResult<CompilationUnit> parsed = new JavaParser(configuration).parse(source);
         out.put("parse_success", parsed.isSuccessful());
         out.put("problem_count", parsed.getProblems().size());
         out.put(
