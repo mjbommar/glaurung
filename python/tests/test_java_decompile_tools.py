@@ -163,6 +163,82 @@ public class a {
     return jar
 
 
+def _dependency_jar(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java dependency fixture")
+    src = tmp_path / "dep-src"
+    out = tmp_path / "dep-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "Helper.java").write_text(
+        """
+package dep;
+
+public class Helper {
+    public static String value() {
+        return "dep";
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["javac", "--release", "17", "-d", str(out), str(src / "Helper.java")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar = tmp_path / "dep.jar"
+    with zipfile.ZipFile(jar, "w") as zf:
+        zf.write(out / "dep" / "Helper.class", "dep/Helper.class")
+    return jar
+
+
+def _jar_using_dependency(tmp_path: Path) -> tuple[Path, Path]:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java dependency fixture")
+    dep_jar = _dependency_jar(tmp_path)
+    src = tmp_path / "uses-dep-src"
+    out = tmp_path / "uses-dep-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "UsesDep.java").write_text(
+        """
+package app;
+
+import dep.Helper;
+
+public class UsesDep {
+    public String value() {
+        return Helper.value();
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "javac",
+            "--release",
+            "17",
+            "-classpath",
+            str(dep_jar),
+            "-d",
+            str(out),
+            str(src / "UsesDep.java"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar = tmp_path / "uses-dep.jar"
+    with zipfile.ZipFile(jar, "w") as zf:
+        zf.write(out / "app" / "UsesDep.class", "app/UsesDep.class")
+    return jar, dep_jar
+
+
 def _mapping_file(tmp_path: Path) -> Path:
     path = tmp_path / "mappings.txt"
     path.write_text(
@@ -441,6 +517,36 @@ def test_java_decompile_archive_can_score_candidate_compilation(
             path=str(jar),
             include_class_globs=["app/Helper"],
             compile_candidates=True,
+            java_release=17,
+        ),
+    )
+
+    assert result.attempted_class_count == 1
+    assert result.classes[0].compile_success is True
+    assert result.classes[0].attempted_engines[0].compile_success is True
+
+
+def test_java_decompile_archive_scores_candidates_with_project_classpath(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_decompile_archive import build_tool
+
+    jar, dep_jar = _jar_using_dependency(tmp_path)
+    output = tmp_path / "project"
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            output_root=str(output),
+            write_sources=True,
+            include_class_globs=["app/UsesDep"],
+            compile_candidates=True,
+            candidate_classpath=[str(dep_jar)],
+            candidate_project_root=str(output),
             java_release=17,
         ),
     )

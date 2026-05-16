@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -111,6 +112,18 @@ class JavaDecompileArchiveArgs(BaseModel):
             "in fallback quality scoring."
         ),
     )
+    candidate_project_root: str | None = Field(
+        None,
+        description=(
+            "Optional recovered project root whose existing src/main/java sources "
+            "are included when compiling decompiler candidates."
+        ),
+    )
+    candidate_classpath: list[str] = Field(
+        default_factory=list,
+        description="Optional classpath used for decompiler candidate compilation.",
+    )
+    max_candidate_project_sources: int = Field(256, ge=0)
     java_release: int = Field(17, ge=1)
 
 
@@ -369,7 +382,7 @@ def _decompile_one_class(
         raw_by_engine[engine] = raw
         attempt = _attempt_from_raw(engine, raw)
         if args.compile_candidates:
-            _score_candidate_compilation(class_name, raw, attempt, args.java_release)
+            _score_candidate_compilation(class_name, raw, attempt, args)
         attempts.append(attempt)
         if _attempt_good_enough(attempt) or not args.fallback:
             break
@@ -559,12 +572,12 @@ def _score_candidate_compilation(
     class_name: str,
     raw: dict[str, Any],
     attempt: JavaDecompileAttempt,
-    java_release: int,
+    args: JavaDecompileArchiveArgs,
 ) -> None:
     source = raw.get("source")
     if not isinstance(source, str) or not source.strip():
         return
-    compiled = _compile_candidate_source(class_name, source, java_release)
+    compiled = _compile_candidate_source(class_name, source, args)
     if compiled is None:
         attempt.stop_reasons = _dedupe([*attempt.stop_reasons, "javac_missing"])
         return
@@ -580,7 +593,7 @@ def _score_candidate_compilation(
 def _compile_candidate_source(
     class_name: str,
     source: str,
-    java_release: int,
+    args: JavaDecompileArchiveArgs,
 ) -> tuple[bool, int] | None:
     javac = shutil.which("javac")
     if javac is None:
@@ -594,16 +607,26 @@ def _compile_candidate_source(
         source_path.parent.mkdir(parents=True, exist_ok=True)
         classes_dir.mkdir()
         source_path.write_text(source.rstrip() + "\n", encoding="utf-8")
+        project_sources = _candidate_project_sources(
+            args.candidate_project_root,
+            class_name,
+            args.max_candidate_project_sources,
+        )
+        source_args = [str(source_path), *[str(path) for path in project_sources]]
+        classpath = _candidate_classpath(args.candidate_classpath)
         try:
+            command = [
+                javac,
+                "--release",
+                str(args.java_release),
+                "-d",
+                str(classes_dir),
+            ]
+            if classpath:
+                command.extend(["-classpath", classpath])
+            command.extend(source_args)
             proc = subprocess.run(
-                [
-                    javac,
-                    "--release",
-                    str(java_release),
-                    "-d",
-                    str(classes_dir),
-                    str(source_path),
-                ],
+                command,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -614,6 +637,38 @@ def _compile_candidate_source(
         output = "\n".join(part for part in (proc.stderr, proc.stdout) if part)
         diagnostic_count = output.count(": error:") + output.count(": warning:")
         return proc.returncode == 0, diagnostic_count
+
+
+def _candidate_project_sources(
+    project_root: str | None,
+    class_name: str,
+    max_sources: int,
+) -> list[Path]:
+    if project_root is None or max_sources == 0:
+        return []
+    root = Path(project_root)
+    source_root = root / "src" / "main" / "java"
+    if not source_root.is_dir():
+        return []
+    candidate_rel = Path(*class_name.split("/")).with_suffix(".java")
+    sources: list[Path] = []
+    for source in sorted(
+        path for path in source_root.rglob("*.java") if path.is_file()
+    ):
+        try:
+            if source.relative_to(source_root) == candidate_rel:
+                continue
+        except ValueError:
+            pass
+        sources.append(source)
+        if len(sources) >= max_sources:
+            break
+    return sources
+
+
+def _candidate_classpath(classpath: list[str]) -> str:
+    existing = [str(Path(item)) for item in classpath if item and Path(item).exists()]
+    return os.pathsep.join(dict.fromkeys(existing))
 
 
 def _quality_score(

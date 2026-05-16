@@ -80,6 +80,83 @@ def _vendored_fixture_jar(tmp_path: Path) -> Path:
     return jar
 
 
+def _dependency_jar(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java dependency fixture")
+    src = tmp_path / "dep-src"
+    out = tmp_path / "dep-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "Helper.java").write_text(
+        """
+package dep;
+
+public class Helper {
+    public static String value() {
+        return "nested-dep";
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["javac", "--release", "17", "-d", str(out), str(src / "Helper.java")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar = tmp_path / "dep.jar"
+    with zipfile.ZipFile(jar, "w") as zf:
+        zf.write(out / "dep" / "Helper.class", "dep/Helper.class")
+    return jar
+
+
+def _jar_with_nested_dependency(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java recovery fixture")
+    dep_jar = _dependency_jar(tmp_path)
+    src = tmp_path / "nested-app-src"
+    out = tmp_path / "nested-app-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "UsesDep.java").write_text(
+        """
+package app;
+
+import dep.Helper;
+
+public class UsesDep {
+    public String value() {
+        return Helper.value();
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "javac",
+            "--release",
+            "17",
+            "-classpath",
+            str(dep_jar),
+            "-d",
+            str(out),
+            str(src / "UsesDep.java"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar = tmp_path / "nested-dependency-app.jar"
+    with zipfile.ZipFile(jar, "w") as zf:
+        zf.write(out / "app" / "UsesDep.class", "app/UsesDep.class")
+        zf.write(dep_jar, "META-INF/libraries/dep/dep/1.0.0/dep-1.0.0.jar")
+    return jar
+
+
 def test_java_recover_project_orchestrates_decompile_compile_repair_validate(
     tmp_path: Path,
 ) -> None:
@@ -147,6 +224,38 @@ def test_java_recover_project_accepts_vendored_safe_fixture_sources(
     assert result.success is True
     assert result.generated_source_count == 1
     assert (output / "src" / "main" / "resources" / "fixture.properties").is_file()
+
+
+def test_java_recover_project_extracts_nested_jars_into_effective_classpath(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_recover_project import build_tool
+
+    jar = _jar_with_nested_dependency(tmp_path)
+    output = tmp_path / "nested-recovered"
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            output_root=str(output),
+            java_release=17,
+            max_classes=4,
+            validate_profile="abi",
+            extract_nested_archives=True,
+        ),
+    )
+
+    assert result.success is True
+    assert result.dependency_result is not None
+    assert result.dependency_result.nested_archive_count == 1
+    assert result.extracted_nested_archive_count == 1
+    assert result.compile_success is True
+    assert any(path.endswith("dep-1.0.0.jar") for path in result.effective_classpath)
+    assert (output / "libs" / "nested" / "dep-1.0.0.jar").is_file()
 
 
 def test_memory_agent_registers_java_recover_project() -> None:

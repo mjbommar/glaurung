@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -18,6 +19,10 @@ from .java_decompile_archive import (
     JavaDecompileArchiveResult,
     JavaInnerClassPolicy,
     build_tool as build_java_decompile_archive,
+)
+from .java_infer_dependencies import (
+    JavaInferDependenciesResult,
+    build_tool as build_java_infer_dependencies,
 )
 from .java_parse_decompiled_source import build_tool as build_java_parse_source
 from .java_reconstruct_source_tree import (
@@ -59,6 +64,12 @@ class JavaRecoverProjectArgs(BaseModel):
     timeout_seconds_per_class: int = Field(60, ge=1, le=600)
     java_release: int = Field(17, ge=1)
     compile_candidates: bool = True
+    classpath: list[str] = Field(default_factory=list)
+    include_dependency_inference: bool = True
+    collect_local_libraries: bool = True
+    extract_nested_archives: bool = False
+    max_nested_archives: int = Field(64, ge=0)
+    max_nested_archive_bytes: int = Field(50_000_000, ge=0)
     run_repair: bool = True
     max_repair_iterations: int = Field(3, ge=1, le=10)
     run_validate: bool = True
@@ -72,6 +83,7 @@ class JavaRecoverProjectResult(BaseModel):
     success: bool = False
     quality_summary: str = ""
     reconstruct_result: JavaReconstructSourceTreeResult | None = None
+    dependency_result: JavaInferDependenciesResult | None = None
     decompile_result: JavaDecompileArchiveResult | None = None
     compile_result: JavaCompileRecoveredProjectResult | None = None
     repair_result: JavaRepairDecompiledSourceResult | None = None
@@ -84,6 +96,9 @@ class JavaRecoverProjectResult(BaseModel):
     generated_source_count: int = 0
     generated_resource_count: int = 0
     generated_build_files: list[str] = Field(default_factory=list)
+    effective_classpath: list[str] = Field(default_factory=list)
+    extracted_nested_archives: list[str] = Field(default_factory=list)
+    extracted_nested_archive_count: int = 0
     warnings: list[str] = Field(default_factory=list)
     stop_reasons: list[str] = Field(default_factory=list)
     recovery_node_id: str | None = None
@@ -151,6 +166,32 @@ class JavaRecoverProjectTool(
             _finish(result, kb)
             return result
 
+        if args.include_dependency_inference:
+            dependency_tool = build_java_infer_dependencies()
+            dependency_result = dependency_tool.run(
+                ctx,
+                kb,
+                dependency_tool.input_model(path=str(archive_path)),
+            )
+            result.dependency_result = dependency_result
+            result.stop_reasons.extend(dependency_result.stop_reasons)
+
+        if args.extract_nested_archives:
+            extracted, extraction_warnings, extraction_reasons = (
+                _extract_nested_archives(archive_path, output_root, args)
+            )
+            result.extracted_nested_archives = [
+                _relative(output_root, path) for path in extracted
+            ]
+            result.extracted_nested_archive_count = len(extracted)
+            result.warnings.extend(extraction_warnings)
+            result.stop_reasons.extend(extraction_reasons)
+
+        effective_classpath = _effective_classpath(output_root, args)
+        result.effective_classpath = [
+            _relative_or_str(output_root, path) for path in effective_classpath
+        ]
+
         decompile_tool = build_java_decompile_archive()
         decompile = decompile_tool.run(
             ctx,
@@ -171,6 +212,8 @@ class JavaRecoverProjectTool(
                 include_bytecode_correlation=True,
                 rewrite_mapped_sources=args.rewrite_mapped_sources,
                 compile_candidates=args.compile_candidates,
+                candidate_project_root=str(output_root),
+                candidate_classpath=[str(path) for path in effective_classpath],
                 java_release=args.java_release,
             ),
         )
@@ -180,7 +223,11 @@ class JavaRecoverProjectTool(
         result.warnings.extend(decompile.warnings)
         result.stop_reasons.extend(decompile.stop_reasons)
 
-        _refresh_sources_and_javac_args(output_root, args.java_release)
+        _refresh_sources_and_javac_args(
+            output_root,
+            args.java_release,
+            effective_classpath,
+        )
         result.parsed_source_count = _parse_sources(ctx, kb, output_root, args)
 
         compile_tool = build_java_compile_recovered_project()
@@ -191,6 +238,7 @@ class JavaRecoverProjectTool(
                 source_project_root=str(output_root),
                 build_tool="javac",
                 java_release=args.java_release,
+                classpath=[str(path) for path in effective_classpath],
                 timeout_seconds=args.timeout_seconds_per_class,
             ),
         )
@@ -210,6 +258,7 @@ class JavaRecoverProjectTool(
                     source_project_root=str(output_root),
                     build_tool="javac",
                     java_release=args.java_release,
+                    classpath=[str(path) for path in effective_classpath],
                     max_iterations=args.max_repair_iterations,
                     timeout_seconds=args.timeout_seconds_per_class,
                 ),
@@ -231,6 +280,7 @@ class JavaRecoverProjectTool(
                     source_project_root=str(output_root),
                     profile=args.validate_profile,
                     java_release=args.java_release,
+                    classpath=[str(path) for path in effective_classpath],
                     run_compile=True,
                     allow_generated_stubs=args.allow_generated_stubs,
                     compile_timeout_seconds=args.timeout_seconds_per_class,
@@ -254,26 +304,108 @@ class JavaRecoverProjectTool(
         return result
 
 
-def _refresh_sources_and_javac_args(output_root: Path, java_release: int) -> None:
+def _refresh_sources_and_javac_args(
+    output_root: Path,
+    java_release: int,
+    classpath: list[Path],
+) -> None:
     source_root = output_root / "src" / "main" / "java"
     sources = sorted(path for path in source_root.rglob("*.java") if path.is_file())
     (output_root / "sources.txt").write_text(
         "\n".join(_relative(output_root, source) for source in sources) + "\n",
         encoding="utf-8",
     )
-    (output_root / "javac.args").write_text(
-        "\n".join(
+    lines = ["--release", str(java_release)]
+    if classpath:
+        lines.extend(
             [
-                "--release",
-                str(java_release),
-                "-d",
-                "build/classes",
-                "@sources.txt",
-                "",
+                "-classpath",
+                ":".join(_relative_or_str(output_root, path) for path in classpath),
             ]
-        ),
-        encoding="utf-8",
-    )
+        )
+    lines.extend(["-d", "build/classes", "@sources.txt", ""])
+    (output_root / "javac.args").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _effective_classpath(
+    output_root: Path,
+    args: JavaRecoverProjectArgs,
+) -> list[Path]:
+    candidates = [Path(item) for item in args.classpath]
+    if args.collect_local_libraries:
+        for lib_dir in (output_root / "libs", output_root / "lib"):
+            if lib_dir.is_dir():
+                candidates.extend(
+                    sorted(path for path in lib_dir.rglob("*.jar") if path.is_file())
+                )
+    return _dedupe_paths(candidates)
+
+
+def _extract_nested_archives(
+    archive_path: Path,
+    output_root: Path,
+    args: JavaRecoverProjectArgs,
+) -> tuple[list[Path], list[str], list[str]]:
+    extracted: list[Path] = []
+    warnings: list[str] = []
+    stop_reasons: list[str] = []
+    if not zipfile.is_zipfile(archive_path):
+        return extracted, warnings, ["input_not_zip_for_nested_archives"]
+    dest_root = output_root / "libs" / "nested"
+    dest_root.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path) as zf:
+        for info in zf.infolist():
+            if info.is_dir() or not info.filename.lower().endswith((".jar", ".zip")):
+                continue
+            safe_name = _safe_archive_path(info.filename)
+            if safe_name is None:
+                warnings.append(f"Skipped unsafe nested archive path {info.filename}.")
+                continue
+            if len(extracted) >= args.max_nested_archives:
+                stop_reasons.append("max_nested_archives")
+                break
+            if info.file_size > args.max_nested_archive_bytes:
+                warnings.append(
+                    f"Skipped oversized nested archive {safe_name} ({info.file_size} bytes)."
+                )
+                stop_reasons.append("max_nested_archive_bytes")
+                continue
+            dest = _nested_archive_destination(dest_root, safe_name)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(zf.read(info))
+            extracted.append(dest)
+    return extracted, warnings, _dedupe(stop_reasons)
+
+
+def _nested_archive_destination(dest_root: Path, archive_entry: str) -> Path:
+    basename = PurePosixPath(archive_entry).name
+    dest = dest_root / basename
+    if not dest.exists():
+        return dest
+    digest = hashlib.sha256(archive_entry.encode("utf-8")).hexdigest()[:8]
+    return dest_root / f"{dest.stem}-{digest}{dest.suffix}"
+
+
+def _safe_archive_path(name: str) -> str | None:
+    normalized = name.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    return path.as_posix()
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    out: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        if not path.exists():
+            continue
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
 
 
 def _parse_sources(
@@ -349,6 +481,13 @@ def _add_recovery_node(
 def _relative(root: Path, path: Path) -> str:
     try:
         return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _relative_or_str(root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return str(path)
 
