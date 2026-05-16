@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import zipfile
 from pathlib import Path
@@ -22,7 +23,14 @@ JavaRepairKind = Literal[
     "rename_public_type_file",
     "rewrite_inner_companion_declaration",
     "add_missing_import",
+    "ambiguous_missing_import",
     "add_local_classpath_jar",
+    "write_build_repair_plan",
+    "report_signature_mismatch",
+    "report_enum_record_sealed_reconstruction",
+    "report_malformed_anonymous_class",
+    "report_bad_cast",
+    "report_synthetic_bridge_noise",
 ]
 
 
@@ -141,16 +149,6 @@ class JavaRepairDecompiledSourceTool(
             )
             if len(repairs) < args.max_repairs_per_iteration:
                 repairs.extend(
-                    _repair_missing_imports(
-                        root,
-                        compile_result,
-                        iteration=iteration,
-                        dry_run=args.dry_run,
-                        max_repairs=args.max_repairs_per_iteration - len(repairs),
-                    )
-                )
-            if len(repairs) < args.max_repairs_per_iteration:
-                repairs.extend(
                     _repair_missing_local_dependencies(
                         root,
                         compile_result,
@@ -163,11 +161,44 @@ class JavaRepairDecompiledSourceTool(
                     )
                 )
             if len(repairs) < args.max_repairs_per_iteration:
+                if not any(
+                    repair.kind == "add_local_classpath_jar" and repair.applied
+                    for repair in repairs
+                ):
+                    repairs.extend(
+                        _write_build_repair_plan(
+                            root,
+                            compile_result,
+                            iteration=iteration,
+                            dry_run=args.dry_run,
+                            max_repairs=args.max_repairs_per_iteration - len(repairs),
+                        )
+                    )
+            if len(repairs) < args.max_repairs_per_iteration:
+                repairs.extend(
+                    _repair_missing_imports(
+                        root,
+                        compile_result,
+                        iteration=iteration,
+                        dry_run=args.dry_run,
+                        max_repairs=args.max_repairs_per_iteration - len(repairs),
+                    )
+                )
+            if len(repairs) < args.max_repairs_per_iteration:
                 repairs.extend(
                     _repair_inner_companion_declarations(
                         root,
                         iteration=iteration,
                         dry_run=args.dry_run,
+                        max_repairs=args.max_repairs_per_iteration - len(repairs),
+                    )
+                )
+            if len(repairs) < args.max_repairs_per_iteration:
+                repairs.extend(
+                    _report_deeper_repair_candidates(
+                        root,
+                        compile_result,
+                        iteration=iteration,
                         max_repairs=args.max_repairs_per_iteration - len(repairs),
                     )
                 )
@@ -177,6 +208,18 @@ class JavaRepairDecompiledSourceTool(
                 break
             if args.dry_run:
                 _append_once(result.stop_reasons, "dry_run")
+                break
+            if not any(repair.applied for repair in repairs):
+                _append_once(result.stop_reasons, "no_applicable_repairs")
+                break
+            if any(
+                repair.kind == "write_build_repair_plan" and repair.applied
+                for repair in repairs
+            ) and not any(
+                repair.applied and repair.kind != "write_build_repair_plan"
+                for repair in repairs
+            ):
+                _append_once(result.stop_reasons, "build_repair_plan_written")
                 break
             _rewrite_sources_file(root, args.sources_file)
             if len(repairs) >= args.max_repairs_per_iteration > 0:
@@ -305,6 +348,52 @@ def _repair_missing_local_dependencies(
     ]
 
 
+def _write_build_repair_plan(
+    root: Path,
+    compile_result: JavaCompileRecoveredProjectResult,
+    *,
+    iteration: int,
+    dry_run: bool,
+    max_repairs: int,
+) -> list[JavaSourceRepair]:
+    if max_repairs == 0:
+        return []
+    targets = _missing_external_dependency_targets(compile_result)
+    if not targets:
+        return []
+    candidate_jars = _matching_local_jars(root, targets)
+    plan_path = root / ".glaurung" / "build-repair-plan.json"
+    plan = {
+        "tool": "java_repair_decompiled_source",
+        "reason": "missing_external_dependencies",
+        "selected_build_tool": compile_result.selected_build_tool,
+        "missing_targets": targets,
+        "local_candidate_jars": [_relative(root, jar) for jar in candidate_jars],
+        "suggested_actions": [
+            "Add the matching local jar to javac.args, Maven, or Gradle before editing source.",
+            "If no local jar matches, resolve the dependency explicitly through the project dependency policy.",
+        ],
+    }
+    if not dry_run:
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(
+            json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    return [
+        JavaSourceRepair(
+            iteration=iteration,
+            kind="write_build_repair_plan",
+            file=_relative(root, plan_path),
+            new_file=_relative(root, plan_path),
+            applied=not dry_run,
+            message=(
+                "Wrote dependency/build repair plan for missing external target(s): "
+                + ", ".join(targets)
+            ),
+        )
+    ]
+
+
 def _repair_missing_imports(
     root: Path,
     compile_result: JavaCompileRecoveredProjectResult,
@@ -337,7 +426,25 @@ def _repair_missing_imports(
         source_file = _resolve_under_root(root, diagnostic.file)
         if source_file in repaired_files:
             continue
-        if source_file is None or not source_file.is_file() or len(candidates) != 1:
+        if source_file is None or not source_file.is_file():
+            continue
+        if len(candidates) > 1:
+            repairs.append(
+                JavaSourceRepair(
+                    iteration=iteration,
+                    kind="ambiguous_missing_import",
+                    file=_relative(root, source_file),
+                    new_file=_relative(root, source_file),
+                    applied=False,
+                    message=(
+                        f"Unresolved type {simple_name} matches multiple local "
+                        "source types: "
+                        + ", ".join(candidate[1] for candidate in candidates)
+                    ),
+                )
+            )
+            continue
+        if len(candidates) != 1:
             continue
         package_name, fqcn, candidate_file = candidates[0]
         if candidate_file == source_file:
@@ -360,6 +467,60 @@ def _repair_missing_imports(
                 new_file=_relative(root, source_file),
                 applied=not dry_run,
                 message=f"Added import {fqcn} for unresolved type {simple_name}.",
+            )
+        )
+    return repairs
+
+
+def _report_deeper_repair_candidates(
+    root: Path,
+    compile_result: JavaCompileRecoveredProjectResult,
+    *,
+    iteration: int,
+    max_repairs: int,
+) -> list[JavaSourceRepair]:
+    if max_repairs == 0:
+        return []
+    repairs: list[JavaSourceRepair] = []
+    for diagnostic in compile_result.diagnostics:
+        if len(repairs) >= max_repairs:
+            break
+        source_file = (
+            _resolve_under_root(root, diagnostic.file) if diagnostic.file else None
+        )
+        file_label = (
+            _relative(root, source_file)
+            if source_file is not None and source_file.is_file()
+            else diagnostic.file or ""
+        )
+        kind: JavaRepairKind | None = None
+        message = diagnostic.message
+        raw = diagnostic.raw_excerpt.lower()
+        if diagnostic.category == "generic_signature_mismatch":
+            kind = "report_signature_mismatch"
+        elif diagnostic.category == "enum_record_sealed_reconstruction":
+            kind = "report_enum_record_sealed_reconstruction"
+        elif diagnostic.category == "lambda_or_anonymous_reconstruction":
+            kind = "report_malformed_anonymous_class"
+        elif "unavailable anonymous inner class" in raw:
+            kind = "report_malformed_anonymous_class"
+        elif "cannot cast" in raw or "inconvertible types" in raw:
+            kind = "report_bad_cast"
+        elif "bridge" in raw and "synthetic" in raw:
+            kind = "report_synthetic_bridge_noise"
+        if kind is None:
+            continue
+        repairs.append(
+            JavaSourceRepair(
+                iteration=iteration,
+                kind=kind,
+                file=file_label,
+                new_file=file_label,
+                applied=False,
+                message=(
+                    "Deferred non-mechanical repair; use bytecode descriptors and "
+                    f"AST evidence before editing source: {message}"
+                ),
             )
         )
     return repairs
@@ -435,6 +596,16 @@ def _missing_import_targets(
         if diagnostic.package_or_class:
             _append_once(out, diagnostic.package_or_class)
     return out
+
+
+def _missing_external_dependency_targets(
+    compile_result: JavaCompileRecoveredProjectResult,
+) -> list[str]:
+    return [
+        target
+        for target in _missing_import_targets(compile_result)
+        if "." in target or target.endswith(".*")
+    ]
 
 
 def _matching_local_jars(root: Path, targets: list[str]) -> list[Path]:

@@ -301,6 +301,129 @@ public class Helper {
     assert (project / "build" / "classes" / "app" / "Use.class").is_file()
 
 
+def test_java_repair_decompiled_source_reports_ambiguous_missing_import(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_repair_decompiled_source import build_tool
+
+    project = tmp_path / "project"
+    src = project / "src" / "main" / "java"
+    (src / "app").mkdir(parents=True)
+    (src / "lib1").mkdir(parents=True)
+    (src / "lib2").mkdir(parents=True)
+    (src / "app" / "Use.java").write_text(
+        """
+package app;
+
+public class Use {
+    private Helper helper;
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    for package in ("lib1", "lib2"):
+        (src / package / "Helper.java").write_text(
+            f"package {package};\n\npublic class Helper {{}}\n",
+            encoding="utf-8",
+        )
+    ctx = _ctx(src / "app" / "Use.java")
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(source_project_root=str(project), java_release=17),
+    )
+
+    assert result.success is False
+    assert any(
+        repair.kind == "ambiguous_missing_import" and not repair.applied
+        for repair in result.repairs
+    )
+    assert "import lib1.Helper;" not in (src / "app" / "Use.java").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_java_repair_decompiled_source_writes_build_repair_plan_for_external_dep(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_repair_decompiled_source import build_tool
+
+    project = tmp_path / "project"
+    src = project / "src" / "main" / "java" / "app"
+    src.mkdir(parents=True)
+    source = src / "UseExternal.java"
+    source.write_text(
+        """
+package app;
+
+import missing.lib.Helper;
+
+public class UseExternal {
+    private Helper helper;
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    ctx = _ctx(source)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(source_project_root=str(project), java_release=17),
+    )
+
+    assert result.success is False
+    assert any(repair.kind == "write_build_repair_plan" for repair in result.repairs)
+    plan = project / ".glaurung" / "build-repair-plan.json"
+    assert plan.is_file()
+    assert "missing.lib" in plan.read_text(encoding="utf-8")
+
+
+def test_java_repair_decompiled_source_reports_signature_mismatch(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_repair_decompiled_source import build_tool
+
+    project = tmp_path / "project"
+    src = project / "src" / "main" / "java" / "app"
+    src.mkdir(parents=True)
+    source = src / "BadCall.java"
+    source.write_text(
+        """
+package app;
+
+public class BadCall {
+    public void target(String value) {}
+
+    public void caller() {
+        target(1);
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    ctx = _ctx(source)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(source_project_root=str(project), java_release=17),
+    )
+
+    assert result.success is False
+    assert any(
+        repair.kind == "report_signature_mismatch" and not repair.applied
+        for repair in result.repairs
+    )
+
+
 def test_memory_agent_registers_java_repair_decompiled_source() -> None:
     from glaurung.llm.agents.memory_agent import create_memory_agent
 
