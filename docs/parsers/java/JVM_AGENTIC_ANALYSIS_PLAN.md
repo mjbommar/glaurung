@@ -56,6 +56,9 @@ Glaurung already has a growing Java path:
 - `java_index_archive` can now apply manifest-aware multi-release selection for a
   requested Java target version, so agents can distinguish detected versioned class
   entries from the class entry that the JVM would actually load.
+- Python tools now share classfile version/size policy normalization, reporting Java
+  release labels, preview classfiles, future classfile versions newer than Java SE
+  26, unusual minor versions, and large/tiny classfile entries.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang
@@ -732,6 +735,8 @@ Outputs:
 - Archive hash and size.
 - Entry counts.
 - Class count.
+- Per-class Java release labels, classfile version labels, preview/future-version
+  state, size categories, and classfile policy warnings.
 - Package summary.
 - Multi-release variants.
 - Manifest fields.
@@ -755,7 +760,8 @@ Initial Python implementation status:
   result-limit filtering.
 - Reports class locators, internal/dotted/mapped names, package/simple names,
   superclasses, `SourceFile`, interfaces, JVM version, method counts, field counts,
-  raw access flags, decoded access-flag names, methods with code,
+  raw access flags, decoded access-flag names, normalized Java/classfile version
+  labels, preview/future-version/size warnings, methods with code,
   inner/nest/record summary counts, and optional class annotation descriptors.
 - Supports optional ProGuard/Mojang mapped class names when a mapping file is
   supplied.
@@ -774,9 +780,9 @@ Inputs:
 Outputs:
 
 - Class locators, names, superclasses, `SourceFile`, interface counts, method counts,
-  field counts, JVM version, raw and decoded access flags,
-  inner/nest/record summary counts, mapped names, and optional annotation
-  descriptors.
+  field counts, JVM version, raw and decoded access flags, Java release labels,
+  classfile size categories, classfile policy warnings, inner/nest/record summary
+  counts, mapped names, and optional annotation descriptors.
 
 `java_view_class`
 
@@ -794,6 +800,8 @@ Outputs:
   `EnclosingMethod`, `NestHost`, `NestMembers`, and `Record` components.
 - Raw and decoded class, field, method, inner-class, and method-parameter access
   flags.
+- Normalized Java/classfile version labels, preview/future-version state,
+  classfile size category, and policy warnings.
 - Fields.
 - Methods with code-size and line-number range summaries where available.
 - Descriptor-aware mapped official/obfuscated names for classes and members when
@@ -820,6 +828,8 @@ Initial Python implementation status:
   defaults when present.
 - Reports class-level `SourceFile` metadata on returned methods when present.
 - Reports raw method access flags and decoded access-flag names.
+- Reports containing-class Java/classfile version labels, classfile size category,
+  and classfile policy warnings for each method.
 - Supports optional method annotation descriptors.
 - Supports optional ProGuard/Mojang mapped class and method names when a mapping file
   is supplied.
@@ -838,6 +848,7 @@ Outputs:
 
 - Method locators.
 - Raw and decoded access flags.
+- Containing-class Java/classfile version labels and policy warnings.
 - Descriptor, decoded erased parameter/return types, generic signatures, and mapped
   names/signatures when available.
 - Readable decoded generic parameter/return/type summaries when `Signature`

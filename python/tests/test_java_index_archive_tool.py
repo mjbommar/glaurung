@@ -115,6 +115,11 @@ def test_java_index_archive_summarizes_vendored_jar() -> None:
     assert cls.entry_name == "HelloWorld.class"
     assert cls.class_name == "HelloWorld"
     assert cls.major_version in {55, 61, 65}
+    assert cls.java_release in {11, 17, 21}
+    assert cls.java_release_label in {"Java 11", "Java 17", "Java 21"}
+    assert cls.classfile_version_label.startswith(cls.java_release_label)
+    assert cls.classfile_size is not None and cls.classfile_size > 0
+    assert cls.classfile_warnings == []
     assert cls.method_count >= 1
     assert cls.methods_with_code >= 1
 

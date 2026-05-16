@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 import glaurung as g
+from glaurung.java_classfile_policy import classfile_policy
 
 from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
@@ -34,6 +35,13 @@ class JavaClassSummary(BaseModel):
     super_class: str
     major_version: int
     minor_version: int
+    java_release: int | None = None
+    java_release_label: str | None = None
+    classfile_version_label: str
+    is_preview_classfile: bool = False
+    classfile_size: int | None = None
+    classfile_size_category: str = "unknown"
+    classfile_warnings: list[str] = Field(default_factory=list)
     access_flags: int
     method_count: int
     field_count: int
@@ -351,12 +359,24 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                         parse_error_count += 1
                         continue
                     methods = parsed["methods"]
+                    policy = classfile_policy(
+                        int(parsed["major_version"]),
+                        int(parsed["minor_version"]),
+                        size_bytes=info.file_size,
+                    )
                     summary = JavaClassSummary(
                         entry_name=info.filename,
                         class_name=parsed["class_name"],
                         super_class=parsed["super_class"],
-                        major_version=parsed["major_version"],
-                        minor_version=parsed["minor_version"],
+                        major_version=policy.major_version,
+                        minor_version=policy.minor_version,
+                        java_release=policy.java_release,
+                        java_release_label=policy.java_release_label,
+                        classfile_version_label=policy.classfile_version_label,
+                        is_preview_classfile=policy.is_preview_classfile,
+                        classfile_size=policy.classfile_size,
+                        classfile_size_category=policy.classfile_size_category,
+                        classfile_warnings=policy.classfile_warnings,
                         access_flags=parsed["access_flags"],
                         method_count=len(methods),
                         field_count=len(parsed["fields"]),

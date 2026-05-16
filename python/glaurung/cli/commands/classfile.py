@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 import glaurung as g
+from glaurung.java_classfile_policy import classfile_policy
 
 from .base import BaseCommand
 from ..formatters.base import BaseFormatter, OutputFormat
@@ -42,16 +43,21 @@ def _format_access(flags: int, is_method: bool = False) -> str:
     return " ".join(parts) if parts else "package-private"
 
 
-def _java_version_label(major: int) -> str:
-    if major >= 49:
-        return f"Java {major - 44} (classfile {major})"
-    return f"classfile {major}"
-
-
-def _render_class_summary(info: dict, formatter: BaseFormatter) -> None:
-    formatter.output_plain(
-        f"class {info['class_name']}  ({_java_version_label(info['major_version'])})"
+def _render_class_summary(
+    info: dict, formatter: BaseFormatter, classfile_size: int | None = None
+) -> None:
+    policy = classfile_policy(
+        int(info["major_version"]),
+        int(info["minor_version"]),
+        size_bytes=classfile_size,
     )
+    formatter.output_plain(
+        f"class {info['class_name']}  ({policy.classfile_version_label})"
+    )
+    if policy.classfile_warnings:
+        formatter.output_plain(
+            f"  classfile warnings: {'; '.join(policy.classfile_warnings)}"
+        )
     if info["super_class"] and info["super_class"] != "java/lang/Object":
         formatter.output_plain(f"  extends {info['super_class']}")
     elif info["super_class"]:
@@ -75,16 +81,17 @@ def _scan_jar(path: Path, formatter: BaseFormatter) -> int:
     """Walk a JAR archive and print every class it contains. Returns
     the number of classes successfully parsed."""
     parsed = 0
+    java_analysis = getattr(g, "analysis")
     with zipfile.ZipFile(path) as zf:
         names = sorted(n for n in zf.namelist() if n.endswith(".class"))
         formatter.output_plain(f"# {path.name}: {len(names)} class file(s)")
         for entry in names:
             data = zf.read(entry)
-            info = g.analysis.parse_java_class_bytes(data)
+            info = java_analysis.parse_java_class_bytes(data)
             if info is None:
                 continue
             formatter.output_plain("")
-            _render_class_summary(info, formatter)
+            _render_class_summary(info, formatter, classfile_size=len(data))
             parsed += 1
     return parsed
 
@@ -118,12 +125,13 @@ class ClassfileCommand(BaseCommand):
             formatter.output_plain(f"\n_parsed {count} class(es)_")
             return 0
 
-        info = g.analysis.parse_java_class_path(str(path))
+        java_analysis = getattr(g, "analysis")
+        info = java_analysis.parse_java_class_path(str(path))
         if info is None:
             formatter.output_plain(f"Error: not a Java class file: {path}")
             return 4
         if formatter.format_type == OutputFormat.JSON:
             formatter.output_json(info)
             return 0
-        _render_class_summary(info, formatter)
+        _render_class_summary(info, formatter, classfile_size=path.stat().st_size)
         return 0

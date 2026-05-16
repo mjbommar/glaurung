@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,29 @@ def _compile_source(tmp_path: Path, source: str) -> Path:
         text=True,
     )
     return jar
+
+
+def _patch_jar_class_version(
+    tmp_path: Path,
+    jar: Path,
+    entry_name: str,
+    *,
+    major_version: int,
+    minor_version: int = 0,
+) -> Path:
+    patched = tmp_path / "patched-version.jar"
+    with zipfile.ZipFile(jar) as src, zipfile.ZipFile(patched, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info)
+            if info.filename == entry_name:
+                data = (
+                    data[:4]
+                    + minor_version.to_bytes(2, "big")
+                    + major_version.to_bytes(2, "big")
+                    + data[8:]
+                )
+            dst.writestr(info, data)
+    return patched
 
 
 _SOURCE = """
@@ -95,6 +119,11 @@ def test_java_list_classes_filters_and_records_kb_nodes(tmp_path: Path) -> None:
     assert main.inner_class_count >= 1
     assert "public" in main.access_flag_names
     assert "super" in main.access_flag_names
+    assert main.java_release == 17
+    assert main.java_release_label == "Java 17"
+    assert main.classfile_version_label == "Java 17 (classfile 61.0)"
+    assert main.classfile_size is not None and main.classfile_size > 0
+    assert main.classfile_warnings == []
     assert main.annotation_descriptors == ["Ljava/lang/Deprecated;"]
     assert any(
         node.kind == NodeKind.java_class
@@ -167,6 +196,40 @@ def test_java_list_classes_decodes_generic_class_signatures(tmp_path: Path) -> N
     assert box.generic_type_parameters == ["T extends java.lang.Number"]
     assert box.generic_super_class == "java.lang.Object"
     assert box.generic_signature_error is None
+
+
+def test_java_list_classes_reports_classfile_policy_warnings(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_list_classes import build_tool
+
+    jar = _compile_source(tmp_path, _SOURCE)
+    future_jar = _patch_jar_class_version(
+        tmp_path,
+        jar,
+        "app/Main.class",
+        major_version=71,
+        minor_version=65535,
+    )
+    ctx = _ctx(future_jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(path=str(future_jar), name_filter="app/Main"),
+    )
+
+    assert result.matched_class_count >= 1
+    main = next(cls for cls in result.classes if cls.class_name == "app/Main")
+    assert main.major_version == 71
+    assert main.minor_version == 65535
+    assert main.java_release == 27
+    assert main.is_preview_classfile is True
+    assert any("preview" in warning for warning in main.classfile_warnings)
+    assert any(
+        "newer than Java SE 26" in warning for warning in main.classfile_warnings
+    )
 
 
 def test_java_list_classes_respects_limit(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 import glaurung as g
+from glaurung.java_classfile_policy import classfile_policy
 
 from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
@@ -75,6 +76,13 @@ class JavaListedClass(BaseModel):
     access_flag_names: list[str] = Field(default_factory=list)
     major_version: int
     minor_version: int
+    java_release: int | None = None
+    java_release_label: str | None = None
+    classfile_version_label: str
+    is_preview_classfile: bool = False
+    classfile_size: int | None = None
+    classfile_size_category: str = "unknown"
+    classfile_warnings: list[str] = Field(default_factory=list)
     method_count: int
     field_count: int
     methods_with_code: int
@@ -150,6 +158,7 @@ class JavaListClassesTool(MemoryTool[JavaListClassesArgs, JavaListClassesResult]
                 summary = _class_summary(
                     entry_name=info.filename,
                     parsed=parsed,
+                    classfile_size=info.file_size,
                     class_mapping=class_mapping,
                     include_annotations=args.include_annotations,
                 )
@@ -170,6 +179,7 @@ def _class_summary(
     *,
     entry_name: str,
     parsed: dict[str, Any],
+    classfile_size: int | None,
     class_mapping: ProguardClassMapping | None,
     include_annotations: bool,
 ) -> JavaListedClass:
@@ -185,6 +195,11 @@ def _class_summary(
     ]
     generic_signature = _optional_string(parsed.get("signature"))
     decoded_signature = decode_class_signature(generic_signature)
+    policy = classfile_policy(
+        int(parsed.get("major_version", 0)),
+        int(parsed.get("minor_version", 0)),
+        size_bytes=classfile_size,
+    )
     return JavaListedClass(
         entry_name=entry_name,
         class_name=class_name,
@@ -205,8 +220,15 @@ def _class_summary(
         access_flag_names=access_flag_names(
             int(parsed.get("access_flags", 0)), "class"
         ),
-        major_version=int(parsed.get("major_version", 0)),
-        minor_version=int(parsed.get("minor_version", 0)),
+        major_version=policy.major_version,
+        minor_version=policy.minor_version,
+        java_release=policy.java_release,
+        java_release_label=policy.java_release_label,
+        classfile_version_label=policy.classfile_version_label,
+        is_preview_classfile=policy.is_preview_classfile,
+        classfile_size=policy.classfile_size,
+        classfile_size_category=policy.classfile_size_category,
+        classfile_warnings=policy.classfile_warnings,
         method_count=len(methods),
         field_count=len(fields),
         methods_with_code=sum(

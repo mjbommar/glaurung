@@ -122,6 +122,10 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert result.source_file == "a.java"
     assert "public" in result.access_flag_names
     assert "super" in result.access_flag_names
+    assert result.java_release == 17
+    assert result.classfile_version_label == "Java 17 (classfile 61.0)"
+    assert result.classfile_size is not None and result.classfile_size > 0
+    assert result.classfile_warnings == []
     assert result.annotations[0].descriptor == "LMarker;"
     assert result.annotations[0].elements[0].value.value == "game-thing"
     assert any(item.inner_class == "a$f" for item in result.inner_classes)

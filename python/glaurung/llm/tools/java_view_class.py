@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 import glaurung as g
+from glaurung.java_classfile_policy import classfile_policy
 
 from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
@@ -149,6 +150,13 @@ class JavaViewClassResult(BaseModel):
     generic_signature_error: str | None = None
     major_version: int | None = None
     minor_version: int | None = None
+    java_release: int | None = None
+    java_release_label: str | None = None
+    classfile_version_label: str | None = None
+    is_preview_classfile: bool = False
+    classfile_size: int | None = None
+    classfile_size_category: str = "unknown"
+    classfile_warnings: list[str] = Field(default_factory=list)
     access_flags: int | None = None
     access_flag_names: list[str] = Field(default_factory=list)
     is_record: bool = False
@@ -226,6 +234,7 @@ class JavaViewClassTool(MemoryTool[JavaViewClassArgs, JavaViewClassResult]):
                     kb=kb,
                     archive_path=archive_path,
                     entry_name=info.filename,
+                    classfile_size=info.file_size,
                     parsed=parsed,
                     matched_by=matched_by,
                     class_mapping=class_mapping,
@@ -246,6 +255,7 @@ def _result_for_class(
     kb: KnowledgeBase,
     archive_path: Path,
     entry_name: str,
+    classfile_size: int | None,
     parsed: dict[str, Any],
     matched_by: Literal["input", "official", "obfuscated", "none"],
     class_mapping: ProguardClassMapping | None,
@@ -260,6 +270,11 @@ def _result_for_class(
     source_file = _optional_string(parsed.get("source_file"))
     generic_signature = _optional_string(parsed.get("signature"))
     decoded_class_signature = decode_class_signature(generic_signature)
+    policy = classfile_policy(
+        int(parsed["major_version"]),
+        int(parsed["minor_version"]),
+        size_bytes=classfile_size,
+    )
     annotations = _annotation_summaries(parsed.get("annotations"))
     inner_classes = _inner_class_summaries(parsed.get("inner_classes"))
     enclosing_method = _enclosing_method_summary(parsed.get("enclosing_method"))
@@ -306,6 +321,13 @@ def _result_for_class(
                 "generic_signature_error": decoded_class_signature.error,
                 "major_version": parsed["major_version"],
                 "minor_version": parsed["minor_version"],
+                "java_release": policy.java_release,
+                "java_release_label": policy.java_release_label,
+                "classfile_version_label": policy.classfile_version_label,
+                "is_preview_classfile": policy.is_preview_classfile,
+                "classfile_size": policy.classfile_size,
+                "classfile_size_category": policy.classfile_size_category,
+                "classfile_warnings": policy.classfile_warnings,
                 "access_flags": parsed["access_flags"],
                 "access_flag_names": access_flag_names(
                     int(parsed["access_flags"]), "class"
@@ -405,8 +427,15 @@ def _result_for_class(
         generic_super_class=decoded_class_signature.super_class,
         generic_interfaces=decoded_class_signature.interfaces,
         generic_signature_error=decoded_class_signature.error,
-        major_version=parsed["major_version"],
-        minor_version=parsed["minor_version"],
+        major_version=policy.major_version,
+        minor_version=policy.minor_version,
+        java_release=policy.java_release,
+        java_release_label=policy.java_release_label,
+        classfile_version_label=policy.classfile_version_label,
+        is_preview_classfile=policy.is_preview_classfile,
+        classfile_size=policy.classfile_size,
+        classfile_size_category=policy.classfile_size_category,
+        classfile_warnings=policy.classfile_warnings,
         access_flags=parsed["access_flags"],
         access_flag_names=access_flag_names(int(parsed["access_flags"]), "class"),
         is_record=is_record,

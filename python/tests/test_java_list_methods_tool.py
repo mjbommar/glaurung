@@ -95,6 +95,10 @@ public class Main {
     assert method.class_name == "app/Main"
     assert method.name == "value"
     assert method.descriptor == "()Ljava/lang/String;"
+    assert method.class_java_release == 17
+    assert method.classfile_version_label == "Java 17 (classfile 61.0)"
+    assert method.classfile_size is not None and method.classfile_size > 0
+    assert method.classfile_warnings == []
     assert method.access_flag_names == ["public"]
     assert method.parameter_types == []
     assert method.parameter_count == 0

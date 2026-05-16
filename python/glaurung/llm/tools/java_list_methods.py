@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 import glaurung as g
+from glaurung.java_classfile_policy import classfile_policy
 
 from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
@@ -51,6 +52,15 @@ class JavaListedMethod(BaseModel):
     dotted_class_name: str
     mapped_class_name: str | None = None
     source_file: str | None = None
+    class_major_version: int | None = None
+    class_minor_version: int | None = None
+    class_java_release: int | None = None
+    class_java_release_label: str | None = None
+    classfile_version_label: str | None = None
+    is_preview_classfile: bool = False
+    classfile_size: int | None = None
+    classfile_size_category: str = "unknown"
+    classfile_warnings: list[str] = Field(default_factory=list)
     name: str
     descriptor: str
     generic_signature: str | None = None
@@ -150,6 +160,7 @@ class JavaListMethodsTool(MemoryTool[JavaListMethodsArgs, JavaListMethodsResult]
                     kb=kb,
                     archive_path=archive_path,
                     parsed=parsed,
+                    classfile_size=info.file_size,
                     class_mapping=class_mapping,
                     mappings=mappings,
                     args=args,
@@ -166,6 +177,7 @@ def _list_methods_from_class(
     kb: KnowledgeBase,
     archive_path: Path,
     parsed: dict[str, Any],
+    classfile_size: int | None,
     class_mapping: ProguardClassMapping | None,
     mappings: ProguardMappings | None,
     args: JavaListMethodsArgs,
@@ -195,6 +207,9 @@ def _list_methods_from_class(
         summary = _method_summary(
             class_name=class_name,
             source_file=source_file,
+            class_major_version=int(parsed.get("major_version", 0)),
+            class_minor_version=int(parsed.get("minor_version", 0)),
+            classfile_size=classfile_size,
             class_mapping=class_mapping,
             method=method,
             mapped_members=mapped_members,
@@ -209,6 +224,9 @@ def _method_summary(
     *,
     class_name: str,
     source_file: str | None,
+    class_major_version: int,
+    class_minor_version: int,
+    classfile_size: int | None,
     class_mapping: ProguardClassMapping | None,
     method: dict[str, Any],
     mapped_members: list[Any],
@@ -228,11 +246,25 @@ def _method_summary(
     decoded_descriptor = decode_method_descriptor(descriptor)
     generic_signature = _optional_string(method.get("signature"))
     decoded_signature = decode_method_signature(generic_signature)
+    policy = classfile_policy(
+        class_major_version,
+        class_minor_version,
+        size_bytes=classfile_size,
+    )
     return JavaListedMethod(
         class_name=class_name,
         dotted_class_name=_dotted(class_name),
         mapped_class_name=class_mapping.official_name if class_mapping else None,
         source_file=source_file,
+        class_major_version=policy.major_version,
+        class_minor_version=policy.minor_version,
+        class_java_release=policy.java_release,
+        class_java_release_label=policy.java_release_label,
+        classfile_version_label=policy.classfile_version_label,
+        is_preview_classfile=policy.is_preview_classfile,
+        classfile_size=policy.classfile_size,
+        classfile_size_category=policy.classfile_size_category,
+        classfile_warnings=policy.classfile_warnings,
         name=str(method.get("name")),
         descriptor=descriptor,
         generic_signature=generic_signature,

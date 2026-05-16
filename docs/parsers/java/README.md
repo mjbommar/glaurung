@@ -67,6 +67,8 @@ Implemented pieces now include:
 - Manifest-aware multi-release selection in `java_index_archive`, reporting which
   base or `META-INF/versions/<N>/` class entry is selected for a requested Java
   target version.
+- Shared Java classfile policy summaries for parser-facing tools, including Java
+  release labels, preview/future-version warnings, and classfile size categories.
 - Python binding `g.analysis.parse_java_class_bytes(data)` for in-memory `.class`
   parsing without extracting JAR entries to temporary files.
 - CLI JAR/class summarization through `glaurung classfile`.
@@ -126,16 +128,17 @@ Implemented pieces now include:
   and mapping context.
 - Initial class listing through `java_list_classes`, exposing bounded package/name
   and access-flag filters, superclass/interface/member counts, optional annotation
-  descriptors, `SourceFile` metadata, decoded access-flag names,
+  descriptors, `SourceFile` metadata, decoded access-flag names, normalized
+  Java/classfile version labels, preview/future-version/size warnings,
   inner/nest/record summary counts, optional ProGuard/Mojang mapped names, and
   `java_class` KB evidence.
 - Initial method listing through `java_list_methods`, exposing bounded method
   summaries with class/name/descriptor filters, code-size metadata, line-number
   counts/ranges, decoded parameter/return types, raw and readable generic
   signatures, `SourceFile` metadata, `MethodParameters` names, decoded method
-  access-flag names, parameter annotation counts, annotation defaults, optional
-  annotation descriptors, optional ProGuard/Mojang mapped names, and `java_method`
-  KB evidence.
+  access-flag names, classfile version/size policy summaries, parameter annotation
+  counts, annotation defaults, optional annotation descriptors, optional
+  ProGuard/Mojang mapped names, and `java_method` KB evidence.
 - Initial bytecode CFG construction for selected methods, exposing basic blocks,
   conditional/goto/fallthrough/default-switch/exception edges, line anchors,
   exception handler ranges, stop reasons, and KB `java_cfg` nodes.
