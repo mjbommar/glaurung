@@ -156,9 +156,29 @@ class JavaRecoverProjectTool(
             and _can_resume(output_root, archive_sha256)
         )
         result.cache_hit = cache_hit
+        resume_state = _read_recovery_state(output_root) if cache_hit else {}
 
         if cache_hit:
             result.resumed_steps.extend(["reconstruct", "decompile"])
+            result.decompile_success_count = _state_int(
+                resume_state,
+                "decompile_success_count",
+                _source_file_count(output_root),
+            )
+            result.generated_source_count = _state_int(
+                resume_state,
+                "generated_source_count",
+                _source_file_count(output_root),
+            )
+            result.generated_resource_count = _state_int(
+                resume_state,
+                "generated_resource_count",
+                0,
+            )
+            result.generated_build_files = _state_string_list(
+                resume_state,
+                "generated_build_files",
+            )
         else:
             reconstruct_tool = build_java_reconstruct_source_tree()
             reconstruct = reconstruct_tool.run(
@@ -243,7 +263,10 @@ class JavaRecoverProjectTool(
             result.warnings.extend(decompile.warnings)
             result.stop_reasons.extend(decompile.stop_reasons)
         else:
-            result.generated_source_count = _source_file_count(output_root)
+            if result.generated_source_count == 0:
+                result.generated_source_count = _source_file_count(output_root)
+            if result.decompile_success_count == 0:
+                result.decompile_success_count = result.generated_source_count
 
         _refresh_sources_and_javac_args(
             output_root,
@@ -468,6 +491,29 @@ def _can_resume(output_root: Path, archive_sha256: str) -> bool:
     )
 
 
+def _read_recovery_state(output_root: Path) -> dict[str, object]:
+    state_path = _recovery_state_path(output_root)
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _state_int(state: dict[str, object], key: str, default: int) -> int:
+    value = state.get(key)
+    if isinstance(value, int):
+        return value
+    return default
+
+
+def _state_string_list(state: dict[str, object], key: str) -> list[str]:
+    value = state.get(key)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def _write_recovery_state(result: JavaRecoverProjectResult) -> None:
     if result.source_project_root is None:
         return
@@ -483,7 +529,10 @@ def _write_recovery_state(result: JavaRecoverProjectResult) -> None:
                 "success": result.success,
                 "compile_success": result.compile_success,
                 "validation_passed": result.validation_passed,
+                "decompile_success_count": result.decompile_success_count,
                 "generated_source_count": result.generated_source_count,
+                "generated_resource_count": result.generated_resource_count,
+                "generated_build_files": result.generated_build_files,
                 "effective_classpath": result.effective_classpath,
             },
             indent=2,

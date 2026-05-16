@@ -280,6 +280,10 @@ Implemented pieces now include:
   persists a project-level JavaParser AST index, compiles, optionally repairs,
   validates the recovered project, and resumes from `.glaurung/recovery-project.json`
   when the source recovery cache is still valid.
+- Initial daily-use recovery reporting through `java_recovery_report`, which wraps
+  `java_recover_project` and renders a human report with status, headline, progress
+  counters, ranked blockers, raw compiler/parser/validation messages, source
+  snippets, likely causes, next actions, cache state, and KB evidence.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -332,6 +336,9 @@ priority is not another broad scanner. The next priority is structure:
 6. Continue clean source recovery: expand dependency/build repair, project AST
    queries, signature-guided repairs, rebuilt ABI/resource validation, and
    compatibility reporting.
+7. Improve daily-driver report ergonomics: keep raw tool evidence available, but
+   put a short human report in front of it with exact blocker locations and the next
+   useful repair.
 
 Important lessons:
 
@@ -468,6 +475,7 @@ Important lessons:
   and nested JAR classpaths
 - [x] Initial project-level source AST index through `java_index_source_project`
 - [x] Initial resumable recovery cache through `.glaurung/recovery-project.json`
+- [x] Initial daily-use recovery report through `java_recovery_report`
 - [ ] Module source recovery and semantic source/resource validation
 - [x] Initial build system inference for plain `javac`, Maven, and Gradle
 - [ ] Build-system refinement for module paths, annotation processors, loader-specific

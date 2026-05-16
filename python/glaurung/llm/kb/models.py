@@ -51,6 +51,7 @@ class NodeKind(str, Enum):
     java_abi_comparison = "java_abi_comparison"
     java_recovery_validation = "java_recovery_validation"
     java_recovery_project = "java_recovery_project"
+    java_recovery_report = "java_recovery_report"
     java_config_correlation = "java_config_correlation"
     java_risk_finding = "java_risk_finding"
 

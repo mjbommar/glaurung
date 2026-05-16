@@ -215,6 +215,10 @@ Glaurung already has a growing Java path:
   files, persisting a project-level JavaParser AST index, compiling, optionally
   repairing, validating the recovered project, and resuming from
   `.glaurung/recovery-project.json` when cache evidence remains valid.
+- Python memory tools can now render a daily-use recovery report with
+  `java_recovery_report`, wrapping the recovery flow with a concise status,
+  headline, progress counters, ranked blockers, exact source snippets, raw compiler
+  and parser messages, likely causes, next actions, cache state, and KB evidence.
 - Python memory tools can now list candidate classes with `java_list_classes`,
   exposing bounded package/name/access-flag filtering, superclass/interface/member
   counts, `SourceFile` metadata, optional annotation descriptors, optional
@@ -368,7 +372,7 @@ here, it is probably not represented strongly enough in the plan.
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, `java_call_graph`, ProGuard/Mojang/Tiny v1/v2 source-name rewrite, and mapped-source collision handling exist; continue with `minecraft_apply_mappings`, Tiny Remapper integration, and descriptor-aware source/tree remapping |
 | Dependency and classpath recovery | Initial `java_infer_dependencies`, `java_infer_build_system`, classpath-aware `java_recover_project`, and local `libs/*.jar` compile repair exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, optional `jdeps` package evidence, Java release, supplied/local/nested classpaths, and `javac`/Maven/Gradle planning; continue with module `requires`, remote resolver/cache policy, and annotation processors |
 | Signed archive validation | Initial `java_verify_signatures` exists using `jarsigner -verify`; continue with policy scoring, certificate/timestamp summaries, and archive-set rollups |
-| Source tree/project reconstruction | Initial `java_reconstruct_source_tree`, `java_infer_build_system`, `java_index_source_project`, and `java_recover_project` exist for resource/metadata preservation, explicit stubs, generated source/build files, build planning, opt-in decompiled source emission, project AST indexing, resumable compile/repair/validate orchestration, and AST evidence; continue with module source recovery and stronger source/resource validation |
+| Source tree/project reconstruction | Initial `java_reconstruct_source_tree`, `java_infer_build_system`, `java_index_source_project`, `java_recover_project`, and `java_recovery_report` exist for resource/metadata preservation, explicit stubs, generated source/build files, build planning, opt-in decompiled source emission, project AST indexing, resumable compile/repair/validate orchestration, daily-use blocker reporting, and AST evidence; continue with module source recovery and stronger source/resource validation |
 | Compile diagnostics | `java_compile_recovered_project` |
 | Agentic compile-repair loop | Initial `java_repair_decompiled_source` exists with compile iteration budgets, public-type filename repair, companion inner declaration repair, unique missing-import repair, local classpath repair, build-repair-plan emission, ambiguous import reporting, and report-only signature/decompiler-artifact repair classes; continue with automatic evidence-grounded source edits and module repair classes |
 | ABI/API and resource validation | Initial `java_compare_rebuilt_abi` and `java_validate_recovered_application` exist for descriptor/access ABI checks, public/package/all scope filtering, optional class/member annotation parity, resource parity, manifest/ServiceLoader/module metadata parity, semantic record/sealed/parameter-annotation/default parity, compile status, generated-stub policy, compatibility score, quality summaries, and next actions; continue with deeper module validation and optional runtime smoke profiles |
@@ -1489,6 +1493,29 @@ Initial Python implementation status:
 Continue by making the orchestrator module-aware, able to run whole-project
 compile-driven decompiler fallback, and able to use cached intermediate results for
 larger archive slices.
+
+`java_recovery_report`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_recovery_report` KB nodes.
+- Runs `java_recover_project` with bounded recovery arguments, then renders a
+  daily-use report that includes:
+  - overall status and headline
+  - cache hit/resume state
+  - generated source/resource counts
+  - AST type/method/field counts
+  - compile, repair, validation, and compatibility status
+  - ranked blockers from compile diagnostics, JavaParser syntax problems, deferred
+    repairs, and validation failures
+  - exact source snippets around compiler diagnostics
+  - likely cause and next action for each blocker
+- The report keeps the full structured recovery result for agents, but puts the
+  human workflow first.
+
+Continue by adding source/bytecode cross-links, decompiler candidate comparison
+cards, and richer "safe automatic repair available" labels.
 
 `java_infer_build_system`
 

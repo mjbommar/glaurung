@@ -285,6 +285,8 @@ def test_java_recover_project_resumes_existing_recovery_state(
     assert second.cache_hit is True
     assert "decompile" in second.resumed_steps
     assert second.decompile_result is None
+    assert second.decompile_success_count == first.decompile_success_count
+    assert second.generated_source_count == first.generated_source_count
     assert second.compile_success is True
     assert (output / ".glaurung" / "recovery-project.json").is_file()
 
