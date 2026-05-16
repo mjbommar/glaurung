@@ -779,6 +779,12 @@ def _inner_source_body(
         count=1,
     )
     text = re.sub(
+        rf"\b{re.escape(outer_simple)}\${re.escape(inner_simple)}\b", inner_simple, text
+    )
+    text = re.sub(
+        rf"\b{re.escape(outer_simple)}\.{re.escape(inner_simple)}\b", inner_simple, text
+    )
+    text = re.sub(
         rf"\b(public|protected|private)\s+(?=(?:final\s+|abstract\s+)?(?:class|interface|enum|record)\s+{re.escape(inner_simple)}\b)",
         "",
         text,
