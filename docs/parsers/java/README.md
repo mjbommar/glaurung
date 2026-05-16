@@ -55,7 +55,9 @@ Implemented pieces now include:
   annotations, `MethodParameters`, runtime-visible/runtime-invisible parameter
   annotations, method `AnnotationDefault` values, structural class attributes
   (`InnerClasses`, `EnclosingMethod`, `NestHost`, `NestMembers`, `Record`,
-  `PermittedSubclasses`, JPMS `Module`), raw class/member/code attribute names,
+  `PermittedSubclasses`, JPMS `Module`, `ModulePackages`, `ModuleMainClass`),
+  runtime-visible/runtime-invisible type annotation counts, raw class/member/code
+  attribute names,
   `Deprecated`/`Synthetic` markers, field `ConstantValue` constants,
   `SourceDebugExtension` length/hash metadata, constant-pool histograms,
   `BootstrapMethods` references, instruction metrics, instruction listings, and
@@ -67,7 +69,8 @@ Implemented pieces now include:
   signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
   `module-info.class`, zip-slip path detection, and truncation state.
 - JPMS `module-info.class` summaries in parser-facing tools, including module name,
-  requires, exports, opens, uses, and provides clauses when present.
+  requires, exports, opens, uses, provides, package list, and module main class when
+  present.
 - Normalized class-kind summaries in parser-facing tools, classifying declarations
   as module, annotation, interface, enum, record, or class without requiring agents
   to decode JVM access flags themselves.
@@ -92,14 +95,19 @@ Implemented pieces now include:
   - `java_detect_entrypoints`
   - `java_detect_frameworks`
   - `java_extract_config_surface`
-- `java_view_class`
+  - `java_view_class`
   - `java_annotate_mappings`
   - `java_lookup_mapping`
   - `java_list_classes`
   - `java_list_packages`
+  - `java_list_resources`
   - `java_list_fields`
   - `java_list_methods`
   - `java_list_annotations`
+  - `java_view_manifest`
+  - `java_list_services`
+  - `java_detect_duplicate_classes`
+  - `java_list_string_constants`
   - `java_audit_archive_set`
   - `java_trace_to_sink`
   - `java_reachability`
@@ -145,6 +153,11 @@ Implemented pieces now include:
 - Initial method/code xref summaries in class and method tools, exposing total,
   method/interface-method, field, class, string, and dynamic/invokedynamic reference
   counts from parsed bytecode xrefs.
+- Initial class/method bytecode rollups in listing and view tools, exposing total
+  code bytes, instruction counts, line spans, local-variable counts/names,
+  stack-map counts, exception-handler counts, type-annotation counts, and generic
+  branch/switch/invoke/field/class/constant/string/dynamic/return/throw/monitor/
+  allocation instruction buckets.
 - Initial `BootstrapMethods` summaries in parser-facing class tools, exposing
   per-class bootstrap method counts plus method-handle owner/name/descriptor and
   argument summaries for lambda, string-concat, and invokedynamic triage.
@@ -187,6 +200,14 @@ Implemented pieces now include:
 - Initial redacted secret detection across method string constants and text
   resources. Findings store category, source location, length, context with the
   candidate replaced, and stable hashes, not raw values.
+- Initial archive navigation tools for generic Java work: `java_list_resources`
+  classifies resource entries by path, size, compression, magic bytes, and
+  manifest/service/signature/multi-release flags; `java_view_manifest` parses
+  continuation-aware launch, agent, class-path, multi-release, sealed, signature,
+  and build attributes; `java_list_services` parses ServiceLoader descriptors;
+  `java_detect_duplicate_classes` reports same/different-hash duplicate class
+  definitions with multi-release awareness; and `java_list_string_constants` lists
+  bounded LDC and field string constants with hashes and optional raw values.
 - Initial signed-JAR cryptographic validation through `java_verify_signatures`,
   using `jarsigner -verify` when available and reporting signed/unsigned/invalid
   state, warning counts, signed-entry counts, signature metadata entries, bounded
@@ -237,9 +258,9 @@ Not yet implemented:
 
 - Stack/local frames, interprocedural xrefs, and advanced call graphs such as
   CHA/RTA with precise virtual dispatch candidates.
-- Deeper attribute semantics beyond the parsed structural subset: type annotations,
-  complete stack-map frame bodies, richer bootstrap argument typing, and richer
-  annotation/module parity checks.
+- Deeper attribute semantics beyond the parsed structural subset: complete
+  type-annotation target/value decoding, complete stack-map frame bodies, richer
+  bootstrap argument typing, and richer annotation/module parity checks.
 - Decompiler helper integration with Vineflower/CFR.
 - Clean source-project recovery after the initial dependency/build/scaffold/compile,
   ABI-comparison, and validation-report layers: dependency resolution policy,
@@ -337,12 +358,24 @@ Important lessons:
 - [x] Initial `BootstrapMethods` method-handle summaries
 - [x] Minimal `SourceDebugExtension` length/hash metadata
 - [x] Initial record component parsing and class-view surfacing
+- [x] Initial `ModulePackages` and `ModuleMainClass` parsing and module summaries
+- [x] Initial runtime-visible/runtime-invisible type annotation counts
+- [x] Initial method local-variable summaries and class/method bytecode rollups
+- [x] Initial branch/switch/invoke/field/class/string/dynamic/return/throw/monitor/
+  allocation instruction category metrics
 - [ ] Stack/local frame analysis
 - [ ] Richer framework annotation semantics
 
 ### Phase 5: JAR Processing
 - [x] Manifest parsing
 - [x] Archive/resource indexing
+- [x] `java_list_resources` for resource path, size, compression, magic, and anomaly
+  metadata
+- [x] `java_view_manifest` for continuation-aware manifest launch/security/build
+  attributes
+- [x] `java_list_services` for ServiceLoader descriptors
+- [x] `java_detect_duplicate_classes` for duplicate and multi-release class variants
+- [x] `java_list_string_constants` for bounded LDC and field string constant evidence
 - [x] Initial package listing and package-level KB evidence
 - [x] Initial annotation/package-info archive discovery
 - [x] Initial native central-directory JAR indexing with nested archive,

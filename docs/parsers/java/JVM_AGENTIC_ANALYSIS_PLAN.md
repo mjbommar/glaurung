@@ -44,8 +44,9 @@ Glaurung already has a growing Java path:
   annotations, method `AnnotationDefault` values, initial JVM instruction listings,
   structural class attributes (`InnerClasses`, `EnclosingMethod`, `NestHost`,
   `NestMembers`, `Record`, `PermittedSubclasses`, JPMS `Module`), raw
-  class/member/code attribute names, `Deprecated`/`Synthetic` markers, field
-  `ConstantValue` constants, `SourceDebugExtension` length/hash metadata,
+  class/member/code attribute names, `ModulePackages`, `ModuleMainClass`,
+  runtime-visible/runtime-invisible type annotation counts, `Deprecated`/`Synthetic`
+  markers, field `ConstantValue` constants, `SourceDebugExtension` length/hash metadata,
   constant-pool histograms, bootstrap method references, instruction metrics, and
   lightweight method-level bytecode xrefs for invokes, fields, class refs, and
   loaded strings.
@@ -65,7 +66,8 @@ Glaurung already has a growing Java path:
   release labels, preview classfiles, future classfile versions newer than Java SE
   26, unusual minor versions, and large/tiny classfile entries.
 - Parser-facing Python tools now expose JPMS `module-info.class` summaries,
-  including module name, requires, exports, opens, uses, and provides clauses.
+  including module name, requires, exports, opens, uses, provides, module packages,
+  and module main class.
 - Parser-facing Python tools now expose normalized class kinds (`module`,
   `annotation`, `interface`, `enum`, `record`, `class`) plus boolean kind helpers.
 - Class listing and class viewing tools now emit KB `extends` and `implements`
@@ -73,6 +75,11 @@ Glaurung already has a growing Java path:
   every target class to be returned in the same result window.
 - Method and class-view code summaries now expose bytecode xref count buckets:
   total, method/interface-method, field, class, string, and dynamic/invokedynamic.
+- Method, class-listing, and class-view summaries now expose local-variable
+  summaries, line/code rollups, stack-map and exception-handler counts, type
+  annotation counts, and generic instruction category buckets for branches, switches,
+  invokes, field/type refs, constant loads, strings, dynamic calls, returns, throws,
+  monitors, and allocations.
 - Parser-facing class summaries now expose `BootstrapMethods` counts plus
   method-handle owner/name/descriptor and argument summaries for quick lambda,
   string-concat, and invokedynamic triage.
@@ -81,6 +88,15 @@ Glaurung already has a growing Java path:
   method/field/code totals, classfile Java release sets, bootstrap-method totals,
   optional resource samples, bounded prefix filtering, and `java_package` evidence
   nodes.
+- Python memory tools now provide foundational archive navigation:
+  `java_list_resources` for resource path/size/compression/magic and
+  manifest/service/signature/multi-release flags, `java_view_manifest` for
+  continuation-aware launch/agent/class-path/multi-release/sealed/signature/build
+  attributes, `java_list_services` for ServiceLoader descriptors,
+  `java_detect_duplicate_classes` for duplicate class definitions with
+  same/different hashes and multi-release awareness, and
+  `java_list_string_constants` for bounded LDC and field string constant evidence
+  with hashes and optional raw values.
 - Python memory tools can now list candidate fields with `java_list_fields`,
   including descriptor/generic type decoding, constant values, raw attribute names,
   `Deprecated`/`Synthetic` markers, optional annotation descriptors, optional
@@ -194,9 +210,9 @@ Glaurung already has a growing Java path:
 Known limitations:
 
 - The Rust parser still needs deeper JVM attribute semantics beyond the parsed
-  structural subset, including type annotations, complete stack-map frame bodies,
-  richer bootstrap argument typing, richer module/annotation parity, and
-  bytecode verifier frame modeling.
+  structural subset, including full type-annotation target/value decoding, complete
+  stack-map frame bodies, richer bootstrap argument typing, richer module/annotation
+  parity, and bytecode verifier frame modeling.
 - There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
 - There is initial dependency inference, build-system inference, source-tree
@@ -279,8 +295,10 @@ detour:
    model multi-release class selection policy, parse Maven/service metadata contents
    at scale, and use `java_verify_signatures` where cryptographic signature state
    matters. Initial nested archive summaries and signature verification now exist;
-   initial multi-release target selection now exists; remaining work should focus on
-   policy, rollups, and classpath/dependency use.
+   initial multi-release target selection, resource listing, manifest viewing,
+   ServiceLoader listing, duplicate-class detection, and string-constant listing now
+   exist; remaining work should focus on policy, rollups, and classpath/dependency
+   use across nested archives.
 2. **Bytecode CFG and xrefs**: basic blocks, branch/switch/exception edges, normalized
    xref tables, `java_xrefs_from`, `java_xrefs_to`, and a first call graph.
 3. **Reachability and framework context**: connect entrypoints, ServiceLoader,
@@ -307,7 +325,8 @@ here, it is probably not represented strongly enough in the plan.
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
 | Bytecode CFG, xrefs, and call graph | Initial `java_cfg`, exception edges, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with frame analysis, interprocedural xrefs, and CHA/RTA dispatch |
 | Descriptors and generic signatures | Initial erased JVM descriptor decoding exists for field types and method parameter/return types in class/method tools; class/member `Signature` attributes are preserved and decoded into readable class/field/method generic summaries; continue type-use annotations and bridge/synthetic correlation |
-| Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, runtime-visible/runtime-invisible class/member and parameter annotation support, method parameters, annotation defaults, inner/enclosing/nest metadata, and record components exist; continue modules/stack maps/permitted subclasses and richer framework semantics |
+| Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, runtime-visible/runtime-invisible class/member and parameter annotation support, type-annotation counts, method parameters, annotation defaults, inner/enclosing/nest metadata, record components, permitted subclasses, and JPMS module extras exist; continue full type-annotation decoding, stack-map bodies, and richer framework semantics |
+| Archive/resource navigation | Initial `java_list_resources`, `java_view_manifest`, `java_list_services`, `java_detect_duplicate_classes`, and `java_list_string_constants` exist; continue with nested-archive rollups, Maven metadata content parsing, policy scoring, and resource/string correlation |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
 | Dependency and classpath recovery | Initial `java_infer_dependencies` and `java_infer_build_system` exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, optional `jdeps` package evidence, Java release, and `javac`/Maven/Gradle planning; continue with module `requires`, supplied classpath comparison, missing-class diagnostics, resolver/cache policy, and annotation processors |
@@ -827,6 +846,77 @@ Outputs:
 
 Use this as the low-cost archive navigation layer before drilling into classes,
 methods, bytecode, or decompiler output.
+
+`java_list_resources`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_resource` KB nodes for returned entries.
+- Lists non-class resources by default, with optional class inclusion.
+- Supports prefix, extension, substring, scan-budget, result-limit, and bounded
+  magic-read filters.
+- Reports entry path, directory, file name, extension, size, compressed size,
+  compression method, CRC-32, SHA-256, magic classification, manifest/service/
+  signature/multi-release flags, classfile-like resources, and extension-vs-magic
+  mismatches.
+
+Use this when an agent needs to inspect archive contents, identify hidden classes,
+native blobs, config/resource payloads, or suspicious mismatched resources before
+deeper scanning.
+
+`java_view_manifest`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits a `java_resource` KB node for the manifest.
+- Parses JAR manifest continuation lines and sections.
+- Reports main attributes, named sections, `Main-Class`, `Premain-Class`,
+  `Agent-Class`, `Launcher-Agent-Class`, `Class-Path`, `Multi-Release`, `Sealed`,
+  signature/digest attributes, and build attributes.
+
+Use this as the direct manifest inspection layer for launch behavior, agents,
+multi-release policy, signing evidence, and classpath hints.
+
+`java_list_services`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_resource` KB nodes for `META-INF/services/*` descriptors.
+- Parses providers with comment/blank-line handling and returns internal and dotted
+  provider names.
+- Supports service and provider substring filters.
+
+Use this to identify ServiceLoader entrypoints and framework/provider wiring.
+
+`java_detect_duplicate_classes`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_class` KB evidence for duplicate class groups.
+- Groups base and `META-INF/versions/<N>/` class entries by parsed class name.
+- Reports entry paths, multi-release versions, sizes, hashes, identical-vs-divergent
+  byte definitions, and multi-release-only duplicates.
+
+Use this to catch shaded dependency collisions, repeated classes, and versioned class
+variants before source recovery or classpath reconstruction.
+
+`java_list_string_constants`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits generic `string` KB nodes for returned constants.
+- Lists bounded string constants from field `ConstantValue` attributes and method
+  LDC bytecode xrefs.
+- Reports class/method/field locators, source kind, BCI where present, length,
+  preview, SHA-256, and optional raw values when explicitly requested.
+
+Use this for low-cost endpoint/config/error-message triage without running a broad
+secret scanner.
 
 `java_list_fields`
 

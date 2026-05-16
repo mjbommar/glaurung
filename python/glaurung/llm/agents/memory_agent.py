@@ -164,9 +164,18 @@ from ..tools.java_annotate_mappings import build_tool as build_java_annotate_map
 from ..tools.java_lookup_mapping import build_tool as build_java_lookup_mapping
 from ..tools.java_list_classes import build_tool as build_java_list_classes
 from ..tools.java_list_packages import build_tool as build_java_list_packages
+from ..tools.java_list_resources import build_tool as build_java_list_resources
 from ..tools.java_list_fields import build_tool as build_java_list_fields
 from ..tools.java_list_methods import build_tool as build_java_list_methods
 from ..tools.java_list_annotations import build_tool as build_java_list_annotations
+from ..tools.java_view_manifest import build_tool as build_java_view_manifest
+from ..tools.java_list_services import build_tool as build_java_list_services
+from ..tools.java_detect_duplicate_classes import (
+    build_tool as build_java_detect_duplicate_classes,
+)
+from ..tools.java_list_string_constants import (
+    build_tool as build_java_list_string_constants,
+)
 from ..tools.java_audit_archive_set import build_tool as build_java_audit_archive_set
 from ..tools.java_trace_to_sink import build_tool as build_java_trace_to_sink
 from ..tools.java_detect_secrets import build_tool as build_java_detect_secrets
@@ -792,9 +801,16 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_lookup_mapping()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_list_classes()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_list_packages()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_list_resources()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_list_fields()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_list_methods()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_list_annotations()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_view_manifest()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_list_services()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_java_detect_duplicate_classes())
+    )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_list_string_constants()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_audit_archive_set()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_trace_to_sink()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_secrets()))
