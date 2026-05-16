@@ -132,3 +132,107 @@ def test_java_security_cli_outputs_json(
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
     assert data["profile"] == "security"
+
+
+def test_java_security_cli_show_tools_controls_plain_evidence(
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    jar = _security_fixture_jar(tmp_path)
+
+    rc = cli.main(
+        [
+            "java",
+            "security",
+            str(jar),
+            "--model",
+            "test",
+            "--max-classes",
+            "16",
+            "--max-findings",
+            "16",
+        ]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "# Java Security Analysis" in out
+    assert "## Tool Calls" not in out
+
+    rc = cli.main(
+        [
+            "java",
+            "security",
+            str(jar),
+            "--model",
+            "test",
+            "--max-classes",
+            "16",
+            "--max-findings",
+            "16",
+            "--show-tools",
+            "--max-tool-calls",
+            "2",
+            "--show-evidence",
+        ]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "## Tool Calls" in out
+    assert "`java_agent_context` seeded" in out
+    assert out.count("\n- `") <= 2
+
+
+def test_java_markdown_formatter_can_show_finding_evidence() -> None:
+    from glaurung.cli.commands.java import _format_markdown
+    from glaurung.llm.agents.java import JavaFinding, JavaSecurityAssessment
+    from glaurung.llm.agents.java_runner import JavaAgentRunResult, JavaAgentToolCall
+    from glaurung.llm.tools.java_agent_context import (
+        JavaAgentArchiveFacts,
+        JavaAgentContextResult,
+    )
+
+    result = JavaAgentRunResult(
+        path="fixture.jar",
+        profile="security",
+        model="test",
+        prompt="security",
+        assessment_type="JavaSecurityAssessment",
+        assessment=JavaSecurityAssessment(
+            summary="One reachable process sink.",
+            findings=[
+                JavaFinding(
+                    title="Process execution",
+                    severity="high",
+                    confidence=0.9,
+                    class_name="app/RunnerFixture",
+                    method_name="runCommand",
+                    method_descriptor="(Ljava/lang/String;)V",
+                    evidence=["java_risk_report: process sink reachable"],
+                )
+            ],
+            risky_categories=["process"],
+            confidence=0.8,
+        ),
+        context=JavaAgentContextResult(
+            archive_path="fixture.jar",
+            profile="security",
+            is_java_archive=True,
+            headline="Java archive: 1 class(es), 1 resource(s).",
+            archive=JavaAgentArchiveFacts(
+                class_count=1,
+                parsed_class_count=1,
+                resource_count=1,
+            ),
+        ),
+        tool_calls=[JavaAgentToolCall(tool="java_agent_context", seeded=True)],
+        tool_call_count=1,
+    )
+
+    out = _format_markdown(result, show_tools=True, show_evidence=True)
+
+    assert "Evidence:" in out
+    assert "java_risk_report: process sink reachable" in out
+    assert "## Tool Calls" in out
+    assert "`java_agent_context` seeded" in out

@@ -53,9 +53,25 @@ class JavaCommand(BaseCommand):
         elif formatter.format_type == OutputFormat.JSONL:
             formatter.output_jsonl(payload)
         elif formatter.format_type == OutputFormat.RICH:
-            formatter.output_rich(formatter.create_markdown(_format_markdown(result)))
+            formatter.output_rich(
+                formatter.create_markdown(
+                    _format_markdown(
+                        result,
+                        show_tools=args.show_tools,
+                        max_tool_calls=args.max_tool_calls,
+                        show_evidence=args.show_evidence,
+                    )
+                )
+            )
         else:
-            formatter.output_plain(_format_markdown(result))
+            formatter.output_plain(
+                _format_markdown(
+                    result,
+                    show_tools=args.show_tools,
+                    max_tool_calls=args.max_tool_calls,
+                    show_evidence=args.show_evidence,
+                )
+            )
         return 0
 
     def _add_common_child_arguments(self, parser: argparse.ArgumentParser) -> None:
@@ -113,9 +129,31 @@ class JavaCommand(BaseCommand):
         parser.add_argument("--max-classes", type=int, default=512)
         parser.add_argument("--max-resources", type=int, default=128)
         parser.add_argument("--max-findings", type=int, default=64)
+        parser.add_argument(
+            "--show-tools",
+            action="store_true",
+            help="Show the tool-call evidence trail in plain/rich output.",
+        )
+        parser.add_argument(
+            "--max-tool-calls",
+            type=int,
+            default=8,
+            help="Maximum tool calls to show with --show-tools.",
+        )
+        parser.add_argument(
+            "--show-evidence",
+            action="store_true",
+            help="Show per-finding evidence lines in plain/rich output.",
+        )
 
 
-def _format_markdown(result: JavaAgentRunResult) -> str:
+def _format_markdown(
+    result: JavaAgentRunResult,
+    *,
+    show_tools: bool = False,
+    max_tool_calls: int = 8,
+    show_evidence: bool = False,
+) -> str:
     assessment = result.assessment
     lines = [
         f"# Java {result.profile.title()} Analysis",
@@ -137,14 +175,19 @@ def _format_markdown(result: JavaAgentRunResult) -> str:
             severity = getattr(finding, "severity", "info")
             location = _finding_location(finding)
             lines.append(f"- **{severity}** {title}{location}")
+            evidence = getattr(finding, "evidence", [])
+            if show_evidence and evidence:
+                lines.append("  Evidence:")
+                lines.extend(f"  - {item}" for item in evidence[:4])
     next_tools = getattr(assessment, "recommended_next_tools", [])
     if next_tools:
         lines.extend(["", "## Next Tools", ""])
         lines.extend(f"- `{tool}`" for tool in next_tools)
-    if result.tool_calls:
+    if show_tools and result.tool_calls:
         lines.extend(["", "## Tool Calls", ""])
         lines.extend(
-            _format_tool_call(call.model_dump()) for call in result.tool_calls[:16]
+            _format_tool_call(call.model_dump())
+            for call in result.tool_calls[: max(0, max_tool_calls)]
         )
     return "\n".join(lines) + "\n"
 

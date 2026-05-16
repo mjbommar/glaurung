@@ -133,9 +133,22 @@ Implemented pieces now include:
   - `minecraft_extract_bundled_server`
 - Ask-command Java seeding for archive summaries, obfuscation annotations, and
   Minecraft loader/version/mapping hints.
-- Initial Java-specific pydantic-ai agents for triage, security review, and
-  source recovery. These agents start from `java_agent_context` and return
-  structured findings with evidence references and recommended follow-up tools.
+- Java-specific pydantic-ai agents for triage, security review, and source
+  recovery. These agents pre-seed the correct `java_agent_context` profile before
+  the model run, use focused provider-safe Java toolsets instead of the full
+  memory-agent catalog, and return structured findings with evidence references
+  and recommended follow-up tools. The focused agent surfaces currently stay below
+  provider strict-tool limits while the generic memory agent still exposes the
+  complete tool catalog for broad exploration.
+- Daily-use Java agent runner API and CLI entrypoints:
+  `run_java_triage_analysis`, `run_java_security_analysis`,
+  `run_java_recovery_analysis`, and `glaurung java triage|security|recovery`.
+  The CLI supports structured JSON plus concise markdown output with opt-in
+  `--show-tools` and `--show-evidence` trails.
+- Provider-aware pydantic-ai tool wrapping for Java agents. Memory tools now expose
+  their actual Pydantic input schemas to pydantic-ai instead of arbitrary
+  `**kwargs` schemas; OpenAI/test runs keep strict tools, while Anthropic Java
+  agent runs use typed non-strict tool schemas to avoid strict grammar limits.
 - Descriptor-aware deobfuscation annotations on sensitive-behavior findings,
   including mapped class names and mapped method names/signatures when a
   ProGuard/Mojang mapping file is supplied.
@@ -346,10 +359,13 @@ priority is not another broad scanner. The next priority is structure:
 6. Continue clean source recovery: expand dependency/build repair, project AST
    queries, signature-guided repairs, rebuilt ABI/resource validation, and
    compatibility reporting.
-7. Continue daily-driver report ergonomics: the report now has CLI access,
-   persisted markdown/JSON, rollups, exact blocker locations, snippets, and copyable
-   commands; next improvements should add source/bytecode cross-links and clearer
-   automatic-vs-manual repair labels.
+7. Continue daily-driver ergonomics: recovery reports now have CLI access,
+   persisted markdown/JSON, rollups, exact blocker locations, snippets, source/
+   bytecode cross-links, automatic-vs-manual repair labels, and copyable commands.
+   The Java agent CLI now has focused `triage`, `security`, and `recovery`
+   workflows with optional tool/evidence trails. Next improvements should compare
+   those first screens on real local JARs, then tighten the output around the
+   evidence users inspect every day.
 
 Important lessons:
 
@@ -358,6 +374,9 @@ Important lessons:
   remain obfuscated or synthetic.
 - Config correlation should stay conservative; exact matches are reliable but miss
   framework defaults and indirect key construction.
+- Focused toolsets are required for live providers. The full memory agent remains
+  useful for exploration, but specialized Java agents should continue to start from
+  small profile-specific surfaces and escalate intentionally.
 - Risk reports must keep capability, reachability, configured state, and observed
   runtime behavior separate.
 - Signature metadata and nested archive state are separate evidence dimensions:

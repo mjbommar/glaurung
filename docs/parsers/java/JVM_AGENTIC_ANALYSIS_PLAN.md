@@ -226,6 +226,18 @@ Glaurung already has a growing Java path:
   manual repair summaries, persisted markdown/JSON report files, copyable commands,
   and KB evidence. The same workflow is exposed through
   `glaurung java-recovery-report` for daily CLI use.
+- Python now has focused Java pydantic-ai runner APIs and CLI workflows:
+  `run_java_triage_analysis`, `run_java_security_analysis`,
+  `run_java_recovery_analysis`, and `glaurung java triage|security|recovery`.
+  These workflows pre-seed the matching `java_agent_context` profile, use
+  profile-specific Java toolsets rather than the full memory-agent catalog, expose
+  structured JSON, and provide opt-in plain/rich tool and evidence trails through
+  `--show-tools` and `--show-evidence`.
+- Provider compatibility is now part of the Java agent design. Memory tools expose
+  their real Pydantic input schemas to pydantic-ai instead of arbitrary `**kwargs`
+  schemas. OpenAI/test Java agents keep strict tools; Anthropic Java agents use
+  typed non-strict tool schemas to avoid strict grammar and optional-parameter
+  limits while preserving the same focused tool access.
 - Python memory tools can now list candidate classes with `java_list_classes`,
   exposing bounded package/name/access-flag filtering, superclass/interface/member
   counts, `SourceFile` metadata, optional annotation descriptors, optional
@@ -275,8 +287,10 @@ Known limitations:
   archive-set summaries, and per-archive risk reports. It still lacks precise
   reachability, interprocedural source-to-sink slicing, framework-aware config
   semantics, dynamic observation, and mature risk calibration.
-- The current memory agent mostly registers hand-written wrappers instead of using
-  `tool_to_pyd_ai`, which means many tool calls bypass generic evidence logging.
+- The generic memory agent still exposes a broad mixed binary/JVM catalog and some
+  non-Java hand-written wrappers can bypass generic evidence logging. The focused
+  Java agents use `tool_to_pyd_ai` and generic evidence logging, but the remaining
+  non-Java wrapper migration is still a cross-cutting agent-platform cleanup.
 - Local JDK availability can vary. Dynamic, decompiler, compiler, and JDK-tool
   integration must detect usable `java`, `javac`, `jar`, `jdeps`, `jcmd`, and `jfr`
   rather than assuming a single PATH layout.
@@ -349,20 +363,29 @@ detour:
    ServiceLoader listing, duplicate-class detection, and string-constant listing now
    exist; remaining work should focus on policy, rollups, and classpath/dependency
    use across nested archives.
-2. **Bytecode CFG and xrefs**: basic blocks, branch/switch/exception edges, normalized
-   xref tables, `java_xrefs_from`, `java_xrefs_to`, and a first call graph.
+2. **Bytecode CFG and xref deepening**: initial basic blocks,
+   branch/switch/exception edges, normalized xref tables, `java_xrefs_from`,
+   `java_xrefs_to`, and `java_call_graph` exist. Continue with frame-aware
+   exception context, interprocedural xrefs, and CHA/RTA virtual dispatch.
 3. **Reachability and framework context**: connect entrypoints, ServiceLoader,
    Forge/Fabric/NeoForge metadata, schedulers, thread starts, static initializers, and
    mod lifecycle hooks to sensitive behavior.
 4. **Risk report calibration**: reduce secret false positives, add policy/suppression
    hooks, separate capability/reachable/configured/observed states in every ranked
    item, and make archive-set reports consume per-archive `java_risk_report` output.
-5. **Decompiler helper**: add the Java helper project with ASM first, then
-   Vineflower/CFR wrappers and source/bytecode correlation.
-6. **Clean source recovery loop**: emit source/resources, infer dependencies/build
-   metadata, compile with `javac`/Maven/Gradle, parse diagnostics, repair, and compare
-   rebuilt ABI/resources against the original archive.
-7. **Opt-in runtime observation**: bounded JDI/JFR/javaagent tooling only after static
+5. **Decompiler/source correlation deepening**: the ASM/CFR/Vineflower/JavaParser
+   helper and archive decompilation path exist. Continue with method-level source
+   slicing, stronger source/bytecode line correlation, and full-project
+   compile-driven fallback selection.
+6. **Clean source recovery loop**: the initial emit/decompile/compile/repair/validate
+   loop exists. Continue with module source recovery, descriptor-safe source/tree
+   remapping, dependency resolver execution policy, module-path and annotation
+   processor repair, and a repeatable small-real-JAR "clean enough" target.
+7. **Daily-driver Java agent ergonomics**: use `glaurung java security` and
+   `glaurung java-recovery-report` on real local Minecraft/mod/library JARs, compare
+   first-screen output, and tighten the default report around the findings, evidence,
+   and next commands users inspect repeatedly.
+8. **Opt-in runtime observation**: bounded JDI/JFR/javaagent tooling only after static
    evidence and source recovery have enough structure to constrain what is executed.
 
 ## Gap Coverage Matrix
