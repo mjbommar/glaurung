@@ -28,6 +28,7 @@ from .java_signatures import (
     decode_field_signature,
     decode_method_signature,
 )
+from .java_xref_summary import code_xref_counts
 
 
 class JavaViewClassArgs(BaseModel):
@@ -51,6 +52,12 @@ class JavaCodeSummary(BaseModel):
     exception_table_len: int
     attributes_count: int
     stack_map_frame_count: int = 0
+    xref_count: int = 0
+    method_xref_count: int = 0
+    field_xref_count: int = 0
+    class_xref_count: int = 0
+    string_xref_count: int = 0
+    dynamic_xref_count: int = 0
     line_number_count: int = 0
     first_line: int | None = None
     last_line: int | None = None
@@ -633,6 +640,7 @@ def _code_summary(value: Any) -> JavaCodeSummary | None:
     if not isinstance(value, dict):
         return None
     line_numbers = _line_numbers(value)
+    xref_counts = code_xref_counts(value)
     return JavaCodeSummary(
         max_stack=int(value["max_stack"]),
         max_locals=int(value["max_locals"]),
@@ -640,6 +648,12 @@ def _code_summary(value: Any) -> JavaCodeSummary | None:
         exception_table_len=int(value["exception_table_len"]),
         attributes_count=int(value["attributes_count"]),
         stack_map_frame_count=int(value.get("stack_map_frame_count", 0)),
+        xref_count=xref_counts["xref_count"],
+        method_xref_count=xref_counts["method_xref_count"],
+        field_xref_count=xref_counts["field_xref_count"],
+        class_xref_count=xref_counts["class_xref_count"],
+        string_xref_count=xref_counts["string_xref_count"],
+        dynamic_xref_count=xref_counts["dynamic_xref_count"],
         line_number_count=len(line_numbers),
         first_line=min(line_numbers) if line_numbers else None,
         last_line=max(line_numbers) if line_numbers else None,

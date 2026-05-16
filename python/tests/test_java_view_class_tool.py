@@ -249,6 +249,7 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     )
     assert method_c.code is not None
     assert method_c.code.code_length > 0
+    assert method_c.code.field_xref_count >= 2
     assert method_c.code.line_number_count >= 1
     assert method_c.code.first_line is not None
     assert method_c.code.last_line is not None

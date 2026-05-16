@@ -67,6 +67,8 @@ Glaurung already has a growing Java path:
 - Class listing and class viewing tools now emit KB `extends` and `implements`
   edges to placeholder `java_class` nodes so hierarchy traversal does not require
   every target class to be returned in the same result window.
+- Method and class-view code summaries now expose bytecode xref count buckets:
+  total, method/interface-method, field, class, string, and dynamic/invokedynamic.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang

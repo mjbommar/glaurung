@@ -104,6 +104,8 @@ public class Main {
     assert method.parameter_count == 0
     assert method.return_type == "java.lang.String"
     assert method.code_length is not None and method.code_length > 0
+    assert method.xref_count >= 1
+    assert method.string_xref_count >= 1
     assert method.source_file == "Main.java"
     assert method.line_number_count >= 1
     assert method.first_line is not None

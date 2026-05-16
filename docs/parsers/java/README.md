@@ -135,6 +135,9 @@ Implemented pieces now include:
 - Initial bytecode viewing for selected methods, exposing BCI, opcode, mnemonic,
   normalized operands, line anchors, local-variable scopes, xrefs, bounded windows,
   stack-map frame counts, and mapping context.
+- Initial method/code xref summaries in class and method tools, exposing total,
+  method/interface-method, field, class, string, and dynamic/invokedynamic reference
+  counts from parsed bytecode xrefs.
 - Initial class listing through `java_list_classes`, exposing bounded package/name
   and access-flag filters, superclass/interface/member counts, optional annotation
   descriptors, `SourceFile` metadata, decoded access-flag names, normalized

@@ -22,6 +22,7 @@ from .java_proguard_mappings import (
     parse_proguard_mappings,
 )
 from .java_signatures import decode_method_signature
+from .java_xref_summary import code_xref_counts
 
 
 class JavaListMethodsArgs(BaseModel):
@@ -86,6 +87,12 @@ class JavaListedMethod(BaseModel):
     max_stack: int | None = None
     max_locals: int | None = None
     stack_map_frame_count: int = 0
+    xref_count: int = 0
+    method_xref_count: int = 0
+    field_xref_count: int = 0
+    class_xref_count: int = 0
+    string_xref_count: int = 0
+    dynamic_xref_count: int = 0
     line_number_count: int = 0
     first_line: int | None = None
     last_line: int | None = None
@@ -249,6 +256,7 @@ def _method_summary(
     decoded_descriptor = decode_method_descriptor(descriptor)
     generic_signature = _optional_string(method.get("signature"))
     decoded_signature = decode_method_signature(generic_signature)
+    xref_counts = code_xref_counts(code)
     policy = classfile_policy(
         class_major_version,
         class_minor_version,
@@ -295,6 +303,12 @@ def _method_summary(
         max_stack=max_stack,
         max_locals=max_locals,
         stack_map_frame_count=stack_map_frame_count,
+        xref_count=xref_counts["xref_count"],
+        method_xref_count=xref_counts["method_xref_count"],
+        field_xref_count=xref_counts["field_xref_count"],
+        class_xref_count=xref_counts["class_xref_count"],
+        string_xref_count=xref_counts["string_xref_count"],
+        dynamic_xref_count=xref_counts["dynamic_xref_count"],
         line_number_count=len(line_numbers),
         first_line=min(line_numbers) if line_numbers else None,
         last_line=max(line_numbers) if line_numbers else None,
