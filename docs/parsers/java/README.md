@@ -122,11 +122,12 @@ Implemented pieces now include:
   and mapping context.
 - Initial class listing through `java_list_classes`, exposing bounded package/name
   and access-flag filters, superclass/interface/member counts, optional annotation
-  descriptors, optional ProGuard/Mojang mapped names, and `java_class` KB evidence.
+  descriptors, `SourceFile` metadata, optional ProGuard/Mojang mapped names, and
+  `java_class` KB evidence.
 - Initial method listing through `java_list_methods`, exposing bounded method
   summaries with class/name/descriptor filters, code-size metadata, line-number
-  counts/ranges, optional annotation descriptors, optional ProGuard/Mojang mapped
-  names, and `java_method` KB evidence.
+  counts/ranges, `SourceFile` metadata, optional annotation descriptors, optional
+  ProGuard/Mojang mapped names, and `java_method` KB evidence.
 - Initial bytecode CFG construction for selected methods, exposing basic blocks,
   conditional/goto/fallthrough/default-switch/exception edges, line anchors,
   exception handler ranges, stop reasons, and KB `java_cfg` nodes.
@@ -268,9 +269,9 @@ Important lessons:
 - [x] Mapping-aware xref and call graph annotations for ProGuard/Mojang names
 - [x] Initial bytecode instruction decode and `java_view_bytecode`
 - [x] Initial bounded class listing with package/name/access filters, class
-  summaries, annotations, and mapping names
+  summaries, `SourceFile`, annotations, and mapping names
 - [x] Initial bounded method listing with filters, code and line-table summaries,
-  annotations, and mapping names
+  `SourceFile`, annotations, and mapping names
 - [x] Initial bytecode CFG via `java_cfg`
 - [x] Initial constant-pool call graph via `java_call_graph`
 - [x] Exception-handler table parsing and CFG exception edges

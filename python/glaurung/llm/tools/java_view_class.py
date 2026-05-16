@@ -39,6 +39,9 @@ class JavaCodeSummary(BaseModel):
     code_length: int
     exception_table_len: int
     attributes_count: int
+    line_number_count: int = 0
+    first_line: int | None = None
+    last_line: int | None = None
 
 
 class JavaAnnotationValueSummary(BaseModel):
@@ -81,6 +84,7 @@ class JavaViewClassResult(BaseModel):
     dotted_class_name: str | None = None
     mapped_class_name: str | None = None
     super_class: str | None = None
+    source_file: str | None = None
     major_version: int | None = None
     minor_version: int | None = None
     access_flags: int | None = None
@@ -184,6 +188,7 @@ def _result_for_class(
     mapped_class_name = (
         class_mapping.official_name if class_mapping is not None else None
     )
+    source_file = _optional_string(parsed.get("source_file"))
     annotations = _annotation_summaries(parsed.get("annotations"))
     fields = (
         [
@@ -214,6 +219,7 @@ def _result_for_class(
                 "mapped_class_name": mapped_class_name,
                 "mapping_path": mapping_path,
                 "super_class": parsed["super_class"],
+                "source_file": source_file,
                 "major_version": parsed["major_version"],
                 "minor_version": parsed["minor_version"],
                 "access_flags": parsed["access_flags"],
@@ -241,6 +247,7 @@ def _result_for_class(
                     "entry_name": entry_name,
                     "class_name": class_name,
                     "mapped_class_name": mapped_class_name,
+                    "source_file": source_file,
                     "name": member.name,
                     "descriptor": member.descriptor,
                     "mapped_names": member.mapped_names,
@@ -267,6 +274,7 @@ def _result_for_class(
         dotted_class_name=_dotted(class_name),
         mapped_class_name=mapped_class_name,
         super_class=parsed["super_class"],
+        source_file=source_file,
         major_version=parsed["major_version"],
         minor_version=parsed["minor_version"],
         access_flags=parsed["access_flags"],
@@ -318,13 +326,35 @@ def _annotation_summaries(value: Any) -> list[JavaAnnotationSummary]:
 def _code_summary(value: Any) -> JavaCodeSummary | None:
     if not isinstance(value, dict):
         return None
+    line_numbers = _line_numbers(value)
     return JavaCodeSummary(
         max_stack=int(value["max_stack"]),
         max_locals=int(value["max_locals"]),
         code_length=int(value["code_length"]),
         exception_table_len=int(value["exception_table_len"]),
         attributes_count=int(value["attributes_count"]),
+        line_number_count=len(line_numbers),
+        first_line=min(line_numbers) if line_numbers else None,
+        last_line=max(line_numbers) if line_numbers else None,
     )
+
+
+def _line_numbers(code: dict[str, Any]) -> list[int]:
+    line_numbers = code.get("line_numbers")
+    if not isinstance(line_numbers, list):
+        return []
+    out: list[int] = []
+    for line in line_numbers:
+        if not isinstance(line, dict):
+            continue
+        value = line.get("line_number")
+        if isinstance(value, int):
+            out.append(value)
+    return out
+
+
+def _optional_string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _candidate_class_names(

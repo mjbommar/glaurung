@@ -84,6 +84,7 @@ public class Main {
     assert method.name == "value"
     assert method.descriptor == "()Ljava/lang/String;"
     assert method.code_length is not None and method.code_length > 0
+    assert method.source_file == "Main.java"
     assert method.line_number_count >= 1
     assert method.first_line is not None
     assert method.last_line is not None
@@ -91,6 +92,7 @@ public class Main {
         node.kind == NodeKind.java_method
         and node.props.get("tool") == "java_list_methods"
         and node.props.get("name") == "value"
+        and node.props.get("source_file") == "Main.java"
         for node in ctx.kb.nodes()
     )
 

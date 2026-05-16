@@ -129,12 +129,12 @@ Glaurung already has a growing Java path:
   `java_recovery_validation` evidence nodes.
 - Python memory tools can now list candidate classes with `java_list_classes`,
   exposing bounded package/name/access-flag filtering, superclass/interface/member
-  counts, optional annotation descriptors, optional ProGuard/Mojang mapped names, and
-  `java_class` evidence nodes.
+  counts, `SourceFile` metadata, optional annotation descriptors, optional
+  ProGuard/Mojang mapped names, and `java_class` evidence nodes.
 - Python memory tools can now list candidate methods with `java_list_methods`,
   exposing bounded class/name/descriptor filtering, code-size summaries,
-  line-number counts/ranges, optional annotation descriptors, optional
-  ProGuard/Mojang mapped names, and `java_method` evidence nodes.
+  line-number counts/ranges, `SourceFile` metadata, optional annotation descriptors,
+  optional ProGuard/Mojang mapped names, and `java_method` evidence nodes.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -745,8 +745,8 @@ Initial Python implementation status:
 - Supports package-prefix, class-name, access-flag all/any/none, scan-budget, and
   result-limit filtering.
 - Reports class locators, internal/dotted/mapped names, package/simple names,
-  superclasses, interfaces, JVM version, method counts, field counts, methods with
-  code, and optional class annotation descriptors.
+  superclasses, `SourceFile`, interfaces, JVM version, method counts, field counts,
+  methods with code, and optional class annotation descriptors.
 - Supports optional ProGuard/Mojang mapped class names when a mapping file is
   supplied.
 
@@ -763,8 +763,9 @@ Inputs:
 
 Outputs:
 
-- Class locators, names, superclasses, interface counts, method counts, field counts,
-  JVM version, access flags, mapped names, and optional annotation descriptors.
+- Class locators, names, superclasses, `SourceFile`, interface counts, method counts,
+  field counts, JVM version, access flags, mapped names, and optional annotation
+  descriptors.
 
 `java_view_class`
 
@@ -778,9 +779,9 @@ Inputs:
 
 Outputs:
 
-- Full class declaration metadata.
+- Full class declaration metadata, including `SourceFile`.
 - Fields.
-- Methods.
+- Methods with code-size and line-number range summaries where available.
 - Descriptor-aware mapped official/obfuscated names for classes and members when
   mappings are loaded.
 - Annotations.
@@ -798,6 +799,7 @@ Initial Python implementation status:
 - Supports class, method-name, and descriptor substring filters.
 - Supports constructor inclusion/exclusion, result limits, code-size summaries, and
   line-number counts/ranges when `LineNumberTable` data exists.
+- Reports class-level `SourceFile` metadata on returned methods when present.
 - Supports optional method annotation descriptors.
 - Supports optional ProGuard/Mojang mapped class and method names when a mapping file
   is supplied.

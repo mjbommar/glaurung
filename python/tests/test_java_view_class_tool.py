@@ -105,6 +105,7 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert result.matched_by == "official"
     assert result.class_name == "a"
     assert result.mapped_class_name == "com.example.GameThing"
+    assert result.source_file == "a.java"
     assert result.annotations[0].descriptor == "LMarker;"
     assert result.annotations[0].elements[0].value.value == "game-thing"
     field_b = next(f for f in result.fields if f.name == "b")
@@ -114,14 +115,20 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert method_c.annotations[0].elements[0].value.value == "tick"
     assert method_c.code is not None
     assert method_c.code.code_length > 0
+    assert method_c.code.line_number_count >= 1
+    assert method_c.code.first_line is not None
+    assert method_c.code.last_line is not None
     assert any(
         n.kind == NodeKind.java_class
         and n.props.get("mapped_class_name") == "com.example.GameThing"
+        and n.props.get("source_file") == "a.java"
         and n.props.get("annotations", [{}])[0].get("descriptor") == "LMarker;"
         for n in ctx.kb.nodes()
     )
     assert any(
-        n.kind == NodeKind.java_method and n.props.get("mapped_names") == ["tick"]
+        n.kind == NodeKind.java_method
+        and n.props.get("mapped_names") == ["tick"]
+        and n.props.get("source_file") == "a.java"
         for n in ctx.kb.nodes()
     )
 

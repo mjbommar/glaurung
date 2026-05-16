@@ -47,6 +47,7 @@ class JavaListedMethod(BaseModel):
     class_name: str
     dotted_class_name: str
     mapped_class_name: str | None = None
+    source_file: str | None = None
     name: str
     descriptor: str
     access_flags: int
@@ -152,6 +153,7 @@ def _list_methods_from_class(
     result: JavaListMethodsResult,
 ) -> None:
     class_name = str(parsed["class_name"])
+    source_file = _optional_string(parsed.get("source_file"))
     for method in parsed.get("methods", []):
         if not isinstance(method, dict):
             continue
@@ -173,6 +175,7 @@ def _list_methods_from_class(
             return
         summary = _method_summary(
             class_name=class_name,
+            source_file=source_file,
             class_mapping=class_mapping,
             method=method,
             mapped_members=mapped_members,
@@ -186,6 +189,7 @@ def _list_methods_from_class(
 def _method_summary(
     *,
     class_name: str,
+    source_file: str | None,
     class_mapping: ProguardClassMapping | None,
     method: dict[str, Any],
     mapped_members: list[Any],
@@ -205,6 +209,7 @@ def _method_summary(
         class_name=class_name,
         dotted_class_name=_dotted(class_name),
         mapped_class_name=class_mapping.official_name if class_mapping else None,
+        source_file=source_file,
         name=str(method.get("name")),
         descriptor=str(method.get("descriptor")),
         access_flags=int(method.get("access_flags", 0)),
@@ -301,6 +306,10 @@ def _line_numbers(code: dict[str, Any]) -> list[int]:
         if isinstance(value, int):
             out.append(value)
     return out
+
+
+def _optional_string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _add_method_node(

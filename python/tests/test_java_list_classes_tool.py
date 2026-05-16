@@ -87,11 +87,13 @@ def test_java_list_classes_filters_and_records_kb_nodes(tmp_path: Path) -> None:
     assert main.interface_count == 1
     assert main.method_count >= 2
     assert main.field_count == 0
+    assert main.source_file == "Main.java"
     assert main.annotation_descriptors == ["Ljava/lang/Deprecated;"]
     assert any(
         node.kind == NodeKind.java_class
         and node.props.get("tool") == "java_list_classes"
         and node.props.get("class_name") == "app/Main"
+        and node.props.get("source_file") == "Main.java"
         for node in ctx.kb.nodes()
     )
 
