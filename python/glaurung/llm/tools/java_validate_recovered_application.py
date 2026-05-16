@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+import glaurung as g
 
 from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
@@ -34,6 +36,12 @@ MetadataDifferenceKind = Literal[
     "manifest",
     "service",
     "module_info",
+]
+SemanticDifferenceKind = Literal[
+    "record_components",
+    "permitted_subclasses",
+    "method_parameter_annotations",
+    "annotation_default",
 ]
 
 
@@ -92,6 +100,16 @@ class JavaMetadataDifference(BaseModel):
     message: str
 
 
+class JavaSemanticDifference(BaseModel):
+    kind: SemanticDifferenceKind
+    class_name: str
+    member_name: str | None = None
+    descriptor: str | None = None
+    original_value: str | None = None
+    rebuilt_value: str | None = None
+    message: str
+
+
 class JavaValidateRecoveredApplicationResult(BaseModel):
     original_path: str
     source_project_root: str | None = None
@@ -117,6 +135,10 @@ class JavaValidateRecoveredApplicationResult(BaseModel):
     metadata_match: bool | None = None
     metadata_difference_count: int = 0
     metadata_differences: list[JavaMetadataDifference] = Field(default_factory=list)
+    semantic_match: bool | None = None
+    semantic_difference_count: int = 0
+    semantic_differences: list[JavaSemanticDifference] = Field(default_factory=list)
+    compatibility_score: float = 0.0
     stub_source_count: int = 0
     stub_sources: list[str] = Field(default_factory=list)
     stop_reasons: list[str] = Field(default_factory=list)
@@ -134,6 +156,14 @@ class _ResourceLoadResult(BaseModel):
     truncated: bool = False
     stop_reasons: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class _ClassSemantic(BaseModel):
+    class_name: str
+    record_components: list[str] = Field(default_factory=list)
+    permitted_subclasses: list[str] = Field(default_factory=list)
+    method_parameter_annotation_counts: dict[str, int] = Field(default_factory=dict)
+    annotation_defaults: dict[str, str] = Field(default_factory=dict)
 
 
 class JavaValidateRecoveredApplicationTool(
@@ -244,6 +274,17 @@ class JavaValidateRecoveredApplicationTool(
                 abi_differences = abi_result.differences
                 stop_reasons.extend(abi_result.stop_reasons)
 
+        semantic_match: bool | None = None
+        semantic_differences: list[JavaSemanticDifference] = []
+        if args.profile in {"abi", "full_static"} and rebuilt_path is not None:
+            if rebuilt_path.exists():
+                semantic_differences = _compare_semantics(
+                    original_path,
+                    rebuilt_path,
+                    args.max_abi_differences,
+                )
+                semantic_match = not semantic_differences
+
         resource_match: bool | None = None
         original_resource_count = 0
         recovered_resource_count = 0
@@ -292,6 +333,7 @@ class JavaValidateRecoveredApplicationTool(
             abi_match=abi_match,
             resource_match=resource_match,
             metadata_match=metadata_match,
+            semantic_match=semantic_match,
             stub_sources=stub_sources,
             allow_generated_stubs=args.allow_generated_stubs,
             stop_reasons=stop_reasons,
@@ -301,6 +343,7 @@ class JavaValidateRecoveredApplicationTool(
             abi_match=abi_match,
             resource_match=resource_match,
             metadata_match=metadata_match,
+            semantic_match=semantic_match,
             stub_sources=stub_sources,
             allow_generated_stubs=args.allow_generated_stubs,
             stop_reasons=stop_reasons,
@@ -314,6 +357,8 @@ class JavaValidateRecoveredApplicationTool(
             resource_difference_count=resource_difference_count,
             metadata_match=metadata_match,
             metadata_difference_count=len(metadata_differences),
+            semantic_match=semantic_match,
+            semantic_difference_count=len(semantic_differences),
             stub_sources=stub_sources,
             stop_reasons=stop_reasons,
         )
@@ -342,6 +387,17 @@ class JavaValidateRecoveredApplicationTool(
             metadata_match=metadata_match,
             metadata_difference_count=len(metadata_differences),
             metadata_differences=metadata_differences,
+            semantic_match=semantic_match,
+            semantic_difference_count=len(semantic_differences),
+            semantic_differences=semantic_differences,
+            compatibility_score=_compatibility_score(
+                compile_success=compile_success,
+                abi_difference_count=abi_difference_count,
+                resource_difference_count=resource_difference_count,
+                metadata_difference_count=len(metadata_differences),
+                semantic_difference_count=len(semantic_differences),
+                stub_source_count=len(stub_sources),
+            ),
             stub_source_count=len(stub_sources),
             stub_sources=stub_sources,
             stop_reasons=stop_reasons,
@@ -529,6 +585,192 @@ def _compare_metadata(
     return differences
 
 
+def _compare_semantics(
+    original_path: Path,
+    rebuilt_path: Path,
+    max_differences: int,
+) -> list[JavaSemanticDifference]:
+    original = _load_semantics(original_path)
+    rebuilt = _load_semantics(rebuilt_path)
+    differences: list[JavaSemanticDifference] = []
+    for class_name in sorted(set(original) & set(rebuilt)):
+        original_class = original[class_name]
+        rebuilt_class = rebuilt[class_name]
+        if original_class.record_components != rebuilt_class.record_components:
+            _add_semantic_difference(
+                differences,
+                max_differences,
+                JavaSemanticDifference(
+                    kind="record_components",
+                    class_name=class_name,
+                    original_value=", ".join(original_class.record_components),
+                    rebuilt_value=", ".join(rebuilt_class.record_components),
+                    message=f"Record components differ for {class_name}.",
+                ),
+            )
+        if original_class.permitted_subclasses != rebuilt_class.permitted_subclasses:
+            _add_semantic_difference(
+                differences,
+                max_differences,
+                JavaSemanticDifference(
+                    kind="permitted_subclasses",
+                    class_name=class_name,
+                    original_value=", ".join(original_class.permitted_subclasses),
+                    rebuilt_value=", ".join(rebuilt_class.permitted_subclasses),
+                    message=f"Permitted subclasses differ for {class_name}.",
+                ),
+            )
+        for method_key in sorted(
+            set(original_class.method_parameter_annotation_counts)
+            | set(rebuilt_class.method_parameter_annotation_counts)
+        ):
+            original_count = original_class.method_parameter_annotation_counts.get(
+                method_key, 0
+            )
+            rebuilt_count = rebuilt_class.method_parameter_annotation_counts.get(
+                method_key, 0
+            )
+            if original_count == rebuilt_count:
+                continue
+            name, _, descriptor = method_key.partition(":")
+            _add_semantic_difference(
+                differences,
+                max_differences,
+                JavaSemanticDifference(
+                    kind="method_parameter_annotations",
+                    class_name=class_name,
+                    member_name=name,
+                    descriptor=descriptor,
+                    original_value=str(original_count),
+                    rebuilt_value=str(rebuilt_count),
+                    message=(
+                        "Method parameter annotation counts differ for "
+                        f"{class_name}.{name}{descriptor}."
+                    ),
+                ),
+            )
+        for method_key in sorted(
+            set(original_class.annotation_defaults)
+            | set(rebuilt_class.annotation_defaults)
+        ):
+            original_default = original_class.annotation_defaults.get(method_key)
+            rebuilt_default = rebuilt_class.annotation_defaults.get(method_key)
+            if original_default == rebuilt_default:
+                continue
+            name, _, descriptor = method_key.partition(":")
+            _add_semantic_difference(
+                differences,
+                max_differences,
+                JavaSemanticDifference(
+                    kind="annotation_default",
+                    class_name=class_name,
+                    member_name=name,
+                    descriptor=descriptor,
+                    original_value=original_default,
+                    rebuilt_value=rebuilt_default,
+                    message=(
+                        "Annotation default differs for "
+                        f"{class_name}.{name}{descriptor}."
+                    ),
+                ),
+            )
+    return differences
+
+
+def _load_semantics(path: Path) -> dict[str, _ClassSemantic]:
+    out: dict[str, _ClassSemantic] = {}
+    for data in _class_bytes(path):
+        try:
+            parsed = getattr(g, "analysis").parse_java_class_bytes(data)
+        except RuntimeError:
+            continue
+        if parsed is None:
+            continue
+        class_name = str(parsed.get("class_name", ""))
+        if not class_name:
+            continue
+        out[class_name] = _class_semantic(parsed)
+    return out
+
+
+def _class_bytes(path: Path) -> list[bytes]:
+    if path.is_dir():
+        return [item.read_bytes() for item in sorted(path.rglob("*.class"))]
+    if path.is_file() and path.suffix == ".class":
+        return [path.read_bytes()]
+    if zipfile.is_zipfile(path):
+        out: list[bytes] = []
+        with zipfile.ZipFile(path) as zf:
+            for info in zf.infolist():
+                if (
+                    not info.is_dir()
+                    and info.filename.endswith(".class")
+                    and not info.filename.startswith("META-INF/versions/")
+                ):
+                    out.append(zf.read(info))
+        return out
+    return []
+
+
+def _class_semantic(parsed: dict[str, Any]) -> _ClassSemantic:
+    return _ClassSemantic(
+        class_name=str(parsed.get("class_name", "")),
+        record_components=[
+            f"{item.get('name')}:{item.get('descriptor')}"
+            for item in parsed.get("record_components", [])
+            if isinstance(item, dict)
+        ],
+        permitted_subclasses=[
+            item
+            for item in parsed.get("permitted_subclasses", [])
+            if isinstance(item, str)
+        ],
+        method_parameter_annotation_counts=_method_parameter_annotation_counts(parsed),
+        annotation_defaults=_annotation_defaults(parsed),
+    )
+
+
+def _method_parameter_annotation_counts(parsed: dict[str, Any]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for method in parsed.get("methods", []):
+        if not isinstance(method, dict):
+            continue
+        key = _method_key(method)
+        count = 0
+        for parameter in method.get("parameter_annotations", []):
+            if not isinstance(parameter, dict):
+                continue
+            annotations = parameter.get("annotations")
+            if isinstance(annotations, list):
+                count += len(annotations)
+        if count:
+            out[key] = count
+    return out
+
+
+def _annotation_defaults(parsed: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for method in parsed.get("methods", []):
+        if not isinstance(method, dict):
+            continue
+        if method.get("has_annotation_default") or method.get("annotation_default"):
+            out[_method_key(method)] = repr(method.get("annotation_default"))
+    return out
+
+
+def _method_key(method: dict[str, Any]) -> str:
+    return f"{method.get('name')}:{method.get('descriptor')}"
+
+
+def _add_semantic_difference(
+    differences: list[JavaSemanticDifference],
+    max_differences: int,
+    difference: JavaSemanticDifference,
+) -> None:
+    if max_differences == 0 or len(differences) < max_differences:
+        differences.append(difference)
+
+
 def _metadata_resource_paths(names: set[str]) -> set[str]:
     return {
         name
@@ -674,6 +916,7 @@ def _passes_validation(
     abi_match: bool | None,
     resource_match: bool | None,
     metadata_match: bool | None,
+    semantic_match: bool | None,
     stub_sources: list[str],
     allow_generated_stubs: bool,
     stop_reasons: list[str],
@@ -689,6 +932,7 @@ def _passes_validation(
         or abi_match is False
         or resource_match is False
         or metadata_match is False
+        or semantic_match is False
     ):
         return False
     return True
@@ -700,6 +944,7 @@ def _validation_checks(
     abi_match: bool | None,
     resource_match: bool | None,
     metadata_match: bool | None,
+    semantic_match: bool | None,
     stub_sources: list[str],
     allow_generated_stubs: bool,
     stop_reasons: list[str],
@@ -732,6 +977,13 @@ def _validation_checks(
             "Recovered manifest, service provider, and module metadata match.",
             "Recovered manifest, service provider, or module metadata differs.",
             "Metadata comparison was not requested.",
+        ),
+        _check(
+            "semantics",
+            semantic_match,
+            "Recovered Java-specific semantic attributes match.",
+            "Recovered Java-specific semantic attributes differ.",
+            "Semantic attribute comparison was not requested.",
         ),
     ]
     if stub_sources and not allow_generated_stubs:
@@ -787,6 +1039,8 @@ def _next_actions(
     resource_difference_count: int,
     metadata_match: bool | None,
     metadata_difference_count: int,
+    semantic_match: bool | None,
+    semantic_difference_count: int,
     stub_sources: list[str],
     stop_reasons: list[str],
 ) -> list[str]:
@@ -804,6 +1058,10 @@ def _next_actions(
     if metadata_match is False:
         actions.append(
             f"Restore manifest/service/module metadata differences ({metadata_difference_count} reported)."
+        )
+    if semantic_match is False:
+        actions.append(
+            f"Repair Java semantic attribute differences ({semantic_difference_count} reported)."
         )
     if stub_sources:
         actions.append(
@@ -825,6 +1083,26 @@ def _quality_summary(
     if not failed:
         return "not_clean_enough: validation did not pass, but no failing check was recorded."
     return "not_clean_enough: failing checks: " + ", ".join(failed)
+
+
+def _compatibility_score(
+    *,
+    compile_success: bool | None,
+    abi_difference_count: int,
+    resource_difference_count: int,
+    metadata_difference_count: int,
+    semantic_difference_count: int,
+    stub_source_count: int,
+) -> float:
+    penalty = 0.0
+    if compile_success is False:
+        penalty += 0.30
+    penalty += min(0.35, abi_difference_count * 0.02)
+    penalty += min(0.15, resource_difference_count * 0.01)
+    penalty += min(0.10, metadata_difference_count * 0.03)
+    penalty += min(0.20, semantic_difference_count * 0.04)
+    penalty += min(0.20, stub_source_count * 0.05)
+    return max(0.0, round(1.0 - penalty, 4))
 
 
 def _status(validation_passed: bool, stop_reasons: list[str]) -> ValidationStatus:

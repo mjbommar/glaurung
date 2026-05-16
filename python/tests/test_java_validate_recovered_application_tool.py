@@ -71,6 +71,24 @@ def _compile_original_jar(
     return jar
 
 
+def _compile_source_dir(tmp_path: Path, source: str, name: str) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java validation fixture")
+    src = tmp_path / f"{name}-src"
+    classes = tmp_path / f"{name}-classes"
+    src.mkdir()
+    classes.mkdir()
+    source_path = src / "Main.java"
+    source_path.write_text(source.strip() + "\n", encoding="utf-8")
+    subprocess.run(
+        ["javac", "--release", "17", "-d", str(classes), str(source_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return classes
+
+
 def test_java_validate_recovered_application_passes_static_validation(
     tmp_path: Path,
 ) -> None:
@@ -170,6 +188,55 @@ def test_java_validate_recovered_application_reports_metadata_drift(
     assert (
         result.metadata_differences[0].resource_path == "META-INF/services/app.Service"
     )
+
+
+def test_java_validate_recovered_application_reports_semantic_record_drift(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_validate_recovered_application import build_tool
+
+    original_classes = _compile_source_dir(
+        tmp_path,
+        """
+package app;
+
+public record Main(String id) {
+}
+""",
+        "original-record",
+    )
+    rebuilt_classes = _compile_source_dir(
+        tmp_path,
+        """
+package app;
+
+public record Main(String name) {
+}
+""",
+        "rebuilt-record",
+    )
+    project = tmp_path / "recovered"
+    _write_source_project(project, "package app; public record Main(String name) {}")
+    ctx = _ctx(original_classes / "app" / "Main.class")
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            original_path=str(original_classes),
+            source_project_root=str(project),
+            rebuilt_path=str(rebuilt_classes),
+            profile="abi",
+            run_compile=False,
+        ),
+    )
+
+    assert result.validation_passed is False
+    assert result.semantic_match is False
+    assert result.semantic_difference_count >= 1
+    assert any(diff.kind == "record_components" for diff in result.semantic_differences)
+    assert result.compatibility_score < 1.0
 
 
 def test_java_validate_recovered_application_can_require_annotation_parity(
