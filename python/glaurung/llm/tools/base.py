@@ -49,6 +49,7 @@ def tool_to_pyd_ai(
     tool: MemoryTool[InputModelT, OutputModelT],
     *,
     strict: bool | None = True,
+    include_return_schema: bool | None = False,
 ) -> Tool[MemoryContext]:
     """Wrap a MemoryTool into a pydantic-ai Tool.
 
@@ -63,6 +64,11 @@ def tool_to_pyd_ai(
     relaxing larger exploratory toolsets for providers with strict-tool
     limits. The default remains ``True`` to preserve existing behavior for
     the general memory agent.
+
+    The wrapper supplies the MemoryTool's Pydantic input model schema to
+    pydantic-ai explicitly. Without this, the ``**kwargs`` implementation
+    detail is exposed as an arbitrary-object schema, which is both less useful
+    to models and problematic for providers with strict schema transforms.
     """
 
     # Build a function taking RunContext
@@ -117,12 +123,16 @@ def tool_to_pyd_ai(
                 # Never let evidence-logging failures break the tool.
                 pass
 
-    return Tool(
+    pyd_tool = Tool.from_schema(
         _impl,
         name=tool.meta.name,
         description=tool.meta.description,
-        strict=strict,
+        json_schema=tool.input_model.model_json_schema(),
+        takes_ctx=True,
     )
+    pyd_tool.strict = strict
+    pyd_tool.include_return_schema = include_return_schema
+    return pyd_tool
 
 
 def _record_tool_evidence(

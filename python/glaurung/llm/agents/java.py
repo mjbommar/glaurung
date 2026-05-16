@@ -72,7 +72,7 @@ def _make_java_agent(
     system_prompt: str,
     context_profile: JavaAgentToolProfile,
     model: str | None = None,
-    tool_strict: bool | None = True,
+    tool_strict: bool | None = None,
 ) -> Any:
     cfg = get_config()
     available = cfg.available_models()
@@ -104,7 +104,9 @@ def _make_java_agent(
     return register_java_agent_tools(
         cast(Any, agent),
         profile=context_profile,
-        strict=tool_strict,
+        strict=_default_tool_strict_for_model(model_name)
+        if tool_strict is None
+        else tool_strict,
     )
 
 
@@ -166,6 +168,17 @@ def prime_java_agent_context(
         }
     )
     return result
+
+
+def _default_tool_strict_for_model(model_name: str) -> bool:
+    """Choose pydantic-ai tool strictness for provider compatibility."""
+
+    # Anthropic strict tool schemas are useful for small/simple toolsets, but
+    # Java analysis tools have many optional parameters. Keeping the typed
+    # schemas while disabling strict grammar compilation avoids Anthropic's
+    # optional-parameter and strict-tool-count limits. OpenAI/test keep strict
+    # mode by default.
+    return not model_name.startswith("anthropic:")
 
 
 def build_java_triage_agent(model: str | None = None) -> Any:

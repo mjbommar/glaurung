@@ -125,3 +125,25 @@ def test_tool_to_pyd_ai_allows_strict_mode_selection() -> None:
     assert strict_tool.strict is True
     assert loose_tool.strict is False
     assert provider_default_tool.strict is None
+
+
+def test_tool_to_pyd_ai_uses_memory_tool_input_schema() -> None:
+    """Wrapped tools should expose their Pydantic args, not an arbitrary
+    **kwargs object. Arbitrary-object schemas trigger provider strict-mode
+    warnings and give the model poor argument guidance.
+    """
+    from glaurung.llm.tools.base import tool_to_pyd_ai
+    from glaurung.llm.tools.java_agent_context import build_tool
+
+    pyd_tool = tool_to_pyd_ai(build_tool(), strict=True)
+    schema = pyd_tool.function_schema.json_schema
+
+    assert "profile" in schema["properties"]
+    assert schema["properties"]["profile"]["enum"] == [
+        "triage",
+        "security",
+        "recovery",
+        "deobfuscation",
+    ]
+    assert schema.get("additionalProperties") is not True
+    assert pyd_tool.include_return_schema is False

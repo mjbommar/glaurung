@@ -13,11 +13,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 
 import pytest
-
-import glaurung as g
 
 
 LIVE = os.environ.get("GLAURUNG_LIVE_LLM") == "1"
@@ -105,25 +104,24 @@ def test_live_java_security_agent_returns_structured_tool_backed_assessment(
 ) -> None:
     from glaurung.llm.agents.java import (
         JavaSecurityAssessment,
-        build_java_security_agent,
     )
+    from glaurung.llm.agents.java_runner import run_java_security_analysis
     from glaurung.llm.config import get_config
-    from glaurung.llm.context import MemoryContext
-    from glaurung.llm.kb.adapters import import_triage
 
     jar_path = _compile_live_fixture(tmp_path)
-    artifact = g.triage.analyze_path(str(jar_path), 10_000_000, 100_000_000, 1)
-    ctx = MemoryContext(file_path=str(jar_path), artifact=artifact)
-    import_triage(ctx.kb, artifact, str(jar_path))
 
     cfg = get_config()
-    agent = build_java_security_agent(model=cfg.preferred_model())
-    result = agent.run_sync(
-        "Analyze this JAR for evidence-backed Java security behavior. "
-        "Use java_risk_report before making findings.",
-        deps=ctx,
-    )
-    output = result.output
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = run_java_security_analysis(
+            jar_path,
+            model=cfg.preferred_model(),
+            prompt=(
+                "Analyze this JAR for evidence-backed Java security behavior. "
+                "Use java_risk_report before making findings."
+            ),
+        )
+    output = result.assessment
 
     assert isinstance(output, JavaSecurityAssessment)
     assert output.confidence >= 0.2
@@ -134,7 +132,10 @@ def test_live_java_security_agent_returns_structured_tool_backed_assessment(
         for finding in output.findings
     )
 
-    calls = getattr(ctx, "_tool_calls", [])
-    assert calls[0]["tool"] == "java_agent_context"
-    assert calls[0]["args"]["profile"] == "security"
-    assert "java_risk_report" in {call["tool"] for call in calls}
+    assert result.tool_calls[0].tool == "java_agent_context"
+    assert result.tool_calls[0].args["profile"] == "security"
+    assert "java_risk_report" in {call.tool for call in result.tool_calls}
+    assert not any(
+        "dict` fields are not supported by Anthropic" in str(item.message)
+        for item in caught
+    )

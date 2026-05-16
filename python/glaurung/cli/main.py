@@ -5,6 +5,7 @@ import sys
 from typing import List, Optional
 
 from .commands.triage import TriageCommand
+from .commands.base import BaseCommand
 from .commands.symbols import SymbolsCommand
 from .commands.disasm import DisasmCommand
 from .commands.cfg import CFGCommand
@@ -28,6 +29,7 @@ from .commands.view import ViewCommand
 from .commands.find import FindCommand
 from .commands.bookmark import BookmarkCommand, JournalCommand
 from .commands.classfile import ClassfileCommand
+from .commands.java import JavaCommand
 from .commands.java_recovery_report import JavaRecoveryReportCommand
 from .commands.luac import LuacCommand
 
@@ -37,6 +39,7 @@ from .formatters import (
     DisasmFormatter,
     CFGFormatter,
 )
+from .formatters.base import BaseFormatter
 from .formatters.ask import AskFormatter
 from .formatters.strings import StringsFormatter
 from .formatters.decompile import DecompileFormatter
@@ -48,7 +51,7 @@ class GlaurungCLI:
 
     def __init__(self):
         """Initialize the CLI with available commands."""
-        self.commands = {
+        self.commands: dict[str, BaseCommand] = {
             "triage": TriageCommand(),
             "strings": StringsCommand(),
             "symbols": SymbolsCommand(),
@@ -75,6 +78,7 @@ class GlaurungCLI:
             "bookmark": BookmarkCommand(),
             "journal": JournalCommand(),
             "classfile": ClassfileCommand(),
+            "java": JavaCommand(),
             "java-recovery-report": JavaRecoveryReportCommand(),
             "luac": LuacCommand(),
         }
@@ -82,7 +86,7 @@ class GlaurungCLI:
         # Map commands to their formatters. The REPL is interactive and
         # prints directly, so it reuses TriageFormatter as a no-op
         # placeholder — the formatter is never actually consulted.
-        self.formatter_map = {
+        self.formatter_map: dict[str, type[BaseFormatter]] = {
             "triage": TriageFormatter,
             "strings": StringsFormatter,
             "symbols": SymbolsFormatter,
@@ -111,6 +115,7 @@ class GlaurungCLI:
             "bookmark": TriageFormatter,
             "journal": TriageFormatter,
             "classfile": TriageFormatter,
+            "java": TriageFormatter,
             "java-recovery-report": TriageFormatter,
             "luac": TriageFormatter,
         }

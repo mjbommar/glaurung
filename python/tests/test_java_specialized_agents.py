@@ -67,6 +67,23 @@ def test_java_specialized_agents_use_focused_provider_safe_toolsets() -> None:
     assert "java_risk_report" in full_agent_tools
 
 
+def test_java_specialized_agents_relax_strict_tools_for_anthropic(monkeypatch) -> None:
+    from glaurung.llm.agents.java import build_java_security_agent
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    anthropic_tools = build_java_security_agent(
+        model="anthropic:claude-opus-4-7"
+    )._function_toolset.tools
+    openai_tools = build_java_security_agent(
+        model="openai:gpt-5.5"
+    )._function_toolset.tools
+
+    assert anthropic_tools
+    assert all(tool.strict is False for tool in anthropic_tools.values())
+    assert all(tool.strict is True for tool in openai_tools.values())
+
+
 def test_java_agent_context_is_seeded_with_specialized_profile(tmp_path) -> None:
     import shutil
     import subprocess
