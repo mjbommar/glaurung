@@ -124,6 +124,48 @@ def test_java_reconstruct_source_tree_emits_marked_stubs_when_requested(
     )
 
 
+def test_java_reconstruct_source_tree_decompiles_top_level_sources(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_compile_recovered_project import (
+        build_tool as build_compile_tool,
+    )
+    from glaurung.llm.tools.java_reconstruct_source_tree import build_tool
+
+    jar = _fixture_jar(tmp_path)
+    output = tmp_path / "recovered"
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            output_root=str(output),
+            decompile_sources=True,
+            decompiler_engine="cfr",
+        ),
+    )
+
+    source = output / "src" / "main" / "java" / "app" / "Main.java"
+    assert source.is_file()
+    text = source.read_text(encoding="utf-8")
+    assert "class Main" in text
+    assert "GLAURUNG GENERATED STUB" not in text
+    assert result.java_source_files == ["src/main/java/app/Main.java"]
+    assert result.decompiled_source_files == ["src/main/java/app/Main.java"]
+    assert result.classes_requiring_decompile == []
+
+    compile_tool = build_compile_tool()
+    compiled = compile_tool.run(
+        ctx,
+        ctx.kb,
+        compile_tool.input_model(source_project_root=str(output), java_release=17),
+    )
+    assert compiled.success is True
+
+
 def test_java_reconstruct_source_tree_requires_output_root(tmp_path: Path) -> None:
     from glaurung.llm.tools.java_reconstruct_source_tree import build_tool
 

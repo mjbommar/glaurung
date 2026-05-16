@@ -163,11 +163,23 @@ Glaurung already has a growing Java path:
   `javac` execution through `java_compile_recovered_project`, including generated
   `sources.txt` population, nested argfile expansion, timeout handling, structured
   diagnostics, and `java_compile_result` evidence nodes.
+- Glaurung now has a local JVM helper project under `java/glaurung-jvm-tools` that
+  packages ASM, CFR, Vineflower, and JavaParser behind a JSON CLI. Python tools call
+  this helper for bytecode summaries, decompiled source, and AST summaries without
+  executing recovered application code.
+- Python memory tools can now decompile one class with `java_decompile_class` and
+  parse recovered source with `java_parse_decompiled_source`, emitting
+  `java_decompile_unit` evidence nodes.
 - Python memory tools can now create an initial recovered source-project scaffold
   with `java_reconstruct_source_tree`, preserving runtime resources and metadata
   under `src/main/resources`, creating `src/main/java`, skipping signed-JAR signature
-  files, tracking classes that still require decompilation, and emitting marked
-  stubs only when explicitly requested.
+  files, optionally emitting CFR/Vineflower decompiled top-level source files,
+  tracking classes that still require decompilation, and emitting marked stubs only
+  when explicitly requested.
+- Python memory tools can now run an initial compile-repair loop through
+  `java_repair_decompiled_source`, applying safe mechanical javac-diagnostic repairs
+  and recompiling. The first repair class fixes public Java types emitted into the
+  wrong filename, updates `sources.txt`, and emits `java_repair_result` evidence.
 - Python memory tools can now compare original and rebuilt Java ABI surfaces with
   `java_compare_rebuilt_abi`, checking class presence, field/method descriptors,
   access flags, selected `all`/`package_api`/`public_api` scope, and optional
@@ -327,13 +339,13 @@ here, it is probably not represented strongly enough in the plan.
 | Descriptors and generic signatures | Initial erased JVM descriptor decoding exists for field types and method parameter/return types in class/method tools; class/member `Signature` attributes are preserved and decoded into readable class/field/method generic summaries; continue type-use annotations and bridge/synthetic correlation |
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, runtime-visible/runtime-invisible class/member and parameter annotation support, type-annotation counts, method parameters, annotation defaults, inner/enclosing/nest metadata, record components, permitted subclasses, and JPMS module extras exist; continue full type-annotation decoding, stack-map bodies, and richer framework semantics |
 | Archive/resource navigation | Initial `java_list_resources`, `java_view_manifest`, `java_list_services`, `java_detect_duplicate_classes`, and `java_list_string_constants` exist; continue with nested-archive rollups, Maven metadata content parsing, policy scoring, and resource/string correlation |
-| Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
+| Decompiler integration | Initial JVM helper, `java_decompile_class`, and `java_parse_decompiled_source` exist; continue with `java_decompile_method`, `java_decompile_archive`, decompiler fallback policy, and source/bytecode correlation |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
 | Dependency and classpath recovery | Initial `java_infer_dependencies` and `java_infer_build_system` exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, optional `jdeps` package evidence, Java release, and `javac`/Maven/Gradle planning; continue with module `requires`, supplied classpath comparison, missing-class diagnostics, resolver/cache policy, and annotation processors |
 | Signed archive validation | Initial `java_verify_signatures` exists using `jarsigner -verify`; continue with policy scoring, certificate/timestamp summaries, and archive-set rollups |
-| Source tree/project reconstruction | Initial `java_reconstruct_source_tree` and `java_infer_build_system` exist for resource/metadata preservation, explicit stubs, generated source lists, and build planning; continue with decompiler source emission, module source recovery, and source/resource validation |
+| Source tree/project reconstruction | Initial `java_reconstruct_source_tree` and `java_infer_build_system` exist for resource/metadata preservation, explicit stubs, generated source lists, build planning, and opt-in top-level decompiled source emission; continue with archive-wide decompilation, module source recovery, and source/resource validation |
 | Compile diagnostics | `java_compile_recovered_project` |
-| Agentic compile-repair loop | `java_repair_decompiled_source` plus compile iteration budgets |
+| Agentic compile-repair loop | Initial `java_repair_decompiled_source` exists with compile iteration budgets and safe public-type filename repair; continue with decompiler syntax, signature, import, dependency/build, and module repair classes |
 | ABI/API and resource validation | Initial `java_compare_rebuilt_abi` and `java_validate_recovered_application` exist for descriptor/access ABI checks, public/package/all scope filtering, optional class/member annotation parity, resource parity, compile status, and generated-stub policy; continue with parameter/default/module validation and richer compatibility scoring |
 | Runtime behavior validation | `java_launch_target`, JDI/JFR/javaagent tools, opt-in smoke profile |
 | Sensitive Java behavior detection | Initial `java_detect_security_sensitive_behavior` exists; expand sink rule packs and config correlation in Phase 3.5 |
@@ -531,28 +543,19 @@ Proposed path:
 
 ```text
 java/glaurung-jvm-tools/
-  build.gradle.kts
-  settings.gradle.kts
-  src/main/java/org/glaurung/jvmtool/Main.java
-  src/main/java/org/glaurung/jvmtool/commands/*.java
-  src/test/java/org/glaurung/jvmtool/*.java
+  pom.xml
+  src/main/java/com/glaurung/jvmtool/Main.java
+  src/main/java/com/glaurung/jvmtool/*.java
+  src/test/java/com/glaurung/jvmtool/*.java
 ```
 
 The helper should be a deterministic JSON CLI:
 
 ```bash
-java -jar build/libs/glaurung-jvm-tools-all.jar index --jar target.jar
-java -jar build/libs/glaurung-jvm-tools-all.jar bytecode --jar target.jar --class a/b/C --method m --desc '()V'
-java -jar build/libs/glaurung-jvm-tools-all.jar cfg --jar target.jar --class a/b/C --method m --desc '()V'
-java -jar build/libs/glaurung-jvm-tools-all.jar xrefs --jar target.jar
-java -jar build/libs/glaurung-jvm-tools-all.jar decompile --jar target.jar --class a/b/C --engine vineflower
-java -jar build/libs/glaurung-jvm-tools-all.jar remap --jar target.jar --mappings mappings.txt --format proguard
-java -jar build/libs/glaurung-jvm-tools-all.jar emit-source --jar target.jar --out recovered/
-java -jar build/libs/glaurung-jvm-tools-all.jar compile --project recovered/
-java -jar build/libs/glaurung-jvm-tools-all.jar compare-abi --original target.jar --rebuilt recovered/build/libs/recovered.jar
-java -jar build/libs/glaurung-jvm-tools-all.jar sensitive --jar target.jar --rules default
-java -jar build/libs/glaurung-jvm-tools-all.jar trace-sink --jar target.jar --sink sink://...
-java -jar build/libs/glaurung-jvm-tools-all.jar entrypoints --jar target.jar
+java -jar target/glaurung-jvm-tools-0.1.0-all.jar version
+java -jar target/glaurung-jvm-tools-0.1.0-all.jar bytecode --jar target.jar --class a/b/C
+java -jar target/glaurung-jvm-tools-0.1.0-all.jar decompile --jar target.jar --class a/b/C --engine vineflower
+java -jar target/glaurung-jvm-tools-0.1.0-all.jar parse-source --source recovered/src/main/java/a/b/C.java
 ```
 
 JSON schema stability matters more than pretty console output. Python tools can wrap
@@ -1478,6 +1481,20 @@ Implementation notes:
 
 `java_repair_decompiled_source`
 
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_repair_result` KB nodes.
+- Runs a bounded `java_compile_recovered_project` loop and records every compile
+  result plus every attempted repair.
+- Applies the first safe mechanical repair class:
+  `rename_public_type_file`, for javac diagnostics like "class X is public, should
+  be declared in a file named X.java".
+- Rewrites `sources.txt` after an applied source-file rename and recompiles to prove
+  the fix.
+- Supports dry-run mode, repair budgets, compile iteration budgets, and timeout
+  propagation.
+
 Inputs:
 
 - Source project root.
@@ -1500,6 +1517,9 @@ Repair rules:
   dependency.
 - Prefer bytecode evidence over decompiler output when reconstructing signatures,
   thrown exceptions, annotations, enum constants, records, or bridge methods.
+- Mechanical source-layout fixes, such as public-type filename repair, may be
+  applied automatically when the compiler diagnostic and filesystem state make the
+  repair unambiguous.
 - Mark stubs and semantic guesses explicitly.
 - Do not simplify behavior merely to make compilation pass.
 - Keep repairs narrow and re-run compilation after each batch.
@@ -2549,7 +2569,7 @@ When the Java helper exists:
 
 ```bash
 cd java/glaurung-jvm-tools
-./gradlew test shadowJar
+mvn -q test package
 ```
 
 End-to-end smoke commands:
@@ -2780,16 +2800,21 @@ Goals:
 
 Tasks:
 
-- Implement `java_decompile_archive`.
+- Extend the implemented JVM helper and `java_decompile_class` from per-class
+  decompilation to `java_decompile_archive`.
 - Extend `java_infer_dependencies` with supplied-classpath comparison, module
   `requires`, optional `jdeps` evidence, and missing-class diagnostics.
-- Extend `java_reconstruct_source_tree` with decompiler source emission, module
-  source recovery, and resource validation.
+- Extend `java_reconstruct_source_tree` beyond the implemented opt-in top-level
+  decompiler source emission with module source recovery, inner/anonymous class
+  policy, archive-wide fallback policy, and resource validation.
 - Extend `java_infer_build_system` with module paths, annotation processors,
   loader-specific Minecraft plugin templates, and resolver/cache policy.
 - Extend `java_compile_recovered_project` with Maven/Gradle execution, richer
   structured diagnostics, rebuilt JAR packaging, and build-log cache keys.
-- Implement `java_repair_decompiled_source` with narrow, evidence-grounded patches.
+- Extend the implemented `java_repair_decompiled_source` beyond public-type
+  filename repair with narrow, evidence-grounded patches for syntax, signatures,
+  imports, dependency/build metadata, enum/record/sealed reconstruction, and module
+  issues.
 - Extend `java_compare_rebuilt_abi` with parameter annotation/default validation,
   module validation, and public-vs-private compatibility scoring.
 - Extend `java_validate_recovered_application` with manifest/service/module semantic
@@ -2812,7 +2837,8 @@ Acceptance:
   javac argfile includes the required dependencies.
 - Compiler diagnostics are structured and tied to source files plus original class
   evidence.
-- The repair loop can fix at least one real decompiler syntax failure and one build
+- The initial repair loop can fix public-type filename recovery failures; next it
+  must fix at least one real decompiler syntax failure and one build
   metadata/classpath failure without broad rewrites.
 - `java_compare_rebuilt_abi` reports public class/method/field descriptor parity for
   recovered fixtures.

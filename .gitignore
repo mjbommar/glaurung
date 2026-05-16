@@ -2,6 +2,7 @@
 
 # Rust
 /target/
+**/target/
 **/*.rs.bk
 *.pdb
 # Don't ignore Cargo.lock for binary projects

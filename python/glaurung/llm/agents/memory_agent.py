@@ -191,6 +191,13 @@ from ..tools.java_compile_recovered_project import (
 from ..tools.java_reconstruct_source_tree import (
     build_tool as build_java_reconstruct_source_tree,
 )
+from ..tools.java_decompile_class import build_tool as build_java_decompile_class
+from ..tools.java_parse_decompiled_source import (
+    build_tool as build_java_parse_decompiled_source,
+)
+from ..tools.java_repair_decompiled_source import (
+    build_tool as build_java_repair_decompiled_source,
+)
 from ..tools.java_compare_rebuilt_abi import (
     build_tool as build_java_compare_rebuilt_abi,
 )
@@ -825,6 +832,13 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_reconstruct_source_tree())
+    )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_decompile_class()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_java_parse_decompiled_source())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_java_repair_decompiled_source())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_compare_rebuilt_abi()))
     agent._function_toolset.add_tool(

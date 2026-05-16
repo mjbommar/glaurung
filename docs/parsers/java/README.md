@@ -225,10 +225,23 @@ Implemented pieces now include:
   supporting bounded `javac` execution for generated source trees and argfiles,
   automatic `sources.txt` population, timeout handling, structured diagnostics, and
   `java_compile_result` KB nodes.
+- Initial JVM helper/decompiler bridge under `java/glaurung-jvm-tools`, packaging
+  ASM, CFR, Vineflower, and JavaParser behind a small JSON CLI. Python tools now use
+  it for per-class bytecode summaries, per-class decompilation, and AST summaries
+  without running recovered application code.
+- Initial decompiler tools through `java_decompile_class` and
+  `java_parse_decompiled_source`, emitting `java_decompile_unit` KB nodes with
+  source/AST evidence suitable for agent review and later repair.
 - Initial source-tree reconstruction through `java_reconstruct_source_tree`,
   creating `src/main/java` and `src/main/resources` scaffolds, preserving runtime
-  resources and metadata, skipping signed-JAR signature files, tracking classes that
-  still need decompilation, and emitting explicit generated stubs only when requested.
+  resources and metadata, skipping signed-JAR signature files, optionally emitting
+  CFR/Vineflower decompiled top-level source files, tracking classes that still need
+  decompilation, and emitting explicit generated stubs only when requested.
+- Initial compile-repair loop through `java_repair_decompiled_source`, running
+  bounded `javac` iterations and applying safe mechanical repairs. The first repair
+  class fixes decompiler/recovery output where a public Java type is emitted into
+  the wrong filename, updates `sources.txt`, recompiles, and records
+  `java_repair_result` KB evidence.
 - Initial ABI comparison through `java_compare_rebuilt_abi`, comparing original and
   rebuilt JARs or class directories by class names, field descriptors, method
   descriptors, access flags, selected `all`/`package_api`/`public_api` scope, and
@@ -261,11 +274,10 @@ Not yet implemented:
 - Deeper attribute semantics beyond the parsed structural subset: complete
   type-annotation target/value decoding, complete stack-map frame bodies, richer
   bootstrap argument typing, and richer annotation/module parity checks.
-- Decompiler helper integration with Vineflower/CFR.
 - Clean source-project recovery after the initial dependency/build/scaffold/compile,
-  ABI-comparison, and validation-report layers: dependency resolution policy,
-  decompiler source emission, Maven/Gradle execution, compiler-diagnostic repair,
-  annotation/module parity, and richer resource policy.
+  ABI-comparison, and validation-report layers: archive-wide decompilation, module
+  source recovery, dependency resolution policy, Maven/Gradle execution, richer
+  compiler-diagnostic repair, annotation/module parity, and richer resource policy.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
   correlation, framework-aware reachability, and richer directory-level risk
   reporting.
@@ -284,11 +296,12 @@ priority is not another broad scanner. The next priority is structure:
    can move from "capability" to "reachable from lifecycle callback" when evidence
    supports it.
 4. Calibrate risk reports, especially secret false positives and config semantics.
-5. Add ASM/Vineflower/CFR helper tooling for decompiler output and source/bytecode
-   correlation.
-6. Start clean source recovery: extend dependency/build inference, emit
-   source/resources, compile, repair diagnostics, compare rebuilt ABI/resources,
-   and summarize whether the recovered application is currently acceptable.
+5. Extend the new ASM/Vineflower/CFR/JavaParser helper from per-class operations to
+   archive-wide source emission, source/bytecode correlation, and decompiler
+   fallback policy.
+6. Continue clean source recovery: expand dependency/build inference, compile,
+   repair diagnostics, compare rebuilt ABI/resources, and summarize whether the
+   recovered application is currently acceptable.
 
 Important lessons:
 
@@ -394,11 +407,11 @@ Important lessons:
 - [x] Initial signed JAR cryptographic validation via `java_verify_signatures`
 
 ### Phase 6: Decompilation and Source Recovery
-- [ ] Java helper project with ASM, Vineflower, CFR, and JavaParser
-- [ ] `java_decompile_class`
+- [x] Java helper project with ASM, Vineflower, CFR, and JavaParser
+- [x] `java_decompile_class`
 - [ ] `java_decompile_method`
 - [ ] `java_decompile_archive`
-- [ ] Source/bytecode line correlation
+- [ ] Source/bytecode line correlation beyond per-class AST summaries
 - [x] Initial `java_infer_dependencies` from manifest `Class-Path`, Maven metadata,
   nested archives, bytecode external package references, and optional `jdeps`
   package evidence
@@ -406,14 +419,16 @@ Important lessons:
   diagnostics
 - [x] Initial source tree scaffold under `src/main/java` and `src/main/resources`
 - [x] Initial manifest, ServiceLoader, framework metadata, and resource preservation
-- [ ] Decompiled source emission, module source recovery, and semantic source/resource
-  validation
+- [x] Initial decompiled top-level source emission from `java_reconstruct_source_tree`
+- [ ] Module source recovery and semantic source/resource validation
 - [x] Initial build system inference for plain `javac`, Maven, and Gradle
 - [ ] Build-system refinement for module paths, annotation processors, loader-specific
   Minecraft build plugins, and resolver/cache policy
 - [x] Initial bounded `javac` compilation and structured diagnostics
 - [ ] Maven/Gradle compile execution and richer structured diagnostics
-- [ ] Agentic compile-repair loop for decompiler syntax and build/classpath failures
+- [x] Initial compile-repair loop with safe public-type filename repair
+- [ ] Richer repair classes for decompiler syntax, signatures, imports, and
+  build/classpath failures
 - [x] Initial ABI/API comparison between original and rebuilt classes
 - [x] Initial scoped ABI filtering for all, package, and public/protected API
 - [x] Initial resource validation between original archives and recovered
