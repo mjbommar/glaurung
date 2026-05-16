@@ -462,6 +462,8 @@ pub struct ParseOptions {
     pub parse_relocations: bool,
     pub parse_tls: bool,
     pub max_resource_depth: usize,
+    pub max_resources: usize,
+    pub max_resource_data_bytes: usize,
     pub max_imports: usize,
     pub max_exports: usize,
     pub timeout_ms: Option<u64>,
@@ -480,6 +482,8 @@ impl Default for ParseOptions {
             parse_relocations: true,
             parse_tls: true,
             max_resource_depth: 32,
+            max_resources: 10000,
+            max_resource_data_bytes: 32 * 1024 * 1024,
             max_imports: 10000,
             max_exports: 10000,
             timeout_ms: None,
@@ -558,6 +562,69 @@ pub struct ResourceEntry<'a> {
 pub enum ResourceId<'a> {
     Name(&'a str),
     Id(u32),
+}
+
+/// Owned Windows resource identifier.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ResourceIdentifier {
+    Name(String),
+    Id(u32),
+}
+
+impl ResourceIdentifier {
+    pub fn as_id(&self) -> Option<u32> {
+        match self {
+            Self::Id(value) => Some(*value),
+            Self::Name(_) => None,
+        }
+    }
+
+    pub fn as_name(&self) -> Option<&str> {
+        match self {
+            Self::Name(value) => Some(value.as_str()),
+            Self::Id(_) => None,
+        }
+    }
+}
+
+/// Parsed resource data leaf with provenance and quick classification metadata.
+#[derive(Debug, Clone)]
+pub struct ResourceDataEntry<'a> {
+    pub type_id: ResourceIdentifier,
+    pub type_name: Option<String>,
+    pub name: ResourceIdentifier,
+    pub language: ResourceIdentifier,
+    pub language_id: Option<u32>,
+    pub code_page: u32,
+    pub data_rva: u32,
+    pub data_offset: usize,
+    pub size: u32,
+    pub section_name: Option<String>,
+    pub entropy: f64,
+    pub sha256: String,
+    pub magic: String,
+    pub data: &'a [u8],
+    pub warnings: Vec<String>,
+}
+
+/// Parsed Windows resource directory summary.
+#[derive(Debug, Clone, Default)]
+pub struct ResourceDirectory<'a> {
+    pub resources: Vec<ResourceDataEntry<'a>>,
+    pub total_directories: usize,
+    pub max_depth: usize,
+    pub warnings: Vec<String>,
+    pub stop_reasons: Vec<String>,
+}
+
+impl<'a> ResourceDirectory<'a> {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn leaf_count(&self) -> usize {
+        self.resources.len()
+    }
 }
 
 /// Anomaly types for detection

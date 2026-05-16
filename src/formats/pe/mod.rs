@@ -27,6 +27,7 @@ pub struct PeParser<'data> {
     // Lazy-loaded data
     imports: OnceCell<ImportTable<'data>>,
     exports: OnceCell<ExportTable<'data>>,
+    resources: OnceCell<ResourceDirectory<'data>>,
 }
 
 impl<'data> PeParser<'data> {
@@ -66,6 +67,7 @@ impl<'data> PeParser<'data> {
             options,
             imports: OnceCell::new(),
             exports: OnceCell::new(),
+            resources: OnceCell::new(),
         })
     }
 
@@ -170,6 +172,19 @@ impl<'data> PeParser<'data> {
         let exports = parse_exports(self.data, &self.section_table, export_dir, &self.options)?;
 
         Ok(self.exports.get_or_init(|| exports))
+    }
+
+    /// Get resources (lazy-loaded)
+    pub fn resources(&self) -> Result<&ResourceDirectory<'data>> {
+        if let Some(resources) = self.resources.get() {
+            return Ok(resources);
+        }
+
+        let resource_dir = self.data_directory(IMAGE_DIRECTORY_ENTRY_RESOURCE)?;
+        let resources =
+            parse_resources(self.data, &self.section_table, resource_dir, &self.options)?;
+
+        Ok(self.resources.get_or_init(|| resources))
     }
 
     /// Get import hash (imphash)
@@ -460,6 +475,95 @@ mod tests {
         data
     }
 
+    fn create_pe_with_version_resource() -> Vec<u8> {
+        let mut data = vec![0u8; 1024];
+
+        // DOS header
+        data[0] = 0x4D; // MZ
+        data[1] = 0x5A;
+        data[60] = 0x80; // e_lfanew
+
+        // PE signature at offset 0x80
+        data[0x80] = b'P';
+        data[0x81] = b'E';
+        data[0x82] = 0;
+        data[0x83] = 0;
+
+        // COFF header at 0x84
+        data[0x84] = 0x4C; // Machine: x86
+        data[0x85] = 0x01;
+        data[0x86] = 0x01; // Number of sections: 1
+        data[0x87] = 0x00;
+        data[0x94] = 0xE0; // Size of optional header: PE32 standard size
+        data[0x95] = 0x00;
+
+        // Optional header at 0x98
+        data[0x98] = 0x0B; // Magic: PE32
+        data[0x99] = 0x01;
+        data[0xA8] = 0x00; // Entry point RVA 0x1000
+        data[0xA9] = 0x10;
+        data[0xB4] = 0x00; // Image base 0x400000
+        data[0xB5] = 0x00;
+        data[0xB6] = 0x40;
+        data[0xB7] = 0x00;
+        data[0xBC] = 0x00; // section alignment 0x1000
+        data[0xBD] = 0x10;
+        data[0xC0] = 0x00; // file alignment 0x200
+        data[0xC1] = 0x02;
+        data[0xF4] = 0x10; // NumberOfRvaAndSizes = 16
+
+        // Resource data directory: optional header + 96 + (2 * 8).
+        let resource_dir = 0x98 + 96 + (IMAGE_DIRECTORY_ENTRY_RESOURCE * 8);
+        data[resource_dir] = 0x00;
+        data[resource_dir + 1] = 0x10; // RVA 0x1000
+        data[resource_dir + 4] = 0x90; // size 0x90
+
+        // Section header at 0x178
+        let section_offset = 0x178;
+        data[section_offset..section_offset + 5].copy_from_slice(b".rsrc");
+        data[section_offset + 8] = 0x00;
+        data[section_offset + 9] = 0x02; // VirtualSize 0x200
+        data[section_offset + 12] = 0x00;
+        data[section_offset + 13] = 0x10; // VirtualAddress 0x1000
+        data[section_offset + 16] = 0x00;
+        data[section_offset + 17] = 0x02; // SizeOfRawData 0x200
+        data[section_offset + 20] = 0x00;
+        data[section_offset + 21] = 0x02; // PointerToRawData 0x200
+        data[section_offset + 36] = 0x40; // initialized data, readable
+        data[section_offset + 39] = 0x40;
+
+        // Resource tree at file offset 0x200, resource RVA 0x1000:
+        // root -> VERSIONINFO (16) -> resource id 1 -> language 1033 -> data.
+        let base = 0x200usize;
+        data[base + 14] = 0x01; // root NumberOfIdEntries
+        data[base + 16] = 16; // type id VERSIONINFO
+        data[base + 20] = 0x18;
+        data[base + 23] = 0x80; // subdirectory at offset 0x18
+
+        let name_dir = base + 0x18;
+        data[name_dir + 14] = 0x01;
+        data[name_dir + 16] = 0x01; // resource id 1
+        data[name_dir + 20] = 0x30;
+        data[name_dir + 23] = 0x80; // subdirectory at offset 0x30
+
+        let lang_dir = base + 0x30;
+        data[lang_dir + 14] = 0x01;
+        data[lang_dir + 16] = 0x09;
+        data[lang_dir + 17] = 0x04; // language id 0x0409
+        data[lang_dir + 20] = 0x48; // data entry at offset 0x48
+
+        let data_entry = base + 0x48;
+        data[data_entry] = 0x80;
+        data[data_entry + 1] = 0x10; // DataRVA 0x1080
+        data[data_entry + 4] = 0x05; // Size 5
+        data[data_entry + 8] = 0xE4;
+        data[data_entry + 9] = 0x04; // CodePage 1252
+
+        data[0x280..0x285].copy_from_slice(b"hello");
+
+        data
+    }
+
     #[test]
     fn test_parse_minimal_pe() {
         let data = create_minimal_pe();
@@ -517,5 +621,46 @@ mod tests {
         // Minimal PE should not be detected as packed
         assert!(!detection.is_packed);
         assert!(detection.confidence < 0.5);
+    }
+
+    #[test]
+    fn test_resource_enumeration_for_version_info() {
+        let data = create_pe_with_version_resource();
+        let parser = PeParser::new(&data).unwrap();
+
+        assert!(parser.has_resources());
+        let resources = parser.resources().unwrap();
+
+        assert_eq!(resources.leaf_count(), 1);
+        assert!(resources.stop_reasons.is_empty());
+        assert!(resources.warnings.is_empty());
+
+        let resource = &resources.resources[0];
+        assert_eq!(resource.type_id.as_id(), Some(16));
+        assert_eq!(resource.type_name.as_deref(), Some("VERSIONINFO"));
+        assert_eq!(resource.name.as_id(), Some(1));
+        assert_eq!(resource.language_id, Some(0x0409));
+        assert_eq!(resource.code_page, 1252);
+        assert_eq!(resource.data_rva, 0x1080);
+        assert_eq!(resource.data_offset, 0x280);
+        assert_eq!(resource.size, 5);
+        assert_eq!(resource.section_name.as_deref(), Some(".rsrc"));
+        assert_eq!(resource.data, b"hello");
+        assert_eq!(resource.magic, "ascii_text");
+    }
+
+    #[test]
+    fn test_resource_enumeration_respects_resource_budget() {
+        let data = create_pe_with_version_resource();
+        let mut options = ParseOptions::default();
+        options.max_resources = 0;
+        let parser = PeParser::with_options(&data, options).unwrap();
+
+        let resources = parser.resources().unwrap();
+        assert_eq!(resources.leaf_count(), 0);
+        assert!(resources
+            .stop_reasons
+            .iter()
+            .any(|reason| reason == "max_resources"));
     }
 }
