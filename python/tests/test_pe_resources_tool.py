@@ -133,3 +133,34 @@ def test_memory_agent_registers_pe_resource_tool() -> None:
     agent = create_memory_agent(model="test")
 
     assert "pe_list_resources" in agent._function_toolset.tools
+
+
+def test_pe_resources_cli_outputs_json(tmp_path: Path, capsys) -> None:
+    from glaurung import cli
+
+    path = _write_fixture(tmp_path)
+
+    rc = cli.main(["pe", "resources", str(path), "--json", "--preview-bytes", "8"])
+
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    payload = __import__("json").loads(out)
+    assert payload["leaf_count"] == 1
+    assert payload["resources_by_type"] == {"VERSIONINFO": 1}
+    assert payload["resources"][0]["evidence"] == "VERSIONINFO/1/0x0409 @ .rsrc:0x280"
+
+
+def test_pe_resources_cli_outputs_compact_human_summary(tmp_path: Path, capsys) -> None:
+    from glaurung import cli
+
+    path = _write_fixture(tmp_path)
+
+    rc = cli.main(["pe", "resources", str(path), "--preview-bytes", "8"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "# PE resources:" in out
+    assert "leaves: 1" in out
+    assert "VERSIONINFO: 1" in out
+    assert "VERSIONINFO/1/0x0409 @ .rsrc:0x280" in out
+    assert "preview=68656c6c6f" in out
