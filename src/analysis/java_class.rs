@@ -165,6 +165,7 @@ pub struct ClassInfo {
     pub nest_host: Option<String>,
     pub nest_members: Vec<String>,
     pub record_components: Vec<JavaRecordComponent>,
+    pub permitted_subclasses: Vec<String>,
     pub interfaces: Vec<String>,
     pub methods: Vec<JavaMethod>,
     pub fields: Vec<JavaMethod>, // same shape — name + descriptor + flags
@@ -225,6 +226,7 @@ struct JavaClassAttributes {
     nest_host: Option<String>,
     nest_members: Vec<String>,
     record_components: Vec<JavaRecordComponent>,
+    permitted_subclasses: Vec<String>,
 }
 
 /// Parse a `.class` file and return its `ClassInfo`.
@@ -413,6 +415,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         nest_host: class_attrs.nest_host,
         nest_members: class_attrs.nest_members,
         record_components: class_attrs.record_components,
+        permitted_subclasses: class_attrs.permitted_subclasses,
         interfaces,
         methods,
         fields,
@@ -586,6 +589,12 @@ fn parse_class_attributes(
         } else if attr_name == "Record" {
             out.record_components
                 .extend(parse_record_attribute(&data[body_start..body_end], cp)?);
+        } else if attr_name == "PermittedSubclasses" {
+            out.permitted_subclasses.extend(parse_class_list_attribute(
+                &data[body_start..body_end],
+                cp,
+                "PermittedSubclasses",
+            )?);
         }
         p = body_end;
     }
@@ -652,15 +661,23 @@ fn parse_nest_host_attribute(body: &[u8], cp: &[CpEntry]) -> Result<String, Clas
 }
 
 fn parse_nest_members_attribute(body: &[u8], cp: &[CpEntry]) -> Result<Vec<String>, ClassError> {
+    parse_class_list_attribute(body, cp, "NestMembers")
+}
+
+fn parse_class_list_attribute(
+    body: &[u8],
+    cp: &[CpEntry],
+    attribute_name: &'static str,
+) -> Result<Vec<String>, ClassError> {
     if body.len() < 2 {
-        return Err(ClassError::Truncated("NestMembers length"));
+        return Err(ClassError::Truncated(attribute_name));
     }
     let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
     let mut p = 2;
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         if p + 2 > body.len() {
-            return Err(ClassError::Truncated("NestMembers body"));
+            return Err(ClassError::Truncated(attribute_name));
         }
         let class_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
         p += 2;

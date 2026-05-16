@@ -112,6 +112,34 @@ record StructureRecord(@ComponentTag String hash, long size) {}
     return out
 
 
+def _compile_sealed_classes(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java fixture")
+    src = tmp_path / "sealed-src"
+    out = tmp_path / "sealed-classes"
+    src.mkdir()
+    out.mkdir()
+    source = src / "Shape.java"
+    source.write_text(
+        """
+public sealed interface Shape permits Circle, Square {}
+
+final class Circle implements Shape {}
+
+non-sealed class Square implements Shape {}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["javac", "-g", "--release", "17", "-d", str(out), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out
+
+
 def _compile_generic_class(tmp_path: Path) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java fixture")
@@ -334,6 +362,23 @@ def test_parse_java_class_recovers_inner_record_and_nest_metadata(
         "LComponentTag;"
     )
     assert record["record_components"][1]["descriptor"] == "J"
+
+
+def test_parse_java_class_recovers_permitted_subclasses(tmp_path: Path) -> None:
+    class_dir = _compile_sealed_classes(tmp_path)
+    java_analysis = getattr(g, "analysis")
+
+    shape = java_analysis.parse_java_class_bytes(
+        (class_dir / "Shape.class").read_bytes()
+    )
+    circle = java_analysis.parse_java_class_bytes(
+        (class_dir / "Circle.class").read_bytes()
+    )
+
+    assert shape is not None
+    assert shape["permitted_subclasses"] == ["Circle", "Square"]
+    assert circle is not None
+    assert circle["permitted_subclasses"] == []
 
 
 def test_parse_java_class_recovers_exception_handlers(tmp_path: Path) -> None:

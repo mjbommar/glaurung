@@ -46,6 +46,8 @@ class JavaClassSummary(BaseModel):
     method_count: int
     field_count: int
     methods_with_code: int
+    is_sealed: bool = False
+    permitted_subclass_count: int = 0
 
 
 class JavaResourceSummary(BaseModel):
@@ -382,6 +384,10 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                         field_count=len(parsed["fields"]),
                         methods_with_code=sum(
                             1 for m in methods if m["code"] is not None
+                        ),
+                        is_sealed=_list_count(parsed.get("permitted_subclasses")) > 0,
+                        permitted_subclass_count=_list_count(
+                            parsed.get("permitted_subclasses")
                         ),
                     )
                     parsed_class_count += 1
@@ -742,6 +748,10 @@ def _parse_properties(text: str) -> dict[str, str]:
         if sep:
             out[key.strip()] = value.strip()
     return out
+
+
+def _list_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
 
 
 def build_tool() -> MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResult]:

@@ -78,6 +78,40 @@ record r(String token, int count) {}
     return jar_path
 
 
+def _compile_sealed_jar(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None or shutil.which("jar") is None:
+        pytest.skip("javac and jar are required for generated Java fixture")
+    src = tmp_path / "sealed-src"
+    out = tmp_path / "sealed-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "Shape.java").write_text(
+        """
+public sealed interface Shape permits Circle, Square {}
+
+final class Circle implements Shape {}
+
+non-sealed class Square implements Shape {}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["javac", "-g", "--release", "17", "-d", str(out), str(src / "Shape.java")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar_path = tmp_path / "sealed.jar"
+    subprocess.run(
+        ["jar", "--create", "--file", str(jar_path), "-C", str(out), "."],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return jar_path
+
+
 def _mapping_file(tmp_path: Path) -> Path:
     path = tmp_path / "mappings.txt"
     path.write_text(
@@ -195,6 +229,26 @@ def test_java_view_class_reports_record_components(tmp_path: Path) -> None:
         and n.props.get("record_component_count") == 2
         for n in ctx.kb.nodes()
     )
+
+
+def test_java_view_class_reports_permitted_subclasses(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_view_class import build_tool
+
+    jar = _compile_sealed_jar(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(ctx, ctx.kb, tool.input_model(path=str(jar), class_name="Shape"))
+
+    assert result.class_found
+    assert result.is_sealed is True
+    assert result.permitted_subclasses == ["Circle", "Square"]
+    class_node = next(
+        node
+        for node in ctx.kb.nodes()
+        if node.kind == NodeKind.java_class and node.props.get("class_name") == "Shape"
+    )
+    assert class_node.props["permitted_subclasses"] == ["Circle", "Square"]
 
 
 def test_java_view_class_can_lookup_by_obfuscated_name(tmp_path: Path) -> None:

@@ -160,6 +160,8 @@ class JavaViewClassResult(BaseModel):
     access_flags: int | None = None
     access_flag_names: list[str] = Field(default_factory=list)
     is_record: bool = False
+    is_sealed: bool = False
+    permitted_subclasses: list[str] = Field(default_factory=list)
     inner_classes: list[JavaInnerClassSummary] = Field(default_factory=list)
     enclosing_method: JavaEnclosingMethodSummary | None = None
     nest_host: str | None = None
@@ -284,6 +286,8 @@ def _result_for_class(
     is_record = parsed.get("super_class") == "java/lang/Record" or bool(
         record_components
     )
+    permitted_subclasses = _string_list(parsed.get("permitted_subclasses"))
+    is_sealed = bool(permitted_subclasses)
     fields = (
         [
             _member_summary("field", member, class_mapping, mappings)
@@ -333,6 +337,9 @@ def _result_for_class(
                     int(parsed["access_flags"]), "class"
                 ),
                 "is_record": is_record,
+                "is_sealed": is_sealed,
+                "permitted_subclasses": permitted_subclasses,
+                "permitted_subclass_count": len(permitted_subclasses),
                 "inner_classes": [item.model_dump() for item in inner_classes],
                 "inner_class_count": len(inner_classes),
                 "enclosing_method": (
@@ -439,6 +446,8 @@ def _result_for_class(
         access_flags=parsed["access_flags"],
         access_flag_names=access_flag_names(int(parsed["access_flags"]), "class"),
         is_record=is_record,
+        is_sealed=is_sealed,
+        permitted_subclasses=permitted_subclasses,
         inner_classes=inner_classes,
         enclosing_method=enclosing_method,
         nest_host=nest_host,

@@ -43,8 +43,8 @@ Glaurung already has a growing Java path:
   annotations, `MethodParameters`, runtime-visible/runtime-invisible parameter
   annotations, method `AnnotationDefault` values, initial JVM instruction listings,
   structural class attributes (`InnerClasses`, `EnclosingMethod`, `NestHost`,
-  `NestMembers`, `Record`), and lightweight method-level bytecode xrefs for invokes,
-  fields, class refs, and loaded strings.
+  `NestMembers`, `Record`, `PermittedSubclasses`), and lightweight method-level
+  bytecode xrefs for invokes, fields, class refs, and loaded strings.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `src/analysis/java_jar.rs` and the Python bindings expose bounded central-directory
   JAR metadata, including nested archive entries, multi-release class variants,
@@ -762,7 +762,8 @@ Initial Python implementation status:
   superclasses, `SourceFile`, interfaces, JVM version, method counts, field counts,
   raw access flags, decoded access-flag names, normalized Java/classfile version
   labels, preview/future-version/size warnings, methods with code,
-  inner/nest/record summary counts, and optional class annotation descriptors.
+  inner/nest/record/sealed summary counts, and optional class annotation
+  descriptors.
 - Supports optional ProGuard/Mojang mapped class names when a mapping file is
   supplied.
 
@@ -781,8 +782,8 @@ Outputs:
 
 - Class locators, names, superclasses, `SourceFile`, interface counts, method counts,
   field counts, JVM version, raw and decoded access flags, Java release labels,
-  classfile size categories, classfile policy warnings, inner/nest/record summary
-  counts, mapped names, and optional annotation descriptors.
+  classfile size categories, classfile policy warnings, inner/nest/record/sealed
+  summary counts, mapped names, and optional annotation descriptors.
 
 `java_view_class`
 
@@ -802,6 +803,7 @@ Outputs:
   flags.
 - Normalized Java/classfile version labels, preview/future-version state,
   classfile size category, and policy warnings.
+- Sealed-class `PermittedSubclasses` lists.
 - Fields.
 - Methods with code-size and line-number range summaries where available.
 - Descriptor-aware mapped official/obfuscated names for classes and members when

@@ -312,6 +312,7 @@ fn java_class_info_to_py(
         "record_components",
         java_record_components_to_py(py, info.record_components)?,
     )?;
+    dict.set_item("permitted_subclasses", info.permitted_subclasses)?;
     dict.set_item("interfaces", info.interfaces)?;
     dict.set_item("major_version", info.major_version)?;
     dict.set_item("minor_version", info.minor_version)?;

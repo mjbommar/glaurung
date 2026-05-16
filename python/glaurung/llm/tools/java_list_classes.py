@@ -87,6 +87,8 @@ class JavaListedClass(BaseModel):
     field_count: int
     methods_with_code: int
     is_record: bool = False
+    is_sealed: bool = False
+    permitted_subclass_count: int = 0
     inner_class_count: int = 0
     record_component_count: int = 0
     nest_member_count: int = 0
@@ -235,6 +237,8 @@ def _class_summary(
             1 for method in methods if isinstance(method.get("code"), dict)
         ),
         is_record=_is_record(parsed),
+        is_sealed=_list_count(parsed.get("permitted_subclasses")) > 0,
+        permitted_subclass_count=_list_count(parsed.get("permitted_subclasses")),
         inner_class_count=_list_count(parsed.get("inner_classes")),
         record_component_count=_list_count(parsed.get("record_components")),
         nest_member_count=_list_count(parsed.get("nest_members")),

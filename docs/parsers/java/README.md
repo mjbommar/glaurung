@@ -54,9 +54,9 @@ Implemented pieces now include:
   runtime-visible/runtime-invisible class/member
   annotations, `MethodParameters`, runtime-visible/runtime-invisible parameter
   annotations, method `AnnotationDefault` values, structural class attributes
-  (`InnerClasses`, `EnclosingMethod`, `NestHost`, `NestMembers`, `Record`),
-  instruction listings, and lightweight method-level bytecode xrefs for invokes,
-  fields, class refs, and loaded strings.
+  (`InnerClasses`, `EnclosingMethod`, `NestHost`, `NestMembers`, `Record`,
+  `PermittedSubclasses`), instruction listings, and lightweight method-level
+  bytecode xrefs for invokes, fields, class refs, and loaded strings.
 - Rust central-directory JAR indexing for bounded archive metadata: entry counts,
   compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
   signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
@@ -130,8 +130,8 @@ Implemented pieces now include:
   and access-flag filters, superclass/interface/member counts, optional annotation
   descriptors, `SourceFile` metadata, decoded access-flag names, normalized
   Java/classfile version labels, preview/future-version/size warnings,
-  inner/nest/record summary counts, optional ProGuard/Mojang mapped names, and
-  `java_class` KB evidence.
+  inner/nest/record/sealed summary counts, optional ProGuard/Mojang mapped names,
+  and `java_class` KB evidence.
 - Initial method listing through `java_list_methods`, exposing bounded method
   summaries with class/name/descriptor filters, code-size metadata, line-number
   counts/ranges, decoded parameter/return types, raw and readable generic
