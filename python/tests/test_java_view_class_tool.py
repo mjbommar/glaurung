@@ -227,6 +227,14 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert result.classfile_size is not None and result.classfile_size > 0
     assert result.classfile_warnings == []
     assert result.bootstrap_method_count > 0
+    assert result.methods_with_code >= 4
+    assert result.method_code_length_total > 0
+    assert result.method_instruction_count > 0
+    assert result.method_line_number_count > 0
+    assert result.invoke_instruction_count > 0
+    assert result.field_instruction_count > 0
+    assert result.dynamic_instruction_count > 0
+    assert result.return_instruction_count > 0
     assert result.annotations[0].descriptor == "LMarker;"
     assert result.annotations[0].elements[0].value.value == "game-thing"
     assert any(item.inner_class == "a$f" for item in result.inner_classes)
@@ -254,11 +262,14 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert method_c.code is not None
     assert method_c.code.code_length > 0
     assert method_c.code.field_xref_count >= 2
+    assert method_c.code.field_instruction_count >= 2
     assert method_c.code.line_number_count >= 1
     assert method_c.code.first_line is not None
     assert method_c.code.last_line is not None
     assert method_j.code is not None
     assert method_j.code.stack_map_frame_count > 0
+    assert method_j.code.branch_instruction_count >= 1
+    assert method_j.code.return_instruction_count >= 1
     assert any(
         n.kind == NodeKind.java_class
         and n.props.get("mapped_class_name") == "com.example.GameThing"

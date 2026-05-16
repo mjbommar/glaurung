@@ -32,14 +32,22 @@ def _compile_field_fixture(tmp_path: Path) -> Path:
         """
 package app;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 import java.util.List;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.TYPE_USE, ElementType.TYPE_PARAMETER})
+@interface TypeTag {}
 
 public class Fields<T extends Number> {
     @Deprecated
     public static final int ANSWER = 42;
 
     public static final String NAME = "glaurung";
-    public List<T> values;
+    public @TypeTag List<T> values;
     private long hidden;
 }
 """.strip()
@@ -82,7 +90,7 @@ def test_java_list_fields_reports_descriptors_constants_and_kb(
     )
 
     assert result.archive_path == str(jar)
-    assert result.class_count_scanned == 1
+    assert result.class_count_scanned == 2
     assert result.field_count_seen == 4
     assert result.matched_field_count == 4
     assert result.truncated is False
@@ -110,6 +118,8 @@ def test_java_list_fields_reports_descriptors_constants_and_kb(
     assert values.generic_signature == "Ljava/util/List<TT;>;"
     assert values.generic_field_type == "java.util.List<T>"
     assert values.field_type == "java.util.List"
+    assert values.type_annotation_count >= 1
+    assert values.runtime_visible_type_annotation_count >= 1
 
     hidden = fields["hidden"]
     assert hidden.access_flag_names == ["private"]

@@ -96,6 +96,9 @@ class JavaListedField(BaseModel):
     attribute_names: list[str] = Field(default_factory=list)
     is_deprecated: bool = False
     is_synthetic: bool = False
+    runtime_visible_type_annotation_count: int = 0
+    runtime_invisible_type_annotation_count: int = 0
+    type_annotation_count: int = 0
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
     annotation_descriptors: list[str] = Field(default_factory=list)
@@ -278,6 +281,13 @@ def _field_summary(
         attribute_names=_string_list(field.get("attribute_names")),
         is_deprecated=bool(field.get("is_deprecated", False)),
         is_synthetic=bool(field.get("is_synthetic", False)),
+        runtime_visible_type_annotation_count=int(
+            field.get("runtime_visible_type_annotation_count", 0)
+        ),
+        runtime_invisible_type_annotation_count=int(
+            field.get("runtime_invisible_type_annotation_count", 0)
+        ),
+        type_annotation_count=int(field.get("type_annotation_count", 0)),
         mapped_names=[member.official_name for member in mapped_members],
         mapped_signatures=[member.official_signature for member in mapped_members],
         annotation_descriptors=_annotation_descriptors(field)

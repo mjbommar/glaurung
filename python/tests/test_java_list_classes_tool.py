@@ -137,6 +137,13 @@ def test_java_list_classes_filters_and_records_kb_nodes(tmp_path: Path) -> None:
     assert main.classfile_size is not None and main.classfile_size > 0
     assert main.classfile_warnings == []
     assert main.bootstrap_method_count > 0
+    assert main.methods_with_code >= 2
+    assert main.method_code_length_total > 0
+    assert main.method_instruction_count > 0
+    assert main.method_line_number_count > 0
+    assert main.methods_with_line_numbers > 0
+    assert main.invoke_instruction_count > 0
+    assert main.return_instruction_count > 0
     assert main.annotation_descriptors == ["Ljava/lang/Deprecated;"]
     assert any(
         node.kind == NodeKind.java_class

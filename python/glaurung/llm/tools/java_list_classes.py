@@ -16,6 +16,7 @@ from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .java_access_flags import access_flag_names
 from .java_class_kind import JavaClassKind, class_kind
+from .java_code_metrics import class_code_rollup
 from .java_hierarchy_edges import add_java_hierarchy_edges
 from .java_proguard_mappings import (
     ProguardClassMapping,
@@ -82,6 +83,9 @@ class JavaListedClass(BaseModel):
     attribute_names: list[str] = Field(default_factory=list)
     is_deprecated: bool = False
     is_synthetic: bool = False
+    runtime_visible_type_annotation_count: int = 0
+    runtime_invisible_type_annotation_count: int = 0
+    type_annotation_count: int = 0
     constant_pool: dict[str, int] = Field(default_factory=dict)
     major_version: int
     minor_version: int
@@ -95,6 +99,32 @@ class JavaListedClass(BaseModel):
     method_count: int
     field_count: int
     methods_with_code: int
+    methods_with_line_numbers: int = 0
+    methods_with_local_variables: int = 0
+    method_code_length_total: int = 0
+    method_instruction_count: int = 0
+    method_unknown_instruction_count: int = 0
+    method_stack_map_frame_count: int = 0
+    method_line_number_count: int = 0
+    first_line: int | None = None
+    last_line: int | None = None
+    method_local_variable_count: int = 0
+    method_local_variable_type_count: int = 0
+    method_exception_handler_count: int = 0
+    code_type_annotation_count: int = 0
+    branch_instruction_count: int = 0
+    switch_instruction_count: int = 0
+    invoke_instruction_count: int = 0
+    field_instruction_count: int = 0
+    class_instruction_count: int = 0
+    constant_load_instruction_count: int = 0
+    string_constant_count: int = 0
+    dynamic_instruction_count: int = 0
+    return_instruction_count: int = 0
+    throw_instruction_count: int = 0
+    monitor_instruction_count: int = 0
+    allocation_instruction_count: int = 0
+    array_allocation_instruction_count: int = 0
     class_kind: JavaClassKind = "class"
     is_interface: bool = False
     is_annotation: bool = False
@@ -223,6 +253,7 @@ def _class_summary(
         int(parsed.get("minor_version", 0)),
         size_bytes=classfile_size,
     )
+    rollup = class_code_rollup(methods)
     return JavaListedClass(
         entry_name=entry_name,
         class_name=class_name,
@@ -253,6 +284,13 @@ def _class_summary(
         attribute_names=_string_list(parsed.get("attribute_names")),
         is_deprecated=bool(parsed.get("is_deprecated", False)),
         is_synthetic=bool(parsed.get("is_synthetic", False)),
+        runtime_visible_type_annotation_count=int(
+            parsed.get("runtime_visible_type_annotation_count", 0)
+        ),
+        runtime_invisible_type_annotation_count=int(
+            parsed.get("runtime_invisible_type_annotation_count", 0)
+        ),
+        type_annotation_count=int(parsed.get("type_annotation_count", 0)),
         constant_pool=_int_dict(parsed.get("constant_pool")),
         major_version=policy.major_version,
         minor_version=policy.minor_version,
@@ -265,9 +303,33 @@ def _class_summary(
         classfile_warnings=policy.classfile_warnings,
         method_count=len(methods),
         field_count=len(fields),
-        methods_with_code=sum(
-            1 for method in methods if isinstance(method.get("code"), dict)
-        ),
+        methods_with_code=rollup.methods_with_code,
+        methods_with_line_numbers=rollup.methods_with_line_numbers,
+        methods_with_local_variables=rollup.methods_with_local_variables,
+        method_code_length_total=rollup.method_code_length_total,
+        method_instruction_count=rollup.method_instruction_count,
+        method_unknown_instruction_count=rollup.method_unknown_instruction_count,
+        method_stack_map_frame_count=rollup.method_stack_map_frame_count,
+        method_line_number_count=rollup.method_line_number_count,
+        first_line=rollup.first_line,
+        last_line=rollup.last_line,
+        method_local_variable_count=rollup.method_local_variable_count,
+        method_local_variable_type_count=rollup.method_local_variable_type_count,
+        method_exception_handler_count=rollup.method_exception_handler_count,
+        code_type_annotation_count=rollup.code_type_annotation_count,
+        branch_instruction_count=rollup.branch_instruction_count,
+        switch_instruction_count=rollup.switch_instruction_count,
+        invoke_instruction_count=rollup.invoke_instruction_count,
+        field_instruction_count=rollup.field_instruction_count,
+        class_instruction_count=rollup.class_instruction_count,
+        constant_load_instruction_count=rollup.constant_load_instruction_count,
+        string_constant_count=rollup.string_constant_count,
+        dynamic_instruction_count=rollup.dynamic_instruction_count,
+        return_instruction_count=rollup.return_instruction_count,
+        throw_instruction_count=rollup.throw_instruction_count,
+        monitor_instruction_count=rollup.monitor_instruction_count,
+        allocation_instruction_count=rollup.allocation_instruction_count,
+        array_allocation_instruction_count=rollup.array_allocation_instruction_count,
         class_kind=kind,
         is_interface=kind in {"interface", "annotation"},
         is_annotation=kind == "annotation",

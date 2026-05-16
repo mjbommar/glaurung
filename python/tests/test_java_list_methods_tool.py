@@ -249,6 +249,63 @@ public class Main {
     assert method.stack_map_frame_count > 0
 
 
+def test_java_list_methods_reports_local_variables_and_instruction_metrics(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_list_methods import build_tool
+
+    jar = _compile_source(
+        tmp_path,
+        """
+package app;
+
+public class Main {
+    public int inspect(String input, int count) {
+        String label = "metric";
+        Object value = new Object();
+        if (count > 3) {
+            return input.length();
+        }
+        switch (count) {
+            case 1:
+                return label.length();
+            case 5:
+                return value.hashCode();
+            default:
+                return 0;
+        }
+    }
+}
+""",
+        javac_args=["-g"],
+    )
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            class_filter="app.Main",
+            name_filter="inspect",
+            include_constructors=False,
+        ),
+    )
+
+    assert result.matched_method_count == 1
+    method = result.methods[0]
+    assert method.local_variable_count >= 4
+    assert set(method.local_variable_names) >= {"input", "count", "label", "value"}
+    assert method.branch_instruction_count >= 1
+    assert method.switch_instruction_count >= 1
+    assert method.invoke_instruction_count >= 2
+    assert method.constant_load_instruction_count >= 1
+    assert method.string_constant_count >= 1
+    assert method.allocation_instruction_count >= 1
+    assert method.return_instruction_count >= 1
+
+
 def test_java_list_methods_reports_parameter_metadata_and_annotation_defaults(
     tmp_path: Path,
 ) -> None:

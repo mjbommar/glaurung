@@ -15,6 +15,7 @@ from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .java_access_flags import access_flag_names
 from .java_class_kind import JavaClassKind, class_kind
+from .java_code_metrics import class_code_rollup, instruction_metrics
 from .java_descriptors import decode_field_descriptor, decode_method_descriptor
 from .java_hierarchy_edges import add_java_hierarchy_edges
 from .java_module_info import JavaModuleSummary, module_summary
@@ -56,6 +57,24 @@ class JavaCodeSummary(BaseModel):
     instruction_count: int = 0
     unknown_instruction_count: int = 0
     stack_map_frame_count: int = 0
+    runtime_visible_type_annotation_count: int = 0
+    runtime_invisible_type_annotation_count: int = 0
+    type_annotation_count: int = 0
+    local_variable_count: int = 0
+    local_variable_type_count: int = 0
+    branch_instruction_count: int = 0
+    switch_instruction_count: int = 0
+    invoke_instruction_count: int = 0
+    field_instruction_count: int = 0
+    class_instruction_count: int = 0
+    constant_load_instruction_count: int = 0
+    string_constant_count: int = 0
+    dynamic_instruction_count: int = 0
+    return_instruction_count: int = 0
+    throw_instruction_count: int = 0
+    monitor_instruction_count: int = 0
+    allocation_instruction_count: int = 0
+    array_allocation_instruction_count: int = 0
     xref_count: int = 0
     method_xref_count: int = 0
     field_xref_count: int = 0
@@ -146,6 +165,9 @@ class JavaClassMemberSummary(BaseModel):
     attribute_names: list[str] = Field(default_factory=list)
     is_deprecated: bool = False
     is_synthetic: bool = False
+    runtime_visible_type_annotation_count: int = 0
+    runtime_invisible_type_annotation_count: int = 0
+    type_annotation_count: int = 0
     constant_value: dict[str, Any] | None = None
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
@@ -183,6 +205,9 @@ class JavaViewClassResult(BaseModel):
     attribute_names: list[str] = Field(default_factory=list)
     is_deprecated: bool = False
     is_synthetic: bool = False
+    runtime_visible_type_annotation_count: int = 0
+    runtime_invisible_type_annotation_count: int = 0
+    type_annotation_count: int = 0
     source_debug_extension_length: int = 0
     source_debug_extension_sha256: str | None = None
     constant_pool: dict[str, int] = Field(default_factory=dict)
@@ -201,6 +226,33 @@ class JavaViewClassResult(BaseModel):
     module_info: JavaModuleSummary | None = None
     bootstrap_method_count: int = 0
     bootstrap_methods: list[dict[str, Any]] = Field(default_factory=list)
+    methods_with_code: int = 0
+    methods_with_line_numbers: int = 0
+    methods_with_local_variables: int = 0
+    method_code_length_total: int = 0
+    method_instruction_count: int = 0
+    method_unknown_instruction_count: int = 0
+    method_stack_map_frame_count: int = 0
+    method_line_number_count: int = 0
+    first_line: int | None = None
+    last_line: int | None = None
+    method_local_variable_count: int = 0
+    method_local_variable_type_count: int = 0
+    method_exception_handler_count: int = 0
+    code_type_annotation_count: int = 0
+    branch_instruction_count: int = 0
+    switch_instruction_count: int = 0
+    invoke_instruction_count: int = 0
+    field_instruction_count: int = 0
+    class_instruction_count: int = 0
+    constant_load_instruction_count: int = 0
+    string_constant_count: int = 0
+    dynamic_instruction_count: int = 0
+    return_instruction_count: int = 0
+    throw_instruction_count: int = 0
+    monitor_instruction_count: int = 0
+    allocation_instruction_count: int = 0
+    array_allocation_instruction_count: int = 0
     annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
     fields: list[JavaClassMemberSummary] = Field(default_factory=list)
     methods: list[JavaClassMemberSummary] = Field(default_factory=list)
@@ -330,6 +382,7 @@ def _result_for_class(
     )
     permitted_subclasses = _string_list(parsed.get("permitted_subclasses"))
     is_sealed = bool(permitted_subclasses)
+    rollup = class_code_rollup(parsed.get("methods"))
     fields = (
         [
             _member_summary("field", member, class_mapping, mappings)
@@ -382,6 +435,13 @@ def _result_for_class(
                 "attribute_names": _string_list(parsed.get("attribute_names")),
                 "is_deprecated": bool(parsed.get("is_deprecated", False)),
                 "is_synthetic": bool(parsed.get("is_synthetic", False)),
+                "runtime_visible_type_annotation_count": int(
+                    parsed.get("runtime_visible_type_annotation_count", 0)
+                ),
+                "runtime_invisible_type_annotation_count": int(
+                    parsed.get("runtime_invisible_type_annotation_count", 0)
+                ),
+                "type_annotation_count": int(parsed.get("type_annotation_count", 0)),
                 "source_debug_extension_length": int(
                     parsed.get("source_debug_extension_length", 0)
                 ),
@@ -414,6 +474,7 @@ def _result_for_class(
                 ),
                 "bootstrap_method_count": int(parsed.get("bootstrap_method_count", 0)),
                 "bootstrap_methods": _dict_list(parsed.get("bootstrap_methods")),
+                **rollup.model_dump(),
                 "annotations": [annotation.model_dump() for annotation in annotations],
             },
             tags=["java", "class", "deobfuscated" if mapped_class_name else "raw"],
@@ -485,6 +546,13 @@ def _result_for_class(
                     "attribute_names": member.attribute_names,
                     "is_deprecated": member.is_deprecated,
                     "is_synthetic": member.is_synthetic,
+                    "runtime_visible_type_annotation_count": (
+                        member.runtime_visible_type_annotation_count
+                    ),
+                    "runtime_invisible_type_annotation_count": (
+                        member.runtime_invisible_type_annotation_count
+                    ),
+                    "type_annotation_count": member.type_annotation_count,
                     "code": member.code.model_dump() if member.code else None,
                 },
                 tags=["java", member.kind, "mapping", "annotation"],
@@ -524,6 +592,13 @@ def _result_for_class(
         attribute_names=_string_list(parsed.get("attribute_names")),
         is_deprecated=bool(parsed.get("is_deprecated", False)),
         is_synthetic=bool(parsed.get("is_synthetic", False)),
+        runtime_visible_type_annotation_count=int(
+            parsed.get("runtime_visible_type_annotation_count", 0)
+        ),
+        runtime_invisible_type_annotation_count=int(
+            parsed.get("runtime_invisible_type_annotation_count", 0)
+        ),
+        type_annotation_count=int(parsed.get("type_annotation_count", 0)),
         source_debug_extension_length=int(
             parsed.get("source_debug_extension_length", 0)
         ),
@@ -546,6 +621,33 @@ def _result_for_class(
         module_info=parsed_module_info,
         bootstrap_method_count=int(parsed.get("bootstrap_method_count", 0)),
         bootstrap_methods=_dict_list(parsed.get("bootstrap_methods")),
+        methods_with_code=rollup.methods_with_code,
+        methods_with_line_numbers=rollup.methods_with_line_numbers,
+        methods_with_local_variables=rollup.methods_with_local_variables,
+        method_code_length_total=rollup.method_code_length_total,
+        method_instruction_count=rollup.method_instruction_count,
+        method_unknown_instruction_count=rollup.method_unknown_instruction_count,
+        method_stack_map_frame_count=rollup.method_stack_map_frame_count,
+        method_line_number_count=rollup.method_line_number_count,
+        first_line=rollup.first_line,
+        last_line=rollup.last_line,
+        method_local_variable_count=rollup.method_local_variable_count,
+        method_local_variable_type_count=rollup.method_local_variable_type_count,
+        method_exception_handler_count=rollup.method_exception_handler_count,
+        code_type_annotation_count=rollup.code_type_annotation_count,
+        branch_instruction_count=rollup.branch_instruction_count,
+        switch_instruction_count=rollup.switch_instruction_count,
+        invoke_instruction_count=rollup.invoke_instruction_count,
+        field_instruction_count=rollup.field_instruction_count,
+        class_instruction_count=rollup.class_instruction_count,
+        constant_load_instruction_count=rollup.constant_load_instruction_count,
+        string_constant_count=rollup.string_constant_count,
+        dynamic_instruction_count=rollup.dynamic_instruction_count,
+        return_instruction_count=rollup.return_instruction_count,
+        throw_instruction_count=rollup.throw_instruction_count,
+        monitor_instruction_count=rollup.monitor_instruction_count,
+        allocation_instruction_count=rollup.allocation_instruction_count,
+        array_allocation_instruction_count=rollup.array_allocation_instruction_count,
         annotations=annotations,
         fields=fields,
         methods=methods,
@@ -610,6 +712,13 @@ def _member_summary(
         attribute_names=_string_list(member.get("attribute_names")),
         is_deprecated=bool(member.get("is_deprecated", False)),
         is_synthetic=bool(member.get("is_synthetic", False)),
+        runtime_visible_type_annotation_count=int(
+            member.get("runtime_visible_type_annotation_count", 0)
+        ),
+        runtime_invisible_type_annotation_count=int(
+            member.get("runtime_invisible_type_annotation_count", 0)
+        ),
+        type_annotation_count=int(member.get("type_annotation_count", 0)),
         constant_value=_optional_dict(member.get("constant_value")),
         mapped_names=[mapping.official_name for mapping in mapped_members],
         mapped_signatures=[mapping.official_signature for mapping in mapped_members],
@@ -695,6 +804,7 @@ def _code_summary(value: Any) -> JavaCodeSummary | None:
         return None
     line_numbers = _line_numbers(value)
     xref_counts = code_xref_counts(value)
+    metrics = instruction_metrics(value)
     return JavaCodeSummary(
         max_stack=int(value["max_stack"]),
         max_locals=int(value["max_locals"]),
@@ -706,6 +816,28 @@ def _code_summary(value: Any) -> JavaCodeSummary | None:
         instruction_count=int(value.get("instruction_count", 0)),
         unknown_instruction_count=int(value.get("unknown_instruction_count", 0)),
         stack_map_frame_count=int(value.get("stack_map_frame_count", 0)),
+        runtime_visible_type_annotation_count=int(
+            value.get("runtime_visible_type_annotation_count", 0)
+        ),
+        runtime_invisible_type_annotation_count=int(
+            value.get("runtime_invisible_type_annotation_count", 0)
+        ),
+        type_annotation_count=int(value.get("type_annotation_count", 0)),
+        local_variable_count=_list_count(value.get("local_variables")),
+        local_variable_type_count=_list_count(value.get("local_variable_types")),
+        branch_instruction_count=metrics.branch_instruction_count,
+        switch_instruction_count=metrics.switch_instruction_count,
+        invoke_instruction_count=metrics.invoke_instruction_count,
+        field_instruction_count=metrics.field_instruction_count,
+        class_instruction_count=metrics.class_instruction_count,
+        constant_load_instruction_count=metrics.constant_load_instruction_count,
+        string_constant_count=metrics.string_constant_count,
+        dynamic_instruction_count=metrics.dynamic_instruction_count,
+        return_instruction_count=metrics.return_instruction_count,
+        throw_instruction_count=metrics.throw_instruction_count,
+        monitor_instruction_count=metrics.monitor_instruction_count,
+        allocation_instruction_count=metrics.allocation_instruction_count,
+        array_allocation_instruction_count=metrics.array_allocation_instruction_count,
         xref_count=xref_counts["xref_count"],
         method_xref_count=xref_counts["method_xref_count"],
         field_xref_count=xref_counts["field_xref_count"],
@@ -756,6 +888,10 @@ def _dict_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _list_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
 
 
 def _candidate_class_names(

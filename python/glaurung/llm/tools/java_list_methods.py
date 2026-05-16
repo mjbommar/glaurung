@@ -15,6 +15,7 @@ from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .java_access_flags import access_flag_names
+from .java_code_metrics import instruction_metrics
 from .java_descriptors import decode_method_descriptor
 from .java_proguard_mappings import (
     ProguardClassMapping,
@@ -85,6 +86,9 @@ class JavaListedMethod(BaseModel):
     attribute_names: list[str] = Field(default_factory=list)
     is_deprecated: bool = False
     is_synthetic: bool = False
+    runtime_visible_type_annotation_count: int = 0
+    runtime_invisible_type_annotation_count: int = 0
+    type_annotation_count: int = 0
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
     code_length: int | None = None
@@ -93,6 +97,24 @@ class JavaListedMethod(BaseModel):
     instruction_count: int = 0
     unknown_instruction_count: int = 0
     stack_map_frame_count: int = 0
+    code_type_annotation_count: int = 0
+    local_variable_count: int = 0
+    local_variable_type_count: int = 0
+    local_variable_names: list[str] = Field(default_factory=list)
+    local_variable_type_names: list[str] = Field(default_factory=list)
+    branch_instruction_count: int = 0
+    switch_instruction_count: int = 0
+    invoke_instruction_count: int = 0
+    field_instruction_count: int = 0
+    class_instruction_count: int = 0
+    constant_load_instruction_count: int = 0
+    string_constant_count: int = 0
+    dynamic_instruction_count: int = 0
+    return_instruction_count: int = 0
+    throw_instruction_count: int = 0
+    monitor_instruction_count: int = 0
+    allocation_instruction_count: int = 0
+    array_allocation_instruction_count: int = 0
     xref_count: int = 0
     method_xref_count: int = 0
     field_xref_count: int = 0
@@ -251,7 +273,11 @@ def _method_summary(
     max_stack: int | None = None
     max_locals: int | None = None
     stack_map_frame_count = 0
+    code_type_annotation_count = 0
+    local_variable_names: list[str] = []
+    local_variable_type_names: list[str] = []
     line_numbers: list[int] = []
+    metrics = instruction_metrics(code)
     if isinstance(code, dict):
         code_length = int(code.get("code_length", 0))
         max_stack = int(code.get("max_stack", 0))
@@ -259,6 +285,9 @@ def _method_summary(
         instruction_count = int(code.get("instruction_count", 0))
         unknown_instruction_count = int(code.get("unknown_instruction_count", 0))
         stack_map_frame_count = int(code.get("stack_map_frame_count", 0))
+        code_type_annotation_count = int(code.get("type_annotation_count", 0))
+        local_variable_names = _local_names(code.get("local_variables"))
+        local_variable_type_names = _local_names(code.get("local_variable_types"))
         line_numbers = _line_numbers(code)
     else:
         instruction_count = 0
@@ -312,6 +341,13 @@ def _method_summary(
         attribute_names=_string_list(method.get("attribute_names")),
         is_deprecated=bool(method.get("is_deprecated", False)),
         is_synthetic=bool(method.get("is_synthetic", False)),
+        runtime_visible_type_annotation_count=int(
+            method.get("runtime_visible_type_annotation_count", 0)
+        ),
+        runtime_invisible_type_annotation_count=int(
+            method.get("runtime_invisible_type_annotation_count", 0)
+        ),
+        type_annotation_count=int(method.get("type_annotation_count", 0)),
         mapped_names=[member.official_name for member in mapped_members],
         mapped_signatures=[member.official_signature for member in mapped_members],
         code_length=code_length,
@@ -320,6 +356,28 @@ def _method_summary(
         instruction_count=instruction_count,
         unknown_instruction_count=unknown_instruction_count,
         stack_map_frame_count=stack_map_frame_count,
+        code_type_annotation_count=code_type_annotation_count,
+        local_variable_count=_list_count(code.get("local_variables"))
+        if isinstance(code, dict)
+        else 0,
+        local_variable_type_count=_list_count(code.get("local_variable_types"))
+        if isinstance(code, dict)
+        else 0,
+        local_variable_names=local_variable_names,
+        local_variable_type_names=local_variable_type_names,
+        branch_instruction_count=metrics.branch_instruction_count,
+        switch_instruction_count=metrics.switch_instruction_count,
+        invoke_instruction_count=metrics.invoke_instruction_count,
+        field_instruction_count=metrics.field_instruction_count,
+        class_instruction_count=metrics.class_instruction_count,
+        constant_load_instruction_count=metrics.constant_load_instruction_count,
+        string_constant_count=metrics.string_constant_count,
+        dynamic_instruction_count=metrics.dynamic_instruction_count,
+        return_instruction_count=metrics.return_instruction_count,
+        throw_instruction_count=metrics.throw_instruction_count,
+        monitor_instruction_count=metrics.monitor_instruction_count,
+        allocation_instruction_count=metrics.allocation_instruction_count,
+        array_allocation_instruction_count=metrics.array_allocation_instruction_count,
         xref_count=xref_counts["xref_count"],
         method_xref_count=xref_counts["method_xref_count"],
         field_xref_count=xref_counts["field_xref_count"],
@@ -427,6 +485,19 @@ def _method_parameter_names(method: dict[str, Any]) -> list[str | None]:
         value = parameter.get("name")
         out.append(value if isinstance(value, str) else None)
     return out
+
+
+def _local_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if isinstance(name, str) and name:
+            names.append(name)
+    return _dedupe(names)
 
 
 def _parameter_annotation_count(method: dict[str, Any]) -> int:
