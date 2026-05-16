@@ -45,6 +45,10 @@ class JavaClassSummary(BaseModel):
     classfile_size_category: str = "unknown"
     classfile_warnings: list[str] = Field(default_factory=list)
     access_flags: int
+    attribute_count: int = 0
+    attribute_names: list[str] = Field(default_factory=list)
+    is_deprecated: bool = False
+    is_synthetic: bool = False
     method_count: int
     field_count: int
     methods_with_code: int
@@ -399,6 +403,10 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                         classfile_size_category=policy.classfile_size_category,
                         classfile_warnings=policy.classfile_warnings,
                         access_flags=parsed["access_flags"],
+                        attribute_count=int(parsed.get("attribute_count", 0)),
+                        attribute_names=_string_list(parsed.get("attribute_names")),
+                        is_deprecated=bool(parsed.get("is_deprecated", False)),
+                        is_synthetic=bool(parsed.get("is_synthetic", False)),
                         method_count=len(methods),
                         field_count=len(parsed["fields"]),
                         methods_with_code=sum(
@@ -780,6 +788,12 @@ def _parse_properties(text: str) -> dict[str, str]:
 
 def _list_count(value: Any) -> int:
     return len(value) if isinstance(value, list) else 0
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def build_tool() -> MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResult]:

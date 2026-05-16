@@ -16,6 +16,10 @@ pub struct JavaMethod {
     pub name: String,
     pub descriptor: String,
     pub signature: Option<String>,
+    pub attribute_names: Vec<String>,
+    pub is_deprecated: bool,
+    pub is_synthetic: bool,
+    pub constant_value: Option<JavaConstantValue>,
     pub exceptions: Vec<String>,
     pub annotations: Vec<JavaAnnotation>,
     pub method_parameters: Vec<JavaMethodParameter>,
@@ -32,12 +36,19 @@ pub struct JavaCode {
     pub exception_table_len: u16,
     pub exception_handlers: Vec<JavaExceptionHandler>,
     pub attributes_count: u16,
+    pub attribute_names: Vec<String>,
     pub stack_map_frame_count: u16,
     pub line_numbers: Vec<JavaLineNumber>,
     pub local_variables: Vec<JavaLocalVariable>,
     pub local_variable_types: Vec<JavaLocalVariableType>,
     pub instructions: Vec<JavaInstruction>,
     pub xrefs: Vec<JavaXref>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaConstantValue {
+    pub kind: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +210,9 @@ pub struct ClassInfo {
     pub super_class: String,
     pub source_file: Option<String>,
     pub signature: Option<String>,
+    pub attribute_names: Vec<String>,
+    pub is_deprecated: bool,
+    pub is_synthetic: bool,
     pub annotations: Vec<JavaAnnotation>,
     pub inner_classes: Vec<JavaInnerClass>,
     pub enclosing_method: Option<JavaEnclosingMethod>,
@@ -237,6 +251,10 @@ enum CpEntry {
     String {
         string_idx: u16,
     },
+    Integer(i32),
+    Float(u32),
+    Long(i64),
+    Double(u64),
     Fieldref {
         class_idx: u16,
         name_and_type_idx: u16,
@@ -266,6 +284,9 @@ enum CpEntry {
 
 #[derive(Debug, Default)]
 struct JavaClassAttributes {
+    attribute_names: Vec<String>,
+    is_deprecated: bool,
+    is_synthetic: bool,
     source_file: Option<String>,
     signature: Option<String>,
     annotations: Vec<JavaAnnotation>,
@@ -343,15 +364,30 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
                 };
                 i += 1;
             }
-            // Fixed-width entries we don't decode but must skip.
             3 | 4 => {
+                if p + 4 > data.len() {
+                    return Err(ClassError::Truncated("numeric constant"));
+                }
+                let bits = u32::from_be_bytes(data[p..p + 4].try_into().unwrap());
                 p += 4;
-                cp[i] = CpEntry::Other;
+                cp[i] = if tag == 3 {
+                    CpEntry::Integer(bits as i32)
+                } else {
+                    CpEntry::Float(bits)
+                };
                 i += 1;
             } // Integer, Float
             5 | 6 => {
+                if p + 8 > data.len() {
+                    return Err(ClassError::Truncated("wide numeric constant"));
+                }
+                let bits = u64::from_be_bytes(data[p..p + 8].try_into().unwrap());
                 p += 8;
-                cp[i] = CpEntry::Other;
+                cp[i] = if tag == 5 {
+                    CpEntry::Long(bits as i64)
+                } else {
+                    CpEntry::Double(bits)
+                };
                 i += 2;
             } // Long, Double (2 slots)
             8 => {
@@ -467,6 +503,9 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         super_class: super_class_name,
         source_file: class_attrs.source_file,
         signature: class_attrs.signature,
+        attribute_names: class_attrs.attribute_names,
+        is_deprecated: class_attrs.is_deprecated,
+        is_synthetic: class_attrs.is_synthetic || access_flags & 0x1000 != 0,
         annotations: class_attrs.annotations,
         inner_classes: class_attrs.inner_classes,
         enclosing_method: class_attrs.enclosing_method,
@@ -507,6 +546,10 @@ fn walk_member_table(
         let mut exceptions = Vec::new();
         let mut annotations = Vec::new();
         let mut signature = None;
+        let mut attribute_names = Vec::with_capacity(attrs);
+        let mut is_deprecated = false;
+        let mut is_synthetic = access_flags & 0x1000 != 0;
+        let mut constant_value = None;
         let mut method_parameters = Vec::new();
         let mut parameter_annotations = Vec::new();
         let mut annotation_default = None;
@@ -524,6 +567,7 @@ fn walk_member_table(
             if body_end > data.len() {
                 return Err(ClassError::Truncated("attribute body"));
             }
+            attribute_names.push(attr_name.clone());
             if capture_code && attr_name == "Code" {
                 code = Some(parse_code_attribute(&data[body_start..body_end], cp)?);
             } else if capture_code && attr_name == "Exceptions" {
@@ -532,6 +576,14 @@ fn walk_member_table(
                 let signature_idx =
                     u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
                 signature = Some(read_utf8(cp, signature_idx)?);
+            } else if attr_name == "ConstantValue" && alen == 2 {
+                let constant_idx =
+                    u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
+                constant_value = Some(read_constant_value(cp, constant_idx)?);
+            } else if attr_name == "Deprecated" {
+                is_deprecated = true;
+            } else if attr_name == "Synthetic" {
+                is_synthetic = true;
             } else if attr_name == "MethodParameters" {
                 method_parameters =
                     parse_method_parameters_attribute(&data[body_start..body_end], cp)?;
@@ -575,6 +627,10 @@ fn walk_member_table(
             name,
             descriptor,
             signature,
+            attribute_names,
+            is_deprecated,
+            is_synthetic,
+            constant_value,
             exceptions,
             annotations,
             method_parameters,
@@ -597,6 +653,7 @@ fn parse_class_attributes(
     let attrs = u16::from_be_bytes(data[p..p + 2].try_into().unwrap()) as usize;
     p += 2;
     let mut out = JavaClassAttributes::default();
+    out.attribute_names.reserve(attrs);
     for _ in 0..attrs {
         if p + 6 > data.len() {
             return Err(ClassError::Truncated("class attribute header"));
@@ -611,12 +668,17 @@ fn parse_class_attributes(
         if body_end > data.len() {
             return Err(ClassError::Truncated("class attribute body"));
         }
+        out.attribute_names.push(attr_name.clone());
         if attr_name == "SourceFile" && alen == 2 {
             let source_idx = u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
             out.source_file = Some(read_utf8(cp, source_idx)?);
         } else if attr_name == "Signature" && alen == 2 {
             let signature_idx = u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
             out.signature = Some(read_utf8(cp, signature_idx)?);
+        } else if attr_name == "Deprecated" {
+            out.is_deprecated = true;
+        } else if attr_name == "Synthetic" {
+            out.is_synthetic = true;
         } else if attr_name == "RuntimeVisibleAnnotations" {
             out.annotations.extend(parse_annotations_attribute(
                 &data[body_start..body_end],
@@ -1020,6 +1082,7 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
     let mut line_numbers = Vec::new();
     let mut local_variables = Vec::new();
     let mut local_variable_types = Vec::new();
+    let mut attribute_names = Vec::with_capacity(attributes_count as usize);
     let mut stack_map_frame_count = 0u16;
     for _ in 0..attributes_count {
         if p + 6 > body.len() {
@@ -1035,6 +1098,7 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         if attr_end > body.len() {
             return Err(ClassError::Truncated("code nested attribute body"));
         }
+        attribute_names.push(name.clone());
         if name == "LineNumberTable" {
             line_numbers.extend(parse_line_number_table(&body[attr_start..attr_end])?);
         } else if name == "LocalVariableTable" {
@@ -1059,6 +1123,7 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         exception_table_len,
         exception_handlers,
         attributes_count,
+        attribute_names,
         stack_map_frame_count,
         line_numbers,
         local_variables,
@@ -1364,6 +1429,38 @@ fn read_annotation_const_value(cp: &[CpEntry], idx: u16) -> Result<String, Class
         CpEntry::String { string_idx } => read_utf8(cp, *string_idx),
         CpEntry::Class { name_idx } => read_utf8(cp, *name_idx),
         _ => Ok(format!("cp#{idx}")),
+    }
+}
+
+fn read_constant_value(cp: &[CpEntry], idx: u16) -> Result<JavaConstantValue, ClassError> {
+    if (idx as usize) >= cp.len() {
+        return Err(ClassError::BadCpIndex(idx));
+    }
+    match &cp[idx as usize] {
+        CpEntry::Integer(value) => Ok(JavaConstantValue {
+            kind: "int".to_string(),
+            value: value.to_string(),
+        }),
+        CpEntry::Float(bits) => Ok(JavaConstantValue {
+            kind: "float".to_string(),
+            value: f32::from_bits(*bits).to_string(),
+        }),
+        CpEntry::Long(value) => Ok(JavaConstantValue {
+            kind: "long".to_string(),
+            value: value.to_string(),
+        }),
+        CpEntry::Double(bits) => Ok(JavaConstantValue {
+            kind: "double".to_string(),
+            value: f64::from_bits(*bits).to_string(),
+        }),
+        CpEntry::String { string_idx } => Ok(JavaConstantValue {
+            kind: "string".to_string(),
+            value: read_utf8(cp, *string_idx)?,
+        }),
+        _ => Ok(JavaConstantValue {
+            kind: "cp".to_string(),
+            value: format!("cp#{idx}"),
+        }),
     }
 }
 

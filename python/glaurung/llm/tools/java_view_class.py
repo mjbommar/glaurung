@@ -51,6 +51,8 @@ class JavaCodeSummary(BaseModel):
     code_length: int
     exception_table_len: int
     attributes_count: int
+    attribute_count: int = 0
+    attribute_names: list[str] = Field(default_factory=list)
     stack_map_frame_count: int = 0
     xref_count: int = 0
     method_xref_count: int = 0
@@ -138,6 +140,11 @@ class JavaClassMemberSummary(BaseModel):
     annotation_default: JavaAnnotationValueSummary | None = None
     access_flags: int
     access_flag_names: list[str] = Field(default_factory=list)
+    attribute_count: int = 0
+    attribute_names: list[str] = Field(default_factory=list)
+    is_deprecated: bool = False
+    is_synthetic: bool = False
+    constant_value: dict[str, Any] | None = None
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
     annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
@@ -170,6 +177,10 @@ class JavaViewClassResult(BaseModel):
     classfile_warnings: list[str] = Field(default_factory=list)
     access_flags: int | None = None
     access_flag_names: list[str] = Field(default_factory=list)
+    attribute_count: int = 0
+    attribute_names: list[str] = Field(default_factory=list)
+    is_deprecated: bool = False
+    is_synthetic: bool = False
     class_kind: JavaClassKind = "class"
     is_interface: bool = False
     is_annotation: bool = False
@@ -361,6 +372,10 @@ def _result_for_class(
                 "access_flag_names": access_flag_names(
                     int(parsed["access_flags"]), "class"
                 ),
+                "attribute_count": int(parsed.get("attribute_count", 0)),
+                "attribute_names": _string_list(parsed.get("attribute_names")),
+                "is_deprecated": bool(parsed.get("is_deprecated", False)),
+                "is_synthetic": bool(parsed.get("is_synthetic", False)),
                 "class_kind": kind,
                 "is_interface": kind in {"interface", "annotation"},
                 "is_annotation": kind == "annotation",
@@ -444,6 +459,7 @@ def _result_for_class(
                         if member.annotation_default
                         else None
                     ),
+                    "constant_value": member.constant_value,
                     "mapped_names": member.mapped_names,
                     "mapped_signatures": member.mapped_signatures,
                     "annotations": [
@@ -451,6 +467,10 @@ def _result_for_class(
                     ],
                     "access_flags": member.access_flags,
                     "access_flag_names": member.access_flag_names,
+                    "attribute_count": member.attribute_count,
+                    "attribute_names": member.attribute_names,
+                    "is_deprecated": member.is_deprecated,
+                    "is_synthetic": member.is_synthetic,
                     "code": member.code.model_dump() if member.code else None,
                 },
                 tags=["java", member.kind, "mapping", "annotation"],
@@ -486,6 +506,10 @@ def _result_for_class(
         classfile_warnings=policy.classfile_warnings,
         access_flags=parsed["access_flags"],
         access_flag_names=access_flag_names(int(parsed["access_flags"]), "class"),
+        attribute_count=int(parsed.get("attribute_count", 0)),
+        attribute_names=_string_list(parsed.get("attribute_names")),
+        is_deprecated=bool(parsed.get("is_deprecated", False)),
+        is_synthetic=bool(parsed.get("is_synthetic", False)),
         class_kind=kind,
         is_interface=kind in {"interface", "annotation"},
         is_annotation=kind == "annotation",
@@ -560,6 +584,11 @@ def _member_summary(
         access_flag_names=access_flag_names(
             int(member["access_flags"]), "method" if kind == "method" else "field"
         ),
+        attribute_count=int(member.get("attribute_count", 0)),
+        attribute_names=_string_list(member.get("attribute_names")),
+        is_deprecated=bool(member.get("is_deprecated", False)),
+        is_synthetic=bool(member.get("is_synthetic", False)),
+        constant_value=_optional_dict(member.get("constant_value")),
         mapped_names=[mapping.official_name for mapping in mapped_members],
         mapped_signatures=[mapping.official_signature for mapping in mapped_members],
         annotations=_annotation_summaries(member.get("annotations")),
@@ -650,6 +679,8 @@ def _code_summary(value: Any) -> JavaCodeSummary | None:
         code_length=int(value["code_length"]),
         exception_table_len=int(value["exception_table_len"]),
         attributes_count=int(value["attributes_count"]),
+        attribute_count=int(value.get("attribute_count", value["attributes_count"])),
+        attribute_names=_string_list(value.get("attribute_names")),
         stack_map_frame_count=int(value.get("stack_map_frame_count", 0)),
         xref_count=xref_counts["xref_count"],
         method_xref_count=xref_counts["method_xref_count"],
@@ -679,6 +710,10 @@ def _line_numbers(code: dict[str, Any]) -> list[int]:
 
 def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _optional_dict(value: Any) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
 
 
 def _string_list(value: Any) -> list[str]:

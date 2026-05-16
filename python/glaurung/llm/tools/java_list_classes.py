@@ -76,6 +76,10 @@ class JavaListedClass(BaseModel):
     interface_count: int = 0
     access_flags: int
     access_flag_names: list[str] = Field(default_factory=list)
+    attribute_count: int = 0
+    attribute_names: list[str] = Field(default_factory=list)
+    is_deprecated: bool = False
+    is_synthetic: bool = False
     major_version: int
     minor_version: int
     java_release: int | None = None
@@ -236,6 +240,10 @@ def _class_summary(
         access_flag_names=access_flag_names(
             int(parsed.get("access_flags", 0)), "class"
         ),
+        attribute_count=int(parsed.get("attribute_count", 0)),
+        attribute_names=_string_list(parsed.get("attribute_names")),
+        is_deprecated=bool(parsed.get("is_deprecated", False)),
+        is_synthetic=bool(parsed.get("is_synthetic", False)),
         major_version=policy.major_version,
         minor_version=policy.minor_version,
         java_release=policy.java_release,
@@ -323,6 +331,12 @@ def _annotation_descriptors(parsed: dict[str, Any]) -> list[str]:
 
 def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def _list_count(value: Any) -> int:

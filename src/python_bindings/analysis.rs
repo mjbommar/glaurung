@@ -297,6 +297,10 @@ fn java_class_info_to_py(
     dict.set_item("super_class", info.super_class)?;
     dict.set_item("source_file", info.source_file)?;
     dict.set_item("signature", info.signature)?;
+    dict.set_item("attribute_count", info.attribute_names.len())?;
+    dict.set_item("attribute_names", info.attribute_names)?;
+    dict.set_item("is_deprecated", info.is_deprecated)?;
+    dict.set_item("is_synthetic", info.is_synthetic)?;
     dict.set_item("annotations", java_annotations_to_py(py, info.annotations)?)?;
     dict.set_item(
         "inner_classes",
@@ -326,6 +330,14 @@ fn java_class_info_to_py(
         mdict.set_item("descriptor", m.descriptor)?;
         mdict.set_item("signature", m.signature)?;
         mdict.set_item("access_flags", m.access_flags)?;
+        mdict.set_item("attribute_count", m.attribute_names.len())?;
+        mdict.set_item("attribute_names", m.attribute_names)?;
+        mdict.set_item("is_deprecated", m.is_deprecated)?;
+        mdict.set_item("is_synthetic", m.is_synthetic)?;
+        mdict.set_item(
+            "constant_value",
+            java_constant_value_to_py(py, m.constant_value)?,
+        )?;
         mdict.set_item("exceptions", m.exceptions)?;
         mdict.set_item("annotations", java_annotations_to_py(py, m.annotations)?)?;
         mdict.set_item(
@@ -351,6 +363,14 @@ fn java_class_info_to_py(
         fdict.set_item("descriptor", f.descriptor)?;
         fdict.set_item("signature", f.signature)?;
         fdict.set_item("access_flags", f.access_flags)?;
+        fdict.set_item("attribute_count", f.attribute_names.len())?;
+        fdict.set_item("attribute_names", f.attribute_names)?;
+        fdict.set_item("is_deprecated", f.is_deprecated)?;
+        fdict.set_item("is_synthetic", f.is_synthetic)?;
+        fdict.set_item(
+            "constant_value",
+            java_constant_value_to_py(py, f.constant_value)?,
+        )?;
         fdict.set_item("exceptions", f.exceptions)?;
         fdict.set_item("annotations", java_annotations_to_py(py, f.annotations)?)?;
         fdict.set_item(
@@ -564,6 +584,19 @@ fn java_annotation_value_to_py(
     Ok(dict.into())
 }
 
+fn java_constant_value_to_py(
+    py: Python<'_>,
+    value: Option<crate::analysis::java_class::JavaConstantValue>,
+) -> PyResult<Py<PyAny>> {
+    let Some(value) = value else {
+        return Ok(py.None());
+    };
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("kind", value.kind)?;
+    dict.set_item("value", value.value)?;
+    Ok(dict.into())
+}
+
 fn java_code_to_py(
     py: Python<'_>,
     code: Option<crate::analysis::java_class::JavaCode>,
@@ -587,6 +620,8 @@ fn java_code_to_py(
     }
     dict.set_item("exception_handlers", exception_handlers)?;
     dict.set_item("attributes_count", code.attributes_count)?;
+    dict.set_item("attribute_count", code.attribute_names.len())?;
+    dict.set_item("attribute_names", code.attribute_names)?;
     dict.set_item("stack_map_frame_count", code.stack_map_frame_count)?;
     let line_numbers = pyo3::types::PyList::empty(py);
     for line in code.line_numbers {

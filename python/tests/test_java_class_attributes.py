@@ -259,6 +259,42 @@ public class GenericFixture<T extends Number> {
     return out / "GenericFixture.class"
 
 
+def _compile_field_attribute_class(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java fixture")
+    src = tmp_path / "field-attribute-src"
+    out = tmp_path / "field-attribute-classes"
+    src.mkdir()
+    out.mkdir()
+    source = src / "FieldAttributeFixture.java"
+    source.write_text(
+        """
+@Deprecated
+public class FieldAttributeFixture {
+    @Deprecated
+    public static final int ANSWER = 42;
+
+    public static final String NAME = "glaurung";
+    public static final long BIG = 123456789L;
+    public static final double RATIO = 1.5d;
+    public int mutable;
+
+    @Deprecated
+    public void oldMethod() {}
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["javac", "-g", "--release", "17", "-d", str(out), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out / "FieldAttributeFixture.class"
+
+
 def _compile_parameter_metadata_classes(tmp_path: Path) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java fixture")
@@ -507,6 +543,57 @@ def test_parse_java_class_recovers_bootstrap_method_count(tmp_path: Path) -> Non
     )
     assert make_task["code"] is not None
     assert any(xref["kind"] == "invokedynamic" for xref in make_task["code"]["xrefs"])
+
+
+def test_parse_java_class_recovers_attributes_deprecated_and_constant_values(
+    tmp_path: Path,
+) -> None:
+    class_file = _compile_field_attribute_class(tmp_path)
+    java_analysis = getattr(g, "analysis")
+
+    info = java_analysis.parse_java_class_path(str(class_file))
+
+    assert info is not None
+    assert info["class_name"] == "FieldAttributeFixture"
+    assert info["attribute_count"] >= 2
+    assert "Deprecated" in info["attribute_names"]
+    assert "SourceFile" in info["attribute_names"]
+    assert info["is_deprecated"] is True
+    assert info["is_synthetic"] is False
+
+    fields = {field["name"]: field for field in info["fields"]}
+    assert fields["ANSWER"]["constant_value"] == {
+        "kind": "int",
+        "value": "42",
+    }
+    assert fields["NAME"]["constant_value"] == {
+        "kind": "string",
+        "value": "glaurung",
+    }
+    assert fields["BIG"]["constant_value"] == {
+        "kind": "long",
+        "value": "123456789",
+    }
+    assert fields["RATIO"]["constant_value"] == {
+        "kind": "double",
+        "value": "1.5",
+    }
+    assert fields["ANSWER"]["attribute_count"] >= 3
+    assert fields["ANSWER"]["is_deprecated"] is True
+    assert fields["ANSWER"]["is_synthetic"] is False
+    assert "ConstantValue" in fields["ANSWER"]["attribute_names"]
+    assert "Deprecated" in fields["ANSWER"]["attribute_names"]
+    assert fields["mutable"]["constant_value"] is None
+
+    old_method = next(
+        method for method in info["methods"] if method["name"] == "oldMethod"
+    )
+    assert old_method["attribute_count"] >= 2
+    assert old_method["is_deprecated"] is True
+    assert old_method["is_synthetic"] is False
+    assert "Deprecated" in old_method["attribute_names"]
+    assert old_method["code"]["attribute_count"] >= 1
+    assert "LineNumberTable" in old_method["code"]["attribute_names"]
 
 
 def test_parse_java_class_recovers_exception_handlers(tmp_path: Path) -> None:
