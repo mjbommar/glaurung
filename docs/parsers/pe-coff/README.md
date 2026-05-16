@@ -7,16 +7,16 @@ The Portable Executable (PE) format, based on the Common Object File Format (COF
 ## Format Specifications
 
 ### Primary References
-- **Microsoft PE Format**: `/reference/specifications/pe-coff/PE_Format_Microsoft.md`
-- **Windows Headers**: `/reference/specifications/pe-coff/winnt.h`
-- **ECMA-335 CLI**: `/reference/specifications/pe-coff/ECMA-335_CLI.pdf`
-- **.NET Extensions**: `/reference/specifications/pe-coff/dotnet_PE_COFF.md`
+- **Microsoft PE Format**: `reference/specifications/pe-coff/PE_Format_Microsoft.md`
+- **Windows Headers**: `reference/specifications/pe-coff/winnt.h`
+- **ECMA-335 CLI**: `reference/specifications/pe-coff/ECMA-335_CLI.pdf`
+- **.NET Extensions**: `reference/specifications/pe-coff/dotnet_PE_COFF.md`
 
 ### Implementation References
-- **Wine Project**: `/reference/specifications/pe-coff/winnt.h`
-- **ReactOS**: `/reference/specifications/pe-coff/reactos_winnt.h`
-- **MinGW-w64**: `/reference/specifications/pe-coff/mingw_winnt.h`
-- **LLVM LIEF**: `/reference/LIEF/include/LIEF/PE/`
+- **Wine Project**: `reference/specifications/pe-coff/winnt.h`
+- **ReactOS**: `reference/specifications/pe-coff/reactos_winnt.h`
+- **MinGW-w64**: `reference/specifications/pe-coff/mingw_winnt.h`
+- **LLVM LIEF**: `reference/LIEF/include/LIEF/PE/`
 
 ## PE Structure
 
@@ -145,8 +145,12 @@ pub struct OptionalHeader {
 
 ## Testing Coverage
 
+For a detailed capability and test roadmap focused on Windows resources,
+metadata, signing, triage integration, and corpus smoke coverage, see
+[Windows PE Resources Capability And Test Plan](WINDOWS_RESOURCES_CAPABILITIES_TEST_PLAN.md).
+
 ### Test Samples
-- Minimal PE: `/reference/specifications/samples/minimal_pe.exe`
+- Minimal PE built from generated fixture source
 - Standard executables: 32-bit and 64-bit
 - DLL files: With exports and forwarding
 - Drivers: Kernel-mode binaries
