@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -44,6 +45,17 @@ class JavaReconstructSourceTreeArgs(BaseModel):
     max_decompile_source_chars: int = Field(200_000, ge=0)
     max_resources: int = Field(20_000, ge=0)
     max_resource_bytes: int = Field(10_000_000, ge=0)
+    java_release: int = Field(17, ge=1)
+    project_name: str | None = Field(
+        None,
+        description="Optional Maven artifactId/build metadata name.",
+    )
+    generate_build_files: bool = Field(
+        True,
+        description=(
+            "Emit minimal javac and Maven build files plus recovery metadata."
+        ),
+    )
 
 
 class JavaReconstructSourceTreeResult(BaseModel):
@@ -56,6 +68,7 @@ class JavaReconstructSourceTreeResult(BaseModel):
     java_source_files: list[str] = Field(default_factory=list)
     decompiled_source_files: list[str] = Field(default_factory=list)
     resource_files: list[str] = Field(default_factory=list)
+    build_files: list[str] = Field(default_factory=list)
     preserved_metadata_files: list[str] = Field(default_factory=list)
     skipped_signature_files: list[str] = Field(default_factory=list)
     skipped_resource_files: list[str] = Field(default_factory=list)
@@ -131,10 +144,12 @@ class JavaReconstructSourceTreeTool(
                 resource_root,
             )
         if result.java_source_files:
-            (output_root / "sources.txt").write_text(
-                "\n".join(result.java_source_files) + "\n",
-                encoding="utf-8",
-            )
+            _write_sources_file(output_root, result)
+        elif args.generate_build_files:
+            (output_root / "sources.txt").write_text("", encoding="utf-8")
+            result.build_files.append("sources.txt")
+        if args.generate_build_files:
+            _emit_build_files(output_root, archive_path, args, result)
         _add_source_tree_node(kb, archive_path, result)
         return result
 
@@ -227,6 +242,91 @@ def _copy_or_plan_entries(
         result.resource_files.append(rel_resource)
         if _is_metadata_resource(normalized):
             result.preserved_metadata_files.append(normalized)
+
+
+def _write_sources_file(
+    output_root: Path,
+    result: JavaReconstructSourceTreeResult,
+) -> None:
+    (output_root / "sources.txt").write_text(
+        "\n".join(result.java_source_files) + "\n",
+        encoding="utf-8",
+    )
+    _append_once(result.build_files, "sources.txt")
+
+
+def _emit_build_files(
+    output_root: Path,
+    archive_path: Path,
+    args: JavaReconstructSourceTreeArgs,
+    result: JavaReconstructSourceTreeResult,
+) -> None:
+    project_name = _safe_project_name(args.project_name or archive_path.stem)
+    javac_args = output_root / "javac.args"
+    javac_args.write_text(
+        "\n".join(
+            [
+                "--release",
+                str(args.java_release),
+                "-d",
+                "build/classes",
+                "@sources.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _append_once(result.build_files, "javac.args")
+
+    pom = output_root / "pom.xml"
+    pom.write_text(
+        f"""<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>glaurung.recovered</groupId>
+  <artifactId>{project_name}</artifactId>
+  <version>0.0.0-recovered</version>
+  <properties>
+    <maven.compiler.release>{args.java_release}</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+</project>
+""",
+        encoding="utf-8",
+    )
+    _append_once(result.build_files, "pom.xml")
+
+    metadata_dir = output_root / ".glaurung"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    metadata = metadata_dir / "recovery.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "tool": "java_reconstruct_source_tree",
+                "archive_path": str(archive_path),
+                "archive_sha256": result.sha256,
+                "java_release": args.java_release,
+                "class_count": result.class_count,
+                "resource_count": result.resource_count,
+                "java_source_files": result.java_source_files,
+                "decompiled_source_files": result.decompiled_source_files,
+                "classes_requiring_decompile": result.classes_requiring_decompile,
+                "classes_requiring_stubs": result.classes_requiring_stubs,
+                "preserved_metadata_files": result.preserved_metadata_files,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _append_once(result.build_files, ".glaurung/recovery.json")
+
+
+def _safe_project_name(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
+    return cleaned or "recovered-java-application"
 
 
 def _emit_stub_source(

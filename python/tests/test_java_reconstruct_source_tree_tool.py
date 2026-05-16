@@ -166,6 +166,39 @@ def test_java_reconstruct_source_tree_decompiles_top_level_sources(
     assert compiled.success is True
 
 
+def test_java_reconstruct_source_tree_emits_recovery_build_files(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_reconstruct_source_tree import build_tool
+
+    jar = _fixture_jar(tmp_path)
+    output = tmp_path / "recovered"
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            output_root=str(output),
+            decompile_sources=True,
+            decompiler_engine="cfr",
+            java_release=17,
+            project_name="fixture-app",
+        ),
+    )
+
+    assert "pom.xml" in result.build_files
+    assert "javac.args" in result.build_files
+    assert ".glaurung/recovery.json" in result.build_files
+    assert (output / "pom.xml").read_text(encoding="utf-8").count("<artifactId>") == 1
+    assert "@sources.txt" in (output / "javac.args").read_text(encoding="utf-8")
+    assert "src/main/java/app/Main.java" in (output / "sources.txt").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_java_reconstruct_source_tree_requires_output_root(tmp_path: Path) -> None:
     from glaurung.llm.tools.java_reconstruct_source_tree import build_tool
 

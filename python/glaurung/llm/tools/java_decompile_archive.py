@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import re
+import shutil
+import subprocess
+import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
@@ -14,12 +18,23 @@ from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
-from .java_proguard_mappings import ProguardMappings, parse_proguard_mappings
+from .java_proguard_mappings import (
+    ProguardClassMapping,
+    ProguardMappings,
+    parse_proguard_mappings,
+)
 
 
 JavaDecompilerEngine = Literal["auto", "cfr", "vineflower"]
 JavaConcreteDecompilerEngine = Literal["cfr", "vineflower"]
 JavaInnerClassPolicy = Literal["skip", "companion"]
+JavaInnerClassKind = Literal[
+    "top_level",
+    "named_inner",
+    "anonymous",
+    "lambda",
+    "synthetic",
+]
 JavaDecompileQuality = Literal[
     "parseable",
     "decompiled_with_parse_errors",
@@ -82,6 +97,21 @@ class JavaDecompileArchiveArgs(BaseModel):
     write_sources: bool = False
     include_bytecode_correlation: bool = False
     max_correlation_methods: int = Field(32, ge=0)
+    rewrite_mapped_sources: bool = Field(
+        False,
+        description=(
+            "When mapping_path is supplied, rewrite emitted source package, class, "
+            "field, and method names using the parsed ProGuard/Mojang mapping."
+        ),
+    )
+    compile_candidates: bool = Field(
+        False,
+        description=(
+            "Compile each decompiler candidate in isolation and include the result "
+            "in fallback quality scoring."
+        ),
+    )
+    java_release: int = Field(17, ge=1)
 
 
 class JavaDecompileAttempt(BaseModel):
@@ -93,16 +123,29 @@ class JavaDecompileAttempt(BaseModel):
     type_count: int = 0
     method_count: int = 0
     quality_score: int = 0
+    compile_success: bool | None = None
+    compile_diagnostic_count: int = 0
     helper_jar: str | None = None
     diagnostics: list[str] = Field(default_factory=list)
     stop_reasons: list[str] = Field(default_factory=list)
 
 
+class JavaInnerClassGroup(BaseModel):
+    outer_class_name: str
+    named_inner_classes: list[str] = Field(default_factory=list)
+    anonymous_classes: list[str] = Field(default_factory=list)
+    lambda_classes: list[str] = Field(default_factory=list)
+    synthetic_classes: list[str] = Field(default_factory=list)
+
+
 class JavaDecompiledClassSummary(BaseModel):
     entry_name: str
     class_name: str
+    outer_class_name: str | None = None
+    inner_class_kind: JavaInnerClassKind = "top_level"
     mapped_class_name: str | None = None
     mapping_match: Literal["obfuscated", "official", "none"] = "none"
+    mapped_source_rewritten: bool = False
     selected_engine: str | None = None
     success: bool = False
     quality: JavaDecompileQuality = "failed"
@@ -112,6 +155,8 @@ class JavaDecompiledClassSummary(BaseModel):
     type_count: int = 0
     method_count: int = 0
     quality_score: int = 0
+    compile_success: bool | None = None
+    compile_diagnostic_count: int = 0
     attempted_engines: list[JavaDecompileAttempt] = Field(default_factory=list)
     source_file: str | None = None
     bytecode_method_count: int | None = None
@@ -139,6 +184,8 @@ class JavaDecompileArchiveResult(BaseModel):
     skipped_inner_class_count: int = 0
     written_source_count: int = 0
     mapped_class_count: int = 0
+    inner_class_group_count: int = 0
+    inner_class_groups: list[JavaInnerClassGroup] = Field(default_factory=list)
     classes: list[JavaDecompiledClassSummary] = Field(default_factory=list)
     failed_classes: list[str] = Field(default_factory=list)
     skipped_classes: list[str] = Field(default_factory=list)
@@ -217,10 +264,14 @@ class JavaDecompileArchiveTool(
         engines = _engine_order(args)
         entries = _class_entries(archive_path)
         result.class_count = len(entries)
+        result.inner_class_groups = _inner_class_groups(entries)
+        result.inner_class_group_count = len(result.inner_class_groups)
 
         for entry_name in entries:
             class_name = entry_name.removesuffix(".class")
-            mapped_class_name, mapping_match = _mapped_class_name(mappings, class_name)
+            class_mapping, mapped_class_name, mapping_match = _mapped_class_mapping(
+                mappings, class_name
+            )
             if not _safe_archive_path(entry_name):
                 _record_skip(result, entry_name, "unsafe_archive_path")
                 continue
@@ -241,6 +292,7 @@ class JavaDecompileArchiveTool(
                 class_name=class_name,
                 mapped_class_name=mapped_class_name,
                 mapping_match=mapping_match,
+                class_mapping=class_mapping,
                 entry_name=entry_name,
                 engines=engines,
                 args=args,
@@ -281,6 +333,7 @@ def _decompile_one_class(
     class_name: str,
     mapped_class_name: str | None,
     mapping_match: Literal["obfuscated", "official", "none"],
+    class_mapping: ProguardClassMapping | None,
     entry_name: str,
     engines: list[JavaConcreteDecompilerEngine],
     args: JavaDecompileArchiveArgs,
@@ -315,6 +368,8 @@ def _decompile_one_class(
             }
         raw_by_engine[engine] = raw
         attempt = _attempt_from_raw(engine, raw)
+        if args.compile_candidates:
+            _score_candidate_compilation(class_name, raw, attempt, args.java_release)
         attempts.append(attempt)
         if _attempt_good_enough(attempt) or not args.fallback:
             break
@@ -329,10 +384,27 @@ def _decompile_one_class(
     if selected is not None and selected.success and args.write_sources:
         source = selected_raw.get("source")
         if isinstance(source, str) and source.strip() and source_root is not None:
-            dest = source_root.joinpath(*class_name.split("/")).with_suffix(".java")
+            mapped_source_rewritten = False
+            dest_class_name = class_name
+            source_to_write = source
+            if (
+                args.rewrite_mapped_sources
+                and class_mapping is not None
+                and mapped_class_name is not None
+            ):
+                source_to_write = _rewrite_mapped_source(source, class_mapping)
+                dest_class_name = mapped_class_name.replace(".", "/")
+                mapped_source_rewritten = source_to_write != source
+            dest = source_root.joinpath(*dest_class_name.split("/")).with_suffix(
+                ".java"
+            )
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(source.rstrip() + "\n", encoding="utf-8")
+            dest.write_text(source_to_write.rstrip() + "\n", encoding="utf-8")
             source_file = _relative(project_root or source_root, dest)
+        else:
+            mapped_source_rewritten = False
+    else:
+        mapped_source_rewritten = False
     correlation = (
         _bytecode_correlation(
             archive_path=archive_path,
@@ -347,8 +419,11 @@ def _decompile_one_class(
     return JavaDecompiledClassSummary(
         entry_name=entry_name,
         class_name=class_name,
+        outer_class_name=_outer_class_name(class_name),
+        inner_class_kind=_inner_class_kind(class_name),
         mapped_class_name=mapped_class_name,
         mapping_match=mapping_match,
+        mapped_source_rewritten=mapped_source_rewritten,
         selected_engine=selected.engine if selected else None,
         success=bool(selected and selected.success),
         quality=_quality(selected),
@@ -358,6 +433,8 @@ def _decompile_one_class(
         type_count=selected.type_count if selected else 0,
         method_count=selected.method_count if selected else 0,
         quality_score=selected.quality_score if selected else 0,
+        compile_success=selected.compile_success if selected else None,
+        compile_diagnostic_count=selected.compile_diagnostic_count if selected else 0,
         attempted_engines=attempts,
         source_file=source_file,
         bytecode_method_count=correlation.bytecode_method_count,
@@ -478,6 +555,67 @@ def _attempt_from_raw(engine: str, raw: dict[str, Any]) -> JavaDecompileAttempt:
     )
 
 
+def _score_candidate_compilation(
+    class_name: str,
+    raw: dict[str, Any],
+    attempt: JavaDecompileAttempt,
+    java_release: int,
+) -> None:
+    source = raw.get("source")
+    if not isinstance(source, str) or not source.strip():
+        return
+    compiled = _compile_candidate_source(class_name, source, java_release)
+    if compiled is None:
+        attempt.stop_reasons = _dedupe([*attempt.stop_reasons, "javac_missing"])
+        return
+    success, diagnostic_count = compiled
+    attempt.compile_success = success
+    attempt.compile_diagnostic_count = diagnostic_count
+    if success:
+        attempt.quality_score += 35
+    else:
+        attempt.quality_score -= 35 + min(diagnostic_count, 20)
+
+
+def _compile_candidate_source(
+    class_name: str,
+    source: str,
+    java_release: int,
+) -> tuple[bool, int] | None:
+    javac = shutil.which("javac")
+    if javac is None:
+        return None
+    with tempfile.TemporaryDirectory(prefix="glaurung-java-candidate-") as tmp:
+        tmp_path = Path(tmp)
+        source_path = (
+            tmp_path / "src" / Path(*class_name.split("/")).with_suffix(".java")
+        )
+        classes_dir = tmp_path / "classes"
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        classes_dir.mkdir()
+        source_path.write_text(source.rstrip() + "\n", encoding="utf-8")
+        try:
+            proc = subprocess.run(
+                [
+                    javac,
+                    "--release",
+                    str(java_release),
+                    "-d",
+                    str(classes_dir),
+                    str(source_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return False, 1
+        output = "\n".join(part for part in (proc.stderr, proc.stdout) if part)
+        diagnostic_count = output.count(": error:") + output.count(": warning:")
+        return proc.returncode == 0, diagnostic_count
+
+
 def _quality_score(
     *,
     success: bool,
@@ -503,12 +641,15 @@ def _quality_score(
 
 
 def _attempt_good_enough(attempt: JavaDecompileAttempt) -> bool:
-    return (
+    good = (
         attempt.success
         and attempt.parse_success
         and not attempt.source_truncated
         and attempt.source_length > 0
     )
+    if good and attempt.compile_success is False:
+        return False
+    return good
 
 
 def _select_best_attempt(
@@ -554,16 +695,103 @@ def _class_entries(path: Path) -> list[str]:
         )
 
 
-def _mapped_class_name(
+def _mapped_class_mapping(
     mappings: ProguardMappings | None,
     class_name: str,
-) -> tuple[str | None, Literal["obfuscated", "official", "none"]]:
+) -> tuple[
+    ProguardClassMapping | None,
+    str | None,
+    Literal["obfuscated", "official", "none"],
+]:
     if mappings is None:
-        return None, "none"
+        return None, None, "none"
     class_mapping, match = mappings.lookup_class(class_name)
     if class_mapping is None:
-        return None, "none"
-    return class_mapping.official_name, match
+        return None, None, "none"
+    return class_mapping, class_mapping.official_name, match
+
+
+def _rewrite_mapped_source(source: str, class_mapping: ProguardClassMapping) -> str:
+    official = class_mapping.official_name
+    official_parts = official.split(".")
+    official_simple = official_parts[-1]
+    official_package = ".".join(official_parts[:-1])
+    obfuscated_simple = class_mapping.obfuscated_name.split(".")[-1]
+
+    rewritten = _rewrite_package(source, official_package)
+    rewritten = re.sub(
+        rf"\b(class|interface|enum|record)\s+{re.escape(obfuscated_simple)}\b",
+        rf"\1 {official_simple}",
+        rewritten,
+        count=1,
+    )
+    rewritten = re.sub(
+        rf"\b{re.escape(obfuscated_simple)}\s*\(",
+        f"{official_simple}(",
+        rewritten,
+    )
+    for field in class_mapping.fields:
+        rewritten = re.sub(
+            rf"\b{re.escape(field.obfuscated_name)}\b",
+            field.official_name,
+            rewritten,
+        )
+    for method in class_mapping.methods:
+        rewritten = re.sub(
+            rf"\b{re.escape(method.obfuscated_name)}\b",
+            method.official_name,
+            rewritten,
+        )
+    return rewritten
+
+
+def _rewrite_package(source: str, package_name: str) -> str:
+    package_re = re.compile(r"(?m)^\s*package\s+[A-Za-z0-9_.]+;\s*\n+")
+    if package_name:
+        replacement = f"package {package_name};\n\n"
+        if package_re.search(source):
+            return package_re.sub(replacement, source, count=1)
+        return replacement + source.lstrip()
+    return package_re.sub("", source, count=1)
+
+
+def _inner_class_groups(entries: list[str]) -> list[JavaInnerClassGroup]:
+    groups: dict[str, JavaInnerClassGroup] = {}
+    for entry in entries:
+        class_name = entry.removesuffix(".class")
+        outer = _outer_class_name(class_name)
+        if outer is None:
+            continue
+        group = groups.setdefault(outer, JavaInnerClassGroup(outer_class_name=outer))
+        kind = _inner_class_kind(class_name)
+        if kind == "named_inner":
+            group.named_inner_classes.append(class_name)
+        elif kind == "anonymous":
+            group.anonymous_classes.append(class_name)
+        elif kind == "lambda":
+            group.lambda_classes.append(class_name)
+        elif kind == "synthetic":
+            group.synthetic_classes.append(class_name)
+    return list(groups.values())
+
+
+def _outer_class_name(class_name: str) -> str | None:
+    if "$" not in class_name:
+        return None
+    return class_name.split("$", 1)[0]
+
+
+def _inner_class_kind(class_name: str) -> JavaInnerClassKind:
+    if "$" not in class_name:
+        return "top_level"
+    suffix = class_name.rsplit("$", 1)[-1]
+    if "Lambda" in suffix or "$$Lambda$" in class_name:
+        return "lambda"
+    if suffix.isdigit() or (suffix and suffix[0].isdigit()):
+        return "anonymous"
+    if suffix.startswith(("access$", "switch$", "$SwitchMap")):
+        return "synthetic"
+    return "named_inner"
 
 
 def _matches_filters(
@@ -684,6 +912,10 @@ def _relative(root: Path, path: Path) -> str:
 def _append_once(items: list[str], value: str) -> None:
     if value not in items:
         items.append(value)
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(items))
 
 
 def _string_list(value: object) -> list[str]:

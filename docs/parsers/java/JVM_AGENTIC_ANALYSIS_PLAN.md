@@ -173,20 +173,24 @@ Glaurung already has a growing Java path:
   recovered source with `java_parse_decompiled_source`, emitting
   `java_decompile_unit` and `java_decompile_archive` evidence nodes. Archive
   decompilation includes package/glob filters, CFR/Vineflower fallback scoring,
-  explicit inner-class `skip`/`companion` policy, mapping-aware filters/metadata,
-  optional source emission, and source/bytecode correlation anchors.
+  explicit inner-class `skip`/`companion` policy, inner/anonymous/lambda grouping,
+  mapping-aware filters/metadata, optional mapped source-name rewriting, optional
+  compile-candidate scoring, source emission, and source/bytecode correlation
+  anchors.
 - Python memory tools can now create an initial recovered source-project scaffold
   with `java_reconstruct_source_tree`, preserving runtime resources and metadata
   under `src/main/resources`, creating `src/main/java`, skipping signed-JAR signature
   files, optionally emitting CFR/Vineflower decompiled top-level source files,
-  tracking classes that still require decompilation, and emitting marked stubs only
-  when explicitly requested.
+  generating minimal `sources.txt`, `javac.args`, `pom.xml`, and
+  `.glaurung/recovery.json` files, tracking classes that still require
+  decompilation, and emitting marked stubs only when explicitly requested.
 - Python memory tools can now run an initial compile-repair loop through
   `java_repair_decompiled_source`, applying safe mechanical javac-diagnostic repairs
   and recompiling. Repair classes now cover public Java types emitted into the wrong
-  filename, dotted inner companion declarations, and missing dependencies satisfied
-  by local `libs/*.jar` or `lib/*.jar` files; repairs update `sources.txt` or
-  `javac.args` as needed and emit `java_repair_result` evidence.
+  filename, dotted inner companion declarations, unique missing imports resolved to
+  local source types, and missing dependencies satisfied by local `libs/*.jar` or
+  `lib/*.jar` files; repairs update `sources.txt` or `javac.args` as needed and
+  emit `java_repair_result` evidence.
 - Python memory tools can now compare original and rebuilt Java ABI surfaces with
   `java_compare_rebuilt_abi`, checking class presence, field/method descriptors,
   access flags, selected `all`/`package_api`/`public_api` scope, and optional
@@ -197,8 +201,12 @@ Glaurung already has a growing Java path:
   compilation, rebuilt ABI comparison, original archive resource parity against
   `src/main/resources`, generated-stub rejection unless explicitly allowed, and
   `java_recovery_validation` evidence nodes. Validation output includes explicit
-  checks, blocking issue counts, `clean_enough`/`not_clean_enough` summaries, and
-  next-action hints.
+  checks, blocking issue counts, manifest/ServiceLoader/module metadata parity,
+  `clean_enough`/`not_clean_enough` summaries, and next-action hints.
+- Python memory tools can now run an initial end-to-end recovery flow with
+  `java_recover_project`, preserving resources/build metadata, decompiling bounded
+  archive slices, refreshing build files, persisting JavaParser AST evidence,
+  compiling, optionally repairing, and validating the recovered project.
 - Python memory tools can now list candidate classes with `java_list_classes`,
   exposing bounded package/name/access-flag filtering, superclass/interface/member
   counts, `SourceFile` metadata, optional annotation descriptors, optional
@@ -348,14 +356,14 @@ here, it is probably not represented strongly enough in the plan.
 | Descriptors and generic signatures | Initial erased JVM descriptor decoding exists for field types and method parameter/return types in class/method tools; class/member `Signature` attributes are preserved and decoded into readable class/field/method generic summaries; continue type-use annotations and bridge/synthetic correlation |
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, runtime-visible/runtime-invisible class/member and parameter annotation support, type-annotation counts, method parameters, annotation defaults, inner/enclosing/nest metadata, record components, permitted subclasses, and JPMS module extras exist; continue full type-annotation decoding, stack-map bodies, and richer framework semantics |
 | Archive/resource navigation | Initial `java_list_resources`, `java_view_manifest`, `java_list_services`, `java_detect_duplicate_classes`, and `java_list_string_constants` exist; continue with nested-archive rollups, Maven metadata content parsing, policy scoring, and resource/string correlation |
-| Decompiler integration | Initial JVM helper, `java_decompile_class`, `java_decompile_archive`, and `java_parse_decompiled_source` exist with CFR/Vineflower fallback scoring and source/bytecode anchors; continue with `java_decompile_method`, richer line correlation, and source remapping |
-| Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
+| Decompiler integration | Initial JVM helper, `java_decompile_class`, `java_decompile_archive`, and `java_parse_decompiled_source` exist with CFR/Vineflower fallback scoring, compile-candidate scoring, inner grouping, AST evidence, and source/bytecode anchors; continue with `java_decompile_method`, richer line correlation, and project-classpath-aware fallback compilation |
+| Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, `java_call_graph`, and mapped source-name rewrite exist; continue with `minecraft_apply_mappings`, Tiny mappings, descriptor-aware source/tree remapping, and collision handling |
 | Dependency and classpath recovery | Initial `java_infer_dependencies`, `java_infer_build_system`, and local `libs/*.jar` compile repair exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, optional `jdeps` package evidence, Java release, and `javac`/Maven/Gradle planning; continue with module `requires`, supplied classpath comparison, remote resolver/cache policy, and annotation processors |
 | Signed archive validation | Initial `java_verify_signatures` exists using `jarsigner -verify`; continue with policy scoring, certificate/timestamp summaries, and archive-set rollups |
-| Source tree/project reconstruction | Initial `java_reconstruct_source_tree` and `java_infer_build_system` exist for resource/metadata preservation, explicit stubs, generated source lists, build planning, and opt-in top-level decompiled source emission; continue with archive-wide decompilation, module source recovery, and source/resource validation |
+| Source tree/project reconstruction | Initial `java_reconstruct_source_tree`, `java_infer_build_system`, and `java_recover_project` exist for resource/metadata preservation, explicit stubs, generated source/build files, build planning, opt-in decompiled source emission, compile/repair/validate orchestration, and AST evidence; continue with module source recovery and stronger source/resource validation |
 | Compile diagnostics | `java_compile_recovered_project` |
-| Agentic compile-repair loop | Initial `java_repair_decompiled_source` exists with compile iteration budgets, public-type filename repair, companion inner declaration repair, and local classpath repair; continue with richer decompiler syntax, signature, import, dependency/build, and module repair classes |
-| ABI/API and resource validation | Initial `java_compare_rebuilt_abi` and `java_validate_recovered_application` exist for descriptor/access ABI checks, public/package/all scope filtering, optional class/member annotation parity, resource parity, compile status, generated-stub policy, quality summaries, and next actions; continue with parameter/default/module validation and richer compatibility scoring |
+| Agentic compile-repair loop | Initial `java_repair_decompiled_source` exists with compile iteration budgets, public-type filename repair, companion inner declaration repair, unique missing-import repair, and local classpath repair; continue with richer decompiler syntax, signature, ambiguous import, dependency/build, and module repair classes |
+| ABI/API and resource validation | Initial `java_compare_rebuilt_abi` and `java_validate_recovered_application` exist for descriptor/access ABI checks, public/package/all scope filtering, optional class/member annotation parity, resource parity, manifest/ServiceLoader/module metadata parity, compile status, generated-stub policy, quality summaries, and next actions; continue with parameter/default/module validation and richer compatibility scoring |
 | Runtime behavior validation | `java_launch_target`, JDI/JFR/javaagent tools, opt-in smoke profile |
 | Sensitive Java behavior detection | Initial `java_detect_security_sensitive_behavior` exists; expand sink rule packs and config correlation in Phase 3.5 |
 | Entrypoint and reachability context | Initial `java_detect_entrypoints`, `java_detect_frameworks`, `java_reachability`, and method-local `java_trace_to_sink` exist; expand framework hooks and interprocedural source-to-sink traces |
@@ -1272,8 +1280,9 @@ Initial Python implementation status:
 - Uses the JVM helper per class with CFR/Vineflower fallback scoring.
 - Supports package filters, class glob filters, max-class budgets, per-class source
   truncation budgets, explicit inner-class `skip` or `$` companion emission policy,
-  mapping-aware filters/metadata, optional `src/main/java` source emission, and
-  optional source/bytecode correlation anchors.
+  inner/anonymous/lambda grouping metadata, mapping-aware filters/metadata, optional
+  mapped source-name rewriting, optional per-candidate `javac` scoring, optional
+  `src/main/java` source emission, and optional source/bytecode correlation anchors.
 
 Inputs:
 
@@ -1368,6 +1377,8 @@ Initial Python implementation status:
 - Tracks classes requiring decompilation. Generated Java stubs are emitted only when
   `emit_stub_sources=True`, and those files are explicitly marked as generated
   stubs.
+- Emits minimal recovered-project build files: `sources.txt`, `javac.args`,
+  `pom.xml`, and `.glaurung/recovery.json`.
 - Minecraft smoke tests showed the 1.20.1 server launcher has only four outer
   classes and a small metadata/resource layer including `META-INF/libraries.list`,
   while the 1.21.11 client immediately exposes shader include resources such as
@@ -1405,6 +1416,44 @@ Responsibilities:
   decompiled.
 - Continue by wiring decompiler output into `src/main/java`, preserving module source
   metadata, and validating copied resources against the original archive.
+
+`java_recover_project`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_recovery_project` KB nodes.
+- Runs a bounded end-to-end recovery flow:
+  `java_reconstruct_source_tree` -> `java_decompile_archive` ->
+  JavaParser AST persistence -> `java_compile_recovered_project` ->
+  optional `java_repair_decompiled_source` -> `java_validate_recovered_application`.
+- Refreshes `sources.txt` and `javac.args` after archive decompilation so the
+  compile step sees the emitted source files.
+- Carries resource/build metadata, compile status, repair status, validation status,
+  quality summaries, stop reasons, and warnings in one result object.
+- Uses safe vendored fixture sources in tests and reserves Minecraft/mod JARs for
+  ignored local smoke tests.
+
+Inputs:
+
+- Original JAR path.
+- Output project root.
+- Resource policy.
+- Decompiler engine and budgets.
+- Mapping path and mapped source rewrite toggle.
+- Java release.
+- Repair and validation toggles.
+
+Outputs:
+
+- Recovered source project root.
+- Nested reconstruct/decompile/compile/repair/validation results.
+- Generated source/resource/build counts.
+- Parsed AST count.
+- `clean_enough`/`not_clean_enough` quality summary.
+
+Continue by making the orchestrator dependency-aware, classpath-aware for fallback
+candidate compilation, module-aware, and resumable from cached intermediate results.
 
 `java_infer_build_system`
 
@@ -1515,8 +1564,8 @@ Initial Python implementation status:
 - Runs a bounded `java_compile_recovered_project` loop and records every compile
   result plus every attempted repair.
 - Applies safe mechanical repair classes:
-  `rename_public_type_file`, `rewrite_inner_companion_declaration`, and
-  `add_local_classpath_jar`.
+  `rename_public_type_file`, `rewrite_inner_companion_declaration`,
+  `add_missing_import`, and `add_local_classpath_jar`.
 - Rewrites `sources.txt` and `javac.args` after applied repairs and recompiles to
   prove the fix.
 - Supports dry-run mode, repair budgets, compile iteration budgets, and timeout
@@ -1547,6 +1596,8 @@ Repair rules:
 - Mechanical source-layout fixes and local classpath additions may be applied
   automatically when compiler diagnostics and filesystem state make the repair
   unambiguous.
+- Missing imports may be added automatically only when exactly one local source type
+  matches the unresolved simple name.
 - Mark stubs and semantic guesses explicitly.
 - Do not simplify behavior merely to make compilation pass.
 - Keep repairs narrow and re-run compilation after each batch.
@@ -1610,6 +1661,9 @@ Initial Python implementation status:
 - Compares original archive resources against recovered `src/main/resources`,
   skipping `.class` and signature metadata while reporting missing, extra, and
   changed resources with SHA-256 evidence.
+- Separately reports manifest, ServiceLoader provider, and module-info metadata
+  parity so runtime-affecting metadata drift is visible even when resource
+  differences are noisy.
 - Rejects `GLAURUNG GENERATED STUB` sources unless the caller explicitly allows
   generated stubs.
 - Reports explicit pass/fail/skip checks, blocking issue counts,
@@ -1618,8 +1672,8 @@ Initial Python implementation status:
 
 Remaining work:
 
-- Add parameter annotation/default, module-info, manifest, and service semantic
-  comparison instead of byte-for-byte resource-only checks.
+- Add parameter annotation/default and richer module-info semantic comparison beyond
+  the initial manifest, service, and module descriptor presence/content checks.
 - Add compatibility scores and selected-scope policy such as public API only,
   package-visible API, or all implementation classes.
 - Add richer Maven/Gradle build-log parsing and resolver/cache policy.

@@ -33,6 +33,7 @@ class JavaParseDecompiledSourceResult(BaseModel):
     stderr_excerpt: str | None = None
     diagnostics: list[str] = Field(default_factory=list)
     stop_reasons: list[str] = Field(default_factory=list)
+    ast_node_id: str | None = None
     parse_node_id: str | None = None
 
 
@@ -98,6 +99,7 @@ class JavaParseDecompiledSourceTool(
             stop_reasons=_stop_reasons(raw, ast_success),
         )
         _add_parse_node(kb, result)
+        _add_ast_node(kb, result)
         return result
 
 
@@ -117,6 +119,47 @@ def _add_parse_node(kb: KnowledgeBase, result: JavaParseDecompiledSourceResult) 
     )
     kb.add_node(node)
     result.parse_node_id = node.id
+
+
+def _add_ast_node(kb: KnowledgeBase, result: JavaParseDecompiledSourceResult) -> None:
+    ast = result.ast
+    package_name = ast.get("package_name") if isinstance(ast, dict) else None
+    node = Node(
+        kind=NodeKind.java_source_ast,
+        label=Path(result.source_path).name,
+        text=(
+            f"JavaParser AST for {result.source_path}: "
+            f"{'success' if result.success else 'failed'}."
+        ),
+        props={
+            "tool": "java_parse_decompiled_source",
+            "source_path": result.source_path,
+            "parse_success": bool(ast.get("parse_success")),
+            "package_name": package_name if isinstance(package_name, str) else None,
+            "imports": ast.get("imports")
+            if isinstance(ast.get("imports"), list)
+            else [],
+            "types": ast.get("types") if isinstance(ast.get("types"), list) else [],
+            "problems": ast.get("problems")
+            if isinstance(ast.get("problems"), list)
+            else [],
+            "type_count": ast.get("type_count")
+            if isinstance(ast.get("type_count"), int)
+            else 0,
+            "method_count": ast.get("method_count")
+            if isinstance(ast.get("method_count"), int)
+            else 0,
+            "field_count": ast.get("field_count")
+            if isinstance(ast.get("field_count"), int)
+            else 0,
+            "constructor_count": ast.get("constructor_count")
+            if isinstance(ast.get("constructor_count"), int)
+            else 0,
+        },
+        tags=["java", "source", "ast", "javaparser"],
+    )
+    kb.add_node(node)
+    result.ast_node_id = node.id
 
 
 def _stop_reasons(raw: dict[str, Any], ast_success: bool) -> list[str]:

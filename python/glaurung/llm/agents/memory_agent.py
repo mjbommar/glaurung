@@ -205,6 +205,7 @@ from ..tools.java_compare_rebuilt_abi import (
 from ..tools.java_validate_recovered_application import (
     build_tool as build_java_validate_recovered_application,
 )
+from ..tools.java_recover_project import build_tool as build_java_recover_project
 from ..tools.java_view_bytecode import build_tool as build_java_view_bytecode
 from ..tools.java_cfg import build_tool as build_java_cfg
 from ..tools.java_xrefs_from import build_tool as build_java_xrefs_from
@@ -846,6 +847,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_validate_recovered_application())
     )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_recover_project()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_view_bytecode()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_cfg()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_xrefs_from()))

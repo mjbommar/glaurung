@@ -30,6 +30,11 @@ ResourceDifferenceKind = Literal[
     "extra_resource",
     "changed_resource",
 ]
+MetadataDifferenceKind = Literal[
+    "manifest",
+    "service",
+    "module_info",
+]
 
 
 class JavaValidateRecoveredApplicationArgs(BaseModel):
@@ -81,6 +86,12 @@ class JavaValidationCheck(BaseModel):
     message: str
 
 
+class JavaMetadataDifference(BaseModel):
+    kind: MetadataDifferenceKind
+    resource_path: str
+    message: str
+
+
 class JavaValidateRecoveredApplicationResult(BaseModel):
     original_path: str
     source_project_root: str | None = None
@@ -103,6 +114,9 @@ class JavaValidateRecoveredApplicationResult(BaseModel):
     recovered_resource_count: int = 0
     resource_difference_count: int = 0
     resource_differences: list[JavaResourceDifference] = Field(default_factory=list)
+    metadata_match: bool | None = None
+    metadata_difference_count: int = 0
+    metadata_differences: list[JavaMetadataDifference] = Field(default_factory=list)
     stub_source_count: int = 0
     stub_sources: list[str] = Field(default_factory=list)
     stop_reasons: list[str] = Field(default_factory=list)
@@ -236,6 +250,8 @@ class JavaValidateRecoveredApplicationTool(
         resource_difference_count = 0
         resource_differences: list[JavaResourceDifference] = []
         resource_truncated = False
+        metadata_match: bool | None = None
+        metadata_differences: list[JavaMetadataDifference] = []
         if args.profile in {"resources", "full_static"}:
             resource_result = _compare_resources(
                 original_path,
@@ -262,12 +278,20 @@ class JavaValidateRecoveredApplicationTool(
             stop_reasons.extend(resource_result.stop_reasons)
             warnings.extend(resource_result.original.warnings)
             warnings.extend(resource_result.recovered.warnings)
+            metadata_differences = _compare_metadata(
+                original_path,
+                project_root / "src" / "main" / "resources",
+                rebuilt_path,
+                args.max_resource_differences,
+            )
+            metadata_match = not metadata_differences
 
         stop_reasons = _dedupe(stop_reasons)
         validation_passed = _passes_validation(
             compile_success=compile_success,
             abi_match=abi_match,
             resource_match=resource_match,
+            metadata_match=metadata_match,
             stub_sources=stub_sources,
             allow_generated_stubs=args.allow_generated_stubs,
             stop_reasons=stop_reasons,
@@ -276,6 +300,7 @@ class JavaValidateRecoveredApplicationTool(
             compile_success=compile_success,
             abi_match=abi_match,
             resource_match=resource_match,
+            metadata_match=metadata_match,
             stub_sources=stub_sources,
             allow_generated_stubs=args.allow_generated_stubs,
             stop_reasons=stop_reasons,
@@ -287,6 +312,8 @@ class JavaValidateRecoveredApplicationTool(
             abi_difference_count=abi_difference_count,
             resource_match=resource_match,
             resource_difference_count=resource_difference_count,
+            metadata_match=metadata_match,
+            metadata_difference_count=len(metadata_differences),
             stub_sources=stub_sources,
             stop_reasons=stop_reasons,
         )
@@ -312,6 +339,9 @@ class JavaValidateRecoveredApplicationTool(
             recovered_resource_count=recovered_resource_count,
             resource_difference_count=resource_difference_count,
             resource_differences=resource_differences,
+            metadata_match=metadata_match,
+            metadata_difference_count=len(metadata_differences),
+            metadata_differences=metadata_differences,
             stub_source_count=len(stub_sources),
             stub_sources=stub_sources,
             stop_reasons=stop_reasons,
@@ -430,6 +460,125 @@ def _compare_resources(
     )
 
 
+def _compare_metadata(
+    original_path: Path,
+    recovered_root: Path,
+    rebuilt_path: Path | None,
+    max_differences: int,
+) -> list[JavaMetadataDifference]:
+    differences: list[JavaMetadataDifference] = []
+    if not zipfile.is_zipfile(original_path):
+        return differences
+    with zipfile.ZipFile(original_path) as zf:
+        names = {
+            normalized
+            for info in zf.infolist()
+            if not info.is_dir()
+            for normalized in [_safe_archive_path(info.filename)]
+            if normalized is not None
+        }
+        for metadata_path in sorted(_metadata_resource_paths(names)):
+            original_data = zf.read(metadata_path)
+            recovered_file = recovered_root / metadata_path
+            if not recovered_file.is_file():
+                _add_metadata_difference(
+                    differences,
+                    max_differences,
+                    JavaMetadataDifference(
+                        kind=_metadata_kind(metadata_path),
+                        resource_path=metadata_path,
+                        message=f"Recovered project is missing metadata {metadata_path}.",
+                    ),
+                )
+                continue
+            if recovered_file.read_bytes() != original_data:
+                _add_metadata_difference(
+                    differences,
+                    max_differences,
+                    JavaMetadataDifference(
+                        kind=_metadata_kind(metadata_path),
+                        resource_path=metadata_path,
+                        message=f"Recovered project changed metadata {metadata_path}.",
+                    ),
+                )
+        for metadata_path in sorted(_directory_metadata_paths(recovered_root)):
+            if metadata_path in names:
+                continue
+            _add_metadata_difference(
+                differences,
+                max_differences,
+                JavaMetadataDifference(
+                    kind=_metadata_kind(metadata_path),
+                    resource_path=metadata_path,
+                    message=f"Recovered project adds metadata {metadata_path}.",
+                ),
+            )
+        if "module-info.class" in names and not _rebuilt_has_module_info(rebuilt_path):
+            _add_metadata_difference(
+                differences,
+                max_differences,
+                JavaMetadataDifference(
+                    kind="module_info",
+                    resource_path="module-info.class",
+                    message=(
+                        "Original archive has module-info.class, but rebuilt output "
+                        "does not contain a module descriptor."
+                    ),
+                ),
+            )
+    return differences
+
+
+def _metadata_resource_paths(names: set[str]) -> set[str]:
+    return {
+        name
+        for name in names
+        if name == "META-INF/MANIFEST.MF" or name.startswith("META-INF/services/")
+    }
+
+
+def _directory_metadata_paths(root: Path) -> set[str]:
+    if not root.is_dir():
+        return set()
+    return {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file()
+        and (
+            path.relative_to(root).as_posix() == "META-INF/MANIFEST.MF"
+            or path.relative_to(root).as_posix().startswith("META-INF/services/")
+        )
+    }
+
+
+def _metadata_kind(path: str) -> MetadataDifferenceKind:
+    if path == "module-info.class":
+        return "module_info"
+    if path.startswith("META-INF/services/"):
+        return "service"
+    return "manifest"
+
+
+def _rebuilt_has_module_info(rebuilt_path: Path | None) -> bool:
+    if rebuilt_path is None or not rebuilt_path.exists():
+        return False
+    if rebuilt_path.is_dir():
+        return (rebuilt_path / "module-info.class").is_file()
+    if zipfile.is_zipfile(rebuilt_path):
+        with zipfile.ZipFile(rebuilt_path) as zf:
+            return "module-info.class" in zf.namelist()
+    return rebuilt_path.name == "module-info.class"
+
+
+def _add_metadata_difference(
+    differences: list[JavaMetadataDifference],
+    max_differences: int,
+    difference: JavaMetadataDifference,
+) -> None:
+    if max_differences == 0 or len(differences) < max_differences:
+        differences.append(difference)
+
+
 def _archive_resources(
     path: Path,
     max_resources: int,
@@ -524,6 +673,7 @@ def _passes_validation(
     compile_success: bool | None,
     abi_match: bool | None,
     resource_match: bool | None,
+    metadata_match: bool | None,
     stub_sources: list[str],
     allow_generated_stubs: bool,
     stop_reasons: list[str],
@@ -534,7 +684,12 @@ def _passes_validation(
         reason for reason in stop_reasons if reason not in {"generated_stubs_present"}
     ):
         return False
-    if compile_success is False or abi_match is False or resource_match is False:
+    if (
+        compile_success is False
+        or abi_match is False
+        or resource_match is False
+        or metadata_match is False
+    ):
         return False
     return True
 
@@ -544,6 +699,7 @@ def _validation_checks(
     compile_success: bool | None,
     abi_match: bool | None,
     resource_match: bool | None,
+    metadata_match: bool | None,
     stub_sources: list[str],
     allow_generated_stubs: bool,
     stop_reasons: list[str],
@@ -569,6 +725,13 @@ def _validation_checks(
             "Recovered resources match the original archive resources.",
             "Recovered resources differ from the original archive resources.",
             "Resource comparison was not requested.",
+        ),
+        _check(
+            "metadata",
+            metadata_match,
+            "Recovered manifest, service provider, and module metadata match.",
+            "Recovered manifest, service provider, or module metadata differs.",
+            "Metadata comparison was not requested.",
         ),
     ]
     if stub_sources and not allow_generated_stubs:
@@ -622,6 +785,8 @@ def _next_actions(
     abi_difference_count: int,
     resource_match: bool | None,
     resource_difference_count: int,
+    metadata_match: bool | None,
+    metadata_difference_count: int,
     stub_sources: list[str],
     stop_reasons: list[str],
 ) -> list[str]:
@@ -635,6 +800,10 @@ def _next_actions(
     if resource_match is False:
         actions.append(
             f"Restore or explicitly omit resource differences ({resource_difference_count} reported)."
+        )
+    if metadata_match is False:
+        actions.append(
+            f"Restore manifest/service/module metadata differences ({metadata_difference_count} reported)."
         )
     if stub_sources:
         actions.append(

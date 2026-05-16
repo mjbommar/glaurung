@@ -45,9 +45,11 @@ class NodeKind(str, Enum):
     java_source_tree = "java_source_tree"
     java_decompile_unit = "java_decompile_unit"
     java_decompile_archive = "java_decompile_archive"
+    java_source_ast = "java_source_ast"
     java_repair_result = "java_repair_result"
     java_abi_comparison = "java_abi_comparison"
     java_recovery_validation = "java_recovery_validation"
+    java_recovery_project = "java_recovery_project"
     java_config_correlation = "java_config_correlation"
     java_risk_finding = "java_risk_finding"
 

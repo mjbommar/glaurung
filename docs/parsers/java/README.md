@@ -235,19 +235,24 @@ Implemented pieces now include:
   `java_decompile_unit` and `java_decompile_archive` KB nodes with source/AST
   evidence suitable for agent review and later repair. Archive decompilation has
   budgets, package/glob filters, CFR/Vineflower fallback scoring, explicit
-  inner-class `skip`/`companion` policy, mapping-aware filters/metadata, optional
-  source emission, and bytecode/source correlation anchors.
+  inner-class `skip`/`companion` policy, inner/anonymous/lambda classification
+  groups, mapping-aware filters/metadata, optional mapped source-name rewriting,
+  optional compile-candidate scoring, source emission, and bytecode/source
+  correlation anchors.
 - Initial source-tree reconstruction through `java_reconstruct_source_tree`,
   creating `src/main/java` and `src/main/resources` scaffolds, preserving runtime
   resources and metadata, skipping signed-JAR signature files, optionally emitting
-  CFR/Vineflower decompiled top-level source files, tracking classes that still need
-  decompilation, and emitting explicit generated stubs only when requested.
+  CFR/Vineflower decompiled top-level source files, generating minimal
+  `sources.txt`, `javac.args`, `pom.xml`, and `.glaurung/recovery.json` files,
+  tracking classes that still need decompilation, and emitting explicit generated
+  stubs only when requested.
 - Initial compile-repair loop through `java_repair_decompiled_source`, running
   bounded `javac` iterations and applying safe mechanical repairs. It can fix
   public-type filename mismatches, rewrite dotted inner companion declarations like
   `Outer.Inner` into legal `$` companion declarations, add matching local
-  `libs/*.jar` classpath entries for missing dependency diagnostics, update
-  `sources.txt`/`javac.args`, recompile, and record `java_repair_result` KB
+  `libs/*.jar` classpath entries for missing dependency diagnostics, add a missing
+  import when exactly one local source type matches the unresolved simple name,
+  update `sources.txt`/`javac.args`, recompile, and record `java_repair_result` KB
   evidence.
 - Initial ABI comparison through `java_compare_rebuilt_abi`, comparing original and
   rebuilt JARs or class directories by class names, field descriptors, method
@@ -259,8 +264,13 @@ Implemented pieces now include:
   compilation, rebuilt ABI comparison, original archive resource parity against
   `src/main/resources`, generated-stub rejection unless explicitly allowed, and
   `java_recovery_validation` KB evidence. Validation reports now include explicit
-  pass/fail/skip checks, blocking issue counts, `clean_enough`/`not_clean_enough`
-  summaries, and next-action hints.
+  pass/fail/skip checks, blocking issue counts, manifest/ServiceLoader/module
+  metadata parity, `clean_enough`/`not_clean_enough` summaries, and next-action
+  hints.
+- Initial end-to-end recovery orchestration through `java_recover_project`, which
+  preserves resources/build metadata, decompiles a bounded archive slice, refreshes
+  source/build files, persists JavaParser AST evidence, compiles, optionally repairs,
+  and validates the recovered project.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -272,9 +282,10 @@ Implemented pieces now include:
 - Initial generic risk reporting that rolls up sensitive behavior, config
   correlation, exact call-site reachability, entrypoints, and redacted secret
   candidates into ranked `java_risk_finding` evidence nodes.
-- Safe tests using vendored `HelloWorld` LFS samples and generated synthetic JAR,
-  mapping, and Minecraft-bundler fixtures. Real Minecraft client/server/Forge
-  jars remain in ignored `tmp/` for smoke tests only.
+- Safe tests using vendored Java fixture sources plus generated synthetic JAR,
+  mapping, and Minecraft-bundler fixtures. Tests compile the owned fixture sources
+  locally instead of committing proprietary or third-party JARs. Real Minecraft
+  client/server/Forge jars remain in ignored `tmp/` for smoke tests only.
 
 Not yet implemented:
 
@@ -421,6 +432,8 @@ Important lessons:
 - [ ] `java_decompile_method`
 - [x] Initial `java_decompile_archive`
 - [x] Initial source/bytecode correlation anchors for archive decompilation
+- [x] Initial compile-candidate scoring for decompiler fallback
+- [x] Initial inner/anonymous/lambda class grouping metadata
 - [ ] Source/bytecode line correlation beyond method/count/string anchors
 - [x] Initial `java_infer_dependencies` from manifest `Class-Path`, Maven metadata,
   nested archives, bytecode external package references, and optional `jdeps`
@@ -431,6 +444,8 @@ Important lessons:
 - [x] Initial source tree scaffold under `src/main/java` and `src/main/resources`
 - [x] Initial manifest, ServiceLoader, framework metadata, and resource preservation
 - [x] Initial decompiled top-level source emission from `java_reconstruct_source_tree`
+- [x] Initial generated `sources.txt`, `javac.args`, `pom.xml`, and recovery metadata
+- [x] Initial `java_recover_project` orchestration
 - [ ] Module source recovery and semantic source/resource validation
 - [x] Initial build system inference for plain `javac`, Maven, and Gradle
 - [ ] Build-system refinement for module paths, annotation processors, loader-specific
@@ -439,15 +454,16 @@ Important lessons:
 - [x] Initial Maven/Gradle compile execution
 - [ ] Richer Maven/Gradle structured diagnostics
 - [x] Initial compile-repair loop with safe public-type filename repair, companion
-  inner declaration repair, and local classpath repair
-- [ ] Richer repair classes for decompiler syntax, signatures, imports, and
+  inner declaration repair, missing import repair, and local classpath repair
+- [ ] Richer repair classes for decompiler syntax, signatures, ambiguous imports, and
   build/classpath failures
 - [x] Initial ABI/API comparison between original and rebuilt classes
 - [x] Initial scoped ABI filtering for all, package, and public/protected API
 - [x] Initial resource validation between original archives and recovered
   `src/main/resources`
 - [x] Optional class/member annotation parity in ABI validation
-- [ ] Parameter annotation/default and module validation between original and rebuilt
+- [x] Initial manifest, ServiceLoader, and module-info metadata validation
+- [ ] Parameter annotation/default and richer module validation between original and rebuilt
   artifacts
 - [x] Initial recovered application validation report with quality summary and next
   actions

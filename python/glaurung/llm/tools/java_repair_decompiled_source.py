@@ -21,6 +21,7 @@ from .java_compile_recovered_project import (
 JavaRepairKind = Literal[
     "rename_public_type_file",
     "rewrite_inner_companion_declaration",
+    "add_missing_import",
     "add_local_classpath_jar",
 ]
 
@@ -138,6 +139,16 @@ class JavaRepairDecompiledSourceTool(
                 dry_run=args.dry_run,
                 max_repairs=args.max_repairs_per_iteration,
             )
+            if len(repairs) < args.max_repairs_per_iteration:
+                repairs.extend(
+                    _repair_missing_imports(
+                        root,
+                        compile_result,
+                        iteration=iteration,
+                        dry_run=args.dry_run,
+                        max_repairs=args.max_repairs_per_iteration - len(repairs),
+                    )
+                )
             if len(repairs) < args.max_repairs_per_iteration:
                 repairs.extend(
                     _repair_missing_local_dependencies(
@@ -292,6 +303,120 @@ def _repair_missing_local_dependencies(
             ),
         )
     ]
+
+
+def _repair_missing_imports(
+    root: Path,
+    compile_result: JavaCompileRecoveredProjectResult,
+    *,
+    iteration: int,
+    dry_run: bool,
+    max_repairs: int,
+) -> list[JavaSourceRepair]:
+    if max_repairs == 0 or compile_result.selected_build_tool != "javac":
+        return []
+    index = _source_type_index(root)
+    if not index:
+        return []
+    repairs: list[JavaSourceRepair] = []
+    repaired_files: set[Path] = set()
+    for diagnostic in compile_result.diagnostics:
+        if len(repairs) >= max_repairs:
+            break
+        if diagnostic.file is None:
+            continue
+        if diagnostic.category not in {
+            "missing_import",
+            "missing_classpath_dependency",
+        }:
+            continue
+        simple_name = _missing_simple_type_name(diagnostic.package_or_class)
+        if simple_name is None:
+            continue
+        candidates = index.get(simple_name, [])
+        source_file = _resolve_under_root(root, diagnostic.file)
+        if source_file in repaired_files:
+            continue
+        if source_file is None or not source_file.is_file() or len(candidates) != 1:
+            continue
+        package_name, fqcn, candidate_file = candidates[0]
+        if candidate_file == source_file:
+            continue
+        text = source_file.read_text(encoding="utf-8", errors="replace")
+        source_package = _source_package(text)
+        if source_package == package_name or f"import {fqcn};" in text:
+            continue
+        rewritten = _insert_import(text, fqcn)
+        if rewritten == text:
+            continue
+        if not dry_run:
+            source_file.write_text(rewritten, encoding="utf-8")
+        repaired_files.add(source_file)
+        repairs.append(
+            JavaSourceRepair(
+                iteration=iteration,
+                kind="add_missing_import",
+                file=_relative(root, source_file),
+                new_file=_relative(root, source_file),
+                applied=not dry_run,
+                message=f"Added import {fqcn} for unresolved type {simple_name}.",
+            )
+        )
+    return repairs
+
+
+_PACKAGE_RE = re.compile(r"(?m)^\s*package\s+([A-Za-z0-9_.]+)\s*;")
+_IMPORT_RE = re.compile(r"(?m)^\s*import\s+(?:static\s+)?[A-Za-z0-9_.*]+\s*;")
+_TYPE_DECL_RE = re.compile(
+    r"(?m)^\s*(?:public\s+)?(?:abstract\s+|final\s+|sealed\s+|non-sealed\s+)*"
+    r"(class|interface|enum|record)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b"
+)
+
+
+def _source_type_index(root: Path) -> dict[str, list[tuple[str, str, Path]]]:
+    source_root = root / "src" / "main" / "java"
+    if not source_root.is_dir():
+        return {}
+    index: dict[str, list[tuple[str, str, Path]]] = {}
+    for source_file in sorted(source_root.rglob("*.java")):
+        text = source_file.read_text(encoding="utf-8", errors="replace")
+        package_name = _source_package(text)
+        for match in _TYPE_DECL_RE.finditer(text):
+            simple = match.group(2)
+            fqcn = f"{package_name}.{simple}" if package_name else simple
+            index.setdefault(simple, []).append((package_name, fqcn, source_file))
+    return index
+
+
+def _missing_simple_type_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    simple = value.rsplit(".", 1)[-1].strip()
+    if re.match(r"^[A-Za-z_$][A-Za-z0-9_$]*$", simple):
+        return simple
+    return None
+
+
+def _source_package(text: str) -> str:
+    match = _PACKAGE_RE.search(text)
+    return match.group(1) if match else ""
+
+
+def _insert_import(text: str, fqcn: str) -> str:
+    lines = text.splitlines()
+    insert_at = 0
+    for idx, line in enumerate(lines):
+        if line.strip().startswith("package "):
+            insert_at = idx + 1
+            break
+    for idx, line in enumerate(lines):
+        if _IMPORT_RE.match(line):
+            insert_at = idx + 1
+    while insert_at < len(lines) and lines[insert_at].strip() == "":
+        insert_at += 1
+    lines.insert(insert_at, f"import {fqcn};")
+    lines.insert(insert_at + 1, "")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _missing_import_targets(

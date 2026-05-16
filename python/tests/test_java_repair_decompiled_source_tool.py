@@ -250,6 +250,57 @@ def test_java_repair_decompiled_source_adds_matching_local_classpath_jar(
     assert (project / "build" / "classes" / "app" / "UsesDep.class").is_file()
 
 
+def test_java_repair_decompiled_source_adds_unique_missing_import(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_repair_decompiled_source import build_tool
+
+    project = tmp_path / "project"
+    src = project / "src" / "main" / "java"
+    (src / "app").mkdir(parents=True)
+    (src / "lib").mkdir(parents=True)
+    (src / "app" / "Use.java").write_text(
+        """
+package app;
+
+public class Use {
+    private Helper helper;
+
+    public Helper helper() {
+        return helper;
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (src / "lib" / "Helper.java").write_text(
+        """
+package lib;
+
+public class Helper {
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    ctx = _ctx(src / "app" / "Use.java")
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(source_project_root=str(project), java_release=17),
+    )
+
+    assert result.success is True
+    assert any(repair.kind == "add_missing_import" for repair in result.repairs)
+    assert "import lib.Helper;" in (src / "app" / "Use.java").read_text(
+        encoding="utf-8"
+    )
+    assert (project / "build" / "classes" / "app" / "Use.class").is_file()
+
+
 def test_memory_agent_registers_java_repair_decompiled_source() -> None:
     from glaurung.llm.agents.memory_agent import create_memory_agent
 

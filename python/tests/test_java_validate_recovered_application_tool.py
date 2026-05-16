@@ -42,7 +42,12 @@ def _write_source_project(root: Path, source: str = _SOURCE) -> Path:
     return source_path
 
 
-def _compile_original_jar(tmp_path: Path, source: str = _SOURCE) -> Path:
+def _compile_original_jar(
+    tmp_path: Path,
+    source: str = _SOURCE,
+    *,
+    include_service: bool = False,
+) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java validation fixture")
     src = tmp_path / "original-src"
@@ -61,6 +66,8 @@ def _compile_original_jar(tmp_path: Path, source: str = _SOURCE) -> Path:
     with zipfile.ZipFile(jar, "w") as zf:
         zf.write(classes / "app" / "Main.class", "app/Main.class")
         zf.writestr("config/app.properties", "enabled=true\n")
+        if include_service:
+            zf.writestr("META-INF/services/app.Service", "app.Main\n")
     return jar
 
 
@@ -133,6 +140,36 @@ def test_java_validate_recovered_application_detects_resource_drift(
     assert result.abi_match is True
     assert result.resource_match is False
     assert any(diff.kind == "missing_resource" for diff in result.resource_differences)
+
+
+def test_java_validate_recovered_application_reports_metadata_drift(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_validate_recovered_application import build_tool
+
+    original = _compile_original_jar(tmp_path, include_service=True)
+    project = tmp_path / "recovered"
+    _write_source_project(project)
+    ctx = _ctx(original)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            original_path=str(original),
+            source_project_root=str(project),
+            java_release=17,
+        ),
+    )
+
+    assert result.validation_passed is False
+    assert result.metadata_match is False
+    assert result.metadata_difference_count == 1
+    assert result.metadata_differences[0].kind == "service"
+    assert (
+        result.metadata_differences[0].resource_path == "META-INF/services/app.Service"
+    )
 
 
 def test_java_validate_recovered_application_can_require_annotation_parity(
