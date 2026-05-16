@@ -394,6 +394,7 @@ def _decompile_one_class(
         raw_selected_ast if isinstance(raw_selected_ast, dict) else {}
     )
     source_file: str | None = None
+    write_stop_reasons: list[str] = []
     if selected is not None and selected.success and args.write_sources:
         source = selected_raw.get("source")
         if isinstance(source, str) and source.strip() and source_root is not None:
@@ -411,9 +412,12 @@ def _decompile_one_class(
             dest = source_root.joinpath(*dest_class_name.split("/")).with_suffix(
                 ".java"
             )
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(source_to_write.rstrip() + "\n", encoding="utf-8")
-            source_file = _relative(project_root or source_root, dest)
+            if dest.exists() and dest_class_name != class_name:
+                write_stop_reasons.append("mapped_source_collision")
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(source_to_write.rstrip() + "\n", encoding="utf-8")
+                source_file = _relative(project_root or source_root, dest)
         else:
             mapped_source_rewritten = False
     else:
@@ -457,7 +461,10 @@ def _decompile_one_class(
         method_count_delta=correlation.method_count_delta,
         correlation_stop_reasons=correlation.stop_reasons,
         diagnostics=selected.diagnostics if selected else [],
-        stop_reasons=selected.stop_reasons if selected else ["no_decompiler_attempts"],
+        stop_reasons=[
+            *(selected.stop_reasons if selected else ["no_decompiler_attempts"]),
+            *write_stop_reasons,
+        ],
     )
 
 

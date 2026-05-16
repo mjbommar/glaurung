@@ -163,6 +163,36 @@ public class a {
     return jar
 
 
+def _colliding_obfuscated_jar(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java mapping fixture")
+    src = tmp_path / "collision-src"
+    out = tmp_path / "collision-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "a.java").write_text("public class a { public int value() { return 1; } }\n")
+    (src / "b.java").write_text("public class b { public int value() { return 2; } }\n")
+    subprocess.run(
+        [
+            "javac",
+            "--release",
+            "17",
+            "-d",
+            str(out),
+            str(src / "a.java"),
+            str(src / "b.java"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar = tmp_path / "colliding-obfuscated.jar"
+    with zipfile.ZipFile(jar, "w") as zf:
+        zf.write(out / "a.class", "a.class")
+        zf.write(out / "b.class", "b.class")
+    return jar
+
+
 def _dependency_jar(tmp_path: Path) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java dependency fixture")
@@ -263,6 +293,39 @@ com.example.GameThing -> a:
     int score(int) -> c
 """.strip()
         + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _tiny_v2_mapping_file(tmp_path: Path) -> Path:
+    path = tmp_path / "tiny-v2-mappings.tiny"
+    path.write_text(
+        "\n".join(
+            [
+                "tiny\t2\t0\tofficial\tnamed",
+                "c\ta\tcom/example/GameThing",
+                "\tf\tI\tb\thealth",
+                "\tm\t(I)I\tc\tscore",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _colliding_tiny_v1_mapping_file(tmp_path: Path) -> Path:
+    path = tmp_path / "colliding-v1.tiny"
+    path.write_text(
+        "\n".join(
+            [
+                "v1\tofficial\tnamed",
+                "CLASS\ta\tcom/example/Thing",
+                "CLASS\tb\tcom/example/Thing",
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
     return path
@@ -499,6 +562,73 @@ def test_java_decompile_archive_rewrites_mapped_source_names(
     assert "class GameThing" in text
     assert "health" in text
     assert "score" in text
+
+
+def test_java_decompile_archive_rewrites_tiny_v2_mapped_source_names(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_decompile_archive import build_tool
+
+    jar = _obfuscated_jar(tmp_path)
+    mappings = _tiny_v2_mapping_file(tmp_path)
+    output = tmp_path / "tiny-mapped"
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            mapping_path=str(mappings),
+            output_root=str(output),
+            write_sources=True,
+            rewrite_mapped_sources=True,
+            include_packages=["com.example"],
+        ),
+    )
+
+    assert result.attempted_class_count == 1
+    assert result.classes[0].mapped_source_rewritten is True
+    source = output / "src" / "main" / "java" / "com" / "example" / "GameThing.java"
+    text = source.read_text(encoding="utf-8")
+    assert "package com.example;" in text
+    assert "class GameThing" in text
+    assert "health" in text
+    assert "score" in text
+
+
+def test_java_decompile_archive_does_not_overwrite_mapping_collisions(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_decompile_archive import build_tool
+
+    jar = _colliding_obfuscated_jar(tmp_path)
+    mappings = _colliding_tiny_v1_mapping_file(tmp_path)
+    output = tmp_path / "colliding"
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            mapping_path=str(mappings),
+            output_root=str(output),
+            write_sources=True,
+            rewrite_mapped_sources=True,
+            include_packages=["com.example"],
+        ),
+    )
+
+    assert result.attempted_class_count == 2
+    assert result.written_source_count == 1
+    assert any(
+        "mapped_source_collision" in item.stop_reasons for item in result.classes
+    )
+    source = output / "src" / "main" / "java" / "com" / "example" / "Thing.java"
+    assert source.is_file()
 
 
 def test_java_decompile_archive_can_score_candidate_compilation(

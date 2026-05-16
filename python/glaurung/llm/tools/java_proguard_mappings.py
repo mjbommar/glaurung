@@ -68,10 +68,16 @@ class ProguardMappings:
 
 
 def parse_proguard_mappings(path: Path) -> ProguardMappings:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    first_line = _first_mapping_line(text)
+    if first_line.startswith("tiny\t2\t"):
+        return _parse_tiny_v2_mappings(text)
+    if first_line.startswith("v1\t"):
+        return _parse_tiny_v1_mappings(text)
     by_obfuscated: dict[str, ProguardClassMapping] = {}
     by_official: dict[str, ProguardClassMapping] = {}
     current: ProguardClassMapping | None = None
-    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for raw_line in text.splitlines():
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
         if not raw_line[0].isspace():
@@ -93,6 +99,115 @@ def parse_proguard_mappings(path: Path) -> ProguardMappings:
         by_obfuscated=by_obfuscated,
         by_official=by_official,
     )
+
+
+def _first_mapping_line(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return stripped
+    return ""
+
+
+def _parse_tiny_v2_mappings(text: str) -> ProguardMappings:
+    by_obfuscated: dict[str, ProguardClassMapping] = {}
+    by_official: dict[str, ProguardClassMapping] = {}
+    current: ProguardClassMapping | None = None
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        parts = raw_line.split("\t")
+        tag = parts[0]
+        if tag == "c" and len(parts) >= 3:
+            current = _add_tiny_class_mapping(
+                by_obfuscated, by_official, parts[1], parts[2]
+            )
+            continue
+        if current is None or len(parts) < 4:
+            continue
+        member_tag = parts[1] if parts[0] == "" else parts[0]
+        offset = 1 if parts[0] == "" else 0
+        if member_tag == "m" and len(parts) >= offset + 4:
+            current.methods.append(
+                ProguardMemberMapping(
+                    kind="method",
+                    official_name=parts[offset + 3],
+                    obfuscated_name=parts[offset + 2],
+                    official_signature=parts[offset + 1],
+                )
+            )
+        elif member_tag == "f" and len(parts) >= offset + 4:
+            current.fields.append(
+                ProguardMemberMapping(
+                    kind="field",
+                    official_name=parts[offset + 3],
+                    obfuscated_name=parts[offset + 2],
+                    official_signature=parts[offset + 1],
+                )
+            )
+    return ProguardMappings(by_obfuscated=by_obfuscated, by_official=by_official)
+
+
+def _parse_tiny_v1_mappings(text: str) -> ProguardMappings:
+    by_obfuscated: dict[str, ProguardClassMapping] = {}
+    by_official: dict[str, ProguardClassMapping] = {}
+    by_source: dict[str, ProguardClassMapping] = {}
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        parts = raw_line.split("\t")
+        tag = parts[0]
+        if tag == "CLASS" and len(parts) >= 3:
+            mapping = _add_tiny_class_mapping(
+                by_obfuscated,
+                by_official,
+                parts[1],
+                parts[2],
+            )
+            by_source[parts[1]] = mapping
+            continue
+        if tag == "METHOD" and len(parts) >= 5:
+            mapping = by_source.get(parts[1])
+            if mapping is not None:
+                mapping.methods.append(
+                    ProguardMemberMapping(
+                        kind="method",
+                        official_name=parts[4],
+                        obfuscated_name=parts[3],
+                        official_signature=parts[2],
+                    )
+                )
+        elif tag == "FIELD" and len(parts) >= 5:
+            mapping = by_source.get(parts[1])
+            if mapping is not None:
+                mapping.fields.append(
+                    ProguardMemberMapping(
+                        kind="field",
+                        official_name=parts[4],
+                        obfuscated_name=parts[3],
+                        official_signature=parts[2],
+                    )
+                )
+    return ProguardMappings(by_obfuscated=by_obfuscated, by_official=by_official)
+
+
+def _add_tiny_class_mapping(
+    by_obfuscated: dict[str, ProguardClassMapping],
+    by_official: dict[str, ProguardClassMapping],
+    obfuscated_name: str,
+    official_name: str,
+) -> ProguardClassMapping:
+    mapping = ProguardClassMapping(
+        official_name=_tiny_external_name(official_name),
+        obfuscated_name=_tiny_external_name(obfuscated_name),
+    )
+    by_obfuscated[mapping.obfuscated_name] = mapping
+    by_official[mapping.official_name] = mapping
+    return mapping
+
+
+def _tiny_external_name(value: str) -> str:
+    return value.replace("/", ".")
 
 
 def _parse_class_line(line: str) -> ProguardClassMapping | None:
