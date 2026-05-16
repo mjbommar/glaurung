@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 from hashlib import sha256
 
@@ -199,6 +200,30 @@ public class ServiceImpl implements com.example.api.Service {
     return out
 
 
+def _compile_module_jar(tmp_path: Path) -> Path:
+    if shutil.which("jar") is None:
+        pytest.skip("jar is required for generated Java module fixture")
+    class_dir = _compile_module_classes(tmp_path)
+    jar_path = tmp_path / "fixture-module.jar"
+    subprocess.run(
+        [
+            "jar",
+            "--create",
+            "--file",
+            str(jar_path),
+            "--main-class",
+            "com.example.internal.ServiceImpl",
+            "-C",
+            str(class_dir),
+            ".",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return jar_path
+
+
 def _compile_lambda_class(tmp_path: Path) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java fixture")
@@ -225,6 +250,46 @@ public class LambdaFixture {
         text=True,
     )
     return out / "LambdaFixture.class"
+
+
+def _compile_type_annotation_classes(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java fixture")
+    src = tmp_path / "type-annotation-src"
+    out = tmp_path / "type-annotation-classes"
+    src.mkdir()
+    out.mkdir()
+    source = src / "TypeAnnotationFixture.java"
+    source.write_text(
+        """
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.TYPE_USE, ElementType.TYPE_PARAMETER})
+@interface TypeUseTag {}
+
+public class TypeAnnotationFixture<@TypeUseTag T> {
+    public @TypeUseTag String value;
+
+    public @TypeUseTag String method(@TypeUseTag String input) {
+        @TypeUseTag String local = input;
+        return local;
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["javac", "-g", "--release", "17", "-d", str(out), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out
 
 
 def _compile_generic_class(tmp_path: Path) -> Path:
@@ -585,6 +650,45 @@ def test_parse_java_class_recovers_module_info(tmp_path: Path) -> None:
             "implementations": ["com/example/internal/ServiceImpl"],
         }
     ]
+
+
+def test_parse_java_class_recovers_module_main_class_and_packages(
+    tmp_path: Path,
+) -> None:
+    jar_path = _compile_module_jar(tmp_path)
+    java_analysis = getattr(g, "analysis")
+
+    with zipfile.ZipFile(jar_path) as zf:
+        module_info = java_analysis.parse_java_class_bytes(zf.read("module-info.class"))
+
+    assert module_info is not None
+    module = module_info["module"]
+    assert module["main_class"] == "com/example/internal/ServiceImpl"
+    assert set(module["packages"]) >= {
+        "com/example/api",
+        "com/example/internal",
+    }
+
+
+def test_parse_java_class_recovers_type_annotation_counts(tmp_path: Path) -> None:
+    class_dir = _compile_type_annotation_classes(tmp_path)
+    java_analysis = getattr(g, "analysis")
+
+    info = java_analysis.parse_java_class_bytes(
+        (class_dir / "TypeAnnotationFixture.class").read_bytes()
+    )
+
+    assert info is not None
+    assert info["runtime_visible_type_annotation_count"] >= 1
+    assert info["type_annotation_count"] >= 1
+    value = next(field for field in info["fields"] if field["name"] == "value")
+    assert value["runtime_visible_type_annotation_count"] >= 1
+    assert value["type_annotation_count"] >= 1
+    method = next(method for method in info["methods"] if method["name"] == "method")
+    assert method["runtime_visible_type_annotation_count"] >= 1
+    assert method["type_annotation_count"] >= 1
+    assert method["code"]["runtime_visible_type_annotation_count"] >= 1
+    assert method["code"]["type_annotation_count"] >= 1
 
 
 def test_parse_java_class_recovers_bootstrap_method_count(tmp_path: Path) -> None:

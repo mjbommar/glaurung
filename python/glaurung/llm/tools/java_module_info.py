@@ -31,6 +31,8 @@ class JavaModuleSummary(BaseModel):
     opens: list[JavaModulePackageSummary] = Field(default_factory=list)
     uses: list[str] = Field(default_factory=list)
     provides: list[JavaModuleProvideSummary] = Field(default_factory=list)
+    packages: list[str] = Field(default_factory=list)
+    main_class: str | None = None
 
 
 def module_summary(value: Any) -> JavaModuleSummary | None:

@@ -21,6 +21,8 @@ pub struct JavaMethod {
     pub attribute_names: Vec<String>,
     pub is_deprecated: bool,
     pub is_synthetic: bool,
+    pub runtime_visible_type_annotation_count: u16,
+    pub runtime_invisible_type_annotation_count: u16,
     pub constant_value: Option<JavaConstantValue>,
     pub exceptions: Vec<String>,
     pub annotations: Vec<JavaAnnotation>,
@@ -42,6 +44,8 @@ pub struct JavaCode {
     pub instruction_count: u32,
     pub unknown_instruction_count: u32,
     pub stack_map_frame_count: u16,
+    pub runtime_visible_type_annotation_count: u16,
+    pub runtime_invisible_type_annotation_count: u16,
     pub line_numbers: Vec<JavaLineNumber>,
     pub local_variables: Vec<JavaLocalVariable>,
     pub local_variable_types: Vec<JavaLocalVariableType>,
@@ -193,6 +197,8 @@ pub struct JavaModuleInfo {
     pub opens: Vec<JavaModuleOpen>,
     pub uses: Vec<String>,
     pub provides: Vec<JavaModuleProvide>,
+    pub packages: Vec<String>,
+    pub main_class: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,6 +261,8 @@ pub struct ClassInfo {
     pub attribute_names: Vec<String>,
     pub is_deprecated: bool,
     pub is_synthetic: bool,
+    pub runtime_visible_type_annotation_count: u16,
+    pub runtime_invisible_type_annotation_count: u16,
     pub source_debug_extension_length: u32,
     pub source_debug_extension_sha256: Option<String>,
     pub constant_pool: JavaConstantPoolSummary,
@@ -341,6 +349,8 @@ struct JavaClassAttributes {
     attribute_names: Vec<String>,
     is_deprecated: bool,
     is_synthetic: bool,
+    runtime_visible_type_annotation_count: u16,
+    runtime_invisible_type_annotation_count: u16,
     source_debug_extension_length: u32,
     source_debug_extension_sha256: Option<String>,
     source_file: Option<String>,
@@ -353,6 +363,8 @@ struct JavaClassAttributes {
     record_components: Vec<JavaRecordComponent>,
     permitted_subclasses: Vec<String>,
     module: Option<JavaModuleInfo>,
+    module_packages: Vec<String>,
+    module_main_class: Option<String>,
     bootstrap_method_count: u16,
     bootstrap_methods: Vec<JavaBootstrapMethod>,
 }
@@ -582,6 +594,9 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         attribute_names: class_attrs.attribute_names,
         is_deprecated: class_attrs.is_deprecated,
         is_synthetic: class_attrs.is_synthetic || access_flags & 0x1000 != 0,
+        runtime_visible_type_annotation_count: class_attrs.runtime_visible_type_annotation_count,
+        runtime_invisible_type_annotation_count: class_attrs
+            .runtime_invisible_type_annotation_count,
         source_debug_extension_length: class_attrs.source_debug_extension_length,
         source_debug_extension_sha256: class_attrs.source_debug_extension_sha256,
         constant_pool,
@@ -629,6 +644,8 @@ fn walk_member_table(
         let mut attribute_names = Vec::with_capacity(attrs);
         let mut is_deprecated = false;
         let mut is_synthetic = access_flags & 0x1000 != 0;
+        let mut runtime_visible_type_annotation_count = 0u16;
+        let mut runtime_invisible_type_annotation_count = 0u16;
         let mut constant_value = None;
         let mut method_parameters = Vec::new();
         let mut parameter_annotations = Vec::new();
@@ -664,6 +681,16 @@ fn walk_member_table(
                 is_deprecated = true;
             } else if attr_name == "Synthetic" {
                 is_synthetic = true;
+            } else if attr_name == "RuntimeVisibleTypeAnnotations" {
+                runtime_visible_type_annotation_count = parse_counted_attribute(
+                    &data[body_start..body_end],
+                    "RuntimeVisibleTypeAnnotations",
+                )?;
+            } else if attr_name == "RuntimeInvisibleTypeAnnotations" {
+                runtime_invisible_type_annotation_count = parse_counted_attribute(
+                    &data[body_start..body_end],
+                    "RuntimeInvisibleTypeAnnotations",
+                )?;
             } else if attr_name == "MethodParameters" {
                 method_parameters =
                     parse_method_parameters_attribute(&data[body_start..body_end], cp)?;
@@ -710,6 +737,8 @@ fn walk_member_table(
             attribute_names,
             is_deprecated,
             is_synthetic,
+            runtime_visible_type_annotation_count,
+            runtime_invisible_type_annotation_count,
             constant_value,
             exceptions,
             annotations,
@@ -762,6 +791,16 @@ fn parse_class_attributes(
         } else if attr_name == "SourceDebugExtension" {
             out.source_debug_extension_length = alen as u32;
             out.source_debug_extension_sha256 = Some(sha256_hex(&data[body_start..body_end]));
+        } else if attr_name == "RuntimeVisibleTypeAnnotations" {
+            out.runtime_visible_type_annotation_count = parse_counted_attribute(
+                &data[body_start..body_end],
+                "RuntimeVisibleTypeAnnotations",
+            )?;
+        } else if attr_name == "RuntimeInvisibleTypeAnnotations" {
+            out.runtime_invisible_type_annotation_count = parse_counted_attribute(
+                &data[body_start..body_end],
+                "RuntimeInvisibleTypeAnnotations",
+            )?;
         } else if attr_name == "RuntimeVisibleAnnotations" {
             out.annotations.extend(parse_annotations_attribute(
                 &data[body_start..body_end],
@@ -802,12 +841,25 @@ fn parse_class_attributes(
             )?);
         } else if attr_name == "Module" {
             out.module = Some(parse_module_attribute(&data[body_start..body_end], cp)?);
+        } else if attr_name == "ModulePackages" {
+            out.module_packages.extend(parse_package_list_attribute(
+                &data[body_start..body_end],
+                cp,
+                "ModulePackages",
+            )?);
+        } else if attr_name == "ModuleMainClass" && alen == 2 {
+            let class_idx = u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
+            out.module_main_class = Some(read_class_name(cp, class_idx)?);
         } else if attr_name == "BootstrapMethods" {
             out.bootstrap_methods =
                 parse_bootstrap_methods_attribute(&data[body_start..body_end], cp)?;
             out.bootstrap_method_count = out.bootstrap_methods.len() as u16;
         }
         p = body_end;
+    }
+    if let Some(module) = out.module.as_mut() {
+        module.packages = out.module_packages.clone();
+        module.main_class = out.module_main_class.clone();
     }
     Ok((p, out))
 }
@@ -897,6 +949,28 @@ fn parse_class_list_attribute(
     Ok(out)
 }
 
+fn parse_package_list_attribute(
+    body: &[u8],
+    cp: &[CpEntry],
+    attribute_name: &'static str,
+) -> Result<Vec<String>, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated(attribute_name));
+    }
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let mut p = 2;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if p + 2 > body.len() {
+            return Err(ClassError::Truncated(attribute_name));
+        }
+        let package_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        p += 2;
+        out.push(read_package_name(cp, package_idx)?);
+    }
+    Ok(out)
+}
+
 fn parse_module_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaModuleInfo, ClassError> {
     let mut p = 0usize;
     let module_name_idx = read_u16_from(body, &mut p, "Module header")?;
@@ -974,6 +1048,8 @@ fn parse_module_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaModuleInfo,
         opens,
         uses,
         provides,
+        packages: Vec::new(),
+        main_class: None,
     })
 }
 
@@ -1210,6 +1286,8 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
     let mut local_variable_types = Vec::new();
     let mut attribute_names = Vec::with_capacity(attributes_count as usize);
     let mut stack_map_frame_count = 0u16;
+    let mut runtime_visible_type_annotation_count = 0u16;
+    let mut runtime_invisible_type_annotation_count = 0u16;
     for _ in 0..attributes_count {
         if p + 6 > body.len() {
             return Err(ClassError::Truncated("code nested attribute header"));
@@ -1236,6 +1314,16 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
             )?);
         } else if name == "StackMapTable" {
             stack_map_frame_count = parse_stack_map_table_frame_count(&body[attr_start..attr_end])?;
+        } else if name == "RuntimeVisibleTypeAnnotations" {
+            runtime_visible_type_annotation_count = parse_counted_attribute(
+                &body[attr_start..attr_end],
+                "RuntimeVisibleTypeAnnotations",
+            )?;
+        } else if name == "RuntimeInvisibleTypeAnnotations" {
+            runtime_invisible_type_annotation_count = parse_counted_attribute(
+                &body[attr_start..attr_end],
+                "RuntimeInvisibleTypeAnnotations",
+            )?;
         }
         p = attr_end;
     }
@@ -1258,6 +1346,8 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         instruction_count,
         unknown_instruction_count,
         stack_map_frame_count,
+        runtime_visible_type_annotation_count,
+        runtime_invisible_type_annotation_count,
         line_numbers,
         local_variables,
         local_variable_types,
@@ -1303,6 +1393,13 @@ fn parse_exception_table(
 fn parse_stack_map_table_frame_count(body: &[u8]) -> Result<u16, ClassError> {
     if body.len() < 2 {
         return Err(ClassError::Truncated("StackMapTable length"));
+    }
+    Ok(u16::from_be_bytes(body[0..2].try_into().unwrap()))
+}
+
+fn parse_counted_attribute(body: &[u8], attribute_name: &'static str) -> Result<u16, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated(attribute_name));
     }
     Ok(u16::from_be_bytes(body[0..2].try_into().unwrap()))
 }

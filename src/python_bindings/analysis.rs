@@ -302,6 +302,18 @@ fn java_class_info_to_py(
     dict.set_item("is_deprecated", info.is_deprecated)?;
     dict.set_item("is_synthetic", info.is_synthetic)?;
     dict.set_item(
+        "runtime_visible_type_annotation_count",
+        info.runtime_visible_type_annotation_count,
+    )?;
+    dict.set_item(
+        "runtime_invisible_type_annotation_count",
+        info.runtime_invisible_type_annotation_count,
+    )?;
+    dict.set_item(
+        "type_annotation_count",
+        info.runtime_visible_type_annotation_count + info.runtime_invisible_type_annotation_count,
+    )?;
+    dict.set_item(
         "source_debug_extension_length",
         info.source_debug_extension_length,
     )?;
@@ -351,6 +363,18 @@ fn java_class_info_to_py(
         mdict.set_item("is_deprecated", m.is_deprecated)?;
         mdict.set_item("is_synthetic", m.is_synthetic)?;
         mdict.set_item(
+            "runtime_visible_type_annotation_count",
+            m.runtime_visible_type_annotation_count,
+        )?;
+        mdict.set_item(
+            "runtime_invisible_type_annotation_count",
+            m.runtime_invisible_type_annotation_count,
+        )?;
+        mdict.set_item(
+            "type_annotation_count",
+            m.runtime_visible_type_annotation_count + m.runtime_invisible_type_annotation_count,
+        )?;
+        mdict.set_item(
             "constant_value",
             java_constant_value_to_py(py, m.constant_value)?,
         )?;
@@ -383,6 +407,18 @@ fn java_class_info_to_py(
         fdict.set_item("attribute_names", f.attribute_names)?;
         fdict.set_item("is_deprecated", f.is_deprecated)?;
         fdict.set_item("is_synthetic", f.is_synthetic)?;
+        fdict.set_item(
+            "runtime_visible_type_annotation_count",
+            f.runtime_visible_type_annotation_count,
+        )?;
+        fdict.set_item(
+            "runtime_invisible_type_annotation_count",
+            f.runtime_invisible_type_annotation_count,
+        )?;
+        fdict.set_item(
+            "type_annotation_count",
+            f.runtime_visible_type_annotation_count + f.runtime_invisible_type_annotation_count,
+        )?;
         fdict.set_item(
             "constant_value",
             java_constant_value_to_py(py, f.constant_value)?,
@@ -499,6 +535,8 @@ fn java_module_info_to_py(
     }
     dict.set_item("opens", opens)?;
     dict.set_item("uses", module.uses)?;
+    dict.set_item("packages", module.packages)?;
+    dict.set_item("main_class", module.main_class)?;
 
     let provides = pyo3::types::PyList::empty(py);
     for provide in module.provides {
@@ -697,6 +735,18 @@ fn java_code_to_py(
     dict.set_item("instruction_count", code.instruction_count)?;
     dict.set_item("unknown_instruction_count", code.unknown_instruction_count)?;
     dict.set_item("stack_map_frame_count", code.stack_map_frame_count)?;
+    dict.set_item(
+        "runtime_visible_type_annotation_count",
+        code.runtime_visible_type_annotation_count,
+    )?;
+    dict.set_item(
+        "runtime_invisible_type_annotation_count",
+        code.runtime_invisible_type_annotation_count,
+    )?;
+    dict.set_item(
+        "type_annotation_count",
+        code.runtime_visible_type_annotation_count + code.runtime_invisible_type_annotation_count,
+    )?;
     let line_numbers = pyo3::types::PyList::empty(py);
     for line in code.line_numbers {
         let ldict = pyo3::types::PyDict::new(py);
