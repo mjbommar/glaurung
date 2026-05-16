@@ -15,6 +15,7 @@ from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .java_access_flags import access_flag_names
+from .java_class_kind import JavaClassKind, class_kind
 from .java_proguard_mappings import (
     ProguardClassMapping,
     ProguardMappings,
@@ -86,6 +87,10 @@ class JavaListedClass(BaseModel):
     method_count: int
     field_count: int
     methods_with_code: int
+    class_kind: JavaClassKind = "class"
+    is_interface: bool = False
+    is_annotation: bool = False
+    is_enum: bool = False
     is_record: bool = False
     is_sealed: bool = False
     permitted_subclass_count: int = 0
@@ -197,6 +202,13 @@ def _class_summary(
     ]
     generic_signature = _optional_string(parsed.get("signature"))
     decoded_signature = decode_class_signature(generic_signature)
+    kind = class_kind(
+        class_name=class_name,
+        access_flags=int(parsed.get("access_flags", 0)),
+        super_class=_optional_string(parsed.get("super_class")),
+        record_components=parsed.get("record_components"),
+        module_info=parsed.get("module"),
+    )
     policy = classfile_policy(
         int(parsed.get("major_version", 0)),
         int(parsed.get("minor_version", 0)),
@@ -236,6 +248,10 @@ def _class_summary(
         methods_with_code=sum(
             1 for method in methods if isinstance(method.get("code"), dict)
         ),
+        class_kind=kind,
+        is_interface=kind in {"interface", "annotation"},
+        is_annotation=kind == "annotation",
+        is_enum=kind == "enum",
         is_record=_is_record(parsed),
         is_sealed=_list_count(parsed.get("permitted_subclasses")) > 0,
         permitted_subclass_count=_list_count(parsed.get("permitted_subclasses")),

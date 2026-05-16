@@ -14,6 +14,7 @@ from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .java_access_flags import access_flag_names
+from .java_class_kind import JavaClassKind, class_kind
 from .java_descriptors import decode_field_descriptor, decode_method_descriptor
 from .java_module_info import JavaModuleSummary, module_summary
 from .java_proguard_mappings import (
@@ -161,6 +162,10 @@ class JavaViewClassResult(BaseModel):
     classfile_warnings: list[str] = Field(default_factory=list)
     access_flags: int | None = None
     access_flag_names: list[str] = Field(default_factory=list)
+    class_kind: JavaClassKind = "class"
+    is_interface: bool = False
+    is_annotation: bool = False
+    is_enum: bool = False
     is_record: bool = False
     is_sealed: bool = False
     permitted_subclasses: list[str] = Field(default_factory=list)
@@ -287,6 +292,13 @@ def _result_for_class(
     nest_members = _string_list(parsed.get("nest_members"))
     record_components = _record_component_summaries(parsed.get("record_components"))
     parsed_module_info = module_summary(parsed.get("module"))
+    kind = class_kind(
+        class_name=class_name,
+        access_flags=int(parsed["access_flags"]),
+        super_class=_optional_string(parsed.get("super_class")),
+        record_components=parsed.get("record_components"),
+        module_info=parsed.get("module"),
+    )
     is_record = parsed.get("super_class") == "java/lang/Record" or bool(
         record_components
     )
@@ -340,6 +352,10 @@ def _result_for_class(
                 "access_flag_names": access_flag_names(
                     int(parsed["access_flags"]), "class"
                 ),
+                "class_kind": kind,
+                "is_interface": kind in {"interface", "annotation"},
+                "is_annotation": kind == "annotation",
+                "is_enum": kind == "enum",
                 "is_record": is_record,
                 "is_sealed": is_sealed,
                 "permitted_subclasses": permitted_subclasses,
@@ -452,6 +468,10 @@ def _result_for_class(
         classfile_warnings=policy.classfile_warnings,
         access_flags=parsed["access_flags"],
         access_flag_names=access_flag_names(int(parsed["access_flags"]), "class"),
+        class_kind=kind,
+        is_interface=kind in {"interface", "annotation"},
+        is_annotation=kind == "annotation",
+        is_enum=kind == "enum",
         is_record=is_record,
         is_sealed=is_sealed,
         permitted_subclasses=permitted_subclasses,

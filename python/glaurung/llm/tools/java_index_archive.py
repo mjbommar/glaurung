@@ -14,6 +14,7 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .java_class_kind import JavaClassKind, class_kind
 from .java_module_info import JavaModuleSummary, module_summary
 
 
@@ -47,6 +48,10 @@ class JavaClassSummary(BaseModel):
     method_count: int
     field_count: int
     methods_with_code: int
+    class_kind: JavaClassKind = "class"
+    is_interface: bool = False
+    is_annotation: bool = False
+    is_enum: bool = False
     is_sealed: bool = False
     permitted_subclass_count: int = 0
 
@@ -366,6 +371,13 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                     parsed_module_info = module_summary(parsed.get("module"))
                     if parsed_module_info is not None:
                         module_info = parsed_module_info
+                    kind = class_kind(
+                        class_name=str(parsed["class_name"]),
+                        access_flags=int(parsed["access_flags"]),
+                        super_class=str(parsed.get("super_class") or ""),
+                        record_components=parsed.get("record_components"),
+                        module_info=parsed.get("module"),
+                    )
                     methods = parsed["methods"]
                     policy = classfile_policy(
                         int(parsed["major_version"]),
@@ -391,6 +403,10 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                         methods_with_code=sum(
                             1 for m in methods if m["code"] is not None
                         ),
+                        class_kind=kind,
+                        is_interface=kind in {"interface", "annotation"},
+                        is_annotation=kind == "annotation",
+                        is_enum=kind == "enum",
                         is_sealed=_list_count(parsed.get("permitted_subclasses")) > 0,
                         permitted_subclass_count=_list_count(
                             parsed.get("permitted_subclasses")

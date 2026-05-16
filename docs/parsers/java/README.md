@@ -64,6 +64,9 @@ Implemented pieces now include:
   `module-info.class`, zip-slip path detection, and truncation state.
 - JPMS `module-info.class` summaries in parser-facing tools, including module name,
   requires, exports, opens, uses, and provides clauses when present.
+- Normalized class-kind summaries in parser-facing tools, classifying declarations
+  as module, annotation, interface, enum, record, or class without requiring agents
+  to decode JVM access flags themselves.
 - Opt-in recursive nested archive indexing in `java_index_archive`, producing bounded
   summaries for selected nested JAR/ZIP payloads without extracting or executing
   archive code.

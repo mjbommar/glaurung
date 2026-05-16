@@ -300,6 +300,10 @@ def test_java_index_archive_reports_module_info_summary(tmp_path: Path) -> None:
 
     assert result.module_info_present
     assert result.module_info is not None
+    module_class = next(
+        cls for cls in result.classes if cls.class_name == "module-info"
+    )
+    assert module_class.class_kind == "module"
     assert result.module_info.name == "com.example.fixture"
     assert {item.module for item in result.module_info.requires} >= {
         "java.base",

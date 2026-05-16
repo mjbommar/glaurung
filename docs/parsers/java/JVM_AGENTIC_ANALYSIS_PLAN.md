@@ -62,6 +62,8 @@ Glaurung already has a growing Java path:
   26, unusual minor versions, and large/tiny classfile entries.
 - Parser-facing Python tools now expose JPMS `module-info.class` summaries,
   including module name, requires, exports, opens, uses, and provides clauses.
+- Parser-facing Python tools now expose normalized class kinds (`module`,
+  `annotation`, `interface`, `enum`, `record`, `class`) plus boolean kind helpers.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang
@@ -788,7 +790,8 @@ Outputs:
 - Class locators, names, superclasses, `SourceFile`, interface counts, method counts,
   field counts, JVM version, raw and decoded access flags, Java release labels,
   classfile size categories, classfile policy warnings, inner/nest/record/sealed
-  summary counts, mapped names, and optional annotation descriptors.
+  summary counts, normalized class kind, mapped names, and optional annotation
+  descriptors.
 
 `java_view_class`
 
@@ -810,6 +813,7 @@ Outputs:
   classfile size category, and policy warnings.
 - Sealed-class `PermittedSubclasses` lists.
 - JPMS module summary when viewing `module-info.class`.
+- Normalized class kind and kind booleans.
 - Fields.
 - Methods with code-size and line-number range summaries where available.
 - Descriptor-aware mapped official/obfuscated names for classes and members when

@@ -91,6 +91,8 @@ sealed interface Gate permits OpenGate, ClosedGate {}
 final class OpenGate implements Gate {}
 
 non-sealed class ClosedGate implements Gate {}
+
+enum Mode { ALPHA, BETA }
 """
 
 
@@ -181,6 +183,7 @@ def test_java_list_classes_reports_record_metadata(tmp_path: Path) -> None:
     assert result.matched_class_count == 1
     pair = result.classes[0]
     assert pair.class_name == "app/Pair"
+    assert pair.class_kind == "record"
     assert pair.is_record is True
     assert pair.super_class == "java/lang/Record"
     assert pair.record_component_count == 2
@@ -196,8 +199,24 @@ def test_java_list_classes_reports_sealed_metadata(tmp_path: Path) -> None:
     result = tool.run(ctx, ctx.kb, tool.input_model(path=str(jar), name_filter="Gate"))
 
     gate = next(cls for cls in result.classes if cls.class_name == "app/Gate")
+    assert gate.class_kind == "interface"
+    assert gate.is_interface is True
     assert gate.is_sealed is True
     assert gate.permitted_subclass_count == 2
+
+
+def test_java_list_classes_reports_enum_kind(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_list_classes import build_tool
+
+    jar = _compile_source(tmp_path, _SOURCE)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(ctx, ctx.kb, tool.input_model(path=str(jar), name_filter="Mode"))
+
+    mode = next(cls for cls in result.classes if cls.class_name == "app/Mode")
+    assert mode.class_kind == "enum"
+    assert mode.is_enum is True
 
 
 def test_java_list_classes_decodes_generic_class_signatures(tmp_path: Path) -> None:

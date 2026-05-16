@@ -284,6 +284,7 @@ def test_java_view_class_reports_record_components(tmp_path: Path) -> None:
     assert result.class_found
     assert result.source_file == "a.java"
     assert result.super_class == "java/lang/Record"
+    assert result.class_kind == "record"
     assert result.is_record is True
     assert [item.name for item in result.record_components] == ["token", "count"]
     assert result.record_components[0].descriptor == "Ljava/lang/String;"
@@ -330,6 +331,7 @@ def test_java_view_class_reports_module_info(tmp_path: Path) -> None:
     )
 
     assert result.class_found
+    assert result.class_kind == "module"
     assert result.module_info is not None
     assert result.module_info.name == "com.example.fixture"
     assert {item.module for item in result.module_info.requires} >= {
