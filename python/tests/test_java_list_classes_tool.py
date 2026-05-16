@@ -59,6 +59,8 @@ abstract class Base {}
 class Helper {}
 
 record Pair(String id, int count) {}
+
+class Box<T extends Number> {}
 """
 
 
@@ -140,6 +142,24 @@ def test_java_list_classes_reports_record_metadata(tmp_path: Path) -> None:
     assert pair.is_record is True
     assert pair.super_class == "java/lang/Record"
     assert pair.record_component_count == 2
+
+
+def test_java_list_classes_decodes_generic_class_signatures(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_list_classes import build_tool
+
+    jar = _compile_source(tmp_path, _SOURCE)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(ctx, ctx.kb, tool.input_model(path=str(jar), name_filter="Box"))
+
+    assert result.matched_class_count == 1
+    box = result.classes[0]
+    assert box.class_name == "app/Box"
+    assert box.generic_signature == "<T:Ljava/lang/Number;>Ljava/lang/Object;"
+    assert box.generic_type_parameters == ["T extends java.lang.Number"]
+    assert box.generic_super_class == "java.lang.Object"
+    assert box.generic_signature_error is None
 
 
 def test_java_list_classes_respects_limit(tmp_path: Path) -> None:

@@ -18,6 +18,11 @@ from .java_proguard_mappings import (
     ProguardMappings,
     parse_proguard_mappings,
 )
+from .java_signatures import (
+    decode_class_signature,
+    decode_field_signature,
+    decode_method_signature,
+)
 
 
 class JavaViewClassArgs(BaseModel):
@@ -100,6 +105,12 @@ class JavaClassMemberSummary(BaseModel):
     name: str
     descriptor: str
     generic_signature: str | None = None
+    generic_type_parameters: list[str] = Field(default_factory=list)
+    generic_field_type: str | None = None
+    generic_parameter_types: list[str] = Field(default_factory=list)
+    generic_return_type: str | None = None
+    generic_throws: list[str] = Field(default_factory=list)
+    generic_signature_error: str | None = None
     field_type: str | None = None
     parameter_types: list[str] = Field(default_factory=list)
     parameter_count: int = 0
@@ -128,6 +139,10 @@ class JavaViewClassResult(BaseModel):
     super_class: str | None = None
     source_file: str | None = None
     generic_signature: str | None = None
+    generic_type_parameters: list[str] = Field(default_factory=list)
+    generic_super_class: str | None = None
+    generic_interfaces: list[str] = Field(default_factory=list)
+    generic_signature_error: str | None = None
     major_version: int | None = None
     minor_version: int | None = None
     access_flags: int | None = None
@@ -239,6 +254,7 @@ def _result_for_class(
     )
     source_file = _optional_string(parsed.get("source_file"))
     generic_signature = _optional_string(parsed.get("signature"))
+    decoded_class_signature = decode_class_signature(generic_signature)
     annotations = _annotation_summaries(parsed.get("annotations"))
     inner_classes = _inner_class_summaries(parsed.get("inner_classes"))
     enclosing_method = _enclosing_method_summary(parsed.get("enclosing_method"))
@@ -279,6 +295,10 @@ def _result_for_class(
                 "super_class": parsed["super_class"],
                 "source_file": source_file,
                 "generic_signature": generic_signature,
+                "generic_type_parameters": decoded_class_signature.type_parameters,
+                "generic_super_class": decoded_class_signature.super_class,
+                "generic_interfaces": decoded_class_signature.interfaces,
+                "generic_signature_error": decoded_class_signature.error,
                 "major_version": parsed["major_version"],
                 "minor_version": parsed["minor_version"],
                 "access_flags": parsed["access_flags"],
@@ -323,6 +343,12 @@ def _result_for_class(
                     "name": member.name,
                     "descriptor": member.descriptor,
                     "generic_signature": member.generic_signature,
+                    "generic_type_parameters": member.generic_type_parameters,
+                    "generic_field_type": member.generic_field_type,
+                    "generic_parameter_types": member.generic_parameter_types,
+                    "generic_return_type": member.generic_return_type,
+                    "generic_throws": member.generic_throws,
+                    "generic_signature_error": member.generic_signature_error,
                     "field_type": member.field_type,
                     "parameter_types": member.parameter_types,
                     "parameter_count": member.parameter_count,
@@ -366,6 +392,10 @@ def _result_for_class(
         super_class=parsed["super_class"],
         source_file=source_file,
         generic_signature=generic_signature,
+        generic_type_parameters=decoded_class_signature.type_parameters,
+        generic_super_class=decoded_class_signature.super_class,
+        generic_interfaces=decoded_class_signature.interfaces,
+        generic_signature_error=decoded_class_signature.error,
         major_version=parsed["major_version"],
         minor_version=parsed["minor_version"],
         access_flags=parsed["access_flags"],
@@ -394,6 +424,12 @@ def _member_summary(
         if kind == "method"
         else decode_field_descriptor(descriptor)
     )
+    generic_signature = _optional_string(member.get("signature"))
+    decoded_signature = (
+        decode_method_signature(generic_signature)
+        if kind == "method"
+        else decode_field_signature(generic_signature)
+    )
     mapped_members = (
         mappings.matching_member_mappings(
             class_mapping,
@@ -408,7 +444,13 @@ def _member_summary(
         kind=kind,
         name=str(member["name"]),
         descriptor=descriptor,
-        generic_signature=_optional_string(member.get("signature")),
+        generic_signature=generic_signature,
+        generic_type_parameters=getattr(decoded_signature, "type_parameters", []),
+        generic_field_type=getattr(decoded_signature, "field_type", None),
+        generic_parameter_types=getattr(decoded_signature, "parameter_types", []),
+        generic_return_type=getattr(decoded_signature, "return_type", None),
+        generic_throws=getattr(decoded_signature, "throws", []),
+        generic_signature_error=decoded_signature.error,
         field_type=decoded_descriptor.field_type,
         parameter_types=decoded_descriptor.parameter_types,
         parameter_count=decoded_descriptor.parameter_count,

@@ -130,10 +130,10 @@ Implemented pieces now include:
   ProGuard/Mojang mapped names, and `java_class` KB evidence.
 - Initial method listing through `java_list_methods`, exposing bounded method
   summaries with class/name/descriptor filters, code-size metadata, line-number
-  counts/ranges, decoded parameter/return types, generic signatures, `SourceFile`
-  metadata, `MethodParameters` names, parameter annotation counts, annotation
-  defaults, optional annotation descriptors, optional ProGuard/Mojang mapped names,
-  and `java_method` KB evidence.
+  counts/ranges, decoded parameter/return types, raw and readable generic
+  signatures, `SourceFile` metadata, `MethodParameters` names, parameter annotation
+  counts, annotation defaults, optional annotation descriptors, optional
+  ProGuard/Mojang mapped names, and `java_method` KB evidence.
 - Initial bytecode CFG construction for selected methods, exposing basic blocks,
   conditional/goto/fallthrough/default-switch/exception edges, line anchors,
   exception handler ranges, stop reasons, and KB `java_cfg` nodes.
@@ -269,6 +269,8 @@ Important lessons:
 - [x] Initial JVM descriptor decoding for field types and method parameter/return
   types
 - [x] Initial class/member generic `Signature` attribute preservation
+- [x] Initial readable generic `Signature` decoding for class, field, and method
+  signatures
 - [x] `Code` attribute metadata
 - [x] `SourceFile`, `Exceptions`, `LocalVariableTable`, and `LocalVariableTypeTable`
   parsing
@@ -280,8 +282,8 @@ Important lessons:
 - [x] Initial bounded class listing with package/name/access filters, class
   summaries, `SourceFile`, annotations, and mapping names
 - [x] Initial bounded method listing with filters, code and line-table summaries,
-  decoded parameter/return types, generic signatures, `SourceFile`, annotations, and
-  mapping names
+  decoded parameter/return types, raw/readable generic signatures, `SourceFile`,
+  annotations, and mapping names
 - [x] Initial bytecode CFG via `java_cfg`
 - [x] Initial constant-pool call graph via `java_call_graph`
 - [x] Exception-handler table parsing and CFG exception edges

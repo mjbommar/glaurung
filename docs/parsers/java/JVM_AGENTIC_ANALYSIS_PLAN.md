@@ -136,10 +136,10 @@ Glaurung already has a growing Java path:
   ProGuard/Mojang mapped names, and `java_class` evidence nodes.
 - Python memory tools can now list candidate methods with `java_list_methods`,
   exposing bounded class/name/descriptor filtering, code-size summaries,
-  line-number counts/ranges, decoded parameter/return types, generic signatures,
-  `SourceFile` metadata, `MethodParameters` names, parameter annotation counts,
-  annotation defaults, optional annotation descriptors, optional ProGuard/Mojang
-  mapped names, and `java_method` evidence nodes.
+  line-number counts/ranges, decoded parameter/return types, raw and readable generic
+  signatures, `SourceFile` metadata, `MethodParameters` names, parameter annotation
+  counts, annotation defaults, optional annotation descriptors, optional
+  ProGuard/Mojang mapped names, and `java_method` evidence nodes.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -265,7 +265,7 @@ here, it is probably not represented strongly enough in the plan.
 | --- | --- |
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
 | Bytecode CFG, xrefs, and call graph | Initial `java_cfg`, exception edges, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with frame analysis, interprocedural xrefs, and CHA/RTA dispatch |
-| Descriptors and generic signatures | Initial erased JVM descriptor decoding exists for field types and method parameter/return types in class/method tools; class/member `Signature` attributes are preserved; continue parsing generic grammar, type-use annotations, and bridge/synthetic correlation |
+| Descriptors and generic signatures | Initial erased JVM descriptor decoding exists for field types and method parameter/return types in class/method tools; class/member `Signature` attributes are preserved and decoded into readable class/field/method generic summaries; continue type-use annotations and bridge/synthetic correlation |
 | Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, runtime-visible/runtime-invisible class/member and parameter annotation support, method parameters, annotation defaults, inner/enclosing/nest metadata, and record components exist; continue modules/stack maps/permitted subclasses and richer framework semantics |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
@@ -428,8 +428,9 @@ Rust responsibilities:
   - `Record`
   - `PermittedSubclasses`
 - Decode descriptors into structured parameter and return types. Initial erased
-  descriptor decoding is implemented in Python tools; continue generic signatures
-  and type annotations.
+  descriptor decoding is implemented in Python tools. Initial generic `Signature`
+  decoding is implemented for class, field, and method summaries; continue type
+  annotations and bridge/synthetic correlation.
 - Extract method bytecode, max stack, max locals, exception table.
 - Build lightweight per-method xrefs from bytecode operands and constant-pool refs.
 - Decode enough JVM instructions to recover invoke, field, type, string, method
@@ -810,7 +811,8 @@ Initial Python implementation status:
 - Supports constructor inclusion/exclusion, result limits, code-size summaries, and
   line-number counts/ranges when `LineNumberTable` data exists.
 - Reports decoded erased parameter and return types from JVM method descriptors.
-- Reports generic `Signature` attributes when present.
+- Reports generic `Signature` attributes and readable decoded generic
+  parameter/return/type summaries when present.
 - Reports `MethodParameters` names, parameter annotation counts, and annotation
   defaults when present.
 - Reports class-level `SourceFile` metadata on returned methods when present.
@@ -834,6 +836,8 @@ Outputs:
 - Access flags.
 - Descriptor, decoded erased parameter/return types, generic signatures, and mapped
   names/signatures when available.
+- Readable decoded generic parameter/return/type summaries when `Signature`
+  attributes are present.
 - Method parameter names, parameter annotation counts, and annotation default values.
 - Code size, max stack, max locals.
 - Line table availability and first/last source line when present.

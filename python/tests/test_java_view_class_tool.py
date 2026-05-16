@@ -131,6 +131,7 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert field_b.field_type == "int"
     assert field_g.field_type == "java.util.List"
     assert field_g.generic_signature == "Ljava/util/List<Ljava/lang/String;>;"
+    assert field_g.generic_field_type == "java.util.List<java.lang.String>"
     assert method_c.mapped_names == ["tick"]
     assert method_c.parameter_types == []
     assert method_c.return_type == "void"

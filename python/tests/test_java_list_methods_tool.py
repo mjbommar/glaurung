@@ -196,6 +196,13 @@ public class Main {
     assert method.generic_signature == (
         "([Ljava/lang/String;[[ILjava/util/List<Ljava/lang/String;>;)I"
     )
+    assert method.generic_parameter_types == [
+        "java.lang.String[]",
+        "int[][]",
+        "java.util.List<java.lang.String>",
+    ]
+    assert method.generic_return_type == "int"
+    assert method.generic_signature_error is None
 
 
 def test_java_list_methods_reports_parameter_metadata_and_annotation_defaults(

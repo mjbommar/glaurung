@@ -18,6 +18,7 @@ from .java_proguard_mappings import (
     ProguardMappings,
     parse_proguard_mappings,
 )
+from .java_signatures import decode_class_signature
 
 
 class JavaListClassesArgs(BaseModel):
@@ -63,6 +64,10 @@ class JavaListedClass(BaseModel):
     super_class: str
     source_file: str | None = None
     generic_signature: str | None = None
+    generic_type_parameters: list[str] = Field(default_factory=list)
+    generic_super_class: str | None = None
+    generic_interfaces: list[str] = Field(default_factory=list)
+    generic_signature_error: str | None = None
     interfaces: list[str] = Field(default_factory=list)
     interface_count: int = 0
     access_flags: int
@@ -176,6 +181,8 @@ def _class_summary(
         for interface in parsed.get("interfaces", [])
         if isinstance(interface, str)
     ]
+    generic_signature = _optional_string(parsed.get("signature"))
+    decoded_signature = decode_class_signature(generic_signature)
     return JavaListedClass(
         entry_name=entry_name,
         class_name=class_name,
@@ -185,7 +192,11 @@ def _class_summary(
         simple_name=class_name.rsplit("/", 1)[-1],
         super_class=str(parsed.get("super_class") or ""),
         source_file=_optional_string(parsed.get("source_file")),
-        generic_signature=_optional_string(parsed.get("signature")),
+        generic_signature=generic_signature,
+        generic_type_parameters=decoded_signature.type_parameters,
+        generic_super_class=decoded_signature.super_class,
+        generic_interfaces=decoded_signature.interfaces,
+        generic_signature_error=decoded_signature.error,
         interfaces=interfaces,
         interface_count=len(interfaces),
         access_flags=int(parsed.get("access_flags", 0)),

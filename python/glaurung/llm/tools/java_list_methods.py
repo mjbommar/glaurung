@@ -19,6 +19,7 @@ from .java_proguard_mappings import (
     ProguardMappings,
     parse_proguard_mappings,
 )
+from .java_signatures import decode_method_signature
 
 
 class JavaListMethodsArgs(BaseModel):
@@ -52,6 +53,11 @@ class JavaListedMethod(BaseModel):
     name: str
     descriptor: str
     generic_signature: str | None = None
+    generic_type_parameters: list[str] = Field(default_factory=list)
+    generic_parameter_types: list[str] = Field(default_factory=list)
+    generic_return_type: str | None = None
+    generic_throws: list[str] = Field(default_factory=list)
+    generic_signature_error: str | None = None
     parameter_types: list[str] = Field(default_factory=list)
     parameter_count: int = 0
     return_type: str | None = None
@@ -218,6 +224,8 @@ def _method_summary(
         line_numbers = _line_numbers(code)
     descriptor = str(method.get("descriptor"))
     decoded_descriptor = decode_method_descriptor(descriptor)
+    generic_signature = _optional_string(method.get("signature"))
+    decoded_signature = decode_method_signature(generic_signature)
     return JavaListedMethod(
         class_name=class_name,
         dotted_class_name=_dotted(class_name),
@@ -225,7 +233,12 @@ def _method_summary(
         source_file=source_file,
         name=str(method.get("name")),
         descriptor=descriptor,
-        generic_signature=_optional_string(method.get("signature")),
+        generic_signature=generic_signature,
+        generic_type_parameters=decoded_signature.type_parameters,
+        generic_parameter_types=decoded_signature.parameter_types,
+        generic_return_type=decoded_signature.return_type,
+        generic_throws=decoded_signature.throws,
+        generic_signature_error=decoded_signature.error,
         parameter_types=decoded_descriptor.parameter_types,
         parameter_count=decoded_descriptor.parameter_count,
         return_type=decoded_descriptor.return_type,
