@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+import zipfile
 
 import pytest
 
@@ -57,6 +58,9 @@ public class Main {
     assert result.exit_code == 0
     assert result.selected_build_tool == "javac"
     assert result.diagnostic_count == 0
+    assert result.rebuilt_jar_path is not None
+    with zipfile.ZipFile(result.rebuilt_jar_path) as zf:
+        assert "app/Main.class" in zf.namelist()
     assert (project / "build" / "classes" / "app" / "Main.class").is_file()
     assert (
         (project / "sources.txt")

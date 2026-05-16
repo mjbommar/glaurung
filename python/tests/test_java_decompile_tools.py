@@ -692,6 +692,7 @@ def test_java_decompile_archive_can_score_candidate_compilation(
     assert result.attempted_class_count == 1
     assert result.classes[0].compile_success is True
     assert result.classes[0].attempted_engines[0].compile_success is True
+    assert result.classes[0].attempted_engines[0].compile_context == "isolated"
 
 
 def test_java_decompile_archive_scores_candidates_with_project_classpath(
@@ -722,6 +723,7 @@ def test_java_decompile_archive_scores_candidates_with_project_classpath(
     assert result.attempted_class_count == 1
     assert result.classes[0].compile_success is True
     assert result.classes[0].attempted_engines[0].compile_success is True
+    assert result.classes[0].attempted_engines[0].compile_context == "project"
 
 
 def test_java_decompile_archive_uses_mappings_for_filters_and_metadata(

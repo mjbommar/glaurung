@@ -276,10 +276,10 @@ Implemented pieces now include:
 - Initial end-to-end recovery orchestration through `java_recover_project`, which
   preserves resources/build metadata, infers dependencies, extracts bounded nested
   JARs when requested, collects supplied/local/nested classpaths, decompiles a
-  bounded archive slice with that project context, refreshes source/build files,
-  persists a project-level JavaParser AST index, compiles, optionally repairs,
-  validates the recovered project, and resumes from `.glaurung/recovery-project.json`
-  when the source recovery cache is still valid.
+  bounded archive slice with project-context decompiler candidate scoring, refreshes
+  source/build files, persists a project-level JavaParser AST index, compiles,
+  optionally repairs, validates the recovered project, and resumes from
+  `.glaurung/recovery-project.json` when the source recovery cache is still valid.
 - Initial daily-use recovery reporting through `java_recovery_report`, which wraps
   `java_recover_project` and renders a human report with status, headline, progress
   counters, ranked blockers, raw compiler/parser/validation messages, source
@@ -493,6 +493,12 @@ Important lessons:
   line anchors
 - [x] Initial automatic generic decompiler repairs for raw foreach iterables and
   generic sneaky-throw casts
+- [x] Initial project-context decompiler candidate compile scoring
+- [x] Initial local Maven cache dependency repair and explicit offline/online
+  resolver policy in build repair plans
+- [x] Initial rebuilt JAR emission for plain `javac` recovery projects
+- [x] Initial owned Java 17 corpus fixture for records, enums, JPMS modules,
+  ServiceLoader metadata, and resources
 - [ ] Module source recovery and semantic source/resource validation
 - [x] Initial build system inference for plain `javac`, Maven, and Gradle
 - [ ] Build-system refinement for module paths, annotation processors, loader-specific

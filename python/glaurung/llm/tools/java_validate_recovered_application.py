@@ -65,6 +65,7 @@ class JavaValidateRecoveredApplicationArgs(BaseModel):
     java_release: int | None = Field(None, ge=1)
     classpath: list[str] = Field(default_factory=list)
     run_compile: bool = True
+    allow_dependency_network: bool = False
     allow_generated_stubs: bool = False
     abi_scope: AbiScope = "all"
     include_annotations: bool = Field(
@@ -239,6 +240,7 @@ class JavaValidateRecoveredApplicationTool(
                     java_release=args.java_release,
                     classpath=args.classpath,
                     timeout_seconds=args.compile_timeout_seconds,
+                    allow_dependency_network=args.allow_dependency_network,
                 ),
             )
             compile_success = compile_result.success
@@ -246,6 +248,8 @@ class JavaValidateRecoveredApplicationTool(
             compile_diagnostics = compile_result.diagnostics
             warnings.extend(compile_result.warnings)
             stop_reasons.extend(compile_result.stop_reasons)
+            if rebuilt_path is None and compile_result.rebuilt_jar_path:
+                rebuilt_path = Path(compile_result.rebuilt_jar_path)
             if rebuilt_path is None and compile_result.generated_classes_dir:
                 rebuilt_path = Path(compile_result.generated_classes_dir)
 

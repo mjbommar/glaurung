@@ -80,7 +80,7 @@ public static class Main.Nested {
     return source_path
 
 
-def _write_missing_local_dependency_project(root: Path, tmp_path: Path) -> Path:
+def _dependency_jar(tmp_path: Path) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java repair fixture")
     dep_src = tmp_path / "dep-src"
@@ -113,11 +113,19 @@ public class Helper {
         capture_output=True,
         text=True,
     )
+    jar = tmp_path / "dep.jar"
+    with zipfile.ZipFile(jar, "w") as zf:
+        zf.write(dep_classes / "dep" / "Helper.class", "dep/Helper.class")
+    return jar
+
+
+def _write_missing_local_dependency_project(root: Path, tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java repair fixture")
+    dep_jar = _dependency_jar(tmp_path)
     libs = root / "libs"
     libs.mkdir(parents=True)
-    with zipfile.ZipFile(libs / "dep.jar", "w") as zf:
-        zf.write(dep_classes / "dep" / "Helper.class", "dep/Helper.class")
-
+    shutil.copy2(dep_jar, libs / "dep.jar")
     src = root / "src" / "main" / "java" / "app"
     src.mkdir(parents=True)
     source_path = src / "UsesDep.java"
@@ -247,6 +255,54 @@ def test_java_repair_decompiled_source_adds_matching_local_classpath_jar(
     assert result.repair_count == 1
     assert result.repairs[0].kind == "add_local_classpath_jar"
     assert "libs/dep.jar" in (project / "javac.args").read_text(encoding="utf-8")
+    assert (project / "build" / "classes" / "app" / "UsesDep.class").is_file()
+
+
+def test_java_repair_decompiled_source_adds_matching_maven_cache_jar(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_repair_decompiled_source import build_tool
+
+    project = tmp_path / "project"
+    dep_jar = _dependency_jar(tmp_path)
+    m2_jar = tmp_path / "m2" / "dep" / "dep" / "1.0.0" / "dep-1.0.0.jar"
+    m2_jar.parent.mkdir(parents=True)
+    shutil.copy2(dep_jar, m2_jar)
+    src = project / "src" / "main" / "java" / "app"
+    src.mkdir(parents=True)
+    source_path = src / "UsesDep.java"
+    source_path.write_text(
+        """
+package app;
+
+import dep.Helper;
+
+public class UsesDep {
+    public String value() {
+        return Helper.value();
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    ctx = _ctx(source_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            source_project_root=str(project),
+            java_release=17,
+            local_maven_repository=str(tmp_path / "m2"),
+        ),
+    )
+
+    assert result.success is True
+    assert result.repair_count == 1
+    assert result.repairs[0].kind == "add_local_classpath_jar"
+    assert str(m2_jar) in (project / "javac.args").read_text(encoding="utf-8")
     assert (project / "build" / "classes" / "app" / "UsesDep.class").is_file()
 
 
@@ -381,7 +437,11 @@ public class UseExternal {
     assert any(repair.kind == "write_build_repair_plan" for repair in result.repairs)
     plan = project / ".glaurung" / "build-repair-plan.json"
     assert plan.is_file()
-    assert "missing.lib" in plan.read_text(encoding="utf-8")
+    plan_text = plan.read_text(encoding="utf-8")
+    assert "missing.lib" in plan_text
+    assert "resolver_policy" in plan_text
+    assert "module_path" in plan_text
+    assert "annotation_processors" in plan_text
 
 
 def test_java_repair_decompiled_source_reports_signature_mismatch(

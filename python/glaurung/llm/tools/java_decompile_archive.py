@@ -28,6 +28,7 @@ from .java_proguard_mappings import (
 
 JavaDecompilerEngine = Literal["auto", "cfr", "vineflower"]
 JavaConcreteDecompilerEngine = Literal["cfr", "vineflower"]
+JavaCandidateCompileContext = Literal["none", "isolated", "project"]
 JavaInnerClassPolicy = Literal["skip", "companion", "merge"]
 JavaInnerClassKind = Literal[
     "top_level",
@@ -146,6 +147,7 @@ class JavaDecompileAttempt(BaseModel):
     quality_score: int = 0
     compile_success: bool | None = None
     compile_diagnostic_count: int = 0
+    compile_context: JavaCandidateCompileContext = "none"
     helper_jar: str | None = None
     diagnostics: list[str] = Field(default_factory=list)
     stop_reasons: list[str] = Field(default_factory=list)
@@ -672,9 +674,10 @@ def _score_candidate_compilation(
     if compiled is None:
         attempt.stop_reasons = _dedupe([*attempt.stop_reasons, "javac_missing"])
         return
-    success, diagnostic_count = compiled
+    success, diagnostic_count, context = compiled
     attempt.compile_success = success
     attempt.compile_diagnostic_count = diagnostic_count
+    attempt.compile_context = context
     if success:
         attempt.quality_score += 35
     else:
@@ -685,10 +688,19 @@ def _compile_candidate_source(
     class_name: str,
     source: str,
     args: JavaDecompileArchiveArgs,
-) -> tuple[bool, int] | None:
+) -> tuple[bool, int, JavaCandidateCompileContext] | None:
     javac = shutil.which("javac")
     if javac is None:
         return None
+    if args.candidate_project_root is not None:
+        project_compiled = _compile_candidate_in_project_context(
+            javac,
+            class_name,
+            source,
+            args,
+        )
+        if project_compiled is not None:
+            return project_compiled
     with tempfile.TemporaryDirectory(prefix="glaurung-java-candidate-") as tmp:
         tmp_path = Path(tmp)
         source_path = (
@@ -724,10 +736,72 @@ def _compile_candidate_source(
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return False, 1
+            return False, 1, "isolated"
         output = "\n".join(part for part in (proc.stderr, proc.stdout) if part)
         diagnostic_count = output.count(": error:") + output.count(": warning:")
-        return proc.returncode == 0, diagnostic_count
+        return proc.returncode == 0, diagnostic_count, "isolated"
+
+
+def _compile_candidate_in_project_context(
+    javac: str,
+    class_name: str,
+    source: str,
+    args: JavaDecompileArchiveArgs,
+) -> tuple[bool, int, JavaCandidateCompileContext] | None:
+    project_root = Path(args.candidate_project_root or "")
+    if not project_root.is_dir():
+        return None
+    with tempfile.TemporaryDirectory(prefix="glaurung-java-project-candidate-") as tmp:
+        candidate_root = Path(tmp) / "project"
+        shutil.copytree(
+            project_root,
+            candidate_root,
+            ignore=shutil.ignore_patterns(
+                "build",
+                "target",
+                ".gradle",
+                ".glaurung",
+            ),
+        )
+        source_root = candidate_root / "src" / "main" / "java"
+        source_path = source_root / Path(*class_name.split("/")).with_suffix(".java")
+        classes_dir = candidate_root / "build" / "classes"
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        classes_dir.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(source.rstrip() + "\n", encoding="utf-8")
+        sources = sorted(path for path in source_root.rglob("*.java") if path.is_file())
+        if not sources:
+            return None
+        sources_file = candidate_root / "sources.txt"
+        sources_file.write_text(
+            "\n".join(_relative(candidate_root, path) for path in sources) + "\n",
+            encoding="utf-8",
+        )
+        classpath = _candidate_classpath(args.candidate_classpath)
+        command = [
+            javac,
+            "--release",
+            str(args.java_release),
+            "-d",
+            str(classes_dir),
+        ]
+        if classpath:
+            command.extend(["-classpath", classpath])
+        command.append(f"@{sources_file}")
+        try:
+            proc = subprocess.run(
+                command,
+                cwd=candidate_root,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return False, 1, "project"
+        output = "\n".join(part for part in (proc.stderr, proc.stdout) if part)
+        diagnostic_count = output.count(": error:") + output.count(": warning:")
+        return proc.returncode == 0, diagnostic_count, "project"
 
 
 def _candidate_project_sources(

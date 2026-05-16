@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 import time
+import zipfile
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Literal
@@ -207,6 +208,9 @@ def _run_javac(
         stop_reasons = []
         if len(diagnostics) >= args.max_diagnostics and args.max_diagnostics > 0:
             stop_reasons.append("max_diagnostics")
+        rebuilt_jar = (
+            _write_rebuilt_jar(root, classes_dir) if proc.returncode == 0 else None
+        )
         result = JavaCompileRecoveredProjectResult(
             source_project_root=str(root),
             selected_build_tool="javac",
@@ -216,6 +220,7 @@ def _run_javac(
             duration_ms=duration_ms,
             command=command,
             generated_classes_dir=str(classes_dir),
+            rebuilt_jar_path=str(rebuilt_jar) if rebuilt_jar else None,
             diagnostic_count=len(diagnostics),
             diagnostics=diagnostics,
             stdout_excerpt=_excerpt(proc.stdout, args.max_output_chars),
@@ -244,6 +249,21 @@ def _run_javac(
             warnings=warnings,
         )
     return result
+
+
+def _write_rebuilt_jar(root: Path, classes_dir: Path) -> Path | None:
+    if not classes_dir.is_dir():
+        return None
+    jar_path = root / "build" / "libs" / "recovered.jar"
+    jar_path.parent.mkdir(parents=True, exist_ok=True)
+    resources_dir = root / "src" / "main" / "resources"
+    with zipfile.ZipFile(jar_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(p for p in classes_dir.rglob("*") if p.is_file()):
+            zf.write(path, path.relative_to(classes_dir).as_posix())
+        if resources_dir.is_dir():
+            for path in sorted(p for p in resources_dir.rglob("*") if p.is_file()):
+                zf.write(path, path.relative_to(resources_dir).as_posix())
+    return jar_path
 
 
 def _run_maven(

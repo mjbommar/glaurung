@@ -48,6 +48,10 @@ class JavaRepairDecompiledSourceArgs(BaseModel):
     max_repairs_per_iteration: int = Field(8, ge=0)
     max_diagnostics: int = Field(64, ge=0)
     timeout_seconds: int = Field(30, ge=1, le=600)
+    allow_dependency_network: bool = False
+    include_local_maven_cache: bool = True
+    local_maven_repository: str | None = None
+    max_local_maven_cache_jars: int = Field(2_048, ge=0)
     dry_run: bool = False
 
 
@@ -131,6 +135,7 @@ class JavaRepairDecompiledSourceTool(
                     classpath=args.classpath,
                     max_diagnostics=args.max_diagnostics,
                     timeout_seconds=args.timeout_seconds,
+                    allow_dependency_network=args.allow_dependency_network,
                 ),
             )
             result.compile_results.append(compile_result)
@@ -162,6 +167,9 @@ class JavaRepairDecompiledSourceTool(
                         java_release=args.java_release,
                         sources_file=args.sources_file,
                         javac_args_file=args.javac_args_file,
+                        include_local_maven_cache=args.include_local_maven_cache,
+                        local_maven_repository=args.local_maven_repository,
+                        max_local_maven_cache_jars=args.max_local_maven_cache_jars,
                     )
                 )
             if len(repairs) < args.max_repairs_per_iteration:
@@ -176,6 +184,10 @@ class JavaRepairDecompiledSourceTool(
                             iteration=iteration,
                             dry_run=args.dry_run,
                             max_repairs=args.max_repairs_per_iteration - len(repairs),
+                            allow_dependency_network=args.allow_dependency_network,
+                            include_local_maven_cache=args.include_local_maven_cache,
+                            local_maven_repository=args.local_maven_repository,
+                            max_local_maven_cache_jars=args.max_local_maven_cache_jars,
                         )
                     )
             if len(repairs) < args.max_repairs_per_iteration:
@@ -266,6 +278,7 @@ class JavaRepairDecompiledSourceTool(
                     classpath=args.classpath,
                     max_diagnostics=args.max_diagnostics,
                     timeout_seconds=args.timeout_seconds,
+                    allow_dependency_network=args.allow_dependency_network,
                 ),
             )
             result.compile_results.append(compile_result)
@@ -360,6 +373,9 @@ def _repair_missing_local_dependencies(
     java_release: int | None,
     sources_file: str,
     javac_args_file: str,
+    include_local_maven_cache: bool,
+    local_maven_repository: str | None,
+    max_local_maven_cache_jars: int,
 ) -> list[JavaSourceRepair]:
     if max_repairs == 0 or compile_result.selected_build_tool != "javac":
         return []
@@ -367,6 +383,15 @@ def _repair_missing_local_dependencies(
     if not missing_targets:
         return []
     jars = _matching_local_jars(root, missing_targets)
+    if include_local_maven_cache:
+        jars.extend(
+            _matching_maven_cache_jars(
+                missing_targets,
+                local_maven_repository,
+                max_local_maven_cache_jars,
+            )
+        )
+        jars = _dedupe_paths(jars)
     if not jars:
         return []
     _rewrite_sources_file(root, sources_file)
@@ -408,6 +433,10 @@ def _write_build_repair_plan(
     iteration: int,
     dry_run: bool,
     max_repairs: int,
+    allow_dependency_network: bool,
+    include_local_maven_cache: bool,
+    local_maven_repository: str | None,
+    max_local_maven_cache_jars: int,
 ) -> list[JavaSourceRepair]:
     if max_repairs == 0:
         return []
@@ -415,6 +444,15 @@ def _write_build_repair_plan(
     if not targets:
         return []
     candidate_jars = _matching_local_jars(root, targets)
+    maven_candidate_jars = (
+        _matching_maven_cache_jars(
+            targets,
+            local_maven_repository,
+            max_local_maven_cache_jars,
+        )
+        if include_local_maven_cache
+        else []
+    )
     plan_path = root / ".glaurung" / "build-repair-plan.json"
     plan = {
         "tool": "java_repair_decompiled_source",
@@ -422,6 +460,16 @@ def _write_build_repair_plan(
         "selected_build_tool": compile_result.selected_build_tool,
         "missing_targets": targets,
         "local_candidate_jars": [_relative(root, jar) for jar in candidate_jars],
+        "local_maven_cache_candidate_jars": [str(jar) for jar in maven_candidate_jars],
+        "resolver_policy": {
+            "network": "allowed" if allow_dependency_network else "disabled",
+            "default_mode": "online" if allow_dependency_network else "offline",
+            "local_maven_repository": str(_maven_repository(local_maven_repository)),
+            "include_local_maven_cache": include_local_maven_cache,
+            "max_local_maven_cache_jars": max_local_maven_cache_jars,
+        },
+        "module_path": _module_path_plan(compile_result),
+        "annotation_processors": _annotation_processor_plan(compile_result),
         "suggested_actions": [
             "Add the matching local jar to javac.args, Maven, or Gradle before editing source.",
             "If no local jar matches, resolve the dependency explicitly through the project dependency policy.",
@@ -688,6 +736,89 @@ def _matching_local_jars(root: Path, targets: list[str]) -> list[Path]:
         if _jar_matches_any_target(jar, targets):
             matches.append(jar)
     return matches
+
+
+def _matching_maven_cache_jars(
+    targets: list[str],
+    local_maven_repository: str | None,
+    max_jars: int,
+) -> list[Path]:
+    if max_jars == 0:
+        return []
+    repository = _maven_repository(local_maven_repository)
+    if not repository.is_dir():
+        return []
+    matches: list[Path] = []
+    scanned = 0
+    for jar in sorted(repository.rglob("*.jar")):
+        if not jar.is_file():
+            continue
+        scanned += 1
+        if scanned > max_jars:
+            break
+        if _jar_matches_any_target(jar, targets):
+            matches.append(jar)
+    return matches
+
+
+def _maven_repository(value: str | None) -> Path:
+    if value:
+        return Path(value).expanduser()
+    return Path.home() / ".m2" / "repository"
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for path in paths:
+        key = path.resolve() if path.exists() else path
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def _module_path_plan(
+    compile_result: JavaCompileRecoveredProjectResult,
+) -> dict[str, object]:
+    diagnostics = [
+        diagnostic
+        for diagnostic in compile_result.diagnostics
+        if diagnostic.category == "annotation_processor_or_module_path"
+        or "module" in diagnostic.message.lower()
+    ]
+    return {
+        "required": bool(diagnostics),
+        "diagnostic_count": len(diagnostics),
+        "suggested_actions": [
+            "Prefer updating module-path/build metadata before editing source.",
+            "Check module-info.java/module-info.class and add required modules explicitly.",
+        ]
+        if diagnostics
+        else [],
+    }
+
+
+def _annotation_processor_plan(
+    compile_result: JavaCompileRecoveredProjectResult,
+) -> dict[str, object]:
+    diagnostics = [
+        diagnostic
+        for diagnostic in compile_result.diagnostics
+        if diagnostic.category == "annotation_processor_or_module_path"
+        or "processor" in diagnostic.message.lower()
+    ]
+    return {
+        "required": bool(diagnostics),
+        "diagnostic_count": len(diagnostics),
+        "suggested_actions": [
+            "Identify annotation processors from build metadata or compiler diagnostics.",
+            "Keep processors explicit and offline unless dependency network is allowed.",
+        ]
+        if diagnostics
+        else [],
+    }
 
 
 def _jar_matches_any_target(jar: Path, targets: list[str]) -> bool:

@@ -74,6 +74,10 @@ class JavaRecoverProjectArgs(BaseModel):
     extract_nested_archives: bool = False
     max_nested_archives: int = Field(64, ge=0)
     max_nested_archive_bytes: int = Field(50_000_000, ge=0)
+    allow_dependency_network: bool = False
+    include_local_maven_cache: bool = True
+    local_maven_repository: str | None = None
+    max_local_maven_cache_jars: int = Field(2_048, ge=0)
     resume: bool = True
     force_redecompile: bool = False
     run_repair: bool = True
@@ -297,6 +301,7 @@ class JavaRecoverProjectTool(
                 java_release=args.java_release,
                 classpath=[str(path) for path in effective_classpath],
                 timeout_seconds=args.timeout_seconds_per_class,
+                allow_dependency_network=args.allow_dependency_network,
             ),
         )
         result.compile_result = compile_result
@@ -318,6 +323,10 @@ class JavaRecoverProjectTool(
                     classpath=[str(path) for path in effective_classpath],
                     max_iterations=args.max_repair_iterations,
                     timeout_seconds=args.timeout_seconds_per_class,
+                    allow_dependency_network=args.allow_dependency_network,
+                    include_local_maven_cache=args.include_local_maven_cache,
+                    local_maven_repository=args.local_maven_repository,
+                    max_local_maven_cache_jars=args.max_local_maven_cache_jars,
                 ),
             )
             result.repair_result = repair
@@ -339,6 +348,7 @@ class JavaRecoverProjectTool(
                     java_release=args.java_release,
                     classpath=[str(path) for path in effective_classpath],
                     run_compile=True,
+                    allow_dependency_network=args.allow_dependency_network,
                     allow_generated_stubs=args.allow_generated_stubs,
                     compile_timeout_seconds=args.timeout_seconds_per_class,
                 ),

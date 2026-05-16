@@ -101,6 +101,27 @@ class JavaRecoveryReportCommand(BaseCommand):
             help="Rewrite source names with the supplied mapping file.",
         )
         parser.add_argument(
+            "--allow-dependency-network",
+            action="store_true",
+            help="Allow Maven/Gradle/dependency repair to use online resolution.",
+        )
+        parser.add_argument(
+            "--no-local-maven-cache",
+            action="store_false",
+            dest="include_local_maven_cache",
+            help="Disable bounded local ~/.m2 repository scans for missing classes.",
+        )
+        parser.add_argument(
+            "--local-maven-repository",
+            help="Local Maven repository to scan for missing classpath entries.",
+        )
+        parser.add_argument(
+            "--max-local-maven-cache-jars",
+            type=int,
+            default=2_048,
+            help="Maximum local Maven cache JARs to inspect during repair.",
+        )
+        parser.add_argument(
             "--no-resume",
             action="store_false",
             dest="resume",
@@ -136,6 +157,7 @@ class JavaRecoveryReportCommand(BaseCommand):
             run_validate=True,
             compile_candidates=True,
             write_report_files=True,
+            include_local_maven_cache=True,
         )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
@@ -167,6 +189,10 @@ class JavaRecoveryReportCommand(BaseCommand):
                 compile_candidates=args.compile_candidates,
                 classpath=_split_path_values(args.classpath),
                 extract_nested_archives=args.extract_nested_archives,
+                allow_dependency_network=args.allow_dependency_network,
+                include_local_maven_cache=args.include_local_maven_cache,
+                local_maven_repository=args.local_maven_repository,
+                max_local_maven_cache_jars=args.max_local_maven_cache_jars,
                 resume=args.resume,
                 force_redecompile=args.force_redecompile,
                 run_repair=args.run_repair,

@@ -61,6 +61,10 @@ class JavaRecoveryReportArgs(BaseModel):
     extract_nested_archives: bool = False
     max_nested_archives: int = Field(64, ge=0)
     max_nested_archive_bytes: int = Field(50_000_000, ge=0)
+    allow_dependency_network: bool = False
+    include_local_maven_cache: bool = True
+    local_maven_repository: str | None = None
+    max_local_maven_cache_jars: int = Field(2_048, ge=0)
     resume: bool = True
     force_redecompile: bool = False
     run_repair: bool = True
@@ -316,6 +320,10 @@ def _recovery_args(args: JavaRecoveryReportArgs) -> JavaRecoverProjectArgs:
         extract_nested_archives=args.extract_nested_archives,
         max_nested_archives=args.max_nested_archives,
         max_nested_archive_bytes=args.max_nested_archive_bytes,
+        allow_dependency_network=args.allow_dependency_network,
+        include_local_maven_cache=args.include_local_maven_cache,
+        local_maven_repository=args.local_maven_repository,
+        max_local_maven_cache_jars=args.max_local_maven_cache_jars,
         resume=args.resume,
         force_redecompile=args.force_redecompile,
         run_repair=args.run_repair,
@@ -474,9 +482,10 @@ def _candidate_notes(item: object) -> list[str]:
         parse = _bool_label(getattr(attempt, "parse_success", None))
         compile_status = _bool_label(getattr(attempt, "compile_success", None))
         diagnostics = getattr(attempt, "compile_diagnostic_count", 0)
+        context = getattr(attempt, "compile_context", "none")
         score = getattr(attempt, "quality_score", 0)
         notes.append(
-            f"{engine}: parse={parse}, compile={compile_status}, diagnostics={diagnostics}, score={score}"
+            f"{engine}: parse={parse}, compile={compile_status}, context={context}, diagnostics={diagnostics}, score={score}"
         )
     return notes[:8]
 
