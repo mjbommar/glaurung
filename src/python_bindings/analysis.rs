@@ -27,6 +27,8 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
 
     // PE-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(pe_iat_map_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_bytes_py, &analysis_mod)?)?;
 
     // Mach-O-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(macho_stubs_map_path_py, &analysis_mod)?)?;
@@ -192,6 +194,156 @@ fn pe_iat_map_path_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     Ok(crate::analysis::pe_iat::pe_iat_map(&data))
+}
+
+/// List PE resource metadata for a file.
+#[pyfunction]
+#[pyo3(name = "pe_list_resources_path")]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64, max_resources=4096usize, max_resource_depth=32usize, max_resource_data_bytes=1_048_576usize, preview_bytes=16usize))]
+fn pe_list_resources_path_py(
+    py: Python<'_>,
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+    max_resources: usize,
+    max_resource_depth: usize,
+    max_resource_data_bytes: usize,
+    preview_bytes: usize,
+) -> PyResult<Py<PyAny>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    pe_list_resources_bytes_inner(
+        py,
+        &data,
+        max_resources,
+        max_resource_depth,
+        max_resource_data_bytes,
+        preview_bytes,
+    )
+}
+
+/// List PE resource metadata for bytes.
+#[pyfunction]
+#[pyo3(name = "pe_list_resources_bytes")]
+#[pyo3(signature = (data, max_resources=4096usize, max_resource_depth=32usize, max_resource_data_bytes=1_048_576usize, preview_bytes=16usize))]
+fn pe_list_resources_bytes_py(
+    py: Python<'_>,
+    data: &[u8],
+    max_resources: usize,
+    max_resource_depth: usize,
+    max_resource_data_bytes: usize,
+    preview_bytes: usize,
+) -> PyResult<Py<PyAny>> {
+    pe_list_resources_bytes_inner(
+        py,
+        data,
+        max_resources,
+        max_resource_depth,
+        max_resource_data_bytes,
+        preview_bytes,
+    )
+}
+
+fn pe_list_resources_bytes_inner(
+    py: Python<'_>,
+    data: &[u8],
+    max_resources: usize,
+    max_resource_depth: usize,
+    max_resource_data_bytes: usize,
+    preview_bytes: usize,
+) -> PyResult<Py<PyAny>> {
+    let mut options = crate::formats::pe::ParseOptions::default();
+    options.max_resources = max_resources;
+    options.max_resource_depth = max_resource_depth;
+    options.max_resource_data_bytes = max_resource_data_bytes;
+
+    let parser = crate::formats::pe::PeParser::with_options(data, options)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{}", e)))?;
+    let resources = parser
+        .resources()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+
+    pe_resources_to_py(py, resources, preview_bytes)
+}
+
+fn pe_resources_to_py(
+    py: Python<'_>,
+    resources: &crate::formats::pe::ResourceDirectory<'_>,
+    preview_bytes: usize,
+) -> PyResult<Py<PyAny>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("leaf_count", resources.leaf_count())?;
+    dict.set_item("total_directories", resources.total_directories)?;
+    dict.set_item("max_depth", resources.max_depth)?;
+    dict.set_item("resource_bytes_total", resource_bytes_total(resources))?;
+    dict.set_item("warnings", resources.warnings.clone())?;
+    dict.set_item("stop_reasons", resources.stop_reasons.clone())?;
+    dict.set_item("truncated", !resources.stop_reasons.is_empty())?;
+
+    let by_type = pyo3::types::PyDict::new(py);
+    for (type_name, count) in resources_by_type(resources) {
+        by_type.set_item(type_name, count)?;
+    }
+    dict.set_item("resources_by_type", by_type)?;
+
+    let entries = pyo3::types::PyList::empty(py);
+    for resource in &resources.resources {
+        let rdict = pyo3::types::PyDict::new(py);
+        let resource_type = pe_resource_type_label(resource);
+        let preview_len = resource.data.len().min(preview_bytes);
+        rdict.set_item("type_id", resource.type_id.as_id())?;
+        rdict.set_item("type_name", resource.type_name.clone())?;
+        rdict.set_item("type", resource_type)?;
+        rdict.set_item("name_id", resource.name.as_id())?;
+        rdict.set_item("name", resource.name.as_name())?;
+        rdict.set_item("language_id", resource.language_id)?;
+        rdict.set_item("language", resource.language.as_name())?;
+        rdict.set_item("code_page", resource.code_page)?;
+        rdict.set_item("data_rva", resource.data_rva)?;
+        rdict.set_item("data_offset", resource.data_offset)?;
+        rdict.set_item("size", resource.size)?;
+        rdict.set_item("section_name", resource.section_name.clone())?;
+        rdict.set_item("entropy", resource.entropy)?;
+        rdict.set_item("sha256", resource.sha256.clone())?;
+        rdict.set_item("magic", resource.magic.clone())?;
+        rdict.set_item("preview_hex", hex::encode(&resource.data[..preview_len]))?;
+        rdict.set_item("warnings", resource.warnings.clone())?;
+        entries.append(rdict)?;
+    }
+    dict.set_item("resources", entries)?;
+    Ok(dict.into())
+}
+
+fn pe_resource_type_label(resource: &crate::formats::pe::ResourceDataEntry<'_>) -> String {
+    if let Some(type_name) = &resource.type_name {
+        return type_name.clone();
+    }
+    if let Some(name) = resource.type_id.as_name() {
+        return name.to_string();
+    }
+    if let Some(id) = resource.type_id.as_id() {
+        return format!("id:{}", id);
+    }
+    "unknown".to_string()
+}
+
+fn resource_bytes_total(resources: &crate::formats::pe::ResourceDirectory<'_>) -> u64 {
+    resources
+        .resources
+        .iter()
+        .map(|resource| resource.size as u64)
+        .sum()
+}
+
+fn resources_by_type(
+    resources: &crate::formats::pe::ResourceDirectory<'_>,
+) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for resource in &resources.resources {
+        *counts.entry(pe_resource_type_label(resource)).or_insert(0) += 1;
+    }
+    counts
 }
 
 /// Get Mach-O stubs/lazy-pointer/non-lazy-pointer map for a file.

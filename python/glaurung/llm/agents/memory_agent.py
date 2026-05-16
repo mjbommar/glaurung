@@ -16,6 +16,7 @@ from ..tools.view_symbols import build_tool as build_view_symbols, SymbolsListRe
 from ..tools.map_elf_plt import build_tool as build_map_elf_plt, ElfPltMapResult
 from ..tools.map_elf_got import build_tool as build_map_elf_got, ElfGotMapResult
 from ..tools.map_pe_iat import build_tool as build_map_pe_iat, PeIatMapResult
+from ..tools.pe_list_resources import build_tool as build_pe_list_resources
 from ..tools.view_disassembly import (
     build_tool as build_view_disassembly,
     DisasmWindowResult,
@@ -800,6 +801,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent.tool(extract_archive_all, name="extract_archive_all")
     agent.tool(recursive_unpack, name="recursive_unpack")
     agent.tool(find_embedded_executables, name="find_embedded_executables")
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_pe_list_resources()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_agent_context()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_index_archive()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_obfuscation()))
