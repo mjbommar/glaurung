@@ -11,8 +11,8 @@ from ..context import MemoryContext
 from ..kb.store import KnowledgeBase
 
 
-I = TypeVar("I", bound=BaseModel)
-O = TypeVar("O", bound=BaseModel)
+InputModelT = TypeVar("InputModelT", bound=BaseModel)
+OutputModelT = TypeVar("OutputModelT", bound=BaseModel)
 
 
 @dataclass
@@ -22,23 +22,34 @@ class ToolMeta:
     tags: tuple[str, ...] = ()
 
 
-class MemoryTool(ABC, Generic[I, O]):
+class MemoryTool(ABC, Generic[InputModelT, OutputModelT]):
     """Atomic tool contract: a single responsibility and clear IO models."""
 
     meta: ToolMeta
-    input_model: Type[I]
-    output_model: Type[O]
+    input_model: Type[InputModelT]
+    output_model: Type[OutputModelT]
 
-    def __init__(self, meta: ToolMeta, input_model: Type[I], output_model: Type[O]):
+    def __init__(
+        self,
+        meta: ToolMeta,
+        input_model: Type[InputModelT],
+        output_model: Type[OutputModelT],
+    ):
         self.meta = meta
         self.input_model = input_model
         self.output_model = output_model
 
     @abstractmethod
-    def run(self, ctx: MemoryContext, kb: KnowledgeBase, args: I) -> O: ...
+    def run(
+        self, ctx: MemoryContext, kb: KnowledgeBase, args: InputModelT
+    ) -> OutputModelT: ...
 
 
-def tool_to_pyd_ai(tool: MemoryTool[I, O]) -> Tool[MemoryContext]:
+def tool_to_pyd_ai(
+    tool: MemoryTool[InputModelT, OutputModelT],
+    *,
+    strict: bool | None = True,
+) -> Tool[MemoryContext]:
     """Wrap a MemoryTool into a pydantic-ai Tool.
 
     Side effects on every call:
@@ -46,13 +57,19 @@ def tool_to_pyd_ai(tool: MemoryTool[I, O]) -> Tool[MemoryContext]:
       2. **Record an evidence_log row** when the context's KB is a
          PersistentKnowledgeBase, so the agent's claims can cite this
          tool invocation by `cite_id` (#208 generic migration).
+
+    ``strict`` is intentionally configurable at the wrapper layer so
+    provider-facing agents can keep small critical toolsets strict while
+    relaxing larger exploratory toolsets for providers with strict-tool
+    limits. The default remains ``True`` to preserve existing behavior for
+    the general memory agent.
     """
 
     # Build a function taking RunContext
-    def _impl(run_ctx: RunContext[MemoryContext], **kwargs) -> O:
+    def _impl(run_ctx: RunContext[MemoryContext], **kwargs) -> OutputModelT:
         args_model = tool.input_model(**kwargs)
         ctx = run_ctx.deps
-        result_model: O | None = None
+        result_model: OutputModelT | None = None
         error_str: str | None = None
         try:
             result_model = tool.run(ctx, ctx.kb, args_model)
@@ -89,8 +106,11 @@ def tool_to_pyd_ai(tool: MemoryTool[I, O]) -> Tool[MemoryContext]:
             # callers (chat UI, repl, agent) can reference it.
             try:
                 _record_tool_evidence(
-                    ctx, tool.meta.name, args_model,
-                    result_model, error_str,
+                    ctx,
+                    tool.meta.name,
+                    args_model,
+                    result_model,
+                    error_str,
                     last_call_entry=calls[-1] if calls else None,
                 )
             except Exception:
@@ -101,7 +121,7 @@ def tool_to_pyd_ai(tool: MemoryTool[I, O]) -> Tool[MemoryContext]:
         _impl,
         name=tool.meta.name,
         description=tool.meta.description,
-        strict=True,
+        strict=strict,
     )
 
 
@@ -191,7 +211,8 @@ def _record_tool_evidence(
         tool=tool_name,
         args=args_dump,
         summary=summary,
-        va_start=va_start, va_end=va_end,
+        va_start=va_start,
+        va_end=va_end,
         file_offset=file_offset,
         output=output_dump,
     )
@@ -200,7 +221,9 @@ def _record_tool_evidence(
 
 
 def _summary_for_tool(
-    tool_name: str, args: dict, output: dict | None,
+    tool_name: str,
+    args: dict,
+    output: dict | None,
 ) -> str:
     """Produce a 1-line summary suitable for the chat-UI cite table.
     Tools with structured outputs whose shape we know get a tailored
@@ -208,8 +231,8 @@ def _summary_for_tool(
     if output:
         # view_hex / scan_until_byte both report `length` / `bytes_consumed`.
         if "length" in output and "bytes_hex" in output:
-            n = output.get('length')
-            va = args.get('va')
+            n = output.get("length")
+            va = args.get("va")
             if va:
                 where = hex(va)
             else:

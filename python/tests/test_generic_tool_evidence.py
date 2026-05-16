@@ -30,7 +30,7 @@ def test_summary_for_tool_picks_view_hex_shape() -> None:
 
     s = _summary_for_tool(
         "view_hex",
-        args={"va": 0x12d0, "length": 32},
+        args={"va": 0x12D0, "length": 32},
         output={"length": 32, "bytes_hex": "554889e5..."},
     )
     assert "view_hex: 32b @ 0x12d0" == s
@@ -78,7 +78,9 @@ def test_evidence_recorded_when_kb_is_persistent(tmp_path: Path) -> None:
     # Build a MemoryContext that points at the persistent KB.
     art = g.triage.analyze_path(str(binary), 10_000_000, 100_000_000, 1)
     ctx = MemoryContext(
-        file_path=str(binary), artifact=art, budgets=Budgets(max_read_bytes=4096),
+        file_path=str(binary),
+        artifact=art,
+        budgets=Budgets(max_read_bytes=4096),
         kb=kb,
     )
     import_triage(kb, art, str(binary))
@@ -91,7 +93,11 @@ def test_evidence_recorded_when_kb_is_persistent(tmp_path: Path) -> None:
     from pydantic_ai import RunContext
 
     run_ctx = RunContext[MemoryContext](
-        deps=ctx, model="test", usage=None, prompt="", tool_call_id=None,
+        deps=ctx,
+        model="test",
+        usage=None,
+        prompt="",
+        tool_call_id=None,
     )
     pyd_tool.function(run_ctx, file_offset=0, max_scan_bytes=128)
 
@@ -103,3 +109,19 @@ def test_evidence_recorded_when_kb_is_persistent(tmp_path: Path) -> None:
     # Args round-tripped.
     assert rows[0].args.get("max_scan_bytes") == 128
     kb.close()
+
+
+def test_tool_to_pyd_ai_allows_strict_mode_selection() -> None:
+    """Provider-specific agents need to tune strict tools without changing
+    each atomic MemoryTool implementation.
+    """
+    from glaurung.llm.tools.base import tool_to_pyd_ai
+    from glaurung.llm.tools.scan_until_byte import build_tool
+
+    strict_tool = tool_to_pyd_ai(build_tool(), strict=True)
+    loose_tool = tool_to_pyd_ai(build_tool(), strict=False)
+    provider_default_tool = tool_to_pyd_ai(build_tool(), strict=None)
+
+    assert strict_tool.strict is True
+    assert loose_tool.strict is False
+    assert provider_default_tool.strict is None
