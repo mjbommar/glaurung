@@ -129,6 +129,7 @@ def test_java_view_bytecode_can_show_branch_targets(tmp_path: Path) -> None:
     )
 
     assert result.method_found
+    assert result.stack_map_frame_count > 0
     assert any(
         ins.mnemonic.startswith("if_")
         and any(op.startswith("target=") for op in ins.operands)
@@ -137,6 +138,12 @@ def test_java_view_bytecode_can_show_branch_targets(tmp_path: Path) -> None:
     assert any(
         local.name == "value" and local.descriptor == "I" and local.index == 0
         for local in result.local_variables
+    )
+    assert any(
+        n.kind == NodeKind.java_bytecode
+        and n.props.get("method_name") == "gate"
+        and n.props.get("stack_map_frame_count") == result.stack_map_frame_count
+        for n in ctx.kb.nodes()
     )
 
 

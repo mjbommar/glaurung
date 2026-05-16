@@ -44,7 +44,8 @@ Glaurung already has a growing Java path:
   annotations, method `AnnotationDefault` values, initial JVM instruction listings,
   structural class attributes (`InnerClasses`, `EnclosingMethod`, `NestHost`,
   `NestMembers`, `Record`, `PermittedSubclasses`), and lightweight method-level
-  bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  bytecode xrefs for invokes, fields, class refs, and loaded strings. Method code
+  summaries include `StackMapTable` verifier frame counts when present.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `src/analysis/java_jar.rs` and the Python bindings expose bounded central-directory
   JAR metadata, including nested archive entries, multi-release class variants,
@@ -832,6 +833,7 @@ Initial Python implementation status:
 - Reports raw method access flags and decoded access-flag names.
 - Reports containing-class Java/classfile version labels, classfile size category,
   and classfile policy warnings for each method.
+- Reports `StackMapTable` verifier frame counts for method code when present.
 - Supports optional method annotation descriptors.
 - Supports optional ProGuard/Mojang mapped class and method names when a mapping file
   is supplied.
@@ -857,6 +859,7 @@ Outputs:
   attributes are present.
 - Method parameter names, parameter annotation counts, and annotation default values.
 - Code size, max stack, max locals.
+- `StackMapTable` verifier frame count.
 - Line table availability and first/last source line when present.
 - Annotation descriptors when requested.
 

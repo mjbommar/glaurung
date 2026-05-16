@@ -531,6 +531,7 @@ fn java_code_to_py(
     }
     dict.set_item("exception_handlers", exception_handlers)?;
     dict.set_item("attributes_count", code.attributes_count)?;
+    dict.set_item("stack_map_frame_count", code.stack_map_frame_count)?;
     let line_numbers = pyo3::types::PyList::empty(py);
     for line in code.line_numbers {
         let ldict = pyo3::types::PyDict::new(py);

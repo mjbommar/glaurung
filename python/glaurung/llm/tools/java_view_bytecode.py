@@ -106,6 +106,7 @@ class JavaViewBytecodeResult(BaseModel):
     max_stack: int | None = None
     max_locals: int | None = None
     code_length: int | None = None
+    stack_map_frame_count: int = 0
     instructions: list[JavaBytecodeInstruction] = Field(default_factory=list)
     xrefs: list[JavaBytecodeXref] = Field(default_factory=list)
     local_variables: list[JavaBytecodeLocalVariable] = Field(default_factory=list)
@@ -337,6 +338,7 @@ def _result_for_method(
                 "local_variable_count": len(local_variables),
                 "local_variable_type_count": len(local_variable_types),
                 "exception_handler_count": len(exception_handlers),
+                "stack_map_frame_count": int(code.get("stack_map_frame_count", 0)),
                 "truncated": truncated,
                 "bci_start": bci_start,
                 "bci_end": bci_end,
@@ -365,6 +367,7 @@ def _result_for_method(
         max_stack=int(code["max_stack"]),
         max_locals=int(code["max_locals"]),
         code_length=int(code["code_length"]),
+        stack_map_frame_count=int(code.get("stack_map_frame_count", 0)),
         instructions=instructions,
         xrefs=xrefs,
         local_variables=local_variables,

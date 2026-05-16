@@ -210,6 +210,43 @@ public class Main {
     assert method.generic_signature_error is None
 
 
+def test_java_list_methods_reports_stack_map_frame_counts(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_list_methods import build_tool
+
+    jar = _compile_source(
+        tmp_path,
+        """
+package app;
+
+public class Main {
+    public int choose(boolean flag) {
+        if (flag) {
+            return 1;
+        }
+        return 2;
+    }
+}
+""",
+    )
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            class_filter="app.Main",
+            name_filter="choose",
+            include_constructors=False,
+        ),
+    )
+
+    assert result.matched_method_count == 1
+    method = result.methods[0]
+    assert method.stack_map_frame_count > 0
+
+
 def test_java_list_methods_reports_parameter_metadata_and_annotation_defaults(
     tmp_path: Path,
 ) -> None:

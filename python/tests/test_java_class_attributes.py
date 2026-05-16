@@ -390,6 +390,7 @@ def test_parse_java_class_recovers_exception_handlers(tmp_path: Path) -> None:
     guarded = next(method for method in info["methods"] if method["name"] == "guarded")
     code = guarded["code"]
     assert code["exception_table_len"] == 1
+    assert code["stack_map_frame_count"] > 0
     assert len(code["exception_handlers"]) == 1
     handler = code["exception_handlers"][0]
     assert handler["catch_type"] == "java/lang/NumberFormatException"

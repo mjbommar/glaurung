@@ -32,6 +32,7 @@ pub struct JavaCode {
     pub exception_table_len: u16,
     pub exception_handlers: Vec<JavaExceptionHandler>,
     pub attributes_count: u16,
+    pub stack_map_frame_count: u16,
     pub line_numbers: Vec<JavaLineNumber>,
     pub local_variables: Vec<JavaLocalVariable>,
     pub local_variable_types: Vec<JavaLocalVariableType>,
@@ -824,6 +825,7 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
     let mut line_numbers = Vec::new();
     let mut local_variables = Vec::new();
     let mut local_variable_types = Vec::new();
+    let mut stack_map_frame_count = 0u16;
     for _ in 0..attributes_count {
         if p + 6 > body.len() {
             return Err(ClassError::Truncated("code nested attribute header"));
@@ -847,6 +849,8 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
                 &body[attr_start..attr_end],
                 cp,
             )?);
+        } else if name == "StackMapTable" {
+            stack_map_frame_count = parse_stack_map_table_frame_count(&body[attr_start..attr_end])?;
         }
         p = attr_end;
     }
@@ -860,6 +864,7 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         exception_table_len,
         exception_handlers,
         attributes_count,
+        stack_map_frame_count,
         line_numbers,
         local_variables,
         local_variable_types,
@@ -900,6 +905,13 @@ fn parse_exception_table(
         p += 8;
     }
     Ok(handlers)
+}
+
+fn parse_stack_map_table_frame_count(body: &[u8]) -> Result<u16, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("StackMapTable length"));
+    }
+    Ok(u16::from_be_bytes(body[0..2].try_into().unwrap()))
 }
 
 fn parse_exceptions_attribute(body: &[u8], cp: &[CpEntry]) -> Result<Vec<String>, ClassError> {

@@ -56,7 +56,8 @@ Implemented pieces now include:
   annotations, method `AnnotationDefault` values, structural class attributes
   (`InnerClasses`, `EnclosingMethod`, `NestHost`, `NestMembers`, `Record`,
   `PermittedSubclasses`), instruction listings, and lightweight method-level
-  bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  bytecode xrefs for invokes, fields, class refs, and loaded strings. Method code
+  summaries include `StackMapTable` verifier frame counts when present.
 - Rust central-directory JAR indexing for bounded archive metadata: entry counts,
   compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
   signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
@@ -125,7 +126,7 @@ Implemented pieces now include:
   distinguish one call site from another call to the same API.
 - Initial bytecode viewing for selected methods, exposing BCI, opcode, mnemonic,
   normalized operands, line anchors, local-variable scopes, xrefs, bounded windows,
-  and mapping context.
+  stack-map frame counts, and mapping context.
 - Initial class listing through `java_list_classes`, exposing bounded package/name
   and access-flag filters, superclass/interface/member counts, optional annotation
   descriptors, `SourceFile` metadata, decoded access-flag names, normalized

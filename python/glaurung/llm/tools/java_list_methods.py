@@ -85,6 +85,7 @@ class JavaListedMethod(BaseModel):
     code_length: int | None = None
     max_stack: int | None = None
     max_locals: int | None = None
+    stack_map_frame_count: int = 0
     line_number_count: int = 0
     first_line: int | None = None
     last_line: int | None = None
@@ -236,11 +237,13 @@ def _method_summary(
     code_length: int | None = None
     max_stack: int | None = None
     max_locals: int | None = None
+    stack_map_frame_count = 0
     line_numbers: list[int] = []
     if isinstance(code, dict):
         code_length = int(code.get("code_length", 0))
         max_stack = int(code.get("max_stack", 0))
         max_locals = int(code.get("max_locals", 0))
+        stack_map_frame_count = int(code.get("stack_map_frame_count", 0))
         line_numbers = _line_numbers(code)
     descriptor = str(method.get("descriptor"))
     decoded_descriptor = decode_method_descriptor(descriptor)
@@ -291,6 +294,7 @@ def _method_summary(
         code_length=code_length,
         max_stack=max_stack,
         max_locals=max_locals,
+        stack_map_frame_count=stack_map_frame_count,
         line_number_count=len(line_numbers),
         first_line=min(line_numbers) if line_numbers else None,
         last_line=max(line_numbers) if line_numbers else None,

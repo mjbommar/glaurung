@@ -47,6 +47,12 @@ public class a {
     public void c() { b++; }
     public int e(int value) { return b + value; }
     public void h(@Marker("param") String input) {}
+    public int j(boolean flag) {
+        if (flag) {
+            return 1;
+        }
+        return 2;
+    }
 }
 
 record r(String token, int count) {}
@@ -167,6 +173,7 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     field_g = next(f for f in result.fields if f.name == "g")
     method_c = next(m for m in result.methods if m.name == "c")
     method_h = next(m for m in result.methods if m.name == "h")
+    method_j = next(m for m in result.methods if m.name == "j")
     assert field_b.mapped_names == ["health"]
     assert field_b.field_type == "int"
     assert field_b.access_flag_names == ["public"]
@@ -188,6 +195,8 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert method_c.code.line_number_count >= 1
     assert method_c.code.first_line is not None
     assert method_c.code.last_line is not None
+    assert method_j.code is not None
+    assert method_j.code.stack_map_frame_count > 0
     assert any(
         n.kind == NodeKind.java_class
         and n.props.get("mapped_class_name") == "com.example.GameThing"

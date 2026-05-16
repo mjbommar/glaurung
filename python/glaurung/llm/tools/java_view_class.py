@@ -47,6 +47,7 @@ class JavaCodeSummary(BaseModel):
     code_length: int
     exception_table_len: int
     attributes_count: int
+    stack_map_frame_count: int = 0
     line_number_count: int = 0
     first_line: int | None = None
     last_line: int | None = None
@@ -602,6 +603,7 @@ def _code_summary(value: Any) -> JavaCodeSummary | None:
         code_length=int(value["code_length"]),
         exception_table_len=int(value["exception_table_len"]),
         attributes_count=int(value["attributes_count"]),
+        stack_map_frame_count=int(value.get("stack_map_frame_count", 0)),
         line_number_count=len(line_numbers),
         first_line=min(line_numbers) if line_numbers else None,
         last_line=max(line_numbers) if line_numbers else None,
