@@ -127,6 +127,10 @@ Glaurung already has a growing Java path:
   compilation, rebuilt ABI comparison, original archive resource parity against
   `src/main/resources`, generated-stub rejection unless explicitly allowed, and
   `java_recovery_validation` evidence nodes.
+- Python memory tools can now list candidate classes with `java_list_classes`,
+  exposing bounded package/name/access-flag filtering, superclass/interface/member
+  counts, optional annotation descriptors, optional ProGuard/Mojang mapped names, and
+  `java_class` evidence nodes.
 - Python memory tools can now list candidate methods with `java_list_methods`,
   exposing bounded class/name/descriptor filtering, code-size summaries, optional
   annotation descriptors, optional ProGuard/Mojang mapped names, and `java_method`
@@ -733,16 +737,34 @@ Use this as the default first-touch tool for JARs.
 
 `java_list_classes`
 
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_class` KB nodes for returned classes.
+- Scans JAR/ZIP class entries with the Rust class parser.
+- Supports package-prefix, class-name, access-flag all/any/none, scan-budget, and
+  result-limit filtering.
+- Reports class locators, internal/dotted/mapped names, package/simple names,
+  superclasses, interfaces, JVM version, method counts, field counts, methods with
+  code, and optional class annotation descriptors.
+- Supports optional ProGuard/Mojang mapped class names when a mapping file is
+  supplied.
+
 Inputs:
 
 - `package_prefix`
 - `name_filter`
-- `flags`
+- `access_flags_all`
+- `access_flags_any`
+- `access_flags_none`
+- Optional mapping path/namespace.
+- `include_annotations`
 - `limit`
 
 Outputs:
 
-- Class locators, names, superclasses, interface counts, method counts, field counts.
+- Class locators, names, superclasses, interface counts, method counts, field counts,
+  JVM version, access flags, mapped names, and optional annotation descriptors.
 
 `java_view_class`
 
