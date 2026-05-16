@@ -192,6 +192,7 @@ from ..tools.java_reconstruct_source_tree import (
     build_tool as build_java_reconstruct_source_tree,
 )
 from ..tools.java_decompile_class import build_tool as build_java_decompile_class
+from ..tools.java_decompile_archive import build_tool as build_java_decompile_archive
 from ..tools.java_parse_decompiled_source import (
     build_tool as build_java_parse_decompiled_source,
 )
@@ -834,6 +835,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
         tool_to_pyd_ai(build_java_reconstruct_source_tree())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_decompile_class()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_decompile_archive()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_parse_decompiled_source())
     )

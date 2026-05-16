@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import zipfile
 from pathlib import Path
 from typing import Literal
 
@@ -17,7 +18,11 @@ from .java_compile_recovered_project import (
 )
 
 
-JavaRepairKind = Literal["rename_public_type_file"]
+JavaRepairKind = Literal[
+    "rename_public_type_file",
+    "rewrite_inner_companion_declaration",
+    "add_local_classpath_jar",
+]
 
 
 class JavaRepairDecompiledSourceArgs(BaseModel):
@@ -133,6 +138,28 @@ class JavaRepairDecompiledSourceTool(
                 dry_run=args.dry_run,
                 max_repairs=args.max_repairs_per_iteration,
             )
+            if len(repairs) < args.max_repairs_per_iteration:
+                repairs.extend(
+                    _repair_missing_local_dependencies(
+                        root,
+                        compile_result,
+                        iteration=iteration,
+                        dry_run=args.dry_run,
+                        max_repairs=args.max_repairs_per_iteration - len(repairs),
+                        java_release=args.java_release,
+                        sources_file=args.sources_file,
+                        javac_args_file=args.javac_args_file,
+                    )
+                )
+            if len(repairs) < args.max_repairs_per_iteration:
+                repairs.extend(
+                    _repair_inner_companion_declarations(
+                        root,
+                        iteration=iteration,
+                        dry_run=args.dry_run,
+                        max_repairs=args.max_repairs_per_iteration - len(repairs),
+                    )
+                )
             result.repairs.extend(repairs)
             if not repairs:
                 _append_once(result.stop_reasons, "no_applicable_repairs")
@@ -154,6 +181,14 @@ class JavaRepairDecompiledSourceTool(
 _PUBLIC_TYPE_FILENAME_RE = re.compile(
     r"(?:class|interface|enum|record)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+is public, "
     r"should be declared in a file named ([A-Za-z_$][A-Za-z0-9_$]*\.java)"
+)
+_INNER_COMPANION_DECL_RE = re.compile(
+    r"\b(?P<access>public|protected|private)?\s*"
+    r"(?:static\s+)?"
+    r"(?P<kind>class|interface|enum)\s+"
+    r"(?P<outer>[A-Za-z_$][A-Za-z0-9_$]*)\."
+    r"(?P<inner>[A-Za-z_$][A-Za-z0-9_$]*)"
+    r"(?P<suffix>\s*(?:<[^>{;]+>)?)"
 )
 
 
@@ -206,6 +241,160 @@ def _repairs_for_compile_result(
             )
         )
     return repairs
+
+
+def _repair_missing_local_dependencies(
+    root: Path,
+    compile_result: JavaCompileRecoveredProjectResult,
+    *,
+    iteration: int,
+    dry_run: bool,
+    max_repairs: int,
+    java_release: int | None,
+    sources_file: str,
+    javac_args_file: str,
+) -> list[JavaSourceRepair]:
+    if max_repairs == 0 or compile_result.selected_build_tool != "javac":
+        return []
+    missing_targets = _missing_import_targets(compile_result)
+    if not missing_targets:
+        return []
+    jars = _matching_local_jars(root, missing_targets)
+    if not jars:
+        return []
+    _rewrite_sources_file(root, sources_file)
+    argfile = root / javac_args_file
+    classpath = ":".join(_relative(root, jar) for jar in jars)
+    content = "\n".join(
+        [
+            "--release",
+            str(java_release or 17),
+            "-classpath",
+            classpath,
+            "-d",
+            "build/classes",
+            f"@{sources_file}",
+            "",
+        ]
+    )
+    if not dry_run:
+        argfile.write_text(content, encoding="utf-8")
+    return [
+        JavaSourceRepair(
+            iteration=iteration,
+            kind="add_local_classpath_jar",
+            file=javac_args_file,
+            new_file=javac_args_file,
+            applied=not dry_run,
+            message=(
+                "Added local classpath jar(s) for missing dependency target(s): "
+                + ", ".join(_relative(root, jar) for jar in jars[:max_repairs])
+            ),
+        )
+    ]
+
+
+def _missing_import_targets(
+    compile_result: JavaCompileRecoveredProjectResult,
+) -> list[str]:
+    out: list[str] = []
+    for diagnostic in compile_result.diagnostics:
+        if diagnostic.category != "missing_classpath_dependency":
+            continue
+        import_match = re.search(
+            r"\(from import ([A-Za-z0-9_.*]+)\)", diagnostic.message
+        )
+        if import_match is not None:
+            _append_once(out, import_match.group(1).removesuffix(".*"))
+            continue
+        if diagnostic.package_or_class:
+            _append_once(out, diagnostic.package_or_class)
+    return out
+
+
+def _matching_local_jars(root: Path, targets: list[str]) -> list[Path]:
+    candidates = [
+        jar
+        for lib_dir_name in ("libs", "lib")
+        for jar in (root / lib_dir_name).glob("*.jar")
+        if jar.is_file()
+    ]
+    matches: list[Path] = []
+    for jar in sorted(candidates):
+        if _jar_matches_any_target(jar, targets):
+            matches.append(jar)
+    return matches
+
+
+def _jar_matches_any_target(jar: Path, targets: list[str]) -> bool:
+    try:
+        with zipfile.ZipFile(jar) as zf:
+            entries = {
+                info.filename
+                for info in zf.infolist()
+                if not info.is_dir() and info.filename.endswith(".class")
+            }
+    except zipfile.BadZipFile:
+        return False
+    for target in targets:
+        internal = target.replace(".", "/")
+        if f"{internal}.class" in entries:
+            return True
+        if any(entry.startswith(internal.rstrip("/") + "/") for entry in entries):
+            return True
+    return False
+
+
+def _repair_inner_companion_declarations(
+    root: Path,
+    *,
+    iteration: int,
+    dry_run: bool,
+    max_repairs: int,
+) -> list[JavaSourceRepair]:
+    if max_repairs == 0:
+        return []
+    source_root = root / "src" / "main" / "java"
+    if not source_root.is_dir():
+        return []
+    repairs: list[JavaSourceRepair] = []
+    for source_file in sorted(source_root.rglob("*$*.java")):
+        if len(repairs) >= max_repairs:
+            break
+        text = source_file.read_text(encoding="utf-8", errors="replace")
+        rewritten = _rewrite_inner_companion_text(text, source_file.stem)
+        if rewritten == text:
+            continue
+        if not dry_run:
+            source_file.write_text(rewritten, encoding="utf-8")
+        repairs.append(
+            JavaSourceRepair(
+                iteration=iteration,
+                kind="rewrite_inner_companion_declaration",
+                file=_relative(root, source_file),
+                new_file=_relative(root, source_file),
+                applied=not dry_run,
+                message=(
+                    "Rewrote dotted nested type declaration into a legal "
+                    "top-level companion declaration."
+                ),
+            )
+        )
+    return repairs
+
+
+def _rewrite_inner_companion_text(text: str, expected_stem: str) -> str:
+    if "$" not in expected_stem:
+        return text
+
+    def replacement(match: re.Match[str]) -> str:
+        declared_stem = f"{match.group('outer')}${match.group('inner')}"
+        if declared_stem != expected_stem:
+            return match.group(0)
+        access = "public " if match.group("access") == "public" else ""
+        return f"{access}{match.group('kind')} {declared_stem}{match.group('suffix')}"
+
+    return _INNER_COMPANION_DECL_RE.sub(replacement, text, count=1)
 
 
 def _resolve_under_root(root: Path, value: str) -> Path | None:

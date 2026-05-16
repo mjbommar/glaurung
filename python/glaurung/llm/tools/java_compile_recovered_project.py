@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Literal
 
@@ -93,10 +94,8 @@ class JavaCompileRecoveredProjectTool(
             ToolMeta(
                 name="java_compile_recovered_project",
                 description=(
-                    "Compile a recovered Java source project with bounded javac "
-                    "execution and structured diagnostics. Maven/Gradle are "
-                    "recognized but not executed unless future offline policies "
-                    "are implemented."
+                    "Compile a recovered Java source project with bounded javac, "
+                    "Maven, or Gradle execution and structured diagnostics."
                 ),
                 tags=("java", "compile", "source-recovery", "diagnostics", "kb"),
             ),
@@ -120,22 +119,19 @@ class JavaCompileRecoveredProjectTool(
             )
 
         selected = _select_build_tool(root, args.build_tool)
-        if selected != "javac":
+        if selected == "javac":
+            result = _run_javac(root, args)
+        elif selected == "maven":
+            result = _run_maven(root, args)
+        elif selected == "gradle":
+            result = _run_gradle(root, args)
+        else:
             result = JavaCompileRecoveredProjectResult(
                 source_project_root=str(root),
                 selected_build_tool=selected,
                 success=False,
                 stop_reasons=["unsupported_build_tool"],
-                warnings=[
-                    "Initial compile support is limited to javac argfile/source-tree "
-                    "projects. Maven/Gradle compile execution will be added with "
-                    "offline resolver policy."
-                ],
             )
-            _add_compile_node(kb, result)
-            return result
-
-        result = _run_javac(root, args)
         _add_compile_node(kb, result)
         return result
 
@@ -248,6 +244,132 @@ def _run_javac(
             warnings=warnings,
         )
     return result
+
+
+def _run_maven(
+    root: Path,
+    args: JavaCompileRecoveredProjectArgs,
+) -> JavaCompileRecoveredProjectResult:
+    mvn = shutil.which("mvn")
+    if mvn is None:
+        return JavaCompileRecoveredProjectResult(
+            source_project_root=str(root),
+            selected_build_tool="maven",
+            success=False,
+            stop_reasons=["maven_missing"],
+        )
+    command = [mvn, "-q"]
+    warnings: list[str] = []
+    if not args.allow_dependency_network:
+        command.append("-o")
+        warnings.append(
+            "Maven ran in offline mode because dependency network is disabled."
+        )
+    command.extend(["-DskipTests", "package"])
+    return _run_build_process(
+        root=root,
+        args=args,
+        selected_build_tool="maven",
+        command=command,
+        classes_dir=root / "target" / "classes",
+        jar_glob="target/*.jar",
+        warnings=warnings,
+    )
+
+
+def _run_gradle(
+    root: Path,
+    args: JavaCompileRecoveredProjectArgs,
+) -> JavaCompileRecoveredProjectResult:
+    gradle = _gradle_path(root)
+    if gradle is None:
+        return JavaCompileRecoveredProjectResult(
+            source_project_root=str(root),
+            selected_build_tool="gradle",
+            success=False,
+            stop_reasons=["gradle_missing"],
+        )
+    command = [gradle]
+    warnings: list[str] = []
+    if not args.allow_dependency_network:
+        command.append("--offline")
+        warnings.append(
+            "Gradle ran in offline mode because dependency network is disabled."
+        )
+    command.extend(["-q", "build", "-x", "test"])
+    return _run_build_process(
+        root=root,
+        args=args,
+        selected_build_tool="gradle",
+        command=command,
+        classes_dir=root / "build" / "classes",
+        jar_glob="build/libs/*.jar",
+        warnings=warnings,
+    )
+
+
+def _run_build_process(
+    *,
+    root: Path,
+    args: JavaCompileRecoveredProjectArgs,
+    selected_build_tool: SelectedJavaCompileTool,
+    command: list[str],
+    classes_dir: Path,
+    jar_glob: str,
+    warnings: list[str],
+) -> JavaCompileRecoveredProjectResult:
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=args.timeout_seconds,
+            check=False,
+        )
+        duration_ms = int((time.monotonic() - started) * 1000)
+        combined = "\n".join(part for part in (proc.stderr, proc.stdout) if part)
+        diagnostics = _parse_javac_diagnostics(combined, args.max_diagnostics)
+        stop_reasons = []
+        if len(diagnostics) >= args.max_diagnostics and args.max_diagnostics > 0:
+            stop_reasons.append("max_diagnostics")
+        rebuilt_jar = _first_file(root.glob(jar_glob))
+        return JavaCompileRecoveredProjectResult(
+            source_project_root=str(root),
+            selected_build_tool=selected_build_tool,
+            success=proc.returncode == 0,
+            timed_out=False,
+            exit_code=proc.returncode,
+            duration_ms=duration_ms,
+            command=command,
+            generated_classes_dir=str(classes_dir) if classes_dir.exists() else None,
+            rebuilt_jar_path=str(rebuilt_jar) if rebuilt_jar else None,
+            diagnostic_count=len(diagnostics),
+            diagnostics=diagnostics,
+            stdout_excerpt=_excerpt(proc.stdout, args.max_output_chars),
+            stderr_excerpt=_excerpt(proc.stderr, args.max_output_chars),
+            stop_reasons=stop_reasons,
+            warnings=warnings,
+        )
+    except subprocess.TimeoutExpired as exc:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        return JavaCompileRecoveredProjectResult(
+            source_project_root=str(root),
+            selected_build_tool=selected_build_tool,
+            success=False,
+            timed_out=True,
+            exit_code=None,
+            duration_ms=duration_ms,
+            command=command,
+            generated_classes_dir=str(classes_dir) if classes_dir.exists() else None,
+            diagnostic_count=0,
+            diagnostics=[],
+            stdout_excerpt=_excerpt(_coerce_output(exc.stdout), args.max_output_chars),
+            stderr_excerpt=_excerpt(_coerce_output(exc.stderr), args.max_output_chars),
+            stop_reasons=["timeout"],
+            warnings=warnings,
+        )
 
 
 _JAVAC_DIAG_RE = re.compile(
@@ -364,6 +486,20 @@ def _javac_path(java_home: str | None) -> str | None:
         if candidate.is_file():
             return str(candidate)
     return shutil.which("javac")
+
+
+def _gradle_path(root: Path) -> str | None:
+    wrapper = root / "gradlew"
+    if wrapper.is_file():
+        return str(wrapper)
+    return shutil.which("gradle")
+
+
+def _first_file(paths: Iterable[Path]) -> Path | None:
+    for path in sorted(paths):
+        if path.is_file():
+            return path
+    return None
 
 
 def _expand_javac_argfile(root: Path, argfile: Path, depth: int = 0) -> list[str]:

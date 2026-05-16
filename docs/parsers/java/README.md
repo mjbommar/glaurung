@@ -223,25 +223,32 @@ Implemented pieces now include:
   nodes without fetching dependencies.
 - Initial recovered-project compilation through `java_compile_recovered_project`,
   supporting bounded `javac` execution for generated source trees and argfiles,
-  automatic `sources.txt` population, timeout handling, structured diagnostics, and
+  bounded Maven/Gradle build execution, automatic `sources.txt` population, timeout
+  handling, structured diagnostics, rebuilt JAR/class-directory reporting, and
   `java_compile_result` KB nodes.
 - Initial JVM helper/decompiler bridge under `java/glaurung-jvm-tools`, packaging
   ASM, CFR, Vineflower, and JavaParser behind a small JSON CLI. Python tools now use
   it for per-class bytecode summaries, per-class decompilation, and AST summaries
   without running recovered application code.
-- Initial decompiler tools through `java_decompile_class` and
-  `java_parse_decompiled_source`, emitting `java_decompile_unit` KB nodes with
-  source/AST evidence suitable for agent review and later repair.
+- Initial decompiler tools through `java_decompile_class`,
+  `java_decompile_archive`, and `java_parse_decompiled_source`, emitting
+  `java_decompile_unit` and `java_decompile_archive` KB nodes with source/AST
+  evidence suitable for agent review and later repair. Archive decompilation has
+  budgets, package/glob filters, CFR/Vineflower fallback scoring, explicit
+  inner-class `skip`/`companion` policy, mapping-aware filters/metadata, optional
+  source emission, and bytecode/source correlation anchors.
 - Initial source-tree reconstruction through `java_reconstruct_source_tree`,
   creating `src/main/java` and `src/main/resources` scaffolds, preserving runtime
   resources and metadata, skipping signed-JAR signature files, optionally emitting
   CFR/Vineflower decompiled top-level source files, tracking classes that still need
   decompilation, and emitting explicit generated stubs only when requested.
 - Initial compile-repair loop through `java_repair_decompiled_source`, running
-  bounded `javac` iterations and applying safe mechanical repairs. The first repair
-  class fixes decompiler/recovery output where a public Java type is emitted into
-  the wrong filename, updates `sources.txt`, recompiles, and records
-  `java_repair_result` KB evidence.
+  bounded `javac` iterations and applying safe mechanical repairs. It can fix
+  public-type filename mismatches, rewrite dotted inner companion declarations like
+  `Outer.Inner` into legal `$` companion declarations, add matching local
+  `libs/*.jar` classpath entries for missing dependency diagnostics, update
+  `sources.txt`/`javac.args`, recompile, and record `java_repair_result` KB
+  evidence.
 - Initial ABI comparison through `java_compare_rebuilt_abi`, comparing original and
   rebuilt JARs or class directories by class names, field descriptors, method
   descriptors, access flags, selected `all`/`package_api`/`public_api` scope, and
@@ -251,7 +258,9 @@ Implemented pieces now include:
   `java_validate_recovered_application`, orchestrating bounded `javac`
   compilation, rebuilt ABI comparison, original archive resource parity against
   `src/main/resources`, generated-stub rejection unless explicitly allowed, and
-  `java_recovery_validation` KB evidence.
+  `java_recovery_validation` KB evidence. Validation reports now include explicit
+  pass/fail/skip checks, blocking issue counts, `clean_enough`/`not_clean_enough`
+  summaries, and next-action hints.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -275,9 +284,9 @@ Not yet implemented:
   type-annotation target/value decoding, complete stack-map frame bodies, richer
   bootstrap argument typing, and richer annotation/module parity checks.
 - Clean source-project recovery after the initial dependency/build/scaffold/compile,
-  ABI-comparison, and validation-report layers: archive-wide decompilation, module
-  source recovery, dependency resolution policy, Maven/Gradle execution, richer
-  compiler-diagnostic repair, annotation/module parity, and richer resource policy.
+  ABI-comparison, and validation-report layers: module source recovery, real source
+  remapping/renaming, dependency resolver policy, richer compiler-diagnostic repair,
+  annotation/module parity, and richer resource policy.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
   correlation, framework-aware reachability, and richer directory-level risk
   reporting.
@@ -410,13 +419,15 @@ Important lessons:
 - [x] Java helper project with ASM, Vineflower, CFR, and JavaParser
 - [x] `java_decompile_class`
 - [ ] `java_decompile_method`
-- [ ] `java_decompile_archive`
-- [ ] Source/bytecode line correlation beyond per-class AST summaries
+- [x] Initial `java_decompile_archive`
+- [x] Initial source/bytecode correlation anchors for archive decompilation
+- [ ] Source/bytecode line correlation beyond method/count/string anchors
 - [x] Initial `java_infer_dependencies` from manifest `Class-Path`, Maven metadata,
   nested archives, bytecode external package references, and optional `jdeps`
   package evidence
-- [ ] Dependency resolution from modules, supplied classpaths, and missing class
-  diagnostics
+- [x] Initial local `libs/*.jar` classpath repair from missing class diagnostics
+- [ ] Dependency resolution from modules, supplied classpaths, remote metadata, and
+  missing class diagnostics
 - [x] Initial source tree scaffold under `src/main/java` and `src/main/resources`
 - [x] Initial manifest, ServiceLoader, framework metadata, and resource preservation
 - [x] Initial decompiled top-level source emission from `java_reconstruct_source_tree`
@@ -425,8 +436,10 @@ Important lessons:
 - [ ] Build-system refinement for module paths, annotation processors, loader-specific
   Minecraft build plugins, and resolver/cache policy
 - [x] Initial bounded `javac` compilation and structured diagnostics
-- [ ] Maven/Gradle compile execution and richer structured diagnostics
-- [x] Initial compile-repair loop with safe public-type filename repair
+- [x] Initial Maven/Gradle compile execution
+- [ ] Richer Maven/Gradle structured diagnostics
+- [x] Initial compile-repair loop with safe public-type filename repair, companion
+  inner declaration repair, and local classpath repair
 - [ ] Richer repair classes for decompiler syntax, signatures, imports, and
   build/classpath failures
 - [x] Initial ABI/API comparison between original and rebuilt classes
@@ -436,7 +449,8 @@ Important lessons:
 - [x] Optional class/member annotation parity in ABI validation
 - [ ] Parameter annotation/default and module validation between original and rebuilt
   artifacts
-- [x] Initial recovered application validation report
+- [x] Initial recovered application validation report with quality summary and next
+  actions
 
 ### Phase 7: Static Behavior Audit and Risk Reporting
 - [ ] Sensitive API rule packs for process execution, filesystem mutation,

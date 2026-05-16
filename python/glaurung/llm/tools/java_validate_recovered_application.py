@@ -24,6 +24,7 @@ from .java_compile_recovered_project import (
 
 ValidationProfile = Literal["compile_only", "abi", "resources", "full_static"]
 ValidationStatus = Literal["valid", "invalid", "partial", "unsupported"]
+ValidationCheckStatus = Literal["pass", "fail", "skip"]
 ResourceDifferenceKind = Literal[
     "missing_resource",
     "extra_resource",
@@ -74,6 +75,12 @@ class JavaResourceDifference(BaseModel):
     message: str
 
 
+class JavaValidationCheck(BaseModel):
+    name: str
+    status: ValidationCheckStatus
+    message: str
+
+
 class JavaValidateRecoveredApplicationResult(BaseModel):
     original_path: str
     source_project_root: str | None = None
@@ -81,6 +88,10 @@ class JavaValidateRecoveredApplicationResult(BaseModel):
     profile: ValidationProfile
     status: ValidationStatus
     validation_passed: bool
+    quality_summary: str = ""
+    blocking_issue_count: int = 0
+    checks: list[JavaValidationCheck] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
     compile_success: bool | None = None
     compile_diagnostic_count: int = 0
     compile_diagnostics: list[JavaCompilerDiagnostic] = Field(default_factory=list)
@@ -261,6 +272,24 @@ class JavaValidateRecoveredApplicationTool(
             allow_generated_stubs=args.allow_generated_stubs,
             stop_reasons=stop_reasons,
         )
+        checks = _validation_checks(
+            compile_success=compile_success,
+            abi_match=abi_match,
+            resource_match=resource_match,
+            stub_sources=stub_sources,
+            allow_generated_stubs=args.allow_generated_stubs,
+            stop_reasons=stop_reasons,
+        )
+        next_actions = _next_actions(
+            compile_success=compile_success,
+            compile_diagnostic_count=compile_diagnostic_count,
+            abi_match=abi_match,
+            abi_difference_count=abi_difference_count,
+            resource_match=resource_match,
+            resource_difference_count=resource_difference_count,
+            stub_sources=stub_sources,
+            stop_reasons=stop_reasons,
+        )
         result = JavaValidateRecoveredApplicationResult(
             original_path=str(original_path),
             source_project_root=str(project_root),
@@ -268,6 +297,10 @@ class JavaValidateRecoveredApplicationTool(
             profile=args.profile,
             status=_status(validation_passed, stop_reasons),
             validation_passed=validation_passed,
+            quality_summary=_quality_summary(validation_passed, checks),
+            blocking_issue_count=sum(1 for check in checks if check.status == "fail"),
+            checks=checks,
+            next_actions=next_actions,
             compile_success=compile_success,
             compile_diagnostic_count=compile_diagnostic_count,
             compile_diagnostics=compile_diagnostics,
@@ -504,6 +537,125 @@ def _passes_validation(
     if compile_success is False or abi_match is False or resource_match is False:
         return False
     return True
+
+
+def _validation_checks(
+    *,
+    compile_success: bool | None,
+    abi_match: bool | None,
+    resource_match: bool | None,
+    stub_sources: list[str],
+    allow_generated_stubs: bool,
+    stop_reasons: list[str],
+) -> list[JavaValidationCheck]:
+    checks = [
+        _check(
+            "compile",
+            compile_success,
+            "Recovered source compiles.",
+            "Recovered source does not compile.",
+            "Compilation was not requested.",
+        ),
+        _check(
+            "abi",
+            abi_match,
+            "Rebuilt classes match the selected ABI surface.",
+            "Rebuilt classes differ from the original ABI surface.",
+            "ABI comparison was not requested.",
+        ),
+        _check(
+            "resources",
+            resource_match,
+            "Recovered resources match the original archive resources.",
+            "Recovered resources differ from the original archive resources.",
+            "Resource comparison was not requested.",
+        ),
+    ]
+    if stub_sources and not allow_generated_stubs:
+        checks.append(
+            JavaValidationCheck(
+                name="generated_stubs",
+                status="fail",
+                message=f"{len(stub_sources)} generated stub source file(s) remain.",
+            )
+        )
+    else:
+        checks.append(
+            JavaValidationCheck(
+                name="generated_stubs",
+                status="pass",
+                message="No blocking generated stubs remain.",
+            )
+        )
+    if stop_reasons:
+        checks.append(
+            JavaValidationCheck(
+                name="stop_reasons",
+                status="fail",
+                message="Validation reported: " + ", ".join(stop_reasons),
+            )
+        )
+    return checks
+
+
+def _check(
+    name: str,
+    value: bool | None,
+    pass_message: str,
+    fail_message: str,
+    skip_message: str,
+) -> JavaValidationCheck:
+    if value is None:
+        return JavaValidationCheck(name=name, status="skip", message=skip_message)
+    return JavaValidationCheck(
+        name=name,
+        status="pass" if value else "fail",
+        message=pass_message if value else fail_message,
+    )
+
+
+def _next_actions(
+    *,
+    compile_success: bool | None,
+    compile_diagnostic_count: int,
+    abi_match: bool | None,
+    abi_difference_count: int,
+    resource_match: bool | None,
+    resource_difference_count: int,
+    stub_sources: list[str],
+    stop_reasons: list[str],
+) -> list[str]:
+    actions: list[str] = []
+    if compile_success is False:
+        actions.append(
+            f"Repair compiler diagnostics ({compile_diagnostic_count} reported)."
+        )
+    if abi_match is False:
+        actions.append(f"Repair ABI differences ({abi_difference_count} reported).")
+    if resource_match is False:
+        actions.append(
+            f"Restore or explicitly omit resource differences ({resource_difference_count} reported)."
+        )
+    if stub_sources:
+        actions.append(
+            f"Replace generated stubs with decompiled/repaired source ({len(stub_sources)} file(s))."
+        )
+    for reason in stop_reasons:
+        if reason.startswith("max_"):
+            actions.append(f"Increase validation budget for {reason}.")
+    return _dedupe(actions)
+
+
+def _quality_summary(
+    validation_passed: bool,
+    checks: list[JavaValidationCheck],
+) -> str:
+    if validation_passed:
+        return "clean_enough: compile, ABI, resources, and stub policy passed for the selected profile."
+    failed = [check.name for check in checks if check.status == "fail"]
+    if not failed:
+        return "not_clean_enough: validation did not pass, but no failing check was recorded."
+    return "not_clean_enough: failing checks: " + ", ".join(failed)
 
 
 def _status(validation_passed: bool, stop_reasons: list[str]) -> ValidationStatus:

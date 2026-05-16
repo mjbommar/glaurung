@@ -87,6 +87,9 @@ def test_java_validate_recovered_application_passes_static_validation(
 
     assert result.validation_passed is True
     assert result.status == "valid"
+    assert result.blocking_issue_count == 0
+    assert result.quality_summary.startswith("clean_enough")
+    assert result.next_actions == []
     assert result.compile_success is True
     assert result.abi_match is True
     assert result.resource_match is True
@@ -123,6 +126,9 @@ def test_java_validate_recovered_application_detects_resource_drift(
 
     assert result.validation_passed is False
     assert result.status == "invalid"
+    assert result.blocking_issue_count >= 1
+    assert result.quality_summary.startswith("not_clean_enough")
+    assert any("resource differences" in action for action in result.next_actions)
     assert result.compile_success is True
     assert result.abi_match is True
     assert result.resource_match is False

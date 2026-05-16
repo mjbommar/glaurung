@@ -112,6 +112,65 @@ public class Broken {
     )
 
 
+def test_java_compile_recovered_project_maven_success(tmp_path: Path) -> None:
+    if shutil.which("mvn") is None:
+        pytest.skip("mvn is required for Maven compile fixture")
+
+    from glaurung.llm.tools.java_compile_recovered_project import build_tool
+
+    project = tmp_path / "maven-project"
+    source_path = _write_project(
+        project,
+        """
+package app;
+
+public class Main {
+    public String value() {
+        return "maven";
+    }
+}
+""",
+    )
+    (project / "pom.xml").write_text(
+        """
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>app</groupId>
+  <artifactId>recovered</artifactId>
+  <version>1.0.0</version>
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+</project>
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    ctx = _ctx(source_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            source_project_root=str(project),
+            build_tool="maven",
+            timeout_seconds=120,
+            allow_dependency_network=True,
+        ),
+    )
+
+    assert result.success is True
+    assert result.selected_build_tool == "maven"
+    assert result.exit_code == 0
+    assert (project / "target" / "classes" / "app" / "Main.class").is_file()
+    assert result.rebuilt_jar_path is not None
+    assert result.stop_reasons == []
+
+
 def test_java_compile_recovered_project_missing_root(tmp_path: Path) -> None:
     from glaurung.llm.tools.java_compile_recovered_project import build_tool
 
