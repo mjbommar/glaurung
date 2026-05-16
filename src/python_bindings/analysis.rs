@@ -301,6 +301,18 @@ fn java_class_info_to_py(
     dict.set_item("attribute_names", info.attribute_names)?;
     dict.set_item("is_deprecated", info.is_deprecated)?;
     dict.set_item("is_synthetic", info.is_synthetic)?;
+    dict.set_item(
+        "source_debug_extension_length",
+        info.source_debug_extension_length,
+    )?;
+    dict.set_item(
+        "source_debug_extension_sha256",
+        info.source_debug_extension_sha256,
+    )?;
+    dict.set_item(
+        "constant_pool",
+        java_constant_pool_summary_to_py(py, info.constant_pool)?,
+    )?;
     dict.set_item("annotations", java_annotations_to_py(py, info.annotations)?)?;
     dict.set_item(
         "inner_classes",
@@ -319,6 +331,10 @@ fn java_class_info_to_py(
     dict.set_item("permitted_subclasses", info.permitted_subclasses)?;
     dict.set_item("module", java_module_info_to_py(py, info.module)?)?;
     dict.set_item("bootstrap_method_count", info.bootstrap_method_count)?;
+    dict.set_item(
+        "bootstrap_methods",
+        java_bootstrap_methods_to_py(py, info.bootstrap_methods)?,
+    )?;
     dict.set_item("interfaces", info.interfaces)?;
     dict.set_item("major_version", info.major_version)?;
     dict.set_item("minor_version", info.minor_version)?;
@@ -495,6 +511,62 @@ fn java_module_info_to_py(
     Ok(dict.into())
 }
 
+fn java_constant_pool_summary_to_py(
+    py: Python<'_>,
+    summary: crate::analysis::java_class::JavaConstantPoolSummary,
+) -> PyResult<Py<PyAny>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("total_slots", summary.total_slots)?;
+    dict.set_item("populated_entries", summary.populated_entries)?;
+    dict.set_item("empty_slots", summary.empty_slots)?;
+    dict.set_item("utf8_count", summary.utf8_count)?;
+    dict.set_item("integer_count", summary.integer_count)?;
+    dict.set_item("float_count", summary.float_count)?;
+    dict.set_item("long_count", summary.long_count)?;
+    dict.set_item("double_count", summary.double_count)?;
+    dict.set_item("class_count", summary.class_count)?;
+    dict.set_item("string_count", summary.string_count)?;
+    dict.set_item("fieldref_count", summary.fieldref_count)?;
+    dict.set_item("methodref_count", summary.methodref_count)?;
+    dict.set_item(
+        "interface_methodref_count",
+        summary.interface_methodref_count,
+    )?;
+    dict.set_item("name_and_type_count", summary.name_and_type_count)?;
+    dict.set_item("method_handle_count", summary.method_handle_count)?;
+    dict.set_item("method_type_count", summary.method_type_count)?;
+    dict.set_item("dynamic_count", summary.dynamic_count)?;
+    dict.set_item("invoke_dynamic_count", summary.invoke_dynamic_count)?;
+    dict.set_item("module_count", summary.module_count)?;
+    dict.set_item("package_count", summary.package_count)?;
+    dict.set_item("other_count", summary.other_count)?;
+    Ok(dict.into())
+}
+
+fn java_bootstrap_methods_to_py(
+    py: Python<'_>,
+    bootstrap_methods: Vec<crate::analysis::java_class::JavaBootstrapMethod>,
+) -> PyResult<Py<PyAny>> {
+    let out = pyo3::types::PyList::empty(py);
+    for method in bootstrap_methods {
+        let mdict = pyo3::types::PyDict::new(py);
+        mdict.set_item(
+            "bootstrap_method_ref_index",
+            method.bootstrap_method_ref_index,
+        )?;
+        mdict.set_item("reference_kind", method.reference_kind)?;
+        mdict.set_item("reference_kind_name", method.reference_kind_name)?;
+        mdict.set_item("reference_owner", method.reference_owner)?;
+        mdict.set_item("reference_name", method.reference_name)?;
+        mdict.set_item("reference_descriptor", method.reference_descriptor)?;
+        mdict.set_item("reference_target", method.reference_target)?;
+        mdict.set_item("argument_count", method.argument_count)?;
+        mdict.set_item("arguments", method.arguments)?;
+        out.append(mdict)?;
+    }
+    Ok(out.into())
+}
+
 fn java_annotations_to_py(
     py: Python<'_>,
     annotations: Vec<crate::analysis::java_class::JavaAnnotation>,
@@ -622,6 +694,8 @@ fn java_code_to_py(
     dict.set_item("attributes_count", code.attributes_count)?;
     dict.set_item("attribute_count", code.attribute_names.len())?;
     dict.set_item("attribute_names", code.attribute_names)?;
+    dict.set_item("instruction_count", code.instruction_count)?;
+    dict.set_item("unknown_instruction_count", code.unknown_instruction_count)?;
     dict.set_item("stack_map_frame_count", code.stack_map_frame_count)?;
     let line_numbers = pyo3::types::PyList::empty(py);
     for line in code.line_numbers {

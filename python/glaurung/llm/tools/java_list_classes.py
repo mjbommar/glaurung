@@ -67,6 +67,8 @@ class JavaListedClass(BaseModel):
     simple_name: str
     super_class: str
     source_file: str | None = None
+    source_debug_extension_length: int = 0
+    source_debug_extension_sha256: str | None = None
     generic_signature: str | None = None
     generic_type_parameters: list[str] = Field(default_factory=list)
     generic_super_class: str | None = None
@@ -80,6 +82,7 @@ class JavaListedClass(BaseModel):
     attribute_names: list[str] = Field(default_factory=list)
     is_deprecated: bool = False
     is_synthetic: bool = False
+    constant_pool: dict[str, int] = Field(default_factory=dict)
     major_version: int
     minor_version: int
     java_release: int | None = None
@@ -229,6 +232,12 @@ def _class_summary(
         simple_name=class_name.rsplit("/", 1)[-1],
         super_class=str(parsed.get("super_class") or ""),
         source_file=_optional_string(parsed.get("source_file")),
+        source_debug_extension_length=int(
+            parsed.get("source_debug_extension_length", 0)
+        ),
+        source_debug_extension_sha256=_optional_string(
+            parsed.get("source_debug_extension_sha256")
+        ),
         generic_signature=generic_signature,
         generic_type_parameters=decoded_signature.type_parameters,
         generic_super_class=decoded_signature.super_class,
@@ -244,6 +253,7 @@ def _class_summary(
         attribute_names=_string_list(parsed.get("attribute_names")),
         is_deprecated=bool(parsed.get("is_deprecated", False)),
         is_synthetic=bool(parsed.get("is_synthetic", False)),
+        constant_pool=_int_dict(parsed.get("constant_pool")),
         major_version=policy.major_version,
         minor_version=policy.minor_version,
         java_release=policy.java_release,
@@ -337,6 +347,12 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def _int_dict(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): int(item) for key, item in value.items() if isinstance(item, int)}
 
 
 def _list_count(value: Any) -> int:

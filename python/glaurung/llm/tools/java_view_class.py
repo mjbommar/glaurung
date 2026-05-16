@@ -53,6 +53,8 @@ class JavaCodeSummary(BaseModel):
     attributes_count: int
     attribute_count: int = 0
     attribute_names: list[str] = Field(default_factory=list)
+    instruction_count: int = 0
+    unknown_instruction_count: int = 0
     stack_map_frame_count: int = 0
     xref_count: int = 0
     method_xref_count: int = 0
@@ -181,6 +183,9 @@ class JavaViewClassResult(BaseModel):
     attribute_names: list[str] = Field(default_factory=list)
     is_deprecated: bool = False
     is_synthetic: bool = False
+    source_debug_extension_length: int = 0
+    source_debug_extension_sha256: str | None = None
+    constant_pool: dict[str, int] = Field(default_factory=dict)
     class_kind: JavaClassKind = "class"
     is_interface: bool = False
     is_annotation: bool = False
@@ -195,6 +200,7 @@ class JavaViewClassResult(BaseModel):
     record_components: list[JavaRecordComponentSummary] = Field(default_factory=list)
     module_info: JavaModuleSummary | None = None
     bootstrap_method_count: int = 0
+    bootstrap_methods: list[dict[str, Any]] = Field(default_factory=list)
     annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
     fields: list[JavaClassMemberSummary] = Field(default_factory=list)
     methods: list[JavaClassMemberSummary] = Field(default_factory=list)
@@ -376,6 +382,13 @@ def _result_for_class(
                 "attribute_names": _string_list(parsed.get("attribute_names")),
                 "is_deprecated": bool(parsed.get("is_deprecated", False)),
                 "is_synthetic": bool(parsed.get("is_synthetic", False)),
+                "source_debug_extension_length": int(
+                    parsed.get("source_debug_extension_length", 0)
+                ),
+                "source_debug_extension_sha256": _optional_string(
+                    parsed.get("source_debug_extension_sha256")
+                ),
+                "constant_pool": _int_dict(parsed.get("constant_pool")),
                 "class_kind": kind,
                 "is_interface": kind in {"interface", "annotation"},
                 "is_annotation": kind == "annotation",
@@ -400,6 +413,7 @@ def _result_for_class(
                     parsed_module_info.model_dump() if parsed_module_info else None
                 ),
                 "bootstrap_method_count": int(parsed.get("bootstrap_method_count", 0)),
+                "bootstrap_methods": _dict_list(parsed.get("bootstrap_methods")),
                 "annotations": [annotation.model_dump() for annotation in annotations],
             },
             tags=["java", "class", "deobfuscated" if mapped_class_name else "raw"],
@@ -510,6 +524,13 @@ def _result_for_class(
         attribute_names=_string_list(parsed.get("attribute_names")),
         is_deprecated=bool(parsed.get("is_deprecated", False)),
         is_synthetic=bool(parsed.get("is_synthetic", False)),
+        source_debug_extension_length=int(
+            parsed.get("source_debug_extension_length", 0)
+        ),
+        source_debug_extension_sha256=_optional_string(
+            parsed.get("source_debug_extension_sha256")
+        ),
+        constant_pool=_int_dict(parsed.get("constant_pool")),
         class_kind=kind,
         is_interface=kind in {"interface", "annotation"},
         is_annotation=kind == "annotation",
@@ -524,6 +545,7 @@ def _result_for_class(
         record_components=record_components,
         module_info=parsed_module_info,
         bootstrap_method_count=int(parsed.get("bootstrap_method_count", 0)),
+        bootstrap_methods=_dict_list(parsed.get("bootstrap_methods")),
         annotations=annotations,
         fields=fields,
         methods=methods,
@@ -681,6 +703,8 @@ def _code_summary(value: Any) -> JavaCodeSummary | None:
         attributes_count=int(value["attributes_count"]),
         attribute_count=int(value.get("attribute_count", value["attributes_count"])),
         attribute_names=_string_list(value.get("attribute_names")),
+        instruction_count=int(value.get("instruction_count", 0)),
+        unknown_instruction_count=int(value.get("unknown_instruction_count", 0)),
         stack_map_frame_count=int(value.get("stack_map_frame_count", 0)),
         xref_count=xref_counts["xref_count"],
         method_xref_count=xref_counts["method_xref_count"],
@@ -720,6 +744,18 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def _int_dict(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): int(item) for key, item in value.items() if isinstance(item, int)}
+
+
+def _dict_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _candidate_class_names(

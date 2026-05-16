@@ -45,10 +45,13 @@ class JavaClassSummary(BaseModel):
     classfile_size_category: str = "unknown"
     classfile_warnings: list[str] = Field(default_factory=list)
     access_flags: int
+    source_debug_extension_length: int = 0
+    source_debug_extension_sha256: str | None = None
     attribute_count: int = 0
     attribute_names: list[str] = Field(default_factory=list)
     is_deprecated: bool = False
     is_synthetic: bool = False
+    constant_pool: dict[str, int] = Field(default_factory=dict)
     method_count: int
     field_count: int
     methods_with_code: int
@@ -403,10 +406,17 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                         classfile_size_category=policy.classfile_size_category,
                         classfile_warnings=policy.classfile_warnings,
                         access_flags=parsed["access_flags"],
+                        source_debug_extension_length=int(
+                            parsed.get("source_debug_extension_length", 0)
+                        ),
+                        source_debug_extension_sha256=_optional_string(
+                            parsed.get("source_debug_extension_sha256")
+                        ),
                         attribute_count=int(parsed.get("attribute_count", 0)),
                         attribute_names=_string_list(parsed.get("attribute_names")),
                         is_deprecated=bool(parsed.get("is_deprecated", False)),
                         is_synthetic=bool(parsed.get("is_synthetic", False)),
+                        constant_pool=_int_dict(parsed.get("constant_pool")),
                         method_count=len(methods),
                         field_count=len(parsed["fields"]),
                         methods_with_code=sum(
@@ -794,6 +804,16 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def _optional_string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _int_dict(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): int(item) for key, item in value.items() if isinstance(item, int)}
 
 
 def build_tool() -> MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResult]:

@@ -43,8 +43,12 @@ Glaurung already has a growing Java path:
   annotations, `MethodParameters`, runtime-visible/runtime-invisible parameter
   annotations, method `AnnotationDefault` values, initial JVM instruction listings,
   structural class attributes (`InnerClasses`, `EnclosingMethod`, `NestHost`,
-  `NestMembers`, `Record`, `PermittedSubclasses`, JPMS `Module`), and lightweight
-  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  `NestMembers`, `Record`, `PermittedSubclasses`, JPMS `Module`), raw
+  class/member/code attribute names, `Deprecated`/`Synthetic` markers, field
+  `ConstantValue` constants, `SourceDebugExtension` length/hash metadata,
+  constant-pool histograms, bootstrap method references, instruction metrics, and
+  lightweight method-level bytecode xrefs for invokes, fields, class refs, and
+  loaded strings.
   Method code summaries include `StackMapTable` verifier frame counts when present.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `src/analysis/java_jar.rs` and the Python bindings expose bounded central-directory
@@ -69,13 +73,21 @@ Glaurung already has a growing Java path:
   every target class to be returned in the same result window.
 - Method and class-view code summaries now expose bytecode xref count buckets:
   total, method/interface-method, field, class, string, and dynamic/invokedynamic.
-- Parser-facing class summaries now expose `BootstrapMethods` counts for quick
-  lambda, string-concat, and invokedynamic triage.
+- Parser-facing class summaries now expose `BootstrapMethods` counts plus
+  method-handle owner/name/descriptor and argument summaries for quick lambda,
+  string-concat, and invokedynamic triage.
 - Python memory tools can now list package-level archive summaries with
   `java_list_packages`, including class kind counts, public class counts,
   method/field/code totals, classfile Java release sets, bootstrap-method totals,
   optional resource samples, bounded prefix filtering, and `java_package` evidence
   nodes.
+- Python memory tools can now list candidate fields with `java_list_fields`,
+  including descriptor/generic type decoding, constant values, raw attribute names,
+  `Deprecated`/`Synthetic` markers, optional annotation descriptors, optional
+  ProGuard/Mojang mapped names, and `java_field` evidence nodes.
+- Python memory tools can now list archive annotations with
+  `java_list_annotations`, including descriptor counts, class/field/method/record
+  component occurrences, package-info counts, and `java_annotation` evidence nodes.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang
@@ -154,12 +166,21 @@ Glaurung already has a growing Java path:
   exposing bounded package/name/access-flag filtering, superclass/interface/member
   counts, `SourceFile` metadata, optional annotation descriptors, optional
   ProGuard/Mojang mapped names, and `java_class` evidence nodes.
+- Python memory tools can now list candidate fields with `java_list_fields`,
+  exposing bounded class/name/descriptor/access filtering, decoded field types,
+  readable generic field signatures, constant values, raw attribute names,
+  `Deprecated`/`Synthetic` markers, optional annotation descriptors, optional
+  ProGuard/Mojang mapped names, and `java_field` evidence nodes.
 - Python memory tools can now list candidate methods with `java_list_methods`,
   exposing bounded class/name/descriptor filtering, code-size summaries,
   line-number counts/ranges, decoded parameter/return types, raw and readable generic
   signatures, `SourceFile` metadata, `MethodParameters` names, parameter annotation
   counts, annotation defaults, optional annotation descriptors, optional
   ProGuard/Mojang mapped names, and `java_method` evidence nodes.
+- Python memory tools can now list archive annotations with
+  `java_list_annotations`, exposing descriptor counts and class, field, method,
+  record-component, and `package-info` occurrences with `java_annotation` evidence
+  nodes.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -174,7 +195,7 @@ Known limitations:
 
 - The Rust parser still needs deeper JVM attribute semantics beyond the parsed
   structural subset, including type annotations, complete stack-map frame bodies,
-  bootstrap method argument resolution, richer module/annotation parity, and
+  richer bootstrap argument typing, richer module/annotation parity, and
   bytecode verifier frame modeling.
 - There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
@@ -806,6 +827,39 @@ Outputs:
 
 Use this as the low-cost archive navigation layer before drilling into classes,
 methods, bytecode, or decompiler output.
+
+`java_list_fields`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_field` KB nodes for returned fields.
+- Scans JAR/ZIP class entries with the Rust class parser.
+- Supports class, field-name, descriptor, access-flag all/any/none,
+  constants-only, scan-budget, and result-limit filtering.
+- Reports class/source metadata, raw and decoded field descriptors, readable generic
+  field signatures, field constant values, raw attribute names,
+  `Deprecated`/`Synthetic` markers, optional annotation descriptors, optional
+  ProGuard/Mojang mapped names, and classfile policy metadata.
+
+Use this before decompilation when an agent needs constants, config key fields,
+serial/version identifiers, public API fields, enum-like static finals, or
+obfuscation evidence.
+
+`java_list_annotations`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_annotation` KB nodes for returned annotation occurrences.
+- Scans JAR/ZIP class entries with the Rust class parser.
+- Supports descriptor and class filters, member inclusion, scan budgets, and result
+  limits.
+- Reports descriptor counts, package-info counts, class annotations, field
+  annotations, method annotations, and record-component annotations.
+
+Use this for quick framework/domain discovery before deeper framework-specific
+analysis.
 
 `java_list_classes`
 
@@ -2187,7 +2241,9 @@ Java support will add many tools. To keep agent prompts manageable:
   - `java_index_archive`
   - `java_list_packages`
   - `java_list_classes`
+  - `java_list_fields`
   - `java_list_methods`
+  - `java_list_annotations`
   - `java_view_class`
   - `java_decompile_method`
   - `java_xrefs_to`

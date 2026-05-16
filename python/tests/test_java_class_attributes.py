@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from hashlib import sha256
 
 import pytest
 
@@ -295,6 +296,62 @@ public class FieldAttributeFixture {
     return out / "FieldAttributeFixture.class"
 
 
+def _add_source_debug_extension(class_bytes: bytes, payload: bytes) -> bytes:
+    data = bytearray(class_bytes)
+    cp_count = int.from_bytes(data[8:10], "big")
+    p = 10
+    i = 1
+    while i < cp_count:
+        tag = data[p]
+        p += 1
+        if tag == 1:
+            length = int.from_bytes(data[p : p + 2], "big")
+            p += 2 + length
+        elif tag in {3, 4, 9, 10, 11, 12, 17, 18}:
+            p += 4
+        elif tag in {5, 6}:
+            p += 8
+            i += 1
+        elif tag in {7, 8, 16, 19, 20}:
+            p += 2
+        elif tag == 15:
+            p += 3
+        else:
+            raise AssertionError(f"unexpected constant-pool tag {tag}")
+        i += 1
+
+    name = b"SourceDebugExtension"
+    new_entry = b"\x01" + len(name).to_bytes(2, "big") + name
+    source_debug_name_index = cp_count
+    data[8:10] = (cp_count + 1).to_bytes(2, "big")
+    data[p:p] = new_entry
+    p += len(new_entry)
+
+    p += 6
+    interfaces_count = int.from_bytes(data[p : p + 2], "big")
+    p += 2 + 2 * interfaces_count
+    p = _skip_member_table(data, p)
+    p = _skip_member_table(data, p)
+    class_attribute_count = int.from_bytes(data[p : p + 2], "big")
+    data[p : p + 2] = (class_attribute_count + 1).to_bytes(2, "big")
+    data.extend(source_debug_name_index.to_bytes(2, "big"))
+    data.extend(len(payload).to_bytes(4, "big"))
+    data.extend(payload)
+    return bytes(data)
+
+
+def _skip_member_table(data: bytearray, p: int) -> int:
+    count = int.from_bytes(data[p : p + 2], "big")
+    p += 2
+    for _ in range(count):
+        attribute_count = int.from_bytes(data[p + 6 : p + 8], "big")
+        p += 8
+        for _ in range(attribute_count):
+            length = int.from_bytes(data[p + 2 : p + 6], "big")
+            p += 6 + length
+    return p
+
+
 def _compile_parameter_metadata_classes(tmp_path: Path) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java fixture")
@@ -543,6 +600,59 @@ def test_parse_java_class_recovers_bootstrap_method_count(tmp_path: Path) -> Non
     )
     assert make_task["code"] is not None
     assert any(xref["kind"] == "invokedynamic" for xref in make_task["code"]["xrefs"])
+
+
+def test_parse_java_class_recovers_constant_pool_code_and_bootstrap_summaries(
+    tmp_path: Path,
+) -> None:
+    class_file = _compile_lambda_class(tmp_path)
+    java_analysis = getattr(g, "analysis")
+
+    info = java_analysis.parse_java_class_bytes(class_file.read_bytes())
+
+    assert info is not None
+    constant_pool = info["constant_pool"]
+    assert constant_pool["total_slots"] > 0
+    assert constant_pool["populated_entries"] > 0
+    assert constant_pool["utf8_count"] > 0
+    assert constant_pool["class_count"] > 0
+    assert constant_pool["methodref_count"] > 0
+    assert constant_pool["method_handle_count"] > 0
+    assert constant_pool["method_type_count"] > 0
+    assert constant_pool["invoke_dynamic_count"] > 0
+
+    assert len(info["bootstrap_methods"]) == info["bootstrap_method_count"]
+    assert any(
+        bootstrap["reference_owner"] == "java/lang/invoke/LambdaMetafactory"
+        and bootstrap["reference_name"] == "metafactory"
+        and bootstrap["reference_kind_name"] == "invoke_static"
+        and bootstrap["argument_count"] > 0
+        for bootstrap in info["bootstrap_methods"]
+    )
+
+    make_task = next(
+        method for method in info["methods"] if method["name"] == "makeTask"
+    )
+    code = make_task["code"]
+    assert code["instruction_count"] == len(code["instructions"])
+    assert code["instruction_count"] > 0
+    assert code["unknown_instruction_count"] == 0
+
+
+def test_parse_java_class_recovers_source_debug_extension_metadata(
+    tmp_path: Path,
+) -> None:
+    class_file = _compile_lambda_class(tmp_path)
+    payload = b"SMAP\nGenerated.java\nJava\n*S Java\n*F\n+ 1 Generated.java\nGenerated.java\n*E\n"
+    patched = _add_source_debug_extension(class_file.read_bytes(), payload)
+    java_analysis = getattr(g, "analysis")
+
+    info = java_analysis.parse_java_class_bytes(patched)
+
+    assert info is not None
+    assert info["source_debug_extension_length"] == len(payload)
+    assert info["source_debug_extension_sha256"] == sha256(payload).hexdigest()
+    assert "SourceDebugExtension" in info["attribute_names"]
 
 
 def test_parse_java_class_recovers_attributes_deprecated_and_constant_values(

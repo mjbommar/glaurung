@@ -10,6 +10,8 @@
 //! Spec reference: JVM Specification §4 (the ClassFile structure).
 //! Supports JDK 1.0 through latest (constant-pool tags 1-20).
 
+use sha2::{Digest, Sha256};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JavaMethod {
     pub access_flags: u16,
@@ -37,6 +39,8 @@ pub struct JavaCode {
     pub exception_handlers: Vec<JavaExceptionHandler>,
     pub attributes_count: u16,
     pub attribute_names: Vec<String>,
+    pub instruction_count: u32,
+    pub unknown_instruction_count: u32,
     pub stack_map_frame_count: u16,
     pub line_numbers: Vec<JavaLineNumber>,
     pub local_variables: Vec<JavaLocalVariable>,
@@ -49,6 +53,44 @@ pub struct JavaCode {
 pub struct JavaConstantValue {
     pub kind: String,
     pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct JavaConstantPoolSummary {
+    pub total_slots: u16,
+    pub populated_entries: u16,
+    pub empty_slots: u16,
+    pub utf8_count: u16,
+    pub integer_count: u16,
+    pub float_count: u16,
+    pub long_count: u16,
+    pub double_count: u16,
+    pub class_count: u16,
+    pub string_count: u16,
+    pub fieldref_count: u16,
+    pub methodref_count: u16,
+    pub interface_methodref_count: u16,
+    pub name_and_type_count: u16,
+    pub method_handle_count: u16,
+    pub method_type_count: u16,
+    pub dynamic_count: u16,
+    pub invoke_dynamic_count: u16,
+    pub module_count: u16,
+    pub package_count: u16,
+    pub other_count: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaBootstrapMethod {
+    pub bootstrap_method_ref_index: u16,
+    pub reference_kind: Option<u8>,
+    pub reference_kind_name: Option<String>,
+    pub reference_owner: Option<String>,
+    pub reference_name: Option<String>,
+    pub reference_descriptor: Option<String>,
+    pub reference_target: Option<String>,
+    pub argument_count: u16,
+    pub arguments: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,6 +255,9 @@ pub struct ClassInfo {
     pub attribute_names: Vec<String>,
     pub is_deprecated: bool,
     pub is_synthetic: bool,
+    pub source_debug_extension_length: u32,
+    pub source_debug_extension_sha256: Option<String>,
+    pub constant_pool: JavaConstantPoolSummary,
     pub annotations: Vec<JavaAnnotation>,
     pub inner_classes: Vec<JavaInnerClass>,
     pub enclosing_method: Option<JavaEnclosingMethod>,
@@ -222,6 +267,7 @@ pub struct ClassInfo {
     pub permitted_subclasses: Vec<String>,
     pub module: Option<JavaModuleInfo>,
     pub bootstrap_method_count: u16,
+    pub bootstrap_methods: Vec<JavaBootstrapMethod>,
     pub interfaces: Vec<String>,
     pub methods: Vec<JavaMethod>,
     pub fields: Vec<JavaMethod>, // same shape — name + descriptor + flags
@@ -268,10 +314,19 @@ enum CpEntry {
         name_and_type_idx: u16,
     },
     Dynamic {
+        bootstrap_method_attr_idx: u16,
         name_and_type_idx: u16,
     },
     InvokeDynamic {
+        bootstrap_method_attr_idx: u16,
         name_and_type_idx: u16,
+    },
+    MethodHandle {
+        reference_kind: u8,
+        reference_index: u16,
+    },
+    MethodType {
+        descriptor_idx: u16,
     },
     Module {
         name_idx: u16,
@@ -279,7 +334,6 @@ enum CpEntry {
     Package {
         name_idx: u16,
     },
-    Other,
 }
 
 #[derive(Debug, Default)]
@@ -287,6 +341,8 @@ struct JavaClassAttributes {
     attribute_names: Vec<String>,
     is_deprecated: bool,
     is_synthetic: bool,
+    source_debug_extension_length: u32,
+    source_debug_extension_sha256: Option<String>,
     source_file: Option<String>,
     signature: Option<String>,
     annotations: Vec<JavaAnnotation>,
@@ -298,6 +354,7 @@ struct JavaClassAttributes {
     permitted_subclasses: Vec<String>,
     module: Option<JavaModuleInfo>,
     bootstrap_method_count: u16,
+    bootstrap_methods: Vec<JavaBootstrapMethod>,
 }
 
 /// Parse a `.class` file and return its `ClassInfo`.
@@ -424,27 +481,45 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
                 i += 1;
             } // Field/Method/InterfaceMethod ref
             15 => {
+                if p + 3 > data.len() {
+                    return Err(ClassError::Truncated("method handle"));
+                }
+                let reference_kind = data[p];
+                let reference_index = u16::from_be_bytes(data[p + 1..p + 3].try_into().unwrap());
                 p += 3;
-                cp[i] = CpEntry::Other;
+                cp[i] = CpEntry::MethodHandle {
+                    reference_kind,
+                    reference_index,
+                };
                 i += 1;
             } // MethodHandle
             16 => {
+                if p + 2 > data.len() {
+                    return Err(ClassError::Truncated("method type"));
+                }
+                let descriptor_idx = u16::from_be_bytes(data[p..p + 2].try_into().unwrap());
                 p += 2;
-                cp[i] = CpEntry::Other;
+                cp[i] = CpEntry::MethodType { descriptor_idx };
                 i += 1;
             } // MethodType
             17 | 18 => {
                 if p + 4 > data.len() {
                     return Err(ClassError::Truncated("dynamic"));
                 }
-                let _bootstrap_method_attr_idx =
+                let bootstrap_method_attr_idx =
                     u16::from_be_bytes(data[p..p + 2].try_into().unwrap());
                 let name_and_type_idx = u16::from_be_bytes(data[p + 2..p + 4].try_into().unwrap());
                 p += 4;
                 cp[i] = if tag == 17 {
-                    CpEntry::Dynamic { name_and_type_idx }
+                    CpEntry::Dynamic {
+                        bootstrap_method_attr_idx,
+                        name_and_type_idx,
+                    }
                 } else {
-                    CpEntry::InvokeDynamic { name_and_type_idx }
+                    CpEntry::InvokeDynamic {
+                        bootstrap_method_attr_idx,
+                        name_and_type_idx,
+                    }
                 };
                 i += 1;
             } // Dynamic, InvokeDynamic
@@ -464,6 +539,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
             other => return Err(ClassError::BadCpTag(other)),
         }
     }
+    let constant_pool = summarize_constant_pool(&cp);
 
     if p + 8 > data.len() {
         return Err(ClassError::Truncated("class header"));
@@ -506,6 +582,9 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         attribute_names: class_attrs.attribute_names,
         is_deprecated: class_attrs.is_deprecated,
         is_synthetic: class_attrs.is_synthetic || access_flags & 0x1000 != 0,
+        source_debug_extension_length: class_attrs.source_debug_extension_length,
+        source_debug_extension_sha256: class_attrs.source_debug_extension_sha256,
+        constant_pool,
         annotations: class_attrs.annotations,
         inner_classes: class_attrs.inner_classes,
         enclosing_method: class_attrs.enclosing_method,
@@ -515,6 +594,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         permitted_subclasses: class_attrs.permitted_subclasses,
         module: class_attrs.module,
         bootstrap_method_count: class_attrs.bootstrap_method_count,
+        bootstrap_methods: class_attrs.bootstrap_methods,
         interfaces,
         methods,
         fields,
@@ -679,6 +759,9 @@ fn parse_class_attributes(
             out.is_deprecated = true;
         } else if attr_name == "Synthetic" {
             out.is_synthetic = true;
+        } else if attr_name == "SourceDebugExtension" {
+            out.source_debug_extension_length = alen as u32;
+            out.source_debug_extension_sha256 = Some(sha256_hex(&data[body_start..body_end]));
         } else if attr_name == "RuntimeVisibleAnnotations" {
             out.annotations.extend(parse_annotations_attribute(
                 &data[body_start..body_end],
@@ -720,8 +803,9 @@ fn parse_class_attributes(
         } else if attr_name == "Module" {
             out.module = Some(parse_module_attribute(&data[body_start..body_end], cp)?);
         } else if attr_name == "BootstrapMethods" {
-            out.bootstrap_method_count =
-                parse_bootstrap_methods_count(&data[body_start..body_end])?;
+            out.bootstrap_methods =
+                parse_bootstrap_methods_attribute(&data[body_start..body_end], cp)?;
+            out.bootstrap_method_count = out.bootstrap_methods.len() as u16;
         }
         p = body_end;
     }
@@ -893,11 +977,53 @@ fn parse_module_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaModuleInfo,
     })
 }
 
-fn parse_bootstrap_methods_count(body: &[u8]) -> Result<u16, ClassError> {
+fn parse_bootstrap_methods_attribute(
+    body: &[u8],
+    cp: &[CpEntry],
+) -> Result<Vec<JavaBootstrapMethod>, ClassError> {
     if body.len() < 2 {
         return Err(ClassError::Truncated("BootstrapMethods length"));
     }
-    Ok(u16::from_be_bytes(body[0..2].try_into().unwrap()))
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let mut p = 2usize;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if p + 4 > body.len() {
+            return Err(ClassError::Truncated("BootstrapMethods body"));
+        }
+        let bootstrap_method_ref_index = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        let argument_count = u16::from_be_bytes(body[p + 2..p + 4].try_into().unwrap());
+        p += 4;
+        let (
+            reference_kind,
+            reference_kind_name,
+            reference_owner,
+            reference_name,
+            reference_descriptor,
+            reference_target,
+        ) = read_method_handle_details(cp, bootstrap_method_ref_index)?;
+        let mut arguments = Vec::with_capacity(argument_count as usize);
+        for _ in 0..argument_count {
+            if p + 2 > body.len() {
+                return Err(ClassError::Truncated("BootstrapMethods arguments"));
+            }
+            let arg_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+            p += 2;
+            arguments.push(read_constant_pool_display(cp, arg_idx)?);
+        }
+        out.push(JavaBootstrapMethod {
+            bootstrap_method_ref_index,
+            reference_kind,
+            reference_kind_name,
+            reference_owner,
+            reference_name,
+            reference_descriptor,
+            reference_target,
+            argument_count,
+            arguments,
+        });
+    }
+    Ok(out)
 }
 
 fn read_module_targets(
@@ -1115,6 +1241,11 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
     }
     let code_bytes = &body[code_start..code_end];
     let instructions = parse_code_instructions(code_bytes)?;
+    let instruction_count = instructions.len() as u32;
+    let unknown_instruction_count = instructions
+        .iter()
+        .filter(|instruction| instruction.mnemonic.starts_with("unknown_0x"))
+        .count() as u32;
     let xrefs = parse_code_xrefs(code_bytes, cp)?;
     Ok(JavaCode {
         max_stack,
@@ -1124,6 +1255,8 @@ fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassEr
         exception_handlers,
         attributes_count,
         attribute_names,
+        instruction_count,
+        unknown_instruction_count,
         stack_map_frame_count,
         line_numbers,
         local_variables,
@@ -1860,12 +1993,12 @@ fn resolve_constant_xref(
                 string_value: Some(value),
             }))
         }
-        CpEntry::Dynamic { name_and_type_idx } => {
-            dynamic_xref(cp, *name_and_type_idx, bci, opcode, "dynamic").map(Some)
-        }
-        CpEntry::InvokeDynamic { name_and_type_idx } => {
-            dynamic_xref(cp, *name_and_type_idx, bci, opcode, "invokedynamic").map(Some)
-        }
+        CpEntry::Dynamic {
+            name_and_type_idx, ..
+        } => dynamic_xref(cp, *name_and_type_idx, bci, opcode, "dynamic").map(Some),
+        CpEntry::InvokeDynamic {
+            name_and_type_idx, ..
+        } => dynamic_xref(cp, *name_and_type_idx, bci, opcode, "invokedynamic").map(Some),
         _ => Ok(None),
     }
 }
@@ -1912,6 +2045,172 @@ fn dynamic_xref(
         target,
         string_value: None,
     })
+}
+
+fn summarize_constant_pool(cp: &[CpEntry]) -> JavaConstantPoolSummary {
+    let mut summary = JavaConstantPoolSummary {
+        total_slots: cp.len().saturating_sub(1) as u16,
+        ..JavaConstantPoolSummary::default()
+    };
+    for entry in cp.iter().skip(1) {
+        match entry {
+            CpEntry::Empty => summary.empty_slots += 1,
+            CpEntry::Utf8(_) => summary.utf8_count += 1,
+            CpEntry::Integer(_) => summary.integer_count += 1,
+            CpEntry::Float(_) => summary.float_count += 1,
+            CpEntry::Long(_) => summary.long_count += 1,
+            CpEntry::Double(_) => summary.double_count += 1,
+            CpEntry::Class { .. } => summary.class_count += 1,
+            CpEntry::String { .. } => summary.string_count += 1,
+            CpEntry::Fieldref { .. } => summary.fieldref_count += 1,
+            CpEntry::Methodref { .. } => summary.methodref_count += 1,
+            CpEntry::InterfaceMethodref { .. } => summary.interface_methodref_count += 1,
+            CpEntry::NameAndType { .. } => summary.name_and_type_count += 1,
+            CpEntry::MethodHandle { .. } => summary.method_handle_count += 1,
+            CpEntry::MethodType { .. } => summary.method_type_count += 1,
+            CpEntry::Dynamic { .. } => summary.dynamic_count += 1,
+            CpEntry::InvokeDynamic { .. } => summary.invoke_dynamic_count += 1,
+            CpEntry::Module { .. } => summary.module_count += 1,
+            CpEntry::Package { .. } => summary.package_count += 1,
+        }
+    }
+    summary.populated_entries = summary.total_slots.saturating_sub(summary.empty_slots);
+    summary
+}
+
+fn read_method_handle_details(
+    cp: &[CpEntry],
+    idx: u16,
+) -> Result<
+    (
+        Option<u8>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
+    ClassError,
+> {
+    if (idx as usize) >= cp.len() {
+        return Err(ClassError::BadCpIndex(idx));
+    }
+    let CpEntry::MethodHandle {
+        reference_kind,
+        reference_index,
+    } = &cp[idx as usize]
+    else {
+        return Ok((None, None, None, None, None, Some(format!("cp#{idx}"))));
+    };
+    let (owner, name, descriptor, target) = read_member_reference(cp, *reference_index)?;
+    Ok((
+        Some(*reference_kind),
+        Some(method_handle_kind_name(*reference_kind).to_string()),
+        Some(owner),
+        Some(name),
+        Some(descriptor),
+        Some(target),
+    ))
+}
+
+fn read_member_reference(
+    cp: &[CpEntry],
+    idx: u16,
+) -> Result<(String, String, String, String), ClassError> {
+    if (idx as usize) >= cp.len() {
+        return Err(ClassError::BadCpIndex(idx));
+    }
+    let (class_idx, name_and_type_idx) = match &cp[idx as usize] {
+        CpEntry::Fieldref {
+            class_idx,
+            name_and_type_idx,
+        }
+        | CpEntry::Methodref {
+            class_idx,
+            name_and_type_idx,
+        }
+        | CpEntry::InterfaceMethodref {
+            class_idx,
+            name_and_type_idx,
+        } => (*class_idx, *name_and_type_idx),
+        _ => return Err(ClassError::BadCpIndex(idx)),
+    };
+    let owner = read_class_name(cp, class_idx)?;
+    let (name, descriptor) = read_name_and_type(cp, name_and_type_idx)?;
+    let target = format!("{owner}.{name}:{descriptor}");
+    Ok((owner, name, descriptor, target))
+}
+
+fn read_constant_pool_display(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
+    if (idx as usize) >= cp.len() {
+        return Err(ClassError::BadCpIndex(idx));
+    }
+    match &cp[idx as usize] {
+        CpEntry::Utf8(value) => Ok(value.clone()),
+        CpEntry::Integer(value) => Ok(value.to_string()),
+        CpEntry::Float(bits) => Ok(f32::from_bits(*bits).to_string()),
+        CpEntry::Long(value) => Ok(value.to_string()),
+        CpEntry::Double(bits) => Ok(f64::from_bits(*bits).to_string()),
+        CpEntry::String { string_idx } => read_utf8(cp, *string_idx),
+        CpEntry::Class { name_idx } => read_utf8(cp, *name_idx),
+        CpEntry::MethodType { descriptor_idx } => read_utf8(cp, *descriptor_idx),
+        CpEntry::MethodHandle { .. } => {
+            let (_, _, _, _, _, target) = read_method_handle_details(cp, idx)?;
+            Ok(target.unwrap_or_else(|| format!("cp#{idx}")))
+        }
+        CpEntry::NameAndType { name_idx, desc_idx } => Ok(format!(
+            "{}:{}",
+            read_utf8(cp, *name_idx)?,
+            read_utf8(cp, *desc_idx)?
+        )),
+        CpEntry::Fieldref { .. }
+        | CpEntry::Methodref { .. }
+        | CpEntry::InterfaceMethodref { .. } => {
+            let (_, _, _, target) = read_member_reference(cp, idx)?;
+            Ok(target)
+        }
+        CpEntry::Dynamic {
+            bootstrap_method_attr_idx,
+            name_and_type_idx,
+        } => {
+            let (name, descriptor) = read_name_and_type(cp, *name_and_type_idx)?;
+            Ok(format!(
+                "dynamic#{bootstrap_method_attr_idx}:{name}:{descriptor}"
+            ))
+        }
+        CpEntry::InvokeDynamic {
+            bootstrap_method_attr_idx,
+            name_and_type_idx,
+        } => {
+            let (name, descriptor) = read_name_and_type(cp, *name_and_type_idx)?;
+            Ok(format!(
+                "invokedynamic#{bootstrap_method_attr_idx}:{name}:{descriptor}"
+            ))
+        }
+        CpEntry::Module { name_idx } | CpEntry::Package { name_idx } => read_utf8(cp, *name_idx),
+        CpEntry::Empty => Ok(format!("cp#{idx}")),
+    }
+}
+
+fn method_handle_kind_name(kind: u8) -> &'static str {
+    match kind {
+        1 => "get_field",
+        2 => "get_static",
+        3 => "put_field",
+        4 => "put_static",
+        5 => "invoke_virtual",
+        6 => "invoke_static",
+        7 => "invoke_special",
+        8 => "new_invoke_special",
+        9 => "invoke_interface",
+        _ => "unknown",
+    }
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
 }
 
 fn read_name_and_type(cp: &[CpEntry], idx: u16) -> Result<(String, String), ClassError> {

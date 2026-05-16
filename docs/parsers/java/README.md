@@ -55,8 +55,12 @@ Implemented pieces now include:
   annotations, `MethodParameters`, runtime-visible/runtime-invisible parameter
   annotations, method `AnnotationDefault` values, structural class attributes
   (`InnerClasses`, `EnclosingMethod`, `NestHost`, `NestMembers`, `Record`,
-  `PermittedSubclasses`, JPMS `Module`), instruction listings, and lightweight
-  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  `PermittedSubclasses`, JPMS `Module`), raw class/member/code attribute names,
+  `Deprecated`/`Synthetic` markers, field `ConstantValue` constants,
+  `SourceDebugExtension` length/hash metadata, constant-pool histograms,
+  `BootstrapMethods` references, instruction metrics, instruction listings, and
+  lightweight method-level bytecode xrefs for invokes, fields, class refs, and
+  loaded strings.
   Method code summaries include `StackMapTable` verifier frame counts when present.
 - Rust central-directory JAR indexing for bounded archive metadata: entry counts,
   compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
@@ -93,7 +97,9 @@ Implemented pieces now include:
   - `java_lookup_mapping`
   - `java_list_classes`
   - `java_list_packages`
+  - `java_list_fields`
   - `java_list_methods`
+  - `java_list_annotations`
   - `java_audit_archive_set`
   - `java_trace_to_sink`
   - `java_reachability`
@@ -140,12 +146,20 @@ Implemented pieces now include:
   method/interface-method, field, class, string, and dynamic/invokedynamic reference
   counts from parsed bytecode xrefs.
 - Initial `BootstrapMethods` summaries in parser-facing class tools, exposing
-  per-class bootstrap method counts for lambda, string-concat, and invokedynamic
-  triage.
+  per-class bootstrap method counts plus method-handle owner/name/descriptor and
+  argument summaries for lambda, string-concat, and invokedynamic triage.
 - Initial package listing through `java_list_packages`, exposing archive-level
   package summaries with class kind counts, public class counts, method/field/code
   totals, classfile release sets, bootstrap-method totals, optional resource
   samples, bounded prefix filtering, and `java_package` KB evidence.
+- Initial field listing through `java_list_fields`, exposing bounded
+  class/name/descriptor/access filters, decoded field descriptors, readable generic
+  field signatures, constant values, raw attribute names, `Deprecated`/`Synthetic`
+  markers, optional annotation descriptors, optional ProGuard/Mojang mapped names,
+  and `java_field` KB evidence.
+- Initial annotation listing through `java_list_annotations`, exposing archive-level
+  descriptor counts and class, field, method, record-component, and `package-info`
+  annotation occurrences with `java_annotation` KB evidence.
 - Initial class listing through `java_list_classes`, exposing bounded package/name
   and access-flag filters, superclass/interface/member counts, optional annotation
   descriptors, `SourceFile` metadata, decoded access-flag names, normalized
@@ -224,7 +238,7 @@ Not yet implemented:
 - Stack/local frames, interprocedural xrefs, and advanced call graphs such as
   CHA/RTA with precise virtual dispatch candidates.
 - Deeper attribute semantics beyond the parsed structural subset: type annotations,
-  complete stack-map frame bodies, bootstrap method argument resolution, and richer
+  complete stack-map frame bodies, richer bootstrap argument typing, and richer
   annotation/module parity checks.
 - Decompiler helper integration with Vineflower/CFR.
 - Clean source-project recovery after the initial dependency/build/scaffold/compile,
@@ -280,6 +294,7 @@ Important lessons:
 - [x] UTF-8 string extraction
 - [x] Class/name/descriptor resolution
 - [x] Initial method/field reference graph
+- [x] Initial constant-pool tag histograms
 
 ### Phase 3: Class Structure
 - [x] Access flag extraction
@@ -303,8 +318,11 @@ Important lessons:
 - [x] Initial normalized xref queries via `java_xrefs_from` and `java_xrefs_to`
 - [x] Mapping-aware xref and call graph annotations for ProGuard/Mojang names
 - [x] Initial bytecode instruction decode and `java_view_bytecode`
+- [x] Initial instruction and unknown-opcode metrics in method code summaries
 - [x] Initial bounded class listing with package/name/access filters, class
   summaries, `SourceFile`, annotations, and mapping names
+- [x] Initial bounded field listing with descriptor/access filters, constants,
+  generic signatures, annotations, and mapping names
 - [x] Initial bounded method listing with filters, code and line-table summaries,
   decoded parameter/return types, raw/readable generic signatures, `SourceFile`,
   annotations, and mapping names
@@ -314,6 +332,10 @@ Important lessons:
 - [x] Initial runtime-visible/runtime-invisible class/member annotation parsing
 - [x] Initial `MethodParameters`, parameter annotation, and annotation-default
   parsing and tool surfacing
+- [x] Raw class/member/code attribute names and `Deprecated`/`Synthetic` markers
+- [x] Field `ConstantValue` parsing for primitive/string constants
+- [x] Initial `BootstrapMethods` method-handle summaries
+- [x] Minimal `SourceDebugExtension` length/hash metadata
 - [x] Initial record component parsing and class-view surfacing
 - [ ] Stack/local frame analysis
 - [ ] Richer framework annotation semantics
@@ -322,6 +344,7 @@ Important lessons:
 - [x] Manifest parsing
 - [x] Archive/resource indexing
 - [x] Initial package listing and package-level KB evidence
+- [x] Initial annotation/package-info archive discovery
 - [x] Initial native central-directory JAR indexing with nested archive,
   multi-release, signed metadata, Maven metadata, ServiceLoader, module-info, and
   zip-slip detection.

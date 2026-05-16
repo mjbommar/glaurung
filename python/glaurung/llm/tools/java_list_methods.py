@@ -90,6 +90,8 @@ class JavaListedMethod(BaseModel):
     code_length: int | None = None
     max_stack: int | None = None
     max_locals: int | None = None
+    instruction_count: int = 0
+    unknown_instruction_count: int = 0
     stack_map_frame_count: int = 0
     xref_count: int = 0
     method_xref_count: int = 0
@@ -254,8 +256,13 @@ def _method_summary(
         code_length = int(code.get("code_length", 0))
         max_stack = int(code.get("max_stack", 0))
         max_locals = int(code.get("max_locals", 0))
+        instruction_count = int(code.get("instruction_count", 0))
+        unknown_instruction_count = int(code.get("unknown_instruction_count", 0))
         stack_map_frame_count = int(code.get("stack_map_frame_count", 0))
         line_numbers = _line_numbers(code)
+    else:
+        instruction_count = 0
+        unknown_instruction_count = 0
     descriptor = str(method.get("descriptor"))
     decoded_descriptor = decode_method_descriptor(descriptor)
     generic_signature = _optional_string(method.get("signature"))
@@ -310,6 +317,8 @@ def _method_summary(
         code_length=code_length,
         max_stack=max_stack,
         max_locals=max_locals,
+        instruction_count=instruction_count,
+        unknown_instruction_count=unknown_instruction_count,
         stack_map_frame_count=stack_map_frame_count,
         xref_count=xref_counts["xref_count"],
         method_xref_count=xref_counts["method_xref_count"],
