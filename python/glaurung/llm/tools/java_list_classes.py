@@ -13,6 +13,7 @@ from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .java_access_flags import access_flag_names
 from .java_proguard_mappings import (
     ProguardClassMapping,
     ProguardMappings,
@@ -71,6 +72,7 @@ class JavaListedClass(BaseModel):
     interfaces: list[str] = Field(default_factory=list)
     interface_count: int = 0
     access_flags: int
+    access_flag_names: list[str] = Field(default_factory=list)
     major_version: int
     minor_version: int
     method_count: int
@@ -200,6 +202,9 @@ def _class_summary(
         interfaces=interfaces,
         interface_count=len(interfaces),
         access_flags=int(parsed.get("access_flags", 0)),
+        access_flag_names=access_flag_names(
+            int(parsed.get("access_flags", 0)), "class"
+        ),
         major_version=int(parsed.get("major_version", 0)),
         minor_version=int(parsed.get("minor_version", 0)),
         method_count=len(methods),

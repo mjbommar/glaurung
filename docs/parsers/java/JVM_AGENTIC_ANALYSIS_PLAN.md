@@ -755,8 +755,8 @@ Initial Python implementation status:
   result-limit filtering.
 - Reports class locators, internal/dotted/mapped names, package/simple names,
   superclasses, `SourceFile`, interfaces, JVM version, method counts, field counts,
-  methods with code, inner/nest/record summary counts, and optional class annotation
-  descriptors.
+  raw access flags, decoded access-flag names, methods with code,
+  inner/nest/record summary counts, and optional class annotation descriptors.
 - Supports optional ProGuard/Mojang mapped class names when a mapping file is
   supplied.
 
@@ -774,8 +774,9 @@ Inputs:
 Outputs:
 
 - Class locators, names, superclasses, `SourceFile`, interface counts, method counts,
-  field counts, JVM version, access flags, inner/nest/record summary counts, mapped
-  names, and optional annotation descriptors.
+  field counts, JVM version, raw and decoded access flags,
+  inner/nest/record summary counts, mapped names, and optional annotation
+  descriptors.
 
 `java_view_class`
 
@@ -791,6 +792,8 @@ Outputs:
 
 - Full class declaration metadata, including `SourceFile`, `InnerClasses`,
   `EnclosingMethod`, `NestHost`, `NestMembers`, and `Record` components.
+- Raw and decoded class, field, method, inner-class, and method-parameter access
+  flags.
 - Fields.
 - Methods with code-size and line-number range summaries where available.
 - Descriptor-aware mapped official/obfuscated names for classes and members when
@@ -816,6 +819,7 @@ Initial Python implementation status:
 - Reports `MethodParameters` names, parameter annotation counts, and annotation
   defaults when present.
 - Reports class-level `SourceFile` metadata on returned methods when present.
+- Reports raw method access flags and decoded access-flag names.
 - Supports optional method annotation descriptors.
 - Supports optional ProGuard/Mojang mapped class and method names when a mapping file
   is supplied.
@@ -833,7 +837,7 @@ Inputs:
 Outputs:
 
 - Method locators.
-- Access flags.
+- Raw and decoded access flags.
 - Descriptor, decoded erased parameter/return types, generic signatures, and mapped
   names/signatures when available.
 - Readable decoded generic parameter/return/type summaries when `Signature`

@@ -120,6 +120,8 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert result.class_name == "a"
     assert result.mapped_class_name == "com.example.GameThing"
     assert result.source_file == "a.java"
+    assert "public" in result.access_flag_names
+    assert "super" in result.access_flag_names
     assert result.annotations[0].descriptor == "LMarker;"
     assert result.annotations[0].elements[0].value.value == "game-thing"
     assert any(item.inner_class == "a$f" for item in result.inner_classes)
@@ -129,10 +131,12 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     method_h = next(m for m in result.methods if m.name == "h")
     assert field_b.mapped_names == ["health"]
     assert field_b.field_type == "int"
+    assert field_b.access_flag_names == ["public"]
     assert field_g.field_type == "java.util.List"
     assert field_g.generic_signature == "Ljava/util/List<Ljava/lang/String;>;"
     assert field_g.generic_field_type == "java.util.List<java.lang.String>"
     assert method_c.mapped_names == ["tick"]
+    assert method_c.access_flag_names == ["public"]
     assert method_c.parameter_types == []
     assert method_c.return_type == "void"
     assert method_c.annotations[0].elements[0].value.value == "tick"

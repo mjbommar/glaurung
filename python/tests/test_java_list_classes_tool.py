@@ -93,6 +93,8 @@ def test_java_list_classes_filters_and_records_kb_nodes(tmp_path: Path) -> None:
     assert main.field_count == 0
     assert main.source_file == "Main.java"
     assert main.inner_class_count >= 1
+    assert "public" in main.access_flag_names
+    assert "super" in main.access_flag_names
     assert main.annotation_descriptors == ["Ljava/lang/Deprecated;"]
     assert any(
         node.kind == NodeKind.java_class
@@ -125,6 +127,11 @@ def test_java_list_classes_supports_access_flag_filters(tmp_path: Path) -> None:
     assert "app/Helper" not in {cls.class_name for cls in public_result.classes}
     assert "app/Helper" in {cls.class_name for cls in non_public_result.classes}
     assert "app/Base" in {cls.class_name for cls in non_public_result.classes}
+    helper = next(
+        cls for cls in non_public_result.classes if cls.class_name == "app/Helper"
+    )
+    assert "public" not in helper.access_flag_names
+    assert "super" in helper.access_flag_names
 
 
 def test_java_list_classes_reports_record_metadata(tmp_path: Path) -> None:

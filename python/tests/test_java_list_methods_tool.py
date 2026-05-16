@@ -95,6 +95,7 @@ public class Main {
     assert method.class_name == "app/Main"
     assert method.name == "value"
     assert method.descriptor == "()Ljava/lang/String;"
+    assert method.access_flag_names == ["public"]
     assert method.parameter_types == []
     assert method.parameter_count == 0
     assert method.return_type == "java.lang.String"
@@ -261,6 +262,7 @@ public class Main {
     assert handle.method_parameter_names == ["path", "count"]
     assert handle.method_parameter_count == 2
     assert handle.parameter_annotation_count == 1
+    assert handle.access_flag_names == ["public"]
     assert handle.has_annotation_default is False
 
     assert default_result.matched_method_count == 1

@@ -13,6 +13,7 @@ from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .java_access_flags import access_flag_names
 from .java_descriptors import decode_method_descriptor
 from .java_proguard_mappings import (
     ProguardClassMapping,
@@ -68,6 +69,7 @@ class JavaListedMethod(BaseModel):
     has_annotation_default: bool = False
     annotation_default: dict[str, Any] | None = None
     access_flags: int
+    access_flag_names: list[str] = Field(default_factory=list)
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
     code_length: int | None = None
@@ -249,6 +251,9 @@ def _method_summary(
         has_annotation_default=isinstance(method.get("annotation_default"), dict),
         annotation_default=_optional_dict(method.get("annotation_default")),
         access_flags=int(method.get("access_flags", 0)),
+        access_flag_names=access_flag_names(
+            int(method.get("access_flags", 0)), "method"
+        ),
         mapped_names=[member.official_name for member in mapped_members],
         mapped_signatures=[member.official_signature for member in mapped_members],
         code_length=code_length,

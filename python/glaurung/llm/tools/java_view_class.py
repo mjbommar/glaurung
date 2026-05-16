@@ -12,6 +12,7 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .java_access_flags import access_flag_names
 from .java_descriptors import decode_field_descriptor, decode_method_descriptor
 from .java_proguard_mappings import (
     ProguardClassMapping,
@@ -73,6 +74,7 @@ class JavaAnnotationSummary(BaseModel):
 class JavaMethodParameterSummary(BaseModel):
     name: str | None = None
     access_flags: int
+    access_flag_names: list[str] = Field(default_factory=list)
 
 
 class JavaParameterAnnotationsSummary(BaseModel):
@@ -85,6 +87,7 @@ class JavaInnerClassSummary(BaseModel):
     outer_class: str | None = None
     inner_name: str | None = None
     access_flags: int
+    access_flag_names: list[str] = Field(default_factory=list)
 
 
 class JavaEnclosingMethodSummary(BaseModel):
@@ -122,6 +125,7 @@ class JavaClassMemberSummary(BaseModel):
     )
     annotation_default: JavaAnnotationValueSummary | None = None
     access_flags: int
+    access_flag_names: list[str] = Field(default_factory=list)
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
     annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
@@ -146,6 +150,7 @@ class JavaViewClassResult(BaseModel):
     major_version: int | None = None
     minor_version: int | None = None
     access_flags: int | None = None
+    access_flag_names: list[str] = Field(default_factory=list)
     is_record: bool = False
     inner_classes: list[JavaInnerClassSummary] = Field(default_factory=list)
     enclosing_method: JavaEnclosingMethodSummary | None = None
@@ -302,6 +307,9 @@ def _result_for_class(
                 "major_version": parsed["major_version"],
                 "minor_version": parsed["minor_version"],
                 "access_flags": parsed["access_flags"],
+                "access_flag_names": access_flag_names(
+                    int(parsed["access_flags"]), "class"
+                ),
                 "is_record": is_record,
                 "inner_classes": [item.model_dump() for item in inner_classes],
                 "inner_class_count": len(inner_classes),
@@ -372,6 +380,7 @@ def _result_for_class(
                         annotation.model_dump() for annotation in member.annotations
                     ],
                     "access_flags": member.access_flags,
+                    "access_flag_names": member.access_flag_names,
                     "code": member.code.model_dump() if member.code else None,
                 },
                 tags=["java", member.kind, "mapping", "annotation"],
@@ -399,6 +408,7 @@ def _result_for_class(
         major_version=parsed["major_version"],
         minor_version=parsed["minor_version"],
         access_flags=parsed["access_flags"],
+        access_flag_names=access_flag_names(int(parsed["access_flags"]), "class"),
         is_record=is_record,
         inner_classes=inner_classes,
         enclosing_method=enclosing_method,
@@ -462,6 +472,9 @@ def _member_summary(
         ),
         annotation_default=_annotation_value_summary(member.get("annotation_default")),
         access_flags=int(member["access_flags"]),
+        access_flag_names=access_flag_names(
+            int(member["access_flags"]), "method" if kind == "method" else "field"
+        ),
         mapped_names=[mapping.official_name for mapping in mapped_members],
         mapped_signatures=[mapping.official_signature for mapping in mapped_members],
         annotations=_annotation_summaries(member.get("annotations")),
@@ -482,11 +495,14 @@ def _annotation_summaries(value: Any) -> list[JavaAnnotationSummary]:
 def _method_parameter_summaries(value: Any) -> list[JavaMethodParameterSummary]:
     if not isinstance(value, list):
         return []
-    return [
-        JavaMethodParameterSummary.model_validate(parameter)
-        for parameter in value
-        if isinstance(parameter, dict)
-    ]
+    out: list[JavaMethodParameterSummary] = []
+    for parameter in value:
+        if not isinstance(parameter, dict):
+            continue
+        summary = JavaMethodParameterSummary.model_validate(parameter)
+        summary.access_flag_names = access_flag_names(summary.access_flags, "parameter")
+        out.append(summary)
+    return out
 
 
 def _parameter_annotation_summaries(
@@ -510,11 +526,16 @@ def _annotation_value_summary(value: Any) -> JavaAnnotationValueSummary | None:
 def _inner_class_summaries(value: Any) -> list[JavaInnerClassSummary]:
     if not isinstance(value, list):
         return []
-    return [
-        JavaInnerClassSummary.model_validate(item)
-        for item in value
-        if isinstance(item, dict)
-    ]
+    out: list[JavaInnerClassSummary] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        summary = JavaInnerClassSummary.model_validate(item)
+        summary.access_flag_names = access_flag_names(
+            summary.access_flags, "inner_class"
+        )
+        out.append(summary)
+    return out
 
 
 def _enclosing_method_summary(value: Any) -> JavaEnclosingMethodSummary | None:
