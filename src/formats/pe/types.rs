@@ -612,6 +612,9 @@ pub struct ResourceDataEntry<'a> {
 pub struct ResourceDirectory<'a> {
     pub resources: Vec<ResourceDataEntry<'a>>,
     pub total_directories: usize,
+    pub total_named_entries: usize,
+    pub total_id_entries: usize,
+    pub total_entries: usize,
     pub max_depth: usize,
     pub warnings: Vec<String>,
     pub stop_reasons: Vec<String>,

@@ -564,6 +564,57 @@ mod tests {
         data
     }
 
+    fn write_resource_u16(data: &mut [u8], offset: usize, value: u16) {
+        data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_resource_u32(data: &mut [u8], offset: usize, value: u32) {
+        data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn create_pe_with_named_resource_type() -> Vec<u8> {
+        let mut data = create_pe_with_version_resource();
+        let base = 0x200usize;
+        let name_rel = 0x70usize;
+        let name = "WEVT_TEMPLATE";
+
+        write_resource_u16(&mut data, base + 12, 1);
+        write_resource_u16(&mut data, base + 14, 0);
+        write_resource_u32(&mut data, base + 16, 0x8000_0000 | name_rel as u32);
+
+        write_resource_u16(&mut data, base + name_rel, name.len() as u16);
+        for (index, word) in name.encode_utf16().enumerate() {
+            write_resource_u16(&mut data, base + name_rel + 2 + (index * 2), word);
+        }
+
+        data
+    }
+
+    fn create_pe_with_duplicate_overlapping_resources() -> Vec<u8> {
+        let mut data = create_pe_with_version_resource();
+        let base = 0x200usize;
+        let lang_dir = base + 0x30;
+        let first_data_entry_rel = 0x60u32;
+        let second_data_entry_rel = 0x70u32;
+
+        write_resource_u16(&mut data, lang_dir + 14, 2);
+        write_resource_u32(&mut data, lang_dir + 20, first_data_entry_rel);
+        write_resource_u32(&mut data, lang_dir + 24, 0x0409);
+        write_resource_u32(&mut data, lang_dir + 28, second_data_entry_rel);
+
+        let first_data_entry = base + first_data_entry_rel as usize;
+        write_resource_u32(&mut data, first_data_entry, 0x1080);
+        write_resource_u32(&mut data, first_data_entry + 4, 5);
+        write_resource_u32(&mut data, first_data_entry + 8, 1252);
+
+        let second_data_entry = base + second_data_entry_rel as usize;
+        write_resource_u32(&mut data, second_data_entry, 0x1082);
+        write_resource_u32(&mut data, second_data_entry + 4, 4);
+        write_resource_u32(&mut data, second_data_entry + 8, 1252);
+
+        data
+    }
+
     #[test]
     fn test_parse_minimal_pe() {
         let data = create_minimal_pe();
@@ -662,5 +713,74 @@ mod tests {
             .stop_reasons
             .iter()
             .any(|reason| reason == "max_resources"));
+    }
+
+    #[test]
+    fn test_resource_enumeration_decodes_named_resource_type() {
+        let data = create_pe_with_named_resource_type();
+        let parser = PeParser::new(&data).unwrap();
+
+        let resources = parser.resources().unwrap();
+
+        assert_eq!(resources.leaf_count(), 1);
+        assert_eq!(resources.total_named_entries, 1);
+        let resource = &resources.resources[0];
+        assert_eq!(resource.type_id.as_name(), Some("WEVT_TEMPLATE"));
+        assert_eq!(resource.type_name, None);
+        assert_eq!(resource.name.as_id(), Some(1));
+    }
+
+    #[test]
+    fn test_resource_enumeration_flags_duplicate_and_overlapping_leaves() {
+        let data = create_pe_with_duplicate_overlapping_resources();
+        let parser = PeParser::new(&data).unwrap();
+
+        let resources = parser.resources().unwrap();
+
+        assert_eq!(resources.leaf_count(), 2);
+        assert_eq!(resources.total_id_entries, 4);
+        assert!(resources
+            .warnings
+            .iter()
+            .any(|warning| warning == "duplicate_resource_triplet"));
+        assert!(resources
+            .warnings
+            .iter()
+            .any(|warning| warning == "overlapping_resource_data"));
+    }
+
+    #[test]
+    fn test_resource_enumeration_respects_depth_budget() {
+        let data = create_pe_with_version_resource();
+        let mut options = ParseOptions::default();
+        options.max_resource_depth = 1;
+        let parser = PeParser::with_options(&data, options).unwrap();
+
+        let resources = parser.resources().unwrap();
+
+        assert_eq!(resources.leaf_count(), 0);
+        assert!(resources
+            .stop_reasons
+            .iter()
+            .any(|reason| reason == "max_resource_depth"));
+        assert!(resources
+            .warnings
+            .iter()
+            .any(|warning| warning == "resource_depth_exceeded"));
+    }
+
+    #[test]
+    fn test_resource_enumeration_warns_on_invalid_data_rva() {
+        let mut data = create_pe_with_version_resource();
+        write_resource_u32(&mut data, 0x200 + 0x48, 0x5000);
+        let parser = PeParser::new(&data).unwrap();
+
+        let resources = parser.resources().unwrap();
+
+        assert_eq!(resources.leaf_count(), 0);
+        assert!(resources
+            .warnings
+            .iter()
+            .any(|warning| warning == "invalid_resource_data_rva"));
     }
 }

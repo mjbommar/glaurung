@@ -275,6 +275,9 @@ fn pe_resources_to_py(
     let dict = pyo3::types::PyDict::new(py);
     dict.set_item("leaf_count", resources.leaf_count())?;
     dict.set_item("total_directories", resources.total_directories)?;
+    dict.set_item("total_named_entries", resources.total_named_entries)?;
+    dict.set_item("total_id_entries", resources.total_id_entries)?;
+    dict.set_item("total_entries", resources.total_entries)?;
     dict.set_item("max_depth", resources.max_depth)?;
     dict.set_item("resource_bytes_total", resource_bytes_total(resources))?;
     dict.set_item("warnings", resources.warnings.clone())?;

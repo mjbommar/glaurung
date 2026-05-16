@@ -48,9 +48,14 @@ pub fn parse_resources<'a>(
         data,
         sections,
         base_offset,
+        resource_section_name: sections
+            .section_containing_rva(resource_dir.virtual_address)
+            .map(|section| section.header.name()),
         options,
         directory: &mut directory,
         visited_directories: HashSet::new(),
+        seen_triplets: HashSet::new(),
+        resource_ranges: Vec::new(),
     };
 
     let mut path = Vec::new();
@@ -63,9 +68,12 @@ struct ResourceParseState<'a, 'out> {
     data: &'a [u8],
     sections: &'out SectionTable,
     base_offset: usize,
+    resource_section_name: Option<String>,
     options: &'out ParseOptions,
     directory: &'out mut ResourceDirectory<'a>,
     visited_directories: HashSet<usize>,
+    seen_triplets: HashSet<(ResourceIdentifier, ResourceIdentifier, ResourceIdentifier)>,
+    resource_ranges: Vec<(usize, usize)>,
 }
 
 impl<'a> ResourceParseState<'a, '_> {
@@ -110,6 +118,9 @@ impl<'a> ResourceParseState<'a, '_> {
         let named_entries = self.data.read_u16_le_at(directory_offset + 12).unwrap_or(0);
         let id_entries = self.data.read_u16_le_at(directory_offset + 14).unwrap_or(0);
         let entry_count = named_entries as usize + id_entries as usize;
+        self.directory.total_named_entries += named_entries as usize;
+        self.directory.total_id_entries += id_entries as usize;
+        self.directory.total_entries += entry_count;
         let entries_offset = directory_offset + RESOURCE_DIRECTORY_HEADER_SIZE;
 
         for index in 0..entry_count {
@@ -243,13 +254,12 @@ impl<'a> ResourceParseState<'a, '_> {
             return;
         }
 
-        let (resource_data, warnings) = if data_end <= self.data.len() {
-            (&self.data[data_offset..data_end], Vec::new())
+        let mut warnings = Vec::new();
+        let resource_data = if data_end <= self.data.len() {
+            &self.data[data_offset..data_end]
         } else {
-            (
-                &self.data[data_offset..],
-                vec!["truncated_resource_data".to_string()],
-            )
+            warnings.push("truncated_resource_data".to_string());
+            &self.data[data_offset..]
         };
 
         let type_id = path.first().cloned().unwrap_or(ResourceIdentifier::Id(0));
@@ -264,6 +274,36 @@ impl<'a> ResourceParseState<'a, '_> {
             .sections
             .section_containing_rva(data_rva)
             .map(|section| section.header.name());
+
+        if !self
+            .seen_triplets
+            .insert((type_id.clone(), name.clone(), language.clone()))
+        {
+            push_once(&mut warnings, "duplicate_resource_triplet");
+            push_once(&mut self.directory.warnings, "duplicate_resource_triplet");
+        }
+
+        if self
+            .resource_ranges
+            .iter()
+            .any(|&(start, end)| ranges_overlap(data_offset, data_end, start, end))
+        {
+            push_once(&mut warnings, "overlapping_resource_data");
+            push_once(&mut self.directory.warnings, "overlapping_resource_data");
+        }
+        self.resource_ranges.push((data_offset, data_end));
+
+        if let (Some(resource_section), Some(data_section)) =
+            (&self.resource_section_name, &section_name)
+        {
+            if resource_section != data_section {
+                push_once(&mut warnings, "resource_data_outside_resource_section");
+                push_once(
+                    &mut self.directory.warnings,
+                    "resource_data_outside_resource_section",
+                );
+            }
+        }
 
         self.directory.resources.push(ResourceDataEntry {
             type_id,
@@ -368,6 +408,18 @@ fn push_once(values: &mut Vec<String>, value: &str) {
     if !values.iter().any(|existing| existing == value) {
         values.push(value.to_string());
     }
+}
+
+fn ranges_overlap(
+    left_start: usize,
+    left_end: usize,
+    right_start: usize,
+    right_end: usize,
+) -> bool {
+    left_start < left_end
+        && right_start < right_end
+        && left_start < right_end
+        && right_start < left_end
 }
 
 fn sha256_digest(data: &[u8]) -> String {

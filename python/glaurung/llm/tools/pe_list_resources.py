@@ -56,6 +56,9 @@ class PeListResourcesResult(BaseModel):
     leaf_count: int = 0
     matched_resource_count: int = 0
     total_directories: int = 0
+    total_named_entries: int = 0
+    total_id_entries: int = 0
+    total_entries: int = 0
     max_depth: int = 0
     resource_bytes_total: int = 0
     resources_by_type: dict[str, int] = Field(default_factory=dict)
@@ -109,6 +112,9 @@ class PeListResourcesTool(MemoryTool[PeListResourcesArgs, PeListResourcesResult]
             path=str(path),
             leaf_count=int(raw.get("leaf_count", 0)),
             total_directories=int(raw.get("total_directories", 0)),
+            total_named_entries=int(raw.get("total_named_entries", 0)),
+            total_id_entries=int(raw.get("total_id_entries", 0)),
+            total_entries=int(raw.get("total_entries", 0)),
             max_depth=int(raw.get("max_depth", 0)),
             resource_bytes_total=int(raw.get("resource_bytes_total", 0)),
             resources_by_type=dict(raw.get("resources_by_type", {})),
