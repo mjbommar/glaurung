@@ -196,6 +196,9 @@ from ..tools.java_decompile_archive import build_tool as build_java_decompile_ar
 from ..tools.java_parse_decompiled_source import (
     build_tool as build_java_parse_decompiled_source,
 )
+from ..tools.java_index_source_project import (
+    build_tool as build_java_index_source_project,
+)
 from ..tools.java_repair_decompiled_source import (
     build_tool as build_java_repair_decompiled_source,
 )
@@ -840,6 +843,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_parse_decompiled_source())
     )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_index_source_project()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_java_repair_decompiled_source())
     )

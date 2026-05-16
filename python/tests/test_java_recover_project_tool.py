@@ -182,6 +182,8 @@ def test_java_recover_project_orchestrates_decompile_compile_repair_validate(
     assert result.success is True
     assert result.source_project_root == str(output)
     assert result.decompile_success_count == 1
+    assert result.source_index_result is not None
+    assert result.source_index_result.parse_success_count == 1
     assert result.compile_success is True
     assert result.validation_passed is True
     assert result.repair_success is True

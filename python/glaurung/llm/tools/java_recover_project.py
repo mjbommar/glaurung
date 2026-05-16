@@ -24,7 +24,10 @@ from .java_infer_dependencies import (
     JavaInferDependenciesResult,
     build_tool as build_java_infer_dependencies,
 )
-from .java_parse_decompiled_source import build_tool as build_java_parse_source
+from .java_index_source_project import (
+    JavaIndexSourceProjectResult,
+    build_tool as build_java_index_source_project,
+)
 from .java_reconstruct_source_tree import (
     JavaReconstructSourceTreeResult,
     ResourcePolicy,
@@ -85,6 +88,7 @@ class JavaRecoverProjectResult(BaseModel):
     reconstruct_result: JavaReconstructSourceTreeResult | None = None
     dependency_result: JavaInferDependenciesResult | None = None
     decompile_result: JavaDecompileArchiveResult | None = None
+    source_index_result: JavaIndexSourceProjectResult | None = None
     compile_result: JavaCompileRecoveredProjectResult | None = None
     repair_result: JavaRepairDecompiledSourceResult | None = None
     validation_result: JavaValidateRecoveredApplicationResult | None = None
@@ -228,7 +232,19 @@ class JavaRecoverProjectTool(
             args.java_release,
             effective_classpath,
         )
-        result.parsed_source_count = _parse_sources(ctx, kb, output_root, args)
+        index_tool = build_java_index_source_project()
+        source_index = index_tool.run(
+            ctx,
+            kb,
+            index_tool.input_model(
+                source_project_root=str(output_root),
+                helper_jar=args.helper_jar,
+                timeout_seconds_per_file=args.timeout_seconds_per_class,
+            ),
+        )
+        result.source_index_result = source_index
+        result.parsed_source_count = source_index.parse_success_count
+        result.stop_reasons.extend(source_index.stop_reasons)
 
         compile_tool = build_java_compile_recovered_project()
         compile_result = compile_tool.run(
@@ -406,32 +422,6 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
         seen.add(key)
         out.append(path)
     return out
-
-
-def _parse_sources(
-    ctx: MemoryContext,
-    kb: KnowledgeBase,
-    output_root: Path,
-    args: JavaRecoverProjectArgs,
-) -> int:
-    source_root = output_root / "src" / "main" / "java"
-    if not source_root.is_dir():
-        return 0
-    parse_tool = build_java_parse_source()
-    count = 0
-    for source in sorted(source_root.rglob("*.java")):
-        parsed = parse_tool.run(
-            ctx,
-            kb,
-            parse_tool.input_model(
-                source_path=str(source),
-                helper_jar=args.helper_jar,
-                timeout_seconds=args.timeout_seconds_per_class,
-            ),
-        )
-        if parsed.success:
-            count += 1
-    return count
 
 
 def _finish(result: JavaRecoverProjectResult, kb: KnowledgeBase) -> None:

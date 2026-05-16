@@ -46,6 +46,7 @@ class NodeKind(str, Enum):
     java_decompile_unit = "java_decompile_unit"
     java_decompile_archive = "java_decompile_archive"
     java_source_ast = "java_source_ast"
+    java_source_project_index = "java_source_project_index"
     java_repair_result = "java_repair_result"
     java_abi_comparison = "java_abi_comparison"
     java_recovery_validation = "java_recovery_validation"
