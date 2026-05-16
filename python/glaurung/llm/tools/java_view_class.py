@@ -12,6 +12,7 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .java_descriptors import decode_field_descriptor, decode_method_descriptor
 from .java_proguard_mappings import (
     ProguardClassMapping,
     ProguardMappings,
@@ -88,6 +89,11 @@ class JavaClassMemberSummary(BaseModel):
     kind: Literal["field", "method"]
     name: str
     descriptor: str
+    field_type: str | None = None
+    parameter_types: list[str] = Field(default_factory=list)
+    parameter_count: int = 0
+    return_type: str | None = None
+    descriptor_error: str | None = None
     access_flags: int
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
@@ -297,6 +303,11 @@ def _result_for_class(
                     "source_file": source_file,
                     "name": member.name,
                     "descriptor": member.descriptor,
+                    "field_type": member.field_type,
+                    "parameter_types": member.parameter_types,
+                    "parameter_count": member.parameter_count,
+                    "return_type": member.return_type,
+                    "descriptor_error": member.descriptor_error,
                     "mapped_names": member.mapped_names,
                     "mapped_signatures": member.mapped_signatures,
                     "annotations": [
@@ -344,12 +355,18 @@ def _member_summary(
     class_mapping: ProguardClassMapping | None,
     mappings: ProguardMappings | None,
 ) -> JavaClassMemberSummary:
+    descriptor = str(member["descriptor"])
+    decoded_descriptor = (
+        decode_method_descriptor(descriptor)
+        if kind == "method"
+        else decode_field_descriptor(descriptor)
+    )
     mapped_members = (
         mappings.matching_member_mappings(
             class_mapping,
             kind=kind,
             obfuscated_name=str(member["name"]),
-            descriptor=str(member["descriptor"]),
+            descriptor=descriptor,
         )
         if class_mapping is not None and mappings is not None
         else []
@@ -357,7 +374,12 @@ def _member_summary(
     return JavaClassMemberSummary(
         kind=kind,
         name=str(member["name"]),
-        descriptor=str(member["descriptor"]),
+        descriptor=descriptor,
+        field_type=decoded_descriptor.field_type,
+        parameter_types=decoded_descriptor.parameter_types,
+        parameter_count=decoded_descriptor.parameter_count,
+        return_type=decoded_descriptor.return_type,
+        descriptor_error=decoded_descriptor.error,
         access_flags=int(member["access_flags"]),
         mapped_names=[mapping.official_name for mapping in mapped_members],
         mapped_signatures=[mapping.official_signature for mapping in mapped_members],

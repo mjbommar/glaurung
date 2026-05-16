@@ -13,6 +13,7 @@ from ..context import MemoryContext
 from ..kb.models import Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .java_descriptors import decode_method_descriptor
 from .java_proguard_mappings import (
     ProguardClassMapping,
     ProguardMappings,
@@ -50,6 +51,10 @@ class JavaListedMethod(BaseModel):
     source_file: str | None = None
     name: str
     descriptor: str
+    parameter_types: list[str] = Field(default_factory=list)
+    parameter_count: int = 0
+    return_type: str | None = None
+    descriptor_error: str | None = None
     access_flags: int
     mapped_names: list[str] = Field(default_factory=list)
     mapped_signatures: list[str] = Field(default_factory=list)
@@ -205,13 +210,19 @@ def _method_summary(
         max_stack = int(code.get("max_stack", 0))
         max_locals = int(code.get("max_locals", 0))
         line_numbers = _line_numbers(code)
+    descriptor = str(method.get("descriptor"))
+    decoded_descriptor = decode_method_descriptor(descriptor)
     return JavaListedMethod(
         class_name=class_name,
         dotted_class_name=_dotted(class_name),
         mapped_class_name=class_mapping.official_name if class_mapping else None,
         source_file=source_file,
         name=str(method.get("name")),
-        descriptor=str(method.get("descriptor")),
+        descriptor=descriptor,
+        parameter_types=decoded_descriptor.parameter_types,
+        parameter_count=decoded_descriptor.parameter_count,
+        return_type=decoded_descriptor.return_type,
+        descriptor_error=decoded_descriptor.error,
         access_flags=int(method.get("access_flags", 0)),
         mapped_names=[member.official_name for member in mapped_members],
         mapped_signatures=[member.official_signature for member in mapped_members],

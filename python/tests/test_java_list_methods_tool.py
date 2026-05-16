@@ -83,6 +83,9 @@ public class Main {
     assert method.class_name == "app/Main"
     assert method.name == "value"
     assert method.descriptor == "()Ljava/lang/String;"
+    assert method.parameter_types == []
+    assert method.parameter_count == 0
+    assert method.return_type == "java.lang.String"
     assert method.code_length is not None and method.code_length > 0
     assert method.source_file == "Main.java"
     assert method.line_number_count >= 1
@@ -132,6 +135,52 @@ public class Main {
 
     assert result.matched_method_count == 1
     assert result.methods[0].annotation_descriptors == ["Lapp/Marker;"]
+
+
+def test_java_list_methods_decodes_complex_method_descriptors(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_list_methods import build_tool
+
+    jar = _compile_source(
+        tmp_path,
+        """
+package app;
+
+import java.util.List;
+
+public class Main {
+    public int combine(String[] names, int[][] scores, List<String> labels) {
+        return names.length + scores.length + labels.size();
+    }
+}
+""",
+    )
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            class_filter="app.Main",
+            name_filter="combine",
+            include_constructors=False,
+        ),
+    )
+
+    assert result.matched_method_count == 1
+    method = result.methods[0]
+    assert method.descriptor == "([Ljava/lang/String;[[ILjava/util/List;)I"
+    assert method.parameter_types == [
+        "java.lang.String[]",
+        "int[][]",
+        "java.util.List",
+    ]
+    assert method.parameter_count == 3
+    assert method.return_type == "int"
+    assert method.descriptor_error is None
 
 
 def test_java_list_methods_respects_limit(tmp_path: Path) -> None:

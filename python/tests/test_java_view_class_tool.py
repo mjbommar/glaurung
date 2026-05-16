@@ -115,7 +115,10 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     field_b = next(f for f in result.fields if f.name == "b")
     method_c = next(m for m in result.methods if m.name == "c")
     assert field_b.mapped_names == ["health"]
+    assert field_b.field_type == "int"
     assert method_c.mapped_names == ["tick"]
+    assert method_c.parameter_types == []
+    assert method_c.return_type == "void"
     assert method_c.annotations[0].elements[0].value.value == "tick"
     assert method_c.code is not None
     assert method_c.code.code_length > 0
