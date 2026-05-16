@@ -1,0 +1,250 @@
+# Windows-specific atomic tools for `glaurung/llm/tools/`
+
+> 12-15 deterministic pydantic-ai tools the `agentic-security-bot`
+> (asb) windows-port campaign adds to `memory_agent`. Each tool
+> encapsulates one tier-1 or tier-2 bug-class invariant from
+> `asb/projects/windows-port/reference/bug-class-invariants.md`.
+
+## Why tools, not glaurung-script rules
+
+asb workstream 02 sec "How rules are encoded" enumerates three
+paths: glaurung-script rules (`data/rules/glaurung/<id>/rule.py`),
+kg-pe-query SQL (`data/rules/kg-pe/<id>/rule.sql`), and new
+`memory_agent` atomic tools. The tool path wins for tier-1
+invariants because the same tool gets reused by:
+
+- the `memory_agent` autonomous loop (the asb campaign's primary
+  consumer)
+- interactive `glaurung ask` sessions (humans debugging a finding)
+- `python -m glaurung.bench` regression scorecard
+- future agents Glaurung adds (vulnerability agent, decompile
+  agent)
+
+A rule file under `data/rules/` is single-purpose; a tool
+multiplies its leverage.
+
+## The 14 tools
+
+The full table, mirroring asb workstream 02 sec "Windows-specific
+atomic tools". Each row's "invariant" column is the load-bearing
+property the tool encodes; "bug-class ref" cites the
+`reference/bug-class-invariants.md` entry the tool implements.
+
+| tool (file) | invariant | bug-class ref |
+|-------------|-----------|---------------|
+| `find_dpc_callbacks.py` | enumerate functions registered via `KeInitializeDpc` (second-arg function pointer in the call) | #2 |
+| `paged_pool_deref_under_dispatch.py` | from a starting fn, walk callgraph until either a paged-pool deref or an IRQL-lowering call; report paths that hit the deref first | #1, #2 |
+| `find_irp_completion_then_use.py` | within a fn, find any deref of an Irp variable that is downstream (CFG) of a call to `IoCompleteRequest(Irp, ...)` | #3 |
+| `find_cancel_routine_no_unset.py` | within a fn that calls `IoSetCancelRoutine(Irp, non-NULL)`, find paths to `IoCompleteRequest(Irp)` not gated by a matching `IoSetCancelRoutine(Irp, NULL)` | #4 |
+| `find_obref_untyped.py` | callsite of `ObReferenceObjectByHandle(...)` with `ObjectType == NULL`, followed by a cast of the returned `Object` | #5 |
+| `find_xxx_callback_uaf.py` | win32k fn whose name starts `xxx` or `zzz`, calls `KeUserModeCallback`, then derefs a pre-callback pointer without re-validation | #6 |
+| `find_probe_then_reread.py` | callsite of `ProbeForRead/Write(p, size)` followed by >=2 derefs `*p`, `*(p+const)` without intervening copy to kernel memory | #7 |
+| `find_mmprobelock_no_unwind.py` | fn calls `MmProbeAndLockPages`; any error edge that returns without `MmUnlockPages` + `IoFreeMdl` | #8 |
+| `find_ndrservercall_unbounded_array.py` | RPC server entry (reached from `NdrServerCall2`) with an unbounded conformant array param read from the marshalled stream before any size cap | #9 |
+| `find_alpc_handler_no_attr_validation.py` | ALPC port handler (reached from `AlpcpDispatchMessage`) reads `Message->Attributes` without `AlpcGetMessageAttribute` precheck | #10 |
+| `find_dxgkrnl_ioctl_no_probe.py` | dxgkrnl IRP_MJ_DEVICE_CONTROL handler derefs `Irp->AssociatedIrp.SystemBuffer` or `Irp->UserBuffer` without prior `ProbeForRead/Write` | #14 |
+| `classify_attacker_for_pe_fn.py` | walk asb's `data/kg/pe-sources.yaml` + `pe-gates.yaml`; return `(attacker_class, gates_on_path)` -- pins AV/PR | (analog of the Linux `bot/kg/` tool `classify_attacker_for_target`) |
+| `find_canonical_pe_binaries.py` | given `nt!Symbol`, return list of (binary, build) tuples from the `/nas4/data/binary-analysis/glaurung/windows-*` corpus | helper |
+| `pe_xref_callers_recursive.py` | bounded-depth reverse callgraph walk against the `.glaurung` SQLite KB; mirrors `cscope -L1` ergonomics | helper |
+| `pdb_struct_layout.py` | given struct name, return field offsets + types from PDB-derived type DB (depends on #179) | helper |
+
+That is 15 (the campaign's "12-15" is approximate). All except
+`pdb_struct_layout.py` are unblocked by the order of operations
+(#179 lands before that one).
+
+## Per-tool authoring template
+
+Each tool is one file under
+`/nas4/data/workspace-infosec/glaurung/python/glaurung/llm/tools/`,
+following the existing `hash_file.py` shape:
+
+```python
+"""find_dpc_callbacks.py -- enumerate functions registered via
+KeInitializeDpc as DPC callbacks. Used by paged_pool_deref_under_dispatch
+to seed the DPC-context walk.
+"""
+
+from __future__ import annotations
+
+from typing import List
+from pathlib import Path
+
+from pydantic import BaseModel, Field
+
+from ..context import MemoryContext
+from ..kb.store import KnowledgeBase
+from .base import MemoryTool, ToolMeta
+
+
+class FindDpcCallbacksArgs(BaseModel):
+    project_path: str = Field(
+        ...,
+        description="Path to .glaurung SQLite project for the binary",
+    )
+    include_chained: bool = Field(
+        False,
+        description="If true, also include fns registered indirectly via "
+        "a vtable slot that flows into KeInitializeDpc",
+    )
+
+
+class DpcCallbackRow(BaseModel):
+    fn_name: str
+    fn_va: int
+    register_callsite_va: int
+    binary: str
+
+
+class FindDpcCallbacksResult(BaseModel):
+    callbacks: List[DpcCallbackRow]
+
+
+class FindDpcCallbacksTool(
+    MemoryTool[FindDpcCallbacksArgs, FindDpcCallbacksResult]
+):
+    def __init__(self) -> None:
+        super().__init__(
+            ToolMeta(
+                name="find_dpc_callbacks",
+                description=(
+                    "Enumerate DPC callbacks (fns registered via "
+                    "KeInitializeDpc); seeds dispatch-IRQL walks."
+                ),
+                tags=("windows", "kernel", "dpc", "irql"),
+            ),
+            FindDpcCallbacksArgs,
+            FindDpcCallbacksResult,
+        )
+
+    def run(
+        self,
+        ctx: MemoryContext,
+        kb: KnowledgeBase,
+        args: FindDpcCallbacksArgs,
+    ) -> FindDpcCallbacksResult:
+        # 1. Open args.project_path as the .glaurung SQLite KB
+        # 2. Query xrefs table: rows where dst_func_name = "KeInitializeDpc"
+        # 3. For each callsite, recover the second-arg operand (the
+        #    function-pointer constant). Use the existing operand parser
+        #    from `analysis.type_propagation` (issue #195).
+        # 4. Lift each resolved VA to its containing function name.
+        # 5. Return rows; also write to kb as Node(kind="dpc_callback")
+        #    so subsequent agent turns can reuse without re-querying.
+        ...
+
+
+def build_tool() -> MemoryTool[
+    FindDpcCallbacksArgs, FindDpcCallbacksResult
+]:
+    return FindDpcCallbacksTool()
+```
+
+### Authoring checklist
+
+For each tool:
+
+1. Args model: pydantic `BaseModel` with `Field(..., description=...)`
+   so the LLM gets human-readable hints.
+2. Output schema: pydantic `BaseModel` with explicit field types.
+   Use lists of small `BaseModel` rows, not free-form dicts.
+3. `MemoryTool[Args, Result]` subclass with `ToolMeta(name, description,
+   tags)`. Tags should include `windows` plus the subsystem
+   (`kernel`, `win32k`, `dxgkrnl`, `alpc`, `rpc`).
+4. `run()` opens the project KB through `ctx.kb` or a per-call
+   `KnowledgeBase` path; never instantiates a new SQLite handle
+   directly so the existing connection pool / lock semantics are
+   preserved.
+5. Writes findings as `Node` rows into `kb` so the agent can
+   chain tools (one tool's output is the next's input).
+6. Test: `python/tests/test_<tool>.py` using one of the
+   `tests/fixtures/msvc-pdb/` binaries (issue #197). Red until
+   #179 lands for any tool that depends on PDB types.
+7. Tool gets auto-registered by `memory_agent` via the existing
+   `build_tool()` discovery pattern; no manual entry in a
+   registry table needed.
+
+## Output-schema conventions
+
+Each tool returns either:
+
+- a `List[<RowModel>]` shape (when the tool enumerates findings)
+- a single `<Verdict>` shape (when the tool classifies one input)
+
+Rows always include enough provenance for the agent to cite:
+
+- `binary` (filename or sha256-prefix)
+- `fn_va` or `fn_name`
+- `callsite_va` where applicable
+- a free-text `evidence` string the agent can quote
+
+This mirrors Glaurung's evidence-tagged tool outputs (issue
+#200, shipped) and the kernel-lore MCP convention of returning
+freshness metadata per row.
+
+## Integration with `data/kg/pe-{sources,gates}.yaml`
+
+The `classify_attacker_for_pe_fn.py` tool is the only one that
+reads YAML at runtime. It accepts:
+
+```python
+class ClassifyAttackerArgs(BaseModel):
+    fn_name: str
+    project_path: str
+    pe_sources_yaml: str = Field(
+        default="/nas4/data/workspace-infosec/agentic-security-bot/data/kg/pe-sources.yaml"
+    )
+    pe_gates_yaml: str = Field(
+        default="/nas4/data/workspace-infosec/agentic-security-bot/data/kg/pe-gates.yaml"
+    )
+```
+
+asb workstream 02 "Open questions" notes the alternative of
+vendoring the YAMLs into Glaurung's tree. Current recommendation:
+keep them in asb, accept a configurable path, default to the asb
+checkout location. A Glaurung release does not need to ship them.
+
+## Bug-class-to-tool routing
+
+When a new bug class lands in
+`asb/projects/windows-port/reference/bug-class-invariants.md`,
+the rule of thumb:
+
+| tier | typical encoding |
+|------|------------------|
+| 1    | new tool here (preferred), glaurung-script under `data/rules/glaurung/` (fallback) |
+| 2    | tool if reusable across rules; glaurung-script otherwise |
+| 3    | broad-sweep glaurung-script; tool only if a helper emerges |
+
+asb workstream 03 owns the rule files; this doc only owns the
+tools. Tools are language- and campaign-agnostic; rules are
+campaign-specific compositions of tool calls.
+
+## Testing the full set
+
+```
+cd /nas4/data/workspace-infosec/glaurung
+uv run pytest python/tests/test_find_dpc_callbacks.py \
+                python/tests/test_find_irp_completion_then_use.py \
+                python/tests/test_paged_pool_deref_under_dispatch.py \
+                # ... etc
+```
+
+Once all 15 ship green against the #197 fixture set,
+`memory_agent` running `glaurung ask "what tier-1 Windows
+findings exist in ntoskrnl-26100.5?"` returns a real verdict.
+
+## Cross-refs
+
+- `roadmap.md` -- the four upstream issues these tools depend on
+- `pdb-ingestion-design.md` -- the #179 work that gives the
+  PDB-aware tools (especially `pdb_struct_layout`) something to
+  resolve
+- asb `reference/bug-class-invariants.md` -- the canonical list
+  of bug shapes; each tier-1 entry maps to exactly one tool
+- asb `workstreams/02-kg-pe-substrate.md` sec "Windows-specific
+  atomic tools" -- the campaign-side table this doc fans out
+- existing template: `glaurung/python/glaurung/llm/tools/hash_file.py`
+  (smallest), `classify_constant.py` (mid), `view_disassembly.py`
+  (largest)
+- Glaurung tool-registration pattern: `docs/llm/TOOLS.md`,
+  `docs/llm/ROADMAP.md` sec "Implementation Status / Atomic tools"
