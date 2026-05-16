@@ -132,9 +132,9 @@ Glaurung already has a growing Java path:
   counts, optional annotation descriptors, optional ProGuard/Mojang mapped names, and
   `java_class` evidence nodes.
 - Python memory tools can now list candidate methods with `java_list_methods`,
-  exposing bounded class/name/descriptor filtering, code-size summaries, optional
-  annotation descriptors, optional ProGuard/Mojang mapped names, and `java_method`
-  evidence nodes.
+  exposing bounded class/name/descriptor filtering, code-size summaries,
+  line-number counts/ranges, optional annotation descriptors, optional
+  ProGuard/Mojang mapped names, and `java_method` evidence nodes.
 - Python memory tools can now correlate sensitive sink findings with method-local
   constants and extracted configuration keys, producing initial config states for
   behavior claims.
@@ -797,7 +797,8 @@ Initial Python implementation status:
 - Scans JAR/ZIP class entries with the Rust class parser.
 - Supports class, method-name, and descriptor substring filters.
 - Supports constructor inclusion/exclusion, result limits, code-size summaries, and
-  optional method annotation descriptors.
+  line-number counts/ranges when `LineNumberTable` data exists.
+- Supports optional method annotation descriptors.
 - Supports optional ProGuard/Mojang mapped class and method names when a mapping file
   is supplied.
 
@@ -817,6 +818,7 @@ Outputs:
 - Access flags.
 - Descriptor and mapped names/signatures when available.
 - Code size, max stack, max locals.
+- Line table availability and first/last source line when present.
 - Annotation descriptors when requested.
 
 `java_view_bytecode`

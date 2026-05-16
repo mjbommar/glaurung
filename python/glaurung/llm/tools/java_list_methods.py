@@ -55,6 +55,9 @@ class JavaListedMethod(BaseModel):
     code_length: int | None = None
     max_stack: int | None = None
     max_locals: int | None = None
+    line_number_count: int = 0
+    first_line: int | None = None
+    last_line: int | None = None
     annotation_descriptors: list[str] = Field(default_factory=list)
 
 
@@ -192,10 +195,12 @@ def _method_summary(
     code_length: int | None = None
     max_stack: int | None = None
     max_locals: int | None = None
+    line_numbers: list[int] = []
     if isinstance(code, dict):
         code_length = int(code.get("code_length", 0))
         max_stack = int(code.get("max_stack", 0))
         max_locals = int(code.get("max_locals", 0))
+        line_numbers = _line_numbers(code)
     return JavaListedMethod(
         class_name=class_name,
         dotted_class_name=_dotted(class_name),
@@ -208,6 +213,9 @@ def _method_summary(
         code_length=code_length,
         max_stack=max_stack,
         max_locals=max_locals,
+        line_number_count=len(line_numbers),
+        first_line=min(line_numbers) if line_numbers else None,
+        last_line=max(line_numbers) if line_numbers else None,
         annotation_descriptors=_annotation_descriptors(method)
         if include_annotations
         else [],
@@ -279,6 +287,20 @@ def _annotation_descriptors(method: dict[str, Any]) -> list[str]:
         for annotation in annotations
         if isinstance(annotation, dict) and annotation.get("descriptor")
     ]
+
+
+def _line_numbers(code: dict[str, Any]) -> list[int]:
+    line_numbers = code.get("line_numbers")
+    if not isinstance(line_numbers, list):
+        return []
+    out: list[int] = []
+    for line in line_numbers:
+        if not isinstance(line, dict):
+            continue
+        value = line.get("line_number")
+        if isinstance(value, int):
+            out.append(value)
+    return out
 
 
 def _add_method_node(

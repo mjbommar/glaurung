@@ -84,6 +84,9 @@ public class Main {
     assert method.name == "value"
     assert method.descriptor == "()Ljava/lang/String;"
     assert method.code_length is not None and method.code_length > 0
+    assert method.line_number_count >= 1
+    assert method.first_line is not None
+    assert method.last_line is not None
     assert any(
         node.kind == NodeKind.java_method
         and node.props.get("tool") == "java_list_methods"
