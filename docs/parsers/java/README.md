@@ -234,11 +234,12 @@ Implemented pieces now include:
   `java_decompile_archive`, and `java_parse_decompiled_source`, emitting
   `java_decompile_unit` and `java_decompile_archive` KB nodes with source/AST
   evidence suitable for agent review and later repair. Archive decompilation has
-  budgets, package/glob filters, CFR/Vineflower fallback scoring, explicit
-  inner-class `skip`/`companion` policy, inner/anonymous/lambda classification
-  groups, mapping-aware filters/metadata, optional mapped source-name rewriting,
-  optional compile-candidate scoring, source emission, and bytecode/source
-  correlation anchors.
+  budgets, package/glob filters, CFR/Vineflower fallback scoring, project-context
+  compile-candidate scoring, explicit inner-class `skip`/`companion`/`merge`
+  policy, named-inner merge, anonymous/lambda/synthetic suppression metadata,
+  ProGuard/Mojang/Tiny v1/v2 mapping-aware filters/metadata, optional mapped
+  source-name rewriting with collision detection, source emission, and
+  bytecode/source correlation anchors.
 - Initial source-tree reconstruction through `java_reconstruct_source_tree`,
   creating `src/main/java` and `src/main/resources` scaffolds, preserving runtime
   resources and metadata, skipping signed-JAR signature files, optionally emitting
@@ -252,8 +253,11 @@ Implemented pieces now include:
   `Outer.Inner` into legal `$` companion declarations, add matching local
   `libs/*.jar` classpath entries for missing dependency diagnostics, add a missing
   import when exactly one local source type matches the unresolved simple name,
-  update `sources.txt`/`javac.args`, recompile, and record `java_repair_result` KB
-  evidence.
+  write `.glaurung/build-repair-plan.json` when dependency/build metadata should be
+  fixed before source, report ambiguous imports without editing, defer
+  non-mechanical signature/enum/record/sealed/anonymous-class/bad-cast/synthetic
+  bridge repairs with evidence, update `sources.txt`/`javac.args`, recompile, and
+  record `java_repair_result` KB evidence.
 - Initial ABI comparison through `java_compare_rebuilt_abi`, comparing original and
   rebuilt JARs or class directories by class names, field descriptors, method
   descriptors, access flags, selected `all`/`package_api`/`public_api` scope, and
@@ -265,12 +269,17 @@ Implemented pieces now include:
   `src/main/resources`, generated-stub rejection unless explicitly allowed, and
   `java_recovery_validation` KB evidence. Validation reports now include explicit
   pass/fail/skip checks, blocking issue counts, manifest/ServiceLoader/module
-  metadata parity, `clean_enough`/`not_clean_enough` summaries, and next-action
-  hints.
+  metadata parity, semantic differences for record components, sealed permitted
+  subclasses, method parameter annotation counts, annotation defaults, a
+  compatibility score, `clean_enough`/`not_clean_enough` summaries, and
+  next-action hints.
 - Initial end-to-end recovery orchestration through `java_recover_project`, which
-  preserves resources/build metadata, decompiles a bounded archive slice, refreshes
-  source/build files, persists JavaParser AST evidence, compiles, optionally repairs,
-  and validates the recovered project.
+  preserves resources/build metadata, infers dependencies, extracts bounded nested
+  JARs when requested, collects supplied/local/nested classpaths, decompiles a
+  bounded archive slice with that project context, refreshes source/build files,
+  persists a project-level JavaParser AST index, compiles, optionally repairs,
+  validates the recovered project, and resumes from `.glaurung/recovery-project.json`
+  when the source recovery cache is still valid.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
   `capability_only`, `configured_enabled`, `configured_disabled`, or
@@ -295,9 +304,10 @@ Not yet implemented:
   type-annotation target/value decoding, complete stack-map frame bodies, richer
   bootstrap argument typing, and richer annotation/module parity checks.
 - Clean source-project recovery after the initial dependency/build/scaffold/compile,
-  ABI-comparison, and validation-report layers: module source recovery, real source
-  remapping/renaming, dependency resolver policy, richer compiler-diagnostic repair,
-  annotation/module parity, and richer resource policy.
+  ABI-comparison, and validation-report layers: module source recovery,
+  descriptor-aware source/tree remapping, compile-driven decompiler fallback across
+  the full project, dependency resolver policy, richer compiler-diagnostic repair,
+  deeper module parity, and richer resource policy.
 - Remaining generic static behavior audit: source-to-sink slicing, deeper config
   correlation, framework-aware reachability, and richer directory-level risk
   reporting.
@@ -316,12 +326,12 @@ priority is not another broad scanner. The next priority is structure:
    can move from "capability" to "reachable from lifecycle callback" when evidence
    supports it.
 4. Calibrate risk reports, especially secret false positives and config semantics.
-5. Extend the new ASM/Vineflower/CFR/JavaParser helper from per-class operations to
-   archive-wide source emission, source/bytecode correlation, and decompiler
-   fallback policy.
-6. Continue clean source recovery: expand dependency/build inference, compile,
-   repair diagnostics, compare rebuilt ABI/resources, and summarize whether the
-   recovered application is currently acceptable.
+5. Extend the ASM/Vineflower/CFR/JavaParser helper from archive-wide source emission
+   to method-level source slicing, stronger source/bytecode line correlation, and
+   compile-driven fallback across the full recovered project.
+6. Continue clean source recovery: expand dependency/build repair, project AST
+   queries, signature-guided repairs, rebuilt ABI/resource validation, and
+   compatibility reporting.
 
 Important lessons:
 
@@ -336,6 +346,11 @@ Important lessons:
   Minecraft 1.20.1 client smoke tests show a Mojang-signed client JAR
   (`MOJANGCS.SF/RSA`), while the server launcher/bundler JAR is unsigned and wraps
   nested server payloads.
+- Minecraft server bundler smoke tests now exercise the recovery loop: named
+  `net.minecraft.bundler.Main$*` inner classes merge into `Main.java`, anonymous and
+  synthetic classes are suppressed, and the next real failure is a bytecode-guided
+  generic/signature repair (`Object` to `FileEntry`) rather than a source-layout
+  failure.
 
 ### Phase 1: Header Validation
 - [x] Magic number (0xCAFEBABE)
@@ -433,8 +448,11 @@ Important lessons:
 - [x] Initial `java_decompile_archive`
 - [x] Initial source/bytecode correlation anchors for archive decompilation
 - [x] Initial compile-candidate scoring for decompiler fallback
+- [x] Initial project-context compile-candidate scoring for decompiler fallback
 - [x] Initial inner/anonymous/lambda class grouping metadata
+- [x] Initial inner-class merge and anonymous/lambda/synthetic suppression policy
 - [ ] Source/bytecode line correlation beyond method/count/string anchors
+- [x] Initial Tiny v1/v2 mapping parsing and collision-safe mapped source paths
 - [x] Initial `java_infer_dependencies` from manifest `Class-Path`, Maven metadata,
   nested archives, bytecode external package references, and optional `jdeps`
   package evidence
@@ -446,6 +464,10 @@ Important lessons:
 - [x] Initial decompiled top-level source emission from `java_reconstruct_source_tree`
 - [x] Initial generated `sources.txt`, `javac.args`, `pom.xml`, and recovery metadata
 - [x] Initial `java_recover_project` orchestration
+- [x] Initial classpath-aware recovery orchestration using inferred, supplied, local,
+  and nested JAR classpaths
+- [x] Initial project-level source AST index through `java_index_source_project`
+- [x] Initial resumable recovery cache through `.glaurung/recovery-project.json`
 - [ ] Module source recovery and semantic source/resource validation
 - [x] Initial build system inference for plain `javac`, Maven, and Gradle
 - [ ] Build-system refinement for module paths, annotation processors, loader-specific
@@ -455,16 +477,20 @@ Important lessons:
 - [ ] Richer Maven/Gradle structured diagnostics
 - [x] Initial compile-repair loop with safe public-type filename repair, companion
   inner declaration repair, missing import repair, and local classpath repair
-- [ ] Richer repair classes for decompiler syntax, signatures, ambiguous imports, and
-  build/classpath failures
+- [x] Initial report-only repair classes for signatures, enum/record/sealed artifacts,
+  ambiguous imports, malformed anonymous classes, bad casts, synthetic bridge noise,
+  and dependency/build plan failures
+- [ ] Automatic evidence-grounded source edits for signatures, enum/record/sealed
+  artifacts, anonymous classes, bad casts, and synthetic bridge noise
 - [x] Initial ABI/API comparison between original and rebuilt classes
 - [x] Initial scoped ABI filtering for all, package, and public/protected API
 - [x] Initial resource validation between original archives and recovered
   `src/main/resources`
 - [x] Optional class/member annotation parity in ABI validation
 - [x] Initial manifest, ServiceLoader, and module-info metadata validation
-- [ ] Parameter annotation/default and richer module validation between original and rebuilt
-  artifacts
+- [x] Initial semantic validation for parameter annotation counts, annotation defaults,
+  record components, sealed permitted subclasses, and compatibility score
+- [ ] Richer module-info semantic validation between original and rebuilt artifacts
 - [x] Initial recovered application validation report with quality summary and next
   actions
 

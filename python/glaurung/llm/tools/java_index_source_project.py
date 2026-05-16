@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
@@ -290,7 +290,7 @@ def _relative(root: Path, path: Path) -> str:
 def _dict_list(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, dict)]
+    return [cast(dict[str, Any], item) for item in value if isinstance(item, dict)]
 
 
 def _string_list(value: object) -> list[str]:
