@@ -4,7 +4,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -52,8 +54,27 @@ final class BytecodeSummary {
             item.put("try_catch_block_count", method.tryCatchBlocks == null ? 0 : method.tryCatchBlocks.size());
             item.put("max_stack", method.maxStack);
             item.put("max_locals", method.maxLocals);
+            addLineRange(item, method);
             out.add(item);
         }
         return out;
+    }
+
+    private static void addLineRange(Map<String, Object> item, MethodNode method) {
+        Integer lineMin = null;
+        Integer lineMax = null;
+        int lineCount = 0;
+        if (method.instructions != null) {
+            for (AbstractInsnNode instruction : method.instructions) {
+                if (instruction instanceof LineNumberNode line) {
+                    lineCount++;
+                    lineMin = lineMin == null ? line.line : Math.min(lineMin, line.line);
+                    lineMax = lineMax == null ? line.line : Math.max(lineMax, line.line);
+                }
+            }
+        }
+        item.put("line_min", lineMin);
+        item.put("line_max", lineMax);
+        item.put("line_count", lineCount);
     }
 }

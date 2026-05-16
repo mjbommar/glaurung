@@ -163,6 +163,15 @@ def test_java_recovery_report_summarizes_clean_recovery(tmp_path: Path) -> None:
     assert result.class_summary_count == 1
     assert result.class_summaries[0].class_name == "app/Main"
     assert result.class_summaries[0].selected_engine in {"cfr", "vineflower"}
+    assert result.class_summaries[0].source_file == "src/main/java/app/Main.java"
+    assert result.class_summaries[0].bytecode_method_count is not None
+    assert result.class_summaries[0].bytecode_method_count >= 2
+    assert any(
+        "value()Ljava/lang/String;" in method
+        for method in result.class_summaries[0].bytecode_methods
+    )
+    assert result.class_summaries[0].bytecode_line_anchors
+    assert result.class_summaries[0].candidate_notes
     assert result.rollups.by_package["app"] == 1
     assert result.rollups.by_engine[result.class_summaries[0].selected_engine] == 1
     assert result.rollups.by_quality[result.class_summaries[0].quality] == 1
@@ -172,6 +181,8 @@ def test_java_recovery_report_summarizes_clean_recovery(tmp_path: Path) -> None:
     assert "Status: clean" in result.markdown
     assert "No blocking recovery issues" in result.markdown
     assert "## Rollups" in result.markdown
+    assert "## Source/Bytecode Links" in result.markdown
+    assert "value()Ljava/lang/String;" in result.markdown
     assert "## Class Summary" in result.markdown
     assert "## Commands" in result.markdown
     persisted = json.loads(Path(result.report_json_path).read_text(encoding="utf-8"))
@@ -237,6 +248,7 @@ def test_java_recovery_report_ranks_dependency_blocker_with_excerpt(
     assert any(
         repair.kind == "write_build_repair_plan" for repair in result.repair_summaries
     )
+    assert any(repair.automation == "automatic" for repair in result.repair_summaries)
     assert any("recovery-report.md" in command for command in result.commands)
     blocker = result.blockers[0]
     assert blocker.kind in {"compile_error", "repair_deferred"}

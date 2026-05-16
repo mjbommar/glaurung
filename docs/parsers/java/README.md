@@ -284,9 +284,11 @@ Implemented pieces now include:
   `java_recover_project` and renders a human report with status, headline, progress
   counters, ranked blockers, raw compiler/parser/validation messages, source
   snippets, likely causes, next actions, cache state, package/engine/quality/blocker
-  rollups, per-class decompiler summaries, repair summaries, copyable commands,
-  persisted `.glaurung/recovery-report.md` and `.glaurung/recovery-report.json`
-  files, and KB evidence. The same report is available from the CLI as
+  rollups, source/bytecode cross-links with method descriptors and bytecode line
+  anchors, per-class decompiler candidate summaries, repair summaries with
+  automatic/manual labels, copyable commands, persisted
+  `.glaurung/recovery-report.md` and `.glaurung/recovery-report.json` files, and KB
+  evidence. The same report is available from the CLI as
   `glaurung java-recovery-report`.
 - Initial behavior/config correlation that joins sensitive sink findings, method-local
   trace constants, and embedded or caller-supplied config keys to classify
@@ -360,9 +362,9 @@ Important lessons:
   nested server payloads.
 - Minecraft server bundler smoke tests now exercise the recovery loop: named
   `net.minecraft.bundler.Main$*` inner classes merge into `Main.java`, anonymous and
-  synthetic classes are suppressed, and the next real failure is a bytecode-guided
-  generic/signature repair (`Object` to `FileEntry`) rather than a source-layout
-  failure.
+  synthetic classes are suppressed, and the previously blocking bytecode-guided
+  generic/signature repairs are now applied automatically for the raw
+  `List<FileEntry>` foreach case and the generic sneaky-throw cast case.
 - JavaParser source indexing now uses a modern language level in the JVM helper, so
   recovered record sources from Minecraft-style jars are not misreported as parser
   failures.
@@ -487,6 +489,10 @@ Important lessons:
 - [x] Initial `glaurung java-recovery-report` CLI wrapper
 - [x] Initial report rollups for packages, engines, quality, compile status, inner
   class actions, blockers, and repairs
+- [x] Initial source/bytecode report cross-links with bytecode method descriptors and
+  line anchors
+- [x] Initial automatic generic decompiler repairs for raw foreach iterables and
+  generic sneaky-throw casts
 - [ ] Module source recovery and semantic source/resource validation
 - [x] Initial build system inference for plain `javac`, Maven, and Gradle
 - [ ] Build-system refinement for module paths, annotation processors, loader-specific

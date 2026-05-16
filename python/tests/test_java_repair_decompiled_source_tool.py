@@ -424,6 +424,96 @@ public class BadCall {
     )
 
 
+def test_java_repair_decompiled_source_parameterizes_raw_foreach_iterable(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_repair_decompiled_source import build_tool
+
+    project = tmp_path / "project"
+    src = project / "src" / "main" / "java" / "app"
+    src.mkdir(parents=True)
+    source = src / "RawLoop.java"
+    source.write_text(
+        """
+package app;
+
+import java.util.List;
+
+public class RawLoop {
+    public static final class Entry {
+    }
+
+    public void copy(Object input) {
+        List entries = (List)input;
+        for (Entry entry : entries) {
+            entry.toString();
+        }
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    ctx = _ctx(source)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(source_project_root=str(project), java_release=17),
+    )
+
+    assert result.success is True
+    assert any(
+        repair.kind == "parameterize_raw_iterable_for_each" and repair.applied
+        for repair in result.repairs
+    )
+    repaired = source.read_text(encoding="utf-8")
+    assert "List<Entry> entries = (List<Entry>)input;" in repaired
+    assert (project / "build" / "classes" / "app" / "RawLoop.class").is_file()
+
+
+def test_java_repair_decompiled_source_casts_generic_sneaky_throw(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_repair_decompiled_source import build_tool
+
+    project = tmp_path / "project"
+    src = project / "src" / "main" / "java" / "app"
+    src.mkdir(parents=True)
+    source = src / "Thrower.java"
+    source.write_text(
+        """
+package app;
+
+public class Thrower<T extends Throwable> {
+    public void sneakyThrow(Throwable exception) throws T {
+        throw exception;
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    ctx = _ctx(source)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(source_project_root=str(project), java_release=17),
+    )
+
+    assert result.success is True
+    assert any(
+        repair.kind == "cast_generic_sneaky_throw" and repair.applied
+        for repair in result.repairs
+    )
+    repaired = source.read_text(encoding="utf-8")
+    assert "throw (T)exception;" in repaired
+    assert (project / "build" / "classes" / "app" / "Thrower.class").is_file()
+
+
 def test_memory_agent_registers_java_repair_decompiled_source() -> None:
     from glaurung.llm.agents.memory_agent import create_memory_agent
 

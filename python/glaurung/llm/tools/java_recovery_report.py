@@ -32,6 +32,7 @@ JavaRecoveryReportBlockerKind = Literal[
     "decompile_failure",
     "missing_input",
 ]
+JavaRecoveryRepairAutomation = Literal["automatic", "manual"]
 
 
 class JavaRecoveryReportArgs(BaseModel):
@@ -133,14 +134,23 @@ class JavaRecoveryReportClassSummary(BaseModel):
     inner_class_action: str
     method_count_delta: int | None = None
     attempted_engines: list[str] = Field(default_factory=list)
+    bytecode_method_count: int | None = None
+    bytecode_field_count: int | None = None
+    bytecode_methods: list[str] = Field(default_factory=list)
+    bytecode_line_anchors: list[str] = Field(default_factory=list)
+    decompiled_methods: list[str] = Field(default_factory=list)
+    correlation_notes: list[str] = Field(default_factory=list)
+    candidate_notes: list[str] = Field(default_factory=list)
 
 
 class JavaRecoveryReportRepairSummary(BaseModel):
     kind: str
     applied: bool
+    automation: JavaRecoveryRepairAutomation = "manual"
     file: str
     new_file: str
     message: str
+    recommended_action: str = ""
 
 
 class JavaRecoveryReportRollups(BaseModel):
@@ -368,6 +378,13 @@ def _class_summaries(
                 attempted_engines=[
                     attempt.engine for attempt in item.attempted_engines
                 ],
+                bytecode_method_count=item.bytecode_method_count,
+                bytecode_field_count=item.bytecode_field_count,
+                bytecode_methods=item.bytecode_methods[:8],
+                bytecode_line_anchors=item.bytecode_method_line_anchors[:8],
+                decompiled_methods=item.decompiled_methods[:8],
+                correlation_notes=item.correlation_stop_reasons[:8],
+                candidate_notes=_candidate_notes(item),
             )
         )
     return out
@@ -436,13 +453,32 @@ def _repair_summaries(
         JavaRecoveryReportRepairSummary(
             kind=repair.kind,
             applied=repair.applied,
+            automation=_repair_automation(repair.kind),
             file=repair.file,
             new_file=repair.new_file,
             message=repair.message,
+            recommended_action=_repair_next_action(repair.kind)
+            if not repair.applied
+            else _applied_repair_action(repair.kind),
         )
         for repair in repair_result.repairs
     ]
     return _dedupe_repair_summaries(summaries)[: args.max_repair_summaries]
+
+
+def _candidate_notes(item: object) -> list[str]:
+    attempts = getattr(item, "attempted_engines", [])
+    notes: list[str] = []
+    for attempt in attempts:
+        engine = getattr(attempt, "engine", "unknown")
+        parse = _bool_label(getattr(attempt, "parse_success", None))
+        compile_status = _bool_label(getattr(attempt, "compile_success", None))
+        diagnostics = getattr(attempt, "compile_diagnostic_count", 0)
+        score = getattr(attempt, "quality_score", 0)
+        notes.append(
+            f"{engine}: parse={parse}, compile={compile_status}, diagnostics={diagnostics}, score={score}"
+        )
+    return notes[:8]
 
 
 def _rollups(
@@ -699,9 +735,29 @@ def _repair_likely_cause(kind: str) -> str:
         return "More than one local source type could satisfy the unresolved name."
     if kind == "report_signature_mismatch":
         return "Decompiler output disagrees with bytecode type/signature evidence."
+    if kind == "parameterize_raw_iterable_for_each":
+        return "The decompiler emitted a raw iterable even though the foreach target type is known."
+    if kind == "cast_generic_sneaky_throw":
+        return "The decompiler lost the generic cast used by a sneaky-throw helper."
     if kind == "report_malformed_anonymous_class":
         return "The decompiler could not reconstruct an anonymous class as legal Java."
     return "The repair loop found a non-mechanical repair that needs more evidence."
+
+
+def _repair_automation(kind: str) -> JavaRecoveryRepairAutomation:
+    if kind.startswith("report_") or kind == "ambiguous_missing_import":
+        return "manual"
+    return "automatic"
+
+
+def _applied_repair_action(kind: str) -> str:
+    if kind == "write_build_repair_plan":
+        return "Review the generated build repair plan and update dependencies/classpath before rerunning."
+    if kind == "parameterize_raw_iterable_for_each":
+        return "Rerun compilation and validate the rewritten generic iterable against bytecode evidence."
+    if kind == "cast_generic_sneaky_throw":
+        return "Rerun compilation and validate the generic sneaky-throw cast against bytecode evidence."
+    return "Rerun compilation and validation to confirm the applied repair."
 
 
 def _repair_next_action(kind: str) -> str:
@@ -713,6 +769,10 @@ def _repair_next_action(kind: str) -> str:
         )
     if kind == "report_signature_mismatch":
         return "Recover the source signature from bytecode descriptors and generic attributes."
+    if kind == "parameterize_raw_iterable_for_each":
+        return "Use the foreach target type and bytecode descriptors to parameterize the raw iterable."
+    if kind == "cast_generic_sneaky_throw":
+        return "Restore the generic cast on the thrown Throwable value."
     if kind == "report_malformed_anonymous_class":
         return "Reconstruct the anonymous class body or try the alternate decompiler output."
     return "Review the deferred repair evidence before making a source patch."
@@ -935,7 +995,7 @@ def _markdown(
             f"- Packages: {_format_counts(rollups.by_package)}",
             f"- Engines: {_format_counts(rollups.by_engine)}",
             f"- Quality: {_format_counts(rollups.by_quality)}",
-            f"- Compile: {_format_counts(rollups.by_compile_status)}",
+            f"- Candidate compile: {_format_counts(rollups.by_compile_status)}",
             f"- Inner class actions: {_format_counts(rollups.by_inner_action)}",
         ]
     )
@@ -945,6 +1005,36 @@ def _markdown(
         )
     if rollups.repair_summary_by_kind:
         lines.append(f"- Repairs: {_format_counts(rollups.repair_summary_by_kind)}")
+    lines.extend(["", "## Source/Bytecode Links"])
+    if class_summaries:
+        for item in class_summaries:
+            source = item.source_file or "n/a"
+            bytecode_count = (
+                str(item.bytecode_method_count)
+                if item.bytecode_method_count is not None
+                else "n/a"
+            )
+            decompiled_count = len(item.decompiled_methods)
+            methods = "; ".join(item.bytecode_methods[:4]) or "none"
+            anchors = "; ".join(item.bytecode_line_anchors[:4])
+            candidates = "; ".join(item.candidate_notes[:3]) or "none"
+            notes = (
+                f"; notes={','.join(item.correlation_notes)}"
+                if item.correlation_notes
+                else ""
+            )
+            lines.append(
+                "- "
+                f"`{item.class_name}` -> `{source}`: "
+                f"bytecode_methods={bytecode_count}, "
+                f"decompiled_methods={decompiled_count}{notes}"
+            )
+            lines.append(f"  - Bytecode: {methods}")
+            if anchors:
+                lines.append(f"  - Lines: {anchors}")
+            lines.append(f"  - Candidates: {candidates}")
+    else:
+        lines.append("- No source/bytecode links available for this run.")
     lines.extend(["", "## Class Summary"])
     if class_summaries:
         for item in class_summaries:
@@ -964,7 +1054,7 @@ def _markdown(
                 "- "
                 f"`{item.class_name}`: engine={item.selected_engine or 'n/a'}, "
                 f"quality={item.quality}, parse={_bool_label(item.parse_success)}, "
-                f"compile={compile_status}, action={item.inner_class_action}"
+                f"candidate_compile={compile_status}, action={item.inner_class_action}"
                 f"{delta}{engines}{source}"
             )
     else:
@@ -983,8 +1073,11 @@ def _markdown(
                 repair.new_file if repair.applied and repair.new_file else repair.file
             )
             lines.append(
-                f"- {repair_status}: {repair.kind} on `{target}` - {repair.message}"
+                f"- {repair_status}/{repair.automation}: {repair.kind} on `{target}` - "
+                f"{repair.message}"
             )
+            if repair.recommended_action:
+                lines.append(f"  - Next: {repair.recommended_action}")
     else:
         lines.append("- No repair attempts were needed or recorded.")
     lines.extend(["", "## Top Blockers"])

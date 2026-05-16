@@ -26,6 +26,8 @@ JavaRepairKind = Literal[
     "ambiguous_missing_import",
     "add_local_classpath_jar",
     "write_build_repair_plan",
+    "parameterize_raw_iterable_for_each",
+    "cast_generic_sneaky_throw",
     "report_signature_mismatch",
     "report_enum_record_sealed_reconstruction",
     "report_malformed_anonymous_class",
@@ -112,8 +114,10 @@ class JavaRepairDecompiledSourceTool(
             dry_run=args.dry_run,
         )
         compile_tool = build_java_compile_recovered_project()
+        last_iteration_applied = False
 
         for iteration in range(args.max_iterations):
+            last_iteration_applied = False
             compile_result = compile_tool.run(
                 ctx,
                 kb,
@@ -195,6 +199,28 @@ class JavaRepairDecompiledSourceTool(
                 )
             if len(repairs) < args.max_repairs_per_iteration:
                 repairs.extend(
+                    _repair_raw_iterable_for_each(
+                        root,
+                        compile_result,
+                        iteration=iteration,
+                        dry_run=args.dry_run,
+                        max_repairs=args.max_repairs_per_iteration - len(repairs),
+                    )
+                )
+            if len(repairs) < args.max_repairs_per_iteration:
+                repairs.extend(
+                    _repair_generic_sneaky_throw(
+                        root,
+                        compile_result,
+                        iteration=iteration,
+                        dry_run=args.dry_run,
+                        max_repairs=args.max_repairs_per_iteration - len(repairs),
+                    )
+                )
+            if len(repairs) < args.max_repairs_per_iteration and not any(
+                repair.applied for repair in repairs
+            ):
+                repairs.extend(
                     _report_deeper_repair_candidates(
                         root,
                         compile_result,
@@ -203,6 +229,7 @@ class JavaRepairDecompiledSourceTool(
                     )
                 )
             result.repairs.extend(repairs)
+            last_iteration_applied = any(repair.applied for repair in repairs)
             if not repairs:
                 _append_once(result.stop_reasons, "no_applicable_repairs")
                 break
@@ -224,6 +251,32 @@ class JavaRepairDecompiledSourceTool(
             _rewrite_sources_file(root, args.sources_file)
             if len(repairs) >= args.max_repairs_per_iteration > 0:
                 _append_once(result.stop_reasons, "max_repairs_per_iteration")
+
+        if not result.success and last_iteration_applied and not args.dry_run:
+            compile_result = compile_tool.run(
+                ctx,
+                kb,
+                compile_tool.input_model(
+                    source_project_root=str(root),
+                    build_tool=args.build_tool,
+                    java_home=args.java_home,
+                    java_release=args.java_release,
+                    javac_args_file=args.javac_args_file,
+                    sources_file=args.sources_file,
+                    classpath=args.classpath,
+                    max_diagnostics=args.max_diagnostics,
+                    timeout_seconds=args.timeout_seconds,
+                ),
+            )
+            result.compile_results.append(compile_result)
+            result.final_compile_result = compile_result
+            if compile_result.success:
+                result.success = True
+                result.repair_count = sum(
+                    1 for repair in result.repairs if repair.applied
+                )
+                _add_repair_node(kb, result)
+                return result
 
         if not result.success and result.iteration_count >= args.max_iterations:
             _append_once(result.stop_reasons, "max_iterations")
@@ -532,6 +585,21 @@ _TYPE_DECL_RE = re.compile(
     r"(?m)^\s*(?:public\s+)?(?:abstract\s+|final\s+|sealed\s+|non-sealed\s+)*"
     r"(class|interface|enum|record)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b"
 )
+_FOREACH_RE = re.compile(
+    r"\bfor\s*\(\s*(?:final\s+)?"
+    r"(?P<type>[A-Za-z_$][A-Za-z0-9_$.]*(?:\s*<[^:;]+>)?)\s+"
+    r"(?P<var>[A-Za-z_$][A-Za-z0-9_$]*)\s*:\s*"
+    r"(?P<iter>[A-Za-z_$][A-Za-z0-9_$]*)\s*\)"
+)
+_RAW_ITERABLE_DECL_TEMPLATE = (
+    r"^(?P<prefix>\s*(?:final\s+)?)"
+    r"(?P<container>(?:java\.util\.)?(?:List|Collection|Iterable))\s+"
+    r"(?P<name>{name})\s*=\s*(?P<rhs>.*;)\s*$"
+)
+_THROW_RE = re.compile(
+    r"^(?P<indent>\s*)throw\s+(?P<value>[A-Za-z_$][A-Za-z0-9_$]*)\s*;\s*$"
+)
+_THROWS_TYPE_VARIABLE_RE = re.compile(r"\bthrows\s+(?P<type>[A-Z][A-Za-z0-9_$]*)\b")
 
 
 def _source_type_index(root: Path) -> dict[str, list[tuple[str, str, Path]]]:
@@ -691,6 +759,208 @@ def _rewrite_inner_companion_text(text: str, expected_stem: str) -> str:
         return f"{access}{match.group('kind')} {declared_stem}{match.group('suffix')}"
 
     return _INNER_COMPANION_DECL_RE.sub(replacement, text, count=1)
+
+
+def _repair_raw_iterable_for_each(
+    root: Path,
+    compile_result: JavaCompileRecoveredProjectResult,
+    *,
+    iteration: int,
+    dry_run: bool,
+    max_repairs: int,
+) -> list[JavaSourceRepair]:
+    if max_repairs == 0 or compile_result.selected_build_tool != "javac":
+        return []
+    repairs: list[JavaSourceRepair] = []
+    repaired_keys: set[tuple[Path, str]] = set()
+    for diagnostic in compile_result.diagnostics:
+        if len(repairs) >= max_repairs:
+            break
+        if (
+            diagnostic.category != "generic_signature_mismatch"
+            or diagnostic.file is None
+            or diagnostic.line is None
+        ):
+            continue
+        source_file = _resolve_under_root(root, diagnostic.file)
+        if source_file is None or not source_file.is_file():
+            continue
+        text = source_file.read_text(encoding="utf-8", errors="replace")
+        rewritten, iterable_name, target_type = _parameterize_raw_iterable_text(
+            text,
+            diagnostic.line,
+            diagnostic.message,
+        )
+        if rewritten == text or iterable_name is None or target_type is None:
+            continue
+        key = (source_file, iterable_name)
+        if key in repaired_keys:
+            continue
+        if not dry_run:
+            source_file.write_text(rewritten, encoding="utf-8")
+        repaired_keys.add(key)
+        repairs.append(
+            JavaSourceRepair(
+                iteration=iteration,
+                kind="parameterize_raw_iterable_for_each",
+                file=_relative(root, source_file),
+                new_file=_relative(root, source_file),
+                applied=not dry_run,
+                message=(
+                    f"Parameterized raw iterable {iterable_name} as "
+                    f"{target_type} from foreach compile evidence."
+                ),
+            )
+        )
+    return repairs
+
+
+def _parameterize_raw_iterable_text(
+    text: str,
+    line_number: int,
+    message: str,
+) -> tuple[str, str | None, str | None]:
+    lines = text.splitlines()
+    if line_number < 1 or line_number > len(lines):
+        return text, None, None
+    foreach_line = lines[line_number - 1]
+    foreach = _FOREACH_RE.search(foreach_line)
+    if foreach is None:
+        return text, None, None
+    iterable_name = foreach.group("iter")
+    target_type = _foreach_target_type(foreach.group("type"), message)
+    if target_type is None:
+        return text, iterable_name, None
+    decl_re = re.compile(
+        _RAW_ITERABLE_DECL_TEMPLATE.format(name=re.escape(iterable_name))
+    )
+    for idx in range(line_number - 2, -1, -1):
+        match = decl_re.match(lines[idx])
+        if match is None:
+            continue
+        container = match.group("container")
+        rhs = _parameterize_raw_cast(match.group("rhs"), container, target_type)
+        lines[idx] = (
+            f"{match.group('prefix')}{container}<{target_type}> {iterable_name} = {rhs}"
+        )
+        return "\n".join(lines).rstrip() + "\n", iterable_name, target_type
+    return text, iterable_name, target_type
+
+
+def _foreach_target_type(source_type: str, message: str) -> str | None:
+    normalized = " ".join(source_type.split())
+    if normalized and " " not in normalized:
+        return normalized
+    match = re.search(
+        r"Object\s+cannot\s+be\s+converted\s+to\s+([A-Za-z_$][A-Za-z0-9_$.]*)",
+        message,
+    )
+    return match.group(1) if match is not None else None
+
+
+def _parameterize_raw_cast(rhs: str, container: str, target_type: str) -> str:
+    cast_re = re.compile(rf"\(\s*{re.escape(container)}\s*\)")
+    return cast_re.sub(f"({container}<{target_type}>)", rhs, count=1)
+
+
+def _repair_generic_sneaky_throw(
+    root: Path,
+    compile_result: JavaCompileRecoveredProjectResult,
+    *,
+    iteration: int,
+    dry_run: bool,
+    max_repairs: int,
+) -> list[JavaSourceRepair]:
+    if max_repairs == 0 or compile_result.selected_build_tool != "javac":
+        return []
+    repairs: list[JavaSourceRepair] = []
+    repaired_lines: set[tuple[Path, int]] = set()
+    for diagnostic in compile_result.diagnostics:
+        if len(repairs) >= max_repairs:
+            break
+        if (
+            diagnostic.file is None
+            or diagnostic.line is None
+            or "unreported exception Throwable" not in diagnostic.message
+        ):
+            continue
+        source_file = _resolve_under_root(root, diagnostic.file)
+        if source_file is None or not source_file.is_file():
+            continue
+        text = source_file.read_text(encoding="utf-8", errors="replace")
+        rewritten, type_variable = _cast_generic_sneaky_throw_text(
+            text,
+            diagnostic.line,
+        )
+        if rewritten == text or type_variable is None:
+            continue
+        key = (source_file, diagnostic.line)
+        if key in repaired_lines:
+            continue
+        if not dry_run:
+            source_file.write_text(rewritten, encoding="utf-8")
+        repaired_lines.add(key)
+        repairs.append(
+            JavaSourceRepair(
+                iteration=iteration,
+                kind="cast_generic_sneaky_throw",
+                file=_relative(root, source_file),
+                new_file=_relative(root, source_file),
+                applied=not dry_run,
+                message=(
+                    "Inserted generic throw cast for sneaky-throw pattern using "
+                    f"declared throws type variable {type_variable}."
+                ),
+            )
+        )
+    return repairs
+
+
+def _cast_generic_sneaky_throw_text(
+    text: str,
+    line_number: int,
+) -> tuple[str, str | None]:
+    lines = text.splitlines()
+    if line_number < 1 or line_number > len(lines):
+        return text, None
+    throw_match = _THROW_RE.match(lines[line_number - 1])
+    if throw_match is None:
+        return text, None
+    type_variable = _nearest_throws_type_variable(lines, line_number - 1)
+    if type_variable is None:
+        return text, None
+    value = throw_match.group("value")
+    lines[line_number - 1] = (
+        f"{throw_match.group('indent')}throw ({type_variable}){value};"
+    )
+    return "\n".join(lines).rstrip() + "\n", type_variable
+
+
+def _nearest_throws_type_variable(
+    lines: list[str],
+    throw_index: int,
+) -> str | None:
+    for idx in range(throw_index, max(-1, throw_index - 12), -1):
+        match = _THROWS_TYPE_VARIABLE_RE.search(lines[idx])
+        if match is not None:
+            type_variable = match.group("type")
+            if _type_variable_extends_throwable(lines, idx, type_variable):
+                return type_variable
+    return None
+
+
+def _type_variable_extends_throwable(
+    lines: list[str],
+    signature_index: int,
+    type_variable: str,
+) -> bool:
+    generic_re = re.compile(
+        rf"<[^>]*\b{re.escape(type_variable)}\s+extends\s+Throwable\b[^>]*>"
+    )
+    for idx in range(signature_index, max(-1, signature_index - 20), -1):
+        if generic_re.search(lines[idx]):
+            return True
+    return False
 
 
 def _resolve_under_root(root: Path, value: str) -> Path | None:

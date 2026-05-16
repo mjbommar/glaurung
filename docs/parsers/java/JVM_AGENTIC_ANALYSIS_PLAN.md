@@ -221,9 +221,11 @@ Glaurung already has a growing Java path:
   `java_recovery_report`, wrapping the recovery flow with a concise status,
   headline, progress counters, ranked blockers, exact source snippets, raw compiler
   and parser messages, likely causes, next actions, cache state, per-class decompiler
-  summaries, package/engine/quality/blocker rollups, repair summaries, persisted
-  markdown/JSON report files, copyable commands, and KB evidence. The same workflow
-  is exposed through `glaurung java-recovery-report` for daily CLI use.
+  summaries, source/bytecode method-descriptor cross-links, bytecode line anchors,
+  decompiler candidate notes, package/engine/quality/blocker rollups, automatic vs
+  manual repair summaries, persisted markdown/JSON report files, copyable commands,
+  and KB evidence. The same workflow is exposed through
+  `glaurung java-recovery-report` for daily CLI use.
 - Python memory tools can now list candidate classes with `java_list_classes`,
   exposing bounded package/name/access-flag filtering, superclass/interface/member
   counts, `SourceFile` metadata, optional annotation descriptors, optional
@@ -1519,8 +1521,10 @@ Initial Python implementation status:
   - exact source snippets around compiler diagnostics
   - package, engine, quality, compile-status, inner-class-action, blocker, and
     repair rollups
+  - source/bytecode links with method descriptors and bytecode line anchors
+  - decompiler candidate notes for CFR/Vineflower parse and compile scoring
   - per-class engine/quality/parse/compile summaries
-  - applied and deferred repair summaries
+  - applied and deferred repair summaries labeled automatic or manual
   - likely cause and next action for each blocker
   - copyable commands for reading the report, rerunning `javac`, and opening the
     first blocking source location
@@ -1533,8 +1537,9 @@ Initial Python implementation status:
 - The report keeps the full structured recovery result for agents, but puts the
   human workflow first.
 
-Continue by adding source/bytecode cross-links, decompiler candidate comparison
-cards, and richer "safe automatic repair available" labels.
+Continue by turning source/bytecode cross-links into method-level repair anchors,
+adding richer decompiler candidate comparison cards, and promoting safe automatic
+repair availability into the top-level blocker ranking.
 
 `java_infer_build_system`
 

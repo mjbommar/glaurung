@@ -30,6 +30,14 @@ class MainTest {
         assertEquals("app/Main", result.get("class_name"));
         assertEquals(1, result.get("field_count"));
         assertTrue((Integer) result.get("method_count") >= 2);
+        @SuppressWarnings("unchecked")
+        java.util.List<Map<String, Object>> methods =
+                (java.util.List<Map<String, Object>>) result.get("methods");
+        assertTrue(methods.stream().anyMatch(method ->
+                "value".equals(method.get("name"))
+                        && "()Ljava/lang/String;".equals(method.get("descriptor"))
+                        && method.get("line_min") != null
+                        && method.get("line_max") != null));
     }
 
     @Test

@@ -184,6 +184,7 @@ class JavaDecompiledClassSummary(BaseModel):
     bytecode_method_count: int | None = None
     bytecode_field_count: int | None = None
     bytecode_methods: list[str] = Field(default_factory=list)
+    bytecode_method_line_anchors: list[str] = Field(default_factory=list)
     decompiled_methods: list[str] = Field(default_factory=list)
     method_count_delta: int | None = None
     correlation_stop_reasons: list[str] = Field(default_factory=list)
@@ -223,6 +224,7 @@ class _Correlation(BaseModel):
     bytecode_method_count: int | None = None
     bytecode_field_count: int | None = None
     bytecode_methods: list[str] = Field(default_factory=list)
+    bytecode_method_line_anchors: list[str] = Field(default_factory=list)
     decompiled_methods: list[str] = Field(default_factory=list)
     method_count_delta: int | None = None
     stop_reasons: list[str] = Field(default_factory=list)
@@ -506,6 +508,7 @@ def _decompile_one_class(
         bytecode_method_count=correlation.bytecode_method_count,
         bytecode_field_count=correlation.bytecode_field_count,
         bytecode_methods=correlation.bytecode_methods,
+        bytecode_method_line_anchors=correlation.bytecode_method_line_anchors,
         decompiled_methods=correlation.decompiled_methods,
         method_count_delta=correlation.method_count_delta,
         correlation_stop_reasons=correlation.stop_reasons,
@@ -545,11 +548,16 @@ def _bytecode_correlation(
         raw.get("methods"),
         args.max_correlation_methods,
     )
+    bytecode_method_line_anchors = _bytecode_method_line_anchors(
+        raw.get("methods"),
+        args.max_correlation_methods,
+    )
     bytecode_method_count = _int_or_zero(raw.get("method_count"))
     return _Correlation(
         bytecode_method_count=bytecode_method_count,
         bytecode_field_count=_int_or_zero(raw.get("field_count")),
         bytecode_methods=bytecode_methods,
+        bytecode_method_line_anchors=bytecode_method_line_anchors,
         decompiled_methods=decompiled_methods,
         method_count_delta=bytecode_method_count - len(decompiled_methods),
     )
@@ -588,6 +596,33 @@ def _bytecode_method_signatures(value: object, max_methods: int) -> list[str]:
         descriptor = method_info.get("descriptor")
         if isinstance(name, str) and isinstance(descriptor, str):
             out.append(f"{name}{descriptor}")
+            if len(out) >= max_methods:
+                break
+    return out
+
+
+def _bytecode_method_line_anchors(value: object, max_methods: int) -> list[str]:
+    if max_methods == 0 or not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for method in value:
+        if not isinstance(method, dict):
+            continue
+        method_info = cast(dict[str, Any], method)
+        name = method_info.get("name")
+        descriptor = method_info.get("descriptor")
+        line_min = method_info.get("line_min")
+        line_max = method_info.get("line_max")
+        if (
+            isinstance(name, str)
+            and isinstance(descriptor, str)
+            and isinstance(line_min, int)
+            and isinstance(line_max, int)
+        ):
+            if line_min == line_max:
+                out.append(f"{name}{descriptor} line={line_min}")
+            else:
+                out.append(f"{name}{descriptor} lines={line_min}-{line_max}")
             if len(out) >= max_methods:
                 break
     return out
