@@ -28,6 +28,7 @@ from .commands.view import ViewCommand
 from .commands.find import FindCommand
 from .commands.bookmark import BookmarkCommand, JournalCommand
 from .commands.classfile import ClassfileCommand
+from .commands.java_recovery_report import JavaRecoveryReportCommand
 from .commands.luac import LuacCommand
 
 from .formatters import (
@@ -74,6 +75,7 @@ class GlaurungCLI:
             "bookmark": BookmarkCommand(),
             "journal": JournalCommand(),
             "classfile": ClassfileCommand(),
+            "java-recovery-report": JavaRecoveryReportCommand(),
             "luac": LuacCommand(),
         }
 
@@ -109,6 +111,7 @@ class GlaurungCLI:
             "bookmark": TriageFormatter,
             "journal": TriageFormatter,
             "classfile": TriageFormatter,
+            "java-recovery-report": TriageFormatter,
             "luac": TriageFormatter,
         }
 

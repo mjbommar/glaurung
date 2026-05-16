@@ -143,6 +143,20 @@ class JavaRecoveryReportRepairSummary(BaseModel):
     message: str
 
 
+class JavaRecoveryReportRollups(BaseModel):
+    total_class_summary_count: int = 0
+    displayed_class_summary_count: int = 0
+    omitted_class_summary_count: int = 0
+    by_package: dict[str, int] = Field(default_factory=dict)
+    by_engine: dict[str, int] = Field(default_factory=dict)
+    by_quality: dict[str, int] = Field(default_factory=dict)
+    by_compile_status: dict[str, int] = Field(default_factory=dict)
+    by_inner_action: dict[str, int] = Field(default_factory=dict)
+    blocker_summary_by_category: dict[str, int] = Field(default_factory=dict)
+    blocker_summary_by_file: dict[str, int] = Field(default_factory=dict)
+    repair_summary_by_kind: dict[str, int] = Field(default_factory=dict)
+
+
 class JavaRecoveryReportResult(BaseModel):
     archive_path: str
     source_project_root: str | None = None
@@ -157,6 +171,9 @@ class JavaRecoveryReportResult(BaseModel):
     repair_summary_count: int = 0
     repair_summaries: list[JavaRecoveryReportRepairSummary] = Field(
         default_factory=list
+    )
+    rollups: JavaRecoveryReportRollups = Field(
+        default_factory=JavaRecoveryReportRollups
     )
     next_actions: list[str] = Field(default_factory=list)
     commands: list[str] = Field(default_factory=list)
@@ -211,6 +228,13 @@ class JavaRecoveryReportTool(
                 args.max_class_summaries,
             )
         repair_summaries = _repair_summaries(recovery, args)
+        rollups = _rollups(recovery, class_summaries, blockers, repair_summaries, args)
+        if recovery.cache_hit and rollups.total_class_summary_count == len(
+            class_summaries
+        ):
+            cached_rollups = _cached_rollups(report_json_path)
+            if cached_rollups is not None:
+                rollups = _adapt_cached_rollups(cached_rollups, class_summaries)
         next_actions = _next_actions(recovery, blockers)
         status = _status(recovery, blockers)
         headline = _headline(status, recovery, blockers)
@@ -229,6 +253,7 @@ class JavaRecoveryReportTool(
             class_summaries=class_summaries,
             repair_summary_count=len(repair_summaries),
             repair_summaries=repair_summaries,
+            rollups=rollups,
             next_actions=next_actions,
             commands=commands,
             markdown=_markdown(
@@ -238,6 +263,7 @@ class JavaRecoveryReportTool(
                 blockers=blockers,
                 class_summaries=class_summaries,
                 repair_summaries=repair_summaries,
+                rollups=rollups,
                 next_actions=next_actions,
                 commands=commands,
                 recovery=recovery,
@@ -371,6 +397,34 @@ def _cached_class_summaries(
     return out
 
 
+def _cached_rollups(report_json_path: Path | None) -> JavaRecoveryReportRollups | None:
+    if report_json_path is None or not report_json_path.is_file():
+        return None
+    try:
+        data = json.loads(report_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    raw = data.get("rollups") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return JavaRecoveryReportRollups(**raw)
+    except ValueError:
+        return None
+
+
+def _adapt_cached_rollups(
+    rollups: JavaRecoveryReportRollups,
+    class_summaries: list[JavaRecoveryReportClassSummary],
+) -> JavaRecoveryReportRollups:
+    rollups.displayed_class_summary_count = len(class_summaries)
+    rollups.omitted_class_summary_count = max(
+        0,
+        rollups.total_class_summary_count - len(class_summaries),
+    )
+    return rollups
+
+
 def _repair_summaries(
     recovery: JavaRecoverProjectResult,
     args: JavaRecoveryReportArgs,
@@ -389,6 +443,48 @@ def _repair_summaries(
         for repair in repair_result.repairs
     ]
     return _dedupe_repair_summaries(summaries)[: args.max_repair_summaries]
+
+
+def _rollups(
+    recovery: JavaRecoverProjectResult,
+    class_summaries: list[JavaRecoveryReportClassSummary],
+    blockers: list[JavaRecoveryReportBlocker],
+    repair_summaries: list[JavaRecoveryReportRepairSummary],
+    args: JavaRecoveryReportArgs,
+) -> JavaRecoveryReportRollups:
+    rollups = JavaRecoveryReportRollups(
+        displayed_class_summary_count=len(class_summaries)
+    )
+    decompile = recovery.decompile_result
+    if decompile is not None:
+        rollups.total_class_summary_count = len(decompile.classes)
+        for item in decompile.classes:
+            _increment(rollups.by_package, _package_name(item.class_name))
+            _increment(rollups.by_engine, item.selected_engine or "n/a")
+            _increment(rollups.by_quality, item.quality)
+            _increment(rollups.by_compile_status, _bool_label(item.compile_success))
+            _increment(rollups.by_inner_action, item.inner_class_action)
+    else:
+        rollups.total_class_summary_count = len(class_summaries)
+        for item in class_summaries:
+            _increment(rollups.by_package, _package_name(item.class_name))
+            _increment(rollups.by_engine, item.selected_engine or "n/a")
+            _increment(rollups.by_quality, item.quality)
+            _increment(rollups.by_compile_status, _bool_label(item.compile_success))
+            _increment(rollups.by_inner_action, item.inner_class_action)
+
+    rollups.omitted_class_summary_count = max(
+        0,
+        rollups.total_class_summary_count
+        - min(args.max_class_summaries, len(class_summaries)),
+    )
+    for blocker in blockers:
+        _increment(rollups.blocker_summary_by_category, blocker.category)
+        if blocker.location is not None:
+            _increment(rollups.blocker_summary_by_file, blocker.location.file)
+    for repair in repair_summaries:
+        _increment(rollups.repair_summary_by_kind, repair.kind)
+    return rollups
 
 
 def _dedupe_repair_summaries(
@@ -784,6 +880,7 @@ def _markdown(
     blockers: list[JavaRecoveryReportBlocker],
     class_summaries: list[JavaRecoveryReportClassSummary],
     repair_summaries: list[JavaRecoveryReportRepairSummary],
+    rollups: JavaRecoveryReportRollups,
     next_actions: list[str],
     commands: list[str],
     recovery: JavaRecoverProjectResult,
@@ -825,6 +922,29 @@ def _markdown(
     )
     if progress.compatibility_score is not None:
         lines.append(f"- Compatibility: {progress.compatibility_score:.2f}")
+    lines.extend(
+        [
+            "",
+            "## Rollups",
+            (
+                "- Classes: "
+                f"{rollups.total_class_summary_count} total, "
+                f"{rollups.displayed_class_summary_count} shown, "
+                f"{rollups.omitted_class_summary_count} omitted"
+            ),
+            f"- Packages: {_format_counts(rollups.by_package)}",
+            f"- Engines: {_format_counts(rollups.by_engine)}",
+            f"- Quality: {_format_counts(rollups.by_quality)}",
+            f"- Compile: {_format_counts(rollups.by_compile_status)}",
+            f"- Inner class actions: {_format_counts(rollups.by_inner_action)}",
+        ]
+    )
+    if rollups.blocker_summary_by_category:
+        lines.append(
+            f"- Blockers: {_format_counts(rollups.blocker_summary_by_category)}"
+        )
+    if rollups.repair_summary_by_kind:
+        lines.append(f"- Repairs: {_format_counts(rollups.repair_summary_by_kind)}")
     lines.extend(["", "## Class Summary"])
     if class_summaries:
         for item in class_summaries:
@@ -849,6 +969,12 @@ def _markdown(
             )
     else:
         lines.append("- No per-class decompile summaries available for this run.")
+    if rollups.omitted_class_summary_count:
+        lines.append(
+            "- Omitted "
+            f"{rollups.omitted_class_summary_count} additional class summaries; "
+            "see recovery-report.json."
+        )
     lines.extend(["", "## Repair Summary"])
     if repair_summaries:
         for repair in repair_summaries:
@@ -902,6 +1028,31 @@ def _bool_label(value: bool | None) -> str:
     if value is False:
         return "fail"
     return "skip"
+
+
+def _package_name(class_name: str) -> str:
+    normalized = class_name.replace(".", "/")
+    if "/" not in normalized:
+        return "(default)"
+    package = normalized.rsplit("/", 1)[0]
+    if not package:
+        return "(default)"
+    return package.replace("/", ".")
+
+
+def _increment(values: dict[str, int], key: str) -> None:
+    values[key] = values.get(key, 0) + 1
+
+
+def _format_counts(values: dict[str, int], limit: int = 8) -> str:
+    if not values:
+        return "none"
+    items = sorted(values.items(), key=lambda item: (-item[1], item[0]))
+    rendered = [f"{key}={count}" for key, count in items[:limit]]
+    omitted = len(items) - len(rendered)
+    if omitted:
+        rendered.append(f"+{omitted} more")
+    return ", ".join(rendered)
 
 
 def _report_path(root: Path | None, value: str) -> Path | None:

@@ -221,8 +221,9 @@ Glaurung already has a growing Java path:
   `java_recovery_report`, wrapping the recovery flow with a concise status,
   headline, progress counters, ranked blockers, exact source snippets, raw compiler
   and parser messages, likely causes, next actions, cache state, per-class decompiler
-  summaries, repair summaries, persisted markdown/JSON report files, copyable
-  commands, and KB evidence.
+  summaries, package/engine/quality/blocker rollups, repair summaries, persisted
+  markdown/JSON report files, copyable commands, and KB evidence. The same workflow
+  is exposed through `glaurung java-recovery-report` for daily CLI use.
 - Python memory tools can now list candidate classes with `java_list_classes`,
   exposing bounded package/name/access-flag filtering, superclass/interface/member
   counts, `SourceFile` metadata, optional annotation descriptors, optional
@@ -262,9 +263,11 @@ Known limitations:
   decompiler helper, or JVM runtime tool surface.
 - There is initial dependency inference, build-system inference, source-tree
   scaffolding, bounded `javac` compile diagnostics, ABI comparison, resource parity
-  checking, and a validation rollup, but no dependency resolver, Java decompiler
-  source emitter, Maven/Gradle compile execution, repair loop, annotation/module
-  parity, or mature recovered-artifact compatibility scoring.
+  checking, decompiler source emission, Maven/Gradle compile execution, a repair
+  loop, semantic ABI/resource validation, and a daily-use report, but no dependency
+  resolver policy, precise module-path/annotation-processor repair, mature
+  source-to-bytecode repair loop, or runtime-backed recovered-artifact compatibility
+  scoring.
 - The generic static-audit layer now has initial sensitive sinks, entrypoints,
   config/resource extraction, config correlation, redacted secret scanning,
   archive-set summaries, and per-archive risk reports. It still lacks precise
@@ -1514,6 +1517,8 @@ Initial Python implementation status:
   - ranked blockers from compile diagnostics, JavaParser syntax problems, deferred
     repairs, and validation failures
   - exact source snippets around compiler diagnostics
+  - package, engine, quality, compile-status, inner-class-action, blocker, and
+    repair rollups
   - per-class engine/quality/parse/compile summaries
   - applied and deferred repair summaries
   - likely cause and next action for each blocker
@@ -1522,6 +1527,9 @@ Initial Python implementation status:
 - Persists `.glaurung/recovery-report.md` and `.glaurung/recovery-report.json`.
 - Retains class summaries across cache-hit report runs by reading the previous
   report JSON when decompilation is resumed.
+- Exposes the report from the CLI through `glaurung java-recovery-report`, with
+  package/class filters, classpath entries, mapping options, cache controls,
+  validation profile selection, and JSON output.
 - The report keeps the full structured recovery result for agents, but puts the
   human workflow first.
 
@@ -2696,6 +2704,7 @@ glaurung java decompile-archive target.jar --out tmp/recovered/decompiled
 glaurung java recover-source target.jar --out tmp/recovered/project --build-tool auto
 glaurung java compile-project tmp/recovered/project
 glaurung java compare-abi target.jar tmp/recovered/project/build/libs/recovered.jar
+glaurung java-recovery-report target.jar --output-root tmp/recovered/report --include-package com.example
 glaurung java xrefs target.jar --to 'net/minecraft/client/Minecraft#tick()V'
 glaurung java minecraft-info target.jar
 glaurung java frameworks target.jar --format json
