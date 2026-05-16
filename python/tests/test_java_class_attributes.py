@@ -140,6 +140,64 @@ non-sealed class Square implements Shape {}
     return out
 
 
+def _compile_module_classes(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java fixture")
+    src = tmp_path / "module-src"
+    out = tmp_path / "module-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "module-info.java").write_text(
+        """
+module com.example.fixture {
+    requires java.logging;
+    exports com.example.api;
+    opens com.example.internal;
+    uses com.example.api.Service;
+    provides com.example.api.Service with com.example.internal.ServiceImpl;
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    api = src / "com" / "example" / "api"
+    internal = src / "com" / "example" / "internal"
+    api.mkdir(parents=True)
+    internal.mkdir(parents=True)
+    (api / "Service.java").write_text(
+        "package com.example.api; public interface Service { String name(); }\n",
+        encoding="utf-8",
+    )
+    (internal / "ServiceImpl.java").write_text(
+        """
+package com.example.internal;
+
+public class ServiceImpl implements com.example.api.Service {
+    public String name() { return "fixture"; }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "javac",
+            "-g",
+            "--release",
+            "17",
+            "-d",
+            str(out),
+            str(src / "module-info.java"),
+            str(api / "Service.java"),
+            str(internal / "ServiceImpl.java"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out
+
+
 def _compile_generic_class(tmp_path: Path) -> Path:
     if shutil.which("javac") is None:
         pytest.skip("javac is required for generated Java fixture")
@@ -379,6 +437,33 @@ def test_parse_java_class_recovers_permitted_subclasses(tmp_path: Path) -> None:
     assert shape["permitted_subclasses"] == ["Circle", "Square"]
     assert circle is not None
     assert circle["permitted_subclasses"] == []
+
+
+def test_parse_java_class_recovers_module_info(tmp_path: Path) -> None:
+    class_dir = _compile_module_classes(tmp_path)
+    java_analysis = getattr(g, "analysis")
+
+    module_info = java_analysis.parse_java_class_bytes(
+        (class_dir / "module-info.class").read_bytes()
+    )
+
+    assert module_info is not None
+    module = module_info["module"]
+    assert module["name"] == "com.example.fixture"
+    assert module["version"] is None
+    assert {item["module"] for item in module["requires"]} >= {
+        "java.base",
+        "java.logging",
+    }
+    assert module["exports"][0]["package"] == "com/example/api"
+    assert module["opens"][0]["package"] == "com/example/internal"
+    assert module["uses"] == ["com/example/api/Service"]
+    assert module["provides"] == [
+        {
+            "service": "com/example/api/Service",
+            "implementations": ["com/example/internal/ServiceImpl"],
+        }
+    ]
 
 
 def test_parse_java_class_recovers_exception_handlers(tmp_path: Path) -> None:

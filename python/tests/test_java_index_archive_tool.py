@@ -93,6 +93,71 @@ def _hardened_index_fixture(tmp_path: Path) -> Path:
     return jar
 
 
+def _module_jar(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None or shutil.which("jar") is None:
+        pytest.skip("javac and jar are required for generated Java module fixture")
+    src = tmp_path / "module-src"
+    out = tmp_path / "module-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "module-info.java").write_text(
+        """
+module com.example.fixture {
+    requires java.logging;
+    exports com.example.api;
+    opens com.example.internal;
+    uses com.example.api.Service;
+    provides com.example.api.Service with com.example.internal.ServiceImpl;
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    api = src / "com" / "example" / "api"
+    internal = src / "com" / "example" / "internal"
+    api.mkdir(parents=True)
+    internal.mkdir(parents=True)
+    (api / "Service.java").write_text(
+        "package com.example.api; public interface Service { String name(); }\n",
+        encoding="utf-8",
+    )
+    (internal / "ServiceImpl.java").write_text(
+        """
+package com.example.internal;
+
+public class ServiceImpl implements com.example.api.Service {
+    public String name() { return "fixture"; }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "javac",
+            "-g",
+            "--release",
+            "17",
+            "-d",
+            str(out),
+            str(src / "module-info.java"),
+            str(api / "Service.java"),
+            str(internal / "ServiceImpl.java"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar = tmp_path / "module.jar"
+    subprocess.run(
+        ["jar", "--create", "--file", str(jar), "-C", str(out), "."],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return jar
+
+
 def test_java_index_archive_summarizes_vendored_jar() -> None:
     from glaurung.llm.tools.java_index_archive import build_tool
 
@@ -222,6 +287,30 @@ def test_java_index_archive_resolves_multi_release_target_classes(
         java11.multi_release_selected_classes[0].selected_entry_name
         == "fixture/VersionedFixture.class"
     )
+
+
+def test_java_index_archive_reports_module_info_summary(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_index_archive import build_tool
+
+    jar = _module_jar(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(ctx, ctx.kb, tool.input_model(path=str(jar)))
+
+    assert result.module_info_present
+    assert result.module_info is not None
+    assert result.module_info.name == "com.example.fixture"
+    assert {item.module for item in result.module_info.requires} >= {
+        "java.base",
+        "java.logging",
+    }
+    assert [item.package for item in result.module_info.exports] == ["com/example/api"]
+    assert [item.package for item in result.module_info.opens] == [
+        "com/example/internal"
+    ]
+    assert result.module_info.uses == ["com/example/api/Service"]
+    assert result.module_info.provides[0].service == "com/example/api/Service"
 
 
 def test_java_index_archive_can_index_nested_archives(tmp_path: Path) -> None:

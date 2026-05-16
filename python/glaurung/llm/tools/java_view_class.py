@@ -15,6 +15,7 @@ from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .java_access_flags import access_flag_names
 from .java_descriptors import decode_field_descriptor, decode_method_descriptor
+from .java_module_info import JavaModuleSummary, module_summary
 from .java_proguard_mappings import (
     ProguardClassMapping,
     ProguardMappings,
@@ -168,6 +169,7 @@ class JavaViewClassResult(BaseModel):
     nest_host: str | None = None
     nest_members: list[str] = Field(default_factory=list)
     record_components: list[JavaRecordComponentSummary] = Field(default_factory=list)
+    module_info: JavaModuleSummary | None = None
     annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
     fields: list[JavaClassMemberSummary] = Field(default_factory=list)
     methods: list[JavaClassMemberSummary] = Field(default_factory=list)
@@ -284,6 +286,7 @@ def _result_for_class(
     nest_host = _optional_string(parsed.get("nest_host"))
     nest_members = _string_list(parsed.get("nest_members"))
     record_components = _record_component_summaries(parsed.get("record_components"))
+    parsed_module_info = module_summary(parsed.get("module"))
     is_record = parsed.get("super_class") == "java/lang/Record" or bool(
         record_components
     )
@@ -353,6 +356,9 @@ def _result_for_class(
                     component.model_dump() for component in record_components
                 ],
                 "record_component_count": len(record_components),
+                "module_info": (
+                    parsed_module_info.model_dump() if parsed_module_info else None
+                ),
                 "annotations": [annotation.model_dump() for annotation in annotations],
             },
             tags=["java", "class", "deobfuscated" if mapped_class_name else "raw"],
@@ -454,6 +460,7 @@ def _result_for_class(
         nest_host=nest_host,
         nest_members=nest_members,
         record_components=record_components,
+        module_info=parsed_module_info,
         annotations=annotations,
         fields=fields,
         methods=methods,

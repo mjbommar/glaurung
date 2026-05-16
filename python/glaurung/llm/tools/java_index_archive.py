@@ -14,6 +14,7 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .java_module_info import JavaModuleSummary, module_summary
 
 
 class JavaIndexArchiveArgs(BaseModel):
@@ -182,6 +183,7 @@ class JavaIndexArchiveResult(BaseModel):
         default_factory=list
     )
     module_info_present: bool = False
+    module_info: JavaModuleSummary | None = None
     zip_slip_entry_count: int = 0
     suspicious_entries: list[JavaSuspiciousEntrySummary] = Field(default_factory=list)
     zip64_locator_present: bool = False
@@ -237,6 +239,7 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
         maven_artifact_count = 0
         service_descriptor_count = 0
         module_info_present = False
+        module_info: JavaModuleSummary | None = None
         zip_slip_entry_count = 0
         zip64_locator_present = False
         manifest_main_class: str | None = None
@@ -360,6 +363,9 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                     if parsed is None:
                         parse_error_count += 1
                         continue
+                    parsed_module_info = module_summary(parsed.get("module"))
+                    if parsed_module_info is not None:
+                        module_info = parsed_module_info
                     methods = parsed["methods"]
                     policy = classfile_policy(
                         int(parsed["major_version"]),
@@ -423,6 +429,7 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
                     "maven_artifact_count": maven_artifact_count,
                     "service_descriptor_count": service_descriptor_count,
                     "module_info_present": module_info_present,
+                    "module_info": module_info.model_dump() if module_info else None,
                     "zip_slip_entry_count": zip_slip_entry_count,
                     "manifest_main_class": manifest_main_class,
                     "manifest_multi_release": manifest_multi_release,
@@ -493,6 +500,7 @@ class JavaIndexArchiveTool(MemoryTool[JavaIndexArchiveArgs, JavaIndexArchiveResu
             service_descriptor_count=service_descriptor_count,
             service_descriptors=service_descriptors,
             module_info_present=module_info_present,
+            module_info=module_info,
             zip_slip_entry_count=zip_slip_entry_count,
             suspicious_entries=suspicious_entries,
             zip64_locator_present=zip64_locator_present,

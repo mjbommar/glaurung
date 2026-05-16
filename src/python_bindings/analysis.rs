@@ -313,6 +313,7 @@ fn java_class_info_to_py(
         java_record_components_to_py(py, info.record_components)?,
     )?;
     dict.set_item("permitted_subclasses", info.permitted_subclasses)?;
+    dict.set_item("module", java_module_info_to_py(py, info.module)?)?;
     dict.set_item("interfaces", info.interfaces)?;
     dict.set_item("major_version", info.major_version)?;
     dict.set_item("minor_version", info.minor_version)?;
@@ -417,6 +418,60 @@ fn java_record_components_to_py(
         out.append(cdict)?;
     }
     Ok(out.into())
+}
+
+fn java_module_info_to_py(
+    py: Python<'_>,
+    module: Option<crate::analysis::java_class::JavaModuleInfo>,
+) -> PyResult<Py<PyAny>> {
+    let Some(module) = module else {
+        return Ok(py.None());
+    };
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("name", module.name)?;
+    dict.set_item("flags", module.flags)?;
+    dict.set_item("version", module.version)?;
+
+    let requires = pyo3::types::PyList::empty(py);
+    for require in module.requires {
+        let rdict = pyo3::types::PyDict::new(py);
+        rdict.set_item("module", require.module)?;
+        rdict.set_item("flags", require.flags)?;
+        rdict.set_item("version", require.version)?;
+        requires.append(rdict)?;
+    }
+    dict.set_item("requires", requires)?;
+
+    let exports = pyo3::types::PyList::empty(py);
+    for export in module.exports {
+        let edict = pyo3::types::PyDict::new(py);
+        edict.set_item("package", export.package)?;
+        edict.set_item("flags", export.flags)?;
+        edict.set_item("targets", export.targets)?;
+        exports.append(edict)?;
+    }
+    dict.set_item("exports", exports)?;
+
+    let opens = pyo3::types::PyList::empty(py);
+    for open in module.opens {
+        let odict = pyo3::types::PyDict::new(py);
+        odict.set_item("package", open.package)?;
+        odict.set_item("flags", open.flags)?;
+        odict.set_item("targets", open.targets)?;
+        opens.append(odict)?;
+    }
+    dict.set_item("opens", opens)?;
+    dict.set_item("uses", module.uses)?;
+
+    let provides = pyo3::types::PyList::empty(py);
+    for provide in module.provides {
+        let pdict = pyo3::types::PyDict::new(py);
+        pdict.set_item("service", provide.service)?;
+        pdict.set_item("implementations", provide.implementations)?;
+        provides.append(pdict)?;
+    }
+    dict.set_item("provides", provides)?;
+    Ok(dict.into())
 }
 
 fn java_annotations_to_py(

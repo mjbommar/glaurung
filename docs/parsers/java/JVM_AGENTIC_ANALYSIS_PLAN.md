@@ -43,9 +43,9 @@ Glaurung already has a growing Java path:
   annotations, `MethodParameters`, runtime-visible/runtime-invisible parameter
   annotations, method `AnnotationDefault` values, initial JVM instruction listings,
   structural class attributes (`InnerClasses`, `EnclosingMethod`, `NestHost`,
-  `NestMembers`, `Record`, `PermittedSubclasses`), and lightweight method-level
-  bytecode xrefs for invokes, fields, class refs, and loaded strings. Method code
-  summaries include `StackMapTable` verifier frame counts when present.
+  `NestMembers`, `Record`, `PermittedSubclasses`, JPMS `Module`), and lightweight
+  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  Method code summaries include `StackMapTable` verifier frame counts when present.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `src/analysis/java_jar.rs` and the Python bindings expose bounded central-directory
   JAR metadata, including nested archive entries, multi-release class variants,
@@ -60,6 +60,8 @@ Glaurung already has a growing Java path:
 - Python tools now share classfile version/size policy normalization, reporting Java
   release labels, preview classfiles, future classfile versions newer than Java SE
   26, unusual minor versions, and large/tiny classfile entries.
+- Parser-facing Python tools now expose JPMS `module-info.class` summaries,
+  including module name, requires, exports, opens, uses, and provides clauses.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang
@@ -744,6 +746,8 @@ Outputs:
 - Main class.
 - Agent classes.
 - Module info.
+- JPMS requires/exports/opens/uses/provides details when `module-info.class` is
+  present.
 - Signed JAR metadata.
 - Mod metadata summary.
 - Truncation flags.
@@ -805,6 +809,7 @@ Outputs:
 - Normalized Java/classfile version labels, preview/future-version state,
   classfile size category, and policy warnings.
 - Sealed-class `PermittedSubclasses` lists.
+- JPMS module summary when viewing `module-info.class`.
 - Fields.
 - Methods with code-size and line-number range summaries where available.
 - Descriptor-aware mapped official/obfuscated names for classes and members when

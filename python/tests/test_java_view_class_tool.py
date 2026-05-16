@@ -118,6 +118,62 @@ non-sealed class Square implements Shape {}
     return jar_path
 
 
+def _compile_module_jar(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None or shutil.which("jar") is None:
+        pytest.skip("javac and jar are required for generated Java module fixture")
+    src = tmp_path / "module-src"
+    out = tmp_path / "module-classes"
+    src.mkdir()
+    out.mkdir()
+    (src / "module-info.java").write_text(
+        """
+module com.example.fixture {
+    requires java.logging;
+    exports com.example.api;
+    opens com.example.internal;
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    api = src / "com" / "example" / "api"
+    internal = src / "com" / "example" / "internal"
+    api.mkdir(parents=True)
+    internal.mkdir(parents=True)
+    (api / "Api.java").write_text(
+        "package com.example.api; public class Api {}\n",
+        encoding="utf-8",
+    )
+    (internal / "Internal.java").write_text(
+        "package com.example.internal; public class Internal {}\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "javac",
+            "-g",
+            "--release",
+            "17",
+            "-d",
+            str(out),
+            str(src / "module-info.java"),
+            str(api / "Api.java"),
+            str(internal / "Internal.java"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    jar_path = tmp_path / "module.jar"
+    subprocess.run(
+        ["jar", "--create", "--file", str(jar_path), "-C", str(out), "."],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return jar_path
+
+
 def _mapping_file(tmp_path: Path) -> Path:
     path = tmp_path / "mappings.txt"
     path.write_text(
@@ -258,6 +314,32 @@ def test_java_view_class_reports_permitted_subclasses(tmp_path: Path) -> None:
         if node.kind == NodeKind.java_class and node.props.get("class_name") == "Shape"
     )
     assert class_node.props["permitted_subclasses"] == ["Circle", "Square"]
+
+
+def test_java_view_class_reports_module_info(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_view_class import build_tool
+
+    jar = _compile_module_jar(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(path=str(jar), class_name="module-info"),
+    )
+
+    assert result.class_found
+    assert result.module_info is not None
+    assert result.module_info.name == "com.example.fixture"
+    assert {item.module for item in result.module_info.requires} >= {
+        "java.base",
+        "java.logging",
+    }
+    assert [item.package for item in result.module_info.exports] == ["com/example/api"]
+    assert [item.package for item in result.module_info.opens] == [
+        "com/example/internal"
+    ]
 
 
 def test_java_view_class_can_lookup_by_obfuscated_name(tmp_path: Path) -> None:

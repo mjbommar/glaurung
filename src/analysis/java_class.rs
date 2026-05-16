@@ -131,6 +131,45 @@ pub struct JavaRecordComponent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaModuleInfo {
+    pub name: String,
+    pub flags: u16,
+    pub version: Option<String>,
+    pub requires: Vec<JavaModuleRequire>,
+    pub exports: Vec<JavaModuleExport>,
+    pub opens: Vec<JavaModuleOpen>,
+    pub uses: Vec<String>,
+    pub provides: Vec<JavaModuleProvide>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaModuleRequire {
+    pub module: String,
+    pub flags: u16,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaModuleExport {
+    pub package: String,
+    pub flags: u16,
+    pub targets: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaModuleOpen {
+    pub package: String,
+    pub flags: u16,
+    pub targets: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaModuleProvide {
+    pub service: String,
+    pub implementations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JavaInstruction {
     pub bci: u32,
     pub opcode: u8,
@@ -167,6 +206,7 @@ pub struct ClassInfo {
     pub nest_members: Vec<String>,
     pub record_components: Vec<JavaRecordComponent>,
     pub permitted_subclasses: Vec<String>,
+    pub module: Option<JavaModuleInfo>,
     pub interfaces: Vec<String>,
     pub methods: Vec<JavaMethod>,
     pub fields: Vec<JavaMethod>, // same shape — name + descriptor + flags
@@ -214,6 +254,12 @@ enum CpEntry {
     InvokeDynamic {
         name_and_type_idx: u16,
     },
+    Module {
+        name_idx: u16,
+    },
+    Package {
+        name_idx: u16,
+    },
     Other,
 }
 
@@ -228,6 +274,7 @@ struct JavaClassAttributes {
     nest_members: Vec<String>,
     record_components: Vec<JavaRecordComponent>,
     permitted_subclasses: Vec<String>,
+    module: Option<JavaModuleInfo>,
 }
 
 /// Parse a `.class` file and return its `ClassInfo`.
@@ -364,8 +411,16 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
                 i += 1;
             } // Dynamic, InvokeDynamic
             19 | 20 => {
+                if p + 2 > data.len() {
+                    return Err(ClassError::Truncated("module/package"));
+                }
+                let name_idx = u16::from_be_bytes(data[p..p + 2].try_into().unwrap());
                 p += 2;
-                cp[i] = CpEntry::Other;
+                cp[i] = if tag == 19 {
+                    CpEntry::Module { name_idx }
+                } else {
+                    CpEntry::Package { name_idx }
+                };
                 i += 1;
             } // Module, Package
             other => return Err(ClassError::BadCpTag(other)),
@@ -417,6 +472,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         nest_members: class_attrs.nest_members,
         record_components: class_attrs.record_components,
         permitted_subclasses: class_attrs.permitted_subclasses,
+        module: class_attrs.module,
         interfaces,
         methods,
         fields,
@@ -596,6 +652,8 @@ fn parse_class_attributes(
                 cp,
                 "PermittedSubclasses",
             )?);
+        } else if attr_name == "Module" {
+            out.module = Some(parse_module_attribute(&data[body_start..body_end], cp)?);
         }
         p = body_end;
     }
@@ -685,6 +743,101 @@ fn parse_class_list_attribute(
         out.push(read_class_name(cp, class_idx)?);
     }
     Ok(out)
+}
+
+fn parse_module_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaModuleInfo, ClassError> {
+    let mut p = 0usize;
+    let module_name_idx = read_u16_from(body, &mut p, "Module header")?;
+    let flags = read_u16_from(body, &mut p, "Module header")?;
+    let version_idx = read_u16_from(body, &mut p, "Module header")?;
+    let requires_count = read_u16_from(body, &mut p, "Module requires count")? as usize;
+    let mut requires = Vec::with_capacity(requires_count);
+    for _ in 0..requires_count {
+        let module_idx = read_u16_from(body, &mut p, "Module requires body")?;
+        let require_flags = read_u16_from(body, &mut p, "Module requires body")?;
+        let require_version_idx = read_u16_from(body, &mut p, "Module requires body")?;
+        requires.push(JavaModuleRequire {
+            module: read_module_name(cp, module_idx)?,
+            flags: require_flags,
+            version: read_optional_utf8(cp, require_version_idx)?,
+        });
+    }
+
+    let exports_count = read_u16_from(body, &mut p, "Module exports count")? as usize;
+    let mut exports = Vec::with_capacity(exports_count);
+    for _ in 0..exports_count {
+        let package_idx = read_u16_from(body, &mut p, "Module exports body")?;
+        let export_flags = read_u16_from(body, &mut p, "Module exports body")?;
+        let targets = read_module_targets(body, cp, &mut p, "Module exports body")?;
+        exports.push(JavaModuleExport {
+            package: read_package_name(cp, package_idx)?,
+            flags: export_flags,
+            targets,
+        });
+    }
+
+    let opens_count = read_u16_from(body, &mut p, "Module opens count")? as usize;
+    let mut opens = Vec::with_capacity(opens_count);
+    for _ in 0..opens_count {
+        let package_idx = read_u16_from(body, &mut p, "Module opens body")?;
+        let open_flags = read_u16_from(body, &mut p, "Module opens body")?;
+        let targets = read_module_targets(body, cp, &mut p, "Module opens body")?;
+        opens.push(JavaModuleOpen {
+            package: read_package_name(cp, package_idx)?,
+            flags: open_flags,
+            targets,
+        });
+    }
+
+    let uses_count = read_u16_from(body, &mut p, "Module uses count")? as usize;
+    let mut uses = Vec::with_capacity(uses_count);
+    for _ in 0..uses_count {
+        let class_idx = read_u16_from(body, &mut p, "Module uses body")?;
+        uses.push(read_class_name(cp, class_idx)?);
+    }
+
+    let provides_count = read_u16_from(body, &mut p, "Module provides count")? as usize;
+    let mut provides = Vec::with_capacity(provides_count);
+    for _ in 0..provides_count {
+        let service_idx = read_u16_from(body, &mut p, "Module provides body")?;
+        let implementation_count =
+            read_u16_from(body, &mut p, "Module provides implementation count")? as usize;
+        let mut implementations = Vec::with_capacity(implementation_count);
+        for _ in 0..implementation_count {
+            let implementation_idx = read_u16_from(body, &mut p, "Module provides body")?;
+            implementations.push(read_class_name(cp, implementation_idx)?);
+        }
+        provides.push(JavaModuleProvide {
+            service: read_class_name(cp, service_idx)?,
+            implementations,
+        });
+    }
+
+    Ok(JavaModuleInfo {
+        name: read_module_name(cp, module_name_idx)?,
+        flags,
+        version: read_optional_utf8(cp, version_idx)?,
+        requires,
+        exports,
+        opens,
+        uses,
+        provides,
+    })
+}
+
+fn read_module_targets(
+    body: &[u8],
+    cp: &[CpEntry],
+    p: &mut usize,
+    context: &'static str,
+) -> Result<Vec<String>, ClassError> {
+    let count = read_u16_from(body, p, context)? as usize;
+    let mut targets = Vec::with_capacity(count);
+    for _ in 0..count {
+        let module_idx = read_u16_from(body, p, context)?;
+        targets.push(read_module_name(cp, module_idx)?);
+    }
+    Ok(targets)
 }
 
 fn parse_record_attribute(
@@ -780,11 +933,40 @@ fn read_class_name(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
     }
 }
 
+fn read_module_name(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
+    if (idx as usize) >= cp.len() {
+        return Err(ClassError::BadCpIndex(idx));
+    }
+    match &cp[idx as usize] {
+        CpEntry::Module { name_idx } => read_utf8(cp, *name_idx),
+        _ => Err(ClassError::BadCpIndex(idx)),
+    }
+}
+
+fn read_package_name(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
+    if (idx as usize) >= cp.len() {
+        return Err(ClassError::BadCpIndex(idx));
+    }
+    match &cp[idx as usize] {
+        CpEntry::Package { name_idx } => read_utf8(cp, *name_idx),
+        _ => Err(ClassError::BadCpIndex(idx)),
+    }
+}
+
 fn read_optional_class_name(cp: &[CpEntry], idx: u16) -> Result<Option<String>, ClassError> {
     if idx == 0 {
         return Ok(None);
     }
     Ok(Some(read_class_name(cp, idx)?))
+}
+
+fn read_u16_from(body: &[u8], p: &mut usize, context: &'static str) -> Result<u16, ClassError> {
+    if *p + 2 > body.len() {
+        return Err(ClassError::Truncated(context));
+    }
+    let value = u16::from_be_bytes(body[*p..*p + 2].try_into().unwrap());
+    *p += 2;
+    Ok(value)
 }
 
 fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassError> {

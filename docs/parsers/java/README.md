@@ -55,13 +55,15 @@ Implemented pieces now include:
   annotations, `MethodParameters`, runtime-visible/runtime-invisible parameter
   annotations, method `AnnotationDefault` values, structural class attributes
   (`InnerClasses`, `EnclosingMethod`, `NestHost`, `NestMembers`, `Record`,
-  `PermittedSubclasses`), instruction listings, and lightweight method-level
-  bytecode xrefs for invokes, fields, class refs, and loaded strings. Method code
-  summaries include `StackMapTable` verifier frame counts when present.
+  `PermittedSubclasses`, JPMS `Module`), instruction listings, and lightweight
+  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
+  Method code summaries include `StackMapTable` verifier frame counts when present.
 - Rust central-directory JAR indexing for bounded archive metadata: entry counts,
   compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
   signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
   `module-info.class`, zip-slip path detection, and truncation state.
+- JPMS `module-info.class` summaries in parser-facing tools, including module name,
+  requires, exports, opens, uses, and provides clauses when present.
 - Opt-in recursive nested archive indexing in `java_index_archive`, producing bounded
   summaries for selected nested JAR/ZIP payloads without extracting or executing
   archive code.
