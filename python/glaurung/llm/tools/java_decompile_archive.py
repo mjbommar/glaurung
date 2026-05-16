@@ -28,13 +28,21 @@ from .java_proguard_mappings import (
 
 JavaDecompilerEngine = Literal["auto", "cfr", "vineflower"]
 JavaConcreteDecompilerEngine = Literal["cfr", "vineflower"]
-JavaInnerClassPolicy = Literal["skip", "companion"]
+JavaInnerClassPolicy = Literal["skip", "companion", "merge"]
 JavaInnerClassKind = Literal[
     "top_level",
     "named_inner",
     "anonymous",
     "lambda",
     "synthetic",
+]
+JavaInnerClassAction = Literal[
+    "emitted_top_level",
+    "emitted_companion",
+    "merged_into_outer",
+    "suppressed",
+    "skipped",
+    "not_written",
 ]
 JavaDecompileQuality = Literal[
     "parseable",
@@ -156,6 +164,7 @@ class JavaDecompiledClassSummary(BaseModel):
     class_name: str
     outer_class_name: str | None = None
     inner_class_kind: JavaInnerClassKind = "top_level"
+    inner_class_action: JavaInnerClassAction = "not_written"
     mapped_class_name: str | None = None
     mapping_match: Literal["obfuscated", "official", "none"] = "none"
     mapped_source_rewritten: bool = False
@@ -195,6 +204,7 @@ class JavaDecompileArchiveResult(BaseModel):
     failed_count: int = 0
     skipped_class_count: int = 0
     skipped_inner_class_count: int = 0
+    suppressed_inner_class_count: int = 0
     written_source_count: int = 0
     mapped_class_count: int = 0
     inner_class_group_count: int = 0
@@ -288,9 +298,19 @@ class JavaDecompileArchiveTool(
             if not _safe_archive_path(entry_name):
                 _record_skip(result, entry_name, "unsafe_archive_path")
                 continue
+            inner_kind = _inner_class_kind(class_name)
             if "$" in class_name and args.inner_class_policy == "skip":
                 result.skipped_inner_class_count += 1
                 _record_skip(result, entry_name, "inner_class_skipped")
+                continue
+            if (
+                "$" in class_name
+                and args.inner_class_policy == "merge"
+                and inner_kind != "named_inner"
+            ):
+                result.skipped_inner_class_count += 1
+                result.suppressed_inner_class_count += 1
+                _record_skip(result, entry_name, "inner_class_suppressed")
                 continue
             if not _matches_filters(class_name, mapped_class_name, args):
                 _record_skip(result, entry_name, "filtered")
@@ -394,6 +414,7 @@ def _decompile_one_class(
         raw_selected_ast if isinstance(raw_selected_ast, dict) else {}
     )
     source_file: str | None = None
+    inner_action: JavaInnerClassAction = "not_written"
     write_stop_reasons: list[str] = []
     if selected is not None and selected.success and args.write_sources:
         source = selected_raw.get("source")
@@ -409,15 +430,42 @@ def _decompile_one_class(
                 source_to_write = _rewrite_mapped_source(source, class_mapping)
                 dest_class_name = mapped_class_name.replace(".", "/")
                 mapped_source_rewritten = source_to_write != source
-            dest = source_root.joinpath(*dest_class_name.split("/")).with_suffix(
-                ".java"
-            )
-            if dest.exists() and dest_class_name != class_name:
-                write_stop_reasons.append("mapped_source_collision")
+            if (
+                args.inner_class_policy == "merge"
+                and _inner_class_kind(class_name) == "named_inner"
+            ):
+                outer = _outer_class_name(class_name)
+                if outer is None:
+                    write_stop_reasons.append("outer_class_missing_for_merge")
+                else:
+                    outer_dest = source_root.joinpath(*outer.split("/")).with_suffix(
+                        ".java"
+                    )
+                    if _merge_inner_source_into_outer(
+                        outer_dest=outer_dest,
+                        inner_source=source_to_write,
+                        outer_class_name=outer,
+                        inner_class_name=class_name,
+                    ):
+                        source_file = _relative(project_root or source_root, outer_dest)
+                        inner_action = "merged_into_outer"
+                    else:
+                        write_stop_reasons.append("inner_merge_failed")
             else:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(source_to_write.rstrip() + "\n", encoding="utf-8")
-                source_file = _relative(project_root or source_root, dest)
+                dest = source_root.joinpath(*dest_class_name.split("/")).with_suffix(
+                    ".java"
+                )
+                if dest.exists() and dest_class_name != class_name:
+                    write_stop_reasons.append("mapped_source_collision")
+                else:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_text(source_to_write.rstrip() + "\n", encoding="utf-8")
+                    source_file = _relative(project_root or source_root, dest)
+                    inner_action = (
+                        "emitted_companion"
+                        if "$" in class_name
+                        else "emitted_top_level"
+                    )
         else:
             mapped_source_rewritten = False
     else:
@@ -438,6 +486,7 @@ def _decompile_one_class(
         class_name=class_name,
         outer_class_name=_outer_class_name(class_name),
         inner_class_kind=_inner_class_kind(class_name),
+        inner_class_action=inner_action,
         mapped_class_name=mapped_class_name,
         mapping_match=mapping_match,
         mapped_source_rewritten=mapped_source_rewritten,
@@ -678,6 +727,92 @@ def _candidate_classpath(classpath: list[str]) -> str:
     return os.pathsep.join(dict.fromkeys(existing))
 
 
+def _merge_inner_source_into_outer(
+    *,
+    outer_dest: Path,
+    inner_source: str,
+    outer_class_name: str,
+    inner_class_name: str,
+) -> bool:
+    if not outer_dest.is_file():
+        return False
+    outer_text = outer_dest.read_text(encoding="utf-8", errors="replace")
+    inner_simple = inner_class_name.rsplit("$", 1)[-1]
+    if re.search(
+        rf"\b(class|interface|enum|record)\s+{re.escape(inner_simple)}\b", outer_text
+    ):
+        return True
+    inner_body = _inner_source_body(inner_source, outer_class_name, inner_simple)
+    if not inner_body.strip():
+        return False
+    insert_at = outer_text.rfind("}")
+    if insert_at < 0:
+        return False
+    merged = (
+        outer_text[:insert_at].rstrip()
+        + "\n\n"
+        + _indent_inner_source(inner_body.rstrip())
+        + "\n"
+        + outer_text[insert_at:]
+    )
+    outer_dest.write_text(merged.rstrip() + "\n", encoding="utf-8")
+    return True
+
+
+def _inner_source_body(
+    source: str,
+    outer_class_name: str,
+    inner_simple: str,
+) -> str:
+    text = _strip_package_and_imports(source)
+    outer_simple = outer_class_name.rsplit("/", 1)[-1].rsplit(".", 1)[-1]
+    text = re.sub(
+        rf"\b(class|interface|enum|record)\s+{re.escape(outer_simple)}[.$]{re.escape(inner_simple)}\b",
+        rf"\1 {inner_simple}",
+        text,
+        count=1,
+    )
+    text = re.sub(
+        rf"\b(class|interface|enum|record)\s+{re.escape(outer_simple)}\$?{re.escape(inner_simple)}\b",
+        rf"\1 {inner_simple}",
+        text,
+        count=1,
+    )
+    text = re.sub(
+        rf"\b(public|protected|private)\s+(?=(?:final\s+|abstract\s+)?(?:class|interface|enum|record)\s+{re.escape(inner_simple)}\b)",
+        "",
+        text,
+        count=1,
+    )
+    if not re.search(
+        rf"\bstatic\s+(?:final\s+|abstract\s+)?(?:class|interface|enum|record)\s+{re.escape(inner_simple)}\b",
+        text,
+    ):
+        text = re.sub(
+            rf"\b((?:final\s+|abstract\s+)?(?:class|interface|enum|record)\s+{re.escape(inner_simple)}\b)",
+            r"static \1",
+            text,
+            count=1,
+        )
+    return text.strip()
+
+
+def _strip_package_and_imports(source: str) -> str:
+    lines = []
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("package ") or stripped.startswith("import "):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _indent_inner_source(source: str) -> str:
+    return "\n".join(
+        ("    " + line if line.strip() else line) for line in source.splitlines()
+    )
+
+
 def _quality_score(
     *,
     success: bool,
@@ -751,10 +886,19 @@ def _engine_order(args: JavaDecompileArchiveArgs) -> list[JavaConcreteDecompiler
 def _class_entries(path: Path) -> list[str]:
     with zipfile.ZipFile(path) as zf:
         return sorted(
-            info.filename
-            for info in zf.infolist()
-            if not info.is_dir() and info.filename.endswith(".class")
+            (
+                info.filename
+                for info in zf.infolist()
+                if not info.is_dir() and info.filename.endswith(".class")
+            ),
+            key=_class_entry_sort_key,
         )
+
+
+def _class_entry_sort_key(entry_name: str) -> tuple[str, int, str]:
+    class_name = entry_name.removesuffix(".class")
+    outer = _outer_class_name(class_name) or class_name
+    return outer, 1 if "$" in class_name else 0, class_name
 
 
 def _mapped_class_mapping(

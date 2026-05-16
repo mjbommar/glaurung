@@ -529,6 +529,44 @@ def test_java_decompile_archive_groups_and_classifies_inner_classes(
     assert kinds["app/Outer$1"] == "anonymous"
 
 
+def test_java_decompile_archive_merges_named_inner_and_suppresses_anonymous(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_decompile_archive import build_tool
+
+    jar = _inner_fixture_jar(tmp_path)
+    output = tmp_path / "merged"
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(jar),
+            output_root=str(output),
+            write_sources=True,
+            include_packages=["app"],
+            inner_class_policy="merge",
+            compile_candidates=True,
+            max_classes=8,
+        ),
+    )
+
+    assert result.attempted_class_count == 2
+    assert result.suppressed_inner_class_count == 1
+    named = next(
+        item for item in result.classes if item.class_name == "app/Outer$Named"
+    )
+    assert named.inner_class_action == "merged_into_outer"
+    assert named.source_file == "src/main/java/app/Outer.java"
+    assert not (output / "src" / "main" / "java" / "app" / "Outer$Named.java").exists()
+    outer = output / "src" / "main" / "java" / "app" / "Outer.java"
+    text = outer.read_text(encoding="utf-8")
+    assert "class Named" in text
+    assert "number()" in text
+
+
 def test_java_decompile_archive_rewrites_mapped_source_names(
     tmp_path: Path,
 ) -> None:
