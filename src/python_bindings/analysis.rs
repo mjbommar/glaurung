@@ -296,6 +296,7 @@ fn java_class_info_to_py(
     dict.set_item("class_name", info.class_name)?;
     dict.set_item("super_class", info.super_class)?;
     dict.set_item("source_file", info.source_file)?;
+    dict.set_item("signature", info.signature)?;
     dict.set_item("annotations", java_annotations_to_py(py, info.annotations)?)?;
     dict.set_item(
         "inner_classes",
@@ -320,6 +321,7 @@ fn java_class_info_to_py(
         let mdict = pyo3::types::PyDict::new(py);
         mdict.set_item("name", m.name)?;
         mdict.set_item("descriptor", m.descriptor)?;
+        mdict.set_item("signature", m.signature)?;
         mdict.set_item("access_flags", m.access_flags)?;
         mdict.set_item("exceptions", m.exceptions)?;
         mdict.set_item("annotations", java_annotations_to_py(py, m.annotations)?)?;
@@ -332,6 +334,7 @@ fn java_class_info_to_py(
         let fdict = pyo3::types::PyDict::new(py);
         fdict.set_item("name", f.name)?;
         fdict.set_item("descriptor", f.descriptor)?;
+        fdict.set_item("signature", f.signature)?;
         fdict.set_item("access_flags", f.access_flags)?;
         fdict.set_item("exceptions", f.exceptions)?;
         fdict.set_item("annotations", java_annotations_to_py(py, f.annotations)?)?;

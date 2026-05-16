@@ -51,6 +51,7 @@ class JavaListedMethod(BaseModel):
     source_file: str | None = None
     name: str
     descriptor: str
+    generic_signature: str | None = None
     parameter_types: list[str] = Field(default_factory=list)
     parameter_count: int = 0
     return_type: str | None = None
@@ -219,6 +220,7 @@ def _method_summary(
         source_file=source_file,
         name=str(method.get("name")),
         descriptor=descriptor,
+        generic_signature=_optional_string(method.get("signature")),
         parameter_types=decoded_descriptor.parameter_types,
         parameter_count=decoded_descriptor.parameter_count,
         return_type=decoded_descriptor.return_type,

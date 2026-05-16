@@ -62,6 +62,7 @@ class JavaListedClass(BaseModel):
     simple_name: str
     super_class: str
     source_file: str | None = None
+    generic_signature: str | None = None
     interfaces: list[str] = Field(default_factory=list)
     interface_count: int = 0
     access_flags: int
@@ -184,6 +185,7 @@ def _class_summary(
         simple_name=class_name.rsplit("/", 1)[-1],
         super_class=str(parsed.get("super_class") or ""),
         source_file=_optional_string(parsed.get("source_file")),
+        generic_signature=_optional_string(parsed.get("signature")),
         interfaces=interfaces,
         interface_count=len(interfaces),
         access_flags=int(parsed.get("access_flags", 0)),

@@ -15,6 +15,7 @@ pub struct JavaMethod {
     pub access_flags: u16,
     pub name: String,
     pub descriptor: String,
+    pub signature: Option<String>,
     pub exceptions: Vec<String>,
     pub annotations: Vec<JavaAnnotation>,
     pub code: Option<JavaCode>,
@@ -142,6 +143,7 @@ pub struct ClassInfo {
     pub class_name: String,
     pub super_class: String,
     pub source_file: Option<String>,
+    pub signature: Option<String>,
     pub annotations: Vec<JavaAnnotation>,
     pub inner_classes: Vec<JavaInnerClass>,
     pub enclosing_method: Option<JavaEnclosingMethod>,
@@ -201,6 +203,7 @@ enum CpEntry {
 #[derive(Debug, Default)]
 struct JavaClassAttributes {
     source_file: Option<String>,
+    signature: Option<String>,
     annotations: Vec<JavaAnnotation>,
     inner_classes: Vec<JavaInnerClass>,
     enclosing_method: Option<JavaEnclosingMethod>,
@@ -388,6 +391,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         class_name,
         super_class: super_class_name,
         source_file: class_attrs.source_file,
+        signature: class_attrs.signature,
         annotations: class_attrs.annotations,
         inner_classes: class_attrs.inner_classes,
         enclosing_method: class_attrs.enclosing_method,
@@ -424,6 +428,7 @@ fn walk_member_table(
         let mut code = None;
         let mut exceptions = Vec::new();
         let mut annotations = Vec::new();
+        let mut signature = None;
         for _ in 0..attrs {
             if p + 6 > data.len() {
                 return Err(ClassError::Truncated("attribute header"));
@@ -442,6 +447,10 @@ fn walk_member_table(
                 code = Some(parse_code_attribute(&data[body_start..body_end], cp)?);
             } else if capture_code && attr_name == "Exceptions" {
                 exceptions = parse_exceptions_attribute(&data[body_start..body_end], cp)?;
+            } else if attr_name == "Signature" && alen == 2 {
+                let signature_idx =
+                    u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
+                signature = Some(read_utf8(cp, signature_idx)?);
             } else if attr_name == "RuntimeVisibleAnnotations" {
                 annotations.extend(parse_annotations_attribute(
                     &data[body_start..body_end],
@@ -463,6 +472,7 @@ fn walk_member_table(
             access_flags,
             name,
             descriptor,
+            signature,
             exceptions,
             annotations,
             code,
@@ -499,6 +509,9 @@ fn parse_class_attributes(
         if attr_name == "SourceFile" && alen == 2 {
             let source_idx = u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
             out.source_file = Some(read_utf8(cp, source_idx)?);
+        } else if attr_name == "Signature" && alen == 2 {
+            let signature_idx = u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
+            out.signature = Some(read_utf8(cp, signature_idx)?);
         } else if attr_name == "RuntimeVisibleAnnotations" {
             out.annotations.extend(parse_annotations_attribute(
                 &data[body_start..body_end],

@@ -89,6 +89,7 @@ class JavaClassMemberSummary(BaseModel):
     kind: Literal["field", "method"]
     name: str
     descriptor: str
+    generic_signature: str | None = None
     field_type: str | None = None
     parameter_types: list[str] = Field(default_factory=list)
     parameter_count: int = 0
@@ -111,6 +112,7 @@ class JavaViewClassResult(BaseModel):
     mapped_class_name: str | None = None
     super_class: str | None = None
     source_file: str | None = None
+    generic_signature: str | None = None
     major_version: int | None = None
     minor_version: int | None = None
     access_flags: int | None = None
@@ -221,6 +223,7 @@ def _result_for_class(
         class_mapping.official_name if class_mapping is not None else None
     )
     source_file = _optional_string(parsed.get("source_file"))
+    generic_signature = _optional_string(parsed.get("signature"))
     annotations = _annotation_summaries(parsed.get("annotations"))
     inner_classes = _inner_class_summaries(parsed.get("inner_classes"))
     enclosing_method = _enclosing_method_summary(parsed.get("enclosing_method"))
@@ -260,6 +263,7 @@ def _result_for_class(
                 "mapping_path": mapping_path,
                 "super_class": parsed["super_class"],
                 "source_file": source_file,
+                "generic_signature": generic_signature,
                 "major_version": parsed["major_version"],
                 "minor_version": parsed["minor_version"],
                 "access_flags": parsed["access_flags"],
@@ -303,6 +307,7 @@ def _result_for_class(
                     "source_file": source_file,
                     "name": member.name,
                     "descriptor": member.descriptor,
+                    "generic_signature": member.generic_signature,
                     "field_type": member.field_type,
                     "parameter_types": member.parameter_types,
                     "parameter_count": member.parameter_count,
@@ -333,6 +338,7 @@ def _result_for_class(
         mapped_class_name=mapped_class_name,
         super_class=parsed["super_class"],
         source_file=source_file,
+        generic_signature=generic_signature,
         major_version=parsed["major_version"],
         minor_version=parsed["minor_version"],
         access_flags=parsed["access_flags"],
@@ -375,6 +381,7 @@ def _member_summary(
         kind=kind,
         name=str(member["name"]),
         descriptor=descriptor,
+        generic_signature=_optional_string(member.get("signature")),
         field_type=decoded_descriptor.field_type,
         parameter_types=decoded_descriptor.parameter_types,
         parameter_count=decoded_descriptor.parameter_count,

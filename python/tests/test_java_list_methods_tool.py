@@ -181,6 +181,9 @@ public class Main {
     assert method.parameter_count == 3
     assert method.return_type == "int"
     assert method.descriptor_error is None
+    assert method.generic_signature == (
+        "([Ljava/lang/String;[[ILjava/util/List<Ljava/lang/String;>;)I"
+    )
 
 
 def test_java_list_methods_respects_limit(tmp_path: Path) -> None:

@@ -112,6 +112,39 @@ record StructureRecord(@ComponentTag String hash, long size) {}
     return out
 
 
+def _compile_generic_class(tmp_path: Path) -> Path:
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for generated Java fixture")
+    src = tmp_path / "generic-src"
+    out = tmp_path / "generic-classes"
+    src.mkdir()
+    out.mkdir()
+    source = src / "GenericFixture.java"
+    source.write_text(
+        """
+import java.util.List;
+import java.util.Map;
+
+public class GenericFixture<T extends Number> {
+    public List<String> names;
+
+    public Map<String, T> lookup(List<T> values) {
+        return Map.of();
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["javac", "-g", "--release", "17", "-d", str(out), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out / "GenericFixture.class"
+
+
 def test_parse_java_class_recovers_source_exceptions_and_local_variables(
     tmp_path: Path,
 ) -> None:
@@ -128,6 +161,21 @@ def test_parse_java_class_recovers_source_exceptions_and_local_variables(
     assert locals_by_name["input"]["index"] == 0
     assert locals_by_name["base"]["descriptor"] == "I"
     assert locals_by_name["total"]["descriptor"] == "I"
+
+
+def test_parse_java_class_recovers_generic_signatures(tmp_path: Path) -> None:
+    class_file = _compile_generic_class(tmp_path)
+
+    info = getattr(g, "analysis").parse_java_class_bytes(class_file.read_bytes())
+
+    assert info is not None
+    assert info["signature"] == "<T:Ljava/lang/Number;>Ljava/lang/Object;"
+    names = next(field for field in info["fields"] if field["name"] == "names")
+    assert names["signature"] == "Ljava/util/List<Ljava/lang/String;>;"
+    lookup = next(method for method in info["methods"] if method["name"] == "lookup")
+    assert lookup["signature"] == (
+        "(Ljava/util/List<TT;>;)Ljava/util/Map<Ljava/lang/String;TT;>;"
+    )
 
 
 def test_parse_java_class_recovers_inner_record_and_nest_metadata(

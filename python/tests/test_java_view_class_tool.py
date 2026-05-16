@@ -30,6 +30,7 @@ def _compile_obfuscated_jar(tmp_path: Path) -> Path:
         """
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.List;
 
 @Retention(RetentionPolicy.RUNTIME)
 @interface Marker {
@@ -40,6 +41,7 @@ import java.lang.annotation.RetentionPolicy;
 public class a {
     public int b = 1;
     public String d = "hello";
+    public List<String> g = List.of("hello");
     public static class f {}
     @Marker("tick")
     public void c() { b++; }
@@ -113,9 +115,12 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert result.annotations[0].elements[0].value.value == "game-thing"
     assert any(item.inner_class == "a$f" for item in result.inner_classes)
     field_b = next(f for f in result.fields if f.name == "b")
+    field_g = next(f for f in result.fields if f.name == "g")
     method_c = next(m for m in result.methods if m.name == "c")
     assert field_b.mapped_names == ["health"]
     assert field_b.field_type == "int"
+    assert field_g.field_type == "java.util.List"
+    assert field_g.generic_signature == "Ljava/util/List<Ljava/lang/String;>;"
     assert method_c.mapped_names == ["tick"]
     assert method_c.parameter_types == []
     assert method_c.return_type == "void"

@@ -49,8 +49,9 @@ Implemented pieces now include:
 
 - Rust classfile parsing for magic/version, constant-pool names, class/super names,
   fields, methods, descriptors, `SourceFile`, method `Exceptions`, `Code` attribute
-  metadata, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, JVM
-  exception handler tables, runtime-visible/runtime-invisible class/member
+  metadata, class/member `Signature` attributes, `LineNumberTable`,
+  `LocalVariableTable`, `LocalVariableTypeTable`, JVM exception handler tables,
+  runtime-visible/runtime-invisible class/member
   annotations, structural class attributes (`InnerClasses`, `EnclosingMethod`,
   `NestHost`, `NestMembers`, `Record`), instruction listings, and lightweight
   method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
@@ -127,9 +128,9 @@ Implemented pieces now include:
   ProGuard/Mojang mapped names, and `java_class` KB evidence.
 - Initial method listing through `java_list_methods`, exposing bounded method
   summaries with class/name/descriptor filters, code-size metadata, line-number
-  counts/ranges, decoded parameter/return types, `SourceFile` metadata, optional
-  annotation descriptors, optional ProGuard/Mojang mapped names, and `java_method`
-  KB evidence.
+  counts/ranges, decoded parameter/return types, generic signatures, `SourceFile`
+  metadata, optional annotation descriptors, optional ProGuard/Mojang mapped names,
+  and `java_method` KB evidence.
 - Initial bytecode CFG construction for selected methods, exposing basic blocks,
   conditional/goto/fallthrough/default-switch/exception edges, line anchors,
   exception handler ranges, stop reasons, and KB `java_cfg` nodes.
@@ -264,6 +265,7 @@ Important lessons:
 - [x] Method signature parsing
 - [x] Initial JVM descriptor decoding for field types and method parameter/return
   types
+- [x] Initial class/member generic `Signature` attribute preservation
 - [x] `Code` attribute metadata
 - [x] `SourceFile`, `Exceptions`, `LocalVariableTable`, and `LocalVariableTypeTable`
   parsing
@@ -275,7 +277,8 @@ Important lessons:
 - [x] Initial bounded class listing with package/name/access filters, class
   summaries, `SourceFile`, annotations, and mapping names
 - [x] Initial bounded method listing with filters, code and line-table summaries,
-  decoded parameter/return types, `SourceFile`, annotations, and mapping names
+  decoded parameter/return types, generic signatures, `SourceFile`, annotations, and
+  mapping names
 - [x] Initial bytecode CFG via `java_cfg`
 - [x] Initial constant-pool call graph via `java_call_graph`
 - [x] Exception-handler table parsing and CFG exception edges
