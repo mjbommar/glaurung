@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -73,6 +74,8 @@ class JavaRecoverProjectArgs(BaseModel):
     extract_nested_archives: bool = False
     max_nested_archives: int = Field(64, ge=0)
     max_nested_archive_bytes: int = Field(50_000_000, ge=0)
+    resume: bool = True
+    force_redecompile: bool = False
     run_repair: bool = True
     max_repair_iterations: int = Field(3, ge=1, le=10)
     run_validate: bool = True
@@ -103,6 +106,8 @@ class JavaRecoverProjectResult(BaseModel):
     effective_classpath: list[str] = Field(default_factory=list)
     extracted_nested_archives: list[str] = Field(default_factory=list)
     extracted_nested_archive_count: int = 0
+    cache_hit: bool = False
+    resumed_steps: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     stop_reasons: list[str] = Field(default_factory=list)
     recovery_node_id: str | None = None
@@ -144,31 +149,41 @@ class JavaRecoverProjectTool(
             archive_path=str(archive_path),
             source_project_root=str(output_root),
         )
-
-        reconstruct_tool = build_java_reconstruct_source_tree()
-        reconstruct = reconstruct_tool.run(
-            ctx,
-            kb,
-            reconstruct_tool.input_model(
-                path=str(archive_path),
-                output_root=str(output_root),
-                resource_policy=args.resource_policy,
-                decompile_sources=False,
-                helper_jar=args.helper_jar,
-                max_classes=args.max_classes,
-                max_resources=args.max_resources,
-                java_release=args.java_release,
-                generate_build_files=True,
-            ),
+        archive_sha256 = _sha256(archive_path)
+        cache_hit = (
+            args.resume
+            and not args.force_redecompile
+            and _can_resume(output_root, archive_sha256)
         )
-        result.reconstruct_result = reconstruct
-        result.generated_resource_count = len(reconstruct.resource_files)
-        result.generated_build_files = reconstruct.build_files
-        result.warnings.extend(reconstruct.warnings)
-        result.stop_reasons.extend(reconstruct.stop_reasons)
-        if reconstruct.stop_reasons and not reconstruct.wrote_files:
-            _finish(result, kb)
-            return result
+        result.cache_hit = cache_hit
+
+        if cache_hit:
+            result.resumed_steps.extend(["reconstruct", "decompile"])
+        else:
+            reconstruct_tool = build_java_reconstruct_source_tree()
+            reconstruct = reconstruct_tool.run(
+                ctx,
+                kb,
+                reconstruct_tool.input_model(
+                    path=str(archive_path),
+                    output_root=str(output_root),
+                    resource_policy=args.resource_policy,
+                    decompile_sources=False,
+                    helper_jar=args.helper_jar,
+                    max_classes=args.max_classes,
+                    max_resources=args.max_resources,
+                    java_release=args.java_release,
+                    generate_build_files=True,
+                ),
+            )
+            result.reconstruct_result = reconstruct
+            result.generated_resource_count = len(reconstruct.resource_files)
+            result.generated_build_files = reconstruct.build_files
+            result.warnings.extend(reconstruct.warnings)
+            result.stop_reasons.extend(reconstruct.stop_reasons)
+            if reconstruct.stop_reasons and not reconstruct.wrote_files:
+                _finish(result, kb)
+                return result
 
         if args.include_dependency_inference:
             dependency_tool = build_java_infer_dependencies()
@@ -196,36 +211,39 @@ class JavaRecoverProjectTool(
             _relative_or_str(output_root, path) for path in effective_classpath
         ]
 
-        decompile_tool = build_java_decompile_archive()
-        decompile = decompile_tool.run(
-            ctx,
-            kb,
-            decompile_tool.input_model(
-                path=str(archive_path),
-                output_root=str(output_root),
-                engine=args.decompiler_engine,
-                helper_jar=args.helper_jar,
-                mapping_path=args.mapping_path,
-                include_packages=args.include_packages,
-                include_class_globs=args.include_class_globs,
-                inner_class_policy=args.inner_class_policy,
-                max_classes=args.max_classes,
-                max_source_chars_per_class=args.max_source_chars_per_class,
-                timeout_seconds_per_class=args.timeout_seconds_per_class,
-                write_sources=True,
-                include_bytecode_correlation=True,
-                rewrite_mapped_sources=args.rewrite_mapped_sources,
-                compile_candidates=args.compile_candidates,
-                candidate_project_root=str(output_root),
-                candidate_classpath=[str(path) for path in effective_classpath],
-                java_release=args.java_release,
-            ),
-        )
-        result.decompile_result = decompile
-        result.decompile_success_count = decompile.success_count
-        result.generated_source_count = decompile.written_source_count
-        result.warnings.extend(decompile.warnings)
-        result.stop_reasons.extend(decompile.stop_reasons)
+        if not cache_hit:
+            decompile_tool = build_java_decompile_archive()
+            decompile = decompile_tool.run(
+                ctx,
+                kb,
+                decompile_tool.input_model(
+                    path=str(archive_path),
+                    output_root=str(output_root),
+                    engine=args.decompiler_engine,
+                    helper_jar=args.helper_jar,
+                    mapping_path=args.mapping_path,
+                    include_packages=args.include_packages,
+                    include_class_globs=args.include_class_globs,
+                    inner_class_policy=args.inner_class_policy,
+                    max_classes=args.max_classes,
+                    max_source_chars_per_class=args.max_source_chars_per_class,
+                    timeout_seconds_per_class=args.timeout_seconds_per_class,
+                    write_sources=True,
+                    include_bytecode_correlation=True,
+                    rewrite_mapped_sources=args.rewrite_mapped_sources,
+                    compile_candidates=args.compile_candidates,
+                    candidate_project_root=str(output_root),
+                    candidate_classpath=[str(path) for path in effective_classpath],
+                    java_release=args.java_release,
+                ),
+            )
+            result.decompile_result = decompile
+            result.decompile_success_count = decompile.success_count
+            result.generated_source_count = decompile.written_source_count
+            result.warnings.extend(decompile.warnings)
+            result.stop_reasons.extend(decompile.stop_reasons)
+        else:
+            result.generated_source_count = _source_file_count(output_root)
 
         _refresh_sources_and_javac_args(
             output_root,
@@ -432,7 +450,59 @@ def _finish(result: JavaRecoverProjectResult, kb: KnowledgeBase) -> None:
             result.quality_summary = "clean_enough: recovery flow completed."
         else:
             result.quality_summary = "not_clean_enough: recovery flow did not pass."
+    _write_recovery_state(result)
     _add_recovery_node(kb, result)
+
+
+def _can_resume(output_root: Path, archive_sha256: str) -> bool:
+    state_path = _recovery_state_path(output_root)
+    source_root = output_root / "src" / "main" / "java"
+    if not state_path.is_file() or not source_root.is_dir():
+        return False
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return state.get("archive_sha256") == archive_sha256 and any(
+        source_root.rglob("*.java")
+    )
+
+
+def _write_recovery_state(result: JavaRecoverProjectResult) -> None:
+    if result.source_project_root is None:
+        return
+    output_root = Path(result.source_project_root)
+    state_path = _recovery_state_path(output_root)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "tool": "java_recover_project",
+                "archive_path": result.archive_path,
+                "archive_sha256": _sha256(Path(result.archive_path)),
+                "success": result.success,
+                "compile_success": result.compile_success,
+                "validation_passed": result.validation_passed,
+                "generated_source_count": result.generated_source_count,
+                "effective_classpath": result.effective_classpath,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _recovery_state_path(output_root: Path) -> Path:
+    return output_root / ".glaurung" / "recovery-project.json"
+
+
+def _source_file_count(output_root: Path) -> int:
+    source_root = output_root / "src" / "main" / "java"
+    if not source_root.is_dir():
+        return 0
+    return sum(1 for path in source_root.rglob("*.java") if path.is_file())
 
 
 def _add_recovery_node(
@@ -484,6 +554,17 @@ def _relative_or_str(root: Path, path: Path) -> str:
 
 def _dedupe(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as f:
+            while chunk := f.read(1024 * 1024):
+                h.update(chunk)
+    except FileNotFoundError:
+        return ""
+    return h.hexdigest()
 
 
 def build_tool() -> MemoryTool[JavaRecoverProjectArgs, JavaRecoverProjectResult]:

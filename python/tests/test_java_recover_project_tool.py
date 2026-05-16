@@ -260,6 +260,35 @@ def test_java_recover_project_extracts_nested_jars_into_effective_classpath(
     assert (output / "libs" / "nested" / "dep-1.0.0.jar").is_file()
 
 
+def test_java_recover_project_resumes_existing_recovery_state(
+    tmp_path: Path,
+) -> None:
+    from glaurung.llm.tools.java_recover_project import build_tool
+
+    jar = _recoverable_jar(tmp_path)
+    output = tmp_path / "resume-recovered"
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    first = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(path=str(jar), output_root=str(output), java_release=17),
+    )
+    second = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(path=str(jar), output_root=str(output), java_release=17),
+    )
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert "decompile" in second.resumed_steps
+    assert second.decompile_result is None
+    assert second.compile_success is True
+    assert (output / ".glaurung" / "recovery-project.json").is_file()
+
+
 def test_memory_agent_registers_java_recover_project() -> None:
     from glaurung.llm.agents.memory_agent import create_memory_agent
 
