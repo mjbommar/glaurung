@@ -64,6 +64,26 @@ class JavaAnnotationSummary(BaseModel):
     elements: list[JavaAnnotationElementSummary] = Field(default_factory=list)
 
 
+class JavaInnerClassSummary(BaseModel):
+    inner_class: str
+    outer_class: str | None = None
+    inner_name: str | None = None
+    access_flags: int
+
+
+class JavaEnclosingMethodSummary(BaseModel):
+    class_name: str
+    method_name: str | None = None
+    method_descriptor: str | None = None
+
+
+class JavaRecordComponentSummary(BaseModel):
+    name: str
+    descriptor: str
+    signature: str | None = None
+    annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
+
+
 class JavaClassMemberSummary(BaseModel):
     kind: Literal["field", "method"]
     name: str
@@ -88,6 +108,12 @@ class JavaViewClassResult(BaseModel):
     major_version: int | None = None
     minor_version: int | None = None
     access_flags: int | None = None
+    is_record: bool = False
+    inner_classes: list[JavaInnerClassSummary] = Field(default_factory=list)
+    enclosing_method: JavaEnclosingMethodSummary | None = None
+    nest_host: str | None = None
+    nest_members: list[str] = Field(default_factory=list)
+    record_components: list[JavaRecordComponentSummary] = Field(default_factory=list)
     annotations: list[JavaAnnotationSummary] = Field(default_factory=list)
     fields: list[JavaClassMemberSummary] = Field(default_factory=list)
     methods: list[JavaClassMemberSummary] = Field(default_factory=list)
@@ -190,6 +216,14 @@ def _result_for_class(
     )
     source_file = _optional_string(parsed.get("source_file"))
     annotations = _annotation_summaries(parsed.get("annotations"))
+    inner_classes = _inner_class_summaries(parsed.get("inner_classes"))
+    enclosing_method = _enclosing_method_summary(parsed.get("enclosing_method"))
+    nest_host = _optional_string(parsed.get("nest_host"))
+    nest_members = _string_list(parsed.get("nest_members"))
+    record_components = _record_component_summaries(parsed.get("record_components"))
+    is_record = parsed.get("super_class") == "java/lang/Record" or bool(
+        record_components
+    )
     fields = (
         [
             _member_summary("field", member, class_mapping, mappings)
@@ -223,6 +257,19 @@ def _result_for_class(
                 "major_version": parsed["major_version"],
                 "minor_version": parsed["minor_version"],
                 "access_flags": parsed["access_flags"],
+                "is_record": is_record,
+                "inner_classes": [item.model_dump() for item in inner_classes],
+                "inner_class_count": len(inner_classes),
+                "enclosing_method": (
+                    enclosing_method.model_dump() if enclosing_method else None
+                ),
+                "nest_host": nest_host,
+                "nest_members": nest_members,
+                "nest_member_count": len(nest_members),
+                "record_components": [
+                    component.model_dump() for component in record_components
+                ],
+                "record_component_count": len(record_components),
                 "annotations": [annotation.model_dump() for annotation in annotations],
             },
             tags=["java", "class", "deobfuscated" if mapped_class_name else "raw"],
@@ -278,6 +325,12 @@ def _result_for_class(
         major_version=parsed["major_version"],
         minor_version=parsed["minor_version"],
         access_flags=parsed["access_flags"],
+        is_record=is_record,
+        inner_classes=inner_classes,
+        enclosing_method=enclosing_method,
+        nest_host=nest_host,
+        nest_members=nest_members,
+        record_components=record_components,
         annotations=annotations,
         fields=fields,
         methods=methods,
@@ -323,6 +376,32 @@ def _annotation_summaries(value: Any) -> list[JavaAnnotationSummary]:
     ]
 
 
+def _inner_class_summaries(value: Any) -> list[JavaInnerClassSummary]:
+    if not isinstance(value, list):
+        return []
+    return [
+        JavaInnerClassSummary.model_validate(item)
+        for item in value
+        if isinstance(item, dict)
+    ]
+
+
+def _enclosing_method_summary(value: Any) -> JavaEnclosingMethodSummary | None:
+    if not isinstance(value, dict):
+        return None
+    return JavaEnclosingMethodSummary.model_validate(value)
+
+
+def _record_component_summaries(value: Any) -> list[JavaRecordComponentSummary]:
+    if not isinstance(value, list):
+        return []
+    return [
+        JavaRecordComponentSummary.model_validate(component)
+        for component in value
+        if isinstance(component, dict)
+    ]
+
+
 def _code_summary(value: Any) -> JavaCodeSummary | None:
     if not isinstance(value, dict):
         return None
@@ -355,6 +434,12 @@ def _line_numbers(code: dict[str, Any]) -> list[int]:
 
 def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def _candidate_class_names(

@@ -57,6 +57,8 @@ public class Main extends Base implements Runnable {
 abstract class Base {}
 
 class Helper {}
+
+record Pair(String id, int count) {}
 """
 
 
@@ -88,6 +90,7 @@ def test_java_list_classes_filters_and_records_kb_nodes(tmp_path: Path) -> None:
     assert main.method_count >= 2
     assert main.field_count == 0
     assert main.source_file == "Main.java"
+    assert main.inner_class_count >= 1
     assert main.annotation_descriptors == ["Ljava/lang/Deprecated;"]
     assert any(
         node.kind == NodeKind.java_class
@@ -120,6 +123,23 @@ def test_java_list_classes_supports_access_flag_filters(tmp_path: Path) -> None:
     assert "app/Helper" not in {cls.class_name for cls in public_result.classes}
     assert "app/Helper" in {cls.class_name for cls in non_public_result.classes}
     assert "app/Base" in {cls.class_name for cls in non_public_result.classes}
+
+
+def test_java_list_classes_reports_record_metadata(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_list_classes import build_tool
+
+    jar = _compile_source(tmp_path, _SOURCE)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(ctx, ctx.kb, tool.input_model(path=str(jar), name_filter="Pair"))
+
+    assert result.matched_class_count == 1
+    pair = result.classes[0]
+    assert pair.class_name == "app/Pair"
+    assert pair.is_record is True
+    assert pair.super_class == "java/lang/Record"
+    assert pair.record_component_count == 2
 
 
 def test_java_list_classes_respects_limit(tmp_path: Path) -> None:

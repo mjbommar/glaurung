@@ -40,8 +40,9 @@ Glaurung already has a growing Java path:
   source/debug attributes (`SourceFile`, method `Exceptions`, `LineNumberTable`,
   `LocalVariableTable`, and `LocalVariableTypeTable`), exception handler tables, plus
   runtime-visible/runtime-invisible class/member annotations, initial JVM
-  instruction listings, and lightweight method-level bytecode xrefs for invokes,
-  fields, class refs, and loaded strings.
+  instruction listings, structural class attributes (`InnerClasses`,
+  `EnclosingMethod`, `NestHost`, `NestMembers`, `Record`), and lightweight
+  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
 - `src/python_bindings/analysis.rs` exposes path-based and bytes-based class parsing.
 - `src/analysis/java_jar.rs` and the Python bindings expose bounded central-directory
   JAR metadata, including nested archive entries, multi-release class variants,
@@ -261,7 +262,7 @@ here, it is probably not represented strongly enough in the plan.
 | JVM instruction decode | Initial Rust decoder and `java_view_bytecode` exist; expand with ASM frames and exception context |
 | Bytecode CFG, xrefs, and call graph | Initial `java_cfg`, exception edges, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with frame analysis, interprocedural xrefs, and CHA/RTA dispatch |
 | Descriptors and generic signatures | Rust parser responsibilities, `java_list_methods`, ABI comparison |
-| Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, and runtime-visible/runtime-invisible class/member annotation support exists; continue parameter annotations/defaults/modules/records/nestmates/stack maps |
+| Attributes and annotations | Initial `SourceFile`, `Exceptions`, line table, local-variable table, runtime-visible/runtime-invisible class/member annotation support, inner/enclosing/nest metadata, and record components exist; continue parameter annotations/defaults/modules/stack maps/permitted subclasses |
 | Decompiler integration | `java_decompile_class`, `java_decompile_method`, `java_decompile_archive` |
 | Mapping/de-obfuscation | Initial `java_annotate_mappings`, `java_lookup_mapping`, mapping-aware `java_view_bytecode`, `java_xrefs_from`, `java_xrefs_to`, and `java_call_graph` exist; continue with `minecraft_apply_mappings` and source/tree remapping |
 | Dependency and classpath recovery | Initial `java_infer_dependencies` and `java_infer_build_system` exist for manifest class paths, Maven identity metadata, nested archive coordinates, bytecode external packages, optional `jdeps` package evidence, Java release, and `javac`/Maven/Gradle planning; continue with module `requires`, supplied classpath comparison, missing-class diagnostics, resolver/cache policy, and annotation processors |
@@ -746,7 +747,8 @@ Initial Python implementation status:
   result-limit filtering.
 - Reports class locators, internal/dotted/mapped names, package/simple names,
   superclasses, `SourceFile`, interfaces, JVM version, method counts, field counts,
-  methods with code, and optional class annotation descriptors.
+  methods with code, inner/nest/record summary counts, and optional class annotation
+  descriptors.
 - Supports optional ProGuard/Mojang mapped class names when a mapping file is
   supplied.
 
@@ -764,8 +766,8 @@ Inputs:
 Outputs:
 
 - Class locators, names, superclasses, `SourceFile`, interface counts, method counts,
-  field counts, JVM version, access flags, mapped names, and optional annotation
-  descriptors.
+  field counts, JVM version, access flags, inner/nest/record summary counts, mapped
+  names, and optional annotation descriptors.
 
 `java_view_class`
 
@@ -779,7 +781,8 @@ Inputs:
 
 Outputs:
 
-- Full class declaration metadata, including `SourceFile`.
+- Full class declaration metadata, including `SourceFile`, `InnerClasses`,
+  `EnclosingMethod`, `NestHost`, `NestMembers`, and `Record` components.
 - Fields.
 - Methods with code-size and line-number range summaries where available.
 - Descriptor-aware mapped official/obfuscated names for classes and members when

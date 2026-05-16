@@ -51,8 +51,9 @@ Implemented pieces now include:
   fields, methods, descriptors, `SourceFile`, method `Exceptions`, `Code` attribute
   metadata, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, JVM
   exception handler tables, runtime-visible/runtime-invisible class/member
-  annotations, instruction listings, and lightweight method-level bytecode xrefs for
-  invokes, fields, class refs, and loaded strings.
+  annotations, structural class attributes (`InnerClasses`, `EnclosingMethod`,
+  `NestHost`, `NestMembers`, `Record`), instruction listings, and lightweight
+  method-level bytecode xrefs for invokes, fields, class refs, and loaded strings.
 - Rust central-directory JAR indexing for bounded archive metadata: entry counts,
   compressed/uncompressed sizes, nested JAR/ZIP entries, multi-release class variants,
   signed-JAR metadata, Maven metadata paths, ServiceLoader descriptors,
@@ -122,8 +123,8 @@ Implemented pieces now include:
   and mapping context.
 - Initial class listing through `java_list_classes`, exposing bounded package/name
   and access-flag filters, superclass/interface/member counts, optional annotation
-  descriptors, `SourceFile` metadata, optional ProGuard/Mojang mapped names, and
-  `java_class` KB evidence.
+  descriptors, `SourceFile` metadata, inner/nest/record summary counts, optional
+  ProGuard/Mojang mapped names, and `java_class` KB evidence.
 - Initial method listing through `java_list_methods`, exposing bounded method
   summaries with class/name/descriptor filters, code-size metadata, line-number
   counts/ranges, `SourceFile` metadata, optional annotation descriptors, optional
@@ -255,7 +256,7 @@ Important lessons:
 - [x] Access flag extraction
 - [x] Superclass extraction
 - [ ] Interface implementation
-- [ ] Inner class detection
+- [x] Initial inner class, enclosing method, and nest metadata detection
 
 ### Phase 4: Member Analysis
 - [x] Field enumeration
@@ -276,6 +277,7 @@ Important lessons:
 - [x] Initial constant-pool call graph via `java_call_graph`
 - [x] Exception-handler table parsing and CFG exception edges
 - [x] Initial runtime-visible/runtime-invisible class/member annotation parsing
+- [x] Initial record component parsing and class-view surfacing
 - [ ] Stack/local frame analysis
 - [ ] Parameter annotations, annotation defaults, and richer framework annotation
   semantics

@@ -91,6 +91,29 @@ pub struct JavaLocalVariableType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaInnerClass {
+    pub inner_class: String,
+    pub outer_class: Option<String>,
+    pub inner_name: Option<String>,
+    pub access_flags: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaEnclosingMethod {
+    pub class_name: String,
+    pub method_name: Option<String>,
+    pub method_descriptor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaRecordComponent {
+    pub name: String,
+    pub descriptor: String,
+    pub signature: Option<String>,
+    pub annotations: Vec<JavaAnnotation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JavaInstruction {
     pub bci: u32,
     pub opcode: u8,
@@ -120,6 +143,11 @@ pub struct ClassInfo {
     pub super_class: String,
     pub source_file: Option<String>,
     pub annotations: Vec<JavaAnnotation>,
+    pub inner_classes: Vec<JavaInnerClass>,
+    pub enclosing_method: Option<JavaEnclosingMethod>,
+    pub nest_host: Option<String>,
+    pub nest_members: Vec<String>,
+    pub record_components: Vec<JavaRecordComponent>,
     pub interfaces: Vec<String>,
     pub methods: Vec<JavaMethod>,
     pub fields: Vec<JavaMethod>, // same shape — name + descriptor + flags
@@ -168,6 +196,17 @@ enum CpEntry {
         name_and_type_idx: u16,
     },
     Other,
+}
+
+#[derive(Debug, Default)]
+struct JavaClassAttributes {
+    source_file: Option<String>,
+    annotations: Vec<JavaAnnotation>,
+    inner_classes: Vec<JavaInnerClass>,
+    enclosing_method: Option<JavaEnclosingMethod>,
+    nest_host: Option<String>,
+    nest_members: Vec<String>,
+    record_components: Vec<JavaRecordComponent>,
 }
 
 /// Parse a `.class` file and return its `ClassInfo`.
@@ -340,7 +379,7 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
     p = walk_member_table(data, p, &cp, false, &mut fields)?;
     let mut methods: Vec<JavaMethod> = Vec::new();
     p = walk_member_table(data, p, &cp, true, &mut methods)?;
-    let (_p, source_file, annotations) = parse_class_attributes(data, p, &cp)?;
+    let (_p, class_attrs) = parse_class_attributes(data, p, &cp)?;
 
     Ok(ClassInfo {
         minor_version: minor,
@@ -348,8 +387,13 @@ pub fn parse_class(data: &[u8]) -> Result<ClassInfo, ClassError> {
         access_flags,
         class_name,
         super_class: super_class_name,
-        source_file,
-        annotations,
+        source_file: class_attrs.source_file,
+        annotations: class_attrs.annotations,
+        inner_classes: class_attrs.inner_classes,
+        enclosing_method: class_attrs.enclosing_method,
+        nest_host: class_attrs.nest_host,
+        nest_members: class_attrs.nest_members,
+        record_components: class_attrs.record_components,
         interfaces,
         methods,
         fields,
@@ -431,14 +475,13 @@ fn parse_class_attributes(
     data: &[u8],
     mut p: usize,
     cp: &[CpEntry],
-) -> Result<(usize, Option<String>, Vec<JavaAnnotation>), ClassError> {
+) -> Result<(usize, JavaClassAttributes), ClassError> {
     if p + 2 > data.len() {
         return Err(ClassError::Truncated("class attributes count"));
     }
     let attrs = u16::from_be_bytes(data[p..p + 2].try_into().unwrap()) as usize;
     p += 2;
-    let mut source_file = None;
-    let mut annotations = Vec::new();
+    let mut out = JavaClassAttributes::default();
     for _ in 0..attrs {
         if p + 6 > data.len() {
             return Err(ClassError::Truncated("class attribute header"));
@@ -455,23 +498,183 @@ fn parse_class_attributes(
         }
         if attr_name == "SourceFile" && alen == 2 {
             let source_idx = u16::from_be_bytes(data[body_start..body_end].try_into().unwrap());
-            source_file = Some(read_utf8(cp, source_idx)?);
+            out.source_file = Some(read_utf8(cp, source_idx)?);
         } else if attr_name == "RuntimeVisibleAnnotations" {
-            annotations.extend(parse_annotations_attribute(
+            out.annotations.extend(parse_annotations_attribute(
                 &data[body_start..body_end],
                 cp,
                 "runtime_visible",
             )?);
         } else if attr_name == "RuntimeInvisibleAnnotations" {
-            annotations.extend(parse_annotations_attribute(
+            out.annotations.extend(parse_annotations_attribute(
                 &data[body_start..body_end],
                 cp,
                 "runtime_invisible",
             )?);
+        } else if attr_name == "InnerClasses" {
+            out.inner_classes.extend(parse_inner_classes_attribute(
+                &data[body_start..body_end],
+                cp,
+            )?);
+        } else if attr_name == "EnclosingMethod" {
+            out.enclosing_method = Some(parse_enclosing_method_attribute(
+                &data[body_start..body_end],
+                cp,
+            )?);
+        } else if attr_name == "NestHost" {
+            out.nest_host = Some(parse_nest_host_attribute(&data[body_start..body_end], cp)?);
+        } else if attr_name == "NestMembers" {
+            out.nest_members.extend(parse_nest_members_attribute(
+                &data[body_start..body_end],
+                cp,
+            )?);
+        } else if attr_name == "Record" {
+            out.record_components
+                .extend(parse_record_attribute(&data[body_start..body_end], cp)?);
         }
         p = body_end;
     }
-    Ok((p, source_file, annotations))
+    Ok((p, out))
+}
+
+fn parse_inner_classes_attribute(
+    body: &[u8],
+    cp: &[CpEntry],
+) -> Result<Vec<JavaInnerClass>, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("InnerClasses length"));
+    }
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let mut p = 2;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if p + 8 > body.len() {
+            return Err(ClassError::Truncated("InnerClasses body"));
+        }
+        let inner_class_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        let outer_class_idx = u16::from_be_bytes(body[p + 2..p + 4].try_into().unwrap());
+        let inner_name_idx = u16::from_be_bytes(body[p + 4..p + 6].try_into().unwrap());
+        let access_flags = u16::from_be_bytes(body[p + 6..p + 8].try_into().unwrap());
+        p += 8;
+        out.push(JavaInnerClass {
+            inner_class: read_class_name(cp, inner_class_idx)?,
+            outer_class: read_optional_class_name(cp, outer_class_idx)?,
+            inner_name: read_optional_utf8(cp, inner_name_idx)?,
+            access_flags,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_enclosing_method_attribute(
+    body: &[u8],
+    cp: &[CpEntry],
+) -> Result<JavaEnclosingMethod, ClassError> {
+    if body.len() != 4 {
+        return Err(ClassError::Truncated("EnclosingMethod body"));
+    }
+    let class_idx = u16::from_be_bytes(body[0..2].try_into().unwrap());
+    let method_idx = u16::from_be_bytes(body[2..4].try_into().unwrap());
+    let (method_name, method_descriptor) = if method_idx == 0 {
+        (None, None)
+    } else {
+        let (name, descriptor) = read_name_and_type(cp, method_idx)?;
+        (Some(name), Some(descriptor))
+    };
+    Ok(JavaEnclosingMethod {
+        class_name: read_class_name(cp, class_idx)?,
+        method_name,
+        method_descriptor,
+    })
+}
+
+fn parse_nest_host_attribute(body: &[u8], cp: &[CpEntry]) -> Result<String, ClassError> {
+    if body.len() != 2 {
+        return Err(ClassError::Truncated("NestHost body"));
+    }
+    let class_idx = u16::from_be_bytes(body[0..2].try_into().unwrap());
+    read_class_name(cp, class_idx)
+}
+
+fn parse_nest_members_attribute(body: &[u8], cp: &[CpEntry]) -> Result<Vec<String>, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("NestMembers length"));
+    }
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let mut p = 2;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if p + 2 > body.len() {
+            return Err(ClassError::Truncated("NestMembers body"));
+        }
+        let class_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        p += 2;
+        out.push(read_class_name(cp, class_idx)?);
+    }
+    Ok(out)
+}
+
+fn parse_record_attribute(
+    body: &[u8],
+    cp: &[CpEntry],
+) -> Result<Vec<JavaRecordComponent>, ClassError> {
+    if body.len() < 2 {
+        return Err(ClassError::Truncated("Record length"));
+    }
+    let count = u16::from_be_bytes(body[0..2].try_into().unwrap()) as usize;
+    let mut p = 2;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        if p + 6 > body.len() {
+            return Err(ClassError::Truncated("Record component"));
+        }
+        let name_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+        let descriptor_idx = u16::from_be_bytes(body[p + 2..p + 4].try_into().unwrap());
+        let attributes_count = u16::from_be_bytes(body[p + 4..p + 6].try_into().unwrap()) as usize;
+        p += 6;
+        let mut signature = None;
+        let mut annotations = Vec::new();
+        for _ in 0..attributes_count {
+            if p + 6 > body.len() {
+                return Err(ClassError::Truncated("Record component attribute header"));
+            }
+            let attr_name_idx = u16::from_be_bytes(body[p..p + 2].try_into().unwrap());
+            let attr_name = read_utf8(cp, attr_name_idx)?;
+            let alen = u32::from_be_bytes(body[p + 2..p + 6].try_into().unwrap()) as usize;
+            let attr_start = p + 6;
+            let attr_end = attr_start
+                .checked_add(alen)
+                .ok_or(ClassError::Truncated("Record component attribute body"))?;
+            if attr_end > body.len() {
+                return Err(ClassError::Truncated("Record component attribute body"));
+            }
+            if attr_name == "Signature" && alen == 2 {
+                let signature_idx =
+                    u16::from_be_bytes(body[attr_start..attr_end].try_into().unwrap());
+                signature = Some(read_utf8(cp, signature_idx)?);
+            } else if attr_name == "RuntimeVisibleAnnotations" {
+                annotations.extend(parse_annotations_attribute(
+                    &body[attr_start..attr_end],
+                    cp,
+                    "runtime_visible",
+                )?);
+            } else if attr_name == "RuntimeInvisibleAnnotations" {
+                annotations.extend(parse_annotations_attribute(
+                    &body[attr_start..attr_end],
+                    cp,
+                    "runtime_invisible",
+                )?);
+            }
+            p = attr_end;
+        }
+        out.push(JavaRecordComponent {
+            name: read_utf8(cp, name_idx)?,
+            descriptor: read_utf8(cp, descriptor_idx)?,
+            signature,
+            annotations,
+        });
+    }
+    Ok(out)
 }
 
 fn read_utf8(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
@@ -482,6 +685,13 @@ fn read_utf8(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
         CpEntry::Utf8(s) => Ok(s.clone()),
         _ => Err(ClassError::BadCpIndex(idx)),
     }
+}
+
+fn read_optional_utf8(cp: &[CpEntry], idx: u16) -> Result<Option<String>, ClassError> {
+    if idx == 0 {
+        return Ok(None);
+    }
+    Ok(Some(read_utf8(cp, idx)?))
 }
 
 fn read_class_name(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
@@ -495,6 +705,13 @@ fn read_class_name(cp: &[CpEntry], idx: u16) -> Result<String, ClassError> {
         CpEntry::Class { name_idx } => read_utf8(cp, *name_idx),
         _ => Err(ClassError::BadCpIndex(idx)),
     }
+}
+
+fn read_optional_class_name(cp: &[CpEntry], idx: u16) -> Result<Option<String>, ClassError> {
+    if idx == 0 {
+        return Ok(None);
+    }
+    Ok(Some(read_class_name(cp, idx)?))
 }
 
 fn parse_code_attribute(body: &[u8], cp: &[CpEntry]) -> Result<JavaCode, ClassError> {

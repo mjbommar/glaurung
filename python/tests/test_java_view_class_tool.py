@@ -40,10 +40,13 @@ import java.lang.annotation.RetentionPolicy;
 public class a {
     public int b = 1;
     public String d = "hello";
+    public static class f {}
     @Marker("tick")
     public void c() { b++; }
     public int e(int value) { return b + value; }
 }
+
+record r(String token, int count) {}
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -108,6 +111,7 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
     assert result.source_file == "a.java"
     assert result.annotations[0].descriptor == "LMarker;"
     assert result.annotations[0].elements[0].value.value == "game-thing"
+    assert any(item.inner_class == "a$f" for item in result.inner_classes)
     field_b = next(f for f in result.fields if f.name == "b")
     method_c = next(m for m in result.methods if m.name == "c")
     assert field_b.mapped_names == ["health"]
@@ -129,6 +133,34 @@ def test_java_view_class_applies_mapping_to_actual_class_members(
         n.kind == NodeKind.java_method
         and n.props.get("mapped_names") == ["tick"]
         and n.props.get("source_file") == "a.java"
+        for n in ctx.kb.nodes()
+    )
+
+
+def test_java_view_class_reports_record_components(tmp_path: Path) -> None:
+    from glaurung.llm.tools.java_view_class import build_tool
+
+    jar = _compile_obfuscated_jar(tmp_path)
+    ctx = _ctx(jar)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(path=str(jar), class_name="r", include_members=False),
+    )
+
+    assert result.class_found
+    assert result.source_file == "a.java"
+    assert result.super_class == "java/lang/Record"
+    assert result.is_record is True
+    assert [item.name for item in result.record_components] == ["token", "count"]
+    assert result.record_components[0].descriptor == "Ljava/lang/String;"
+    assert result.record_components[1].descriptor == "I"
+    assert any(
+        n.kind == NodeKind.java_class
+        and n.props.get("class_name") == "r"
+        and n.props.get("record_component_count") == 2
         for n in ctx.kb.nodes()
     )
 

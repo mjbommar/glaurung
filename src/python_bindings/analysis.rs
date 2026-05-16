@@ -297,6 +297,20 @@ fn java_class_info_to_py(
     dict.set_item("super_class", info.super_class)?;
     dict.set_item("source_file", info.source_file)?;
     dict.set_item("annotations", java_annotations_to_py(py, info.annotations)?)?;
+    dict.set_item(
+        "inner_classes",
+        java_inner_classes_to_py(py, info.inner_classes)?,
+    )?;
+    dict.set_item(
+        "enclosing_method",
+        java_enclosing_method_to_py(py, info.enclosing_method)?,
+    )?;
+    dict.set_item("nest_host", info.nest_host)?;
+    dict.set_item("nest_members", info.nest_members)?;
+    dict.set_item(
+        "record_components",
+        java_record_components_to_py(py, info.record_components)?,
+    )?;
     dict.set_item("interfaces", info.interfaces)?;
     dict.set_item("major_version", info.major_version)?;
     dict.set_item("minor_version", info.minor_version)?;
@@ -326,6 +340,55 @@ fn java_class_info_to_py(
     }
     dict.set_item("fields", fields)?;
     Ok(dict.into())
+}
+
+fn java_inner_classes_to_py(
+    py: Python<'_>,
+    inner_classes: Vec<crate::analysis::java_class::JavaInnerClass>,
+) -> PyResult<Py<PyAny>> {
+    let out = pyo3::types::PyList::empty(py);
+    for inner in inner_classes {
+        let idict = pyo3::types::PyDict::new(py);
+        idict.set_item("inner_class", inner.inner_class)?;
+        idict.set_item("outer_class", inner.outer_class)?;
+        idict.set_item("inner_name", inner.inner_name)?;
+        idict.set_item("access_flags", inner.access_flags)?;
+        out.append(idict)?;
+    }
+    Ok(out.into())
+}
+
+fn java_enclosing_method_to_py(
+    py: Python<'_>,
+    enclosing_method: Option<crate::analysis::java_class::JavaEnclosingMethod>,
+) -> PyResult<Py<PyAny>> {
+    let Some(enclosing_method) = enclosing_method else {
+        return Ok(py.None());
+    };
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("class_name", enclosing_method.class_name)?;
+    dict.set_item("method_name", enclosing_method.method_name)?;
+    dict.set_item("method_descriptor", enclosing_method.method_descriptor)?;
+    Ok(dict.into())
+}
+
+fn java_record_components_to_py(
+    py: Python<'_>,
+    record_components: Vec<crate::analysis::java_class::JavaRecordComponent>,
+) -> PyResult<Py<PyAny>> {
+    let out = pyo3::types::PyList::empty(py);
+    for component in record_components {
+        let cdict = pyo3::types::PyDict::new(py);
+        cdict.set_item("name", component.name)?;
+        cdict.set_item("descriptor", component.descriptor)?;
+        cdict.set_item("signature", component.signature)?;
+        cdict.set_item(
+            "annotations",
+            java_annotations_to_py(py, component.annotations)?,
+        )?;
+        out.append(cdict)?;
+    }
+    Ok(out.into())
 }
 
 fn java_annotations_to_py(

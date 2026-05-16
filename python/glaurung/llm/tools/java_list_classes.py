@@ -70,6 +70,11 @@ class JavaListedClass(BaseModel):
     method_count: int
     field_count: int
     methods_with_code: int
+    is_record: bool = False
+    inner_class_count: int = 0
+    record_component_count: int = 0
+    nest_member_count: int = 0
+    has_enclosing_method: bool = False
     annotation_descriptors: list[str] = Field(default_factory=list)
 
 
@@ -189,6 +194,11 @@ def _class_summary(
         methods_with_code=sum(
             1 for method in methods if isinstance(method.get("code"), dict)
         ),
+        is_record=_is_record(parsed),
+        inner_class_count=_list_count(parsed.get("inner_classes")),
+        record_component_count=_list_count(parsed.get("record_components")),
+        nest_member_count=_list_count(parsed.get("nest_members")),
+        has_enclosing_method=isinstance(parsed.get("enclosing_method"), dict),
         annotation_descriptors=_annotation_descriptors(parsed)
         if include_annotations
         else [],
@@ -250,6 +260,17 @@ def _annotation_descriptors(parsed: dict[str, Any]) -> list[str]:
 
 def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _list_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _is_record(parsed: dict[str, Any]) -> bool:
+    return (
+        parsed.get("super_class") == "java/lang/Record"
+        or _list_count(parsed.get("record_components")) > 0
+    )
 
 
 def _lookup_class_mapping(
