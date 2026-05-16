@@ -1,6 +1,6 @@
 # JVM and Java Agentic Analysis Plan
 
-Status: design plan
+Status: active implementation plan
 Owner area: Java/JVM parser, archive analysis, LLM tools, and runtime analysis
 Primary fixtures: `tmp/minecraft-jars/` copied from local and `w1` Minecraft installs
 
@@ -71,6 +71,11 @@ Glaurung already has a growing Java path:
   total, method/interface-method, field, class, string, and dynamic/invokedynamic.
 - Parser-facing class summaries now expose `BootstrapMethods` counts for quick
   lambda, string-concat, and invokedynamic triage.
+- Python memory tools can now list package-level archive summaries with
+  `java_list_packages`, including class kind counts, public class counts,
+  method/field/code totals, classfile Java release sets, bootstrap-method totals,
+  optional resource samples, bounded prefix filtering, and `java_package` evidence
+  nodes.
 - `python/glaurung/cli/commands/classfile.py` provides `glaurung classfile` for
   `.class` and `.jar` inputs.
 - Python memory tools can index JARs, assess obfuscation, annotate ProGuard/Mojang
@@ -167,10 +172,10 @@ Glaurung already has a growing Java path:
 
 Known limitations:
 
-- The Rust parser still skips many attributes after the initial source/debug,
-  annotation, and exception-handler subset, including parameter annotations,
-  annotation defaults, bootstrap methods, records, modules, nestmates, generic
-  signatures, and stack maps.
+- The Rust parser still needs deeper JVM attribute semantics beyond the parsed
+  structural subset, including type annotations, complete stack-map frame bodies,
+  bootstrap method argument resolution, richer module/annotation parity, and
+  bytecode verifier frame modeling.
 - There is no stack/local frame model, advanced Java xref model, CHA/RTA call graph,
   decompiler helper, or JVM runtime tool surface.
 - There is initial dependency inference, build-system inference, source-tree
@@ -762,6 +767,45 @@ Outputs:
 - Truncation flags.
 
 Use this as the default first-touch tool for JARs.
+
+`java_list_packages`
+
+Initial Python implementation status:
+
+- Implemented as a pydantic memory tool registered on the memory agent.
+- Emits `java_package` KB nodes and `contains_package` edges from a
+  `java_archive` evidence node.
+- Scans JAR/ZIP class entries with the Rust class parser and aggregates package
+  structure without decompilation or execution.
+- Supports dotted or internal package-prefix filtering, class/resource scan
+  budgets, result limits, and bounded class/resource samples.
+- Reports per-package class counts, public class counts, normalized class kind
+  counts, method/field/code totals, bootstrap-method totals, classfile byte totals,
+  resource byte totals, Java release sets, and optional resource samples.
+
+Inputs:
+
+- `package_prefix`
+- `include_resources`
+- `max_classes_scan`
+- `max_resources_scan`
+- `limit`
+- `classes_sample_limit`
+- `resources_sample_limit`
+
+Outputs:
+
+- Package internal and dotted names.
+- Class, public class, interface, annotation, enum, record, sealed, and module
+  counts.
+- Method, field, methods-with-code, and bootstrap-method totals.
+- Class kind distribution, classfile major versions, Java release labels, and sample
+  classes.
+- Optional resource counts, byte totals, and sample resource entries.
+- Scan counts, parse-error counts, truncation flags, and stop reasons.
+
+Use this as the low-cost archive navigation layer before drilling into classes,
+methods, bytecode, or decompiler output.
 
 `java_list_classes`
 
@@ -2141,6 +2185,7 @@ Java support will add many tools. To keep agent prompts manageable:
 - Put Java tools in a Java-specific toolset.
 - Expose only first-touch tools by default:
   - `java_index_archive`
+  - `java_list_packages`
   - `java_list_classes`
   - `java_list_methods`
   - `java_view_class`

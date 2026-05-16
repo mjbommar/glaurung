@@ -92,6 +92,7 @@ Implemented pieces now include:
   - `java_annotate_mappings`
   - `java_lookup_mapping`
   - `java_list_classes`
+  - `java_list_packages`
   - `java_list_methods`
   - `java_audit_archive_set`
   - `java_trace_to_sink`
@@ -141,6 +142,10 @@ Implemented pieces now include:
 - Initial `BootstrapMethods` summaries in parser-facing class tools, exposing
   per-class bootstrap method counts for lambda, string-concat, and invokedynamic
   triage.
+- Initial package listing through `java_list_packages`, exposing archive-level
+  package summaries with class kind counts, public class counts, method/field/code
+  totals, classfile release sets, bootstrap-method totals, optional resource
+  samples, bounded prefix filtering, and `java_package` KB evidence.
 - Initial class listing through `java_list_classes`, exposing bounded package/name
   and access-flag filters, superclass/interface/member counts, optional annotation
   descriptors, `SourceFile` metadata, decoded access-flag names, normalized
@@ -218,10 +223,9 @@ Not yet implemented:
 
 - Stack/local frames, interprocedural xrefs, and advanced call graphs such as
   CHA/RTA with precise virtual dispatch candidates.
-- Full attribute parsing for parameter annotations, annotation defaults, modules,
-  records, sealed classes, nestmates, bootstrap methods, stack maps, and
-  runtime-visible metadata beyond the initial source/debug and class/member
-  annotation attributes.
+- Deeper attribute semantics beyond the parsed structural subset: type annotations,
+  complete stack-map frame bodies, bootstrap method argument resolution, and richer
+  annotation/module parity checks.
 - Decompiler helper integration with Vineflower/CFR.
 - Clean source-project recovery after the initial dependency/build/scaffold/compile,
   ABI-comparison, and validation-report layers: dependency resolution policy,
@@ -268,19 +272,19 @@ Important lessons:
 ### Phase 1: Header Validation
 - [x] Magic number (0xCAFEBABE)
 - [x] Version extraction
-- [ ] Version compatibility policy
-- [ ] File size validation
+- [x] Version compatibility policy
+- [x] File size validation
 
 ### Phase 2: Constant Pool
 - [x] Core entry type parsing
 - [x] UTF-8 string extraction
 - [x] Class/name/descriptor resolution
-- [ ] Full method/field reference graph
+- [x] Initial method/field reference graph
 
 ### Phase 3: Class Structure
 - [x] Access flag extraction
 - [x] Superclass extraction
-- [ ] Interface implementation
+- [x] Interface implementation
 - [x] Initial inner class, enclosing method, and nest metadata detection
 
 ### Phase 4: Member Analysis
@@ -317,6 +321,7 @@ Important lessons:
 ### Phase 5: JAR Processing
 - [x] Manifest parsing
 - [x] Archive/resource indexing
+- [x] Initial package listing and package-level KB evidence
 - [x] Initial native central-directory JAR indexing with nested archive,
   multi-release, signed metadata, Maven metadata, ServiceLoader, module-info, and
   zip-slip detection.

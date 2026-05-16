@@ -21,6 +21,7 @@ class NodeKind(str, Enum):
     hash = "hash"
     ioc = "ioc"
     java_archive = "java_archive"
+    java_package = "java_package"
     java_class = "java_class"
     java_method = "java_method"
     java_field = "java_field"
