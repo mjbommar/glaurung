@@ -12,6 +12,7 @@ use pyo3::prelude::*;
 pub mod analysis;
 pub mod elf;
 pub mod macho;
+pub mod pdb;
 pub mod pe;
 pub mod types;
 

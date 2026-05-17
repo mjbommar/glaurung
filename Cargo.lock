@@ -458,6 +458,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fallible-iterator"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4443176a9f2c162692bd3d352d745ef9413eec5782a80d8fd6f8a1ac692a07f7"
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -549,6 +555,7 @@ dependencies = [
  "msvc-demangler",
  "object 0.37.3",
  "once_cell",
+ "pdb",
  "pelite",
  "pyo3",
  "rayon",
@@ -576,7 +583,7 @@ checksum = "d6a80adfd63bd7ffd94fefc3d22167880c440a724303080e5aa686fa36abaa96"
 dependencies = [
  "log",
  "plain",
- "scroll",
+ "scroll 0.13.0",
 ]
 
 [[package]]
@@ -860,6 +867,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "pdb"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82040a392923abe6279c00ab4aff62d5250d1c8555dc780e4b02783a7aa74863"
+dependencies = [
+ "fallible-iterator",
+ "scroll 0.11.0",
+ "uuid",
+]
+
+[[package]]
 name = "pelite"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1078,6 +1096,12 @@ checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
 ]
+
+[[package]]
+name = "scroll"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04c565b551bafbef4157586fa379538366e4385d42082f255bfd96e4fe8519da"
 
 [[package]]
 name = "scroll"
