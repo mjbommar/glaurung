@@ -30,12 +30,17 @@ impl ScannedStrings {
 }
 
 /// Scan strings within byte/time budgets and return counts and samples.
-pub fn scan_strings(data: &[u8], cfg: &StringsConfig, start: std::time::Instant) -> ScannedStrings {
+pub fn scan_strings(
+    data: &[u8],
+    cfg: &StringsConfig,
+    _start: std::time::Instant,
+) -> ScannedStrings {
     let mut out = ScannedStrings::new();
     let scan = &data[..data.len().min(cfg.max_scan_bytes)];
 
     // ASCII scanner with offsets
     {
+        let start = std::time::Instant::now();
         let mut cur: Vec<u8> = Vec::new();
         let mut cur_offset: usize = 0;
         for (i, &b) in scan.iter().enumerate() {
@@ -72,6 +77,7 @@ pub fn scan_strings(data: &[u8], cfg: &StringsConfig, start: std::time::Instant)
 
     // UTF-8 scanner: collect runs that contain at least one non-ASCII char
     {
+        let start = std::time::Instant::now();
         let mut i = 0usize;
         let mut run_start: Option<usize> = None;
         let mut run_has_non_ascii = false;
@@ -216,6 +222,7 @@ pub fn scan_strings(data: &[u8], cfg: &StringsConfig, start: std::time::Instant)
 
     // UTF-16LE scanner
     {
+        let start = std::time::Instant::now();
         let mut run: Vec<u16> = Vec::new();
         let mut run_offset: usize = 0;
         for (i, chunk) in scan.chunks_exact(2).enumerate() {
@@ -261,6 +268,7 @@ pub fn scan_strings(data: &[u8], cfg: &StringsConfig, start: std::time::Instant)
 
     // UTF-16BE scanner
     {
+        let start = std::time::Instant::now();
         let mut run: Vec<u16> = Vec::new();
         let mut run_offset: usize = 0;
         for (i, chunk) in scan.chunks_exact(2).enumerate() {
@@ -357,6 +365,29 @@ mod tests {
         assert!(!out.utf16le_strings.is_empty());
         assert_eq!(out.utf16le_strings[0].0, "HELLO");
         assert_eq!(out.utf16le_strings[0].1, 0);
+    }
+
+    #[test]
+    fn utf16le_scan_not_starved_by_expired_ascii_budget() {
+        let mut data = vec![0u8; 32];
+        for &c in b"HARDWARE" {
+            data.push(c);
+            data.push(0);
+        }
+        data.extend_from_slice(&[0, 0]);
+        let cfg = StringsConfig {
+            time_guard_ms: 1_000,
+            max_scan_bytes: 256,
+            ..cfg_default()
+        };
+        let expired_start = std::time::Instant::now() - std::time::Duration::from_millis(10_000);
+        let out = scan_strings(&data, &cfg, expired_start);
+        assert!(
+            out.utf16le_strings
+                .iter()
+                .any(|(text, off)| text == "HARDWARE" && *off == 32),
+            "UTF-16LE scan should get its own time budget"
+        );
     }
 
     #[test]

@@ -54,8 +54,10 @@ DB import path, and public PDB function names are available through
 the persistent `function_names` table for xref-heavy tools. Direct
 PE code-to-data refs also persist as `data_read` rows, so string and
 global-data use-site tools can answer direct `.rdata` questions from
-the KB; UTF-16 strings and one-hop data-pointer refs remain follow-up
-coverage.
+the KB. UTF-16 strings now reach Python triage on the real
+`ntoskrnl.exe` fixture; one-hop data-pointer refs are partially
+recovered, with residual exact-ref misses still tracked by
+comparison 05.
 
 ## Per-tool authoring template
 
