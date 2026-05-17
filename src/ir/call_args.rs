@@ -4,7 +4,8 @@
 //! The pass is intentionally conservative: it only folds an assignment when
 //!
 //! 1. the assignment's destination is a calling-convention argument
-//!    register (x86-64 SysV: rdi/rsi/rdx/rcx/r8/r9; AArch64: x0..x7), and
+//!    register (x86-64 SysV: rdi/rsi/rdx/rcx/r8/r9; Windows x64:
+//!    rcx/rdx/r8/r9; AArch64: x0..x7), and
 //! 2. that register is not read between the assignment and the call, and
 //! 3. no intervening statement has a side effect we can't reason about
 //!    (calls, stores are treated as a barrier to keep the transformation
@@ -23,11 +24,18 @@ use crate::ir::types::VReg;
 /// Calling-convention argument registers in positional order. We include the
 /// common 32-/8-bit sub-register names so a `%edi = ...` write is recognised
 /// as writing the same logical parameter slot as `%rdi = ...`.
-const X86_64_ARG_SLOTS: &[&[&str]] = &[
+const X86_64_SYSV_ARG_SLOTS: &[&[&str]] = &[
     &["rdi", "edi", "di", "dil"],
     &["rsi", "esi", "si", "sil"],
     &["rdx", "edx", "dx", "dl"],
     &["rcx", "ecx", "cx", "cl"],
+    &["r8", "r8d", "r8w", "r8b"],
+    &["r9", "r9d", "r9w", "r9b"],
+];
+
+const X86_64_WIN64_ARG_SLOTS: &[&[&str]] = &[
+    &["rcx", "ecx", "cx", "cl"],
+    &["rdx", "edx", "dx", "dl"],
     &["r8", "r8d", "r8w", "r8b"],
     &["r9", "r9d", "r9w", "r9b"],
 ];
@@ -43,26 +51,32 @@ const AARCH64_ARG_SLOTS: &[&[&str]] = &[
     &["x7", "w7"],
 ];
 
-fn slot_of(arch: CallConv, name: &str) -> Option<usize> {
-    let slots = match arch {
-        CallConv::SysVAmd64 => X86_64_ARG_SLOTS,
-        CallConv::Aarch64 => AARCH64_ARG_SLOTS,
-    };
-    slots.iter().position(|names| names.contains(&name))
-}
-
-fn all_slot_names(arch: CallConv) -> Vec<&'static str> {
-    let slots = match arch {
-        CallConv::SysVAmd64 => X86_64_ARG_SLOTS,
-        CallConv::Aarch64 => AARCH64_ARG_SLOTS,
-    };
-    slots.iter().flat_map(|s| s.iter().copied()).collect()
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallConv {
     SysVAmd64,
+    Win64,
     Aarch64,
+}
+
+fn arg_slots(arch: CallConv) -> &'static [&'static [&'static str]] {
+    match arch {
+        CallConv::SysVAmd64 => X86_64_SYSV_ARG_SLOTS,
+        CallConv::Win64 => X86_64_WIN64_ARG_SLOTS,
+        CallConv::Aarch64 => AARCH64_ARG_SLOTS,
+    }
+}
+
+fn slot_of(arch: CallConv, name: &str) -> Option<usize> {
+    arg_slots(arch)
+        .iter()
+        .position(|names| names.contains(&name))
+}
+
+fn all_slot_names(arch: CallConv) -> Vec<&'static str> {
+    arg_slots(arch)
+        .iter()
+        .flat_map(|s| s.iter().copied())
+        .collect()
 }
 
 /// Run argument reconstruction on `f` using the given calling convention.
@@ -112,13 +126,7 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv) {
 
 fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
     // Map slot → (stmt_index, expression) for assignments we will eat.
-    let mut found: Vec<Option<(usize, Expr)>> = vec![
-        None;
-        match arch {
-            CallConv::SysVAmd64 => X86_64_ARG_SLOTS.len(),
-            CallConv::Aarch64 => AARCH64_ARG_SLOTS.len(),
-        }
-    ];
+    let mut found: Vec<Option<(usize, Expr)>> = vec![None; arg_slots(arch).len()];
 
     // Walk backwards from the call.
     let mut i = call_idx;
@@ -450,6 +458,68 @@ mod tests {
         assert_eq!(f.body.len(), 1);
         if let Stmt::Call { args, .. } = &f.body[0] {
             assert_eq!(args[0], Expr::Const(7));
+        }
+    }
+
+    #[test]
+    fn win64_folds_rcx_rdx_r8_r9_in_windows_order() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rcx", 1),
+                assign("rdx", 2),
+                assign("r8", 3),
+                assign("r9", 4),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "foo".into(),
+                    },
+                    args: Vec::new(),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::Win64);
+        assert_eq!(f.body.len(), 1);
+        if let Stmt::Call { args, .. } = &f.body[0] {
+            assert_eq!(
+                args,
+                &vec![
+                    Expr::Const(1),
+                    Expr::Const(2),
+                    Expr::Const(3),
+                    Expr::Const(4)
+                ]
+            );
+        } else {
+            panic!("expected Call, got {:?}", f.body[0]);
+        }
+    }
+
+    #[test]
+    fn win64_does_not_treat_rdi_as_first_argument() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 1),
+                assign("rcx", 2),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "foo".into(),
+                    },
+                    args: Vec::new(),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::Win64);
+        assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("rdi")));
+        if let Stmt::Call { args, .. } = &f.body[1] {
+            assert_eq!(args, &vec![Expr::Const(2)]);
+        } else {
+            panic!("expected Call, got {:?}", f.body[1]);
         }
     }
 

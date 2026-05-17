@@ -131,6 +131,9 @@ SAMPLE = Path(
 ARM64_SAMPLE = Path(
     "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc"
 )
+WIN64_SAMPLE = Path(
+    "samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe"
+)
 
 
 def test_arm64_nop_lifts_via_arch_parameter():
@@ -176,6 +179,13 @@ def test_decompile_at_for_first_function_produces_text():
     # End-to-end: we've plumbed cfg + lift + ssa + structure + lower +
     # reconstruct + print. A non-trivial function produces multiple lines.
     assert text.count("\n") > 5
+
+
+@pytest.mark.skipif(not WIN64_SAMPLE.exists(), reason="win64 PE sample missing")
+def test_decompile_win64_pe_uses_windows_argument_registers():
+    text = g.ir.decompile_at(str(WIN64_SAMPLE), 0x140001190, timeout_ms=2000)
+    assert "%arg0 = 13;" in text
+    assert "%arg3 = 13;" not in text
 
 
 @pytest.mark.skipif(not ARM64_SAMPLE.exists(), reason="arm64 sample missing")

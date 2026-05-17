@@ -9,8 +9,8 @@
 //! names within the scope of a single function:
 //!
 //! * Return-value register → `ret`
-//! * Argument-passing register N → `argN` (rdi/x0 → `arg0`, rsi/x1 → `arg1`,
-//!   …)
+//! * Argument-passing register N -> `argN` (rdi/rcx/x0 -> `arg0`,
+//!   rsi/rdx/x1 -> `arg1`, ...)
 //! * Stack-frame registers (`rsp`, `ebp`, `sp`, `x29`, …) keep their names —
 //!   renaming them to `stack` would lose information.
 //! * Any other GPR that still appears after earlier folding gets a stable
@@ -32,7 +32,7 @@ const STACK_KEEPERS: &[&str] = &[
 
 fn return_reg_aliases(cc: CallConv) -> &'static [&'static str] {
     match cc {
-        CallConv::SysVAmd64 => &["rax", "eax", "ax", "al"],
+        CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
         CallConv::Aarch64 => &["x0", "w0"],
     }
 }
@@ -44,6 +44,12 @@ fn arg_slot_tables(cc: CallConv) -> &'static [&'static [&'static str]] {
             &["rsi", "esi", "si", "sil"],
             &["rdx", "edx", "dx", "dl"],
             &["rcx", "ecx", "cx", "cl"],
+            &["r8", "r8d", "r8w", "r8b"],
+            &["r9", "r9d", "r9w", "r9b"],
+        ],
+        CallConv::Win64 => &[
+            &["rcx", "ecx", "cx", "cl"],
+            &["rdx", "edx", "dx", "dl"],
             &["r8", "r8d", "r8w", "r8b"],
             &["r9", "r9d", "r9w", "r9b"],
         ],
@@ -417,5 +423,31 @@ mod tests {
         apply_role_names(&mut f, CallConv::SysVAmd64);
         let text = render(&f);
         assert!(text.contains("call puts(%arg0);"), "got: {}", text);
+    }
+
+    #[test]
+    fn win64_rcx_becomes_arg0_and_rdi_becomes_var() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: Expr::Const(1),
+                },
+                Stmt::Assign {
+                    dst: reg("rdi"),
+                    src: Expr::Const(2),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax"))),
+                },
+            ],
+        };
+        apply_role_names(&mut f, CallConv::Win64);
+        let text = render(&f);
+        assert!(text.contains("%arg0 = 1;"), "got: {}", text);
+        assert!(text.contains("%var0 = 2;"), "got: {}", text);
+        assert!(text.contains("return %ret;"), "got: {}", text);
     }
 }

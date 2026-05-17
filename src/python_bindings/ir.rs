@@ -254,6 +254,33 @@ fn lift_window_at_py(
     lift_bytes_py(py, &data[foff..end], start_va, bits, arch)
 }
 
+fn detect_arch_and_call_conv(
+    data: &[u8],
+) -> (crate::core::binary::Arch, crate::ir::call_args::CallConv) {
+    use crate::core::binary::Arch as BArch;
+
+    let mut is_pe = false;
+    let arch = if let Ok(obj) = object::read::File::parse(data) {
+        use object::Object;
+        is_pe = obj.format() == object::BinaryFormat::Pe;
+        match obj.architecture() {
+            object::Architecture::I386 => BArch::X86,
+            object::Architecture::X86_64 => BArch::X86_64,
+            object::Architecture::Aarch64 => BArch::AArch64,
+            _ => BArch::X86_64,
+        }
+    } else {
+        BArch::X86_64
+    };
+
+    let cc = match (arch, is_pe) {
+        (BArch::AArch64, _) => crate::ir::call_args::CallConv::Aarch64,
+        (BArch::X86_64, true) => crate::ir::call_args::CallConv::Win64,
+        _ => crate::ir::call_args::CallConv::SysVAmd64,
+    };
+    (arch, cc)
+}
+
 /// Run the full decompiler pipeline on the function whose entry is `func_va`
 /// in `path`, returning the rendered pseudocode.
 ///
@@ -276,7 +303,6 @@ fn decompile_at_py(
     style: &str,
 ) -> PyResult<String> {
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
-    use crate::core::binary::Arch as BArch;
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
@@ -302,18 +328,7 @@ fn decompile_at_py(
                 func_va
             ))
         })?;
-    // Best-effort arch detection (x86-64 vs aarch64) from the object format.
-    let arch = if let Ok(obj) = object::read::File::parse(&data[..]) {
-        use object::Object;
-        match obj.architecture() {
-            object::Architecture::I386 => BArch::X86,
-            object::Architecture::X86_64 => BArch::X86_64,
-            object::Architecture::Aarch64 => BArch::AArch64,
-            _ => BArch::X86_64,
-        }
-    } else {
-        BArch::X86_64
-    };
+    let (arch, cc) = detect_arch_and_call_conv(&data);
     let lf = lift_function_from_bytes(&data, func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
@@ -323,10 +338,6 @@ fn decompile_at_py(
     reconstruct(&mut f);
     crate::ir::const_fold::fold_constants(&mut f);
     crate::ir::dce::prune_dead_flags(&mut f);
-    let cc = match arch {
-        BArch::AArch64 => crate::ir::call_args::CallConv::Aarch64,
-        _ => crate::ir::call_args::CallConv::SysVAmd64,
-    };
     crate::ir::call_args::reconstruct_args(&mut f, cc);
     let addr_map = crate::ir::name_resolve::collect_address_map(&data, &path);
     crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
@@ -356,7 +367,10 @@ fn decompile_at_py(
     crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
     crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
     crate::ir::label_prune::prune_unreferenced_labels(&mut f);
-    if matches!(cc, crate::ir::call_args::CallConv::SysVAmd64) {
+    if matches!(
+        cc,
+        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
+    ) {
         crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
     }
     Ok(if style == "c" {
@@ -396,6 +410,12 @@ fn remap_type_map(
             &["r8", "r8d", "r8w", "r8b"],
             &["r9", "r9d", "r9w", "r9b"],
         ],
+        crate::ir::call_args::CallConv::Win64 => &[
+            &["rcx", "ecx", "cx", "cl"],
+            &["rdx", "edx", "dx", "dl"],
+            &["r8", "r8d", "r8w", "r8b"],
+            &["r9", "r9d", "r9w", "r9b"],
+        ],
         crate::ir::call_args::CallConv::Aarch64 => &[
             &["x0", "w0"],
             &["x1", "w1"],
@@ -415,7 +435,9 @@ fn remap_type_map(
         }
     }
     let ret_aliases: &[&str] = match cc {
-        crate::ir::call_args::CallConv::SysVAmd64 => &["rax", "eax", "ax", "al"],
+        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64 => {
+            &["rax", "eax", "ax", "al"]
+        }
         crate::ir::call_args::CallConv::Aarch64 => &["x0", "w0"],
     };
     for n in ret_aliases {
@@ -450,7 +472,6 @@ fn decompile_all_py(
     timeout_ms: u64,
 ) -> PyResult<PyObject> {
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
-    use crate::core::binary::Arch as BArch;
     use crate::ir::ast::{lower, render};
     use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
@@ -466,23 +487,9 @@ fn decompile_all_py(
         timeout_ms,
     };
     let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
-    let arch = if let Ok(obj) = object::read::File::parse(&data[..]) {
-        use object::Object;
-        match obj.architecture() {
-            object::Architecture::I386 => BArch::X86,
-            object::Architecture::X86_64 => BArch::X86_64,
-            object::Architecture::Aarch64 => BArch::AArch64,
-            _ => BArch::X86_64,
-        }
-    } else {
-        BArch::X86_64
-    };
+    let (arch, cc) = detect_arch_and_call_conv(&data);
     let addr_map = crate::ir::name_resolve::collect_address_map(&data, &path);
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let cc = match arch {
-        BArch::AArch64 => crate::ir::call_args::CallConv::Aarch64,
-        _ => crate::ir::call_args::CallConv::SysVAmd64,
-    };
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {
         let Some(lf) = lift_function_from_bytes(&data, func, arch) else {
@@ -506,7 +513,10 @@ fn decompile_all_py(
         }
         crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
         crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
-        if matches!(cc, crate::ir::call_args::CallConv::SysVAmd64) {
+        if matches!(
+            cc,
+            crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
+        ) {
             crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
         }
         let text = render(&f);
