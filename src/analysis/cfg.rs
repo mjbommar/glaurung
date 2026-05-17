@@ -23,7 +23,7 @@ use crate::flirt::{
 };
 use crate::triage::heuristics;
 
-use object::{Object, ObjectSegment};
+use object::{Object, ObjectSegment, SectionKind};
 use object::{ObjectSection, ObjectSymbol};
 
 #[derive(Debug, Clone, Copy)]
@@ -102,25 +102,36 @@ fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Optio
             });
         }
 
-        // If we can refine by sections with execute-like names, do so
+        // Refine by every section whose object-classified kind is Text.
+        // Object's PE backend reads IMAGE_SCN_MEM_EXECUTE to set kind, so
+        // this catches Win64 driver / kernel layouts where many code
+        // sections exist with non-".text" names (PAGE, PAGELK, KVASCODE,
+        // INIT, RETPOL, POOLCODE, ...). Previously we filtered with a
+        // ".text" / "code" substring heuristic that dropped most of
+        // ntoskrnl's executable bytes -- the dominant cause of the
+        // 49 % recall observed on the ntoskrnl fixture in the iter 14
+        // sweep.
         let mut refined = Vec::new();
         for sec in obj.sections() {
-            let name = sec.name().unwrap_or("").to_ascii_lowercase();
-            let addr = sec.address();
             let size = sec.size();
             if size == 0 {
                 continue;
             }
-            // Simple heuristic for code sections
-            let looks_exec = name.contains(".text") || name.contains("code") || name == "text";
-            if looks_exec {
-                if let Some((foff, _)) = sec.file_range() {
-                    refined.push(ExecRegion {
-                        start: addr,
-                        end: addr.saturating_add(size),
-                        _file_off_start: foff,
-                    });
+            if sec.kind() != SectionKind::Text {
+                // Fall back to the legacy name heuristic for formats
+                // where object can't classify (e.g. some odd COFFs).
+                let name = sec.name().unwrap_or("").to_ascii_lowercase();
+                if !(name.contains(".text") || name.contains("code") || name == "text") {
+                    continue;
                 }
+            }
+            let addr = sec.address();
+            if let Some((foff, _)) = sec.file_range() {
+                refined.push(ExecRegion {
+                    start: addr,
+                    end: addr.saturating_add(size),
+                    _file_off_start: foff,
+                });
             }
         }
         if !refined.is_empty() {
@@ -417,6 +428,141 @@ fn discover_function(
     }
 
     Some((func, call_edges))
+}
+
+/// Heuristic: does `data[file_off..]` look like the start of a real
+/// function?
+///
+/// Used to gate xref-target promotion in the recursive worklist.
+/// Trusted seeds (symbol table, .pdata, FLIRT, vtable, jump-table,
+/// entrypoint) MUST NOT be subjected to this gate -- it's only for
+/// the addresses we follow via direct-call/jump xrefs, which can
+/// land in the middle of an existing function's body (mid-fn
+/// continuation labels) or even mid-instruction.
+///
+/// "Looks like a fn start" rule:
+///
+/// 1. **Strong yes**: the byte just before `file_off` is a function-
+///    boundary marker emitted by the MSVC compiler:
+///    - `0xcc` (INT3 padding, the dominant case on Win64)
+///    - `0xc3` (RET; previous function ended)
+///    - `0x90` (single-byte NOP padding)
+///    - `0x66 0x90` (2-byte NOP via `xchg ax, ax`)
+///    - `0x0f 0x1f ..` (3+ byte NOP families)
+/// 2. **Otherwise**: byte 0 must match a recognised x86-64 prologue
+///    pattern (REX-prefix push, parameter spill, frame setup, IAT
+///    thunk, RET stub, ...).
+///
+/// Returns `true` if either signal fires, `false` if neither does.
+/// Empirical validation on ntoskrnl's 31,729 g-only seeds (asb
+/// iter 14 sweep): ~77 % have neither signal and are rejected as
+/// likely mid-instruction xref landings.
+fn looks_like_fn_start(data: &[u8], file_off: usize) -> bool {
+    if file_off == 0 || file_off >= data.len() {
+        return false;
+    }
+    let prev = data[file_off - 1];
+    if prev == 0xcc || prev == 0xc3 || prev == 0x90 {
+        return true;
+    }
+    // 2-byte NOP via `xchg ax, ax`
+    if file_off >= 2 && data[file_off - 2] == 0x66 && prev == 0x90 {
+        return true;
+    }
+    // Multi-byte NOP encodings (0f 1f .. /0 series)
+    if file_off >= 3 && data[file_off - 3] == 0x0f && data[file_off - 2] == 0x1f {
+        return true;
+    }
+    if file_off >= 4
+        && data[file_off - 4] == 0x0f
+        && data[file_off - 3] == 0x1f
+        && data[file_off - 2] == 0x40
+    {
+        return true;
+    }
+    let head_end = std::cmp::min(file_off + 8, data.len());
+    let head = &data[file_off..head_end];
+    if head.is_empty() {
+        return false;
+    }
+    // Recognised x86-64 function prologue patterns.
+    match head {
+        // mov [rsp+disp8], rXX (REX.W parameter spill: 48 89 X 24 ..)
+        [0x48, 0x89, _, 0x24, ..] => true,
+        // REX-prefixed push rbx/rbp/rsi/rdi (40 53/55/56/57)
+        [0x40, 0x53 | 0x55 | 0x56 | 0x57, ..] => true,
+        // push r12-r15 (41 54/55/56/57)
+        [0x41, 0x54 | 0x55 | 0x56 | 0x57, ..] => true,
+        // sub rsp, imm8 / imm32
+        [0x48, 0x83, 0xec, ..] => true,
+        [0x48, 0x81, 0xec, ..] => true,
+        // mov rax, rsp (SEH frame setup)
+        [0x48, 0x8b, 0xc4, ..] => true,
+        // jmp rel32 (tail-call thunk)
+        [0xe9, ..] => true,
+        // jmp [rip+rel32] (IAT thunk)
+        [0xff, 0x25, ..] => true,
+        // mov eax, imm32 (HRESULT stub / syscall stub)
+        [0xb8, ..] => true,
+        // xor eax, eax; ret (tiny RET stub)
+        [0x33, 0xc0, 0xc3, ..] => true,
+        // mov rax, gs:[imm32] (TEB-access prologue)
+        [0x65, 0x48, 0x8b, 0x04, 0x25, ..] => true,
+        _ => false,
+    }
+}
+
+/// Resolve a VA to a file offset by walking the section headers
+/// directly. Used by the prologue-sanity gate during xref-target
+/// promotion -- the existing `pe::sections::SectionTable` is built
+/// per-PeParser instance; this helper avoids constructing one
+/// inside the cfg worklist (where we already have raw `data` and
+/// the `ExecRegion` list, but not the full section table).
+fn pe_va_to_file_off(data: &[u8], va: u64) -> Option<usize> {
+    if data.len() < 0x40 || &data[..2] != b"MZ" {
+        return None;
+    }
+    let e_lfanew = u32::from_le_bytes(data[0x3c..0x40].try_into().ok()?) as usize;
+    if e_lfanew + 24 > data.len() || &data[e_lfanew..e_lfanew + 4] != b"PE\0\0" {
+        return None;
+    }
+    let coff_off = e_lfanew + 4;
+    let n_sections = u16::from_le_bytes(data[coff_off + 2..coff_off + 4].try_into().ok()?)
+        as usize;
+    let opt_size = u16::from_le_bytes(data[coff_off + 16..coff_off + 18].try_into().ok()?)
+        as usize;
+    let opt_off = coff_off + 20;
+    let magic = u16::from_le_bytes(data[opt_off..opt_off + 2].try_into().ok()?);
+    let image_base = if magic == 0x20B {
+        let b = data.get(opt_off + 24..opt_off + 32)?;
+        let lo = u32::from_le_bytes(b[..4].try_into().ok()?) as u64;
+        let hi = u32::from_le_bytes(b[4..].try_into().ok()?) as u64;
+        (hi << 32) | lo
+    } else if magic == 0x10B {
+        u32::from_le_bytes(data[opt_off + 28..opt_off + 32].try_into().ok()?) as u64
+    } else {
+        return None;
+    };
+    if va < image_base {
+        return None;
+    }
+    let rva = (va - image_base) as usize;
+    let sec_off = opt_off + opt_size;
+    for i in 0..n_sections {
+        let s = sec_off + i * 40;
+        if s + 40 > data.len() {
+            break;
+        }
+        let virt_sz = u32::from_le_bytes(data[s + 8..s + 12].try_into().ok()?) as usize;
+        let virt_addr = u32::from_le_bytes(data[s + 12..s + 16].try_into().ok()?) as usize;
+        let raw_sz = u32::from_le_bytes(data[s + 16..s + 20].try_into().ok()?) as usize;
+        let raw_ptr = u32::from_le_bytes(data[s + 20..s + 24].try_into().ok()?) as usize;
+        let span = std::cmp::max(virt_sz, raw_sz);
+        if rva >= virt_addr && rva < virt_addr + span {
+            return Some(raw_ptr + (rva - virt_addr));
+        }
+    }
+    None
 }
 
 /// Read every `RUNTIME_FUNCTION::BeginAddress` from the Win64 PE
@@ -963,6 +1109,80 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     }
 
     (functions, cg)
+}
+
+#[cfg(test)]
+mod prologue_gate_tests {
+    use super::looks_like_fn_start;
+
+    fn data_with_pre(prev: &[u8], head: &[u8]) -> (Vec<u8>, usize) {
+        let mut d = Vec::with_capacity(prev.len() + head.len());
+        d.extend_from_slice(prev);
+        let off = d.len();
+        d.extend_from_slice(head);
+        (d, off)
+    }
+
+    #[test]
+    fn accepts_cc_padded_boundary() {
+        let (d, off) = data_with_pre(&[0xcc, 0xcc], &[0x48, 0x89, 0x5c, 0x24, 0x08]);
+        assert!(looks_like_fn_start(&d, off));
+    }
+
+    #[test]
+    fn accepts_c3_ret_boundary() {
+        let (d, off) = data_with_pre(&[0xc3], &[0x40, 0x53]);
+        assert!(looks_like_fn_start(&d, off));
+    }
+
+    #[test]
+    fn accepts_90_nop_boundary() {
+        let (d, off) = data_with_pre(&[0x90, 0x90], &[0x48, 0x83, 0xec, 0x28]);
+        assert!(looks_like_fn_start(&d, off));
+    }
+
+    #[test]
+    fn accepts_recognised_prologue_no_marker() {
+        // No fn-boundary marker before, but byte 0 is a textbook
+        // parameter-spill prologue.
+        let (d, off) = data_with_pre(&[0xaa], &[0x48, 0x89, 0x5c, 0x24, 0x08]);
+        assert!(looks_like_fn_start(&d, off));
+    }
+
+    #[test]
+    fn accepts_iat_thunk() {
+        let (d, off) = data_with_pre(&[0xaa], &[0xff, 0x25, 0x10, 0x00, 0x00, 0x00]);
+        assert!(looks_like_fn_start(&d, off));
+    }
+
+    #[test]
+    fn accepts_tiny_ret_stub() {
+        let (d, off) = data_with_pre(&[0xaa], &[0x33, 0xc0, 0xc3]);
+        assert!(looks_like_fn_start(&d, off));
+    }
+
+    #[test]
+    fn rejects_mid_fn_continuation_no_marker() {
+        // No fn-boundary marker; byte 0 is `cmp edi, 2` which is
+        // valid x86 but not a recognised prologue. This is exactly
+        // the false-positive pattern xref backtracking introduces.
+        let (d, off) = data_with_pre(&[0xaa], &[0x83, 0xff, 0x02, 0x0f, 0x85]);
+        assert!(!looks_like_fn_start(&d, off));
+    }
+
+    #[test]
+    fn rejects_mid_instruction_landing() {
+        // No marker, byte 0 is a ModR/M byte (0x24) -- xref-target
+        // landed in the middle of an existing instruction.
+        let (d, off) = data_with_pre(&[0xaa], &[0x24, 0x10, 0x00, 0x00]);
+        assert!(!looks_like_fn_start(&d, off));
+    }
+
+    #[test]
+    fn rejects_file_off_zero() {
+        let d = vec![0x48, 0x89, 0x5c, 0x24];
+        assert!(!looks_like_fn_start(&d, 0));
+    }
 }
 
 #[cfg(test)]
