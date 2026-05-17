@@ -20,7 +20,6 @@ from __future__ import annotations
 import sqlite3
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Iterable, List, Literal, Optional, Tuple
 
 from .persistent import PersistentKnowledgeBase
@@ -521,11 +520,17 @@ def index_callgraph(
         dst = va_by_name.get(e.callee)
         if src is None or dst is None:
             continue
-        key = (src, dst, "call")
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append((kb.binary_id, src, dst, "call", src))
+        call_sites = list(getattr(e, "call_sites", None) or [])
+        src_vas = [
+            int(getattr(site, "value", site))
+            for site in call_sites
+        ] or [src]
+        for src_va in src_vas:
+            key = (src_va, dst, "call")
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append((kb.binary_id, src_va, dst, "call", src))
 
     cur = kb._conn.cursor()
     cur.execute("BEGIN")
@@ -2125,7 +2130,6 @@ def render_evidence_markdown(evs: List[Evidence], *, max_args_chars: int = 120) 
     JSON one-line and truncated so the cite pane stays readable."""
     if not evs:
         return "_no evidence rows_\n"
-    import json
     lines = ["| cite | tool | summary | range |", "|---:|---|---|---|"]
     for e in evs:
         rng = ""

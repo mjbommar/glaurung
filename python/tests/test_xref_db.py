@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import glaurung as g
 from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 from glaurung.llm.kb import xref_db
 
@@ -35,6 +37,63 @@ def test_index_callgraph_persists(tmp_path: Path) -> None:
     kb2 = PersistentKnowledgeBase.open(db, binary_path=binary)
     assert xref_db.is_indexed(kb2)
     kb2.close()
+
+
+def test_index_callgraph_persists_exact_callsite_vas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = _hello_path()
+    db = tmp_path / "callsites.glaurung"
+
+    def fake_analyze_functions_path(_path: str):
+        funcs = [
+            SimpleNamespace(
+                name="caller",
+                entry_point=SimpleNamespace(value=0x1000),
+            ),
+            SimpleNamespace(
+                name="callee",
+                entry_point=SimpleNamespace(value=0x2000),
+            ),
+        ]
+        edge = SimpleNamespace(
+            caller="caller",
+            callee="callee",
+            call_sites=[
+                SimpleNamespace(value=0x1010),
+                SimpleNamespace(value=0x1024),
+            ],
+        )
+        return funcs, SimpleNamespace(edges=[edge])
+
+    monkeypatch.setattr(
+        g.analysis,
+        "analyze_functions_path",
+        fake_analyze_functions_path,
+    )
+
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+    assert xref_db.index_callgraph(kb, str(binary)) == 2
+
+    rows = xref_db.list_xrefs_to(kb, 0x2000)
+    assert [(r.src_va, r.dst_va, r.kind, r.src_function_va) for r in rows] == [
+        (0x1010, 0x2000, "call", 0x1000),
+        (0x1024, 0x2000, "call", 0x1000),
+    ]
+    kb.close()
+
+
+def test_analyze_functions_populates_callgraph_call_sites() -> None:
+    binary = _hello_path()
+    _, cg = g.analysis.analyze_functions_path(
+        str(binary),
+        max_functions=64,
+        max_blocks=4096,
+        max_instructions=200_000,
+        timeout_ms=1000,
+    )
+    assert any(e.call_sites for e in cg.edges)
 
 
 def test_xrefs_to_and_from(tmp_path: Path) -> None:

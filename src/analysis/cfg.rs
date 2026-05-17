@@ -275,7 +275,7 @@ fn discover_function(
     let mut seen: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
     let mut blocks: HashMap<u64, (u64, u32)> = HashMap::new(); // start_va -> (end_va, instr_count)
     let mut edges: Vec<(u64, u64, ControlFlowEdgeKind)> = Vec::new();
-    let mut call_edges: Vec<(u64, u64)> = Vec::new();
+    let mut call_edges: Vec<(u64, u64)> = Vec::new(); // (callsite_va, callee_va)
 
     if let Some(r) = in_exec_regions(regions, entry.value) {
         let _ = r;
@@ -323,10 +323,11 @@ fn discover_function(
             let end_va = cur_va.saturating_add(ins.length as u64);
             let (is_branch, is_call, is_ret) = classify_ctrl_flow(&ins.mnemonic, arch);
             if is_call {
-                // Fallthrough continues; capture call edge to unknown for now. We use placeholder callee id.
+                // Fallthrough continues; preserve the exact instruction VA
+                // so downstream xref tables can report callsites, not just
+                // caller-function granularity.
                 if let Some(tgt) = immediate_target(&ins) {
-                    // Track call edge (caller block start -> callee target)
-                    call_edges.push((start_va, tgt));
+                    call_edges.push((cur_va, tgt));
                 }
                 // continue to fallthrough
             } else if is_branch {
@@ -1258,7 +1259,7 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     // other seed source. Worklist-based to keep the iteration bounded
     // by `max_functions` while still propagating xrefs to a fixed
     // point.
-    let mut calls_all: Vec<(String, u64)> = Vec::new(); // (caller_name, callee_va)
+    let mut calls_all: Vec<(u64, u64, u64)> = Vec::new(); // (caller_entry_va, callsite_va, callee_va)
     let mut worklist: std::collections::VecDeque<(Address, DiscoverySeedKind)> =
         seeds.into_iter().collect();
     while let Some((seed, seed_kind)) = worklist.pop_front() {
@@ -1278,8 +1279,8 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         if let Some((f, calls)) =
             discover_function(data, arch, end, seed.clone(), &regions, budgets)
         {
-            for (_caller, callee_va) in &calls {
-                calls_all.push((f.name.clone(), *callee_va));
+            for (callsite_va, callee_va) in &calls {
+                calls_all.push((f.entry_point.value, *callsite_va, *callee_va));
                 // Xref-backtracking seed: any direct call/jump target
                 // landing in an exec region that we haven't already
                 // queued becomes a new candidate function entry.
@@ -1378,13 +1379,26 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         .map(|f| (f.entry_point.value, f.name.clone()))
         .collect();
 
-    for (caller, callee_va) in calls_all {
+    for (caller_entry_va, callsite_va, callee_va) in calls_all {
+        let caller = name_by_va
+            .get(&caller_entry_va)
+            .cloned()
+            .unwrap_or_else(|| format!("sub_{:x}", caller_entry_va));
         let callee = name_by_va
             .get(&callee_va)
             .cloned()
             .unwrap_or_else(|| format!("sub_{:x}", callee_va));
         cg.add_node(callee.clone());
-        let edge = CallGraphEdge::new(caller.clone(), callee, CallType::Direct);
+        let edge = Address::new(AddressKind::VA, callsite_va, bits, None, None)
+            .map(|site| {
+                CallGraphEdge::with_call_sites(
+                    caller.clone(),
+                    callee.clone(),
+                    CallType::Direct,
+                    vec![site],
+                )
+            })
+            .unwrap_or_else(|_| CallGraphEdge::new(caller.clone(), callee, CallType::Direct));
         cg.add_edge(edge);
     }
 
