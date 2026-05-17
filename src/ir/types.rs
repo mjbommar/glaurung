@@ -9,6 +9,7 @@ use std::fmt;
 ///
 /// * `Z`   — equal / zero (result == 0)
 /// * `C`   — carry / unsigned-less-than (a `ult` b)
+/// * `Ule` — unsigned-less-or-equal (a `ule` b; `C || Z`)
 /// * `S`   — raw sign — top bit of the last arithmetic/logic result; equals
 ///           the x86 `SF` flag. After `test` this differs from [`Flag::Slt`]
 ///           (which is `SF ^ OF` and would be wrong for test-derived paths).
@@ -21,6 +22,7 @@ use std::fmt;
 pub enum Flag {
     Z,
     C,
+    Ule,
     S,
     Slt,
     Sle,
@@ -86,6 +88,7 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
+    Div,
     And,
     Or,
     Xor,
@@ -106,6 +109,8 @@ pub enum CmpOp {
     Ne,
     /// Unsigned less-than.
     Ult,
+    /// Unsigned less-or-equal.
+    Ule,
     /// Signed less-than.
     Slt,
     /// Signed less-or-equal.
@@ -125,6 +130,13 @@ pub enum CallTarget {
 pub enum Op {
     Assign {
         dst: VReg,
+        src: Value,
+    },
+    /// Conditional register assignment. `dst` receives `src` when `cond` is
+    /// true; otherwise its previous value is preserved.
+    CondAssign {
+        dst: VReg,
+        cond: VReg,
         src: Value,
     },
     Bin {
@@ -228,6 +240,7 @@ impl fmt::Display for VReg {
             VReg::Flag(fl) => match fl {
                 Flag::Z => write!(f, "%zf"),
                 Flag::C => write!(f, "%cf"),
+                Flag::Ule => write!(f, "%ule"),
                 Flag::S => write!(f, "%sf"),
                 Flag::Slt => write!(f, "%slt"),
                 Flag::Sle => write!(f, "%sle"),
@@ -253,6 +266,9 @@ impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Op::Assign { dst, src } => write!(f, "{} = {}", dst, src),
+            Op::CondAssign { dst, cond, src } => {
+                write!(f, "if {} {} = {}", cond, dst, src)
+            }
             Op::Bin { dst, op, lhs, rhs } => write!(f, "{} = {:?} {} {}", dst, op, lhs, rhs),
             Op::Un { dst, op, src } => write!(f, "{} = {:?} {}", dst, op, src),
             Op::Cmp { dst, op, lhs, rhs } => write!(f, "{} = cmp {:?} {} {}", dst, op, lhs, rhs),

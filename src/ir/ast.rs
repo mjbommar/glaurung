@@ -224,6 +224,14 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
             dst: dst.clone(),
             src: lower_value(src),
         }],
+        Op::CondAssign { dst, cond, src } => vec![Stmt::If {
+            cond: Expr::Reg(cond.clone()),
+            then_body: vec![Stmt::Assign {
+                dst: dst.clone(),
+                src: lower_value(src),
+            }],
+            else_body: None,
+        }],
         Op::Bin { dst, op, lhs, rhs } => vec![Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Bin {
@@ -578,6 +586,7 @@ fn binop_sym(op: BinOp) -> &'static str {
         BinOp::Add => "+",
         BinOp::Sub => "-",
         BinOp::Mul => "*",
+        BinOp::Div => "/",
         BinOp::And => "&",
         BinOp::Or => "|",
         BinOp::Xor => "^",
@@ -599,6 +608,7 @@ fn cmpop_sym(op: CmpOp) -> &'static str {
         CmpOp::Eq => "==",
         CmpOp::Ne => "!=",
         CmpOp::Ult => "u<",
+        CmpOp::Ule => "u<=",
         CmpOp::Slt => "<",
         CmpOp::Sle => "<=",
     }

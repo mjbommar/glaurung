@@ -138,6 +138,7 @@ fn fold_expr(e: &mut Expr) {
                     *e = Expr::Const(0);
                     return;
                 }
+                _ => {}
             }
         }
         if let Expr::Const(0) = **lhs {
@@ -184,6 +185,12 @@ fn fold_expr(e: &mut Expr) {
                 BinOp::Add => a.wrapping_add(b),
                 BinOp::Sub => a.wrapping_sub(b),
                 BinOp::Mul => a.wrapping_mul(b),
+                BinOp::Div => {
+                    if b == 0 {
+                        return;
+                    }
+                    a.wrapping_div(b)
+                }
                 BinOp::And => a & b,
                 BinOp::Or => a | b,
                 BinOp::Xor => a ^ b,

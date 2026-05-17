@@ -21,9 +21,7 @@ def test_nop_lifts_to_nop_dict():
 
 def test_mov_reg_imm_lifts_to_assign_dict():
     # mov rax, 0x1234
-    ops = g.ir.lift_bytes(
-        bytes([0x48, 0xC7, 0xC0, 0x34, 0x12, 0x00, 0x00]), 0x1000, 64
-    )
+    ops = g.ir.lift_bytes(bytes([0x48, 0xC7, 0xC0, 0x34, 0x12, 0x00, 0x00]), 0x1000, 64)
     assert len(ops) == 1
     assert ops[0] == {
         "va": 0x1000,
@@ -84,13 +82,13 @@ def test_call_direct_records_target_address():
 
 
 def test_cmp_and_je_roundtrip():
-    # cmp rax, rbx ; je +2 — cmp emits ZF/CF/Slt/Sle/S writes (plus a sub
-    # temp to materialise the signed difference for %sf); je reads %zf.
+    # cmp rax, rbx ; je +2 — cmp emits ZF/CF/Ule/Slt/Sle/S writes (plus a
+    # sub temp to materialise the signed difference for %sf); je reads %zf.
     ops = g.ir.lift_bytes(bytes([0x48, 0x39, 0xD8, 0x74, 0x02]), 0x1000, 64)
     cmp_ops = [o for o in ops if o["kind"] == "cmp"]
-    assert len(cmp_ops) == 5
+    assert len(cmp_ops) == 6
     cmp_flags = {o["dst"] for o in cmp_ops}
-    assert cmp_flags == {"%zf", "%cf", "%slt", "%sle", "%sf"}
+    assert cmp_flags == {"%zf", "%cf", "%ule", "%slt", "%sle", "%sf"}
     cj = [o for o in ops if o["kind"] == "cond_jump"]
     assert len(cj) == 1
     assert cj[0]["cond"] == "%zf"
@@ -118,6 +116,74 @@ def test_jl_reads_slt_flag():
     ops = g.ir.lift_bytes(bytes([0x48, 0x39, 0xD8, 0x7C, 0x02]), 0x1000, 64)
     cj = next(o for o in ops if o["kind"] == "cond_jump")
     assert cj["cond"] == "%slt"
+
+
+def test_jbe_reads_unsigned_less_equal_flag():
+    ops = g.ir.lift_bytes(bytes([0x48, 0x39, 0xD8, 0x76, 0x02]), 0x1000, 64)
+    cj = next(o for o in ops if o["kind"] == "cond_jump")
+    assert cj["cond"] == "%ule"
+
+
+def test_sete_lifts_to_assign_from_flag():
+    ops = g.ir.lift_bytes(bytes([0x0F, 0x94, 0xC0]), 0x1000, 64)
+    assert ops == [
+        {
+            "va": 0x1000,
+            "kind": "assign",
+            "dst": "al",
+            "src": {"kind": "reg", "name": "%zf"},
+        }
+    ]
+
+
+def test_cmovne_lifts_to_cond_assign_dict():
+    ops = g.ir.lift_bytes(bytes([0x48, 0x0F, 0x45, 0xC3]), 0x1000, 64)
+    assert ops == [
+        {
+            "va": 0x1000,
+            "kind": "cmp",
+            "dst": "%t1",
+            "op": "eq",
+            "lhs": {"kind": "reg", "name": "%zf"},
+            "rhs": {"kind": "const", "value": 0},
+        },
+        {
+            "va": 0x1000,
+            "kind": "cond_assign",
+            "dst": "rax",
+            "cond": "%t1",
+            "src": {"kind": "reg", "name": "rbx"},
+        },
+    ]
+
+
+def test_xchg_lifts_to_assign_sequence():
+    ops = g.ir.lift_bytes(bytes([0x48, 0x87, 0xD8]), 0x1000, 64)
+    assert [o["kind"] for o in ops] == ["assign", "assign", "assign"]
+    assert ops[0]["dst"] == "%t0"
+    assert ops[0]["src"] == {"kind": "reg", "name": "rax"}
+    assert ops[1]["dst"] == "rax"
+    assert ops[1]["src"] == {"kind": "reg", "name": "rbx"}
+    assert ops[2]["dst"] == "rbx"
+    assert ops[2]["src"] == {"kind": "reg", "name": "%t0"}
+
+
+def test_int3_lifts_to_nop_dict():
+    assert g.ir.lift_bytes(bytes([0xCC]), 0x1000, 64) == [{"va": 0x1000, "kind": "nop"}]
+
+
+def test_div_lifts_to_bin_div_dict():
+    ops = g.ir.lift_bytes(bytes([0x48, 0xF7, 0xF1]), 0x1000, 64)
+    assert ops == [
+        {
+            "va": 0x1000,
+            "kind": "bin",
+            "dst": "rax",
+            "op": "div",
+            "lhs": {"kind": "reg", "name": "rax"},
+            "rhs": {"kind": "reg", "name": "rcx"},
+        }
+    ]
 
 
 def test_lift_bytes_rejects_invalid_bits():

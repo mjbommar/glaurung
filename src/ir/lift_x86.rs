@@ -8,11 +8,13 @@
 //!
 //! * `nop` → [`Op::Nop`]
 //! * `mov` between reg / imm / mem → [`Op::Assign`] / [`Op::Load`] / [`Op::Store`]
-//! * `add`, `sub`, `and`, `or`, `xor`, `shl`, `shr`, `sar`, `imul` → [`Op::Bin`]
+//! * `add`, `sub`, `and`, `or`, `xor`, `shl`, `shr`, `sar`, `imul`, `div` → [`Op::Bin`]
 //! * `not`, `neg` → [`Op::Un`]
-//! * `inc`, `dec`, `xadd` on registers / memory → [`Op::Bin`] or load-modify-store
+//! * `inc`, `dec`, `xadd`, `xchg` on registers / memory → [`Op::Bin`] or load-modify-store
 //! * `cmp` → [`Op::Cmp`] writing `ZF`/`CF`/`SF`
 //! * `test` → [`Op::Cmp`] writing `ZF`/`SF`
+//! * `setcc` → [`Op::Assign`] / [`Op::Store`] from the corresponding flag
+//! * `cmovcc` → [`Op::CondAssign`]
 //! * `push` / `pop` → decomposed into rsp-adjust + load/store
 //! * `call` near direct / indirect → [`Op::Call`]
 //! * `ret` → [`Op::Return`]
@@ -150,24 +152,74 @@ fn bin_for(mnem: Mnemonic) -> Option<BinOp> {
     })
 }
 
-/// Map a conditional-jump mnemonic onto the flag virtual register whose truth
-/// value determines whether the branch is taken. The negated siblings (Jne,
-/// Jae, Jge, …) read the same flag; the consumer is expected to invert the
-/// sense. The mapping is faithful across both `cmp`- and `test`-derived
-/// paths: cmp writes `Flag::S` via a subtract-then-sign sequence and test
-/// writes `Flag::S` as the sign of the AND result, so Js/Jns read the right
-/// bit in either case.
-fn cond_flag_for(mnem: Mnemonic) -> Option<VReg> {
-    Some(match mnem {
-        Mnemonic::Je | Mnemonic::Jne => VReg::Flag(Flag::Z),
-        Mnemonic::Jb | Mnemonic::Jae => VReg::Flag(Flag::C),
-        Mnemonic::Jl | Mnemonic::Jge => VReg::Flag(Flag::Slt),
-        Mnemonic::Jg | Mnemonic::Jle => VReg::Flag(Flag::Sle),
-        Mnemonic::Js | Mnemonic::Jns => VReg::Flag(Flag::S),
-        Mnemonic::Jo | Mnemonic::Jno => VReg::Flag(Flag::O),
-        Mnemonic::Jp | Mnemonic::Jnp => VReg::Flag(Flag::P),
+fn condition_suffix(mnem: Mnemonic, prefix: &str) -> Option<String> {
+    let name = format!("{:?}", mnem).to_ascii_lowercase();
+    name.strip_prefix(prefix).map(str::to_string)
+}
+
+#[derive(Debug, Clone)]
+struct Condition {
+    flag: VReg,
+    inverted: bool,
+}
+
+fn condition_for_suffix(suffix: &str) -> Option<Condition> {
+    let (flag, inverted) = match suffix {
+        "e" | "z" => (Flag::Z, false),
+        "ne" | "nz" => (Flag::Z, true),
+        "b" | "c" | "nae" => (Flag::C, false),
+        "ae" | "nb" | "nc" => (Flag::C, true),
+        "be" | "na" => (Flag::Ule, false),
+        "a" | "nbe" => (Flag::Ule, true),
+        "l" | "nge" => (Flag::Slt, false),
+        "ge" | "nl" => (Flag::Slt, true),
+        "le" | "ng" => (Flag::Sle, false),
+        "g" | "nle" => (Flag::Sle, true),
+        "s" => (Flag::S, false),
+        "ns" => (Flag::S, true),
+        "o" => (Flag::O, false),
+        "no" => (Flag::O, true),
+        "p" | "pe" => (Flag::P, false),
+        "np" | "po" => (Flag::P, true),
         _ => return None,
+    };
+    Some(Condition {
+        flag: VReg::Flag(flag),
+        inverted,
     })
+}
+
+/// Map a conditional-jump mnemonic onto the flag virtual register family that
+/// controls the branch. `Op::CondJump` does not yet carry polarity, so negated
+/// siblings (Jne, Jae, Jge, ...) intentionally share the positive flag as the
+/// existing approximation. `setcc` and `cmovcc` materialize inverted forms
+/// explicitly because they produce dataflow values.
+fn cond_flag_for(mnem: Mnemonic) -> Option<VReg> {
+    condition_suffix(mnem, "j").and_then(|suffix| condition_for_suffix(&suffix).map(|c| c.flag))
+}
+
+fn setcc_condition_for(mnem: Mnemonic) -> Option<Condition> {
+    condition_suffix(mnem, "set").and_then(|suffix| condition_for_suffix(&suffix))
+}
+
+fn cmovcc_condition_for(mnem: Mnemonic) -> Option<Condition> {
+    condition_suffix(mnem, "cmov").and_then(|suffix| condition_for_suffix(&suffix))
+}
+
+fn div_accumulator_name(instr: &iced_x86::Instruction, bits: u32) -> &'static str {
+    let width = match instr.op_kind(0) {
+        OpKind::Register => reg_size(instr.op_register(0)),
+        OpKind::Memory => instr.memory_size().size() as u8,
+        _ => 0,
+    };
+    match width {
+        1 => "al",
+        2 => "ax",
+        4 => "eax",
+        8 => "rax",
+        _ if bits == 64 => "rax",
+        _ => "eax",
+    }
 }
 
 fn push_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
@@ -316,7 +368,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     }
 
     match mnem {
-        Mnemonic::Nop | Mnemonic::Endbr32 | Mnemonic::Endbr64 => vec![Op::Nop],
+        Mnemonic::Nop | Mnemonic::Endbr32 | Mnemonic::Endbr64 | Mnemonic::Int3 => vec![Op::Nop],
         Mnemonic::Mov => {
             if instr.op_count() != 2 {
                 return vec![Op::Unknown {
@@ -510,8 +562,9 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 // A machine `cmp` updates ZF, SF, CF, OF, AF, PF, but jcc
                 // semantics ultimately depend on five composite conditions:
                 // equal (ZF), unsigned-less (CF), signed-less (SF^OF),
-                // signed-less-or-equal (ZF|SF^OF), and raw sign (SF). We
-                // write each directly as an LLIR flag so conditional
+                // unsigned-less-or-equal (CF|ZF), signed-less-or-equal
+                // (ZF|SF^OF), and raw sign (SF). We write each directly as
+                // an LLIR flag so conditional
                 // branches can read a single flag with faithful semantics.
                 // The raw sign is derived by materialising `lhs - rhs` into
                 // a temp and comparing to zero.
@@ -527,6 +580,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     Op::Cmp {
                         dst: VReg::Flag(Flag::C),
                         op: CmpOp::Ult,
+                        lhs: lhs.clone(),
+                        rhs: rhs.clone(),
+                    },
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Ule),
+                        op: CmpOp::Ule,
                         lhs: lhs.clone(),
                         rhs: rhs.clone(),
                     },
@@ -606,6 +665,99 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: "test".into(),
             }]
         }
+        _ if setcc_condition_for(mnem).is_some() => {
+            let condition = setcc_condition_for(mnem).expect("checked above");
+            if instr.op_count() == 1 {
+                match instr.op_kind(0) {
+                    OpKind::Register => {
+                        let dst = VReg::phys(reg_name(instr.op_register(0)));
+                        if condition.inverted {
+                            return vec![Op::Cmp {
+                                dst,
+                                op: CmpOp::Eq,
+                                lhs: Value::Reg(condition.flag),
+                                rhs: Value::Const(0),
+                            }];
+                        }
+                        return vec![Op::Assign {
+                            dst,
+                            src: Value::Reg(condition.flag),
+                        }];
+                    }
+                    OpKind::Memory => {
+                        if condition.inverted {
+                            let tmp = VReg::Temp(0);
+                            return vec![
+                                Op::Cmp {
+                                    dst: tmp.clone(),
+                                    op: CmpOp::Eq,
+                                    lhs: Value::Reg(condition.flag),
+                                    rhs: Value::Const(0),
+                                },
+                                Op::Store {
+                                    addr: mem_op_of(instr),
+                                    src: Value::Reg(tmp),
+                                },
+                            ];
+                        }
+                        return vec![Op::Store {
+                            addr: mem_op_of(instr),
+                            src: Value::Reg(condition.flag),
+                        }];
+                    }
+                    _ => {}
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
+            }]
+        }
+        _ if cmovcc_condition_for(mnem).is_some() => {
+            let condition = cmovcc_condition_for(mnem).expect("checked above");
+            if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
+                let dst = VReg::phys(reg_name(instr.op_register(0)));
+                let mut ops = Vec::new();
+                let cond = if condition.inverted {
+                    let tmp = VReg::Temp(1);
+                    ops.push(Op::Cmp {
+                        dst: tmp.clone(),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(condition.flag),
+                        rhs: Value::Const(0),
+                    });
+                    tmp
+                } else {
+                    condition.flag
+                };
+                match instr.op_kind(1) {
+                    OpKind::Register => {
+                        ops.push(Op::CondAssign {
+                            dst,
+                            cond,
+                            src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+                        });
+                        return ops;
+                    }
+                    OpKind::Memory => {
+                        let tmp = VReg::Temp(0);
+                        ops.push(Op::Load {
+                            dst: tmp.clone(),
+                            addr: mem_op_of(instr),
+                        });
+                        ops.push(Op::CondAssign {
+                            dst,
+                            cond,
+                            src: Value::Reg(tmp),
+                        });
+                        return ops;
+                    }
+                    _ => {}
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
+            }]
+        }
         Mnemonic::Not => {
             if instr.op_count() == 1 && instr.op_kind(0) == OpKind::Register {
                 let r = VReg::phys(reg_name(instr.op_register(0)));
@@ -630,6 +782,41 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             }
             vec![Op::Unknown {
                 mnemonic: "neg".into(),
+            }]
+        }
+        Mnemonic::Div | Mnemonic::Idiv => {
+            if instr.op_count() == 1 {
+                let acc = VReg::phys(div_accumulator_name(instr, bits));
+                let mut ops = Vec::new();
+                let divisor = match instr.op_kind(0) {
+                    OpKind::Register => Value::Reg(VReg::phys(reg_name(instr.op_register(0)))),
+                    OpKind::Memory => {
+                        let tmp = VReg::Temp(0);
+                        ops.push(Op::Load {
+                            dst: tmp.clone(),
+                            addr: mem_op_of(instr),
+                        });
+                        Value::Reg(tmp)
+                    }
+                    _ => {
+                        return vec![Op::Unknown {
+                            mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
+                        }]
+                    }
+                };
+                // x86 div/idiv also writes the high-half remainder register.
+                // This first-pass lift preserves the quotient dataflow that
+                // tends to feed later buffer and bounds calculations.
+                ops.push(Op::Bin {
+                    dst: acc.clone(),
+                    op: BinOp::Div,
+                    lhs: Value::Reg(acc),
+                    rhs: divisor,
+                });
+                return ops;
+            }
+            vec![Op::Unknown {
+                mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
             }]
         }
         Mnemonic::Push => push_ops(instr, bits),
@@ -766,6 +953,73 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             }
             vec![Op::Unknown {
                 mnemonic: "xadd".into(),
+            }]
+        }
+        Mnemonic::Xchg => {
+            if instr.op_count() == 2 {
+                match (instr.op_kind(0), instr.op_kind(1)) {
+                    (OpKind::Register, OpKind::Register) => {
+                        let left = VReg::phys(reg_name(instr.op_register(0)));
+                        let right = VReg::phys(reg_name(instr.op_register(1)));
+                        let tmp = VReg::Temp(0);
+                        return vec![
+                            Op::Assign {
+                                dst: tmp.clone(),
+                                src: Value::Reg(left.clone()),
+                            },
+                            Op::Assign {
+                                dst: left,
+                                src: Value::Reg(right.clone()),
+                            },
+                            Op::Assign {
+                                dst: right,
+                                src: Value::Reg(tmp),
+                            },
+                        ];
+                    }
+                    (OpKind::Memory, OpKind::Register) => {
+                        let addr = mem_op_of(instr);
+                        let reg = VReg::phys(reg_name(instr.op_register(1)));
+                        let tmp = VReg::Temp(0);
+                        return vec![
+                            Op::Load {
+                                dst: tmp.clone(),
+                                addr: addr.clone(),
+                            },
+                            Op::Store {
+                                addr,
+                                src: Value::Reg(reg.clone()),
+                            },
+                            Op::Assign {
+                                dst: reg,
+                                src: Value::Reg(tmp),
+                            },
+                        ];
+                    }
+                    (OpKind::Register, OpKind::Memory) => {
+                        let reg = VReg::phys(reg_name(instr.op_register(0)));
+                        let addr = mem_op_of(instr);
+                        let tmp = VReg::Temp(0);
+                        return vec![
+                            Op::Load {
+                                dst: tmp.clone(),
+                                addr: addr.clone(),
+                            },
+                            Op::Store {
+                                addr,
+                                src: Value::Reg(reg.clone()),
+                            },
+                            Op::Assign {
+                                dst: reg,
+                                src: Value::Reg(tmp),
+                            },
+                        ];
+                    }
+                    _ => {}
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: "xchg".into(),
             }]
         }
         Mnemonic::Leave => {
@@ -1040,13 +1294,13 @@ mod tests {
     }
 
     #[test]
-    fn cmp_emits_five_flag_writes_plus_sign_materialisation() {
+    fn cmp_emits_composite_flag_writes_plus_sign_materialisation() {
         // cmp rax, rbx (48 39 d8) — lifter writes Z, C, Slt, Sle, S (via a
         // `tmp = lhs - rhs; %sf = slt(tmp, 0)` sequence so that Js/Jns read a
         // faithful bit).
         let ops = lift64(&[0x48, 0x39, 0xd8]);
-        // 4 Cmp flag writes + 1 Sub temp materialisation + 1 Cmp for %sf = 6.
-        assert_eq!(ops.len(), 6, "cmp should lift to 6 LLIR ops: {:#?}", ops);
+        // 5 Cmp flag writes + 1 Sub temp materialisation + 1 Cmp for %sf = 7.
+        assert_eq!(ops.len(), 7, "cmp should lift to 7 LLIR ops: {:#?}", ops);
         let flags: Vec<_> = ops
             .iter()
             .filter_map(|i| match &i.op {
@@ -1057,6 +1311,7 @@ mod tests {
         for want in [
             VReg::Flag(Flag::Z),
             VReg::Flag(Flag::C),
+            VReg::Flag(Flag::Ule),
             VReg::Flag(Flag::Slt),
             VReg::Flag(Flag::Sle),
             VReg::Flag(Flag::S),
@@ -1131,6 +1386,121 @@ mod tests {
         // cmp is 3 bytes, je short is 2 bytes, start 0x1000 → je at 0x1003 → target 0x1005 + 2? Let's compute:
         // je is at 0x1003, length 2, disp +2 → target = 0x1003 + 2 + 2 = 0x1007
         assert_eq!(cj.1, 0x1007);
+    }
+
+    #[test]
+    fn jbe_reads_unsigned_less_or_equal_flag() {
+        // cmp rax, rbx ; jbe +2  (48 39 d8 76 02)
+        let ops = lift_bytes(&[0x48, 0x39, 0xd8, 0x76, 0x02], 0x1000, 64);
+        let cj = ops
+            .iter()
+            .find_map(|i| match &i.op {
+                Op::CondJump { cond, target } => Some((cond.clone(), *target)),
+                _ => None,
+            })
+            .expect("expected CondJump");
+        assert_eq!(cj.0, VReg::Flag(Flag::Ule));
+        assert_eq!(cj.1, 0x1007);
+    }
+
+    #[test]
+    fn sete_lifts_to_flag_assign() {
+        // sete al  (0f 94 c0)
+        let ops = lift64(&[0x0f, 0x94, 0xc0]);
+        assert_eq!(ops.len(), 1, "got: {:#?}", ops);
+        match &ops[0].op {
+            Op::Assign {
+                dst,
+                src: Value::Reg(cond),
+            } => {
+                assert_eq!(*dst, VReg::phys("al"));
+                assert_eq!(*cond, VReg::Flag(Flag::Z));
+            }
+            other => panic!("expected flag Assign, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cmovne_lifts_to_conditional_assign() {
+        // cmovne rax, rbx  (48 0f 45 c3)
+        let ops = lift64(&[0x48, 0x0f, 0x45, 0xc3]);
+        assert_eq!(ops.len(), 2, "got: {:#?}", ops);
+        match &ops[0].op {
+            Op::Cmp {
+                dst: VReg::Temp(1),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(cond),
+                rhs: Value::Const(0),
+            } => assert_eq!(*cond, VReg::Flag(Flag::Z)),
+            other => panic!("expected inverted-condition Cmp, got {:?}", other),
+        }
+        match &ops[1].op {
+            Op::CondAssign {
+                dst,
+                cond,
+                src: Value::Reg(src),
+            } => {
+                assert_eq!(*dst, VReg::phys("rax"));
+                assert_eq!(*cond, VReg::Temp(1));
+                assert_eq!(*src, VReg::phys("rbx"));
+            }
+            other => panic!("expected CondAssign, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn xchg_reg_reg_lifts_to_swap_sequence() {
+        // xchg rax, rbx  (48 87 d8)
+        let ops = lift64(&[0x48, 0x87, 0xd8]);
+        assert_eq!(ops.len(), 3, "got: {:#?}", ops);
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign {
+                dst: VReg::Temp(0),
+                src: Value::Reg(src),
+            } if *src == VReg::phys("rax")
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Assign {
+                dst,
+                src: Value::Reg(src),
+            } if *dst == VReg::phys("rax") && *src == VReg::phys("rbx")
+        ));
+        assert!(matches!(
+            &ops[2].op,
+            Op::Assign {
+                dst,
+                src: Value::Reg(VReg::Temp(0)),
+            } if *dst == VReg::phys("rbx")
+        ));
+    }
+
+    #[test]
+    fn int3_lifts_to_nop() {
+        let ops = lift64(&[0xcc]);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].op, Op::Nop);
+    }
+
+    #[test]
+    fn div_reg_lifts_to_accumulator_divide() {
+        // div rcx  (48 f7 f1)
+        let ops = lift64(&[0x48, 0xf7, 0xf1]);
+        assert_eq!(ops.len(), 1, "got: {:#?}", ops);
+        match &ops[0].op {
+            Op::Bin {
+                dst,
+                op: BinOp::Div,
+                lhs: Value::Reg(lhs),
+                rhs: Value::Reg(rhs),
+            } => {
+                assert_eq!(*dst, VReg::phys("rax"));
+                assert_eq!(*lhs, VReg::phys("rax"));
+                assert_eq!(*rhs, VReg::phys("rcx"));
+            }
+            other => panic!("expected accumulator Div, got {:?}", other),
+        }
     }
 
     #[test]

@@ -10,8 +10,9 @@
 //! ```text
 //! {
 //!     "va": int,
-//!     "kind": "assign" | "bin" | "un" | "cmp" | "load" | "store"
-//!           | "jump"   | "cond_jump" | "call" | "return" | "nop" | "unknown",
+//!     "kind": "assign" | "cond_assign" | "bin" | "un" | "cmp"
+//!           | "load" | "store" | "jump" | "cond_jump" | "call"
+//!           | "return" | "nop" | "unknown",
 //!     # additional kind-specific fields — see encode_op below.
 //! }
 //! ```
@@ -31,6 +32,7 @@ fn flag_repr(f: Flag) -> &'static str {
     match f {
         Flag::Z => "%zf",
         Flag::C => "%cf",
+        Flag::Ule => "%ule",
         Flag::S => "%sf",
         Flag::Slt => "%slt",
         Flag::Sle => "%sle",
@@ -85,6 +87,7 @@ fn binop_str(op: BinOp) -> &'static str {
         BinOp::Add => "add",
         BinOp::Sub => "sub",
         BinOp::Mul => "mul",
+        BinOp::Div => "div",
         BinOp::And => "and",
         BinOp::Or => "or",
         BinOp::Xor => "xor",
@@ -106,6 +109,7 @@ fn cmpop_str(op: CmpOp) -> &'static str {
         CmpOp::Eq => "eq",
         CmpOp::Ne => "ne",
         CmpOp::Ult => "ult",
+        CmpOp::Ule => "ule",
         CmpOp::Slt => "slt",
         CmpOp::Sle => "sle",
     }
@@ -118,6 +122,12 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
         Op::Assign { dst, src } => {
             d.set_item("kind", "assign")?;
             d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("src", value_to_pyobj(py, src)?)?;
+        }
+        Op::CondAssign { dst, cond, src } => {
+            d.set_item("kind", "cond_assign")?;
+            d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("cond", vreg_to_str(cond))?;
             d.set_item("src", value_to_pyobj(py, src)?)?;
         }
         Op::Bin { dst, op, lhs, rhs } => {
