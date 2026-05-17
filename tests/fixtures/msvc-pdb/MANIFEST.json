@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "purpose": "Fixtures for Glaurung #179 PDB ingestion (blocked-by-#197). Each row is a (PE, PDB) pair identified by the PE's embedded CodeView (pdb_guid, pdb_age). The fetch.sh script reproduces the set from msdl.microsoft.com.",
+  "produced_by": "agentic-security-bot windows-port iter 11 (2026-05-16)",
+  "source_corpus": "/nas4/data/binary-analysis/glaurung/binaries/windows-11-x64/ (asb private; reproducible via fetch.sh below)",
+  "license_summary": "All binaries are Microsoft public release binaries; PDBs are public via msdl.microsoft.com. We do not commit the bytes here; tests fetch on demand. If a future revision opts to vendor via git LFS, this MANIFEST remains the authoritative provenance record.",
+  "authoritative_identifier": "(pdb_name, pdb_guid, pdb_age). PE sha256 is the corpus-snapshot value and is INFORMATIONAL ONLY -- msdl.microsoft.com sometimes serves a re-signed PE for the same build, leaving the PDB GUID intact but changing the PE sha. fetch.sh verifies by PDB GUID, not PE sha. PDBs are content-addressed by URL and unique per (name, guid, age).",
+  "fixtures": [
+    {
+      "binary": "ntoskrnl.exe",
+      "size_bytes": 12092904,
+      "sha256": "bf8489d981ea5d73dfb29b883405d68590f2b0b74dc2e9796e35cc1849c56826",
+      "pdb_name": "ntkrnlmp.pdb",
+      "pdb_guid": "CF32DE2E4A334C7C06FB63FCB6FAFB5C",
+      "pdb_age": 1,
+      "version": "10.0.22621.2428 (WinBuild.160101.0800)",
+      "windows_versions": [
+        "11-22H2",
+        "11-23H2"
+      ],
+      "msdl_pe_url": "https://msdl.microsoft.com/download/symbols/ntoskrnl.exe/7D02613E1047000/ntoskrnl.exe",
+      "msdl_pdb_url": "https://msdl.microsoft.com/download/symbols/ntkrnlmp.pdb/CF32DE2E4A334C7C06FB63FCB6FAFB5C1/ntkrnlmp.pdb",
+      "license_note": "Microsoft public release binary; redistributable per MS Software License Terms for development testing. PDB fetched from msdl.microsoft.com (Microsoft public symbol server)."
+    },
+    {
+      "binary": "ntdll.dll",
+      "size_bytes": 2187392,
+      "sha256": "5d59d9f32b8f1c4e5161714f1f07bd366f6c71c0ef72a7b7e66e4ac58f646ecd",
+      "pdb_name": "ntdll.pdb",
+      "pdb_guid": "158A782AFAE4E837A58B83204612935F",
+      "pdb_age": 1,
+      "version": "10.0.22621.2428 (WinBuild.160101.0800)",
+      "windows_versions": [
+        "11-22H2",
+        "11-23H2"
+      ],
+      "msdl_pe_url": "https://msdl.microsoft.com/download/symbols/ntdll.dll/806D3ECF217000/ntdll.dll",
+      "msdl_pdb_url": "https://msdl.microsoft.com/download/symbols/ntdll.pdb/158A782AFAE4E837A58B83204612935F1/ntdll.pdb",
+      "license_note": "Microsoft public release binary; redistributable per MS Software License Terms for development testing. PDB fetched from msdl.microsoft.com (Microsoft public symbol server)."
+    },
+    {
+      "binary": "tcpip.sys",
+      "size_bytes": 3306864,
+      "sha256": "d6e2e4766ef5068942ef6e8d8a519f43425deb9a8942789144a7afcede50c452",
+      "pdb_name": "tcpip.pdb",
+      "pdb_guid": "1833C6CE5730B11F526DB438977292B6",
+      "pdb_age": 1,
+      "version": "10.0.22621.2428 (WinBuild.160101.0800)",
+      "windows_versions": [
+        "11-22H2",
+        "11-23H2"
+      ],
+      "msdl_pe_url": "https://msdl.microsoft.com/download/symbols/tcpip.sys/9641870932f000/tcpip.sys",
+      "msdl_pdb_url": "https://msdl.microsoft.com/download/symbols/tcpip.pdb/1833C6CE5730B11F526DB438977292B61/tcpip.pdb",
+      "license_note": "Microsoft public release binary; redistributable per MS Software License Terms for development testing. PDB fetched from msdl.microsoft.com (Microsoft public symbol server)."
+    },
+    {
+      "binary": "dxgkrnl.sys",
+      "size_bytes": 4703704,
+      "sha256": "0e3e44d61a20eea7c932131c24f9c951346fe5c6f08f703a0a73c49b881d60ff",
+      "pdb_name": "dxgkrnl.pdb",
+      "pdb_guid": "9C4AE603CA21876042DD239B0EF5FF1B",
+      "pdb_age": 1,
+      "version": "10.0.22621.2428 (WinBuild.160101.0800)",
+      "windows_versions": [
+        "11-22H2",
+        "11-23H2"
+      ],
+      "msdl_pe_url": "https://msdl.microsoft.com/download/symbols/dxgkrnl.sys/9C3F5BC947d000/dxgkrnl.sys",
+      "msdl_pdb_url": "https://msdl.microsoft.com/download/symbols/dxgkrnl.pdb/9C4AE603CA21876042DD239B0EF5FF1B1/dxgkrnl.pdb",
+      "license_note": "Microsoft public release binary; redistributable per MS Software License Terms for development testing. PDB fetched from msdl.microsoft.com (Microsoft public symbol server)."
+    },
+    {
+      "binary": "win32k.sys",
+      "size_bytes": 692224,
+      "sha256": "729771c074d6c66eee07ff864163dc53c2d82a970e25b6a48ac1bd80d4ec3f91",
+      "pdb_name": "win32k.pdb",
+      "pdb_guid": "4FAED4BC3FB43EA9C734A5484BB2BD3A",
+      "pdb_age": 1,
+      "version": "10.0.22621.2428 (WinBuild.160101.0800)",
+      "windows_versions": [
+        "11-22H2",
+        "11-23H2"
+      ],
+      "msdl_pe_url": "https://msdl.microsoft.com/download/symbols/win32k.sys/57E4132Bab000/win32k.sys",
+      "msdl_pdb_url": "https://msdl.microsoft.com/download/symbols/win32k.pdb/4FAED4BC3FB43EA9C734A5484BB2BD3A1/win32k.pdb",
+      "license_note": "Microsoft public release binary; redistributable per MS Software License Terms for development testing. PDB fetched from msdl.microsoft.com (Microsoft public symbol server)."
+    },
+    {
+      "binary": "lsass.exe",
+      "size_bytes": 84096,
+      "sha256": "7cb8f22828a71c63c9fcf39ef12385a1d13a2aab495e2921f6a0b3a4feab7a77",
+      "pdb_name": "lsass.pdb",
+      "pdb_guid": "7BEED7B9FDFA544C0B455A46ADE3DB4C",
+      "pdb_age": 1,
+      "version": "10.0.22621.2215 (WinBuild.160101.0800)",
+      "windows_versions": [
+        "11-22H2",
+        "11-23H2"
+      ],
+      "msdl_pe_url": "https://msdl.microsoft.com/download/symbols/lsass.exe/8F5FB1D012000/lsass.exe",
+      "msdl_pdb_url": "https://msdl.microsoft.com/download/symbols/lsass.pdb/7BEED7B9FDFA544C0B455A46ADE3DB4C1/lsass.pdb",
+      "license_note": "Microsoft public release binary; redistributable per MS Software License Terms for development testing. PDB fetched from msdl.microsoft.com (Microsoft public symbol server)."
+    },
+    {
+      "binary": "kernel32.dll",
+      "size_bytes": 815456,
+      "sha256": "bbbb806a41b4e8254b7b8fb03af9e3a10f3a9e946a9a3bb2a02ea03ad7df6ca2",
+      "pdb_name": "kernel32.pdb",
+      "pdb_guid": "A651E6DA598D55318B7FBE3A9AA66B08",
+      "pdb_age": 1,
+      "version": "10.0.22621.2428 (WinBuild.160101.0800)",
+      "windows_versions": [
+        "11-22H2",
+        "11-23H2"
+      ],
+      "msdl_pe_url": "https://msdl.microsoft.com/download/symbols/kernel32.dll/D05C34F8c4000/kernel32.dll",
+      "msdl_pdb_url": "https://msdl.microsoft.com/download/symbols/kernel32.pdb/A651E6DA598D55318B7FBE3A9AA66B081/kernel32.pdb",
+      "license_note": "Microsoft public release binary; redistributable per MS Software License Terms for development testing. PDB fetched from msdl.microsoft.com (Microsoft public symbol server)."
+    },
+    {
+      "binary": "spoolsv.exe",
+      "size_bytes": 929792,
+      "sha256": "3668c100fe2c0232ce49f50f7b934e19041387211ab18935daaada83b4eb80bb",
+      "pdb_name": "spoolsv.pdb",
+      "pdb_guid": "F6D2178DE205E8EC2D25872DEB62CDD9",
+      "pdb_age": 1,
+      "version": "10.0.22621.2215 (WinBuild.160101.0800)",
+      "windows_versions": [
+        "11-22H2",
+        "11-23H2"
+      ],
+      "msdl_pe_url": "https://msdl.microsoft.com/download/symbols/spoolsv.exe/8CE45517e5000/spoolsv.exe",
+      "msdl_pdb_url": "https://msdl.microsoft.com/download/symbols/spoolsv.pdb/F6D2178DE205E8EC2D25872DEB62CDD91/spoolsv.pdb",
+      "license_note": "Microsoft public release binary; redistributable per MS Software License Terms for development testing. PDB fetched from msdl.microsoft.com (Microsoft public symbol server)."
+    }
+  ]
+}

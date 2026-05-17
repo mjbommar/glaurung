@@ -1,0 +1,7 @@
+# Binary fixtures are fetched on demand by fetch.sh from
+# msdl.microsoft.com; see README.md for the rationale.
+*.exe
+*.dll
+*.sys
+*.pdb
+.fetch_list
