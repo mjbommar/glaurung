@@ -182,14 +182,17 @@ The comparison-02 type-ingestion contract is now:
 - `_KSPIN_LOCK` remains visible as a scalar-alias/non-UDT missing
   layout instead of being forced into fake fields.
 
-The broader original exit signal also included >95% public-symbol
-name persistence. That remains a follow-up under the #179 umbrella.
+Public PDB function symbols now persist as address-to-name records
+for PE/PDB cache hits. The `ntoskrnl.exe` / `ntkrnlmp.pdb` fixture
+imports 27,238 PDB-derived `function_names` rows and resolves
+comparison-03 caller names such as `FsRtlPrivateLock` and
+`IoInitSystemPreDrivers`.
 
 ### Status
 
-Type ingestion shipped for the comparison-02 contract. Remaining
-PDB work is public symbol-to-VA name persistence and, if needed, a
-small alias/type-summary API for scalar typedefs such as
+Type ingestion and public function-name persistence have shipped for
+PE/PDB cache hits. Remaining PDB work is a small alias/type-summary
+API only if later consumers need scalar typedefs such as
 `_KSPIN_LOCK`.
 
 ---

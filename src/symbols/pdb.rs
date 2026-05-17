@@ -124,6 +124,35 @@ impl PdbFunctionPrototype {
     }
 }
 
+/// Public PDB symbol resolved to an RVA, optionally PE rebased.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdbPublicSymbol {
+    /// Public symbol name as stored in the PDB.
+    pub name: String,
+    /// Relative virtual address translated through the PDB address map.
+    pub rva: u32,
+    /// Virtual address when the symbol came from a PE/PDB cache hit.
+    pub va: Option<u64>,
+    /// The public symbol refers to executable code.
+    pub code: bool,
+    /// The public symbol is a function.
+    pub function: bool,
+    /// The symbol is in managed code.
+    pub managed: bool,
+    /// The symbol is managed IL code.
+    pub msil: bool,
+    /// Build identity for PE-originated PDB rows.
+    pub provenance: Option<PdbBuildProvenance>,
+}
+
+impl PdbPublicSymbol {
+    fn with_pe_context(mut self, image_base: u64, provenance: &PdbBuildProvenance) -> Self {
+        self.va = Some(image_base + u64::from(self.rva));
+        self.provenance = Some(provenance.clone());
+        self
+    }
+}
+
 /// Build identity attached to PDB rows resolved from a PE CodeView record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdbBuildProvenance {
@@ -205,6 +234,8 @@ pub struct PePdbSource {
     pub pdb_path: PathBuf,
     /// Parsed CodeView RSDS metadata.
     pub codeview: CodeViewRsds,
+    /// PE image base used to rebase PDB RVAs.
+    pub image_base: u64,
     /// Build identity for rows produced by this PE/PDB pairing.
     pub provenance: PdbBuildProvenance,
     /// Native PDB ingestor for the cache hit.
@@ -229,6 +260,16 @@ impl PePdbSource {
             .map(|prototype| prototype.with_provenance(&self.provenance))
             .collect())
     }
+
+    /// Enumerate public function symbols with PE rebased virtual addresses.
+    pub fn public_symbols(&self) -> ::pdb::Result<Vec<PdbPublicSymbol>> {
+        Ok(self
+            .ingestor
+            .public_symbols()?
+            .into_iter()
+            .map(|symbol| symbol.with_pe_context(self.image_base, &self.provenance))
+            .collect())
+    }
 }
 
 /// PDB-backed data pulled from a PE's matching cached PDB.
@@ -240,12 +281,16 @@ pub struct PePdbAnalysis {
     pub pdb_path: PathBuf,
     /// Parsed CodeView RSDS metadata.
     pub codeview: CodeViewRsds,
+    /// PE image base used to rebase PDB RVAs.
+    pub image_base: u64,
     /// Build identity for rows produced by this PE/PDB pairing.
     pub provenance: PdbBuildProvenance,
     /// Requested struct/class layouts found in the PDB.
     pub struct_layouts: Vec<PdbStructLayout>,
     /// Procedure and member-function prototype rows.
     pub function_prototypes: Vec<PdbFunctionPrototype>,
+    /// Public PDB function symbols.
+    pub public_symbols: Vec<PdbPublicSymbol>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,6 +361,13 @@ impl PdbIngestor {
         }
     }
 
+    /// Enumerate public code/function symbols with translated RVAs.
+    pub fn public_symbols(&self) -> ::pdb::Result<Vec<PdbPublicSymbol>> {
+        match self.backend {
+            PdbBackend::Native => self.public_symbols_native(),
+        }
+    }
+
     /// Resolve a PE's CodeView RSDS record against a local PDB cache.
     pub fn from_pe_cache<P: AsRef<Path>, C: AsRef<Path>>(
         pe_path: P,
@@ -325,6 +377,7 @@ impl PdbIngestor {
         let data = fs::read(pe_path)?;
         let binary_sha256 = sha256_hex(&data);
         let parser = PeParser::new(&data)?;
+        let image_base = parser.image_base();
         let Some(codeview) = parser.codeview_rsds()?.cloned() else {
             return Ok(None);
         };
@@ -338,6 +391,7 @@ impl PdbIngestor {
             ingestor: Self::open(pdb_path.clone()),
             pdb_path,
             codeview,
+            image_base,
             provenance,
         }))
     }
@@ -359,15 +413,18 @@ impl PdbIngestor {
             }
         }
         let function_prototypes = source.function_prototypes()?;
+        let public_symbols = source.public_symbols()?;
         let provenance = source.provenance.clone();
 
         Ok(Some(PePdbAnalysis {
             pe_path: source.pe_path,
             pdb_path: source.pdb_path,
             codeview: source.codeview,
+            image_base: source.image_base,
             provenance,
             struct_layouts,
             function_prototypes,
+            public_symbols,
         }))
     }
 
@@ -494,6 +551,159 @@ impl PdbIngestor {
 
         Ok(prototypes)
     }
+
+    fn public_symbols_native(&self) -> ::pdb::Result<Vec<PdbPublicSymbol>> {
+        let mut pdb = self.open_native()?;
+        let address_map = pdb.address_map()?;
+        let Some((public_stream_index, symbol_records_stream_index)) =
+            pdb_public_stream_indices(&mut pdb)?
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(public_stream) = pdb.raw_stream(public_stream_index)? else {
+            return Ok(Vec::new());
+        };
+        let Some(symbol_records_stream) = pdb.raw_stream(symbol_records_stream_index)? else {
+            return Ok(Vec::new());
+        };
+        let public_stream = public_stream.as_slice();
+        let symbol_records = symbol_records_stream.as_slice();
+        if public_stream.len() < PDB_PUBLICS_STREAM_HEADER_SIZE + PDB_GSI_HASH_HEADER_SIZE {
+            return Err(::pdb::Error::UnexpectedEof);
+        }
+
+        let hash_header_offset = PDB_PUBLICS_STREAM_HEADER_SIZE;
+        let hash_record_size = read_u32_le(public_stream, hash_header_offset + 8)? as usize;
+        let hash_records_offset = hash_header_offset + PDB_GSI_HASH_HEADER_SIZE;
+        let mut public_symbols = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+
+        for record_offset in (0..hash_record_size).step_by(PDB_PS_HASH_RECORD_SIZE) {
+            let public_record_offset =
+                read_u32_le(public_stream, hash_records_offset + record_offset)?;
+            if public_record_offset == 0 {
+                continue;
+            }
+            let symbol_offset = (public_record_offset - 1) as usize;
+            let Some(symbol) =
+                parse_public_symbol_record(symbol_records, symbol_offset, &address_map)?
+            else {
+                continue;
+            };
+            if !symbol.function {
+                continue;
+            }
+            if !seen.insert((symbol.rva, symbol.name.clone())) {
+                continue;
+            }
+            public_symbols.push(symbol);
+        }
+
+        Ok(public_symbols)
+    }
+}
+
+const PDB_DBI_STREAM_INDEX: u16 = 3;
+const PDB_DBI_PS_SYMBOLS_STREAM_OFFSET: usize = 16;
+const PDB_DBI_SYMBOL_RECORDS_STREAM_OFFSET: usize = 20;
+const PDB_PUBLICS_STREAM_HEADER_SIZE: usize = 28;
+const PDB_GSI_HASH_HEADER_SIZE: usize = 16;
+const PDB_PS_HASH_RECORD_SIZE: usize = 8;
+const PDB_NULL_STREAM_INDEX: u16 = 0xffff;
+const PDB_S_PUB32_ST: u16 = 0x1009;
+const PDB_S_PUB32: u16 = 0x110e;
+
+fn pdb_public_stream_indices(
+    pdb: &mut ::pdb::PDB<'static, File>,
+) -> ::pdb::Result<Option<(::pdb::StreamIndex, ::pdb::StreamIndex)>> {
+    let Some(dbi_stream) = pdb.raw_stream(::pdb::StreamIndex(PDB_DBI_STREAM_INDEX))? else {
+        return Ok(None);
+    };
+    let dbi = dbi_stream.as_slice();
+    let public_stream = read_u16_le(dbi, PDB_DBI_PS_SYMBOLS_STREAM_OFFSET)?;
+    let symbol_records_stream = read_u16_le(dbi, PDB_DBI_SYMBOL_RECORDS_STREAM_OFFSET)?;
+    if public_stream == PDB_NULL_STREAM_INDEX || symbol_records_stream == PDB_NULL_STREAM_INDEX {
+        return Ok(None);
+    }
+    Ok(Some((
+        ::pdb::StreamIndex(public_stream),
+        ::pdb::StreamIndex(symbol_records_stream),
+    )))
+}
+
+fn parse_public_symbol_record(
+    symbol_records: &[u8],
+    symbol_offset: usize,
+    address_map: &::pdb::AddressMap<'_>,
+) -> ::pdb::Result<Option<PdbPublicSymbol>> {
+    let symbol_length = usize::from(read_u16_le(symbol_records, symbol_offset)?);
+    if symbol_length < 2 {
+        return Err(::pdb::Error::SymbolTooShort);
+    }
+    let record_start = symbol_offset + 2;
+    let record_end = record_start + symbol_length;
+    let record = symbol_records
+        .get(record_start..record_end)
+        .ok_or(::pdb::Error::UnexpectedEof)?;
+    let kind = read_u16_le(record, 0)?;
+    if kind != PDB_S_PUB32 && kind != PDB_S_PUB32_ST {
+        return Ok(None);
+    }
+    if record.len() < 12 {
+        return Err(::pdb::Error::UnexpectedEof);
+    }
+
+    let flags = read_u32_le(record, 2)?;
+    let offset = read_u32_le(record, 6)?;
+    let section = read_u16_le(record, 10)?;
+    let Some(name) = parse_public_symbol_name(kind, &record[12..])? else {
+        return Ok(None);
+    };
+    let Some(rva) = (::pdb::PdbInternalSectionOffset { offset, section }).to_rva(address_map)
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(PdbPublicSymbol {
+        name,
+        rva: rva.0,
+        va: None,
+        code: flags & 0x1 != 0,
+        function: flags & 0x2 != 0,
+        managed: flags & 0x4 != 0,
+        msil: flags & 0x8 != 0,
+        provenance: None,
+    }))
+}
+
+fn parse_public_symbol_name(kind: u16, data: &[u8]) -> ::pdb::Result<Option<String>> {
+    if kind == PDB_S_PUB32_ST {
+        let Some((&len, rest)) = data.split_first() else {
+            return Err(::pdb::Error::UnexpectedEof);
+        };
+        let name = rest
+            .get(..usize::from(len))
+            .ok_or(::pdb::Error::UnexpectedEof)?;
+        return Ok(Some(String::from_utf8_lossy(name).into_owned()));
+    }
+    let Some(end) = data.iter().position(|byte| *byte == 0) else {
+        return Ok(None);
+    };
+    Ok(Some(String::from_utf8_lossy(&data[..end]).into_owned()))
+}
+
+fn read_u16_le(data: &[u8], offset: usize) -> ::pdb::Result<u16> {
+    let bytes = data
+        .get(offset..offset + 2)
+        .ok_or(::pdb::Error::UnexpectedEof)?;
+    Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+fn read_u32_le(data: &[u8], offset: usize) -> ::pdb::Result<u32> {
+    let bytes = data
+        .get(offset..offset + 4)
+        .ok_or(::pdb::Error::UnexpectedEof)?;
+    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
 fn build_procedure_prototype(
@@ -1207,6 +1417,33 @@ mod tests {
     }
 
     #[test]
+    fn pdb_ingestor_extracts_public_function_symbols() {
+        let Some(path) = fixture_pdb("ntkrnlmp.pdb") else {
+            eprintln!("skipping PDB fixture test: ntkrnlmp.pdb is not present");
+            return;
+        };
+
+        let ingestor = PdbIngestor::open(path);
+        let public_symbols = ingestor
+            .public_symbols()
+            .expect("extract public function symbols");
+        assert!(
+            public_symbols.len() > 1_000,
+            "expected many ntkrnlmp public function symbols, got {}",
+            public_symbols.len()
+        );
+
+        let release_spin_lock = public_symbols
+            .iter()
+            .find(|symbol| symbol.name == "KeReleaseSpinLock")
+            .expect("expected KeReleaseSpinLock public symbol");
+        assert_eq!(release_spin_lock.rva, 0x323480);
+        assert_eq!(release_spin_lock.va, None);
+        assert!(release_spin_lock.function);
+        assert!(release_spin_lock.provenance.is_none());
+    }
+
+    #[test]
     fn pdb_ingestor_resolves_fixture_pe_cache_hit() {
         let Some(pe_path) = fixture("ntoskrnl.exe") else {
             eprintln!("skipping PE/PDB cache test: ntoskrnl.exe is not present");
@@ -1258,6 +1495,23 @@ mod tests {
             .function_prototypes
             .iter()
             .all(|prototype| prototype.provenance.as_ref() == Some(&analysis.provenance)));
+
+        let release_spin_lock = analysis
+            .public_symbols
+            .iter()
+            .find(|symbol| symbol.name == "KeReleaseSpinLock")
+            .expect("expected KeReleaseSpinLock public symbol from PE cache hit");
+        assert_eq!(release_spin_lock.rva, 0x323480);
+        assert_eq!(release_spin_lock.va, Some(0x140323480));
+        assert_eq!(
+            release_spin_lock.provenance.as_ref(),
+            Some(&analysis.provenance)
+        );
+        assert!(analysis.public_symbols.len() > 1_000);
+        assert!(analysis
+            .public_symbols
+            .iter()
+            .all(|symbol| symbol.provenance.as_ref() == Some(&analysis.provenance)));
     }
 
     #[test]

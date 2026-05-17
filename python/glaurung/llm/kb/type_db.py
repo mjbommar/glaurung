@@ -559,6 +559,9 @@ def import_pe_pdb_types(
             "imported_struct": 0,
             "imported_union": 0,
             "imported_function_proto": 0,
+            "imported_function_name": 0,
+            "public_symbols": 0,
+            "skipped_manual_function_name": 0,
             "missing_layouts": list(struct_names),
         }
 
@@ -571,6 +574,9 @@ def import_pe_pdb_types(
         "imported_struct": 0,
         "imported_union": 0,
         "imported_function_proto": 0,
+        "imported_function_name": 0,
+        "public_symbols": 0,
+        "skipped_manual_function_name": 0,
         "missing_layouts": missing,
     }
 
@@ -654,6 +660,115 @@ def import_pe_pdb_types(
             type_index=type_index,
         )
         counts["imported_function_proto"] += 1
+    counts.update(_import_pe_pdb_public_names_from_analysis(kb, analysis))
+    return counts
+
+
+def import_pe_pdb_public_names(
+    kb: PersistentKnowledgeBase,
+    pe_path: str,
+    cache_dir: str,
+) -> dict:
+    """Import public PE/PDB function names into the persistent xref KB.
+
+    Public symbols are translated to VA by the native PE/PDB cache
+    analysis before landing in ``function_names`` with ``set_by="pdb"``.
+    Existing manual names are preserved; non-manual names may be replaced
+    by the PDB canonical name, with the old canonical retained as an alias.
+    """
+    import glaurung as g
+
+    g_mod = cast(Any, g)
+    analysis = g_mod.debug.analyze_pe_pdb_cache_path(pe_path, cache_dir, [])
+    if not analysis.get("cache_hit"):
+        return {
+            "cache_hit": False,
+            "imported_function_name": 0,
+            "public_symbols": 0,
+            "skipped_manual_function_name": 0,
+        }
+    counts = _import_pe_pdb_public_names_from_analysis(kb, analysis)
+    counts["cache_hit"] = True
+    return counts
+
+
+def _import_pe_pdb_public_names_from_analysis(
+    kb: PersistentKnowledgeBase,
+    analysis: dict,
+) -> dict:
+    import time
+
+    from . import xref_db
+
+    counts = {
+        "imported_function_name": 0,
+        "public_symbols": 0,
+        "skipped_manual_function_name": 0,
+    }
+    xref_db._ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT entry_va, canonical, aliases_json, set_by "
+        "FROM function_names WHERE binary_id = ?",
+        (kb.binary_id,),
+    )
+    existing_by_va = {
+        int(row[0]): {
+            "canonical": str(row[1]),
+            "aliases": json.loads(row[2] or "[]"),
+            "set_by": str(row[3] or ""),
+        }
+        for row in cur.fetchall()
+    }
+
+    pending: dict[int, tuple[str, list[str]]] = {}
+    public_symbols = sorted(
+        list(analysis.get("public_symbols") or []),
+        key=lambda symbol: (
+            int(symbol.get("va") or 0),
+            str(symbol.get("name") or ""),
+        ),
+    )
+    for symbol in public_symbols:
+        counts["public_symbols"] += 1
+        if not symbol.get("function"):
+            continue
+        name = str(symbol.get("name") or "")
+        va = symbol.get("va")
+        if not name or va is None:
+            continue
+        entry_va = int(va)
+        existing = existing_by_va.get(entry_va)
+        if existing is not None and existing["set_by"] == "manual":
+            counts["skipped_manual_function_name"] += 1
+            continue
+
+        if entry_va in pending:
+            canonical, aliases = pending[entry_va]
+            if name != canonical and name not in aliases:
+                aliases.append(name)
+            continue
+
+        aliases = []
+        if existing is not None:
+            aliases.extend(str(alias) for alias in existing["aliases"])
+            canonical = str(existing["canonical"])
+            if canonical != name and canonical not in aliases:
+                aliases.insert(0, canonical)
+        pending[entry_va] = (name, aliases)
+
+    now = int(time.time())
+    cur.executemany(
+        "INSERT OR REPLACE INTO function_names "
+        "(binary_id, entry_va, canonical, aliases_json, set_by, set_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (kb.binary_id, entry_va, name, json.dumps(aliases), "pdb", now)
+            for entry_va, (name, aliases) in pending.items()
+        ],
+    )
+    kb._conn.commit()
+    counts["imported_function_name"] = len(pending)
     return counts
 
 

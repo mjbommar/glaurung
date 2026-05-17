@@ -10,7 +10,8 @@ use pyo3::types::{PyDict, PyList};
 
 use crate::debug::dwarf::{extract_dwarf_types, DwarfType, DwarfTypeKind};
 use crate::symbols::pdb::{
-    PdbBuildProvenance, PdbFieldSummary, PdbFunctionPrototype, PdbIngestor, PdbStructLayout,
+    PdbBuildProvenance, PdbFieldSummary, PdbFunctionPrototype, PdbIngestor, PdbPublicSymbol,
+    PdbStructLayout,
 };
 
 pub fn register_debug_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -136,6 +137,26 @@ fn _pdb_prototype_to_dict<'py>(
     Ok(d)
 }
 
+fn _pdb_public_symbol_to_dict<'py>(
+    py: Python<'py>,
+    symbol: &PdbPublicSymbol,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("name", &symbol.name)?;
+    d.set_item("rva", symbol.rva)?;
+    d.set_item("va", symbol.va)?;
+    d.set_item("code", symbol.code)?;
+    d.set_item("function", symbol.function)?;
+    d.set_item("managed", symbol.managed)?;
+    d.set_item("msil", symbol.msil)?;
+    if let Some(provenance) = &symbol.provenance {
+        d.set_item("provenance", _provenance_to_dict(py, provenance)?)?;
+    } else {
+        d.set_item("provenance", py.None())?;
+    }
+    Ok(d)
+}
+
 #[pyfunction]
 #[pyo3(name = "extract_dwarf_types_path")]
 fn extract_dwarf_types_path_py<'py>(
@@ -168,6 +189,7 @@ fn analyze_pe_pdb_cache_path_py<'py>(
     d.set_item("cache_hit", true)?;
     d.set_item("pe_path", analysis.pe_path.display().to_string())?;
     d.set_item("pdb_path", analysis.pdb_path.display().to_string())?;
+    d.set_item("image_base", analysis.image_base)?;
     let codeview = PyDict::new(py);
     codeview.set_item("pdb_path", &analysis.codeview.pdb_path)?;
     codeview.set_item("pdb_name", &analysis.codeview.pdb_name)?;
@@ -188,5 +210,11 @@ fn analyze_pe_pdb_cache_path_py<'py>(
         prototypes.append(_pdb_prototype_to_dict(py, prototype)?)?;
     }
     d.set_item("function_prototypes", prototypes)?;
+
+    let public_symbols = PyList::empty(py);
+    for symbol in &analysis.public_symbols {
+        public_symbols.append(_pdb_public_symbol_to_dict(py, symbol)?)?;
+    }
+    d.set_item("public_symbols", public_symbols)?;
     Ok(d)
 }

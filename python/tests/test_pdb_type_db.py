@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from glaurung.llm.kb import type_db
+from glaurung.llm.kb import type_db, xref_db
 from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 
 
@@ -36,6 +36,7 @@ def test_import_pe_pdb_types_into_persistent_type_db(tmp_path: Path) -> None:
     assert summary["imported_struct"] >= 1
     assert summary["imported_union"] >= 1
     assert summary["imported_function_proto"] > 100
+    assert summary["imported_function_name"] > 1000
     assert summary["missing_layouts"] == ["_KSPIN_LOCK"]
 
     eprocess = type_db.get_type(kb, "_EPROCESS")
@@ -61,6 +62,11 @@ def test_import_pe_pdb_types_into_persistent_type_db(tmp_path: Path) -> None:
     assert prototypes
     assert prototypes[0].set_by == "pdb"
     assert "provenance" in prototypes[0].body
+
+    release_spin_lock = xref_db.get_function_name(kb, 0x140323480)
+    assert release_spin_lock is not None
+    assert release_spin_lock.canonical == "KeReleaseSpinLock"
+    assert release_spin_lock.set_by == "pdb"
     kb.close()
 
     reopened = PersistentKnowledgeBase.open(db_path, binary_path=pe_path)

@@ -73,7 +73,7 @@ forking; the contract is asb ADR 0023 (mirrored here as
 | issue | scope | blocker for | per-doc | status |
 |-------|-------|-------------|---------|--------|
 | #197  | MSVC + .pdb sample fixtures                | #179 PDB ingest test cases | `roadmap.md` sec 1, `pdb-ingestion-design.md` sec "Test fixtures" | shipped |
-| #179  | PDB ingestion (`src/symbols/pdb.rs`)       | every kg-pe rule that needs PDB-derived types | `pdb-ingestion-design.md` | type path shipped; public symbol binding / alias summaries remain |
+| #179  | PDB ingestion (`src/symbols/pdb.rs`)       | every kg-pe rule that needs PDB-derived types | `pdb-ingestion-design.md` | type path + public function-name binding shipped; alias summaries remain |
 | #199  | PE hardening: delay-import / manifest / VersionInfo / TLS callbacks | grounded malware triage, driver TLS-callback bug class | `pe-hardening-design.md` | shipped |
 | #186  | BSim-equivalent function similarity         | Patch Tuesday cross-build diff for n-day | `bsim-similarity-design.md` | not started |
 | tools | 12-15 Windows-specific `llm/tools/` files   | rule-as-tool encoding for tier-1 bug classes | `atomic-tools.md` | not started |

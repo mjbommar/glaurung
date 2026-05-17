@@ -50,8 +50,8 @@ property the tool encodes; "bug-class ref" cites the
 
 That is 15 (the campaign's "12-15" is approximate). The
 `pdb_struct_layout.py` helper is now unblocked by the #179 type
-DB import path; public symbol-name binding remains a separate PDB
-follow-up for xref-heavy tools.
+DB import path, and public PDB function names are available through
+the persistent `function_names` table for xref-heavy tools.
 
 ## Per-tool authoring template
 

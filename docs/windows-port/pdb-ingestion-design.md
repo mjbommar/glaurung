@@ -25,15 +25,19 @@ The type-ingestion path has landed for the comparison-02 contract:
 - `type_db.import_pe_pdb_types()` persists PDB-derived structs,
   unions, and `function_proto` type records into `.glaurung` with
   `set_by="pdb"` and provenance.
+- `type_db.import_pe_pdb_public_names()` persists PE/PDB public
+  function symbols into the persistent `function_names` table with
+  `set_by="pdb"` while preserving manual names.
 - The `ntoskrnl.exe` / `ntkrnlmp.pdb` fixture imports the 20
   fielded canonical structs/unions needed by comparison 02 and
   keeps `_KSPIN_LOCK` explicit as a scalar-alias/non-UDT
   `missing_layouts` entry.
+- The same fixture imports 27,238 PDB public function names, including
+  `KeReleaseSpinLock`, `FsRtlPrivateLock`, and
+  `IoInitSystemPreDrivers`.
 
 Remaining work under the broader #179 umbrella:
 
-- Persist public PDB symbols as address-to-name records so PE/PDB
-  cache hits can name functions by VA.
 - Add a narrow alias/type-summary API only if a later consumer needs
   scalar typedefs such as `_KSPIN_LOCK` represented as typed rows.
 
