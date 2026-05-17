@@ -692,6 +692,179 @@ fn parse_pdata_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch)
     starts
 }
 
+/// Read every export-table function VA from a PE.
+///
+/// The `object` crate's `dynamic_symbols()` returns nothing for PE
+/// targets even when the binary has an `IMAGE_DIRECTORY_ENTRY_EXPORT`
+/// table (verified empirically on kernel32.dll: 1671 exports, 0
+/// returned by `obj.dynamic_symbols()`). We walk the directory
+/// directly to keep export-driven fn discovery working.
+///
+/// Without this seed source, kernel32.dll (~1700 exports, most of
+/// them tiny `jmp [iat]` thunks not covered by `.pdata`) yields
+/// only 58 % recall on the iter-14 comparison sweep. With it, every
+/// `IMAGE_EXPORT_DIRECTORY::AddressOfFunctions[i]` lands as a seed.
+///
+/// Returns an empty vector for non-PE files or PEs with no export
+/// directory.
+fn parse_pe_export_function_starts(
+    data: &[u8],
+    regions: &[ExecRegion],
+    arch: BArch,
+) -> Vec<u64> {
+    if !arch.is_64_bit() && arch != BArch::X86 {
+        return Vec::new();
+    }
+    if data.len() < 0x40 || &data[..2] != b"MZ" {
+        return Vec::new();
+    }
+    let read_u16 = |off: usize| -> Option<u16> {
+        data.get(off..off + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let read_u32 = |off: usize| -> Option<u32> {
+        data.get(off..off + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let read_u64 = |off: usize| -> Option<u64> {
+        data.get(off..off + 8).map(|b| {
+            let lo = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64;
+            let hi = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as u64;
+            (hi << 32) | lo
+        })
+    };
+    let e_lfanew = match read_u32(0x3c) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    if e_lfanew + 24 > data.len() || &data[e_lfanew..e_lfanew + 4] != b"PE\0\0" {
+        return Vec::new();
+    }
+    let coff_off = e_lfanew + 4;
+    let n_sections = match read_u16(coff_off + 2) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    let opt_size = match read_u16(coff_off + 16) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    let opt_off = coff_off + 20;
+    let magic = match read_u16(opt_off) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    let (image_base, dd_off) = if magic == 0x20B {
+        let base = match read_u64(opt_off + 24) {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+        (base, opt_off + 112)
+    } else if magic == 0x10B {
+        let base = match read_u32(opt_off + 28) {
+            Some(v) => v as u64,
+            None => return Vec::new(),
+        };
+        (base, opt_off + 96)
+    } else {
+        return Vec::new();
+    };
+    // IMAGE_DIRECTORY_ENTRY_EXPORT = index 0
+    let exp_rva = match read_u32(dd_off) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    let exp_size = match read_u32(dd_off + 4) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    if exp_rva == 0 || exp_size == 0 {
+        return Vec::new();
+    }
+    // Resolve via section table.
+    let sec_off = opt_off + opt_size;
+    let mut sections_view: Vec<(usize, usize, usize, usize)> =
+        Vec::with_capacity(n_sections);
+    for i in 0..n_sections {
+        let s = sec_off + i * 40;
+        if s + 40 > data.len() {
+            break;
+        }
+        let virt_sz = read_u32(s + 8).unwrap_or(0) as usize;
+        let virt_addr = read_u32(s + 12).unwrap_or(0) as usize;
+        let raw_sz = read_u32(s + 16).unwrap_or(0) as usize;
+        let raw_ptr = read_u32(s + 20).unwrap_or(0) as usize;
+        sections_view.push((virt_addr, std::cmp::max(virt_sz, raw_sz), raw_ptr, raw_sz));
+    }
+    let rva_to_off = |rva: usize| -> Option<usize> {
+        for (va, span, rp, _rs) in &sections_view {
+            if rva >= *va && rva < *va + *span {
+                return Some(rp + (rva - va));
+            }
+        }
+        None
+    };
+    let exp_off = match rva_to_off(exp_rva) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    // IMAGE_EXPORT_DIRECTORY layout:
+    //   u32 Characteristics
+    //   u32 TimeDateStamp
+    //   u16 MajorVersion, u16 MinorVersion
+    //   u32 Name (RVA)
+    //   u32 Base
+    //   u32 NumberOfFunctions
+    //   u32 NumberOfNames
+    //   u32 AddressOfFunctions (RVA -> array of u32 RVAs)
+    //   u32 AddressOfNames     (RVA -> ...)
+    //   u32 AddressOfNameOrdinals (RVA -> ...)
+    if exp_off + 40 > data.len() {
+        return Vec::new();
+    }
+    let n_funcs = match read_u32(exp_off + 0x14) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    let addr_of_funcs_rva = match read_u32(exp_off + 0x1c) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    if n_funcs == 0 || addr_of_funcs_rva == 0 {
+        return Vec::new();
+    }
+    let addrs_off = match rva_to_off(addr_of_funcs_rva) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    let cap = std::cmp::min(n_funcs, 1_000_000);
+    let mut starts = Vec::with_capacity(cap);
+    for i in 0..cap {
+        let off = addrs_off + i * 4;
+        if off + 4 > data.len() {
+            break;
+        }
+        let rva = read_u32(off).unwrap_or(0) as u64;
+        if rva == 0 {
+            continue;
+        }
+        let va = image_base + rva;
+        // Skip forwarder exports: their "address" actually points
+        // inside the export directory itself (an ASCII string like
+        // "NTDLL.RtlAddAccessAllowedAce"), NOT a code byte. The
+        // forwarder RVA always falls inside the export directory
+        // span [exp_rva, exp_rva + exp_size).
+        let rva_us = rva as usize;
+        if rva_us >= exp_rva && rva_us < exp_rva + exp_size {
+            continue;
+        }
+        if in_exec_regions(regions, va).is_some() {
+            starts.push(va);
+        }
+    }
+    starts
+}
+
 fn parse_function_seeds(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<Address> {
     let bits = if arch.is_64_bit() { 64 } else { 32 };
     let mut seeds: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
@@ -973,6 +1146,24 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     // observed in asb's iter 13 comparison.
     let pdata_starts = parse_pdata_function_starts(data, &regions, arch);
     for va in pdata_starts {
+        if known.contains(&va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, va, bits, None, None) {
+            seeds.push(addr);
+            known.insert(va);
+        }
+    }
+
+    // PE export-table seeds. The `object` crate's `dynamic_symbols()`
+    // returns 0 entries for PE files (verified on kernel32.dll: 1671
+    // exports, 0 returned). We parse IMAGE_DIRECTORY_ENTRY_EXPORT
+    // directly so every export address becomes a discovery seed.
+    // Closes the 58 % recall observed on kernel32 in the iter 14
+    // sweep (most kernel32 exports are tiny `jmp [iat]` thunks not
+    // covered by .pdata).
+    let export_starts = parse_pe_export_function_starts(data, &regions, arch);
+    for va in export_starts {
         if known.contains(&va) {
             continue;
         }
