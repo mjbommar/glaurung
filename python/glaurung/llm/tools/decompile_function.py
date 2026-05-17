@@ -24,6 +24,10 @@ class DecompileFunctionArgs(BaseModel):
                     "the register-level form with type annotations.",
     )
     timeout_ms: int = Field(500, description="Per-function analysis timeout in ms")
+    pdb_cache: str = Field(
+        "",
+        description="Optional Microsoft-style PDB cache directory for PE/PDB public names.",
+    )
 
 
 class DecompileFunctionResult(BaseModel):
@@ -70,6 +74,7 @@ class DecompileFunctionTool(
                 int(args.va),
                 timeout_ms=max(200, int(args.timeout_ms)),
                 style=style,
+                pdb_cache=args.pdb_cache,
             )
         except Exception as e:
             # Surface the failure in-band so the agent can continue; the

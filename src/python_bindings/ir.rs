@@ -292,7 +292,7 @@ fn detect_arch_and_call_conv(
 /// prefixes and type annotations).
 #[pyfunction]
 #[pyo3(name = "decompile_at")]
-#[pyo3(signature = (path, func_va, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, types=true, style=""))]
+#[pyo3(signature = (path, func_va, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, types=true, style="", pdb_cache=""))]
 fn decompile_at_py(
     path: String,
     func_va: u64,
@@ -301,6 +301,7 @@ fn decompile_at_py(
     timeout_ms: u64,
     types: bool,
     style: &str,
+    pdb_cache: &str,
 ) -> PyResult<String> {
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
@@ -339,7 +340,9 @@ fn decompile_at_py(
     crate::ir::const_fold::fold_constants(&mut f);
     crate::ir::dce::prune_dead_flags(&mut f);
     crate::ir::call_args::reconstruct_args(&mut f, cc);
-    let addr_map = crate::ir::name_resolve::collect_address_map(&data, &path);
+    let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
+    let addr_map =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
@@ -462,7 +465,7 @@ fn remap_type_map(
 /// `(func_name, entry_va, pseudocode)` triples.
 #[pyfunction]
 #[pyo3(name = "decompile_all")]
-#[pyo3(signature = (path, limit=8usize, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64))]
+#[pyo3(signature = (path, limit=8usize, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, pdb_cache=""))]
 fn decompile_all_py(
     py: Python<'_>,
     path: String,
@@ -470,6 +473,7 @@ fn decompile_all_py(
     max_blocks: usize,
     max_instructions: usize,
     timeout_ms: u64,
+    pdb_cache: &str,
 ) -> PyResult<PyObject> {
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render};
@@ -488,7 +492,9 @@ fn decompile_all_py(
     };
     let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
     let (arch, cc) = detect_arch_and_call_conv(&data);
-    let addr_map = crate::ir::name_resolve::collect_address_map(&data, &path);
+    let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
+    let addr_map =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {

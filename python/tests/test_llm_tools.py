@@ -93,6 +93,37 @@ def _make_ctx_for_bytes(data: bytes, tmp_path: Path) -> MemoryContext:
     return ctx
 
 
+@pytest.mark.skipif(
+    not Path("tests/fixtures/msvc-pdb/ntdll.dll").exists(),
+    reason="ntdll PE sample missing",
+)
+def test_decompile_function_tool_uses_pe_export_names():
+    from glaurung.llm.tools.decompile_function import (
+        build_tool as build_decompile_function,
+    )
+
+    sample = Path("tests/fixtures/msvc-pdb/ntdll.dll")
+    art = g.triage.analyze_path(str(sample))
+    ctx = MemoryContext(
+        file_path=str(sample),
+        artifact=art,
+        budgets=Budgets(timeout_ms=3000),
+    )
+    tool = build_decompile_function()
+    out = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            va=0x1800886C0,
+            style="c",
+            timeout_ms=3000,
+            pdb_cache="tests/fixtures/msvc-pdb",
+        ),
+    )
+    assert "RtlAcquireSRWLockExclusive(" in out.pseudocode
+    assert "call 0x180037800" not in out.pseudocode
+
+
 class TestAtomicTools:
     def test_file_hash_direct(self, tmp_path: Path):
         ctx = _make_ctx_for_bytes(b"hello world", tmp_path)

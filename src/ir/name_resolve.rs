@@ -14,6 +14,7 @@
 //!   reference.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::ir::ast::{Expr, Function, Stmt};
 
@@ -135,6 +136,10 @@ pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
             }
         }
     }
+    // PE exports. The object crate does not expose PE exports through
+    // dynamic_symbols(), so recover the export table directly for Windows
+    // decompile output.
+    collect_pe_exports(data, &mut out);
     // ELF GOT (may name something the symbol table doesn't).
     for (va, name) in crate::analysis::elf_got::elf_got_map(data) {
         out.insert(va, name);
@@ -154,6 +159,65 @@ pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
     // Keep `path` so future resolvers can hit debug info; unused today.
     let _ = path;
     out
+}
+
+/// Helper: build an address map and optionally overlay PE/PDB public
+/// function symbols from a local Microsoft-style symbol cache. Export/IAT
+/// names stay preferred for exact-address collisions because they are the
+/// names the binary exposes at runtime.
+pub fn collect_address_map_with_pdb_cache(
+    data: &[u8],
+    path: &str,
+    pdb_cache: Option<&Path>,
+) -> HashMap<u64, String> {
+    let mut out = collect_address_map(data, path);
+    if let Some(cache_dir) = pdb_cache {
+        collect_pe_pdb_publics(path, cache_dir, &mut out);
+    }
+    out
+}
+
+fn collect_pe_exports(data: &[u8], out: &mut HashMap<u64, String>) {
+    let Ok(parser) = crate::formats::pe::PeParser::new(data) else {
+        return;
+    };
+    let image_base = parser.image_base();
+    let Ok(exports) = parser.exports() else {
+        return;
+    };
+    for export in &exports.exports {
+        if export.forwarder.is_some() {
+            continue;
+        }
+        let Some(name) = export.name else {
+            continue;
+        };
+        if name.is_empty() || export.rva == 0 {
+            continue;
+        }
+        out.entry(image_base + u64::from(export.rva))
+            .or_insert_with(|| name.to_string());
+    }
+}
+
+fn collect_pe_pdb_publics(path: &str, cache_dir: &Path, out: &mut HashMap<u64, String>) {
+    if path.is_empty() || !cache_dir.is_dir() {
+        return;
+    }
+    let Ok(Some(source)) = crate::symbols::pdb::PdbIngestor::from_pe_cache(path, cache_dir) else {
+        return;
+    };
+    let Ok(symbols) = source.public_symbols() else {
+        return;
+    };
+    for symbol in symbols {
+        if !symbol.code || !symbol.function || symbol.name.is_empty() {
+            continue;
+        }
+        if let Some(va) = symbol.va {
+            out.entry(va).or_insert(symbol.name);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -257,6 +321,36 @@ mod tests {
             map.values().any(|n| n.contains("@plt")),
             "no @plt entries in resolved map (size={})",
             map.len()
+        );
+    }
+
+    #[test]
+    fn collect_address_map_includes_pe_exports_on_real_binary() {
+        let path = std::path::Path::new("tests/fixtures/msvc-pdb/ntdll.dll");
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).unwrap();
+        let map = collect_address_map(&data, path.to_str().unwrap_or(""));
+        assert_eq!(
+            map.get(&0x180037800).map(String::as_str),
+            Some("RtlAcquireSRWLockExclusive")
+        );
+    }
+
+    #[test]
+    fn collect_address_map_can_include_pe_pdb_publics() {
+        let path = std::path::Path::new("tests/fixtures/msvc-pdb/ntoskrnl.exe");
+        let cache = std::path::Path::new("tests/fixtures/msvc-pdb");
+        if !path.exists() || !cache.join("ntkrnlmp.pdb").exists() {
+            return;
+        }
+        let data = std::fs::read(path).unwrap();
+        let map =
+            collect_address_map_with_pdb_cache(&data, path.to_str().unwrap_or(""), Some(cache));
+        assert_eq!(
+            map.get(&0x140323480).map(String::as_str),
+            Some("KeReleaseSpinLock")
         );
     }
 }

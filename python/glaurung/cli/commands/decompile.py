@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 from typing import Optional
 
 import glaurung as g
@@ -72,6 +71,12 @@ class DecompileCommand(BaseCommand):
                  "(default); 'c' strips the %% prefix and annotations for a "
                  "closer-to-C view.",
         )
+        parser.add_argument(
+            "--pdb-cache",
+            default="",
+            help="Optional Microsoft-style PDB cache directory used to resolve "
+                 "PE/PDB public function names in decompile output.",
+        )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         try:
@@ -85,7 +90,10 @@ class DecompileCommand(BaseCommand):
         try:
             if args.all:
                 results = g.ir.decompile_all(
-                    str(path), args.limit, timeout_ms=args.timeout_ms
+                    str(path),
+                    args.limit,
+                    timeout_ms=args.timeout_ms,
+                    pdb_cache=args.pdb_cache,
                 )
                 if as_json:
                     payload = [
@@ -117,6 +125,7 @@ class DecompileCommand(BaseCommand):
                     timeout_ms=args.timeout_ms,
                     types=args.types,
                     style=style,
+                    pdb_cache=args.pdb_cache,
                 )
             except ValueError as e:
                 formatter.output_plain(f"Error: {e}")
