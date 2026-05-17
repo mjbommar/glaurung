@@ -85,7 +85,7 @@ fn count_reads_in_expr(e: &Expr, target: &VReg) -> usize {
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => 0,
-        Expr::Lea { base, index, .. } => {
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             (base.as_ref() == Some(target)) as usize + (index.as_ref() == Some(target)) as usize
         }
         Expr::Deref { addr, .. } => count_reads_in_expr(addr, target),

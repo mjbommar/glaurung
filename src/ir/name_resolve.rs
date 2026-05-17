@@ -102,6 +102,7 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => {}

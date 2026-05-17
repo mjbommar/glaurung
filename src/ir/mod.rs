@@ -36,6 +36,7 @@ pub mod lift_function;
 pub mod lift_x86;
 pub mod name_resolve;
 pub mod naming;
+pub mod pdb_fields;
 pub mod ssa;
 pub mod stack_idiom;
 pub mod stack_locals;

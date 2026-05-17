@@ -343,6 +343,8 @@ fn decompile_at_py(
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+    let field_map =
+        pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
@@ -375,6 +377,9 @@ fn decompile_at_py(
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
     ) {
         crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
+    }
+    if let Some(field_map) = &field_map {
+        crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
     }
     Ok(if style == "c" {
         crate::ir::ast::render_c(&f)
@@ -495,6 +500,8 @@ fn decompile_all_py(
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+    let field_map =
+        pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {
@@ -524,6 +531,9 @@ fn decompile_all_py(
             crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
         ) {
             crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
+        }
+        if let Some(field_map) = &field_map {
+            crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
         let text = render(&f);
         list.append((func.name.clone(), func.entry_point.value, text))?;

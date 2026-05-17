@@ -265,7 +265,9 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => false,
-        Expr::Lea { base, index, .. } => base.as_ref() == Some(dst) || index.as_ref() == Some(dst),
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            base.as_ref() == Some(dst) || index.as_ref() == Some(dst)
+        }
         Expr::Deref { addr, .. } => expr_reads(addr, dst),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_reads(lhs, dst) || expr_reads(rhs, dst)

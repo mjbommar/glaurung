@@ -219,7 +219,7 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => false,
-        Expr::Lea { base, index, .. } => {
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             base.as_ref() == Some(target) || index.as_ref() == Some(target)
         }
         Expr::Deref { addr, .. } => reads_reg_in_expr(addr, target),

@@ -203,6 +203,7 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => {}
     }

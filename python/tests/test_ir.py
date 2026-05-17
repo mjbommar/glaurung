@@ -135,6 +135,8 @@ WIN64_SAMPLE = Path(
     "samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe"
 )
 NTDLL_SAMPLE = Path("tests/fixtures/msvc-pdb/ntdll.dll")
+NTOSKRNL_SAMPLE = Path("tests/fixtures/msvc-pdb/ntoskrnl.exe")
+MSVC_PDB_CACHE = Path("tests/fixtures/msvc-pdb")
 
 
 def test_arm64_nop_lifts_via_arch_parameter():
@@ -194,6 +196,21 @@ def test_decompile_pe_uses_export_names_for_calls():
     text = g.ir.decompile_at(str(NTDLL_SAMPLE), 0x1800886C0, timeout_ms=3000)
     assert "call RtlAcquireSRWLockExclusive" in text
     assert "call 0x180037800" not in text
+
+
+@pytest.mark.skipif(
+    not NTOSKRNL_SAMPLE.exists() or not (MSVC_PDB_CACHE / "ntkrnlmp.pdb").exists(),
+    reason="ntoskrnl PE/PDB sample missing",
+)
+def test_decompile_pe_pdb_cache_adds_field_hints():
+    text = g.ir.decompile_at(
+        str(NTOSKRNL_SAMPLE),
+        0x140A88010,
+        timeout_ms=5000,
+        pdb_cache=str(MSVC_PDB_CACHE),
+    )
+    assert "_KTRAP_FRAME.Rsp" in text
+    assert "_KTHREAD.WaitIrql" in text
 
 
 @pytest.mark.skipif(not ARM64_SAMPLE.exists(), reason="arm64 sample missing")

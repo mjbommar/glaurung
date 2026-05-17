@@ -122,7 +122,7 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => false,
-        Expr::Lea { base, index, .. } => {
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             base.as_ref().map(|r| r == target).unwrap_or(false)
                 || index.as_ref().map(|r| r == target).unwrap_or(false)
         }
@@ -142,7 +142,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => 0,
-        Expr::Lea { base, index, .. } => {
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             let mut n = 0;
             if base.as_ref() == Some(target) {
                 n += 1;
@@ -216,6 +216,21 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
                 segment,
             }
         }
+        Expr::PdbFieldAddr {
+            base,
+            index,
+            scale,
+            disp,
+            segment,
+            hints,
+        } => Expr::PdbFieldAddr {
+            base,
+            index,
+            scale,
+            disp,
+            segment,
+            hints,
+        },
         Expr::Deref { mut addr, size } => {
             substitute_in_expr(&mut addr, target, with);
             Expr::Deref { addr, size }

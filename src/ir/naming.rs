@@ -208,7 +208,7 @@ fn walk_expr_phys(e: &Expr, cb: &mut impl FnMut(&str)) {
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => {}
-        Expr::Lea { base, index, .. } => {
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             if let Some(VReg::Phys(n)) = base {
                 cb(n);
             }
@@ -241,7 +241,7 @@ fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => {}
-        Expr::Lea { base, index, .. } => {
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             if let Some(v) = base {
                 rename_vreg(v, role);
             }

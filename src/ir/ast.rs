@@ -21,6 +21,15 @@ use crate::ir::types_recover::{TypeHint, TypeMap};
 
 // -- Expressions ---------------------------------------------------------------
 
+/// PDB-backed field candidate for a memory operand offset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdbFieldHint {
+    pub type_name: String,
+    pub field_name: String,
+    pub field_type: Option<String>,
+    pub offset: u64,
+}
+
 /// A C-level expression. v1 is deliberately shallow: we carry raw VReg
 /// references and constants without reconstructing use-def chains. The
 /// expression-reconstruction pass can later replace `Reg` with compound
@@ -51,6 +60,18 @@ pub enum Expr {
         /// Optional segment override (e.g. "fs" for x86-64 TLS).
         #[doc(hidden)]
         segment: Option<String>,
+    },
+    /// Address-of a memory operand with PDB-backed candidate field names
+    /// for the displacement. Kept as a hint because v0 does not yet know
+    /// the concrete struct type of the base register.
+    PdbFieldAddr {
+        base: Option<VReg>,
+        index: Option<VReg>,
+        scale: u8,
+        disp: i64,
+        #[doc(hidden)]
+        segment: Option<String>,
+        hints: Vec<PdbFieldHint>,
     },
     /// Dereference a memory operand with a given access width.
     Deref {
@@ -314,7 +335,7 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => 0,
-        Expr::Lea { base, index, .. } => {
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             (base.as_ref() == Some(target)) as usize + (index.as_ref() == Some(target)) as usize
         }
         Expr::Deref { addr, .. } => count_reg_uses_in_expr(addr, target),
@@ -615,6 +636,25 @@ fn write_reg_with_type(v: &VReg, tm: Option<&TypeMap>, out: &mut String) {
     let _ = write!(out, "{}", v);
 }
 
+fn write_pdb_field_hints(hints: &[PdbFieldHint], out: &mut String) {
+    if hints.is_empty() {
+        return;
+    }
+    out.push_str(" /* ");
+    for (i, hint) in hints.iter().enumerate() {
+        if i > 0 {
+            out.push_str(" | ");
+        }
+        let _ = write!(out, "{}.{}", hint.type_name, hint.field_name);
+        if let Some(field_type) = &hint.field_type {
+            if !field_type.is_empty() {
+                let _ = write!(out, ": {}", field_type);
+            }
+        }
+    }
+    out.push_str(" */");
+}
+
 fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
     match e {
         Expr::Reg(v) => {
@@ -675,6 +715,14 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
             scale,
             disp,
             segment,
+        }
+        | Expr::PdbFieldAddr {
+            base,
+            index,
+            scale,
+            disp,
+            segment,
+            ..
         } => {
             if let Some(seg) = segment {
                 let _ = write!(out, "{}:", seg);
@@ -710,6 +758,9 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
                 }
             }
             out.push(']');
+            if let Expr::PdbFieldAddr { hints, .. } = e {
+                write_pdb_field_hints(hints, out);
+            }
         }
         Expr::Deref { addr, size } => {
             let _ = write!(out, "*(u{})", size * 8);
@@ -1101,6 +1152,14 @@ fn write_expr_c(e: &Expr, out: &mut String) {
             scale,
             disp,
             segment,
+        }
+        | Expr::PdbFieldAddr {
+            base,
+            index,
+            scale,
+            disp,
+            segment,
+            ..
         } => {
             if let Some(seg) = segment {
                 let _ = write!(out, "{}:", seg);
@@ -1133,6 +1192,9 @@ fn write_expr_c(e: &Expr, out: &mut String) {
                 }
             }
             out.push(']');
+            if let Expr::PdbFieldAddr { hints, .. } = e {
+                write_pdb_field_hints(hints, out);
+            }
         }
         Expr::Deref { addr, .. } => {
             out.push('*');

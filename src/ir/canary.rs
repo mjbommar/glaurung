@@ -300,6 +300,7 @@ fn rewrite_expr(e: &mut Expr) {
         | Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => {}

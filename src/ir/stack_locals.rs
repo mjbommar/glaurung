@@ -169,6 +169,7 @@ fn rewrite_expr(
         | Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => {}
