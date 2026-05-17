@@ -10,6 +10,7 @@
 //! * `mov` between reg / imm / mem → [`Op::Assign`] / [`Op::Load`] / [`Op::Store`]
 //! * `add`, `sub`, `and`, `or`, `xor`, `shl`, `shr`, `sar`, `imul` → [`Op::Bin`]
 //! * `not`, `neg` → [`Op::Un`]
+//! * `inc`, `dec`, `xadd` on registers / memory → [`Op::Bin`] or load-modify-store
 //! * `cmp` → [`Op::Cmp`] writing `ZF`/`CF`/`SF`
 //! * `test` → [`Op::Cmp`] writing `ZF`
 //! * `push` / `pop` → decomposed into rsp-adjust + load/store
@@ -638,31 +639,137 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Push => push_ops(instr, bits),
         Mnemonic::Pop => pop_ops(instr, bits),
         Mnemonic::Inc => {
-            if instr.op_count() == 1 && instr.op_kind(0) == OpKind::Register {
-                let r = VReg::phys(reg_name(instr.op_register(0)));
-                return vec![Op::Bin {
-                    dst: r.clone(),
-                    op: BinOp::Add,
-                    lhs: Value::Reg(r),
-                    rhs: Value::Const(1),
-                }];
+            if instr.op_count() == 1 {
+                match instr.op_kind(0) {
+                    OpKind::Register => {
+                        let r = VReg::phys(reg_name(instr.op_register(0)));
+                        return vec![Op::Bin {
+                            dst: r.clone(),
+                            op: BinOp::Add,
+                            lhs: Value::Reg(r),
+                            rhs: Value::Const(1),
+                        }];
+                    }
+                    OpKind::Memory => {
+                        let addr = mem_op_of(instr);
+                        let tmp = VReg::Temp(0);
+                        return vec![
+                            Op::Load {
+                                dst: tmp.clone(),
+                                addr: addr.clone(),
+                            },
+                            Op::Bin {
+                                dst: tmp.clone(),
+                                op: BinOp::Add,
+                                lhs: Value::Reg(tmp.clone()),
+                                rhs: Value::Const(1),
+                            },
+                            Op::Store {
+                                addr,
+                                src: Value::Reg(tmp),
+                            },
+                        ];
+                    }
+                    _ => {}
+                }
             }
             vec![Op::Unknown {
                 mnemonic: "inc".into(),
             }]
         }
         Mnemonic::Dec => {
-            if instr.op_count() == 1 && instr.op_kind(0) == OpKind::Register {
-                let r = VReg::phys(reg_name(instr.op_register(0)));
-                return vec![Op::Bin {
-                    dst: r.clone(),
-                    op: BinOp::Sub,
-                    lhs: Value::Reg(r),
-                    rhs: Value::Const(1),
-                }];
+            if instr.op_count() == 1 {
+                match instr.op_kind(0) {
+                    OpKind::Register => {
+                        let r = VReg::phys(reg_name(instr.op_register(0)));
+                        return vec![Op::Bin {
+                            dst: r.clone(),
+                            op: BinOp::Sub,
+                            lhs: Value::Reg(r),
+                            rhs: Value::Const(1),
+                        }];
+                    }
+                    OpKind::Memory => {
+                        let addr = mem_op_of(instr);
+                        let tmp = VReg::Temp(0);
+                        return vec![
+                            Op::Load {
+                                dst: tmp.clone(),
+                                addr: addr.clone(),
+                            },
+                            Op::Bin {
+                                dst: tmp.clone(),
+                                op: BinOp::Sub,
+                                lhs: Value::Reg(tmp.clone()),
+                                rhs: Value::Const(1),
+                            },
+                            Op::Store {
+                                addr,
+                                src: Value::Reg(tmp),
+                            },
+                        ];
+                    }
+                    _ => {}
+                }
             }
             vec![Op::Unknown {
                 mnemonic: "dec".into(),
+            }]
+        }
+        Mnemonic::Xadd => {
+            if instr.op_count() == 2 && instr.op_kind(1) == OpKind::Register {
+                let src = VReg::phys(reg_name(instr.op_register(1)));
+                match instr.op_kind(0) {
+                    OpKind::Register => {
+                        let dst = VReg::phys(reg_name(instr.op_register(0)));
+                        let old = VReg::Temp(0);
+                        return vec![
+                            Op::Assign {
+                                dst: old.clone(),
+                                src: Value::Reg(dst.clone()),
+                            },
+                            Op::Bin {
+                                dst: dst.clone(),
+                                op: BinOp::Add,
+                                lhs: Value::Reg(dst),
+                                rhs: Value::Reg(src.clone()),
+                            },
+                            Op::Assign {
+                                dst: src,
+                                src: Value::Reg(old),
+                            },
+                        ];
+                    }
+                    OpKind::Memory => {
+                        let addr = mem_op_of(instr);
+                        let old = VReg::Temp(0);
+                        let sum = VReg::Temp(1);
+                        return vec![
+                            Op::Load {
+                                dst: old.clone(),
+                                addr: addr.clone(),
+                            },
+                            Op::Bin {
+                                dst: sum.clone(),
+                                op: BinOp::Add,
+                                lhs: Value::Reg(old.clone()),
+                                rhs: Value::Reg(src.clone()),
+                            },
+                            Op::Store {
+                                addr,
+                                src: Value::Reg(sum),
+                            },
+                            Op::Assign {
+                                dst: src,
+                                src: Value::Reg(old),
+                            },
+                        ];
+                    }
+                    _ => {}
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: "xadd".into(),
             }]
         }
         Mnemonic::Leave => {
@@ -711,6 +818,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 target: CallTarget::Indirect(Value::Reg(VReg::phys(reg_name(
                     instr.op_register(0),
                 )))),
+            }],
+            OpKind::Memory => vec![Op::Call {
+                // See the register-indirect case above: model tail jumps
+                // through an import slot as indirect calls until LLIR grows a
+                // dedicated indirect-jump operation.
+                target: CallTarget::Indirect(Value::Addr(instr.memory_displacement64())),
             }],
             _ => vec![Op::Unknown {
                 mnemonic: "jmp".into(),
@@ -914,6 +1027,19 @@ mod tests {
         match &ops[0].op {
             Op::Jump { target } => assert_eq!(*target, 0x1004),
             other => panic!("expected Jump, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn jmp_rip_memory_records_indirect_tail_call_slot() {
+        // jmp qword ptr [rip+0x1234] (ff 25 34 12 00 00) from 0x1000.
+        let ops = lift64(&[0xff, 0x25, 0x34, 0x12, 0x00, 0x00]);
+        assert_eq!(ops.len(), 1);
+        match &ops[0].op {
+            Op::Call {
+                target: CallTarget::Indirect(Value::Addr(addr)),
+            } => assert_eq!(*addr, 0x223a),
+            other => panic!("expected indirect Call through memory, got {:?}", other),
         }
     }
 
@@ -1218,6 +1344,143 @@ mod tests {
             } => assert_eq!(*dst, VReg::phys("rax")),
             other => panic!("expected Bin Sub 1, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn inc_mem_lifts_to_load_add_store() {
+        // inc qword ptr [rax+8] (48 ff 40 08)
+        let ops = lift64(&[0x48, 0xff, 0x40, 0x08]);
+        assert_eq!(ops.len(), 3);
+        match &ops[0].op {
+            Op::Load { dst, addr } => {
+                assert_eq!(*dst, VReg::Temp(0));
+                assert_eq!(addr.base, Some(VReg::phys("rax")));
+                assert_eq!(addr.disp, 8);
+                assert_eq!(addr.size, 8);
+            }
+            other => panic!("expected Load, got {:?}", other),
+        }
+        match &ops[1].op {
+            Op::Bin {
+                dst,
+                op: BinOp::Add,
+                lhs: Value::Reg(lhs),
+                rhs: Value::Const(1),
+            } => {
+                assert_eq!(*dst, VReg::Temp(0));
+                assert_eq!(*lhs, VReg::Temp(0));
+            }
+            other => panic!("expected Bin Add +1, got {:?}", other),
+        }
+        match &ops[2].op {
+            Op::Store {
+                addr,
+                src: Value::Reg(src),
+            } => {
+                assert_eq!(addr.base, Some(VReg::phys("rax")));
+                assert_eq!(addr.disp, 8);
+                assert_eq!(addr.size, 8);
+                assert_eq!(*src, VReg::Temp(0));
+            }
+            other => panic!("expected Store, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dec_mem_lifts_to_load_sub_store() {
+        // dec qword ptr [rax+0x10] (48 ff 48 10)
+        let ops = lift64(&[0x48, 0xff, 0x48, 0x10]);
+        assert_eq!(ops.len(), 3);
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(0),
+                addr,
+            } if addr.base == Some(VReg::phys("rax")) && addr.disp == 0x10 && addr.size == 8
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Bin {
+                dst: VReg::Temp(0),
+                op: BinOp::Sub,
+                lhs: Value::Reg(VReg::Temp(0)),
+                rhs: Value::Const(1),
+            }
+        ));
+        assert!(matches!(
+            &ops[2].op,
+            Op::Store {
+                addr,
+                src: Value::Reg(VReg::Temp(0)),
+            } if addr.base == Some(VReg::phys("rax")) && addr.disp == 0x10 && addr.size == 8
+        ));
+    }
+
+    #[test]
+    fn xadd_mem_reg_lifts_to_load_add_store_and_old_value_assign() {
+        // lock xadd dword ptr [rcx], eax (f0 0f c1 01)
+        let ops = lift64(&[0xf0, 0x0f, 0xc1, 0x01]);
+        assert_eq!(ops.len(), 4);
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(0),
+                addr,
+            } if addr.base == Some(VReg::phys("rcx")) && addr.size == 4
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Bin {
+                dst: VReg::Temp(1),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::Temp(0)),
+                rhs: Value::Reg(VReg::Phys(src)),
+            } if src == "eax"
+        ));
+        assert!(matches!(
+            &ops[2].op,
+            Op::Store {
+                addr,
+                src: Value::Reg(VReg::Temp(1)),
+            } if addr.base == Some(VReg::phys("rcx")) && addr.size == 4
+        ));
+        assert!(matches!(
+            &ops[3].op,
+            Op::Assign {
+                dst: VReg::Phys(dst),
+                src: Value::Reg(VReg::Temp(0)),
+            } if dst == "eax"
+        ));
+    }
+
+    #[test]
+    fn xadd_reg_reg_lifts_to_exchange_after_add() {
+        // xadd eax, ebx (0f c1 d8)
+        let ops = lift64(&[0x0f, 0xc1, 0xd8]);
+        assert_eq!(ops.len(), 3);
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign {
+                dst: VReg::Temp(0),
+                src: Value::Reg(VReg::Phys(src)),
+            } if src == "eax"
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Bin {
+                dst: VReg::Phys(dst),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::Phys(lhs)),
+                rhs: Value::Reg(VReg::Phys(rhs)),
+            } if dst == "eax" && lhs == "eax" && rhs == "ebx"
+        ));
+        assert!(matches!(
+            &ops[2].op,
+            Op::Assign {
+                dst: VReg::Phys(dst),
+                src: Value::Reg(VReg::Temp(0)),
+            } if dst == "ebx"
+        ));
     }
 
     #[test]
