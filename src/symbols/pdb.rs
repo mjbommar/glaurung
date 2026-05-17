@@ -75,6 +75,31 @@ pub struct PdbFieldSummary {
     pub bit_underlying_type_index: Option<u32>,
 }
 
+/// A PDB procedure or member-function type record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdbFunctionPrototype {
+    /// Raw TypeIndex of the LF_PROCEDURE or LF_MFUNCTION record.
+    pub type_index: u32,
+    /// Coarse record kind: "procedure" or "member_function".
+    pub kind: String,
+    /// Raw return TypeIndex, when present.
+    pub return_type_index: Option<u32>,
+    /// Best-effort C-like return type spelling.
+    pub return_type_name: Option<String>,
+    /// Number of parameters declared by the function type record.
+    pub argument_count: u16,
+    /// Raw TypeIndex values from the referenced LF_ARGLIST record.
+    pub argument_type_indices: Vec<u32>,
+    /// Best-effort C-like argument type spellings aligned with `argument_type_indices`.
+    pub argument_type_names: Vec<Option<String>>,
+    /// Raw CodeView calling convention byte.
+    pub calling_convention: u8,
+    /// For LF_MFUNCTION, raw TypeIndex of the parent class.
+    pub class_type_index: Option<u32>,
+    /// For LF_MFUNCTION, raw TypeIndex of the `this` pointer type.
+    pub this_pointer_type_index: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PdbTypeDescriptor {
     name: String,
@@ -133,6 +158,13 @@ impl PdbIngestor {
     pub fn find_struct_layout(&self, name: &str) -> ::pdb::Result<Option<PdbStructLayout>> {
         match self.backend {
             PdbBackend::Native => self.find_struct_layout_native(name),
+        }
+    }
+
+    /// Enumerate procedure and member-function type records.
+    pub fn function_prototypes(&self) -> ::pdb::Result<Vec<PdbFunctionPrototype>> {
+        match self.backend {
+            PdbBackend::Native => self.function_prototypes_native(),
         }
     }
 
@@ -200,6 +232,138 @@ impl PdbIngestor {
 
         Ok(None)
     }
+
+    fn function_prototypes_native(&self) -> ::pdb::Result<Vec<PdbFunctionPrototype>> {
+        let mut pdb = self.open_native()?;
+        let type_information = pdb.type_information()?;
+        let mut type_finder = type_information.finder();
+        let mut iter = type_information.iter();
+        let mut prototypes = Vec::new();
+
+        while let Some(typ) = iter.next()? {
+            type_finder.update(&iter);
+            let type_index = typ.index();
+
+            let parsed = match typ.parse() {
+                Ok(parsed) => parsed,
+                Err(::pdb::Error::UnimplementedTypeKind(_)) => continue,
+                Err(error) => return Err(error),
+            };
+
+            match parsed {
+                TypeData::Procedure(procedure) => {
+                    prototypes.push(build_procedure_prototype(
+                        &type_finder,
+                        type_index,
+                        procedure,
+                    )?);
+                }
+                TypeData::MemberFunction(member_function) => {
+                    prototypes.push(build_member_function_prototype(
+                        &type_finder,
+                        type_index,
+                        member_function,
+                    )?);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(prototypes)
+    }
+}
+
+fn build_procedure_prototype(
+    type_finder: &TypeFinder<'_>,
+    type_index: TypeIndex,
+    procedure: ::pdb::ProcedureType,
+) -> ::pdb::Result<PdbFunctionPrototype> {
+    let argument_types = collect_argument_types(type_finder, procedure.argument_list)?;
+    let argument_type_names = describe_type_names(type_finder, &argument_types)?;
+    let return_type_name = match procedure.return_type {
+        Some(return_type) => describe_type_name(type_finder, return_type)?,
+        None => None,
+    };
+
+    Ok(PdbFunctionPrototype {
+        type_index: type_index.0,
+        kind: "procedure".to_string(),
+        return_type_index: procedure.return_type.map(|return_type| return_type.0),
+        return_type_name,
+        argument_count: procedure.parameter_count,
+        argument_type_indices: argument_types
+            .iter()
+            .map(|argument_type| argument_type.0)
+            .collect(),
+        argument_type_names,
+        calling_convention: procedure.attributes.calling_convention(),
+        class_type_index: None,
+        this_pointer_type_index: None,
+    })
+}
+
+fn build_member_function_prototype(
+    type_finder: &TypeFinder<'_>,
+    type_index: TypeIndex,
+    member_function: ::pdb::MemberFunctionType,
+) -> ::pdb::Result<PdbFunctionPrototype> {
+    let argument_types = collect_argument_types(type_finder, member_function.argument_list)?;
+    let argument_type_names = describe_type_names(type_finder, &argument_types)?;
+
+    Ok(PdbFunctionPrototype {
+        type_index: type_index.0,
+        kind: "member_function".to_string(),
+        return_type_index: Some(member_function.return_type.0),
+        return_type_name: describe_type_name(type_finder, member_function.return_type)?,
+        argument_count: member_function.parameter_count,
+        argument_type_indices: argument_types
+            .iter()
+            .map(|argument_type| argument_type.0)
+            .collect(),
+        argument_type_names,
+        calling_convention: member_function.attributes.calling_convention(),
+        class_type_index: Some(member_function.class_type.0),
+        this_pointer_type_index: member_function
+            .this_pointer_type
+            .map(|this_pointer_type| this_pointer_type.0),
+    })
+}
+
+fn collect_argument_types(
+    type_finder: &TypeFinder<'_>,
+    argument_list: TypeIndex,
+) -> ::pdb::Result<Vec<TypeIndex>> {
+    let typ = match type_finder.find(argument_list) {
+        Ok(typ) => typ,
+        Err(::pdb::Error::TypeNotFound(_)) | Err(::pdb::Error::TypeNotIndexed(_, _)) => {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
+
+    match typ.parse() {
+        Ok(TypeData::ArgumentList(argument_list)) => Ok(argument_list.arguments),
+        Ok(_) | Err(::pdb::Error::UnimplementedTypeKind(_)) => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+fn describe_type_name(
+    type_finder: &TypeFinder<'_>,
+    type_index: TypeIndex,
+) -> ::pdb::Result<Option<String>> {
+    Ok(describe_type(type_finder, type_index)?.map(|descriptor| descriptor.name))
+}
+
+fn describe_type_names(
+    type_finder: &TypeFinder<'_>,
+    type_indices: &[TypeIndex],
+) -> ::pdb::Result<Vec<Option<String>>> {
+    let mut names = Vec::with_capacity(type_indices.len());
+    for type_index in type_indices {
+        names.push(describe_type_name(type_finder, *type_index)?);
+    }
+    Ok(names)
 }
 
 fn collect_field_list_members(
@@ -700,5 +864,46 @@ mod tests {
         assert_eq!(last_app_state.bit_size, Some(3));
         assert_eq!(last_app_state.bit_position, Some(61));
         assert!(last_app_state.bit_underlying_type_index.is_some());
+    }
+
+    #[test]
+    fn pdb_ingestor_extracts_function_prototypes() {
+        let Some(path) = fixture_pdb("ntkrnlmp.pdb") else {
+            eprintln!("skipping PDB fixture test: ntkrnlmp.pdb is not present");
+            return;
+        };
+
+        let ingestor = PdbIngestor::open(path);
+        let prototypes = ingestor
+            .function_prototypes()
+            .expect("extract function prototypes");
+        assert!(
+            prototypes.len() > 100,
+            "expected many ntkrnlmp function prototypes, got {}",
+            prototypes.len()
+        );
+
+        let prototype = prototypes
+            .iter()
+            .find(|prototype| {
+                prototype.argument_count >= 2
+                    && prototype.argument_type_indices.len()
+                        == usize::from(prototype.argument_count)
+                    && prototype.return_type_index.is_some()
+                    && prototype.return_type_name.is_some()
+                    && prototype.argument_type_names.iter().any(Option::is_some)
+            })
+            .expect("expected a non-trivial function prototype");
+
+        assert!(
+            matches!(prototype.kind.as_str(), "procedure" | "member_function"),
+            "unexpected prototype kind: {}",
+            prototype.kind
+        );
+        assert_eq!(
+            prototype.argument_type_names.len(),
+            prototype.argument_type_indices.len(),
+            "argument type names should align with raw argument indexes"
+        );
     }
 }
