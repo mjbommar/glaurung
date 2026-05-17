@@ -166,6 +166,35 @@ def test_windows_risk_json_reports_parser_shape(
         "LocalAlloc",
         "ReadFile",
     ]
+    read_call = next(
+        call
+        for call in report["functions"][0]["api_calls"]
+        if call["name"] == "ReadFile"
+    )
+    assert read_call["return_type"] == "BOOL"
+    assert read_call["args"][1] == {
+        "index": 1,
+        "expr": "(rbp - 128)",
+        "param": "lpBuffer",
+        "type": "LPVOID",
+        "role": "buffer",
+    }
+    assert read_call["args"][2] == {
+        "index": 2,
+        "expr": "4",
+        "param": "nNumberOfBytesToRead",
+        "type": "DWORD",
+        "role": "length",
+        "value": 4,
+        "hex": "0x4",
+    }
+    alloc_call = next(
+        call
+        for call in report["functions"][0]["api_calls"]
+        if call["name"] == "LocalAlloc"
+    )
+    assert alloc_call["args"][1]["param"] == "uBytes"
+    assert alloc_call["args"][1]["role"] == "length"
     assert report["functions"][0]["flow_hints"][0]["kind"] == (
         "file-read-allocation-flow"
     )

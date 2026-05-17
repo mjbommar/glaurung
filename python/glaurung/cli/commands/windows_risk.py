@@ -9,9 +9,11 @@ parser-like API sequences worth poking.
 from __future__ import annotations
 
 import argparse
+import json
 import re
-from collections.abc import Callable
 from collections import defaultdict
+from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -302,9 +304,15 @@ class WindowsRiskCommand(BaseCommand):
                 constants = ", ".join(
                     const["hex"] for const in fn.get("suspicious_constants", [])[:4]
                 )
+                api_calls = ", ".join(
+                    _format_api_call_summary(call)
+                    for call in fn.get("api_calls", [])[:3]
+                )
                 bits = []
                 if apis:
                     bits.append(f"apis: {apis}")
+                if api_calls:
+                    bits.append(f"args: {api_calls}")
                 if calls:
                     bits.append(f"calls: {calls}")
                 if stack_vars:
@@ -675,6 +683,7 @@ def _function_row(func: Any) -> dict[str, Any]:
         "suspicious_constants": [],
         "api_hits": [],
         "api_sequence": [],
+        "api_calls": [],
         "imports": [],
         "calls": [],
         "call_count": 0,
@@ -911,6 +920,7 @@ def _annotate_decompile_hits(
             _extract_suspicious_constants(pseudocode, risk_api_names),
         )
         _merge_row_api_sequence(row, api_sequence)
+        _merge_row_api_calls(row, _extract_api_calls(pseudocode, risk_api_names))
         _merge_row_api_hits(row, api_hits, _patterns_from_api_hits(api_hits))
         _merge_row_flow_hints(row, _flow_hints_from_api_sequence(api_sequence))
 
@@ -984,6 +994,32 @@ def _merge_row_api_sequence(row: dict[str, Any], api_sequence: list[str]) -> Non
         return
     existing = list(row.get("api_sequence") or [])
     row["api_sequence"] = (existing + api_sequence)[:128]
+
+
+def _merge_row_api_calls(
+    row: dict[str, Any],
+    api_calls: list[dict[str, Any]],
+) -> None:
+    if not api_calls:
+        return
+    existing = list(row.get("api_calls") or [])
+    seen = {
+        (
+            str(call.get("name")),
+            tuple(str(arg.get("expr", "")) for arg in call.get("args", [])),
+        )
+        for call in existing
+    }
+    for call in api_calls:
+        key = (
+            str(call.get("name")),
+            tuple(str(arg.get("expr", "")) for arg in call.get("args", [])),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        existing.append(call)
+    row["api_calls"] = existing[:64]
 
 
 def _merge_row_flow_hints(
@@ -1105,6 +1141,228 @@ def _extract_suspicious_constants(
             if len(constants) >= 64:
                 return constants
     return constants
+
+
+def _extract_api_calls(
+    pseudocode: str,
+    api_names: list[str],
+) -> list[dict[str, Any]]:
+    api_lookup = _api_name_lookup(api_names)
+    calls: list[dict[str, Any]] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    call_pattern = re.compile(
+        r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<args>[^;\n{}]*)\)"
+    )
+    for match in call_pattern.finditer(pseudocode):
+        raw_name = match.group("name")
+        canonical_name = api_lookup.get(raw_name.lower()) or api_lookup.get(
+            _api_stem(raw_name)
+        )
+        if canonical_name is None:
+            continue
+        arg_exprs = _split_call_args(match.group("args"))
+        key = (canonical_name, tuple(arg_exprs))
+        if key in seen:
+            continue
+        seen.add(key)
+        calls.append(_api_call_row(canonical_name, arg_exprs))
+        if len(calls) >= 64:
+            break
+    return calls
+
+
+def _api_call_row(name: str, arg_exprs: list[str]) -> dict[str, Any]:
+    proto = _prototype_for_api(name)
+    params = list(proto.get("params") or []) if proto else []
+    args = []
+    for idx, expr in enumerate(arg_exprs):
+        arg: dict[str, Any] = {"index": idx, "expr": expr}
+        if idx < len(params):
+            param = params[idx]
+            param_name = str(param.get("name", ""))
+            c_type = str(param.get("c_type", ""))
+            if param_name:
+                arg["param"] = param_name
+            if c_type:
+                arg["type"] = c_type
+            role = _param_role(param_name, c_type)
+            if role:
+                arg["role"] = role
+        value = _parse_expr_int_literal(expr)
+        if value is not None:
+            arg["value"] = value
+            arg["hex"] = hex(value)
+        args.append(arg)
+
+    row: dict[str, Any] = {
+        "name": name,
+        "return_type": str(proto.get("return_type")) if proto else None,
+        "args": args,
+    }
+    roles = sorted({str(arg["role"]) for arg in args if "role" in arg})
+    if roles:
+        row["roles"] = roles
+    return row
+
+
+def _api_name_lookup(api_names: list[str]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for name in sorted(api_names, key=lambda item: (len(item), item.lower())):
+        clean = _clean_import_name(name)
+        if not clean:
+            continue
+        lookup[clean.lower()] = clean
+        lookup.setdefault(_api_stem(clean), clean)
+    return lookup
+
+
+@lru_cache(maxsize=1)
+def _load_winapi_prototypes() -> dict[str, dict[str, Any]]:
+    path = (
+        Path(__file__).resolve().parents[4]
+        / "data"
+        / "types"
+        / "stdlib-winapi-protos.json"
+    )
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return {}
+
+    protos: dict[str, dict[str, Any]] = {}
+    for proto in data.get("prototypes", []):
+        if not isinstance(proto, dict):
+            continue
+        name = str(proto.get("name", ""))
+        if not name:
+            continue
+        protos[name.lower()] = proto
+        protos.setdefault(_api_stem(name), proto)
+    return protos
+
+
+def _prototype_for_api(name: str) -> dict[str, Any] | None:
+    clean = _clean_import_name(name)
+    protos = _load_winapi_prototypes()
+    return protos.get(clean.lower()) or protos.get(_api_stem(clean))
+
+
+def _split_call_args(args: str) -> list[str]:
+    out: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote = ""
+    escaped = False
+    for ch in args:
+        if quote:
+            current.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = ""
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            current.append(ch)
+            continue
+        if ch in "([{<":
+            depth += 1
+            current.append(ch)
+            continue
+        if ch in ")]}>":
+            depth = max(0, depth - 1)
+            current.append(ch)
+            continue
+        if ch == "," and depth == 0:
+            out.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    tail = "".join(current).strip()
+    if tail or args.strip():
+        out.append(tail)
+    return out
+
+
+def _param_role(param_name: str, c_type: str) -> str | None:
+    name = param_name.lower()
+    c_type_lower = c_type.lower()
+    if "buffer" in name or name in {"lpdata", "lpbaseaddress", "lpaddress", "buf"}:
+        return "buffer"
+    if _looks_like_length_param(name):
+        return "length"
+    if "flag" in name or name.endswith("flags") or "mode" in name:
+        return "flags"
+    if (
+        c_type_lower == "handle"
+        or c_type_lower == "hwnd"
+        or c_type_lower.startswith("h")
+        or (name.startswith("h") and "handle" in c_type_lower)
+    ):
+        return "handle"
+    if any(token in name for token in ("filename", "pathname", "path", "commandline")):
+        return "path"
+    if any(
+        token in name for token in ("procname", "modulename", "keyname", "valuename")
+    ):
+        return "name"
+    if _is_pointer_ctype(c_type_lower):
+        return "pointer"
+    return None
+
+
+def _looks_like_length_param(name: str) -> bool:
+    compact = name.replace("_", "")
+    if compact in {"ubytes", "nbytes", "nnumberofbytestoread", "cb", "cch"}:
+        return True
+    if compact.startswith(("cb", "cch")) and len(compact) > 2:
+        return True
+    return any(
+        token in compact
+        for token in (
+            "size",
+            "length",
+            "bytecount",
+            "numberofbytes",
+            "bytesread",
+            "bytestoread",
+            "count",
+        )
+    )
+
+
+def _is_pointer_ctype(c_type_lower: str) -> bool:
+    if "*" in c_type_lower:
+        return True
+    if c_type_lower.startswith("lp") or c_type_lower.startswith("p"):
+        return True
+    return c_type_lower in {"voidptr", "uintptr_t"}
+
+
+def _parse_expr_int_literal(expr: str) -> int | None:
+    stripped = expr.strip()
+    if not re.fullmatch(r"0x[0-9a-fA-F]+|\d+", stripped):
+        return None
+    return _parse_int_literal(stripped)
+
+
+def _format_api_call_summary(call: dict[str, Any]) -> str:
+    parts = []
+    interesting_roles = {"buffer", "length", "path", "name", "flags", "handle"}
+    for arg in call.get("args", []):
+        role = str(arg.get("role", ""))
+        if role not in interesting_roles:
+            continue
+        label = str(arg.get("param") or f"arg{arg.get('index', '?')}")
+        parts.append(f"{label}={arg.get('expr', '')}")
+        if len(parts) >= 3:
+            break
+    name = str(call.get("name", "api"))
+    if not parts:
+        return f"{name}({len(call.get('args', []))} args)"
+    return f"{name}({', '.join(parts)})"
 
 
 def _stack_ref_pattern() -> re.Pattern[str]:
