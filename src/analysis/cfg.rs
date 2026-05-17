@@ -419,6 +419,133 @@ fn discover_function(
     Some((func, call_edges))
 }
 
+/// Read every `RUNTIME_FUNCTION::BeginAddress` from the Win64 PE
+/// exception directory (`IMAGE_DIRECTORY_ENTRY_EXCEPTION`, index 3).
+///
+/// On x86-64 Windows the calling convention mandates an unwind record
+/// in `.pdata` for every non-leaf function (and most leaf functions
+/// emit one too). The exception directory is therefore a near-complete
+/// function index, free for the asking, and the single highest-leverage
+/// source of function starts on stripped Windows PE.
+///
+/// Returns an empty vector for non-PE32+ files, files missing the
+/// exception directory, or 32-bit PEs (which use SEH on the stack and
+/// don't have an equivalent table). ARM64 PE has a different unwind
+/// format we don't yet decode.
+fn parse_pdata_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<u64> {
+    if !arch.is_64_bit() {
+        return Vec::new();
+    }
+    if data.len() < 0x40 || &data[..2] != b"MZ" {
+        return Vec::new();
+    }
+    let read_u16 = |off: usize| -> Option<u16> {
+        data.get(off..off + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let read_u32 = |off: usize| -> Option<u32> {
+        data.get(off..off + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let read_u64 = |off: usize| -> Option<u64> {
+        data.get(off..off + 8).map(|b| {
+            let lo = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64;
+            let hi = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as u64;
+            (hi << 32) | lo
+        })
+    };
+    let e_lfanew = match read_u32(0x3c) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    if e_lfanew + 24 > data.len() || &data[e_lfanew..e_lfanew + 4] != b"PE\0\0" {
+        return Vec::new();
+    }
+    let coff_off = e_lfanew + 4;
+    let n_sections = match read_u16(coff_off + 2) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    let opt_size = match read_u16(coff_off + 16) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    let opt_off = coff_off + 20;
+    if read_u16(opt_off) != Some(0x20B) {
+        // not PE32+ (Win64)
+        return Vec::new();
+    }
+    let image_base = match read_u64(opt_off + 24) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    let num_dirs = match read_u32(opt_off + 108) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    if num_dirs < 4 {
+        return Vec::new();
+    }
+    let dd_off = opt_off + 112;
+    let exc_rva = match read_u32(dd_off + 3 * 8) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    let exc_size = match read_u32(dd_off + 3 * 8 + 4) {
+        Some(v) => v as usize,
+        None => return Vec::new(),
+    };
+    if exc_rva == 0 || exc_size == 0 {
+        return Vec::new();
+    }
+    // Resolve exc_rva to a file offset via the section table.
+    let sec_off = opt_off + opt_size;
+    let mut exc_file_off: Option<usize> = None;
+    for i in 0..n_sections {
+        let s = sec_off + i * 40;
+        if s + 40 > data.len() {
+            break;
+        }
+        let virt_sz = read_u32(s + 8).unwrap_or(0) as usize;
+        let virt_addr = read_u32(s + 12).unwrap_or(0) as usize;
+        let raw_sz = read_u32(s + 16).unwrap_or(0) as usize;
+        let raw_ptr = read_u32(s + 20).unwrap_or(0) as usize;
+        let span = std::cmp::max(virt_sz, raw_sz);
+        if exc_rva >= virt_addr && exc_rva < virt_addr + span {
+            exc_file_off = Some(raw_ptr + (exc_rva - virt_addr));
+            break;
+        }
+    }
+    let exc_file_off = match exc_file_off {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    // Walk RUNTIME_FUNCTION entries (12 bytes each on x64:
+    //   u32 BeginAddress, u32 EndAddress, u32 UnwindInfoAddress).
+    let entry_size = 12usize;
+    let n_entries = exc_size / entry_size;
+    let cap = 2_000_000usize.min(n_entries);
+    let mut starts = Vec::with_capacity(cap);
+    for i in 0..cap {
+        let off = exc_file_off + i * entry_size;
+        if off + 4 > data.len() {
+            break;
+        }
+        let begin_rva = match read_u32(off) {
+            Some(v) => v,
+            None => break,
+        };
+        if begin_rva == 0 {
+            continue;
+        }
+        let va = image_base + begin_rva as u64;
+        if in_exec_regions(regions, va).is_some() {
+            starts.push(va);
+        }
+    }
+    starts
+}
+
 fn parse_function_seeds(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<Address> {
     let bits = if arch.is_64_bit() { 64 } else { 32 };
     let mut seeds: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
@@ -691,13 +818,56 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         }
     }
 
-    // Discover functions up to budget
+    // Win64 exception-directory seeds. On x86-64 Windows the calling
+    // convention emits a RUNTIME_FUNCTION unwind record for nearly
+    // every function; IMAGE_DIRECTORY_ENTRY_EXCEPTION is therefore a
+    // near-complete function index for free. This is the single
+    // highest-leverage seed source on stripped Windows PE -- it
+    // closed most of the ~98% recall gap vs Ghidra on ntdll.dll
+    // observed in asb's iter 13 comparison.
+    let pdata_starts = parse_pdata_function_starts(data, &regions, arch);
+    for va in pdata_starts {
+        if known.contains(&va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, va, bits, None, None) {
+            seeds.push(addr);
+            known.insert(va);
+        }
+    }
+
+    // Recursive multi-pass discovery. Each discovered function's
+    // direct-call targets feed back as new seeds; without this the
+    // discovery pass terminates as soon as the initial seed list is
+    // exhausted, missing every internal function not reached by any
+    // other seed source. Worklist-based to keep the iteration bounded
+    // by `max_functions` while still propagating xrefs to a fixed
+    // point.
     let mut calls_all: Vec<(String, u64)> = Vec::new(); // (caller_name, callee_va)
-    for seed in seeds.into_iter().take(budgets.max_functions.max(1)) {
+    let mut worklist: std::collections::VecDeque<Address> = seeds.into_iter().collect();
+    while let Some(seed) = worklist.pop_front() {
+        if functions.len() >= budgets.max_functions.max(1) {
+            break;
+        }
         if let Some((f, calls)) =
             discover_function(data, arch, end, seed.clone(), &regions, budgets)
         {
-            calls_all.extend(calls.into_iter().map(|(_c, tgt)| (f.name.clone(), tgt)));
+            for (_caller, callee_va) in &calls {
+                calls_all.push((f.name.clone(), *callee_va));
+                // Xref-backtracking seed: any direct call/jump target
+                // landing in an exec region that we haven't already
+                // queued becomes a new candidate function entry.
+                if !known.contains(callee_va)
+                    && in_exec_regions(&regions, *callee_va).is_some()
+                {
+                    if let Ok(addr) =
+                        Address::new(AddressKind::VA, *callee_va, bits, None, None)
+                    {
+                        worklist.push_back(addr);
+                        known.insert(*callee_va);
+                    }
+                }
+            }
             cg.add_node(f.name.clone());
             functions.push(f);
         }
