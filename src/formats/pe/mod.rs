@@ -28,6 +28,7 @@ pub struct PeParser<'data> {
     imports: OnceCell<ImportTable<'data>>,
     exports: OnceCell<ExportTable<'data>>,
     resources: OnceCell<ResourceDirectory<'data>>,
+    tls: OnceCell<TlsDirectory>,
 }
 
 impl<'data> PeParser<'data> {
@@ -68,6 +69,7 @@ impl<'data> PeParser<'data> {
             imports: OnceCell::new(),
             exports: OnceCell::new(),
             resources: OnceCell::new(),
+            tls: OnceCell::new(),
         })
     }
 
@@ -185,6 +187,31 @@ impl<'data> PeParser<'data> {
             parse_resources(self.data, &self.section_table, resource_dir, &self.options)?;
 
         Ok(self.resources.get_or_init(|| resources))
+    }
+
+    /// Get the TLS directory + walked callback list (lazy-loaded).
+    ///
+    /// Returns an empty `TlsDirectory` when the PE has no TLS data
+    /// directory entry or when `parse_tls` is disabled in the
+    /// parser's `ParseOptions`. Soft errors (truncated header,
+    /// unmapped RVA) are recorded in `TlsDirectory::stop_reasons`
+    /// rather than failing the call.
+    pub fn tls(&self) -> Result<&TlsDirectory> {
+        if let Some(tls) = self.tls.get() {
+            return Ok(tls);
+        }
+
+        let tls_dir = self.data_directory(IMAGE_DIRECTORY_ENTRY_TLS)?;
+        let tls = parse_tls(
+            self.data,
+            &self.section_table,
+            tls_dir,
+            self.image_base(),
+            self.is_64bit(),
+            &self.options,
+        )?;
+
+        Ok(self.tls.get_or_init(|| tls))
     }
 
     /// Get import hash (imphash)

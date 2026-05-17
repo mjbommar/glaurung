@@ -525,16 +525,10 @@ pub struct DebugEntry {
     pub pointer_to_raw_data: u32,
 }
 
-/// TLS directory
-#[derive(Debug, Clone)]
-pub struct TlsDirectory {
-    pub start_address_of_raw_data: u64,
-    pub end_address_of_raw_data: u64,
-    pub address_of_index: u64,
-    pub address_of_callbacks: u64,
-    pub size_of_zero_fill: u32,
-    pub characteristics: u32,
-}
+// TLS directory: the canonical walked type now lives at
+// `crate::formats::pe::directories::tls::TlsDirectory` (re-exported
+// via `directories::TlsDirectory`). The previous unused header-only
+// stub here was removed when the TLS callback walker landed.
 
 /// Certificate/Authenticode entry
 #[derive(Debug, Clone)]
