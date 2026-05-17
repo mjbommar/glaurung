@@ -48,9 +48,10 @@ property the tool encodes; "bug-class ref" cites the
 | `pe_xref_callers_recursive.py` | bounded-depth reverse callgraph walk against the `.glaurung` SQLite KB; mirrors `cscope -L1` ergonomics | helper |
 | `pdb_struct_layout.py` | given struct name, return field offsets + types from PDB-derived type DB (depends on #179) | helper |
 
-That is 15 (the campaign's "12-15" is approximate). All except
-`pdb_struct_layout.py` are unblocked by the order of operations
-(#179 lands before that one).
+That is 15 (the campaign's "12-15" is approximate). The
+`pdb_struct_layout.py` helper is now unblocked by the #179 type
+DB import path; public symbol-name binding remains a separate PDB
+follow-up for xref-heavy tools.
 
 ## Per-tool authoring template
 
@@ -157,8 +158,9 @@ For each tool:
 5. Writes findings as `Node` rows into `kb` so the agent can
    chain tools (one tool's output is the next's input).
 6. Test: `python/tests/test_<tool>.py` using one of the
-   `tests/fixtures/msvc-pdb/` binaries (issue #197). Red until
-   #179 lands for any tool that depends on PDB types.
+   `tests/fixtures/msvc-pdb/` binaries (issue #197). PDB-type
+   tools should use the #179 type DB importer rather than hard-coded
+   layout JSON.
 7. Tool gets auto-registered by `memory_agent` via the existing
    `build_tool()` discovery pattern; no manual entry in a
    registry table needed.

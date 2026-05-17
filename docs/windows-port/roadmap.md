@@ -8,13 +8,30 @@ The campaign-side rationale lives at
 `projects/windows-port/workstreams/02-kg-pe-substrate.md` (asb
 repo); the headings below cite the relevant section numbers.
 
+## Current status (2026-05-17)
+
+- #197 shipped. The fixture directory now uses a manifest plus
+  fetch-on-demand workflow for eight x64 PE/PDB pairs.
+- #179 has shipped the type-ingestion path needed by the
+  comparison-02 contract: native PDB loading, PE CodeView cache
+  resolution, struct/union layouts, function-prototype type
+  records, PE/PDB provenance, Python access, and `.glaurung`
+  type DB persistence. Remaining broad PDB work is public
+  symbol-to-VA name persistence and a scalar alias/type-summary API
+  if later consumers need `_KSPIN_LOCK` as a typed row instead of
+  an explicit non-UDT missing layout.
+- #199 shipped. Delay imports, resource traversal, manifest /
+  version-info decoding, and TLS callback enumeration are available
+  through the PE hardening surface.
+- #186 and the Windows-specific atomic tools remain future work.
+
 ---
 
 ## #197 -- MSVC + .pdb sample fixtures
 
-`docs/architecture/IDA_GHIDRA_PARITY.md` lists this as the
-blocker for #179. Without committed, license-clean MSVC samples
-the PDB ingestion code has no red tests to drive.
+`docs/architecture/IDA_GHIDRA_PARITY.md` originally listed this as
+the blocker for #179. Without committed, license-clean MSVC samples
+the PDB ingestion code had no red tests to drive.
 
 ### Scope
 
@@ -53,7 +70,7 @@ tests/fixtures/msvc-pdb/
   mspaint.exe
   mspaint.pdb
   ...
-tests/test_pdb_ingest.py   # skeleton; red until #179 lands
+tests/test_pdb_ingest.py   # original red-test skeleton for #179
 ```
 
 `MANIFEST.json` is the load-bearing artifact. Without it the
@@ -84,6 +101,12 @@ test skeleton).
 hashlib.sha256(Path(r["filename"]).read_bytes()).hexdigest() ==
 r["sha256"]) for r in json.load(open("MANIFEST.json")))'`
 exits 0.
+
+### Status
+
+Shipped. The current fixture set contains eight x64 PE/PDB pairs
+covering kernel, driver, userland, and service binaries. The bytes
+remain fetch-on-demand; provenance lives in `MANIFEST.json`.
 
 ---
 
@@ -142,10 +165,32 @@ chains.
 
 ### Exit signal
 
-`glaurung symbols ntoskrnl.exe --pdb-cache
-/nas4/data/symbol-cache/microsoft/` shows >95% function-name
-symbolization, with type-DB rows present for the top-10 named
-structs (`KTHREAD`, `EPROCESS`, `FILE_OBJECT`, etc.).
+The comparison-02 type-ingestion contract is now:
+
+- `ntoskrnl.exe` resolves its cached `ntkrnlmp.pdb` through the
+  PE CodeView RSDS record.
+- The canonical fielded layout set resolves and persists with
+  PE/PDB provenance: `_EPROCESS`, `_KTHREAD`, `_KPROCESS`,
+  `_FILE_OBJECT`, `_DEVICE_OBJECT`, `_IRP`, `_DRIVER_OBJECT`,
+  `_HANDLE_TABLE`, `_PEB`, `_TEB`, `_KAPC`, `_KSEMAPHORE`,
+  `_KEVENT`, `_KDPC`, `_RTL_AVL_TREE`, `_EX_FAST_REF`,
+  `_EX_PUSH_LOCK`, `_DISPATCHER_HEADER`, `_LARGE_INTEGER`, and
+  `_LIST_ENTRY`.
+- PDB `LF_PROCEDURE` and `LF_MFUNCTION` records persist as
+  deterministic `function_proto` type records keyed by raw
+  `TypeIndex`.
+- `_KSPIN_LOCK` remains visible as a scalar-alias/non-UDT missing
+  layout instead of being forced into fake fields.
+
+The broader original exit signal also included >95% public-symbol
+name persistence. That remains a follow-up under the #179 umbrella.
+
+### Status
+
+Type ingestion shipped for the comparison-02 contract. Remaining
+PDB work is public symbol-to-VA name persistence and, if needed, a
+small alias/type-summary API for scalar typedefs such as
+`_KSPIN_LOCK`.
 
 ---
 
@@ -225,6 +270,12 @@ glaurung pe-env dxgkrnl-26100.1.sys --json | jq \
 returns four populated values; `pe_env::analyze` for
 `mspaint.exe` returns manifest with `uac_level=asInvoker`,
 version info with `company="Microsoft Corporation"`.
+
+### Status
+
+Shipped. The implementation landed delay imports, bounded resource
+traversal, manifest and version-info decoding, and TLS callback
+enumeration against the #197 fixture set.
 
 ---
 

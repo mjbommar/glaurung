@@ -88,10 +88,10 @@ Active development. Foundations and analyst‑facing surface area are largely in
 
 ### Active Frontier
 
-The deterministic backbone is in place. Remaining tracked work is now larger projects:
+The deterministic backbone is in place. Remaining tracked work is now larger projects and follow-up slices:
 
-- **PDB ingestion** (#179, blocked on #197 MSVC sample fixtures): symmetric counterpart to DWARF for Windows/MSVC binaries
-- **PE format hardening** (#199): delay imports, manifest, version info, TLS callbacks — pre-req for grounded malware triage claims
+- **PDB ingestion** (#179): PE/PDB type ingestion has landed for cache hits, including struct/union layouts, function-prototype type records, provenance, and `.glaurung` type DB import. Remaining broad PDB work is public symbol-to-VA name persistence and optional scalar-alias summaries.
+- **PE format hardening** (#199): delay imports, manifest, version info, TLS callbacks -- shipped for grounded malware triage claims
 - **Web chat UI** (#203/#204): the actual product surface for the agentic workflow; deterministic backbone is fully done
 - **More architectures** (#166): MIPS, RISC-V, PowerPC, WASM
 - **C → Rust translate end-to-end demo** (#173)

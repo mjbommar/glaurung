@@ -7,8 +7,35 @@
 > campaign supplies test fixtures and build-tagging discipline.
 
 Roadmap status: `docs/architecture/IDA_GHIDRA_PARITY.md` row
-"#179 PDB ingestion (Microsoft Program Database)" --
-blocked-by-#197.
+"#179 PDB ingestion (Microsoft Program Database)".
+
+## Implementation status (2026-05-17)
+
+The type-ingestion path has landed for the comparison-02 contract:
+
+- `src/symbols/pdb.rs` provides native PDB loading through the
+  Rust `pdb` crate, struct/class/union layout lookup, field-list
+  walking, best-effort field type-name mapping, bitfield metadata,
+  function-prototype type records, and PE/PDB build provenance.
+- The PE path parses CodeView RSDS metadata and resolves cached
+  PDBs from the Microsoft symbol-cache layout or the flat fixture
+  layout.
+- `glaurung.debug.analyze_pe_pdb_cache_path()` exposes the PE/PDB
+  cache analysis to Python.
+- `type_db.import_pe_pdb_types()` persists PDB-derived structs,
+  unions, and `function_proto` type records into `.glaurung` with
+  `set_by="pdb"` and provenance.
+- The `ntoskrnl.exe` / `ntkrnlmp.pdb` fixture imports the 20
+  fielded canonical structs/unions needed by comparison 02 and
+  keeps `_KSPIN_LOCK` explicit as a scalar-alias/non-UDT
+  `missing_layouts` entry.
+
+Remaining work under the broader #179 umbrella:
+
+- Persist public PDB symbols as address-to-name records so PE/PDB
+  cache hits can name functions by VA.
+- Add a narrow alias/type-summary API only if a later consumer needs
+  scalar typedefs such as `_KSPIN_LOCK` represented as typed rows.
 
 ## What exists today
 

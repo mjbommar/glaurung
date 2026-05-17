@@ -1,7 +1,8 @@
 # tests/fixtures/msvc-pdb/
 
-Fixtures for **#179 -- PDB ingestion** (blocked-by-#197 in
-`docs/architecture/IDA_GHIDRA_PARITY.md`).
+Fixtures for **#179 -- PDB ingestion**. This directory is the
+shipped #197 fixture set referenced by
+`docs/architecture/IDA_GHIDRA_PARITY.md`.
 
 8 (PE, PDB) pairs from a single Win11 23H2 corpus snapshot,
 spanning kernel / driver / userland / system-service diversity:

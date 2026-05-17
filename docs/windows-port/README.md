@@ -6,10 +6,12 @@
 
 ## Status
 
-Pre-scaffold. No Rust or Python code lands from these docs yet;
-the asb campaign supplies the use cases, calibration fixtures,
-and PR authoring effort. Glaurung is the substrate; nothing in
-this tree forks the project or vendors anything from asb.
+Implementation is active. #197 and #199 have shipped, and #179 now
+has the PE/PDB type-ingestion path needed by the comparison-02
+contract: cached PDBs produce persisted struct, union, and
+function-prototype type records with provenance. The remaining
+windows-port work is the broader PDB follow-up surface, BSim-style
+similarity, and the Windows-specific atomic tools.
 
 ## Why this exists in Glaurung (not in asb)
 
@@ -70,9 +72,9 @@ forking; the contract is asb ADR 0023 (mirrored here as
 
 | issue | scope | blocker for | per-doc | status |
 |-------|-------|-------------|---------|--------|
-| #197  | MSVC + .pdb sample fixtures                | #179 PDB ingest test cases | `roadmap.md` sec 1, `pdb-ingestion-design.md` sec "Test fixtures" | not started |
-| #179  | PDB ingestion (`src/symbols/pdb.rs`)       | every kg-pe rule that needs PDB-derived types | `pdb-ingestion-design.md` | not started |
-| #199  | PE hardening: delay-import / manifest / VersionInfo / TLS callbacks | grounded malware triage, driver TLS-callback bug class | `pe-hardening-design.md` | not started |
+| #197  | MSVC + .pdb sample fixtures                | #179 PDB ingest test cases | `roadmap.md` sec 1, `pdb-ingestion-design.md` sec "Test fixtures" | shipped |
+| #179  | PDB ingestion (`src/symbols/pdb.rs`)       | every kg-pe rule that needs PDB-derived types | `pdb-ingestion-design.md` | type path shipped; public symbol binding / alias summaries remain |
+| #199  | PE hardening: delay-import / manifest / VersionInfo / TLS callbacks | grounded malware triage, driver TLS-callback bug class | `pe-hardening-design.md` | shipped |
 | #186  | BSim-equivalent function similarity         | Patch Tuesday cross-build diff for n-day | `bsim-similarity-design.md` | not started |
 | tools | 12-15 Windows-specific `llm/tools/` files   | rule-as-tool encoding for tier-1 bug classes | `atomic-tools.md` | not started |
 
