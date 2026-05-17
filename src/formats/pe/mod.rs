@@ -27,6 +27,7 @@ pub struct PeParser<'data> {
     // Lazy-loaded data
     imports: OnceCell<ImportTable<'data>>,
     exports: OnceCell<ExportTable<'data>>,
+    debug: OnceCell<DebugDirectory>,
     resources: OnceCell<ResourceDirectory<'data>>,
     tls: OnceCell<TlsDirectory>,
 }
@@ -68,6 +69,7 @@ impl<'data> PeParser<'data> {
             options,
             imports: OnceCell::new(),
             exports: OnceCell::new(),
+            debug: OnceCell::new(),
             resources: OnceCell::new(),
             tls: OnceCell::new(),
         })
@@ -174,6 +176,37 @@ impl<'data> PeParser<'data> {
         let exports = parse_exports(self.data, &self.section_table, export_dir, &self.options)?;
 
         Ok(self.exports.get_or_init(|| exports))
+    }
+
+    /// Get the debug directory and first CodeView RSDS record, when present.
+    pub fn debug_directory(&self) -> Result<&DebugDirectory> {
+        if let Some(debug) = self.debug.get() {
+            return Ok(debug);
+        }
+
+        let debug_dir = self.data_directory(IMAGE_DIRECTORY_ENTRY_DEBUG)?;
+        let debug = if self.options.parse_debug_info {
+            parse_debug_directory(self.data, &self.section_table, debug_dir)?
+        } else {
+            DebugDirectory::default()
+        };
+
+        Ok(self.debug.get_or_init(|| debug))
+    }
+
+    /// Get the first CodeView RSDS record from the debug directory.
+    pub fn codeview_rsds(&self) -> Result<Option<&CodeViewRsds>> {
+        Ok(self.debug_directory()?.codeview.as_ref())
+    }
+
+    /// Resolve the first CodeView RSDS record against a local PDB cache.
+    pub fn resolve_pdb_cache(
+        &self,
+        cache_dir: &std::path::Path,
+    ) -> Result<Option<std::path::PathBuf>> {
+        Ok(self
+            .codeview_rsds()?
+            .and_then(|rsds| rsds.resolve_pdb_path(cache_dir)))
     }
 
     /// Get resources (lazy-loaded)

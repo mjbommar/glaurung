@@ -4,13 +4,16 @@
 //! PDB, reports coarse table counts, and locates complete struct/class type
 //! records by name.
 
-use std::fs::File;
+use std::fmt;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use ::pdb::{
     ClassKind, FallibleIterator, Indirection, PointerMode, PrimitiveKind, PrimitiveType, TypeData,
     TypeFinder, TypeIndex,
 };
+
+use crate::formats::pe::{directories::CodeViewRsds, PeError, PeParser};
 
 /// PDB implementation used by the ingestor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +103,90 @@ pub struct PdbFunctionPrototype {
     pub this_pointer_type_index: Option<u32>,
 }
 
+/// Errors while resolving a PE's CodeView record to a cached PDB.
+#[derive(Debug)]
+pub enum PdbPeError {
+    /// Filesystem read/open failure.
+    Io(std::io::Error),
+    /// PE parser failure.
+    Pe(PeError),
+    /// PDB parser failure.
+    Pdb(::pdb::Error),
+}
+
+impl fmt::Display for PdbPeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "I/O error: {error}"),
+            Self::Pe(error) => write!(f, "PE parse error: {error}"),
+            Self::Pdb(error) => write!(f, "PDB parse error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for PdbPeError {}
+
+impl From<std::io::Error> for PdbPeError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<PeError> for PdbPeError {
+    fn from(error: PeError) -> Self {
+        Self::Pe(error)
+    }
+}
+
+impl From<::pdb::Error> for PdbPeError {
+    fn from(error: ::pdb::Error) -> Self {
+        Self::Pdb(error)
+    }
+}
+
+/// Result type for PE-to-PDB cache wiring.
+pub type PdbPeResult<T> = std::result::Result<T, PdbPeError>;
+
+/// A PE CodeView record resolved to a local PDB cache hit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PePdbSource {
+    /// PE binary path that supplied the CodeView RSDS record.
+    pub pe_path: PathBuf,
+    /// Local cached PDB path.
+    pub pdb_path: PathBuf,
+    /// Parsed CodeView RSDS metadata.
+    pub codeview: CodeViewRsds,
+    /// Native PDB ingestor for the cache hit.
+    pub ingestor: PdbIngestor,
+}
+
+impl PePdbSource {
+    /// Locate a complete struct/class and return its top-level fields.
+    pub fn find_struct_layout(&self, name: &str) -> ::pdb::Result<Option<PdbStructLayout>> {
+        self.ingestor.find_struct_layout(name)
+    }
+
+    /// Enumerate procedure and member-function type records.
+    pub fn function_prototypes(&self) -> ::pdb::Result<Vec<PdbFunctionPrototype>> {
+        self.ingestor.function_prototypes()
+    }
+}
+
+/// PDB-backed data pulled from a PE's matching cached PDB.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PePdbAnalysis {
+    /// PE binary path that supplied the CodeView RSDS record.
+    pub pe_path: PathBuf,
+    /// Local cached PDB path.
+    pub pdb_path: PathBuf,
+    /// Parsed CodeView RSDS metadata.
+    pub codeview: CodeViewRsds,
+    /// Requested struct/class layouts found in the PDB.
+    pub struct_layouts: Vec<PdbStructLayout>,
+    /// Procedure and member-function prototype rows.
+    pub function_prototypes: Vec<PdbFunctionPrototype>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PdbTypeDescriptor {
     name: String,
@@ -166,6 +253,56 @@ impl PdbIngestor {
         match self.backend {
             PdbBackend::Native => self.function_prototypes_native(),
         }
+    }
+
+    /// Resolve a PE's CodeView RSDS record against a local PDB cache.
+    pub fn from_pe_cache<P: AsRef<Path>, C: AsRef<Path>>(
+        pe_path: P,
+        cache_dir: C,
+    ) -> PdbPeResult<Option<PePdbSource>> {
+        let pe_path = pe_path.as_ref();
+        let data = fs::read(pe_path)?;
+        let parser = PeParser::new(&data)?;
+        let Some(codeview) = parser.codeview_rsds()?.cloned() else {
+            return Ok(None);
+        };
+        let Some(pdb_path) = codeview.resolve_pdb_path(cache_dir.as_ref()) else {
+            return Ok(None);
+        };
+
+        Ok(Some(PePdbSource {
+            pe_path: pe_path.to_path_buf(),
+            ingestor: Self::open(pdb_path.clone()),
+            pdb_path,
+            codeview,
+        }))
+    }
+
+    /// Resolve a PE's matching PDB and return selected layouts plus all prototypes.
+    pub fn analyze_pe_cache<P: AsRef<Path>, C: AsRef<Path>>(
+        pe_path: P,
+        cache_dir: C,
+        struct_names: &[&str],
+    ) -> PdbPeResult<Option<PePdbAnalysis>> {
+        let Some(source) = Self::from_pe_cache(pe_path, cache_dir)? else {
+            return Ok(None);
+        };
+
+        let mut struct_layouts = Vec::new();
+        for name in struct_names {
+            if let Some(layout) = source.find_struct_layout(name)? {
+                struct_layouts.push(layout);
+            }
+        }
+        let function_prototypes = source.function_prototypes()?;
+
+        Ok(Some(PePdbAnalysis {
+            pe_path: source.pe_path,
+            pdb_path: source.pdb_path,
+            codeview: source.codeview,
+            struct_layouts,
+            function_prototypes,
+        }))
     }
 
     fn open_native(&self) -> ::pdb::Result<::pdb::PDB<'static, File>> {
@@ -734,13 +871,24 @@ fn resolve_bitfield(
 mod tests {
     use super::*;
 
-    fn fixture_pdb(name: &str) -> Option<PathBuf> {
+    fn fixture(name: &str) -> Option<PathBuf> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("fixtures")
             .join("msvc-pdb")
             .join(name);
         path.is_file().then_some(path)
+    }
+
+    fn fixture_pdb(name: &str) -> Option<PathBuf> {
+        fixture(name)
+    }
+
+    fn fixture_cache_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("msvc-pdb")
     }
 
     #[test]
@@ -905,5 +1053,65 @@ mod tests {
             prototype.argument_type_indices.len(),
             "argument type names should align with raw argument indexes"
         );
+    }
+
+    #[test]
+    fn pdb_ingestor_resolves_fixture_pe_cache_hit() {
+        let Some(pe_path) = fixture("ntoskrnl.exe") else {
+            eprintln!("skipping PE/PDB cache test: ntoskrnl.exe is not present");
+            return;
+        };
+        let Some(_pdb_path) = fixture_pdb("ntkrnlmp.pdb") else {
+            eprintln!("skipping PE/PDB cache test: ntkrnlmp.pdb is not present");
+            return;
+        };
+
+        let analysis = PdbIngestor::analyze_pe_cache(&pe_path, fixture_cache_dir(), &["_EPROCESS"])
+            .expect("analyze PE through cached PDB")
+            .expect("expected PE/PDB cache hit");
+
+        assert_eq!(analysis.codeview.pdb_name, "ntkrnlmp.pdb");
+        assert_eq!(
+            analysis.codeview.guid_age_key(),
+            "CF32DE2E4A334C7C06FB63FCB6FAFB5C1"
+        );
+        assert_eq!(analysis.pdb_path.file_name().unwrap(), "ntkrnlmp.pdb");
+
+        let eprocess = analysis
+            .struct_layouts
+            .iter()
+            .find(|layout| layout.name == "_EPROCESS")
+            .expect("expected _EPROCESS layout from PE cache hit");
+        assert_eq!(eprocess.byte_size, 2_944);
+        assert!(
+            analysis.function_prototypes.len() > 100,
+            "expected function prototypes from PE cache hit"
+        );
+    }
+
+    #[test]
+    fn pdb_ingestor_resolves_microsoft_symbol_cache_if_present() {
+        let Some(pe_path) = fixture("ntoskrnl.exe") else {
+            eprintln!("skipping Microsoft cache test: ntoskrnl.exe is not present");
+            return;
+        };
+        let cache_dir = PathBuf::from("/nas4/data/symbol-cache/microsoft");
+        if !cache_dir.is_dir() {
+            eprintln!(
+                "skipping Microsoft cache test: {} absent",
+                cache_dir.display()
+            );
+            return;
+        }
+
+        let source = PdbIngestor::from_pe_cache(&pe_path, &cache_dir)
+            .expect("resolve PE through Microsoft symbol cache")
+            .expect("expected Microsoft symbol-cache hit");
+
+        assert_eq!(source.codeview.pdb_name, "ntkrnlmp.pdb");
+        assert!(source
+            .pdb_path
+            .ends_with("ntkrnlmp.pdb/CF32DE2E4A334C7C06FB63FCB6FAFB5C1/ntkrnlmp.pdb"));
+        assert!(source.find_struct_layout("_EPROCESS").unwrap().is_some());
     }
 }
