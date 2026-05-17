@@ -48,6 +48,8 @@ pub struct PdbStructSummary {
 pub struct PdbStructLayout {
     /// Struct/class/union name as stored in the PDB.
     pub name: String,
+    /// Coarse type kind: "struct", "class", "interface", or "union".
+    pub kind: String,
     /// Declared byte size of the type.
     pub byte_size: u64,
     /// Field count declared by the class/structure/union record.
@@ -425,6 +427,7 @@ impl PdbIngestor {
 
                     return Ok(Some(PdbStructLayout {
                         name: class.name.to_string().into_owned(),
+                        kind: pdb_class_kind_name(class.kind).to_string(),
                         byte_size: class.size,
                         field_count: usize::from(class.count),
                         provenance: None,
@@ -439,6 +442,7 @@ impl PdbIngestor {
 
                     return Ok(Some(PdbStructLayout {
                         name: union.name.to_string().into_owned(),
+                        kind: "union".to_string(),
                         byte_size: union.size,
                         field_count: usize::from(union.count),
                         provenance: None,
@@ -554,6 +558,14 @@ fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     format!("{:x}", hasher.finalize())
+}
+
+fn pdb_class_kind_name(kind: ClassKind) -> &'static str {
+    match kind {
+        ClassKind::Struct => "struct",
+        ClassKind::Class => "class",
+        ClassKind::Interface => "interface",
+    }
 }
 
 fn collect_argument_types(
@@ -1235,6 +1247,7 @@ mod tests {
             .iter()
             .find(|layout| layout.name == "_EPROCESS")
             .expect("expected _EPROCESS layout from PE cache hit");
+        assert_eq!(eprocess.kind, "struct");
         assert_eq!(eprocess.byte_size, 2_944);
         assert_eq!(eprocess.provenance.as_ref(), Some(&analysis.provenance));
         assert!(
@@ -1313,6 +1326,13 @@ mod tests {
                 layout.name
             );
         }
+
+        let large_integer = analysis
+            .struct_layouts
+            .iter()
+            .find(|layout| layout.name == "_LARGE_INTEGER")
+            .expect("expected _LARGE_INTEGER layout from PE cache hit");
+        assert_eq!(large_integer.kind, "union");
     }
 
     #[test]
