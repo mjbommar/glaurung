@@ -130,47 +130,63 @@ pub fn parse_tls(
     }
 
     if is_64bit {
-        td.raw_data_start_va = data.read_u64_le_at(tls_off).ok_or(
-            PeError::InvalidOffset { offset: tls_off },
-        )?;
-        td.raw_data_end_va = data.read_u64_le_at(tls_off + 8).ok_or(
-            PeError::InvalidOffset { offset: tls_off + 8 },
-        )?;
-        td.address_of_index = data.read_u64_le_at(tls_off + 16).ok_or(
-            PeError::InvalidOffset { offset: tls_off + 16 },
-        )?;
-        td.address_of_callbacks = data.read_u64_le_at(tls_off + 24).ok_or(
-            PeError::InvalidOffset { offset: tls_off + 24 },
-        )?;
-        td.size_of_zero_fill = data.read_u32_le_at(tls_off + 32).ok_or(
-            PeError::InvalidOffset { offset: tls_off + 32 },
-        )?;
-        td.characteristics = data.read_u32_le_at(tls_off + 36).ok_or(
-            PeError::InvalidOffset { offset: tls_off + 36 },
-        )?;
-    } else {
         td.raw_data_start_va = data
-            .read_u32_le_at(tls_off)
-            .ok_or(PeError::InvalidOffset { offset: tls_off })?
-            as u64;
+            .read_u64_le_at(tls_off)
+            .ok_or(PeError::InvalidOffset { offset: tls_off })?;
+        td.raw_data_end_va = data
+            .read_u64_le_at(tls_off + 8)
+            .ok_or(PeError::InvalidOffset {
+                offset: tls_off + 8,
+            })?;
+        td.address_of_index = data
+            .read_u64_le_at(tls_off + 16)
+            .ok_or(PeError::InvalidOffset {
+                offset: tls_off + 16,
+            })?;
+        td.address_of_callbacks =
+            data.read_u64_le_at(tls_off + 24)
+                .ok_or(PeError::InvalidOffset {
+                    offset: tls_off + 24,
+                })?;
+        td.size_of_zero_fill = data
+            .read_u32_le_at(tls_off + 32)
+            .ok_or(PeError::InvalidOffset {
+                offset: tls_off + 32,
+            })?;
+        td.characteristics = data
+            .read_u32_le_at(tls_off + 36)
+            .ok_or(PeError::InvalidOffset {
+                offset: tls_off + 36,
+            })?;
+    } else {
+        td.raw_data_start_va =
+            data.read_u32_le_at(tls_off)
+                .ok_or(PeError::InvalidOffset { offset: tls_off })? as u64;
         td.raw_data_end_va = data
             .read_u32_le_at(tls_off + 4)
-            .ok_or(PeError::InvalidOffset { offset: tls_off + 4 })?
-            as u64;
+            .ok_or(PeError::InvalidOffset {
+                offset: tls_off + 4,
+            })? as u64;
         td.address_of_index = data
             .read_u32_le_at(tls_off + 8)
-            .ok_or(PeError::InvalidOffset { offset: tls_off + 8 })?
-            as u64;
-        td.address_of_callbacks = data
-            .read_u32_le_at(tls_off + 12)
-            .ok_or(PeError::InvalidOffset { offset: tls_off + 12 })?
-            as u64;
+            .ok_or(PeError::InvalidOffset {
+                offset: tls_off + 8,
+            })? as u64;
+        td.address_of_callbacks =
+            data.read_u32_le_at(tls_off + 12)
+                .ok_or(PeError::InvalidOffset {
+                    offset: tls_off + 12,
+                })? as u64;
         td.size_of_zero_fill = data
             .read_u32_le_at(tls_off + 16)
-            .ok_or(PeError::InvalidOffset { offset: tls_off + 16 })?;
+            .ok_or(PeError::InvalidOffset {
+                offset: tls_off + 16,
+            })?;
         td.characteristics = data
             .read_u32_le_at(tls_off + 20)
-            .ok_or(PeError::InvalidOffset { offset: tls_off + 20 })?;
+            .ok_or(PeError::InvalidOffset {
+                offset: tls_off + 20,
+            })?;
     }
 
     if td.address_of_callbacks == 0 {
@@ -178,9 +194,7 @@ pub fn parse_tls(
         return Ok(td);
     }
 
-    let callbacks_rva = td
-        .address_of_callbacks
-        .saturating_sub(image_base) as u32;
+    let callbacks_rva = td.address_of_callbacks.saturating_sub(image_base) as u32;
     let mut cb_off = match sections.rva_to_offset(callbacks_rva) {
         Some(o) => o,
         None => {

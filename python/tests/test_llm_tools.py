@@ -1,18 +1,25 @@
 """Tests for the new memory-first LLM tools and agent."""
 
+from pathlib import Path
+from unittest.mock import MagicMock, Mock
+
+import pytest
+import glaurung as g
+
+from glaurung.llm.agents.memory_agent import create_memory_agent
+from glaurung.llm.context import Budgets, MemoryContext
+from glaurung.llm.kb.adapters import import_triage
+from glaurung.llm.tools.hash_file import build_tool as build_file_hash
 from glaurung.llm.tools.suggest_function_name import build_naming_prompt
+from glaurung.llm.tools.view_disassembly import build_tool as build_view_disassembly
+from glaurung.llm.tools.view_entry import build_tool as build_view_entry
+from glaurung.llm.tools.view_strings import build_tool as build_view_strings
 
 
 def test_build_naming_prompt_includes_pseudocode_when_decompile_succeeds(tmp_path: "__import__('pathlib').Path"):
     """build_naming_prompt should embed decompiler output when available."""
-    from pathlib import Path
-    import glaurung as g
-    from glaurung.llm.context import MemoryContext, Budgets
-    from glaurung.llm.kb.adapters import import_triage
-
     sample = Path("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2")
     if not sample.exists():
-        import pytest
         pytest.skip("sample missing")
 
     art = g.triage.analyze_path(str(sample))
@@ -46,11 +53,8 @@ def test_build_naming_prompt_includes_pseudocode_when_decompile_succeeds(tmp_pat
 def test_build_naming_prompt_falls_back_when_decompile_unavailable(tmp_path):
     """When no VA is given (or decompile fails) the helper uses the legacy
     context shape."""
-    from glaurung.llm.context import MemoryContext, Budgets
-
     # MemoryContext without a usable file — decompile will raise and the
     # helper must fall back.
-    from unittest.mock import MagicMock
     ctx = MemoryContext(
         file_path="/nonexistent",
         artifact=MagicMock(),
@@ -69,19 +73,6 @@ def test_build_naming_prompt_falls_back_when_decompile_unavailable(tmp_path):
     assert "puts@plt" in prompt
     assert "'hello'" in prompt or "\"hello\"" in prompt
     assert "mov rax" in prompt
-
-from pathlib import Path
-from unittest.mock import Mock
-import pytest
-import glaurung as g
-
-from glaurung.llm.context import MemoryContext, Budgets
-from glaurung.llm.agents.memory_agent import create_memory_agent
-from glaurung.llm.tools.hash_file import build_tool as build_file_hash
-from glaurung.llm.tools.view_strings import build_tool as build_view_strings
-from glaurung.llm.tools.view_entry import build_tool as build_view_entry
-from glaurung.llm.tools.view_disassembly import build_tool as build_view_disassembly
-from glaurung.llm.kb.adapters import import_triage
 
 
 def _make_ctx_for_bytes(data: bytes, tmp_path: Path) -> MemoryContext:
