@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from collections.abc import Callable
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -661,9 +662,11 @@ def _function_row(func: Any) -> dict[str, Any]:
         "instruction_count": instr_count,
         "strings": [],
         "api_hits": [],
+        "api_sequence": [],
         "imports": [],
         "calls": [],
         "call_count": 0,
+        "flow_hints": [],
         "patterns": [],
         "decompile_error": None,
         "score": 0,
@@ -888,8 +891,11 @@ def _annotate_decompile_hits(
         except Exception as e:
             row["decompile_error"] = str(e)
             continue
+        api_sequence = _scan_api_sequence(pseudocode, risk_api_names)
         api_hits = _scan_api_hits(pseudocode, risk_api_names)
+        _merge_row_api_sequence(row, api_sequence)
         _merge_row_api_hits(row, api_hits, _patterns_from_api_hits(api_hits))
+        _merge_row_flow_hints(row, _flow_hints_from_api_sequence(api_sequence))
 
 
 def _risk_api_name_pool(imports: list[str]) -> list[str]:
@@ -919,6 +925,34 @@ def _merge_row_api_hits(
         row["score"] += 8 * len(new_patterns)
 
 
+def _merge_row_api_sequence(row: dict[str, Any], api_sequence: list[str]) -> None:
+    if not api_sequence:
+        return
+    existing = list(row.get("api_sequence") or [])
+    row["api_sequence"] = (existing + api_sequence)[:128]
+
+
+def _merge_row_flow_hints(
+    row: dict[str, Any],
+    flow_hints: list[dict[str, Any]],
+) -> None:
+    if not flow_hints:
+        return
+    existing = list(row.get("flow_hints") or [])
+    seen = {str(hint.get("kind")) for hint in existing}
+    added = 0
+    for hint in flow_hints:
+        kind = str(hint.get("kind"))
+        if kind in seen:
+            continue
+        seen.add(kind)
+        existing.append(hint)
+        added += 1
+    if added:
+        row["flow_hints"] = existing
+        row["score"] += 10 * added
+
+
 def _scan_api_hits(pseudocode: str, api_names: list[str]) -> list[str]:
     lower = pseudocode.lower()
     hits = []
@@ -932,12 +966,90 @@ def _scan_api_hits(pseudocode: str, api_names: list[str]) -> list[str]:
     return sorted(set(hits), key=lambda item: item.lower())
 
 
+def _scan_api_sequence(pseudocode: str, api_names: list[str]) -> list[str]:
+    lower = pseudocode.lower()
+    hits: list[tuple[int, int, str]] = []
+    for name in api_names:
+        clean = _clean_import_name(name)
+        if not clean:
+            continue
+        for needle in {clean.lower(), _api_stem(clean)}:
+            if not needle:
+                continue
+            suffix = "[aw]?" if len(needle) > 2 and needle[-1] not in {"a", "w"} else ""
+            pattern = rf"(?<![a-z0-9_]){re.escape(needle)}{suffix}(?![a-z0-9_])"
+            for match in re.finditer(pattern, lower):
+                hits.append((match.start(), match.end(), clean))
+    hits.sort(key=lambda item: (item[0], -(item[1] - item[0]), -len(item[2])))
+    out: list[str] = []
+    seen_spans: set[tuple[int, int]] = set()
+    for start, end, name in hits:
+        span = (start, end)
+        if span in seen_spans:
+            continue
+        seen_spans.add(span)
+        out.append(name)
+        if len(out) >= 128:
+            break
+    return out
+
+
 def _contains_api_name(lower_text: str, needle: str) -> bool:
     if not needle:
         return False
     suffix = "[aw]?" if len(needle) > 2 and needle[-1] not in {"a", "w"} else ""
     pattern = rf"(?<![a-z0-9_]){re.escape(needle)}{suffix}(?![a-z0-9_])"
     return re.search(pattern, lower_text) is not None
+
+
+def _flow_hints_from_api_sequence(api_sequence: list[str]) -> list[dict[str, Any]]:
+    stems = [_api_stem(name) for name in api_sequence]
+    ordered = _ordered_file_read_allocation_flow(stems)
+    if not ordered:
+        return []
+    evidence = [api_sequence[idx] for idx in ordered]
+    return [
+        {
+            "kind": "file-read-allocation-flow",
+            "summary": "ordered CreateFile/ReadFile/allocation/ReadFile sequence",
+            "evidence": evidence,
+        }
+    ]
+
+
+def _ordered_file_read_allocation_flow(stems: list[str]) -> list[int] | None:
+    create_idx = _find_stem_index(stems, 0, lambda stem: stem.startswith("createfile"))
+    if create_idx is None:
+        return None
+    first_read_idx = _find_stem_index(
+        stems, create_idx + 1, lambda stem: stem.startswith("readfile")
+    )
+    if first_read_idx is None:
+        return None
+    alloc_idx = _find_stem_index(
+        stems,
+        first_read_idx + 1,
+        lambda stem: stem in {"localalloc", "heapalloc", "malloc", "calloc", "realloc"},
+    )
+    if alloc_idx is None:
+        return None
+    second_read_idx = _find_stem_index(
+        stems, alloc_idx + 1, lambda stem: stem.startswith("readfile")
+    )
+    if second_read_idx is None:
+        return None
+    return [create_idx, first_read_idx, alloc_idx, second_read_idx]
+
+
+def _find_stem_index(
+    stems: list[str],
+    start: int,
+    predicate: Callable[[str], bool],
+) -> int | None:
+    for idx in range(start, len(stems)):
+        if predicate(stems[idx]):
+            return idx
+    return None
 
 
 def _patterns_from_api_hits(api_hits: list[str]) -> list[str]:
@@ -1008,6 +1120,18 @@ def _build_risk_items(
                     "severity": severity,
                     "summary": f"{row['name']} has {pattern.replace('-', ' ')} shape",
                     "evidence": row.get("api_hits", [])[:12],
+                    "function_va": row["entry_va"],
+                }
+            )
+        for hint in row.get("flow_hints", []):
+            items.append(
+                {
+                    "kind": hint.get("kind", "flow-hint"),
+                    "severity": "high",
+                    "summary": (
+                        f"{row['name']} has {hint.get('summary', 'flow hint')}"
+                    ),
+                    "evidence": list(hint.get("evidence") or [])[:12],
                     "function_va": row["entry_va"],
                 }
             )

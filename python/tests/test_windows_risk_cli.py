@@ -159,9 +159,21 @@ def test_windows_risk_json_reports_parser_shape(
         "call_sites": [0x1020],
     }
     assert "ReadFile" in report["functions"][0]["imports"]
+    assert report["functions"][0]["api_sequence"][:4] == [
+        "CreateFileW",
+        "ReadFile",
+        "LocalAlloc",
+        "ReadFile",
+    ]
+    assert report["functions"][0]["flow_hints"][0]["kind"] == (
+        "file-read-allocation-flow"
+    )
     assert "file_io" in report["risk_imports"]
     assert any(
         item["kind"] == "file-read-allocation-parser" for item in report["risk_items"]
+    )
+    assert any(
+        item["kind"] == "file-read-allocation-flow" for item in report["risk_items"]
     )
     assert any(item["kind"] == "function-string-xrefs" for item in report["risk_items"])
     assert report["functions"][0]["strings"][0]["text"].startswith(
