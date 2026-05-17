@@ -232,6 +232,25 @@ def test_decompile_kernel_idioms_render_semantic_comments():
     assert "// wrmsr: write model-specific register" in text
 
 
+@pytest.mark.skipif(
+    not NTOSKRNL_SAMPLE.exists() or not (MSVC_PDB_CACHE / "ntkrnlmp.pdb").exists(),
+    reason="ntoskrnl PE/PDB sample missing",
+)
+def test_decompile_pe_pdb_cache_names_kernel_public_calls():
+    text = g.ir.decompile_at(
+        str(NTOSKRNL_SAMPLE),
+        0x140A88010,
+        timeout_ms=5000,
+        pdb_cache=str(MSVC_PDB_CACHE),
+    )
+    assert "call KiInitializeKernelShadowStacks" in text
+    assert "call KiInitializeBootStructures" in text
+    assert "call KiIdleLoop" in text
+    assert "call 0x140a92840" not in text
+    assert "call 0x140a8c880" not in text
+    assert "call 0x1404174a0" not in text
+
+
 @pytest.mark.skipif(not ARM64_SAMPLE.exists(), reason="arm64 sample missing")
 def test_decompile_all_on_arm64_sample():
     results = g.ir.decompile_all(str(ARM64_SAMPLE), limit=2)

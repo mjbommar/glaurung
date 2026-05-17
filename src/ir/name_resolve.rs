@@ -212,7 +212,7 @@ fn collect_pe_pdb_publics(path: &str, cache_dir: &Path, out: &mut HashMap<u64, S
         return;
     };
     for symbol in symbols {
-        if !symbol.code || !symbol.function || symbol.name.is_empty() {
+        if !(symbol.code || symbol.function) || symbol.name.is_empty() {
             continue;
         }
         if let Some(va) = symbol.va {
@@ -352,6 +352,10 @@ mod tests {
         assert_eq!(
             map.get(&0x140323480).map(String::as_str),
             Some("KeReleaseSpinLock")
+        );
+        assert_eq!(
+            map.get(&0x140a92840).map(String::as_str),
+            Some("KiInitializeKernelShadowStacks")
         );
     }
 }
