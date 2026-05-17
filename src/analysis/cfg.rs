@@ -52,6 +52,19 @@ struct ExecRegion {
     _file_off_start: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscoverySeedKind {
+    Trusted,
+    BodyOverlapGated,
+    Xref,
+}
+
+impl DiscoverySeedKind {
+    fn is_body_overlap_gated(self) -> bool {
+        matches!(self, Self::BodyOverlapGated | Self::Xref)
+    }
+}
+
 fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Option<Address>) {
     let mut regions = Vec::new();
     let mut arch = BArch::Unknown;
@@ -457,6 +470,7 @@ fn discover_function(
 /// Empirical validation on ntoskrnl's 31,729 g-only seeds (asb
 /// iter 14 sweep): ~77 % have neither signal and are rejected as
 /// likely mid-instruction xref landings.
+#[allow(dead_code)]
 fn looks_like_fn_start(data: &[u8], file_off: usize) -> bool {
     if file_off == 0 || file_off >= data.len() {
         return false;
@@ -512,12 +526,60 @@ fn looks_like_fn_start(data: &[u8], file_off: usize) -> bool {
     }
 }
 
+fn va_in_function_body(func: &Function, va: u64) -> bool {
+    if va == func.entry_point.value {
+        return false;
+    }
+    if !func.basic_blocks.is_empty() {
+        return func.basic_blocks.iter().any(|bb| {
+            let start = bb.start_address.value;
+            let end = bb.end_address.value;
+            va > start && va < end
+        });
+    }
+    for range in func.all_ranges() {
+        let start = range.start.value;
+        let end = start.saturating_add(range.size);
+        if va >= start && va < end {
+            return true;
+        }
+    }
+    false
+}
+
+fn va_in_discovered_body(functions: &[Function], current: Option<&Function>, va: u64) -> bool {
+    if let Some(f) = current {
+        if va_in_function_body(f, va) {
+            return true;
+        }
+    }
+    functions.iter().any(|f| va_in_function_body(f, va))
+}
+
+fn pe_xref_seed_looks_like_function_start(data: &[u8], va: u64) -> bool {
+    match pe_va_to_file_off(data, va) {
+        Some(file_off) => looks_like_fn_start(data, file_off),
+        None => false,
+    }
+}
+
+fn unwind_info_has_chain_info(data: &[u8], file_off: usize) -> bool {
+    match data.get(file_off) {
+        Some(first) => {
+            let flags = first >> 3;
+            flags & 0x04 != 0
+        }
+        None => false,
+    }
+}
+
 /// Resolve a VA to a file offset by walking the section headers
 /// directly. Used by the prologue-sanity gate during xref-target
 /// promotion -- the existing `pe::sections::SectionTable` is built
 /// per-PeParser instance; this helper avoids constructing one
 /// inside the cfg worklist (where we already have raw `data` and
 /// the `ExecRegion` list, but not the full section table).
+#[allow(dead_code)]
 fn pe_va_to_file_off(data: &[u8], va: u64) -> Option<usize> {
     if data.len() < 0x40 || &data[..2] != b"MZ" {
         return None;
@@ -527,10 +589,8 @@ fn pe_va_to_file_off(data: &[u8], va: u64) -> Option<usize> {
         return None;
     }
     let coff_off = e_lfanew + 4;
-    let n_sections = u16::from_le_bytes(data[coff_off + 2..coff_off + 4].try_into().ok()?)
-        as usize;
-    let opt_size = u16::from_le_bytes(data[coff_off + 16..coff_off + 18].try_into().ok()?)
-        as usize;
+    let n_sections = u16::from_le_bytes(data[coff_off + 2..coff_off + 4].try_into().ok()?) as usize;
+    let opt_size = u16::from_le_bytes(data[coff_off + 16..coff_off + 18].try_into().ok()?) as usize;
     let opt_off = coff_off + 20;
     let magic = u16::from_le_bytes(data[opt_off..opt_off + 2].try_into().ok()?);
     let image_base = if magic == 0x20B {
@@ -644,9 +704,9 @@ fn parse_pdata_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch)
     if exc_rva == 0 || exc_size == 0 {
         return Vec::new();
     }
-    // Resolve exc_rva to a file offset via the section table.
+    // Resolve RVAs to file offsets via the section table.
     let sec_off = opt_off + opt_size;
-    let mut exc_file_off: Option<usize> = None;
+    let mut sections_view: Vec<(usize, usize, usize)> = Vec::with_capacity(n_sections);
     for i in 0..n_sections {
         let s = sec_off + i * 40;
         if s + 40 > data.len() {
@@ -657,12 +717,17 @@ fn parse_pdata_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch)
         let raw_sz = read_u32(s + 16).unwrap_or(0) as usize;
         let raw_ptr = read_u32(s + 20).unwrap_or(0) as usize;
         let span = std::cmp::max(virt_sz, raw_sz);
-        if exc_rva >= virt_addr && exc_rva < virt_addr + span {
-            exc_file_off = Some(raw_ptr + (exc_rva - virt_addr));
-            break;
-        }
+        sections_view.push((virt_addr, span, raw_ptr));
     }
-    let exc_file_off = match exc_file_off {
+    let rva_to_off = |rva: usize| -> Option<usize> {
+        for (va, span, rp) in &sections_view {
+            if rva >= *va && rva < *va + *span {
+                return Some(rp + (rva - va));
+            }
+        }
+        None
+    };
+    let exc_file_off = match rva_to_off(exc_rva) {
         Some(v) => v,
         None => return Vec::new(),
     };
@@ -683,6 +748,15 @@ fn parse_pdata_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch)
         };
         if begin_rva == 0 {
             continue;
+        }
+        let unwind_rva = match read_u32(off + 8) {
+            Some(v) => v as usize,
+            None => break,
+        };
+        if let Some(unwind_off) = rva_to_off(unwind_rva) {
+            if unwind_info_has_chain_info(data, unwind_off) {
+                continue;
+            }
         }
         let va = image_base + begin_rva as u64;
         if in_exec_regions(regions, va).is_some() {
@@ -707,11 +781,7 @@ fn parse_pdata_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch)
 ///
 /// Returns an empty vector for non-PE files or PEs with no export
 /// directory.
-fn parse_pe_export_function_starts(
-    data: &[u8],
-    regions: &[ExecRegion],
-    arch: BArch,
-) -> Vec<u64> {
+fn parse_pe_export_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<u64> {
     if !arch.is_64_bit() && arch != BArch::X86 {
         return Vec::new();
     }
@@ -783,8 +853,7 @@ fn parse_pe_export_function_starts(
     }
     // Resolve via section table.
     let sec_off = opt_off + opt_size;
-    let mut sections_view: Vec<(usize, usize, usize, usize)> =
-        Vec::with_capacity(n_sections);
+    let mut sections_view: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(n_sections);
     for i in 0..n_sections {
         let s = sec_off + i * 40;
         if s + 40 > data.len() {
@@ -1054,11 +1123,14 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     }
 
     // Seeds: entrypoint + symbol-defined function addresses (exec region)
-    let mut seeds = parse_function_seeds(data, &regions, arch);
+    let mut seeds: Vec<(Address, DiscoverySeedKind)> = parse_function_seeds(data, &regions, arch)
+        .into_iter()
+        .map(|addr| (addr, DiscoverySeedKind::Trusted))
+        .collect();
     if let Some(ep) = entry.clone() {
         // Ensure entrypoint first
-        seeds.retain(|a| a.value != ep.value);
-        let mut ordered = vec![ep];
+        seeds.retain(|(a, _kind)| a.value != ep.value);
+        let mut ordered = vec![(ep, DiscoverySeedKind::Trusted)];
         ordered.extend(seeds);
         seeds = ordered;
     }
@@ -1076,15 +1148,16 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         Vec::new()
     };
     let bits = if arch.is_64_bit() { 64 } else { 32 };
+    let is_pe_image = data.len() >= 2 && &data[..2] == b"MZ";
     let flirt_name_by_va: std::collections::HashMap<u64, String> =
         flirt_seeds.iter().cloned().collect();
-    let mut known: std::collections::HashSet<u64> = seeds.iter().map(|a| a.value).collect();
+    let mut known: std::collections::HashSet<u64> = seeds.iter().map(|(a, _)| a.value).collect();
     for (va, _name) in &flirt_seeds {
         if known.contains(va) {
             continue;
         }
         if let Ok(addr) = Address::new(AddressKind::VA, *va, bits, None, None) {
-            seeds.push(addr);
+            seeds.push((addr, DiscoverySeedKind::Trusted));
             known.insert(*va);
         }
     }
@@ -1107,33 +1180,56 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
             continue;
         }
         if let Ok(addr) = Address::new(AddressKind::VA, entry.target_va, bits, None, None) {
-            seeds.push(addr);
+            seeds.push((addr, DiscoverySeedKind::Trusted));
             known.insert(entry.target_va);
             vtable_method_count += 1;
         }
     }
     let _ = vtable_method_count; // available for telemetry; unused for now.
 
-    // Jump-table discovery (#177). Scans rodata for relative-offset
-    // tables (i32 entries encoding `target_va - table_va`); each entry
-    // is a switch-statement case label and would otherwise be a dead
-    // code branch as far as direct-call discovery is concerned.
-    let regions_for_check2 = regions.clone();
-    let is_executable2 = move |va: u64| -> bool {
-        regions_for_check2
-            .iter()
-            .any(|r| va >= r.start && va < r.end)
-    };
-    let jump_tables = discover_jump_tables(data, is_executable2);
-    for jt in &jump_tables {
-        for tgt in &jt.targets {
-            if known.contains(tgt) {
-                continue;
+    // Jump-table discovery (#177). For non-PE stripped binaries this
+    // preserves the historical behavior of surfacing switch case bodies
+    // as discoverable functions. For PE function-discovery parity, do
+    // not promote case labels into the top-level function list: Ghidra
+    // keeps them as intra-function blocks, and switch reconstruction has
+    // its own comparison area.
+    if !is_pe_image {
+        let regions_for_check2 = regions.clone();
+        let is_executable2 = move |va: u64| -> bool {
+            regions_for_check2
+                .iter()
+                .any(|r| va >= r.start && va < r.end)
+        };
+        let jump_tables = discover_jump_tables(data, is_executable2);
+        for jt in &jump_tables {
+            for tgt in &jt.targets {
+                if known.contains(tgt) {
+                    continue;
+                }
+                if let Ok(addr) = Address::new(AddressKind::VA, *tgt, bits, None, None) {
+                    seeds.push((addr, DiscoverySeedKind::Trusted));
+                    known.insert(*tgt);
+                }
             }
-            if let Ok(addr) = Address::new(AddressKind::VA, *tgt, bits, None, None) {
-                seeds.push(addr);
-                known.insert(*tgt);
-            }
+        }
+    }
+
+    // PE export-table seeds. The `object` crate's `dynamic_symbols()`
+    // returns 0 entries for PE files (verified on kernel32.dll: 1671
+    // exports, 0 returned). We parse IMAGE_DIRECTORY_ENTRY_EXPORT
+    // directly so every export address becomes a discovery seed.
+    // Closes the 58 % recall observed on kernel32 in the iter 14
+    // sweep (most kernel32 exports are tiny `jmp [iat]` thunks not
+    // covered by .pdata). Exports are trusted entry points, so insert
+    // them before the body-overlap-gated .pdata seeds below.
+    let export_starts = parse_pe_export_function_starts(data, &regions, arch);
+    for va in export_starts {
+        if known.contains(&va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, va, bits, None, None) {
+            seeds.push((addr, DiscoverySeedKind::Trusted));
+            known.insert(va);
         }
     }
 
@@ -1150,25 +1246,7 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
             continue;
         }
         if let Ok(addr) = Address::new(AddressKind::VA, va, bits, None, None) {
-            seeds.push(addr);
-            known.insert(va);
-        }
-    }
-
-    // PE export-table seeds. The `object` crate's `dynamic_symbols()`
-    // returns 0 entries for PE files (verified on kernel32.dll: 1671
-    // exports, 0 returned). We parse IMAGE_DIRECTORY_ENTRY_EXPORT
-    // directly so every export address becomes a discovery seed.
-    // Closes the 58 % recall observed on kernel32 in the iter 14
-    // sweep (most kernel32 exports are tiny `jmp [iat]` thunks not
-    // covered by .pdata).
-    let export_starts = parse_pe_export_function_starts(data, &regions, arch);
-    for va in export_starts {
-        if known.contains(&va) {
-            continue;
-        }
-        if let Ok(addr) = Address::new(AddressKind::VA, va, bits, None, None) {
-            seeds.push(addr);
+            seeds.push((addr, DiscoverySeedKind::BodyOverlapGated));
             known.insert(va);
         }
     }
@@ -1181,10 +1259,21 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     // by `max_functions` while still propagating xrefs to a fixed
     // point.
     let mut calls_all: Vec<(String, u64)> = Vec::new(); // (caller_name, callee_va)
-    let mut worklist: std::collections::VecDeque<Address> = seeds.into_iter().collect();
-    while let Some(seed) = worklist.pop_front() {
+    let mut worklist: std::collections::VecDeque<(Address, DiscoverySeedKind)> =
+        seeds.into_iter().collect();
+    while let Some((seed, seed_kind)) = worklist.pop_front() {
         if functions.len() >= budgets.max_functions.max(1) {
             break;
+        }
+        if seed_kind.is_body_overlap_gated() && va_in_discovered_body(&functions, None, seed.value)
+        {
+            continue;
+        }
+        if seed_kind == DiscoverySeedKind::Xref
+            && is_pe_image
+            && !pe_xref_seed_looks_like_function_start(data, seed.value)
+        {
+            continue;
         }
         if let Some((f, calls)) =
             discover_function(data, arch, end, seed.clone(), &regions, budgets)
@@ -1196,11 +1285,11 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
                 // queued becomes a new candidate function entry.
                 if !known.contains(callee_va)
                     && in_exec_regions(&regions, *callee_va).is_some()
+                    && !va_in_discovered_body(&functions, Some(&f), *callee_va)
+                    && (!is_pe_image || pe_xref_seed_looks_like_function_start(data, *callee_va))
                 {
-                    if let Ok(addr) =
-                        Address::new(AddressKind::VA, *callee_va, bits, None, None)
-                    {
-                        worklist.push_back(addr);
+                    if let Ok(addr) = Address::new(AddressKind::VA, *callee_va, bits, None, None) {
+                        worklist.push_back((addr, DiscoverySeedKind::Xref));
                         known.insert(*callee_va);
                     }
                 }
@@ -1373,6 +1462,103 @@ mod prologue_gate_tests {
     fn rejects_file_off_zero() {
         let d = vec![0x48, 0x89, 0x5c, 0x24];
         assert!(!looks_like_fn_start(&d, 0));
+    }
+}
+
+#[cfg(test)]
+mod body_overlap_gate_tests {
+    use super::*;
+
+    fn _va_range(start: u64, size: u64) -> AddressRange {
+        let s = Address::new(AddressKind::VA, start, 64, None, None).unwrap();
+        AddressRange::new(s, size, None).unwrap()
+    }
+
+    fn _func(entry_va: u64, ranges: &[(u64, u64)]) -> Function {
+        let entry = Address::new(AddressKind::VA, entry_va, 64, None, None).unwrap();
+        let mut func =
+            Function::new(format!("sub_{entry_va:x}"), entry, FunctionKind::Normal).unwrap();
+        for (start, size) in ranges {
+            func.add_chunk(_va_range(*start, *size));
+        }
+        func
+    }
+
+    fn _func_with_block(entry_va: u64, range: (u64, u64), block: (u64, u64)) -> Function {
+        let mut func = _func(entry_va, &[range]);
+        let bb = BasicBlock::new(
+            format!("bb_{:x}", block.0),
+            Address::new(AddressKind::VA, block.0, 64, None, None).unwrap(),
+            Address::new(AddressKind::VA, block.1, 64, None, None).unwrap(),
+            1,
+            None,
+            None,
+        );
+        func.add_basic_block(bb);
+        func
+    }
+
+    #[test]
+    fn body_gate_keeps_function_entry() {
+        let f = _func(0x1000, &[(0x1000, 0x80)]);
+        assert!(!va_in_function_body(&f, 0x1000));
+    }
+
+    #[test]
+    fn body_gate_rejects_primary_body_address() {
+        let f = _func(0x1000, &[(0x1000, 0x80)]);
+        assert!(va_in_function_body(&f, 0x1040));
+    }
+
+    #[test]
+    fn body_gate_uses_half_open_ranges() {
+        let f = _func(0x1000, &[(0x1000, 0x80)]);
+        assert!(!va_in_function_body(&f, 0x1080));
+        assert!(!va_in_function_body(&f, 0x0fff));
+    }
+
+    #[test]
+    fn body_gate_treats_auxiliary_chunks_as_owned_body() {
+        let f = _func(0x1000, &[(0x1000, 0x80), (0x2000, 0x20)]);
+        assert!(va_in_function_body(&f, 0x2000));
+    }
+
+    #[test]
+    fn body_gate_prefers_decoded_block_interiors_over_wide_ranges() {
+        let f = _func_with_block(0x1000, (0x1000, 0x5000), (0x1000, 0x1010));
+        assert!(va_in_function_body(&f, 0x1008));
+        assert!(!va_in_function_body(&f, 0x1010));
+        assert!(!va_in_function_body(&f, 0x2000));
+    }
+
+    #[test]
+    fn discovered_body_checks_current_and_prior_functions() {
+        let prior = _func(0x1000, &[(0x1000, 0x80)]);
+        let current = _func(0x3000, &[(0x3000, 0x80)]);
+        assert!(va_in_discovered_body(&[prior], Some(&current), 0x1040));
+        assert!(va_in_discovered_body(&[], Some(&current), 0x3040));
+        assert!(!va_in_discovered_body(&[], Some(&current), 0x4000));
+    }
+}
+
+#[cfg(test)]
+mod unwind_info_tests {
+    use super::unwind_info_has_chain_info;
+
+    #[test]
+    fn detects_chaininfo_flag_in_unwind_info_header() {
+        // UNWIND_INFO byte 0 packs Version in bits 0..2 and Flags in
+        // bits 3..7. UNW_FLAG_CHAININFO is flag bit 0x04.
+        let data = [0x01, (0x04 << 3) | 0x01, (0x03 << 3) | 0x01];
+        assert!(!unwind_info_has_chain_info(&data, 0));
+        assert!(unwind_info_has_chain_info(&data, 1));
+        assert!(!unwind_info_has_chain_info(&data, 2));
+    }
+
+    #[test]
+    fn missing_unwind_info_header_is_not_chained() {
+        let data = [0x21];
+        assert!(!unwind_info_has_chain_info(&data, 2));
     }
 }
 
