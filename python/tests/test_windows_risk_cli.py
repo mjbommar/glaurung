@@ -57,7 +57,19 @@ def test_windows_risk_json_reports_parser_shape(
             basic_blocks=[SimpleNamespace(instruction_count=16)],
             size=0x80,
         )
-        return [func], SimpleNamespace(edges=[])
+        helper = SimpleNamespace(
+            name="helper",
+            entry_point=SimpleNamespace(value=0x2000),
+            basic_blocks=[SimpleNamespace(instruction_count=4)],
+            size=0x20,
+        )
+        edge = SimpleNamespace(
+            caller="sub_1000",
+            callee="helper",
+            call_type=SimpleNamespace(value=lambda: "direct"),
+            call_sites=[SimpleNamespace(value=0x1020)],
+        )
+        return [func, helper], SimpleNamespace(edges=[edge])
 
     monkeypatch.setattr(g.triage, "list_symbols", fake_list_symbols)
     monkeypatch.setattr(g.triage, "analyze_path", fake_analyze_path)
@@ -132,13 +144,21 @@ def test_windows_risk_json_reports_parser_shape(
     assert rc == 0
     report = json.loads(buf.getvalue())
     assert report["summary"]["format"] == "PE"
-    assert report["summary"]["function_count"] == 1
+    assert report["summary"]["function_count"] == 2
     assert report["summary"]["export_count"] == 1
     assert report["pe_metadata"]["resources"]["resources_by_type"] == {
         "VERSIONINFO": 1,
         "MANIFEST": 1,
     }
     assert report["pe_metadata"]["tls"]["callback_count"] == 1
+    assert report["functions"][0]["call_count"] == 1
+    assert report["functions"][0]["calls"][0] == {
+        "target": "helper",
+        "target_va": 0x2000,
+        "kind": "direct",
+        "call_sites": [0x1020],
+    }
+    assert "ReadFile" in report["functions"][0]["imports"]
     assert "file_io" in report["risk_imports"]
     assert any(
         item["kind"] == "file-read-allocation-parser" for item in report["risk_items"]

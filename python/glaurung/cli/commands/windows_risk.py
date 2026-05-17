@@ -294,9 +294,12 @@ class WindowsRiskCommand(BaseCommand):
             for fn in report["functions"][: report["summary"]["function_rows"]]:
                 apis = ", ".join(fn.get("api_hits") or [])
                 strings = ", ".join(repr(s["text"]) for s in fn.get("strings", [])[:3])
+                calls = ", ".join(call["target"] for call in fn.get("calls", [])[:4])
                 bits = []
                 if apis:
                     bits.append(f"apis: {apis}")
+                if calls:
+                    bits.append(f"calls: {calls}")
                 if strings:
                     bits.append(f"strings: {strings}")
                 suffix = " | " + " | ".join(bits) if bits else ""
@@ -317,7 +320,7 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     risk_imports = _bucket_imports(imports)
     pe_metadata = _collect_pe_metadata(path_str, args, exports, libs)
     strings = _extract_strings(path_str, args)
-    funcs, _callgraph = g.analysis.analyze_functions_path(
+    funcs, callgraph = g.analysis.analyze_functions_path(
         path_str,
         max_read_bytes=args.max_read_bytes,
         max_file_size=args.max_file_size,
@@ -328,6 +331,7 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     )
     function_rows = [_function_row(func) for func in funcs]
     by_va = {row["entry_va"]: row for row in function_rows}
+    _annotate_calls(function_rows, callgraph)
 
     data_xrefs = _collect_data_xrefs(path_str, args)
     _join_string_xrefs(path_str, args, data_xrefs, strings, by_va)
@@ -657,10 +661,78 @@ def _function_row(func: Any) -> dict[str, Any]:
         "instruction_count": instr_count,
         "strings": [],
         "api_hits": [],
+        "imports": [],
+        "calls": [],
+        "call_count": 0,
         "patterns": [],
         "decompile_error": None,
         "score": 0,
     }
+
+
+def _annotate_calls(function_rows: list[dict[str, Any]], callgraph: Any) -> None:
+    if callgraph is None:
+        return
+    by_name: dict[str, dict[str, Any]] = {}
+    for row in function_rows:
+        va = int(row["entry_va"])
+        by_name[str(row["name"])] = row
+        by_name[f"sub_{va:x}"] = row
+
+    seen: set[tuple[int, str, tuple[int, ...]]] = set()
+    for edge in getattr(callgraph, "edges", []) or []:
+        caller_name = str(getattr(edge, "caller", ""))
+        row = by_name.get(caller_name)
+        if row is None:
+            continue
+        callee_name = str(getattr(edge, "callee", ""))
+        call_sites = _edge_call_sites(edge)
+        key = (int(row["entry_va"]), callee_name, tuple(call_sites))
+        if key in seen:
+            continue
+        seen.add(key)
+        callee_row = by_name.get(callee_name)
+        call_kind = _edge_call_type(edge)
+        row["calls"].append(
+            {
+                "target": callee_name,
+                "target_va": int(callee_row["entry_va"]) if callee_row else None,
+                "kind": call_kind,
+                "call_sites": call_sites,
+            }
+        )
+
+    for row in function_rows:
+        row["calls"].sort(
+            key=lambda call: (
+                int(call["target_va"]) if call["target_va"] is not None else 2**64 - 1,
+                str(call["target"]),
+            )
+        )
+        row["call_count"] = len(row["calls"])
+
+
+def _edge_call_sites(edge: Any) -> list[int]:
+    sites = []
+    for site in getattr(edge, "call_sites", []) or []:
+        try:
+            sites.append(int(getattr(site, "value", site)))
+        except Exception:
+            continue
+    return sorted(set(sites))
+
+
+def _edge_call_type(edge: Any) -> str:
+    call_type = getattr(edge, "call_type", None)
+    value = getattr(call_type, "value", None)
+    if callable(value):
+        try:
+            return str(value()).lower()
+        except Exception:
+            pass
+    if call_type is None:
+        return "unknown"
+    return str(call_type).lower()
 
 
 def _collect_data_xrefs(
@@ -840,6 +912,7 @@ def _merge_row_api_hits(
         row["api_hits"] = sorted(
             old_api_hits | set(api_hits), key=lambda item: item.lower()
         )
+        row["imports"] = row["api_hits"]
         row["score"] += len(new_api_hits)
     if new_patterns:
         row["patterns"] = sorted(old_patterns | set(patterns))
