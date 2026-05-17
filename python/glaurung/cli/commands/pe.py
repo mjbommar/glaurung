@@ -12,6 +12,10 @@ from glaurung.llm.tools.pe_list_resources import (
     PeListResourcesResult,
     build_tool as build_pe_list_resources,
 )
+from glaurung.llm.tools.pe_view_manifest import (
+    PeManifestResult,
+    build_tool as build_pe_view_manifest,
+)
 
 from .base import BaseCommand
 from ..formatters.base import BaseFormatter, OutputFormat
@@ -36,6 +40,9 @@ class PeCommand(BaseCommand):
             "resources", help="List PE resource directory leaves"
         )
         self._add_common_child_arguments(resources)
+        manifest = subparsers.add_parser("manifest", help="Decode RT_MANIFEST")
+        self._add_common_child_arguments(manifest)
+        manifest.add_argument("--max-text-bytes", type=int, default=65_536)
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         if args.pe_action == "resources":
@@ -49,6 +56,17 @@ class PeCommand(BaseCommand):
             else:
                 formatter.output_plain(_format_resources_human(result))
             return 0 if "input_not_pe_or_unparseable" not in result.stop_reasons else 4
+        if args.pe_action == "manifest":
+            path = self.validate_file_path(args.path)
+            result = _view_manifest(path, args)
+            payload = result.model_dump(mode="json")
+            if formatter.format_type == OutputFormat.JSON:
+                formatter.output_json(payload)
+            elif formatter.format_type == OutputFormat.JSONL:
+                formatter.output_jsonl(payload)
+            else:
+                formatter.output_plain(_format_manifest_human(result))
+            return 0 if result.found else 4
         raise ValueError(f"unsupported PE action: {args.pe_action}")
 
     def _add_common_child_arguments(self, parser: argparse.ArgumentParser) -> None:
@@ -144,6 +162,29 @@ def _list_resources(path: Path, args: argparse.Namespace) -> PeListResourcesResu
     )
 
 
+def _view_manifest(path: Path, args: argparse.Namespace) -> PeManifestResult:
+    artifact = g.triage.analyze_path(
+        str(path),
+        int(args.max_read_bytes),
+        int(args.max_file_size),
+        1,
+    )
+    ctx = MemoryContext(file_path=str(path), artifact=artifact)
+    ctx.budgets.max_read_bytes = int(args.max_read_bytes)
+    ctx.budgets.max_file_size = int(args.max_file_size)
+    tool = build_pe_view_manifest()
+    return tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(path),
+            language_id=args.language_id,
+            max_text_bytes=args.max_text_bytes,
+            add_to_kb=False,
+        ),
+    )
+
+
 def _format_resources_human(result: PeListResourcesResult) -> str:
     lines = [
         f"# PE resources: {Path(result.path).name}",
@@ -171,6 +212,34 @@ def _format_resources_human(result: PeListResourcesResult) -> str:
             if resource.warnings:
                 line += f"  warnings={','.join(resource.warnings)}"
             lines.append(line)
+    return "\n".join(lines)
+
+
+def _format_manifest_human(result: PeManifestResult) -> str:
+    lines = [f"# PE manifest: {Path(result.path).name}"]
+    if result.evidence:
+        lines.append(f"evidence: {result.evidence}")
+    if result.requested_execution_level:
+        lines.append(f"requested_execution_level: {result.requested_execution_level}")
+    if result.ui_access is not None:
+        lines.append(f"ui_access: {str(result.ui_access).lower()}")
+    if result.assembly_identity:
+        identity = ", ".join(
+            f"{key}={value}" for key, value in sorted(result.assembly_identity.items())
+        )
+        lines.append(f"assembly_identity: {identity}")
+    if result.dependencies:
+        lines.append("dependencies:")
+        for dependency in result.dependencies:
+            lines.append(f"  {dependency}")
+    if result.compatibility_guids:
+        lines.append("compatibility_guids:")
+        for guid in result.compatibility_guids:
+            lines.append(f"  {guid}")
+    if result.warnings:
+        lines.append(f"warnings: {', '.join(result.warnings[:8])}")
+    if result.stop_reasons:
+        lines.append(f"stop: {', '.join(result.stop_reasons)}")
     return "\n".join(lines)
 
 

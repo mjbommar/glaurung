@@ -29,6 +29,7 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     analysis_mod.add_function(wrap_pyfunction!(pe_iat_map_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_bytes_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(pe_view_resource_path_py, &analysis_mod)?)?;
 
     // Mach-O-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(macho_stubs_map_path_py, &analysis_mod)?)?;
@@ -267,6 +268,52 @@ fn pe_list_resources_bytes_inner(
     pe_resources_to_py(py, resources, preview_bytes)
 }
 
+/// View one selected PE resource payload under bounded text/preview budgets.
+#[pyfunction]
+#[pyo3(name = "pe_view_resource_path")]
+#[pyo3(signature = (path, type_filter=None, name_filter=None, language_id=None, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64, max_resources=4096usize, max_resource_depth=32usize, max_resource_data_bytes=1_048_576usize, preview_bytes=64usize, max_text_bytes=65_536usize))]
+fn pe_view_resource_path_py(
+    py: Python<'_>,
+    path: String,
+    type_filter: Option<String>,
+    name_filter: Option<String>,
+    language_id: Option<u32>,
+    max_read_bytes: u64,
+    max_file_size: u64,
+    max_resources: usize,
+    max_resource_depth: usize,
+    max_resource_data_bytes: usize,
+    preview_bytes: usize,
+    max_text_bytes: usize,
+) -> PyResult<Option<Py<PyAny>>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+
+    let mut options = crate::formats::pe::ParseOptions::default();
+    options.max_resources = max_resources;
+    options.max_resource_depth = max_resource_depth;
+    options.max_resource_data_bytes = max_resource_data_bytes;
+
+    let parser = crate::formats::pe::PeParser::with_options(&data, options)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{}", e)))?;
+    let resources = parser
+        .resources()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+
+    for resource in &resources.resources {
+        if pe_resource_matches(
+            resource,
+            type_filter.as_deref(),
+            name_filter.as_deref(),
+            language_id,
+        ) {
+            return pe_resource_view_to_py(py, resource, preview_bytes, max_text_bytes).map(Some);
+        }
+    }
+    Ok(None)
+}
+
 fn pe_resources_to_py(
     py: Python<'_>,
     resources: &crate::formats::pe::ResourceDirectory<'_>,
@@ -329,6 +376,140 @@ fn pe_resource_type_label(resource: &crate::formats::pe::ResourceDataEntry<'_>) 
         return format!("id:{}", id);
     }
     "unknown".to_string()
+}
+
+fn pe_resource_view_to_py(
+    py: Python<'_>,
+    resource: &crate::formats::pe::ResourceDataEntry<'_>,
+    preview_bytes: usize,
+    max_text_bytes: usize,
+) -> PyResult<Py<PyAny>> {
+    let dict = pyo3::types::PyDict::new(py);
+    let resource_type = pe_resource_type_label(resource);
+    let preview_len = resource.data.len().min(preview_bytes);
+    let text_len = resource.data.len().min(max_text_bytes);
+    let text = if pe_resource_is_textual(resource) {
+        std::str::from_utf8(&resource.data[..text_len])
+            .ok()
+            .map(str::to_string)
+    } else {
+        None
+    };
+
+    dict.set_item("type_id", resource.type_id.as_id())?;
+    dict.set_item("type_name", resource.type_name.clone())?;
+    dict.set_item("type", resource_type.clone())?;
+    dict.set_item("name_id", resource.name.as_id())?;
+    dict.set_item("name", resource.name.as_name())?;
+    dict.set_item("language_id", resource.language_id)?;
+    dict.set_item("language", resource.language.as_name())?;
+    dict.set_item("code_page", resource.code_page)?;
+    dict.set_item("data_rva", resource.data_rva)?;
+    dict.set_item("data_offset", resource.data_offset)?;
+    dict.set_item("size", resource.size)?;
+    dict.set_item("section_name", resource.section_name.clone())?;
+    dict.set_item("entropy", resource.entropy)?;
+    dict.set_item("sha256", resource.sha256.clone())?;
+    dict.set_item("magic", resource.magic.clone())?;
+    dict.set_item("preview_hex", hex::encode(&resource.data[..preview_len]))?;
+    dict.set_item("text", text)?;
+    dict.set_item("text_truncated", resource.data.len() > max_text_bytes)?;
+    dict.set_item("warnings", resource.warnings.clone())?;
+    dict.set_item(
+        "evidence",
+        pe_resource_evidence_label(resource, &resource_type),
+    )?;
+    Ok(dict.into())
+}
+
+fn pe_resource_evidence_label(
+    resource: &crate::formats::pe::ResourceDataEntry<'_>,
+    resource_type: &str,
+) -> String {
+    let name = resource
+        .name
+        .as_id()
+        .map(|value| value.to_string())
+        .or_else(|| resource.name.as_name().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string());
+    let language = resource
+        .language_id
+        .map(|value| format!("0x{:04x}", value))
+        .unwrap_or_else(|| "unknown".to_string());
+    let section = resource.section_name.as_deref().unwrap_or("unknown");
+    format!(
+        "{}/{}/{} @ {}:0x{:x}",
+        resource_type, name, language, section, resource.data_offset
+    )
+}
+
+fn pe_resource_is_textual(resource: &crate::formats::pe::ResourceDataEntry<'_>) -> bool {
+    matches!(
+        resource.magic.as_str(),
+        "ascii_text" | "xml" | "json" | "html" | "text"
+    ) || resource.type_name.as_deref() == Some("MANIFEST")
+}
+
+fn pe_resource_matches(
+    resource: &crate::formats::pe::ResourceDataEntry<'_>,
+    type_filter: Option<&str>,
+    name_filter: Option<&str>,
+    language_id: Option<u32>,
+) -> bool {
+    if let Some(filter) = type_filter {
+        if !resource_type_matches(resource, filter) {
+            return false;
+        }
+    }
+    if let Some(filter) = name_filter {
+        if !resource_identifier_matches(&resource.name, filter) {
+            return false;
+        }
+    }
+    if let Some(language_id) = language_id {
+        if resource.language_id != Some(language_id) {
+            return false;
+        }
+    }
+    true
+}
+
+fn resource_type_matches(
+    resource: &crate::formats::pe::ResourceDataEntry<'_>,
+    filter: &str,
+) -> bool {
+    let normalized = filter.trim().to_ascii_lowercase();
+    let label = pe_resource_type_label(resource).to_ascii_lowercase();
+    if normalized == label {
+        return true;
+    }
+    if let Some(type_name) = &resource.type_name {
+        if normalized == type_name.to_ascii_lowercase() {
+            return true;
+        }
+    }
+    resource_identifier_matches(&resource.type_id, filter)
+}
+
+fn resource_identifier_matches(
+    identifier: &crate::formats::pe::ResourceIdentifier,
+    filter: &str,
+) -> bool {
+    let normalized = filter.trim().to_ascii_lowercase();
+    if let Some(id) = identifier.as_id() {
+        if normalized == id.to_string() || normalized == format!("id:{}", id) {
+            return true;
+        }
+        if let Some(stripped) = normalized.strip_prefix("0x") {
+            return u32::from_str_radix(stripped, 16)
+                .map(|value| value == id)
+                .unwrap_or(false);
+        }
+    }
+    identifier
+        .as_name()
+        .map(|name| normalized == name.to_ascii_lowercase())
+        .unwrap_or(false)
 }
 
 fn resource_bytes_total(resources: &crate::formats::pe::ResourceDirectory<'_>) -> u64 {

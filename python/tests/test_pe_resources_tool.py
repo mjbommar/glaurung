@@ -69,6 +69,41 @@ def _write_fixture(tmp_path: Path) -> Path:
     return path
 
 
+def _create_pe_with_manifest_resource() -> bytes:
+    data = bytearray(_create_pe_with_version_resource())
+    if len(data) < 2048:
+        data.extend(b"\0" * (2048 - len(data)))
+
+    manifest = (
+        b'<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">'
+        b'<assemblyIdentity name="Glaurung.Test" version="1.0.0.0" type="win32"/>'
+        b'<trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"><security>'
+        b"<requestedPrivileges>"
+        b'<requestedExecutionLevel level="requireAdministrator" uiAccess="true"/>'
+        b"</requestedPrivileges></security></trustInfo>"
+        b"<dependency><dependentAssembly>"
+        b'<assemblyIdentity name="Microsoft.Windows.Common-Controls"/>'
+        b"</dependentAssembly></dependency></assembly>"
+    )
+
+    data[0x200 + 16 : 0x200 + 20] = (24).to_bytes(4, "little")
+    data[0x200 + 0x48 + 4 : 0x200 + 0x48 + 8] = len(manifest).to_bytes(4, "little")
+    data[0x200 + 0x48 + 8 : 0x200 + 0x48 + 12] = (65001).to_bytes(4, "little")
+    data[0x280 : 0x280 + len(manifest)] = manifest
+
+    section_offset = 0x178
+    data[section_offset + 8 : section_offset + 12] = (0x400).to_bytes(4, "little")
+    data[section_offset + 16 : section_offset + 20] = (0x400).to_bytes(4, "little")
+
+    return bytes(data)
+
+
+def _write_manifest_fixture(tmp_path: Path) -> Path:
+    path = tmp_path / "manifest-resource.exe"
+    path.write_bytes(_create_pe_with_manifest_resource())
+    return path
+
+
 def _ctx_for(path: Path) -> MemoryContext:
     artifact = g.triage.analyze_path(str(path), 10_000_000, 100_000_000, 1)
     ctx = MemoryContext(file_path=str(path), artifact=artifact)
@@ -164,3 +199,47 @@ def test_pe_resources_cli_outputs_compact_human_summary(tmp_path: Path, capsys) 
     assert "VERSIONINFO: 1" in out
     assert "VERSIONINFO/1/0x0409 @ .rsrc:0x280" in out
     assert "preview=68656c6c6f" in out
+
+
+def test_native_pe_view_resource_returns_manifest_text(tmp_path: Path) -> None:
+    path = _write_manifest_fixture(tmp_path)
+
+    resource = g.analysis.pe_view_resource_path(
+        str(path), type_filter="manifest", preview_bytes=32
+    )
+
+    assert resource["type_name"] == "MANIFEST"
+    assert resource["magic"] == "xml"
+    assert resource["text"].startswith("<assembly")
+    assert resource["preview_hex"].startswith("3c617373656d626c79")
+
+
+def test_pe_view_manifest_tool_decodes_security_fields(tmp_path: Path) -> None:
+    from glaurung.llm.tools.pe_view_manifest import build_tool
+
+    path = _write_manifest_fixture(tmp_path)
+    ctx = _ctx_for(path)
+    tool = build_tool()
+
+    result = tool.run(ctx, ctx.kb, tool.input_model())
+
+    assert result.found is True
+    assert result.requested_execution_level == "requireAdministrator"
+    assert result.ui_access is True
+    assert result.assembly_identity["name"] == "Glaurung.Test"
+    assert "Microsoft.Windows.Common-Controls" in result.dependencies
+    assert result.evidence == "MANIFEST/1/0x0409 @ .rsrc:0x280"
+
+
+def test_pe_manifest_cli_outputs_json(tmp_path: Path, capsys) -> None:
+    from glaurung import cli
+
+    path = _write_manifest_fixture(tmp_path)
+
+    rc = cli.main(["pe", "manifest", str(path), "--json"])
+
+    assert rc == 0
+    payload = __import__("json").loads(capsys.readouterr().out)
+    assert payload["requested_execution_level"] == "requireAdministrator"
+    assert payload["ui_access"] is True
+    assert payload["assembly_identity"]["name"] == "Glaurung.Test"
