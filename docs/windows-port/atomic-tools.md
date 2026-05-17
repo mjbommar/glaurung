@@ -56,9 +56,9 @@ PE code-to-data refs also persist as `data_read` rows, so string and
 global-data use-site tools can answer direct `.rdata` questions from
 the KB. UTF-16 strings now reach Python triage on the real
 `ntoskrnl.exe` fixture, and register-held string/table bases recover
-direct exact refs above the comparison-05 bar. One-hop data-pointer
-refs are partially recovered, with residual PARAM-style refs still
-tracked by comparison 05.
+direct exact refs above the comparison-05 bar. Known-index pointer
+loads recover the straightforward one-hop table refs; residual
+PARAM/table-entry refs are still tracked by comparison 05.
 
 ## Per-tool authoring template
 

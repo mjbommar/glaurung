@@ -176,25 +176,32 @@ fn memop_known_target(m: &MemOp, known: &AddrState) -> Option<u64> {
         return memop_absolute_target(m);
     }
 
-    let mut target = if let Some(base) = &m.base {
-        known.get(&reg_key(base)).copied()?
-    } else {
-        0
+    let base_value = m
+        .base
+        .as_ref()
+        .and_then(|base| known.get(&reg_key(base)).copied());
+    let index_value = m
+        .index
+        .as_ref()
+        .and_then(|index| known.get(&reg_key(index)).copied());
+
+    let mut target = match (&m.base, base_value, &m.index, index_value) {
+        (Some(_), Some(base), _, _) => base,
+        (Some(_), None, Some(_), Some(index)) if m.scale.max(1) == 1 => index,
+        (None, _, Some(_), Some(index)) => index.checked_mul(u64::from(m.scale.max(1)))?,
+        (None, _, None, _) => 0,
+        _ => return None,
     };
-    if let Some(index) = &m.index {
-        let index_value = known.get(&reg_key(index)).copied();
-        match index_value {
-            Some(value) => {
-                let scale = u64::from(m.scale.max(1));
-                target = target.checked_add(value.checked_mul(scale)?)?;
-            }
-            None => {
-                // The common string-table pattern is `[known_base + variable
-                // index * scale + disp]`; keep the known base as the xref
-                // target so the use-site remains attached to the table/string
-                // range without inventing a concrete indexed element.
-            }
+    if let Some(value) = index_value {
+        if base_value.is_some() {
+            let scale = u64::from(m.scale.max(1));
+            target = target.checked_add(value.checked_mul(scale)?)?;
         }
+    } else if base_value.is_some() && m.index.is_some() {
+        // The common string-table pattern is `[known_base + variable
+        // index * scale + disp]`; keep the known base as the xref target so
+        // the use-site remains attached to the table/string range without
+        // inventing a concrete indexed element.
     }
     checked_add_i64(target, m.disp)
 }
@@ -677,6 +684,49 @@ mod tests {
     }
 
     #[test]
+    fn llir_tracks_known_index_with_unknown_base() {
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
+        let lf = LlirFunction {
+            entry_va: 0x4100,
+            blocks: vec![LlirBlock {
+                start_va: 0x4100,
+                end_va: 0x4110,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x4100,
+                        op: Op::Assign {
+                            dst: VReg::phys("rsi"),
+                            src: Value::Addr(0x140c02690),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x4108,
+                        op: Op::Load {
+                            dst: VReg::phys("rdx"),
+                            addr: MemOp {
+                                base: Some(VReg::phys("rbx")),
+                                index: Some(VReg::phys("rsi")),
+                                scale: 1,
+                                disp: 0,
+                                size: 8,
+                                ..Default::default()
+                            },
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let xrefs = llir_to_data_xrefs(&lf, &[(0x140c00000, 0x140c10000)], 64, 16);
+        assert!(
+            xrefs
+                .iter()
+                .any(|xref| xref.from.value == 0x4108 && xref.to.value == 0x140c02690),
+            "known scale-1 index should remain visible when base is variable"
+        );
+    }
+
+    #[test]
     fn llir_tracks_address_register_across_cfg_successor() {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
         let lf = LlirFunction {
@@ -1008,6 +1058,70 @@ mod tests {
                 "expected ntoskrnl register-held string xref from 0x{source_va:x}"
             );
         }
+    }
+
+    #[test]
+    fn function_data_xrefs_recover_real_pe_known_index_pointer_ref() {
+        use crate::core::basic_block::BasicBlock;
+        use crate::core::function::{Function, FunctionKind};
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("msvc-pdb")
+            .join("ntoskrnl.exe");
+        if !path.exists() {
+            eprintln!(
+                "skipping PE indexed pointer xref fixture test: {} is not present",
+                path.display()
+            );
+            return;
+        }
+
+        let data = std::fs::read(path).expect("read ntoskrnl.exe");
+        let target_va = 0x140c02690;
+        let function_va = 0x140801848;
+        let mut func = Function::new(
+            "CmpBuildMachineHiveMountPoint".to_string(),
+            Address::new(AddressKind::VA, function_va, 64, None, None).unwrap(),
+            FunctionKind::Normal,
+        )
+        .unwrap();
+        func.basic_blocks.push(BasicBlock::new(
+            "bb0".to_string(),
+            Address::new(AddressKind::VA, function_va, 64, None, None).unwrap(),
+            Address::new(AddressKind::VA, 0x140801890, 64, None, None).unwrap(),
+            17,
+            Some(vec!["bb1".to_string(), "bb2".to_string()]),
+            None,
+        ));
+        func.basic_blocks.push(BasicBlock::new(
+            "bb1".to_string(),
+            Address::new(AddressKind::VA, 0x140801890, 64, None, None).unwrap(),
+            Address::new(AddressKind::VA, 0x1408018a8, 64, None, None).unwrap(),
+            8,
+            Some(vec![]),
+            Some(vec!["bb0".to_string(), "bb2".to_string()]),
+        ));
+        func.basic_blocks.push(BasicBlock::new(
+            "bb2".to_string(),
+            Address::new(AddressKind::VA, 0x1408018a9, 64, None, None).unwrap(),
+            Address::new(AddressKind::VA, 0x1408018b4, 64, None, None).unwrap(),
+            3,
+            Some(vec!["bb1".to_string()]),
+            Some(vec!["bb0".to_string()]),
+        ));
+
+        let xrefs = function_data_xrefs(&data, &[func], 32);
+        assert!(
+            xrefs.iter().any(|xref| {
+                xref.from.value == 0x1408018a9
+                    && xref.to.value == target_va
+                    && xref.function_va.value == function_va
+            }),
+            "expected ntoskrnl known-index pointer xref from 0x1408018a9"
+        );
     }
 
     #[test]

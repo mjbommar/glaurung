@@ -75,7 +75,7 @@ why each gap matters. Updated whenever a roadmap task completes.
 | 211 | Lua bytecode (.luac) recognizer | ✅ | `glaurung luac <path>` — Lua 5.1 / 5.2 / 5.3 / 5.4 + LuaJIT, source-name extraction from debug info |
 | 212 | Go gopclntab walker | ✅ | `g.analysis.gopclntab_names_path`; recovers function names from stripped Go binaries (1801 names from `hello-go`) |
 | 213 | Bench-harness coverage: packed binaries | ✅ | `BinaryScorecard.packer` field, `--packed-matrix` flag, markdown summary surfaces "Packed binaries: N (UPX×N)" |
-| 222 | Strings window with xrefs back to code | ✅ | `glaurung strings-xrefs <db>` -- IDA-style strings panel with data_read xrefs. Direct PE `.rdata` string refs persist through the Python/KB path; UTF-16 strings reach Python triage on `ntoskrnl.exe`; register-held string/table bases lift direct exact recall above the comparison-05 bar; one-hop pointer/PARAM refs remain follow-up coverage work. |
+| 222 | Strings window with xrefs back to code | ✅ | `glaurung strings-xrefs <db>` -- IDA-style strings panel with data_read xrefs. Direct PE `.rdata` string refs persist through the Python/KB path; UTF-16 strings reach Python triage on `ntoskrnl.exe`; register-held and known-index string/table bases lift selected KB-ref coverage above 90%; residual PARAM/table-entry refs remain follow-up coverage work. |
 | 223 | Tri-pane view (hex / disasm / pseudocode) | ✅ | `glaurung view <db> <va>` |
 | 226 | Bookmarks + analyst journal | ✅ | new `bookmarks` and `journal` tables; `glaurung bookmark|journal` CLIs |
 | 166 | More architectures (MIPS / RISC-V / PowerPC / WASM) | ⏳ | Pick one per session |

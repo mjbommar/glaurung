@@ -28,9 +28,9 @@ repo); the headings below cite the relevant section numbers.
   giving `strings-xrefs` direct `.rdata` use sites on Windows
   binaries. UTF-16 strings now reach the Python triage surface on
   `ntoskrnl.exe`; register-held string/table bases lift direct exact
-  string-ref recall above the comparison-05 bar. One-hop data-pointer
-  refs are partially recovered and residual PARAM-style refs remain
-  follow-up comparison-05 work.
+  string-ref recall above the comparison-05 bar. Known-index pointer
+  loads raise selected KB-ref coverage above 90%; residual
+  PARAM/table-entry refs remain follow-up comparison-05 work.
 - #186 and the Windows-specific atomic tools remain future work.
 
 ---
