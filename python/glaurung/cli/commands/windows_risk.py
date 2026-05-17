@@ -914,15 +914,20 @@ def _annotate_decompile_hits(
             continue
         api_sequence = _scan_api_sequence(pseudocode, risk_api_names)
         api_hits = _scan_api_hits(pseudocode, risk_api_names)
+        api_calls = _extract_api_calls(pseudocode, risk_api_names)
         _merge_row_stack_vars(row, _extract_stack_vars(pseudocode))
         _merge_row_suspicious_constants(
             row,
             _extract_suspicious_constants(pseudocode, risk_api_names),
         )
         _merge_row_api_sequence(row, api_sequence)
-        _merge_row_api_calls(row, _extract_api_calls(pseudocode, risk_api_names))
+        _merge_row_api_calls(row, api_calls)
         _merge_row_api_hits(row, api_hits, _patterns_from_api_hits(api_hits))
-        _merge_row_flow_hints(row, _flow_hints_from_api_sequence(api_sequence))
+        _merge_row_flow_hints(
+            row,
+            _flow_hints_from_api_sequence(api_sequence)
+            + _flow_hints_from_api_calls(api_calls),
+        )
 
 
 def _risk_api_name_pool(imports: list[str]) -> list[str]:
@@ -1151,23 +1156,39 @@ def _extract_api_calls(
     calls: list[dict[str, Any]] = []
     seen: set[tuple[str, tuple[str, ...]]] = set()
     call_pattern = re.compile(
-        r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<args>[^;\n{}]*)\)"
+        r"(?:(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*)?"
+        r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<args>[^{}]*)\)"
     )
-    for match in call_pattern.finditer(pseudocode):
-        raw_name = match.group("name")
+    pending_args: dict[int, str] = {}
+    for statement in _split_pseudocode_statements(pseudocode):
+        if _record_pending_arg(statement, pending_args):
+            continue
+        call_match = _first_call_match(statement, call_pattern)
+        if call_match is None:
+            if _statement_has_raw_call(statement):
+                pending_args.clear()
+            continue
+        raw_name = call_match.group("name")
         canonical_name = api_lookup.get(raw_name.lower()) or api_lookup.get(
             _api_stem(raw_name)
         )
-        if canonical_name is None:
-            continue
-        arg_exprs = _split_call_args(match.group("args"))
-        key = (canonical_name, tuple(arg_exprs))
-        if key in seen:
-            continue
-        seen.add(key)
-        calls.append(_api_call_row(canonical_name, arg_exprs))
-        if len(calls) >= 64:
-            break
+        if canonical_name is not None:
+            arg_exprs = _fill_call_arg_exprs(
+                canonical_name,
+                _split_call_args(call_match.group("args")),
+                pending_args,
+            )
+            key = (canonical_name, tuple(arg_exprs))
+            if key not in seen:
+                seen.add(key)
+                call_row = _api_call_row(canonical_name, arg_exprs)
+                lhs = call_match.group("lhs")
+                if lhs:
+                    call_row["assigned_to"] = lhs
+                calls.append(call_row)
+                if len(calls) >= 64:
+                    break
+        pending_args.clear()
     return calls
 
 
@@ -1214,6 +1235,84 @@ def _api_name_lookup(api_names: list[str]) -> dict[str, str]:
         lookup[clean.lower()] = clean
         lookup.setdefault(_api_stem(clean), clean)
     return lookup
+
+
+def _split_pseudocode_statements(pseudocode: str) -> list[str]:
+    statements: list[str] = []
+    current: list[str] = []
+    quote = ""
+    escaped = False
+    for ch in pseudocode:
+        if quote:
+            current.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = ""
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            current.append(ch)
+            continue
+        if ch == ";":
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            continue
+        current.append(ch)
+    tail = "".join(current).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
+def _record_pending_arg(statement: str, pending_args: dict[int, str]) -> bool:
+    match = re.search(
+        r"(?:^|[:\s])arg(?P<idx>\d+)\s*=\s*(?P<expr>.+)\Z",
+        statement.strip(),
+    )
+    if match is None:
+        return False
+    pending_args[int(match.group("idx"))] = match.group("expr").strip()
+    return True
+
+
+def _first_call_match(
+    statement: str,
+    call_pattern: re.Pattern[str],
+) -> re.Match[str] | None:
+    for match in call_pattern.finditer(statement):
+        if match.group("name") in {"if", "for", "while", "switch"}:
+            continue
+        return match
+    return None
+
+
+def _statement_has_raw_call(statement: str) -> bool:
+    return re.search(r"\b0x[0-9a-fA-F]+\s*\(", statement) is not None
+
+
+def _fill_call_arg_exprs(
+    name: str,
+    arg_exprs: list[str],
+    pending_args: dict[int, str],
+) -> list[str]:
+    if not pending_args:
+        return arg_exprs
+    proto = _prototype_for_api(name)
+    params = list(proto.get("params") or []) if proto else []
+    limit = len(params) if params else max(pending_args) + 1
+    out = list(arg_exprs)
+    while len(out) < limit:
+        idx = len(out)
+        expr = pending_args.get(idx)
+        if expr is None:
+            break
+        out.append(expr)
+    return out
 
 
 @lru_cache(maxsize=1)
@@ -1291,6 +1390,8 @@ def _param_role(param_name: str, c_type: str) -> str | None:
     c_type_lower = c_type.lower()
     if "buffer" in name or name in {"lpdata", "lpbaseaddress", "lpaddress", "buf"}:
         return "buffer"
+    if _looks_like_output_length_param(name):
+        return "out_length"
     if _looks_like_length_param(name):
         return "length"
     if "flag" in name or name.endswith("flags") or "mode" in name:
@@ -1333,6 +1434,19 @@ def _looks_like_length_param(name: str) -> bool:
     )
 
 
+def _looks_like_output_length_param(name: str) -> bool:
+    compact = name.replace("_", "")
+    return any(
+        token in compact
+        for token in (
+            "numberofbytesread",
+            "numberofbyteswritten",
+            "bytesread",
+            "byteswritten",
+        )
+    )
+
+
 def _is_pointer_ctype(c_type_lower: str) -> bool:
     if "*" in c_type_lower:
         return True
@@ -1350,7 +1464,15 @@ def _parse_expr_int_literal(expr: str) -> int | None:
 
 def _format_api_call_summary(call: dict[str, Any]) -> str:
     parts = []
-    interesting_roles = {"buffer", "length", "path", "name", "flags", "handle"}
+    interesting_roles = {
+        "buffer",
+        "length",
+        "out_length",
+        "path",
+        "name",
+        "flags",
+        "handle",
+    }
     for arg in call.get("args", []):
         role = str(arg.get("role", ""))
         if role not in interesting_roles:
@@ -1399,6 +1521,70 @@ def _flow_hints_from_api_sequence(api_sequence: list[str]) -> list[dict[str, Any
             "evidence": evidence,
         }
     ]
+
+
+def _flow_hints_from_api_calls(api_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    for alloc_idx, alloc_call in enumerate(api_calls):
+        if not _is_allocation_call(alloc_call):
+            continue
+        alloc_size = _first_arg_with_role(alloc_call, "length")
+        if alloc_size is None:
+            continue
+        alloc_expr = str(alloc_size.get("expr", ""))
+        if not alloc_expr:
+            continue
+        normalized_alloc_expr = _normalize_expr(alloc_expr)
+        for read_call in api_calls[alloc_idx + 1 :]:
+            if not _api_stem(str(read_call.get("name", ""))).startswith("readfile"):
+                continue
+            read_length = _first_arg_with_role(read_call, "length")
+            if read_length is None:
+                continue
+            read_expr = str(read_length.get("expr", ""))
+            if _normalize_expr(read_expr) != normalized_alloc_expr:
+                continue
+            evidence = [
+                _format_role_evidence(alloc_call, alloc_size),
+                _format_role_evidence(read_call, read_length),
+            ]
+            read_buffer = _first_arg_with_role(read_call, "buffer")
+            if read_buffer is not None:
+                evidence.append(_format_role_evidence(read_call, read_buffer))
+            hints.append(
+                {
+                    "kind": "file-read-allocation-argument-flow",
+                    "summary": "allocation size is reused as ReadFile length",
+                    "evidence": evidence,
+                }
+            )
+            break
+    return hints[:16]
+
+
+def _is_allocation_call(call: dict[str, Any]) -> bool:
+    stem = _api_stem(str(call.get("name", "")))
+    return stem in {"localalloc", "heapalloc", "malloc", "calloc", "realloc"}
+
+
+def _first_arg_with_role(
+    call: dict[str, Any],
+    role: str,
+) -> dict[str, Any] | None:
+    for arg in call.get("args", []):
+        if arg.get("role") == role:
+            return arg
+    return None
+
+
+def _normalize_expr(expr: str) -> str:
+    return re.sub(r"\s+", "", expr).lower()
+
+
+def _format_role_evidence(call: dict[str, Any], arg: dict[str, Any]) -> str:
+    name = str(call.get("name", "api"))
+    param = str(arg.get("param") or f"arg{arg.get('index', '?')}")
+    return f"{name}.{param}={arg.get('expr', '')}"
 
 
 def _ordered_file_read_allocation_flow(stems: list[str]) -> list[int] | None:

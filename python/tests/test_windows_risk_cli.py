@@ -133,7 +133,8 @@ def test_windows_risk_json_reports_parser_shape(
         lambda *_args, **_kwargs: (
             "fn sub_1000 { tmp = (rbp - 128); CreateFileW(); "
             "ReadFile(var3, (rbp - 128), 4); LocalAlloc(64, stack_9); "
-            "ReadFile(var3, stack_9, 64); RegSetValueExW(); }"
+            "var6 = ret; L_1010: arg2 = stack_9; arg3 = (rsp + 64); "
+            "ReadFile(var3, var6); RegSetValueExW(); }"
         ),
     )
 
@@ -195,8 +196,21 @@ def test_windows_risk_json_reports_parser_shape(
     )
     assert alloc_call["args"][1]["param"] == "uBytes"
     assert alloc_call["args"][1]["role"] == "length"
+    sized_read = next(
+        call
+        for call in report["functions"][0]["api_calls"]
+        if call["name"] == "ReadFile" and call["args"][2]["expr"] == "stack_9"
+    )
+    assert sized_read["args"][2]["param"] == "nNumberOfBytesToRead"
+    assert sized_read["args"][2]["role"] == "length"
+    assert sized_read["args"][3]["param"] == "lpNumberOfBytesRead"
+    assert sized_read["args"][3]["role"] == "out_length"
     assert report["functions"][0]["flow_hints"][0]["kind"] == (
         "file-read-allocation-flow"
+    )
+    assert any(
+        hint["kind"] == "file-read-allocation-argument-flow"
+        for hint in report["functions"][0]["flow_hints"]
     )
     assert report["functions"][0]["stack_vars"][0]["offset"] == -128
     assert report["functions"][0]["suspicious_constants"][0] == {
@@ -210,6 +224,10 @@ def test_windows_risk_json_reports_parser_shape(
     )
     assert any(
         item["kind"] == "file-read-allocation-flow" for item in report["risk_items"]
+    )
+    assert any(
+        item["kind"] == "file-read-allocation-argument-flow"
+        for item in report["risk_items"]
     )
     assert any(item["kind"] == "function-string-xrefs" for item in report["risk_items"])
     assert report["functions"][0]["strings"][0]["text"].startswith(
