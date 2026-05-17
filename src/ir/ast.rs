@@ -197,6 +197,25 @@ fn lower_memop(m: &MemOp) -> Expr {
     }
 }
 
+fn semantic_comment_for_unknown(mnemonic: &str) -> Option<&'static str> {
+    match mnemonic.to_ascii_lowercase().as_str() {
+        "sgdt" => Some("sgdt: store global descriptor table register (GDTR)"),
+        "sidt" => Some("sidt: store interrupt descriptor table register (IDTR)"),
+        "str" => Some("str: store task register selector"),
+        "sldt" => Some("sldt: store local descriptor table register selector"),
+        "lldt" => Some("lldt: load local descriptor table register selector"),
+        "wrmsr" => Some("wrmsr: write model-specific register ecx with edx:eax"),
+        "rdmsr" => Some("rdmsr: read model-specific register ecx into edx:eax"),
+        "ldmxcsr" => Some("ldmxcsr: load SSE MXCSR control/status register"),
+        "stmxcsr" => Some("stmxcsr: store SSE MXCSR control/status register"),
+        "swapgs" => Some("swapgs: swap GS base with KernelGSBase MSR"),
+        "setssbsy" => Some("setssbsy: mark CET shadow stack busy"),
+        "rstorssp" => Some("rstorssp: restore CET shadow stack pointer"),
+        "saveprevssp" => Some("saveprevssp: save previous CET shadow stack pointer"),
+        _ => None,
+    }
+}
+
 /// Lower a single LLIR op to one or more Stmts.
 fn lower_op(op: &Op) -> Vec<Stmt> {
     match op {
@@ -261,7 +280,10 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
             }]
         }
         Op::Return => vec![Stmt::Return { value: None }],
-        Op::Unknown { mnemonic } => vec![Stmt::Unknown(mnemonic.clone())],
+        Op::Unknown { mnemonic } => match semantic_comment_for_unknown(mnemonic) {
+            Some(comment) => vec![Stmt::Comment(comment.to_string())],
+            None => vec![Stmt::Unknown(mnemonic.clone())],
+        },
     }
 }
 
@@ -1679,6 +1701,36 @@ function f @ 0x1000 {
         )]);
         let text = lower_and_render(&lf, "f");
         assert!(text.contains("unknown(leave);"), "got: {}", text);
+    }
+
+    #[test]
+    fn known_kernel_unknown_ops_render_as_semantic_comments() {
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::Unknown {
+                    mnemonic: "wrmsr".into(),
+                },
+                Op::Unknown {
+                    mnemonic: "sgdt".into(),
+                },
+                Op::Return,
+            ],
+            vec![],
+        )]);
+        let text = lower_and_render(&lf, "f");
+        assert!(
+            text.contains("// wrmsr: write model-specific register"),
+            "got: {}",
+            text
+        );
+        assert!(
+            text.contains("// sgdt: store global descriptor table register"),
+            "got: {}",
+            text
+        );
+        assert!(!text.contains("unknown(wrmsr);"), "got: {}", text);
+        assert!(!text.contains("unknown(sgdt);"), "got: {}", text);
     }
 
     #[test]

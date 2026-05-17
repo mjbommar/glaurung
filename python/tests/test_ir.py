@@ -213,6 +213,25 @@ def test_decompile_pe_pdb_cache_adds_field_hints():
     assert "_KTHREAD.WaitIrql" in text
 
 
+@pytest.mark.skipif(
+    not NTOSKRNL_SAMPLE.exists() or not (MSVC_PDB_CACHE / "ntkrnlmp.pdb").exists(),
+    reason="ntoskrnl PE/PDB sample missing",
+)
+def test_decompile_kernel_idioms_render_semantic_comments():
+    text = g.ir.decompile_at(
+        str(NTOSKRNL_SAMPLE),
+        0x140A88010,
+        timeout_ms=5000,
+        pdb_cache=str(MSVC_PDB_CACHE),
+    )
+    assert "unknown(sgdt)" not in text
+    assert "unknown(wrmsr)" not in text
+    assert "unknown(test)" not in text
+    assert "unknown(cmp)" not in text
+    assert "// sgdt: store global descriptor table register" in text
+    assert "// wrmsr: write model-specific register" in text
+
+
 @pytest.mark.skipif(not ARM64_SAMPLE.exists(), reason="arm64 sample missing")
 def test_decompile_all_on_arm64_sample():
     results = g.ir.decompile_all(str(ARM64_SAMPLE), limit=2)

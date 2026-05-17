@@ -12,7 +12,7 @@
 //! * `not`, `neg` → [`Op::Un`]
 //! * `inc`, `dec`, `xadd` on registers / memory → [`Op::Bin`] or load-modify-store
 //! * `cmp` → [`Op::Cmp`] writing `ZF`/`CF`/`SF`
-//! * `test` → [`Op::Cmp`] writing `ZF`
+//! * `test` → [`Op::Cmp`] writing `ZF`/`SF`
 //! * `push` / `pop` → decomposed into rsp-adjust + load/store
 //! * `call` near direct / indirect → [`Op::Call`]
 //! * `ret` → [`Op::Return`]
@@ -86,7 +86,9 @@ fn value_of_operand(instr: &iced_x86::Instruction, idx: u32) -> Option<Value> {
     match instr.op_kind(idx) {
         OpKind::Register => Some(Value::Reg(VReg::phys(reg_name(instr.op_register(idx))))),
         OpKind::Immediate8 => Some(Value::Const(instr.immediate8() as i8 as i64)),
-        OpKind::Immediate16 => Some(Value::Const(instr.immediate16() as i16 as i64)),
+        OpKind::Immediate16 | OpKind::Immediate8to16 => {
+            Some(Value::Const(instr.immediate16() as i16 as i64))
+        }
         OpKind::Immediate32 | OpKind::Immediate8to32 => {
             Some(Value::Const(instr.immediate32() as i32 as i64))
         }
@@ -561,21 +563,13 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         }
         Mnemonic::Test => {
             if instr.op_count() == 2 {
-                let lhs = match value_of_operand(instr, 0) {
-                    Some(v) => v,
-                    None => {
-                        return vec![Op::Unknown {
-                            mnemonic: "test".into(),
-                        }]
-                    }
-                };
-                let rhs = match value_of_operand(instr, 1) {
-                    Some(v) => v,
-                    None => {
-                        return vec![Op::Unknown {
-                            mnemonic: "test".into(),
-                        }]
-                    }
+                let mut preamble: Vec<Op> = Vec::new();
+                let lhs = cmp_operand_as_value(instr, 0, VReg::Temp(10), &mut preamble);
+                let rhs = cmp_operand_as_value(instr, 1, VReg::Temp(11), &mut preamble);
+                let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
+                    return vec![Op::Unknown {
+                        mnemonic: "test".into(),
+                    }];
                 };
                 // test sets ZF = ((lhs & rhs) == 0) and SF = msb(lhs & rhs).
                 // Materialise the AND into a temp and emit the two flag
@@ -585,7 +579,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 // flag — it coincides with the sign bit here because the
                 // second comparand is 0.
                 let tmp = VReg::Temp(0);
-                return vec![
+                let mut ops = preamble;
+                ops.extend(vec![
                     Op::Bin {
                         dst: tmp.clone(),
                         op: BinOp::And,
@@ -604,7 +599,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         lhs: Value::Reg(tmp),
                         rhs: Value::Const(0),
                     },
-                ];
+                ]);
+                return ops;
             }
             vec![Op::Unknown {
                 mnemonic: "test".into(),
@@ -1312,6 +1308,48 @@ mod tests {
         assert!(!ops
             .iter()
             .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp")));
+    }
+
+    #[test]
+    fn cmp_gs_mem_imm8to16_emits_load_and_flags() {
+        // cmp word ptr gs:[0x1a4], 0
+        let ops = lift64(&[0x66, 0x65, 0x83, 0x3c, 0x25, 0xa4, 0x01, 0x00, 0x00, 0x00]);
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(10),
+                addr,
+            } if addr.segment.as_deref() == Some("gs")
+                && addr.disp == 0x1a4
+                && addr.size == 2
+        ));
+        assert!(ops.iter().any(|i| matches!(&i.op, Op::Cmp { .. })));
+        assert!(!ops
+            .iter()
+            .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp")));
+    }
+
+    #[test]
+    fn test_mem_imm_emits_load_and_flags() {
+        // test byte ptr [rip + 0], 1
+        let ops = lift64(&[0xf6, 0x05, 0x00, 0x00, 0x00, 0x00, 0x01]);
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(10),
+                addr,
+            } if addr.base == Some(VReg::phys("rip")) && addr.size == 1
+        ));
+        assert!(ops.iter().any(|i| matches!(
+            &i.op,
+            Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                ..
+            }
+        )));
+        assert!(!ops
+            .iter()
+            .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "test")));
     }
 
     #[test]
