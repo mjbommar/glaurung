@@ -17,6 +17,7 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     // Function analysis helpers
     analysis_mod.add_function(wrap_pyfunction!(analyze_functions_bytes_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(analyze_functions_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(data_xrefs_path_py, &analysis_mod)?)?;
 
     // VA to file offset mapping
     analysis_mod.add_function(wrap_pyfunction!(va_to_file_offset_path_py, &analysis_mod)?)?;
@@ -134,6 +135,37 @@ fn analyze_functions_path_py(
     Ok(crate::analysis::cfg::analyze_functions_bytes(
         &data, &budgets,
     ))
+}
+
+/// Extract direct code-to-data xrefs from a file.
+#[pyfunction]
+#[pyo3(name = "data_xrefs_path")]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64, max_functions=30_000usize, max_blocks=1_000_000usize, max_instructions=30_000_000usize, timeout_ms=600_000u64, max_xrefs=1_000_000usize))]
+fn data_xrefs_path_py(
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+    max_functions: usize,
+    max_blocks: usize,
+    max_instructions: usize,
+    timeout_ms: u64,
+    max_xrefs: usize,
+) -> PyResult<Vec<(u64, u64, u64)>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    let budgets = crate::analysis::cfg::Budgets {
+        max_functions,
+        max_blocks,
+        max_instructions,
+        timeout_ms,
+    };
+    let (funcs, _cg) = crate::analysis::cfg::analyze_functions_bytes(&data, &budgets);
+    let xrefs = crate::analysis::xrefs::function_data_xrefs(&data, &funcs, max_xrefs);
+    Ok(xrefs
+        .into_iter()
+        .map(|xref| (xref.from.value, xref.to.value, xref.function_va.value))
+        .collect())
 }
 
 /// Map VA to file offset for a given file.

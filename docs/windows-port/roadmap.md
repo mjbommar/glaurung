@@ -16,13 +16,18 @@ repo); the headings below cite the relevant section numbers.
   comparison-02 contract: native PDB loading, PE CodeView cache
   resolution, struct/union layouts, function-prototype type
   records, PE/PDB provenance, Python access, and `.glaurung`
-  type DB persistence. Remaining broad PDB work is public
-  symbol-to-VA name persistence and a scalar alias/type-summary API
-  if later consumers need `_KSPIN_LOCK` as a typed row instead of
-  an explicit non-UDT missing layout.
+  type DB persistence. Public symbol-to-VA function-name persistence
+  has also shipped for PE/PDB cache hits. Remaining broad PDB work
+  is a scalar alias/type-summary API if later consumers need
+  `_KSPIN_LOCK` as a typed row instead of an explicit non-UDT
+  missing layout.
 - #199 shipped. Delay imports, resource traversal, manifest /
   version-info decoding, and TLS callback enumeration are available
   through the PE hardening surface.
+- PE direct code-to-data xrefs now persist as KB `data_read` rows,
+  giving `strings-xrefs` direct `.rdata` use sites on Windows
+  binaries. UTF-16 strings and one-hop data-pointer refs remain
+  follow-up comparison-05 work.
 - #186 and the Windows-specific atomic tools remain future work.
 
 ---

@@ -14,13 +14,24 @@
 
 use crate::analysis::aarch64_literals;
 use crate::core::address::{Address, AddressKind};
+use crate::core::binary::Arch;
+use crate::core::function::Function;
 use crate::core::instruction::Instruction;
+use crate::ir::lift_function::lift_function_from_bytes;
 use crate::ir::types::{LlirFunction, MemOp, Op, Value};
+use object::{Object, ObjectSection, SectionKind};
 
 #[derive(Debug, Clone)]
 pub struct Xref {
     pub from: Address,
     pub to: Address,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionDataXref {
+    pub from: Address,
+    pub to: Address,
+    pub function_va: Address,
 }
 
 fn in_ranges(v: u64, ranges: &[(u64, u64)]) -> bool {
@@ -150,6 +161,167 @@ pub fn llir_to_data_xrefs(
                 continue;
             }
             push_xref(&mut out, ins.va, to_va, bits);
+        }
+    }
+    out
+}
+
+fn arch_from_object(obj: &object::read::File<'_>) -> Arch {
+    match obj.architecture() {
+        object::Architecture::I386 => Arch::X86,
+        object::Architecture::X86_64 => Arch::X86_64,
+        object::Architecture::Aarch64 => Arch::AArch64,
+        object::Architecture::Arm => Arch::ARM,
+        object::Architecture::Mips => Arch::MIPS,
+        object::Architecture::Mips64 => Arch::MIPS64,
+        object::Architecture::PowerPc => Arch::PPC,
+        object::Architecture::PowerPc64 => Arch::PPC64,
+        object::Architecture::Riscv32 => Arch::RISCV,
+        object::Architecture::Riscv64 => Arch::RISCV64,
+        _ => Arch::Unknown,
+    }
+}
+
+fn bits_for_arch(arch: Arch) -> u8 {
+    match arch {
+        Arch::X86 => 32,
+        _ => 64,
+    }
+}
+
+fn pe_image_base(data: &[u8]) -> Option<u64> {
+    if data.len() < 0x40 || &data[..2] != b"MZ" {
+        return None;
+    }
+    let pe_off = u32::from_le_bytes(data[0x3c..0x40].try_into().ok()?) as usize;
+    if pe_off.checked_add(0x18 + 0x20)? > data.len() {
+        return None;
+    }
+    if data.get(pe_off..pe_off + 4)? != b"PE\0\0" {
+        return None;
+    }
+    let opt_off = pe_off + 0x18;
+    let magic = u16::from_le_bytes(data[opt_off..opt_off + 2].try_into().ok()?);
+    match magic {
+        0x10b => {
+            let off = opt_off + 0x1c;
+            Some(u32::from_le_bytes(data[off..off + 4].try_into().ok()?) as u64)
+        }
+        0x20b => {
+            let off = opt_off + 0x18;
+            Some(u64::from_le_bytes(data[off..off + 8].try_into().ok()?))
+        }
+        _ => None,
+    }
+}
+
+fn is_pe(data: &[u8]) -> bool {
+    data.len() >= 2 && &data[..2] == b"MZ"
+}
+
+fn section_data_range(
+    section: &object::read::Section<'_, '_>,
+    image_base: Option<u64>,
+    pe_semantics: bool,
+) -> Option<(u64, u64)> {
+    let size = section.size();
+    if size == 0 {
+        return None;
+    }
+    if matches!(section.kind(), SectionKind::Text) {
+        return None;
+    }
+    let name = section.name().unwrap_or("").to_ascii_lowercase();
+    if name.contains("text") || name.contains("code") || name.contains("pagekd") {
+        return None;
+    }
+    if section
+        .data()
+        .ok()
+        .filter(|data| !data.is_empty())
+        .is_none()
+    {
+        return None;
+    }
+    let mut start = section.address();
+    if pe_semantics {
+        if let Some(base) = image_base {
+            if start < base {
+                start = start.saturating_add(base);
+            }
+        }
+    }
+    Some((start, start.saturating_add(size)))
+}
+
+/// Build non-executable, file-backed data ranges in VA form.
+pub fn data_ranges_for_xrefs(data: &[u8]) -> Vec<(u64, u64)> {
+    let Ok(obj) = object::read::File::parse(data) else {
+        return Vec::new();
+    };
+    let pe_semantics = is_pe(data);
+    let image_base = if pe_semantics {
+        pe_image_base(data)
+    } else {
+        None
+    };
+    let mut ranges: Vec<(u64, u64)> = obj
+        .sections()
+        .filter_map(|section| section_data_range(&section, image_base, pe_semantics))
+        .collect();
+    ranges.sort_unstable();
+    ranges
+}
+
+/// Extract direct code-to-data references for discovered functions.
+///
+/// This is the native substrate for IDA-style "who uses this string?"
+/// workflows. It intentionally emits exact source instruction VAs and source
+/// function entry VAs so the persistent KB can answer both callsite-level and
+/// function-level questions without re-running analysis.
+pub fn function_data_xrefs(
+    data: &[u8],
+    funcs: &[Function],
+    max_xrefs: usize,
+) -> Vec<FunctionDataXref> {
+    let Ok(obj) = object::read::File::parse(data) else {
+        return Vec::new();
+    };
+    let arch = arch_from_object(&obj);
+    let bits = bits_for_arch(arch);
+    let data_ranges = data_ranges_for_xrefs(data);
+    if data_ranges.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<(u64, u64, u64)> = std::collections::HashSet::new();
+    for func in funcs {
+        if out.len() >= max_xrefs {
+            break;
+        }
+        let Some(lf) = lift_function_from_bytes(data, func, arch) else {
+            continue;
+        };
+        let remaining = max_xrefs.saturating_sub(out.len());
+        for xref in llir_to_data_xrefs(&lf, &data_ranges, bits, remaining) {
+            let key = (xref.from.value, xref.to.value, func.entry_point.value);
+            if !seen.insert(key) {
+                continue;
+            }
+            let Ok(function_va) =
+                Address::new(AddressKind::VA, func.entry_point.value, bits, None, None)
+            else {
+                continue;
+            };
+            out.push(FunctionDataXref {
+                from: xref.from,
+                to: xref.to,
+                function_va,
+            });
+            if out.len() >= max_xrefs {
+                break;
+            }
         }
     }
     out
@@ -334,6 +506,63 @@ mod tests {
         assert!(
             any_xref,
             "expected at least one LLIR-derived data xref on hello-gcc-O2"
+        );
+    }
+
+    #[test]
+    fn function_data_xrefs_recover_real_pe_rip_relative_string_ref() {
+        use crate::core::basic_block::BasicBlock;
+        use crate::core::function::{Function, FunctionKind};
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("msvc-pdb")
+            .join("ntoskrnl.exe");
+        if !path.exists() {
+            eprintln!(
+                "skipping PE data-xref fixture test: {} is not present",
+                path.display()
+            );
+            return;
+        }
+
+        let data = std::fs::read(path).expect("read ntoskrnl.exe");
+
+        let target_va = 0x14003deb0;
+        let ranges = data_ranges_for_xrefs(&data);
+        assert!(
+            ranges
+                .iter()
+                .any(|(start, end)| target_va >= *start && target_va < *end),
+            "expected selected string VA to land in a PE data range"
+        );
+
+        let function_va = 0x14029dda0;
+        let mut func = Function::new(
+            "HalDisableInterrupt".to_string(),
+            Address::new(AddressKind::VA, function_va, 64, None, None).unwrap(),
+            FunctionKind::Normal,
+        )
+        .unwrap();
+        func.basic_blocks.push(BasicBlock::new(
+            "bb0".to_string(),
+            Address::new(AddressKind::VA, 0x140496523, 64, None, None).unwrap(),
+            Address::new(AddressKind::VA, 0x14049652a, 64, None, None).unwrap(),
+            1,
+            None,
+            None,
+        ));
+
+        let xrefs = function_data_xrefs(&data, &[func], 16);
+        assert!(
+            xrefs.iter().any(|xref| {
+                xref.from.value == 0x140496523
+                    && xref.to.value == target_va
+                    && xref.function_va.value == function_va
+            }),
+            "expected selected ntoskrnl string xref with exact source and function VAs"
         );
     }
 

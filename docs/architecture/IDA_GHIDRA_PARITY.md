@@ -9,7 +9,7 @@ why each gap matters. Updated whenever a roadmap task completes.
 |---|---|---|---|
 | 152 | Persistent project database (SQLite `.glaurung`) | ✅ | sessions, binaries (sha256-keyed), kb_nodes/edges/tags |
 | 153 | Persistent type system + retroactive apply | ✅ | struct/enum/typedef/function_proto, set_by precedence, render-as-header |
-| 154 | Bidirectional persistent xref database | ✅ | call/jump/data_read/data_write/struct_field, function_names, comments per VA |
+| 154 | Bidirectional persistent xref database | ✅ | call/jump/data_read/data_write/struct_field, function_names, comments per VA. PE direct code-to-data refs now flow through `g.analysis.data_xrefs_path()` and persist as exact-source `data_read` rows in the KB. |
 | 155 | `glaurung repl` interactive CLI | ✅ | navigation, persistence, lazy LLM, readline history |
 | 156 | Function-chunk model (non-contiguous functions) | ✅ | `<fn>.cold`/`.part.N` auto-folded into parent's chunks; replaces band-aid heuristic |
 | 180 | Standard type-library bundles (libc/POSIX/WinAPI) | ✅ | 75+ canonical types ship by default, auto-load on KB open |
@@ -75,7 +75,7 @@ why each gap matters. Updated whenever a roadmap task completes.
 | 211 | Lua bytecode (.luac) recognizer | ✅ | `glaurung luac <path>` — Lua 5.1 / 5.2 / 5.3 / 5.4 + LuaJIT, source-name extraction from debug info |
 | 212 | Go gopclntab walker | ✅ | `g.analysis.gopclntab_names_path`; recovers function names from stripped Go binaries (1801 names from `hello-go`) |
 | 213 | Bench-harness coverage: packed binaries | ✅ | `BinaryScorecard.packer` field, `--packed-matrix` flag, markdown summary surfaces "Packed binaries: N (UPX×N)" |
-| 222 | Strings window with xrefs back to code | ✅ | `glaurung strings-xrefs <db>` — IDA-style strings panel with data_read xrefs |
+| 222 | Strings window with xrefs back to code | ✅ | `glaurung strings-xrefs <db>` -- IDA-style strings panel with data_read xrefs. Direct PE `.rdata` string refs persist through the Python/KB path; UTF-16 extraction and one-hop pointer refs remain follow-up coverage work. |
 | 223 | Tri-pane view (hex / disasm / pseudocode) | ✅ | `glaurung view <db> <va>` |
 | 226 | Bookmarks + analyst journal | ✅ | new `bookmarks` and `journal` tables; `glaurung bookmark|journal` CLIs |
 | 166 | More architectures (MIPS / RISC-V / PowerPC / WASM) | ⏳ | Pick one per session |

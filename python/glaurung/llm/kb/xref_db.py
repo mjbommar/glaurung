@@ -81,6 +81,12 @@ CREATE TABLE IF NOT EXISTS xref_index_state (
     edge_count INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS data_xref_index_state (
+    binary_id INTEGER PRIMARY KEY,
+    indexed_at INTEGER NOT NULL,
+    xref_count INTEGER NOT NULL
+);
+
 -- Global data labels (#181). Names + (optional) types for global
 -- variables, .data / .rodata / .bss symbols, jump-table targets, etc.
 -- Distinct from `function_names` because data isn't called.
@@ -486,6 +492,17 @@ def is_indexed(kb: PersistentKnowledgeBase) -> bool:
     return cur.fetchone() is not None
 
 
+def is_data_xrefs_indexed(kb: PersistentKnowledgeBase) -> bool:
+    """Return True when direct code-to-data xrefs have been populated."""
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM data_xref_index_state WHERE binary_id = ?",
+        (kb.binary_id,),
+    )
+    return cur.fetchone() is not None
+
+
 def index_callgraph(
     kb: PersistentKnowledgeBase,
     binary_path: str,
@@ -599,6 +616,77 @@ def index_callgraph(
     except Exception:
         pass
     return len(rows)
+
+
+def index_data_xrefs(
+    kb: PersistentKnowledgeBase,
+    binary_path: str,
+    *,
+    force: bool = False,
+    max_read_bytes: int = 104_857_600,
+    max_file_size: int = 104_857_600,
+    max_functions: int = 30_000,
+    max_blocks: int = 1_000_000,
+    max_instructions: int = 30_000_000,
+    timeout_ms: int = 600_000,
+    max_xrefs: int = 1_000_000,
+) -> int:
+    """Run native direct code-to-data xref recovery and persist ``data_read`` rows.
+
+    The rows use the exact source instruction VA as ``src_va`` and the source
+    function entry VA as ``src_function_va``. This intentionally does not
+    touch call/jump xrefs or the callgraph index state.
+    """
+    _ensure_schema(kb._conn)
+    if is_data_xrefs_indexed(kb) and not force:
+        return _row_count(kb, "data_read")
+
+    import glaurung as g
+
+    xrefs = g.analysis.data_xrefs_path(
+        binary_path,
+        max_read_bytes=max_read_bytes,
+        max_file_size=max_file_size,
+        max_functions=max_functions,
+        max_blocks=max_blocks,
+        max_instructions=max_instructions,
+        timeout_ms=timeout_ms,
+        max_xrefs=max_xrefs,
+    )
+    rows = [
+        (kb.binary_id, int(src), int(dst), "data_read", int(src_fn))
+        for src, dst, src_fn in xrefs
+    ]
+
+    cur = kb._conn.cursor()
+    cur.execute("BEGIN")
+    try:
+        if force:
+            cur.execute(
+                "DELETE FROM xrefs WHERE binary_id = ? "
+                "AND kind IN ('data_read', 'data_write')",
+                (kb.binary_id,),
+            )
+            cur.execute(
+                "DELETE FROM data_xref_index_state WHERE binary_id = ?",
+                (kb.binary_id,),
+            )
+        cur.executemany(
+            "INSERT OR IGNORE INTO xrefs "
+            "(binary_id, src_va, dst_va, kind, src_function_va, indexed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [(*r, int(time.time())) for r in rows],
+        )
+        cur.execute(
+            "INSERT OR REPLACE INTO data_xref_index_state "
+            "(binary_id, indexed_at, xref_count) VALUES (?, ?, ?)",
+            (kb.binary_id, int(time.time()), len(rows)),
+        )
+        kb._conn.commit()
+    except Exception:
+        kb._conn.rollback()
+        raise
+    return _row_count(kb, "data_read")
 
 
 def _import_external_names(

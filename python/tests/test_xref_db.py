@@ -21,6 +21,13 @@ def _hello_path() -> Path:
     return p
 
 
+def _ntoskrnl_path() -> Path:
+    p = Path("tests/fixtures/msvc-pdb/ntoskrnl.exe")
+    if not p.exists():
+        pytest.skip(f"missing PE/PDB fixture {p}")
+    return p
+
+
 def test_index_callgraph_persists(tmp_path: Path) -> None:
     binary = _hello_path()
     db = tmp_path / "xrefs.glaurung"
@@ -164,4 +171,66 @@ def test_add_xref_data_kind(tmp_path: Path) -> None:
     # In-function summary.
     in_fn = xref_db.list_xrefs_in_function(kb, 0x14d0)
     assert len(in_fn) == 2
+    kb.close()
+
+
+def test_index_data_xrefs_persists_exact_source_and_function_vas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = _hello_path()
+    db = tmp_path / "data-index.glaurung"
+
+    def fake_data_xrefs_path(_path: str, **_kwargs: object) -> list[tuple[int, int, int]]:
+        return [
+            (0x401010, 0x404040, 0x401000),
+            (0x401020, 0x404048, 0x401000),
+        ]
+
+    monkeypatch.setattr(g.analysis, "data_xrefs_path", fake_data_xrefs_path)
+
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+    xref_db.add_xref(kb, src_va=0x400100, dst_va=0x400200, kind="call",
+                     src_function_va=0x400000)
+
+    assert not xref_db.is_data_xrefs_indexed(kb)
+    assert xref_db.index_data_xrefs(kb, str(binary)) == 2
+    assert xref_db.is_data_xrefs_indexed(kb)
+
+    rows = xref_db.list_xrefs_to(kb, 0x404040, kinds=["data_read"])
+    assert [(r.src_va, r.dst_va, r.kind, r.src_function_va) for r in rows] == [
+        (0x401010, 0x404040, "data_read", 0x401000),
+    ]
+    assert xref_db.list_xrefs_to(kb, 0x400200, kinds=["call"])
+    kb.close()
+
+
+def test_index_data_xrefs_real_pe_fixture(tmp_path: Path) -> None:
+    binary = _ntoskrnl_path()
+    db = tmp_path / "ntoskrnl-data-xrefs.glaurung"
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+
+    count = xref_db.index_data_xrefs(kb, str(binary))
+    assert count > 0
+
+    selected_ascii_string_vas = [
+        0x14003DEB0,  # minkernel\hals\lib\interrupts\common\connect.c
+        0x140014B30,  # timersup.c
+        0x14003E4A8,  # intsup.c
+        0x140015508,  # SdbpReadMappedData
+        0x140048010,  # Out of memory
+    ]
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT src_va, dst_va, src_function_va FROM xrefs "
+        "WHERE binary_id = ? AND kind = 'data_read' "
+        f"AND dst_va IN ({','.join('?' for _ in selected_ascii_string_vas)}) "
+        "LIMIT 1",
+        (kb.binary_id, *selected_ascii_string_vas),
+    )
+    row = cur.fetchone()
+    assert row is not None
+    assert int(row[0]) > 0
+    assert int(row[1]) in selected_ascii_string_vas
+    assert int(row[2]) > 0
     kb.close()
