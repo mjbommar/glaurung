@@ -97,7 +97,12 @@ pub fn pe_iat_map(data: &[u8]) -> Vec<(u64, String)> {
     } else {
         return out;
     };
-    let num_dirs = read_u32_le(data, opt_off + 92).unwrap_or(0); // NumberOfRvaAndSizes
+    let num_dirs_off = if is_pe32_plus {
+        opt_off + 108
+    } else {
+        opt_off + 92
+    };
+    let num_dirs = read_u32_le(data, num_dirs_off).unwrap_or(0); // NumberOfRvaAndSizes
     let opt = OptionalHeaderLocs {
         data_dir_offset,
         num_data_dirs: num_dirs,
@@ -223,9 +228,17 @@ pub fn pe_iat_map(data: &[u8]) -> Vec<(u64, String)> {
                             first_thunk.saturating_add((index as u32) * (entry_size as u32));
                         let slot_va = image_base.saturating_add(slot_rva as u64);
 
-                        // Name via OriginalFirstThunk (by-name) or hint/name table
-                        let name_opt = if original_first_thunk != 0 {
-                            if let Some(n_off) = rva_to_offset(original_first_thunk, &sections) {
+                        // Name via OriginalFirstThunk when present. Some PEs
+                        // omit it and use FirstThunk as the on-disk import
+                        // lookup table, so fall back to FirstThunk for names
+                        // while still reporting FirstThunk as the IAT slot VA.
+                        let name_thunk = if original_first_thunk != 0 {
+                            original_first_thunk
+                        } else {
+                            first_thunk
+                        };
+                        let name_opt = if name_thunk != 0 {
+                            if let Some(n_off) = rva_to_offset(name_thunk, &sections) {
                                 // Read parallel entry at same index
                                 let n_entry_off = n_off.saturating_add(index * entry_size);
                                 if n_entry_off + entry_size <= data.len() {

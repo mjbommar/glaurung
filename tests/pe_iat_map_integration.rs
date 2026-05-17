@@ -27,3 +27,24 @@ fn test_pe_iat_map_on_sample() {
         );
     }
 }
+
+#[test]
+fn test_pe_iat_map_reads_pe32_plus_data_directories() {
+    let path = Path::new(
+        "samples/binaries/platforms/windows/i386/export/windows/x86_64/O0/hello-c-mingw64-O0.exe",
+    );
+    if !path.exists() {
+        return;
+    }
+    let data = fs::read(path).expect("read sample");
+    let got = glaurung::analysis::pe_iat::pe_iat_map(&data);
+    let names: std::collections::BTreeSet<&str> =
+        got.iter().map(|(_, name)| name.as_str()).collect();
+    assert!(
+        names.contains("GetLastError"),
+        "expected PE32+ import names, got {} entries: {:?}",
+        got.len(),
+        got.iter().take(8).collect::<Vec<_>>()
+    );
+    assert!(got.iter().any(|(va, _)| *va != 0));
+}

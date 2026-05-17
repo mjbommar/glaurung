@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import glaurung as g
 
 
 SAMPLE = Path(
@@ -17,6 +18,9 @@ ARM64_SAMPLE = Path(
 )
 X86_O0_SAMPLE = Path(
     "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
+)
+PE32_PLUS_SAMPLE = Path(
+    "samples/binaries/platforms/windows/i386/export/windows/x86_64/O0/hello-c-mingw64-O0.exe"
 )
 
 
@@ -125,3 +129,15 @@ def test_decompile_x86_o0_main_shows_prologue_and_epilogue():
     assert "// x86-64 epilogue:" in result.stdout, (
         "x86-64 epilogue comment missing: " + result.stdout
     )
+
+
+@pytest.mark.skipif(not PE32_PLUS_SAMPLE.exists(), reason="PE32+ sample missing")
+def test_decompile_pe32_plus_resolves_iat_names():
+    text = g.ir.decompile_at(
+        str(PE32_PLUS_SAMPLE),
+        0x140001190,
+        timeout_ms=1000,
+        style="c",
+    )
+    assert "GetStartupInfoA(arg2);" in text
+    assert "0x14000d1ec(" not in text
