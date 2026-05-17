@@ -354,6 +354,27 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 }],
             }
         }
+        Mnemonic::Movsx | Mnemonic::Movsxd | Mnemonic::Movzx => {
+            if instr.op_count() != 2 || instr.op_kind(0) != OpKind::Register {
+                return vec![Op::Unknown {
+                    mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
+                }];
+            }
+            let dst = VReg::phys(reg_name(instr.op_register(0)));
+            match instr.op_kind(1) {
+                OpKind::Memory => vec![Op::Load {
+                    dst,
+                    addr: mem_op_of(instr),
+                }],
+                OpKind::Register => vec![Op::Assign {
+                    dst,
+                    src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+                }],
+                _ => vec![Op::Unknown {
+                    mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
+                }],
+            }
+        }
         Mnemonic::Lea => {
             if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
                 // When the base is RIP we can resolve to an absolute VA.
@@ -1112,6 +1133,23 @@ mod tests {
         assert_eq!(ops.len(), 1);
         match &ops[0].op {
             Op::Load { addr, .. } => assert_eq!(addr.size, 16),
+            other => panic!("expected Load, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn movzx_indexed_mem_lifts_to_load() {
+        // movzx eax, word ptr [r15 + rax*2]  (41 0f b7 04 47)
+        let ops = lift64(&[0x41, 0x0f, 0xb7, 0x04, 0x47]);
+        assert_eq!(ops.len(), 1);
+        match &ops[0].op {
+            Op::Load { dst, addr } => {
+                assert_eq!(*dst, VReg::phys("eax"));
+                assert_eq!(addr.base, Some(VReg::phys("r15")));
+                assert_eq!(addr.index, Some(VReg::phys("rax")));
+                assert_eq!(addr.scale, 2);
+                assert_eq!(addr.size, 2);
+            }
             other => panic!("expected Load, got {:?}", other),
         }
     }

@@ -55,9 +55,10 @@ the persistent `function_names` table for xref-heavy tools. Direct
 PE code-to-data refs also persist as `data_read` rows, so string and
 global-data use-site tools can answer direct `.rdata` questions from
 the KB. UTF-16 strings now reach Python triage on the real
-`ntoskrnl.exe` fixture; one-hop data-pointer refs are partially
-recovered, with residual exact-ref misses still tracked by
-comparison 05.
+`ntoskrnl.exe` fixture, and register-held string/table bases recover
+direct exact refs above the comparison-05 bar. One-hop data-pointer
+refs are partially recovered, with residual PARAM-style refs still
+tracked by comparison 05.
 
 ## Per-tool authoring template
 

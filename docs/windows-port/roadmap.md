@@ -27,8 +27,10 @@ repo); the headings below cite the relevant section numbers.
 - PE direct code-to-data xrefs now persist as KB `data_read` rows,
   giving `strings-xrefs` direct `.rdata` use sites on Windows
   binaries. UTF-16 strings now reach the Python triage surface on
-  `ntoskrnl.exe`; one-hop data-pointer refs are partially recovered
-  and residual exact-ref misses remain follow-up comparison-05 work.
+  `ntoskrnl.exe`; register-held string/table bases lift direct exact
+  string-ref recall above the comparison-05 bar. One-hop data-pointer
+  refs are partially recovered and residual PARAM-style refs remain
+  follow-up comparison-05 work.
 - #186 and the Windows-specific atomic tools remain future work.
 
 ---

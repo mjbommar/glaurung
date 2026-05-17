@@ -20,6 +20,7 @@ use crate::core::instruction::Instruction;
 use crate::ir::lift_function::lift_function_from_bytes;
 use crate::ir::types::{LlirFunction, MemOp, Op, Value};
 use object::{Object, ObjectSection, SectionKind};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct Xref {
@@ -116,6 +117,193 @@ fn memop_absolute_target(m: &MemOp) -> Option<u64> {
     Some(m.disp as u64)
 }
 
+fn canonical_x86_reg(name: &str) -> Option<&'static str> {
+    match name {
+        "rax" | "eax" | "ax" | "al" | "ah" => Some("rax"),
+        "rbx" | "ebx" | "bx" | "bl" | "bh" => Some("rbx"),
+        "rcx" | "ecx" | "cx" | "cl" | "ch" => Some("rcx"),
+        "rdx" | "edx" | "dx" | "dl" | "dh" => Some("rdx"),
+        "rsi" | "esi" | "si" | "sil" => Some("rsi"),
+        "rdi" | "edi" | "di" | "dil" => Some("rdi"),
+        "rbp" | "ebp" | "bp" | "bpl" => Some("rbp"),
+        "rsp" | "esp" | "sp" | "spl" => Some("rsp"),
+        "r8" | "r8d" | "r8w" | "r8b" => Some("r8"),
+        "r9" | "r9d" | "r9w" | "r9b" => Some("r9"),
+        "r10" | "r10d" | "r10w" | "r10b" => Some("r10"),
+        "r11" | "r11d" | "r11w" | "r11b" => Some("r11"),
+        "r12" | "r12d" | "r12w" | "r12b" => Some("r12"),
+        "r13" | "r13d" | "r13w" | "r13b" => Some("r13"),
+        "r14" | "r14d" | "r14w" | "r14b" => Some("r14"),
+        "r15" | "r15d" | "r15w" | "r15b" => Some("r15"),
+        _ => None,
+    }
+}
+
+fn reg_key(reg: &crate::ir::types::VReg) -> crate::ir::types::VReg {
+    match reg {
+        crate::ir::types::VReg::Phys(name) => crate::ir::types::VReg::Phys(
+            canonical_x86_reg(name.as_str())
+                .unwrap_or(name.as_str())
+                .to_string(),
+        ),
+        _ => reg.clone(),
+    }
+}
+
+type AddrState = HashMap<crate::ir::types::VReg, u64>;
+
+fn value_known_addr(value: &Value, known: &AddrState) -> Option<u64> {
+    match value {
+        Value::Addr(v) => Some(*v),
+        Value::Reg(reg) => known.get(&reg_key(reg)).copied(),
+        Value::Const(_) => None,
+    }
+}
+
+fn checked_add_i64(base: u64, disp: i64) -> Option<u64> {
+    if disp >= 0 {
+        base.checked_add(disp as u64)
+    } else {
+        base.checked_sub(disp.unsigned_abs())
+    }
+}
+
+fn memop_known_target(m: &MemOp, known: &AddrState) -> Option<u64> {
+    if m.segment.is_some() {
+        return None;
+    }
+    if m.base.is_none() && m.index.is_none() {
+        return memop_absolute_target(m);
+    }
+
+    let mut target = if let Some(base) = &m.base {
+        known.get(&reg_key(base)).copied()?
+    } else {
+        0
+    };
+    if let Some(index) = &m.index {
+        let index_value = known.get(&reg_key(index)).copied();
+        match index_value {
+            Some(value) => {
+                let scale = u64::from(m.scale.max(1));
+                target = target.checked_add(value.checked_mul(scale)?)?;
+            }
+            None => {
+                // The common string-table pattern is `[known_base + variable
+                // index * scale + disp]`; keep the known base as the xref
+                // target so the use-site remains attached to the table/string
+                // range without inventing a concrete indexed element.
+            }
+        }
+    }
+    checked_add_i64(target, m.disp)
+}
+
+fn update_known_addrs(op: &Op, known_addrs: &mut AddrState, data_ranges: &[(u64, u64)]) {
+    match op {
+        Op::Assign { dst, src } => {
+            let dst = reg_key(dst);
+            if let Some(value) =
+                value_known_addr(src, known_addrs).filter(|value| in_ranges(*value, data_ranges))
+            {
+                known_addrs.insert(dst, value);
+            } else {
+                known_addrs.remove(&dst);
+            }
+        }
+        Op::Bin { dst, op, lhs, rhs } => {
+            let dst = reg_key(dst);
+            let value = match (op, value_known_addr(lhs, known_addrs), rhs) {
+                (crate::ir::types::BinOp::Add, Some(base), Value::Const(disp)) => {
+                    checked_add_i64(base, *disp)
+                }
+                (crate::ir::types::BinOp::Sub, Some(base), Value::Const(disp)) => {
+                    checked_add_i64(base, -*disp)
+                }
+                _ => None,
+            };
+            if let Some(value) = value.filter(|value| in_ranges(*value, data_ranges)) {
+                known_addrs.insert(dst, value);
+            } else {
+                known_addrs.remove(&dst);
+            }
+        }
+        Op::Load { dst, .. } | Op::Un { dst, .. } | Op::Cmp { dst, .. } => {
+            known_addrs.remove(&reg_key(dst));
+        }
+        _ => {}
+    }
+}
+
+fn block_out_known_addrs(
+    block: &crate::ir::types::LlirBlock,
+    input: &AddrState,
+    data_ranges: &[(u64, u64)],
+) -> AddrState {
+    let mut out = input.clone();
+    for ins in &block.instrs {
+        update_known_addrs(&ins.op, &mut out, data_ranges);
+    }
+    out
+}
+
+fn merged_pred_state(preds: &[usize], out_states: &[AddrState]) -> AddrState {
+    let Some((first, rest)) = preds.split_first() else {
+        return HashMap::new();
+    };
+    let mut merged = out_states[*first].clone();
+    for pred in rest {
+        merged.retain(|reg, value| out_states[*pred].get(reg) == Some(value));
+    }
+    merged
+}
+
+fn compute_known_addr_in_states(lf: &LlirFunction, data_ranges: &[(u64, u64)]) -> Vec<AddrState> {
+    let mut block_index: HashMap<u64, usize> = HashMap::new();
+    for (idx, block) in lf.blocks.iter().enumerate() {
+        block_index.insert(block.start_va, idx);
+    }
+
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); lf.blocks.len()];
+    for (idx, block) in lf.blocks.iter().enumerate() {
+        for succ in &block.succs {
+            if let Some(succ_idx) = block_index.get(succ).copied() {
+                preds[succ_idx].push(idx);
+            }
+        }
+    }
+
+    let entry_idx = block_index.get(&lf.entry_va).copied();
+    let mut in_states: Vec<AddrState> = vec![HashMap::new(); lf.blocks.len()];
+    let mut out_states: Vec<AddrState> = vec![HashMap::new(); lf.blocks.len()];
+    let max_iters = lf.blocks.len().saturating_mul(4).max(1);
+
+    for _ in 0..max_iters {
+        let mut changed = false;
+        for idx in 0..lf.blocks.len() {
+            let new_in = if Some(idx) == entry_idx || preds[idx].is_empty() {
+                HashMap::new()
+            } else {
+                merged_pred_state(&preds[idx], &out_states)
+            };
+            let new_out = block_out_known_addrs(&lf.blocks[idx], &new_in, data_ranges);
+            if new_in != in_states[idx] {
+                in_states[idx] = new_in;
+                changed = true;
+            }
+            if new_out != out_states[idx] {
+                out_states[idx] = new_out;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    in_states
+}
+
 /// Extract code→data xrefs from a lifted function.
 ///
 /// Scans every LLIR op for concrete VA references:
@@ -136,8 +324,10 @@ pub fn llir_to_data_xrefs(
     let mut out = Vec::new();
     // Dedupe by (from, to) — a single machine instruction can expand into
     // multiple LLIR ops and we do not want to double-count its xref.
-    let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
-    for block in &lf.blocks {
+    let mut seen: HashSet<(u64, u64)> = HashSet::new();
+    let in_states = compute_known_addr_in_states(lf, data_ranges);
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        let mut known_addrs = in_states[block_idx].clone();
         for ins in &block.instrs {
             if out.len() >= max_xrefs {
                 return out;
@@ -147,20 +337,23 @@ pub fn llir_to_data_xrefs(
                     src: Value::Addr(v),
                     ..
                 } => Some(*v),
-                Op::Load { addr, .. } | Op::Store { addr, .. } => memop_absolute_target(addr),
+                Op::Load { addr, .. } => memop_known_target(addr, &known_addrs),
+                Op::Store { addr, src } => value_known_addr(src, &known_addrs)
+                    .or_else(|| memop_known_target(addr, &known_addrs)),
                 Op::Call {
                     target: crate::ir::types::CallTarget::Indirect(Value::Addr(v)),
                 } => Some(*v),
+                Op::Call {
+                    target: crate::ir::types::CallTarget::Indirect(value),
+                } => value_known_addr(value, &known_addrs),
                 _ => None,
             };
-            let Some(to_va) = target else { continue };
-            if !in_ranges(to_va, data_ranges) {
-                continue;
+            if let Some(to_va) = target {
+                if in_ranges(to_va, data_ranges) && seen.insert((ins.va, to_va)) {
+                    push_xref(&mut out, ins.va, to_va, bits);
+                }
             }
-            if !seen.insert((ins.va, to_va)) {
-                continue;
-            }
-            push_xref(&mut out, ins.va, to_va, bits);
+            update_known_addrs(&ins.op, &mut known_addrs, data_ranges);
         }
     }
     out
@@ -441,6 +634,207 @@ mod tests {
     }
 
     #[test]
+    fn llir_tracks_address_register_through_indexed_load() {
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
+        let lf = LlirFunction {
+            entry_va: 0x4000,
+            blocks: vec![LlirBlock {
+                start_va: 0x4000,
+                end_va: 0x4010,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x4000,
+                        op: Op::Assign {
+                            dst: VReg::phys("r15"),
+                            src: Value::Addr(0x1400468a8),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x4008,
+                        op: Op::Load {
+                            dst: VReg::phys("eax"),
+                            addr: MemOp {
+                                base: Some(VReg::phys("r15")),
+                                index: Some(VReg::phys("rax")),
+                                scale: 2,
+                                disp: 0,
+                                size: 2,
+                                ..Default::default()
+                            },
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let xrefs = llir_to_data_xrefs(&lf, &[(0x140040000, 0x140050000)], 64, 16);
+        assert!(
+            xrefs
+                .iter()
+                .any(|xref| xref.from.value == 0x4008 && xref.to.value == 0x1400468a8),
+            "indexed read through known string base should keep exact source VA"
+        );
+    }
+
+    #[test]
+    fn llir_tracks_address_register_across_cfg_successor() {
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
+        let lf = LlirFunction {
+            entry_va: 0x4000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x4000,
+                    end_va: 0x4008,
+                    instrs: vec![LlirInstr {
+                        va: 0x4000,
+                        op: Op::Assign {
+                            dst: VReg::phys("r15"),
+                            src: Value::Addr(0x1400468a8),
+                        },
+                    }],
+                    succs: vec![0x4010],
+                },
+                LlirBlock {
+                    start_va: 0x4010,
+                    end_va: 0x4018,
+                    instrs: vec![LlirInstr {
+                        va: 0x4010,
+                        op: Op::Load {
+                            dst: VReg::phys("eax"),
+                            addr: MemOp {
+                                base: Some(VReg::phys("r15")),
+                                index: Some(VReg::phys("rax")),
+                                scale: 2,
+                                disp: 0,
+                                size: 2,
+                                ..Default::default()
+                            },
+                        },
+                    }],
+                    succs: vec![],
+                },
+            ],
+        };
+        let xrefs = llir_to_data_xrefs(&lf, &[(0x140040000, 0x140050000)], 64, 16);
+        assert!(
+            xrefs
+                .iter()
+                .any(|xref| xref.from.value == 0x4010 && xref.to.value == 0x1400468a8),
+            "successor block should inherit agreed string base"
+        );
+    }
+
+    #[test]
+    fn llir_does_not_merge_conflicting_address_registers() {
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
+        let lf = LlirFunction {
+            entry_va: 0x4000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x4000,
+                    end_va: 0x4004,
+                    instrs: vec![LlirInstr {
+                        va: 0x4000,
+                        op: Op::Nop,
+                    }],
+                    succs: vec![0x4010, 0x4020],
+                },
+                LlirBlock {
+                    start_va: 0x4010,
+                    end_va: 0x4018,
+                    instrs: vec![LlirInstr {
+                        va: 0x4010,
+                        op: Op::Assign {
+                            dst: VReg::phys("r15"),
+                            src: Value::Addr(0x1400468a8),
+                        },
+                    }],
+                    succs: vec![0x4030],
+                },
+                LlirBlock {
+                    start_va: 0x4020,
+                    end_va: 0x4028,
+                    instrs: vec![LlirInstr {
+                        va: 0x4020,
+                        op: Op::Assign {
+                            dst: VReg::phys("r15"),
+                            src: Value::Addr(0x140014b30),
+                        },
+                    }],
+                    succs: vec![0x4030],
+                },
+                LlirBlock {
+                    start_va: 0x4030,
+                    end_va: 0x4038,
+                    instrs: vec![LlirInstr {
+                        va: 0x4030,
+                        op: Op::Load {
+                            dst: VReg::phys("eax"),
+                            addr: MemOp {
+                                base: Some(VReg::phys("r15")),
+                                index: None,
+                                scale: 1,
+                                disp: 0,
+                                size: 2,
+                                ..Default::default()
+                            },
+                        },
+                    }],
+                    succs: vec![],
+                },
+            ],
+        };
+        let xrefs = llir_to_data_xrefs(&lf, &[(0x140010000, 0x140050000)], 64, 16);
+        assert!(
+            !xrefs.iter().any(|xref| xref.from.value == 0x4030),
+            "join block should not inherit conflicting predecessor addresses"
+        );
+    }
+
+    #[test]
+    fn llir_tracks_address_register_value_stores_with_aliases() {
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
+        let lf = LlirFunction {
+            entry_va: 0x5000,
+            blocks: vec![LlirBlock {
+                start_va: 0x5000,
+                end_va: 0x5010,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x5000,
+                        op: Op::Assign {
+                            dst: VReg::phys("ecx"),
+                            src: Value::Addr(0x140014b30),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x5006,
+                        op: Op::Store {
+                            addr: MemOp {
+                                base: Some(VReg::phys("rdi")),
+                                index: None,
+                                scale: 1,
+                                disp: 0x108,
+                                size: 8,
+                                ..Default::default()
+                            },
+                            src: Value::Reg(VReg::phys("rcx")),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let xrefs = llir_to_data_xrefs(&lf, &[(0x140010000, 0x140020000)], 64, 16);
+        assert!(
+            xrefs
+                .iter()
+                .any(|xref| xref.from.value == 0x5006 && xref.to.value == 0x140014b30),
+            "store of address-valued rcx should produce a string xref"
+        );
+    }
+
+    #[test]
     fn llir_xrefs_recover_string_references_on_real_binary() {
         // End-to-end: discover functions via CFG, lift each, collect xrefs
         // from their LLIR, and assert that *some* xref points into the binary's
@@ -564,6 +958,56 @@ mod tests {
             }),
             "expected selected ntoskrnl string xref with exact source and function VAs"
         );
+    }
+
+    #[test]
+    fn function_data_xrefs_recover_real_pe_register_held_string_ref() {
+        use crate::core::basic_block::BasicBlock;
+        use crate::core::function::{Function, FunctionKind};
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("msvc-pdb")
+            .join("ntoskrnl.exe");
+        if !path.exists() {
+            eprintln!(
+                "skipping PE register-held string-xref fixture test: {} is not present",
+                path.display()
+            );
+            return;
+        }
+
+        let data = std::fs::read(path).expect("read ntoskrnl.exe");
+        let target_va = 0x1400468a8;
+        let function_va = 0x1409d35ec;
+        let mut func = Function::new(
+            "EncodeAttributeName".to_string(),
+            Address::new(AddressKind::VA, function_va, 64, None, None).unwrap(),
+            FunctionKind::Normal,
+        )
+        .unwrap();
+        func.basic_blocks.push(BasicBlock::new(
+            "bb0".to_string(),
+            Address::new(AddressKind::VA, 0x1409d365e, 64, None, None).unwrap(),
+            Address::new(AddressKind::VA, 0x1409d36cd, 64, None, None).unwrap(),
+            16,
+            None,
+            None,
+        ));
+
+        let xrefs = function_data_xrefs(&data, &[func], 32);
+        for source_va in [0x1409d365e, 0x1409d3691, 0x1409d36a2] {
+            assert!(
+                xrefs.iter().any(|xref| {
+                    xref.from.value == source_va
+                        && xref.to.value == target_va
+                        && xref.function_va.value == function_va
+                }),
+                "expected ntoskrnl register-held string xref from 0x{source_va:x}"
+            );
+        }
     }
 
     #[test]

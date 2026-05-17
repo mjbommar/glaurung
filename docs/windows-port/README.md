@@ -10,13 +10,14 @@ Implementation is active. #197 and #199 have shipped, and #179 now
 has the PE/PDB type-ingestion path needed by the comparison-02
 contract: cached PDBs produce persisted struct, union, and
 function-prototype type records with provenance. Public PDB
-function names and direct PE code-to-data xrefs now persist into
-the `.glaurung` KB, which unblocks IDA-style string/use-site
-queries for direct `.rdata` references. UTF-16 strings also reach
-the Python triage surface on the real `ntoskrnl.exe` fixture. The
-remaining windows-port work is residual exact string-reference
-coverage, broader PDB follow-up surface, BSim-style similarity,
-and the Windows-specific atomic tools.
+function names and PE code-to-data xrefs now persist into the
+`.glaurung` KB, which unblocks IDA-style string/use-site queries
+for direct `.rdata` references. UTF-16 strings reach Python triage
+on the real `ntoskrnl.exe` fixture, and register-held string/table
+bases now recover direct exact string refs above the comparison-05
+bar. The remaining windows-port work is PARAM-style / one-hop
+indirect string-reference coverage, broader PDB follow-up surface,
+BSim-style similarity, and the Windows-specific atomic tools.
 
 ## Why this exists in Glaurung (not in asb)
 
@@ -80,7 +81,7 @@ forking; the contract is asb ADR 0023 (mirrored here as
 | #197  | MSVC + .pdb sample fixtures                | #179 PDB ingest test cases | `roadmap.md` sec 1, `pdb-ingestion-design.md` sec "Test fixtures" | shipped |
 | #179  | PDB ingestion (`src/symbols/pdb.rs`)       | every kg-pe rule that needs PDB-derived types | `pdb-ingestion-design.md` | type path + public function-name binding shipped; alias summaries remain |
 | #199  | PE hardening: delay-import / manifest / VersionInfo / TLS callbacks | grounded malware triage, driver TLS-callback bug class | `pe-hardening-design.md` | shipped |
-| xrefs | PE direct code-to-data refs                | strings-xrefs and data-use queries over Windows binaries | `IDA_GHIDRA_PARITY.md` #154/#222 | direct `data_read` rows shipped for PE functions; UTF-16 raw strings fixed; one-hop pointer refs partially recovered |
+| xrefs | PE direct code-to-data refs                | strings-xrefs and data-use queries over Windows binaries | `IDA_GHIDRA_PARITY.md` #154/#222 | direct exact string refs exceed the comparison-05 bar; UTF-16 raw strings fixed; one-hop pointer refs partially recovered |
 | #186  | BSim-equivalent function similarity         | Patch Tuesday cross-build diff for n-day | `bsim-similarity-design.md` | not started |
 | tools | 12-15 Windows-specific `llm/tools/` files   | rule-as-tool encoding for tier-1 bug classes | `atomic-tools.md` | not started |
 
