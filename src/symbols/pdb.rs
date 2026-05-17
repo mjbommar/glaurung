@@ -12,6 +12,7 @@ use ::pdb::{
     ClassKind, FallibleIterator, Indirection, PointerMode, PrimitiveKind, PrimitiveType, TypeData,
     TypeFinder, TypeIndex,
 };
+use sha2::{Digest, Sha256};
 
 use crate::formats::pe::{directories::CodeViewRsds, PeError, PeParser};
 
@@ -51,8 +52,17 @@ pub struct PdbStructLayout {
     pub byte_size: u64,
     /// Field count declared by the class/structure record.
     pub field_count: usize,
+    /// Build identity for PE-originated PDB rows.
+    pub provenance: Option<PdbBuildProvenance>,
     /// Top-level members in PDB field-list order.
     pub fields: Vec<PdbFieldSummary>,
+}
+
+impl PdbStructLayout {
+    fn with_provenance(mut self, provenance: &PdbBuildProvenance) -> Self {
+        self.provenance = Some(provenance.clone());
+        self
+    }
 }
 
 /// A top-level PDB struct/class member.
@@ -101,6 +111,43 @@ pub struct PdbFunctionPrototype {
     pub class_type_index: Option<u32>,
     /// For LF_MFUNCTION, raw TypeIndex of the `this` pointer type.
     pub this_pointer_type_index: Option<u32>,
+    /// Build identity for PE-originated PDB rows.
+    pub provenance: Option<PdbBuildProvenance>,
+}
+
+impl PdbFunctionPrototype {
+    fn with_provenance(mut self, provenance: &PdbBuildProvenance) -> Self {
+        self.provenance = Some(provenance.clone());
+        self
+    }
+}
+
+/// Build identity attached to PDB rows resolved from a PE CodeView record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdbBuildProvenance {
+    /// SHA256 of the PE binary bytes that supplied the CodeView record.
+    pub binary_sha256: String,
+    /// PDB basename from the CodeView RSDS record.
+    pub pdb_name: String,
+    /// Microsoft symbol-server GUID spelling.
+    pub pdb_guid: String,
+    /// CodeView age value.
+    pub pdb_age: u32,
+    /// Microsoft symbol-server GUID+age key.
+    pub pdb_guid_age: String,
+}
+
+impl PdbBuildProvenance {
+    /// Build provenance from a PE binary hash and its CodeView RSDS record.
+    pub fn from_codeview(binary_sha256: String, codeview: &CodeViewRsds) -> Self {
+        Self {
+            binary_sha256,
+            pdb_name: codeview.pdb_name.clone(),
+            pdb_guid: codeview.guid_string.clone(),
+            pdb_age: codeview.age,
+            pdb_guid_age: codeview.guid_age_key(),
+        }
+    }
 }
 
 /// Errors while resolving a PE's CodeView record to a cached PDB.
@@ -156,6 +203,8 @@ pub struct PePdbSource {
     pub pdb_path: PathBuf,
     /// Parsed CodeView RSDS metadata.
     pub codeview: CodeViewRsds,
+    /// Build identity for rows produced by this PE/PDB pairing.
+    pub provenance: PdbBuildProvenance,
     /// Native PDB ingestor for the cache hit.
     pub ingestor: PdbIngestor,
 }
@@ -163,12 +212,20 @@ pub struct PePdbSource {
 impl PePdbSource {
     /// Locate a complete struct/class and return its top-level fields.
     pub fn find_struct_layout(&self, name: &str) -> ::pdb::Result<Option<PdbStructLayout>> {
-        self.ingestor.find_struct_layout(name)
+        Ok(self
+            .ingestor
+            .find_struct_layout(name)?
+            .map(|layout| layout.with_provenance(&self.provenance)))
     }
 
     /// Enumerate procedure and member-function type records.
     pub fn function_prototypes(&self) -> ::pdb::Result<Vec<PdbFunctionPrototype>> {
-        self.ingestor.function_prototypes()
+        Ok(self
+            .ingestor
+            .function_prototypes()?
+            .into_iter()
+            .map(|prototype| prototype.with_provenance(&self.provenance))
+            .collect())
     }
 }
 
@@ -181,6 +238,8 @@ pub struct PePdbAnalysis {
     pub pdb_path: PathBuf,
     /// Parsed CodeView RSDS metadata.
     pub codeview: CodeViewRsds,
+    /// Build identity for rows produced by this PE/PDB pairing.
+    pub provenance: PdbBuildProvenance,
     /// Requested struct/class layouts found in the PDB.
     pub struct_layouts: Vec<PdbStructLayout>,
     /// Procedure and member-function prototype rows.
@@ -262,6 +321,7 @@ impl PdbIngestor {
     ) -> PdbPeResult<Option<PePdbSource>> {
         let pe_path = pe_path.as_ref();
         let data = fs::read(pe_path)?;
+        let binary_sha256 = sha256_hex(&data);
         let parser = PeParser::new(&data)?;
         let Some(codeview) = parser.codeview_rsds()?.cloned() else {
             return Ok(None);
@@ -269,12 +329,14 @@ impl PdbIngestor {
         let Some(pdb_path) = codeview.resolve_pdb_path(cache_dir.as_ref()) else {
             return Ok(None);
         };
+        let provenance = PdbBuildProvenance::from_codeview(binary_sha256, &codeview);
 
         Ok(Some(PePdbSource {
             pe_path: pe_path.to_path_buf(),
             ingestor: Self::open(pdb_path.clone()),
             pdb_path,
             codeview,
+            provenance,
         }))
     }
 
@@ -295,11 +357,13 @@ impl PdbIngestor {
             }
         }
         let function_prototypes = source.function_prototypes()?;
+        let provenance = source.provenance.clone();
 
         Ok(Some(PePdbAnalysis {
             pe_path: source.pe_path,
             pdb_path: source.pdb_path,
             codeview: source.codeview,
+            provenance,
             struct_layouts,
             function_prototypes,
         }))
@@ -361,6 +425,7 @@ impl PdbIngestor {
                         name: class.name.to_string().into_owned(),
                         byte_size: class.size,
                         field_count: usize::from(class.count),
+                        provenance: None,
                         fields,
                     }));
                 }
@@ -436,6 +501,7 @@ fn build_procedure_prototype(
         calling_convention: procedure.attributes.calling_convention(),
         class_type_index: None,
         this_pointer_type_index: None,
+        provenance: None,
     })
 }
 
@@ -463,7 +529,14 @@ fn build_member_function_prototype(
         this_pointer_type_index: member_function
             .this_pointer_type
             .map(|this_pointer_type| this_pointer_type.0),
+        provenance: None,
     })
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
 }
 
 fn collect_argument_types(
@@ -941,6 +1014,7 @@ mod tests {
 
         assert_eq!(eprocess.name, "_EPROCESS");
         assert_eq!(eprocess.byte_size, 2_944);
+        assert!(eprocess.provenance.is_none());
         assert!(
             eprocess.fields.len() >= 141,
             "expected at least the common Ghidra/pdb-struct fields, got {}",
@@ -1048,6 +1122,7 @@ mod tests {
             "unexpected prototype kind: {}",
             prototype.kind
         );
+        assert!(prototype.provenance.is_none());
         assert_eq!(
             prototype.argument_type_names.len(),
             prototype.argument_type_indices.len(),
@@ -1076,6 +1151,20 @@ mod tests {
             "CF32DE2E4A334C7C06FB63FCB6FAFB5C1"
         );
         assert_eq!(analysis.pdb_path.file_name().unwrap(), "ntkrnlmp.pdb");
+        assert_eq!(
+            analysis.provenance.binary_sha256,
+            "bf8489d981ea5d73dfb29b883405d68590f2b0b74dc2e9796e35cc1849c56826"
+        );
+        assert_eq!(analysis.provenance.pdb_name, "ntkrnlmp.pdb");
+        assert_eq!(
+            analysis.provenance.pdb_guid,
+            "CF32DE2E4A334C7C06FB63FCB6FAFB5C"
+        );
+        assert_eq!(analysis.provenance.pdb_age, 1);
+        assert_eq!(
+            analysis.provenance.pdb_guid_age,
+            "CF32DE2E4A334C7C06FB63FCB6FAFB5C1"
+        );
 
         let eprocess = analysis
             .struct_layouts
@@ -1083,10 +1172,15 @@ mod tests {
             .find(|layout| layout.name == "_EPROCESS")
             .expect("expected _EPROCESS layout from PE cache hit");
         assert_eq!(eprocess.byte_size, 2_944);
+        assert_eq!(eprocess.provenance.as_ref(), Some(&analysis.provenance));
         assert!(
             analysis.function_prototypes.len() > 100,
             "expected function prototypes from PE cache hit"
         );
+        assert!(analysis
+            .function_prototypes
+            .iter()
+            .all(|prototype| prototype.provenance.as_ref() == Some(&analysis.provenance)));
     }
 
     #[test]
@@ -1109,9 +1203,21 @@ mod tests {
             .expect("expected Microsoft symbol-cache hit");
 
         assert_eq!(source.codeview.pdb_name, "ntkrnlmp.pdb");
+        assert_eq!(
+            source.provenance.binary_sha256,
+            "bf8489d981ea5d73dfb29b883405d68590f2b0b74dc2e9796e35cc1849c56826"
+        );
+        assert_eq!(
+            source.provenance.pdb_guid_age,
+            "CF32DE2E4A334C7C06FB63FCB6FAFB5C1"
+        );
         assert!(source
             .pdb_path
             .ends_with("ntkrnlmp.pdb/CF32DE2E4A334C7C06FB63FCB6FAFB5C1/ntkrnlmp.pdb"));
-        assert!(source.find_struct_layout("_EPROCESS").unwrap().is_some());
+        let eprocess = source
+            .find_struct_layout("_EPROCESS")
+            .unwrap()
+            .expect("expected _EPROCESS through Microsoft cache");
+        assert_eq!(eprocess.provenance.as_ref(), Some(&source.provenance));
     }
 }
