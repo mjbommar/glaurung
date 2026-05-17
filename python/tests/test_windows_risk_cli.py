@@ -131,8 +131,9 @@ def test_windows_risk_json_reports_parser_shape(
         g.ir,
         "decompile_at",
         lambda *_args, **_kwargs: (
-            "fn sub_1000 { CreateFileW(); ReadFile(); "
-            "LocalAlloc(); ReadFile(); RegSetValueExW(); }"
+            "fn sub_1000 { tmp = (rbp - 128); CreateFileW(); "
+            "ReadFile(var3, (rbp - 128), 4); LocalAlloc(64, stack_9); "
+            "ReadFile(var3, stack_9, 64); RegSetValueExW(); }"
         ),
     )
 
@@ -168,6 +169,12 @@ def test_windows_risk_json_reports_parser_shape(
     assert report["functions"][0]["flow_hints"][0]["kind"] == (
         "file-read-allocation-flow"
     )
+    assert report["functions"][0]["stack_vars"][0]["offset"] == -128
+    assert report["functions"][0]["suspicious_constants"][0] == {
+        "value": 4,
+        "hex": "0x4",
+        "context": "ReadFile",
+    }
     assert "file_io" in report["risk_imports"]
     assert any(
         item["kind"] == "file-read-allocation-parser" for item in report["risk_items"]

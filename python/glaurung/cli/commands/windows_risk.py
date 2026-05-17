@@ -296,11 +296,21 @@ class WindowsRiskCommand(BaseCommand):
                 apis = ", ".join(fn.get("api_hits") or [])
                 strings = ", ".join(repr(s["text"]) for s in fn.get("strings", [])[:3])
                 calls = ", ".join(call["target"] for call in fn.get("calls", [])[:4])
+                stack_vars = ", ".join(
+                    var["display"] for var in fn.get("stack_vars", [])[:4]
+                )
+                constants = ", ".join(
+                    const["hex"] for const in fn.get("suspicious_constants", [])[:4]
+                )
                 bits = []
                 if apis:
                     bits.append(f"apis: {apis}")
                 if calls:
                     bits.append(f"calls: {calls}")
+                if stack_vars:
+                    bits.append(f"stack: {stack_vars}")
+                if constants:
+                    bits.append(f"consts: {constants}")
                 if strings:
                     bits.append(f"strings: {strings}")
                 suffix = " | " + " | ".join(bits) if bits else ""
@@ -661,6 +671,8 @@ def _function_row(func: Any) -> dict[str, Any]:
         "basic_blocks": len(basic_blocks),
         "instruction_count": instr_count,
         "strings": [],
+        "stack_vars": [],
+        "suspicious_constants": [],
         "api_hits": [],
         "api_sequence": [],
         "imports": [],
@@ -893,6 +905,11 @@ def _annotate_decompile_hits(
             continue
         api_sequence = _scan_api_sequence(pseudocode, risk_api_names)
         api_hits = _scan_api_hits(pseudocode, risk_api_names)
+        _merge_row_stack_vars(row, _extract_stack_vars(pseudocode))
+        _merge_row_suspicious_constants(
+            row,
+            _extract_suspicious_constants(pseudocode, risk_api_names),
+        )
         _merge_row_api_sequence(row, api_sequence)
         _merge_row_api_hits(row, api_hits, _patterns_from_api_hits(api_hits))
         _merge_row_flow_hints(row, _flow_hints_from_api_sequence(api_sequence))
@@ -923,6 +940,43 @@ def _merge_row_api_hits(
     if new_patterns:
         row["patterns"] = sorted(old_patterns | set(patterns))
         row["score"] += 8 * len(new_patterns)
+
+
+def _merge_row_stack_vars(
+    row: dict[str, Any],
+    stack_vars: list[dict[str, Any]],
+) -> None:
+    if not stack_vars:
+        return
+    existing = list(row.get("stack_vars") or [])
+    seen = {(str(var.get("base")), int(var.get("offset", 0))) for var in existing}
+    for var in stack_vars:
+        key = (str(var.get("base")), int(var.get("offset", 0)))
+        if key in seen:
+            continue
+        seen.add(key)
+        existing.append(var)
+    row["stack_vars"] = existing[:64]
+
+
+def _merge_row_suspicious_constants(
+    row: dict[str, Any],
+    constants: list[dict[str, Any]],
+) -> None:
+    if not constants:
+        return
+    existing = list(row.get("suspicious_constants") or [])
+    seen = {
+        (int(const.get("value", 0)), str(const.get("context", "")))
+        for const in existing
+    }
+    for const in constants:
+        key = (int(const.get("value", 0)), str(const.get("context", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        existing.append(const)
+    row["suspicious_constants"] = existing[:64]
 
 
 def _merge_row_api_sequence(row: dict[str, Any], api_sequence: list[str]) -> None:
@@ -992,6 +1046,78 @@ def _scan_api_sequence(pseudocode: str, api_names: list[str]) -> list[str]:
         if len(out) >= 128:
             break
     return out
+
+
+def _extract_stack_vars(pseudocode: str) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    pattern = _stack_ref_pattern()
+    for match in pattern.finditer(pseudocode):
+        base = match.group("base")
+        raw_value = _parse_int_literal(match.group("value"))
+        if raw_value is None:
+            continue
+        offset = raw_value if match.group("sign") == "+" else -raw_value
+        key = (base, offset)
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(
+            {
+                "base": base,
+                "offset": offset,
+                "display": f"{base}{offset:+#x}",
+            }
+        )
+        if len(refs) >= 64:
+            break
+    refs.sort(key=lambda var: (str(var["base"]), int(var["offset"])))
+    return refs
+
+
+def _extract_suspicious_constants(
+    pseudocode: str,
+    api_names: list[str],
+) -> list[dict[str, Any]]:
+    api_stems = {_api_stem(name) for name in api_names}
+    constants: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    call_pattern = re.compile(
+        r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<args>[^;\n{}]*)\)"
+    )
+    literal_pattern = re.compile(
+        r"(?<![A-Za-z0-9_])(0x[0-9a-fA-F]+|\d+)(?![A-Za-z0-9_])"
+    )
+    for call in call_pattern.finditer(pseudocode):
+        context = call.group("name")
+        if _api_stem(context) not in api_stems:
+            continue
+        args = _stack_ref_pattern().sub("", call.group("args"))
+        for literal in literal_pattern.finditer(args):
+            value = _parse_int_literal(literal.group(1))
+            if value is None or value < 4:
+                continue
+            key = (value, context)
+            if key in seen:
+                continue
+            seen.add(key)
+            constants.append({"value": value, "hex": hex(value), "context": context})
+            if len(constants) >= 64:
+                return constants
+    return constants
+
+
+def _stack_ref_pattern() -> re.Pattern[str]:
+    return re.compile(
+        r"\b(?P<base>[re]?[bs]p)\s*(?P<sign>[+-])\s*(?P<value>0x[0-9a-fA-F]+|\d+)"
+    )
+
+
+def _parse_int_literal(value: str) -> int | None:
+    try:
+        return int(value, 0)
+    except ValueError:
+        return None
 
 
 def _contains_api_name(lower_text: str, needle: str) -> bool:
