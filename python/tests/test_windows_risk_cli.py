@@ -31,8 +31,8 @@ def test_windows_risk_json_reports_parser_shape(
                 "KERNEL32.dll!LocalAlloc",
                 "ADVAPI32.dll!RegSetValueExW",
             ],
-            [],
-            [],
+            ["sample_export"],
+            ["KERNEL32.dll"],
         )
 
     def fake_analyze_path(_path: str, **_kwargs: object) -> SimpleNamespace:
@@ -80,6 +80,42 @@ def test_windows_risk_json_reports_parser_shape(
         lambda *_args, **_kwargs: 0x200,
     )
     monkeypatch.setattr(
+        g.analysis,
+        "pe_list_resources_path",
+        lambda *_args, **_kwargs: {
+            "leaf_count": 2,
+            "total_directories": 3,
+            "total_entries": 5,
+            "resource_bytes_total": 128,
+            "resources_by_type": {"VERSIONINFO": 1, "MANIFEST": 1},
+            "truncated": False,
+            "warnings": [],
+            "stop_reasons": [],
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        g.analysis,
+        "pe_view_resource_path",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        g.analysis,
+        "pe_tls_path",
+        lambda *_args, **_kwargs: {
+            "has_tls": True,
+            "has_callbacks": True,
+            "callback_count": 1,
+            "address_of_callbacks": 0x402000,
+            "callbacks": [0x401000],
+            "callback_rvas": [0x1000],
+            "truncated": False,
+            "stop_reasons": [],
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
         g.ir,
         "decompile_at",
         lambda *_args, **_kwargs: (
@@ -97,6 +133,12 @@ def test_windows_risk_json_reports_parser_shape(
     report = json.loads(buf.getvalue())
     assert report["summary"]["format"] == "PE"
     assert report["summary"]["function_count"] == 1
+    assert report["summary"]["export_count"] == 1
+    assert report["pe_metadata"]["resources"]["resources_by_type"] == {
+        "VERSIONINFO": 1,
+        "MANIFEST": 1,
+    }
+    assert report["pe_metadata"]["tls"]["callback_count"] == 1
     assert "file_io" in report["risk_imports"]
     assert any(
         item["kind"] == "file-read-allocation-parser" for item in report["risk_items"]
@@ -183,6 +225,7 @@ def test_windows_risk_report_tool_uses_context_file(
                 "data_xref_count": 1,
             },
             "risk_imports": {"file_io": ["ReadFile"]},
+            "pe_metadata": {"tls": {"has_tls": False}},
             "risk_items": [
                 {
                     "kind": "file-read-allocation-parser",
@@ -224,6 +267,7 @@ def test_windows_risk_report_tool_uses_context_file(
         "max_candidates": 3,
     }
     assert result.summary["format"] == "PE"
+    assert result.pe_metadata["tls"]["has_tls"] is False
     assert result.risk_items[0]["kind"] == "file-read-allocation-parser"
 
 
@@ -233,3 +277,25 @@ def test_memory_agent_registers_windows_risk_report() -> None:
     agent = create_memory_agent(model="test")
 
     assert "windows_risk_report" in agent._function_toolset.tools
+
+
+def test_pe_tls_path_binding_smoke() -> None:
+    from pathlib import Path
+
+    candidates = [
+        Path(
+            "samples/binaries/platforms/linux/amd64/cross/windows-x86_64/hello-c-x86_64-mingw.exe"
+        ),
+        Path(
+            "samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe"
+        ),
+        Path("tests/fixtures/msvc-pdb/ntdll.dll"),
+    ]
+    sample = next((path for path in candidates if path.exists()), None)
+    if sample is None:
+        return
+
+    tls = g.analysis.pe_tls_path(str(sample))
+
+    assert {"has_tls", "callback_count", "callbacks", "stop_reasons"} <= set(tls)
+    assert isinstance(tls["callbacks"], list)

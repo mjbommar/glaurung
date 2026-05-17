@@ -37,6 +37,7 @@ class WindowsRiskReportArgs(BaseModel):
 
 class WindowsRiskReportResult(BaseModel):
     summary: dict[str, Any]
+    pe_metadata: dict[str, Any] = Field(default_factory=dict)
     risk_imports: dict[str, list[str]]
     risk_items: list[dict[str, Any]]
     functions: list[dict[str, Any]]

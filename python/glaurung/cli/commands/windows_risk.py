@@ -217,12 +217,54 @@ class WindowsRiskCommand(BaseCommand):
                 f"format: {summary['format']} arch: {summary['arch']} "
                 f"functions: {summary['function_count']} "
                 f"imports: {summary['import_count']} "
+                f"exports: {summary['export_count']} "
                 f"strings: {summary['string_count']} "
                 f"data_xrefs: {summary['data_xref_count']}"
             ),
             "",
-            "Risk import buckets:",
+            "PE metadata:",
         ]
+        pe_metadata = report.get("pe_metadata") or {}
+        if pe_metadata:
+            resources = pe_metadata.get("resources") or {}
+            version = pe_metadata.get("version_info") or {}
+            manifest = pe_metadata.get("manifest") or {}
+            tls = pe_metadata.get("tls") or {}
+            if resources:
+                lines.append(
+                    "  resources: "
+                    f"leaves={resources.get('leaf_count', 0)} "
+                    f"types={resources.get('resources_by_type', {})}"
+                )
+            if version.get("found"):
+                lines.append(
+                    "  version: "
+                    f"file={version.get('file_version')} "
+                    f"product={version.get('product_version')} "
+                    f"description={version.get('file_description')}"
+                )
+            if manifest.get("found"):
+                lines.append(
+                    "  manifest: "
+                    f"level={manifest.get('requested_execution_level')} "
+                    f"ui_access={manifest.get('ui_access')} "
+                    f"deps={manifest.get('dependencies', [])[:4]}"
+                )
+            if tls:
+                lines.append(
+                    "  tls: "
+                    f"has_tls={tls.get('has_tls')} "
+                    f"callbacks={tls.get('callback_count', 0)}"
+                )
+        else:
+            lines.append("  none")
+
+        lines.extend(
+            [
+                "",
+                "Risk import buckets:",
+            ]
+        )
         risk_imports = report["risk_imports"]
         if risk_imports:
             for bucket, names in risk_imports.items():
@@ -271,8 +313,9 @@ class WindowsRiskCommand(BaseCommand):
 def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     path_str = str(path)
     fmt, arch = _detect_format_arch(path_str, args)
-    imports = _collect_imports(path_str, args)
+    imports, exports, libs = _collect_symbol_names(path_str, args)
     risk_imports = _bucket_imports(imports)
+    pe_metadata = _collect_pe_metadata(path_str, args, exports, libs)
     strings = _extract_strings(path_str, args)
     funcs, _callgraph = g.analysis.analyze_functions_path(
         path_str,
@@ -305,9 +348,12 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
             "function_count": len(function_rows),
             "function_rows": min(len(candidates), args.max_candidates),
             "import_count": len(imports),
+            "export_count": len(exports),
+            "lib_count": len(libs),
             "string_count": len(strings),
             "data_xref_count": len(data_xrefs),
         },
+        "pe_metadata": pe_metadata,
         "risk_imports": risk_imports,
         "risk_items": risk_items,
         "functions": candidates[: args.max_candidates],
@@ -328,7 +374,9 @@ def _detect_format_arch(path: str, args: argparse.Namespace) -> tuple[str, str]:
     return str(got[0]), str(got[1])
 
 
-def _collect_imports(path: str, args: argparse.Namespace) -> list[str]:
+def _collect_symbol_names(
+    path: str, args: argparse.Namespace
+) -> tuple[list[str], list[str], list[str]]:
     try:
         _all, _dyn, imports, _exports, _libs = g.triage.list_symbols(
             path,
@@ -336,8 +384,182 @@ def _collect_imports(path: str, args: argparse.Namespace) -> list[str]:
             args.max_file_size,
         )
     except Exception:
-        return []
-    return sorted({_clean_import_name(str(name)) for name in imports if str(name)})
+        return [], [], []
+    return (
+        sorted({_clean_import_name(str(name)) for name in imports if str(name)}),
+        sorted({_clean_import_name(str(name)) for name in _exports if str(name)}),
+        sorted({str(name) for name in _libs if str(name)}),
+    )
+
+
+def _collect_pe_metadata(
+    path: str,
+    args: argparse.Namespace,
+    exports: list[str],
+    libs: list[str],
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "exports": exports[:128],
+        "libs": libs[:128],
+    }
+    resources = _collect_resource_metadata(path, args)
+    if resources:
+        metadata["resources"] = resources
+    manifest = _collect_manifest_metadata(path, args)
+    if manifest:
+        metadata["manifest"] = manifest
+    version = _collect_version_metadata(path, args)
+    if version:
+        metadata["version_info"] = version
+    tls = _collect_tls_metadata(path, args)
+    if tls:
+        metadata["tls"] = tls
+    return metadata
+
+
+def _collect_resource_metadata(path: str, args: argparse.Namespace) -> dict[str, Any]:
+    try:
+        raw = g.analysis.pe_list_resources_path(
+            path,
+            max_read_bytes=args.max_read_bytes,
+            max_file_size=args.max_file_size,
+            max_resources=4096,
+            max_resource_depth=32,
+            max_resource_data_bytes=1_048_576,
+            preview_bytes=0,
+        )
+    except Exception as exc:
+        return {"warnings": [str(exc)], "stop_reasons": ["resources_unavailable"]}
+    return {
+        "leaf_count": int(raw.get("leaf_count", 0)),
+        "total_directories": int(raw.get("total_directories", 0)),
+        "total_entries": int(raw.get("total_entries", 0)),
+        "resource_bytes_total": int(raw.get("resource_bytes_total", 0)),
+        "resources_by_type": dict(raw.get("resources_by_type") or {}),
+        "truncated": bool(raw.get("truncated", False)),
+        "warnings": list(raw.get("warnings") or []),
+        "stop_reasons": list(raw.get("stop_reasons") or []),
+    }
+
+
+def _collect_manifest_metadata(path: str, args: argparse.Namespace) -> dict[str, Any]:
+    try:
+        resource = g.analysis.pe_view_resource_path(
+            path,
+            type_filter="manifest",
+            max_read_bytes=args.max_read_bytes,
+            max_file_size=args.max_file_size,
+            max_text_bytes=65_536,
+        )
+    except Exception as exc:
+        return {
+            "found": False,
+            "warnings": [str(exc)],
+            "stop_reasons": ["manifest_unavailable"],
+        }
+    if resource is None:
+        return {"found": False, "stop_reasons": ["manifest_not_found"]}
+    text = resource.get("text") or ""
+    try:
+        from glaurung.llm.tools.pe_view_manifest import _decode_manifest_text
+
+        decoded = _decode_manifest_text(path, text).model_dump(mode="json")
+    except Exception as exc:
+        return {
+            "found": True,
+            "evidence": resource.get("evidence"),
+            "warnings": [f"manifest_decode_error:{exc}"],
+        }
+    return {
+        "found": True,
+        "evidence": resource.get("evidence"),
+        "assembly_identity": decoded.get("assembly_identity") or {},
+        "requested_execution_level": decoded.get("requested_execution_level"),
+        "ui_access": decoded.get("ui_access"),
+        "dpi_awareness": decoded.get("dpi_awareness") or [],
+        "compatibility_guids": decoded.get("compatibility_guids") or [],
+        "dependencies": decoded.get("dependencies") or [],
+        "warnings": (decoded.get("warnings") or [])
+        + list(resource.get("warnings") or []),
+        "text_truncated": bool(resource.get("text_truncated", False)),
+    }
+
+
+def _collect_version_metadata(path: str, args: argparse.Namespace) -> dict[str, Any]:
+    try:
+        resource = g.analysis.pe_view_resource_path(
+            path,
+            type_filter="versioninfo",
+            max_read_bytes=args.max_read_bytes,
+            max_file_size=args.max_file_size,
+            max_payload_bytes=65_536,
+        )
+    except Exception as exc:
+        return {
+            "found": False,
+            "warnings": [str(exc)],
+            "stop_reasons": ["version_info_unavailable"],
+        }
+    if resource is None:
+        return {"found": False, "stop_reasons": ["version_info_not_found"]}
+    payload = resource.get("data")
+    if not isinstance(payload, bytes):
+        return {
+            "found": False,
+            "evidence": resource.get("evidence"),
+            "stop_reasons": ["version_info_payload_not_available"],
+        }
+    try:
+        from glaurung.llm.tools.pe_decode_version_info import _decode_version_info
+
+        decoded = _decode_version_info(path, payload).model_dump(mode="json")
+    except Exception as exc:
+        return {
+            "found": True,
+            "evidence": resource.get("evidence"),
+            "warnings": [f"version_info_decode_error:{exc}"],
+        }
+    strings = decoded.get("strings") or {}
+    return {
+        "found": bool(decoded.get("fixed_file_info") or strings),
+        "evidence": resource.get("evidence"),
+        "file_version": decoded.get("file_version"),
+        "product_version": decoded.get("product_version"),
+        "file_description": strings.get("FileDescription"),
+        "company_name": strings.get("CompanyName"),
+        "original_filename": strings.get("OriginalFilename"),
+        "product_name": strings.get("ProductName"),
+        "file_type": decoded.get("file_type"),
+        "translations": decoded.get("translations") or [],
+        "warnings": (decoded.get("warnings") or [])
+        + list(resource.get("warnings") or []),
+        "stop_reasons": decoded.get("stop_reasons") or [],
+    }
+
+
+def _collect_tls_metadata(path: str, args: argparse.Namespace) -> dict[str, Any]:
+    tls_func = getattr(g.analysis, "pe_tls_path", None)
+    if tls_func is None:
+        return {"available": False, "stop_reasons": ["pe_tls_path_unavailable"]}
+    try:
+        raw = tls_func(
+            path,
+            max_read_bytes=args.max_read_bytes,
+            max_file_size=args.max_file_size,
+        )
+    except Exception as exc:
+        return {"available": False, "warnings": [str(exc)]}
+    return {
+        "available": True,
+        "has_tls": bool(raw.get("has_tls", False)),
+        "has_callbacks": bool(raw.get("has_callbacks", False)),
+        "callback_count": int(raw.get("callback_count", 0)),
+        "address_of_callbacks": int(raw.get("address_of_callbacks", 0)),
+        "callbacks": [int(v) for v in raw.get("callbacks") or []][:64],
+        "callback_rvas": [int(v) for v in raw.get("callback_rvas") or []][:64],
+        "truncated": bool(raw.get("truncated", False)),
+        "stop_reasons": list(raw.get("stop_reasons") or []),
+    }
 
 
 def _clean_import_name(name: str) -> str:

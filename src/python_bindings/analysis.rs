@@ -28,6 +28,7 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
 
     // PE-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(pe_iat_map_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(pe_tls_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_bytes_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_view_resource_path_py, &analysis_mod)?)?;
@@ -227,6 +228,42 @@ fn pe_iat_map_path_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     Ok(crate::analysis::pe_iat::pe_iat_map(&data))
+}
+
+/// Parse the PE TLS directory and callback array for a file.
+#[pyfunction]
+#[pyo3(name = "pe_tls_path")]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
+fn pe_tls_path_py(
+    py: Python<'_>,
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Py<PyAny>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    let parser = crate::formats::pe::PeParser::new(&data)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{}", e)))?;
+    let tls = parser
+        .tls()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("has_tls", tls.has_tls_header())?;
+    dict.set_item("has_callbacks", tls.has_callbacks())?;
+    dict.set_item("callback_count", tls.callback_count())?;
+    dict.set_item("raw_data_start_va", tls.raw_data_start_va)?;
+    dict.set_item("raw_data_end_va", tls.raw_data_end_va)?;
+    dict.set_item("address_of_index", tls.address_of_index)?;
+    dict.set_item("address_of_callbacks", tls.address_of_callbacks)?;
+    dict.set_item("size_of_zero_fill", tls.size_of_zero_fill)?;
+    dict.set_item("characteristics", tls.characteristics)?;
+    dict.set_item("callbacks", tls.callbacks.clone())?;
+    dict.set_item("callback_rvas", tls.callback_rvas.clone())?;
+    dict.set_item("truncated", tls.truncated)?;
+    dict.set_item("stop_reasons", tls.stop_reasons.clone())?;
+    Ok(dict.into())
 }
 
 /// List PE resource metadata for a file.
