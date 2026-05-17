@@ -12,6 +12,10 @@ from glaurung.llm.tools.pe_list_resources import (
     PeListResourcesResult,
     build_tool as build_pe_list_resources,
 )
+from glaurung.llm.tools.pe_decode_version_info import (
+    PeVersionInfoResult,
+    build_tool as build_pe_decode_version_info,
+)
 from glaurung.llm.tools.pe_view_manifest import (
     PeManifestResult,
     build_tool as build_pe_view_manifest,
@@ -43,6 +47,9 @@ class PeCommand(BaseCommand):
         manifest = subparsers.add_parser("manifest", help="Decode RT_MANIFEST")
         self._add_common_child_arguments(manifest)
         manifest.add_argument("--max-text-bytes", type=int, default=65_536)
+        version = subparsers.add_parser("version", help="Decode VERSIONINFO")
+        self._add_common_child_arguments(version)
+        version.add_argument("--max-payload-bytes", type=int, default=65_536)
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         if args.pe_action == "resources":
@@ -66,6 +73,17 @@ class PeCommand(BaseCommand):
                 formatter.output_jsonl(payload)
             else:
                 formatter.output_plain(_format_manifest_human(result))
+            return 0 if result.found else 4
+        if args.pe_action == "version":
+            path = self.validate_file_path(args.path)
+            result = _decode_version(path, args)
+            payload = result.model_dump(mode="json")
+            if formatter.format_type == OutputFormat.JSON:
+                formatter.output_json(payload)
+            elif formatter.format_type == OutputFormat.JSONL:
+                formatter.output_jsonl(payload)
+            else:
+                formatter.output_plain(_format_version_human(result))
             return 0 if result.found else 4
         raise ValueError(f"unsupported PE action: {args.pe_action}")
 
@@ -185,6 +203,29 @@ def _view_manifest(path: Path, args: argparse.Namespace) -> PeManifestResult:
     )
 
 
+def _decode_version(path: Path, args: argparse.Namespace) -> PeVersionInfoResult:
+    artifact = g.triage.analyze_path(
+        str(path),
+        int(args.max_read_bytes),
+        int(args.max_file_size),
+        1,
+    )
+    ctx = MemoryContext(file_path=str(path), artifact=artifact)
+    ctx.budgets.max_read_bytes = int(args.max_read_bytes)
+    ctx.budgets.max_file_size = int(args.max_file_size)
+    tool = build_pe_decode_version_info()
+    return tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            path=str(path),
+            language_id=args.language_id,
+            max_payload_bytes=args.max_payload_bytes,
+            add_to_kb=False,
+        ),
+    )
+
+
 def _format_resources_human(result: PeListResourcesResult) -> str:
     lines = [
         f"# PE resources: {Path(result.path).name}",
@@ -212,6 +253,34 @@ def _format_resources_human(result: PeListResourcesResult) -> str:
             if resource.warnings:
                 line += f"  warnings={','.join(resource.warnings)}"
             lines.append(line)
+    return "\n".join(lines)
+
+
+def _format_version_human(result: PeVersionInfoResult) -> str:
+    lines = [f"# PE VERSIONINFO: {Path(result.path).name}"]
+    if result.evidence:
+        lines.append(f"evidence: {result.evidence}")
+    if result.file_version:
+        lines.append(f"file_version: {result.file_version}")
+    if result.product_version:
+        lines.append(f"product_version: {result.product_version}")
+    if result.file_type:
+        lines.append(f"file_type: {result.file_type}")
+    if result.strings:
+        lines.append("strings:")
+        for key, value in sorted(result.strings.items()):
+            lines.append(f"  {key}: {value}")
+    if result.translations:
+        lines.append("translations:")
+        for translation in result.translations:
+            lines.append(
+                f"  language=0x{translation['language_id']:04x} "
+                f"code_page={translation['code_page']}"
+            )
+    if result.warnings:
+        lines.append(f"warnings: {', '.join(result.warnings[:8])}")
+    if result.stop_reasons:
+        lines.append(f"stop: {', '.join(result.stop_reasons)}")
     return "\n".join(lines)
 
 

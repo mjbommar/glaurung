@@ -271,7 +271,7 @@ fn pe_list_resources_bytes_inner(
 /// View one selected PE resource payload under bounded text/preview budgets.
 #[pyfunction]
 #[pyo3(name = "pe_view_resource_path")]
-#[pyo3(signature = (path, type_filter=None, name_filter=None, language_id=None, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64, max_resources=4096usize, max_resource_depth=32usize, max_resource_data_bytes=1_048_576usize, preview_bytes=64usize, max_text_bytes=65_536usize))]
+#[pyo3(signature = (path, type_filter=None, name_filter=None, language_id=None, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64, max_resources=4096usize, max_resource_depth=32usize, max_resource_data_bytes=1_048_576usize, preview_bytes=64usize, max_text_bytes=65_536usize, max_payload_bytes=65_536usize))]
 fn pe_view_resource_path_py(
     py: Python<'_>,
     path: String,
@@ -285,6 +285,7 @@ fn pe_view_resource_path_py(
     max_resource_data_bytes: usize,
     preview_bytes: usize,
     max_text_bytes: usize,
+    max_payload_bytes: usize,
 ) -> PyResult<Option<Py<PyAny>>> {
     let limit = std::cmp::min(max_read_bytes, max_file_size);
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
@@ -308,7 +309,14 @@ fn pe_view_resource_path_py(
             name_filter.as_deref(),
             language_id,
         ) {
-            return pe_resource_view_to_py(py, resource, preview_bytes, max_text_bytes).map(Some);
+            return pe_resource_view_to_py(
+                py,
+                resource,
+                preview_bytes,
+                max_text_bytes,
+                max_payload_bytes,
+            )
+            .map(Some);
         }
     }
     Ok(None)
@@ -383,6 +391,7 @@ fn pe_resource_view_to_py(
     resource: &crate::formats::pe::ResourceDataEntry<'_>,
     preview_bytes: usize,
     max_text_bytes: usize,
+    max_payload_bytes: usize,
 ) -> PyResult<Py<PyAny>> {
     let dict = pyo3::types::PyDict::new(py);
     let resource_type = pe_resource_type_label(resource);
@@ -414,6 +423,14 @@ fn pe_resource_view_to_py(
     dict.set_item("preview_hex", hex::encode(&resource.data[..preview_len]))?;
     dict.set_item("text", text)?;
     dict.set_item("text_truncated", resource.data.len() > max_text_bytes)?;
+    if resource.data.len() <= max_payload_bytes {
+        let bytes = pyo3::types::PyBytes::new(py, resource.data);
+        dict.set_item("data", bytes)?;
+        dict.set_item("data_truncated", false)?;
+    } else {
+        dict.set_item("data", py.None())?;
+        dict.set_item("data_truncated", true)?;
+    }
     dict.set_item("warnings", resource.warnings.clone())?;
     dict.set_item(
         "evidence",
