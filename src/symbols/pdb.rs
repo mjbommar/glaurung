@@ -1,7 +1,7 @@
 //! Native PDB symbol and type ingestion.
 //!
 //! This module is intentionally small for the first ingestion slice: it opens a
-//! PDB, reports coarse table counts, and locates complete struct/class type
+//! PDB, reports coarse table counts, and locates complete struct/class/union type
 //! records by name.
 
 use std::fmt;
@@ -32,10 +32,10 @@ pub struct PdbSummary {
     pub symbol_count: usize,
 }
 
-/// Summary for a named PDB struct/class type.
+/// Summary for a named PDB struct/class/union type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdbStructSummary {
-    /// Struct/class name as stored in the PDB.
+    /// Struct/class/union name as stored in the PDB.
     pub name: String,
     /// Declared byte size of the type.
     pub byte_size: u64,
@@ -43,14 +43,14 @@ pub struct PdbStructSummary {
     pub field_count: usize,
 }
 
-/// Top-level struct/class layout resolved from a PDB field list.
+/// Top-level struct/class/union layout resolved from a PDB field list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdbStructLayout {
-    /// Struct/class name as stored in the PDB.
+    /// Struct/class/union name as stored in the PDB.
     pub name: String,
     /// Declared byte size of the type.
     pub byte_size: u64,
-    /// Field count declared by the class/structure record.
+    /// Field count declared by the class/structure/union record.
     pub field_count: usize,
     /// Build identity for PE-originated PDB rows.
     pub provenance: Option<PdbBuildProvenance>,
@@ -65,7 +65,7 @@ impl PdbStructLayout {
     }
 }
 
-/// A top-level PDB struct/class member.
+/// A top-level PDB struct/class/union member.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdbFieldSummary {
     /// Zero-based ordinal in the collected FieldList walk.
@@ -411,8 +411,10 @@ impl PdbIngestor {
                 Err(error) => return Err(error),
             };
 
-            if let TypeData::Class(class) = parsed {
-                if class.name.as_bytes() == name.as_bytes() && !class.properties.forward_reference()
+            match parsed {
+                TypeData::Class(class)
+                    if class.name.as_bytes() == name.as_bytes()
+                        && !class.properties.forward_reference() =>
                 {
                     let fields = match class.fields {
                         Some(fields_index) => {
@@ -429,6 +431,21 @@ impl PdbIngestor {
                         fields,
                     }));
                 }
+                TypeData::Union(union)
+                    if union.name.as_bytes() == name.as_bytes()
+                        && !union.properties.forward_reference() =>
+                {
+                    let fields = collect_field_list_members(&type_finder, union.fields)?;
+
+                    return Ok(Some(PdbStructLayout {
+                        name: union.name.to_string().into_owned(),
+                        byte_size: union.size,
+                        field_count: usize::from(union.count),
+                        provenance: None,
+                        fields,
+                    }));
+                }
+                _ => {}
             }
         }
 
@@ -964,6 +981,53 @@ mod tests {
             .join("msvc-pdb")
     }
 
+    const CANONICAL_PDB_LAYOUT_REQUESTS: &[&str] = &[
+        "_EPROCESS",
+        "_KTHREAD",
+        "_KPROCESS",
+        "_FILE_OBJECT",
+        "_DEVICE_OBJECT",
+        "_IRP",
+        "_DRIVER_OBJECT",
+        "_HANDLE_TABLE",
+        "_PEB",
+        "_TEB",
+        "_KAPC",
+        "_KSEMAPHORE",
+        "_KEVENT",
+        "_KSPIN_LOCK",
+        "_KDPC",
+        "_RTL_AVL_TREE",
+        "_EX_FAST_REF",
+        "_EX_PUSH_LOCK",
+        "_DISPATCHER_HEADER",
+        "_LARGE_INTEGER",
+        "_LIST_ENTRY",
+    ];
+
+    const CANONICAL_PDB_FIELDED_LAYOUTS: &[&str] = &[
+        "_EPROCESS",
+        "_KTHREAD",
+        "_KPROCESS",
+        "_FILE_OBJECT",
+        "_DEVICE_OBJECT",
+        "_IRP",
+        "_DRIVER_OBJECT",
+        "_HANDLE_TABLE",
+        "_PEB",
+        "_TEB",
+        "_KAPC",
+        "_KSEMAPHORE",
+        "_KEVENT",
+        "_KDPC",
+        "_RTL_AVL_TREE",
+        "_EX_FAST_REF",
+        "_EX_PUSH_LOCK",
+        "_DISPATCHER_HEADER",
+        "_LARGE_INTEGER",
+        "_LIST_ENTRY",
+    ];
+
     #[test]
     fn pdb_ingestor_loads_ntkrnlmp_and_finds_eprocess() {
         let Some(path) = fixture_pdb("ntkrnlmp.pdb") else {
@@ -1181,6 +1245,74 @@ mod tests {
             .function_prototypes
             .iter()
             .all(|prototype| prototype.provenance.as_ref() == Some(&analysis.provenance)));
+    }
+
+    #[test]
+    fn pdb_ingestor_resolves_canonical_fielded_layouts_from_pe_cache_hit() {
+        let Some(pe_path) = fixture("ntoskrnl.exe") else {
+            eprintln!("skipping PE/PDB cache test: ntoskrnl.exe is not present");
+            return;
+        };
+        let Some(_pdb_path) = fixture_pdb("ntkrnlmp.pdb") else {
+            eprintln!("skipping PE/PDB cache test: ntkrnlmp.pdb is not present");
+            return;
+        };
+
+        let analysis = PdbIngestor::analyze_pe_cache(
+            &pe_path,
+            fixture_cache_dir(),
+            CANONICAL_PDB_LAYOUT_REQUESTS,
+        )
+        .expect("analyze PE through cached PDB")
+        .expect("expected PE/PDB cache hit");
+        let resolved_names = analysis
+            .struct_layouts
+            .iter()
+            .map(|layout| layout.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let missing = CANONICAL_PDB_LAYOUT_REQUESTS
+            .iter()
+            .copied()
+            .filter(|name| !resolved_names.contains(name))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            missing,
+            ["_KSPIN_LOCK"],
+            "unexpected missing canonical PDB layouts"
+        );
+        assert_eq!(
+            analysis.struct_layouts.len(),
+            CANONICAL_PDB_FIELDED_LAYOUTS.len()
+        );
+
+        for layout in &analysis.struct_layouts {
+            assert!(
+                CANONICAL_PDB_FIELDED_LAYOUTS.contains(&layout.name.as_str()),
+                "unexpected canonical layout {}",
+                layout.name
+            );
+            assert!(
+                layout.field_count > 0,
+                "{} should declare at least one field",
+                layout.name
+            );
+            assert!(
+                !layout.fields.is_empty(),
+                "{} should expose field rows",
+                layout.name
+            );
+            assert_eq!(
+                layout.provenance.as_ref(),
+                Some(&analysis.provenance),
+                "{} should carry PE/PDB provenance",
+                layout.name
+            );
+            assert!(
+                layout.fields.iter().all(|field| !field.name.is_empty()),
+                "{} should not expose empty field names",
+                layout.name
+            );
+        }
     }
 
     #[test]
