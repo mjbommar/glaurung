@@ -154,3 +154,82 @@ def test_windows_risk_plain_no_decompile_still_reports_imports(
     assert "Windows Risk Summary" in out
     assert "dynamic_loading" in out
     assert "LoadLibraryW" in out
+
+
+def test_windows_risk_report_tool_uses_context_file(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from glaurung.llm.context import Budgets, MemoryContext
+    from glaurung.llm.tools import windows_risk_report as tool_mod
+
+    binary = tmp_path / "sample.dll"
+    binary.write_bytes(b"MZ")
+    seen = {}
+
+    def fake_report(path, args):
+        seen["path"] = str(path)
+        seen["max_read_bytes"] = args.max_read_bytes
+        seen["max_candidates"] = args.max_candidates
+        return {
+            "summary": {
+                "path": str(path),
+                "format": "PE",
+                "arch": "x86_64",
+                "function_count": 1,
+                "function_rows": 1,
+                "import_count": 1,
+                "string_count": 1,
+                "data_xref_count": 1,
+            },
+            "risk_imports": {"file_io": ["ReadFile"]},
+            "risk_items": [
+                {
+                    "kind": "file-read-allocation-parser",
+                    "severity": "high",
+                    "summary": "parser shape",
+                    "evidence": ["ReadFile"],
+                    "function_va": 0x1000,
+                }
+            ],
+            "functions": [
+                {
+                    "name": "sub_1000",
+                    "entry_va": 0x1000,
+                    "score": 10,
+                    "api_hits": ["ReadFile"],
+                    "patterns": ["file-read-allocation-parser"],
+                    "strings": [],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(tool_mod, "_build_report", fake_report)
+    ctx = MemoryContext(
+        file_path=str(binary),
+        artifact=SimpleNamespace(),
+        budgets=Budgets(max_read_bytes=1234, max_file_size=5678),
+    )
+    tool = tool_mod.build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(max_candidates=3, no_decompile=True),
+    )
+
+    assert seen == {
+        "path": str(binary),
+        "max_read_bytes": 1234,
+        "max_candidates": 3,
+    }
+    assert result.summary["format"] == "PE"
+    assert result.risk_items[0]["kind"] == "file-read-allocation-parser"
+
+
+def test_memory_agent_registers_windows_risk_report() -> None:
+    from glaurung.llm.agents.memory_agent import create_memory_agent
+
+    agent = create_memory_agent(model="test")
+
+    assert "windows_risk_report" in agent._function_toolset.tools
