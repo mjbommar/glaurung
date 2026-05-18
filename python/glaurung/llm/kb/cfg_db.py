@@ -7,9 +7,11 @@ query CFG coverage without re-running function recovery.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from .persistent import PersistentKnowledgeBase
 
@@ -73,6 +75,34 @@ CREATE TABLE IF NOT EXISTS cfg_dominance_index_state (
     function_count INTEGER NOT NULL,
     block_count INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS cfg_branch_facts (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    block_id TEXT NOT NULL,
+    branch_va INTEGER NOT NULL,
+    branch_mnemonic TEXT NOT NULL,
+    branch_operands_json TEXT NOT NULL DEFAULT '[]',
+    compare_va INTEGER,
+    compare_mnemonic TEXT,
+    compare_operands_json TEXT NOT NULL DEFAULT '[]',
+    condition_kind TEXT NOT NULL,
+    target_block_id TEXT,
+    fallthrough_block_id TEXT,
+    indexed_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, function_va, block_id, branch_va)
+);
+CREATE INDEX IF NOT EXISTS idx_cfg_branch_facts_function
+    ON cfg_branch_facts(binary_id, function_va);
+CREATE INDEX IF NOT EXISTS idx_cfg_branch_facts_block
+    ON cfg_branch_facts(binary_id, function_va, block_id);
+
+CREATE TABLE IF NOT EXISTS cfg_branch_index_state (
+    binary_id INTEGER PRIMARY KEY,
+    indexed_at INTEGER NOT NULL,
+    function_count INTEGER NOT NULL,
+    branch_count INTEGER NOT NULL
+);
 """
 
 
@@ -87,6 +117,12 @@ class CfgIndexCounts:
 class CfgDominanceCounts:
     function_count: int = 0
     block_count: int = 0
+
+
+@dataclass(frozen=True)
+class CfgBranchCounts:
+    function_count: int = 0
+    branch_count: int = 0
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
@@ -142,6 +178,29 @@ def cfg_dominance_counts(kb: PersistentKnowledgeBase) -> CfgDominanceCounts:
     if row is None:
         return CfgDominanceCounts()
     return CfgDominanceCounts(function_count=int(row[0]), block_count=int(row[1]))
+
+
+def is_branch_facts_indexed(kb: PersistentKnowledgeBase) -> bool:
+    """Return True when branch-condition facts exist for this binary."""
+    _ensure_schema(kb._conn)
+    row = kb._conn.execute(
+        "SELECT 1 FROM cfg_branch_index_state WHERE binary_id = ?",
+        (kb.binary_id,),
+    ).fetchone()
+    return row is not None
+
+
+def cfg_branch_counts(kb: PersistentKnowledgeBase) -> CfgBranchCounts:
+    """Return persisted branch-condition fact counts for the current binary."""
+    _ensure_schema(kb._conn)
+    row = kb._conn.execute(
+        "SELECT function_count, branch_count FROM cfg_branch_index_state "
+        "WHERE binary_id = ?",
+        (kb.binary_id,),
+    ).fetchone()
+    if row is None:
+        return CfgBranchCounts()
+    return CfgBranchCounts(function_count=int(row[0]), branch_count=int(row[1]))
 
 
 def index_cfg(
@@ -233,6 +292,14 @@ def index_cfg(
             )
             cur.execute(
                 "DELETE FROM cfg_dominance_index_state WHERE binary_id = ?",
+                (kb.binary_id,),
+            )
+            cur.execute(
+                "DELETE FROM cfg_branch_facts WHERE binary_id = ?",
+                (kb.binary_id,),
+            )
+            cur.execute(
+                "DELETE FROM cfg_branch_index_state WHERE binary_id = ?",
                 (kb.binary_id,),
             )
         cur.executemany(
@@ -327,6 +394,127 @@ def index_cfg_dominance(
     return len(rows)
 
 
+def index_cfg_branch_facts(
+    kb: PersistentKnowledgeBase,
+    binary_path: str,
+    *,
+    force: bool = False,
+    max_instructions_per_block: int = 64,
+    timeout_ms: int = 500,
+) -> int:
+    """Persist simple branch-condition facts for CFG blocks.
+
+    The first version records conditional x86/x64 branch terminators and the
+    closest preceding ``cmp``/``test`` instruction in the same block when one is
+    visible through the native disassembler.
+    """
+    _ensure_schema(kb._conn)
+    if is_branch_facts_indexed(kb) and not force:
+        return cfg_branch_counts(kb).branch_count
+
+    import glaurung as g
+
+    data = Path(binary_path).read_bytes()
+    pe_mapper = _PeVaMapper.from_bytes(data)
+    disassembler = None
+    if pe_mapper is not None:
+        try:
+            disassembler = g.disasm.disassembler_for_path(binary_path)
+        except Exception:
+            disassembler = None
+
+    block_rows = kb._conn.execute(
+        "SELECT function_va, block_id, start_va, end_va FROM basic_blocks "
+        "WHERE binary_id = ? ORDER BY function_va, start_va",
+        (kb.binary_id,),
+    ).fetchall()
+    successors = _successors_by_block(kb._conn, kb.binary_id)
+    now = int(time.time())
+    rows: list[
+        tuple[
+            int,
+            int,
+            str,
+            int,
+            str,
+            str,
+            int | None,
+            str | None,
+            str,
+            str,
+            str | None,
+            str | None,
+            int,
+        ]
+    ] = []
+    functions_with_facts: set[int] = set()
+    for function_va, block_id, start_va, end_va in block_rows:
+        try:
+            window_bytes = max(1, int(end_va) - int(start_va))
+            if disassembler is not None and pe_mapper is not None:
+                block_bytes = pe_mapper.read_va(int(start_va), window_bytes)
+                if not block_bytes:
+                    continue
+                instructions = disassembler.disassemble_bytes(
+                    g.Address(g.AddressKind.VA, int(start_va), bits=64),
+                    block_bytes,
+                    max_instructions_per_block,
+                    timeout_ms,
+                )
+            else:
+                instructions = g.disasm.disassemble_window_at(
+                    binary_path,
+                    int(start_va),
+                    window_bytes=window_bytes,
+                    max_instructions=max_instructions_per_block,
+                    max_time_ms=timeout_ms,
+                )
+        except Exception:
+            continue
+        fact = _branch_fact_from_instructions(
+            str(block_id),
+            list(instructions),
+            successors.get((int(function_va), str(block_id)), []),
+        )
+        if fact is None:
+            continue
+        rows.append((kb.binary_id, int(function_va), str(block_id), *fact, now))
+        functions_with_facts.add(int(function_va))
+
+    cur = kb._conn.cursor()
+    cur.execute("BEGIN")
+    try:
+        if force:
+            cur.execute(
+                "DELETE FROM cfg_branch_facts WHERE binary_id = ?",
+                (kb.binary_id,),
+            )
+            cur.execute(
+                "DELETE FROM cfg_branch_index_state WHERE binary_id = ?",
+                (kb.binary_id,),
+            )
+        cur.executemany(
+            "INSERT OR REPLACE INTO cfg_branch_facts "
+            "(binary_id, function_va, block_id, branch_va, branch_mnemonic, "
+            "branch_operands_json, compare_va, compare_mnemonic, "
+            "compare_operands_json, condition_kind, target_block_id, "
+            "fallthrough_block_id, indexed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        cur.execute(
+            "INSERT OR REPLACE INTO cfg_branch_index_state "
+            "(binary_id, indexed_at, function_count, branch_count) "
+            "VALUES (?, ?, ?, ?)",
+            (kb.binary_id, now, len(functions_with_facts), len(rows)),
+        )
+        kb._conn.commit()
+    except Exception:
+        kb._conn.rollback()
+        raise
+    return len(rows)
+
+
 def _entry_block_id(blocks: list[object]) -> str | None:
     no_preds = [
         block for block in blocks if not (getattr(block, "predecessor_ids", []) or [])
@@ -339,6 +527,207 @@ def _entry_block_id(blocks: list[object]) -> str | None:
         key=lambda item: int(getattr(getattr(item, "start_address"), "value")),
     )
     return str(getattr(block, "id"))
+
+
+def _successors_by_block(
+    conn: sqlite3.Connection,
+    binary_id: int,
+) -> dict[tuple[int, str], list[str]]:
+    out: dict[tuple[int, str], list[str]] = {}
+    rows = conn.execute(
+        "SELECT function_va, src_block_id, dst_block_id FROM cfg_edges "
+        "WHERE binary_id = ? ORDER BY function_va, src_block_id, dst_block_id",
+        (binary_id,),
+    ).fetchall()
+    for function_va, src, dst in rows:
+        out.setdefault((int(function_va), str(src)), []).append(str(dst))
+    return out
+
+
+def _branch_fact_from_instructions(
+    block_id: str,
+    instructions: list[object],
+    successors: list[str],
+) -> tuple[int, str, str, int | None, str | None, str, str, str | None, str | None] | None:
+    branch_index = None
+    for index in range(len(instructions) - 1, -1, -1):
+        mnemonic = str(getattr(instructions[index], "mnemonic", "")).lower()
+        if _is_conditional_branch(mnemonic):
+            branch_index = index
+            break
+    if branch_index is None:
+        return None
+    branch = instructions[branch_index]
+    compare = None
+    for candidate in reversed(instructions[:branch_index]):
+        mnemonic = str(getattr(candidate, "mnemonic", "")).lower()
+        if mnemonic in {"cmp", "test"}:
+            compare = candidate
+            break
+    target_block_id = _target_successor(successors)
+    fallthrough_block_id = _fallthrough_successor(block_id, successors, target_block_id)
+    return (
+        int(getattr(getattr(branch, "address"), "value")),
+        str(getattr(branch, "mnemonic")).lower(),
+        json.dumps(_operand_texts(branch)),
+        int(getattr(getattr(compare, "address"), "value")) if compare is not None else None,
+        str(getattr(compare, "mnemonic")).lower() if compare is not None else None,
+        json.dumps(_operand_texts(compare)) if compare is not None else "[]",
+        _condition_kind(str(getattr(branch, "mnemonic")).lower()),
+        target_block_id,
+        fallthrough_block_id,
+    )
+
+
+def _is_conditional_branch(mnemonic: str) -> bool:
+    return mnemonic.startswith("j") and mnemonic not in {"jmp", "jmpe", "jmpl"}
+
+
+def _operand_texts(instruction: object) -> list[str]:
+    return [str(operand) for operand in getattr(instruction, "operands", []) or []]
+
+
+def _condition_kind(mnemonic: str) -> str:
+    mapping = {
+        "je": "equal",
+        "jz": "equal",
+        "jne": "not_equal",
+        "jnz": "not_equal",
+        "ja": "unsigned_greater",
+        "jnbe": "unsigned_greater",
+        "jae": "unsigned_greater_equal",
+        "jnb": "unsigned_greater_equal",
+        "jb": "unsigned_less",
+        "jnae": "unsigned_less",
+        "jbe": "unsigned_less_equal",
+        "jna": "unsigned_less_equal",
+        "jg": "signed_greater",
+        "jnle": "signed_greater",
+        "jge": "signed_greater_equal",
+        "jnl": "signed_greater_equal",
+        "jl": "signed_less",
+        "jnge": "signed_less",
+        "jle": "signed_less_equal",
+        "jng": "signed_less_equal",
+        "jo": "overflow",
+        "jno": "not_overflow",
+        "js": "signed",
+        "jns": "not_signed",
+        "jp": "parity",
+        "jpe": "parity",
+        "jnp": "not_parity",
+        "jpo": "not_parity",
+    }
+    return mapping.get(mnemonic, "conditional")
+
+
+def _target_successor(successors: list[str]) -> str | None:
+    # Native CFG edges are currently not typed true/false. Preserve a stable
+    # candidate target when present and keep fallthrough distinct below.
+    return successors[0] if successors else None
+
+
+def _fallthrough_successor(
+    block_id: str,
+    successors: list[str],
+    target_block_id: str | None,
+) -> str | None:
+    for successor in successors:
+        if successor != target_block_id:
+            return successor
+    return None
+
+
+@dataclass(frozen=True)
+class _PeSection:
+    virtual_address: int
+    virtual_size: int
+    raw_pointer: int
+    raw_size: int
+
+
+@dataclass(frozen=True)
+class _PeVaMapper:
+    data: bytes
+    image_base: int
+    sections: list[_PeSection]
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "_PeVaMapper | None":
+        if len(data) < 0x100 or data[:2] != b"MZ":
+            return None
+        pe_offset = _u32(data, 0x3C)
+        if pe_offset is None or pe_offset + 0x18 >= len(data):
+            return None
+        if data[pe_offset : pe_offset + 4] != b"PE\0\0":
+            return None
+        number_of_sections = _u16(data, pe_offset + 6)
+        optional_header_size = _u16(data, pe_offset + 20)
+        if number_of_sections is None or optional_header_size is None:
+            return None
+        optional_header = pe_offset + 24
+        magic = _u16(data, optional_header)
+        if magic == 0x20B:
+            image_base = _u64(data, optional_header + 24)
+        elif magic == 0x10B:
+            image_base = _u32(data, optional_header + 28)
+        else:
+            image_base = None
+        if image_base is None:
+            return None
+        section_table = optional_header + optional_header_size
+        sections: list[_PeSection] = []
+        for index in range(number_of_sections):
+            off = section_table + index * 40
+            if off + 40 > len(data):
+                break
+            virtual_size = _u32(data, off + 8) or 0
+            virtual_address = _u32(data, off + 12) or 0
+            raw_size = _u32(data, off + 16) or 0
+            raw_pointer = _u32(data, off + 20) or 0
+            if raw_pointer >= len(data):
+                continue
+            sections.append(
+                _PeSection(
+                    virtual_address=virtual_address,
+                    virtual_size=virtual_size,
+                    raw_pointer=raw_pointer,
+                    raw_size=raw_size,
+                )
+            )
+        return cls(data=data, image_base=int(image_base), sections=sections)
+
+    def read_va(self, va: int, size: int) -> bytes:
+        rva = va - self.image_base
+        if rva < 0:
+            return b""
+        for section in self.sections:
+            span = max(section.virtual_size, section.raw_size)
+            if section.virtual_address <= rva < section.virtual_address + span:
+                offset = section.raw_pointer + (rva - section.virtual_address)
+                if offset < 0 or offset >= len(self.data):
+                    return b""
+                end = min(len(self.data), offset + size)
+                return self.data[offset:end]
+        return b""
+
+
+def _u16(data: bytes, offset: int) -> int | None:
+    if offset < 0 or offset + 2 > len(data):
+        return None
+    return int.from_bytes(data[offset : offset + 2], "little")
+
+
+def _u32(data: bytes, offset: int) -> int | None:
+    if offset < 0 or offset + 4 > len(data):
+        return None
+    return int.from_bytes(data[offset : offset + 4], "little")
+
+
+def _u64(data: bytes, offset: int) -> int | None:
+    if offset < 0 or offset + 8 > len(data):
+        return None
+    return int.from_bytes(data[offset : offset + 8], "little")
 
 
 def _dominance_rows_for_function(

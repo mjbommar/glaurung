@@ -37,6 +37,9 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
     def fake_index_cfg_dominance(*_args, **_kwargs) -> int:
         return 17
 
+    def fake_index_cfg_branch_facts(*_args, **_kwargs) -> int:
+        return 19
+
     def fake_import_pe_pdb_types(*_args, **_kwargs) -> dict:
         return {
             "cache_hit": True,
@@ -53,6 +56,7 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
     monkeypatch.setattr(xref_db, "index_data_xrefs", fake_index_data_xrefs)
     monkeypatch.setattr(cfg_db, "index_cfg", fake_index_cfg)
     monkeypatch.setattr(cfg_db, "index_cfg_dominance", fake_index_cfg_dominance)
+    monkeypatch.setattr(cfg_db, "index_cfg_branch_facts", fake_index_cfg_branch_facts)
     monkeypatch.setattr(type_db, "import_pe_pdb_types", fake_import_pe_pdb_types)
 
     pe = tmp_path / "driver.sys"
@@ -79,6 +83,7 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
         ("index_data_xrefs", True, 11),
         ("index_cfg", True, 13),
         ("index_cfg_dominance", True, 17),
+        ("index_branch_conditions", True, 19),
         ("import_pdb_facts", True, 10),
     ]
     assert result.pdb_counts is not None
@@ -88,6 +93,7 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
     assert "data_xrefs" in result.fact_coverage
     assert "persisted_cfg" in result.fact_coverage
     assert "cfg_dominance" in result.fact_coverage
+    assert "branch_conditions" in result.fact_coverage
     assert "pdb_type_layouts" in result.fact_coverage
     assert "pdb_function_prototypes" in result.fact_coverage
     assert "requested_type_layouts" in result.missing_capabilities
@@ -115,6 +121,7 @@ def test_windows_bootstrap_project_facts_can_skip_steps(tmp_path: Path) -> None:
             index_data_xrefs=False,
             index_cfg=False,
             index_cfg_dominance=False,
+            index_branch_conditions=False,
             import_pdb_facts=False,
         ),
     )
@@ -124,6 +131,7 @@ def test_windows_bootstrap_project_facts_can_skip_steps(tmp_path: Path) -> None:
         ("index_data_xrefs", False, True),
         ("index_cfg", False, True),
         ("index_cfg_dominance", False, True),
+        ("index_branch_conditions", False, True),
         ("import_pdb_facts", False, True),
     ]
     assert result.fact_coverage == []
@@ -148,10 +156,14 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
     def fake_index_cfg_dominance(*_args, **_kwargs) -> int:
         return 0
 
+    def fake_index_cfg_branch_facts(*_args, **_kwargs) -> int:
+        return 0
+
     monkeypatch.setattr(xref_db, "index_callgraph", fake_index_callgraph)
     monkeypatch.setattr(xref_db, "index_data_xrefs", fake_index_data_xrefs)
     monkeypatch.setattr(cfg_db, "index_cfg", fake_index_cfg)
     monkeypatch.setattr(cfg_db, "index_cfg_dominance", fake_index_cfg_dominance)
+    monkeypatch.setattr(cfg_db, "index_cfg_branch_facts", fake_index_cfg_branch_facts)
 
     pe = tmp_path / "driver.sys"
     pe.write_bytes(b"MZ")
@@ -173,6 +185,7 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
         ("index_data_xrefs", True, 3),
         ("index_cfg", True, 0),
         ("index_cfg_dominance", True, 0),
+        ("index_branch_conditions", True, 0),
         ("import_pdb_facts", True, 0),
         ("index_pe_direct_calls", True, 0),
     ]
@@ -182,6 +195,7 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
     assert "data_xrefs" not in result.missing_capabilities
     assert "persisted_cfg" in result.missing_capabilities
     assert "cfg_dominance" in result.missing_capabilities
+    assert "branch_conditions" in result.missing_capabilities
 
 
 def test_memory_agent_registers_windows_bootstrap_project_facts() -> None:

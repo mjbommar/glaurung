@@ -142,8 +142,10 @@ sit below full IR/CFG bug-class scanners:
 - `windows_bootstrap_project_facts` can now persist native PE basic
   blocks and CFG edges into `.glaurung` projects via its `index_cfg`
   step, then precompute immediate dominator/post-dominator summaries
-  via `index_cfg_dominance`, so project summaries can report CFG
-  coverage without re-running on-demand function recovery.
+  via `index_cfg_dominance`, and capture simple conditional
+  branch/compare facts via `index_branch_conditions`, so project
+  summaries can report CFG coverage without re-running on-demand
+  function recovery.
 - `windows_project_cfg_path_query` reads persisted `.glaurung` CFG
   tables to resolve containing blocks, branch/source-to-sink
   reachability, and whether every entry-to-sink path passes through a

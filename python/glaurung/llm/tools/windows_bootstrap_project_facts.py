@@ -42,6 +42,10 @@ class WindowsBootstrapProjectFactsArgs(BaseModel):
         True,
         description="If true, precompute dominance summaries for persisted CFGs.",
     )
+    index_branch_conditions: bool = Field(
+        True,
+        description="If true, persist conditional branch and compare operand facts.",
+    )
     import_pdb_facts: bool = Field(
         True,
         description="If true and pdb_cache_dir is set, import matching PDB facts.",
@@ -169,6 +173,26 @@ class WindowsBootstrapProjectFactsTool(
             else:
                 steps.append(
                     ProjectBootstrapStep(name="index_cfg_dominance", ran=False, ok=True)
+                )
+
+            if args.index_branch_conditions:
+                steps.append(
+                    _run_count_step(
+                        "index_branch_conditions",
+                        lambda: cfg_db.index_cfg_branch_facts(
+                            project,
+                            str(pe_path),
+                            force=args.force_reindex,
+                        ),
+                    )
+                )
+            else:
+                steps.append(
+                    ProjectBootstrapStep(
+                        name="index_branch_conditions",
+                        ran=False,
+                        ok=True,
+                    )
                 )
 
             if args.import_pdb_facts and args.pdb_cache_dir:
@@ -317,6 +341,8 @@ def _fact_coverage(
         coverage.append("persisted_cfg")
     if _step_has_facts(by_name.get("index_cfg_dominance")):
         coverage.append("cfg_dominance")
+    if _step_has_facts(by_name.get("index_branch_conditions")):
+        coverage.append("branch_conditions")
     if pdb_counts:
         if pdb_counts.cache_hit:
             coverage.append("cached_pdb")
@@ -349,6 +375,10 @@ def _missing_capabilities(
         by_name.get("index_cfg_dominance")
     ):
         missing.append("cfg_dominance")
+    if args.index_branch_conditions and not _step_has_facts(
+        by_name.get("index_branch_conditions")
+    ):
+        missing.append("branch_conditions")
     if args.import_pdb_facts and not pdb_counts:
         missing.append("pdb_import")
     if pdb_counts:

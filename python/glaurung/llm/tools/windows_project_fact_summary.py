@@ -26,6 +26,8 @@ CORE_TABLES = (
     "cfg_edges",
     "cfg_dominance",
     "cfg_dominance_index_state",
+    "cfg_branch_facts",
+    "cfg_branch_index_state",
 )
 
 
@@ -68,6 +70,7 @@ class ProjectFactCounts(BaseModel):
     basic_block_count: int = 0
     cfg_edge_count: int = 0
     cfg_dominance_count: int = 0
+    cfg_branch_fact_count: int = 0
 
 
 class ProjectFunctionFact(BaseModel):
@@ -227,6 +230,7 @@ def _counts(
         basic_block_count=_count(conn, present, "basic_blocks", binary_id, None),
         cfg_edge_count=_count(conn, present, "cfg_edges", binary_id, None),
         cfg_dominance_count=_count(conn, present, "cfg_dominance", binary_id, None),
+        cfg_branch_fact_count=_count(conn, present, "cfg_branch_facts", binary_id, None),
     )
 
 
@@ -420,6 +424,8 @@ def _coverage(counts: ProjectFactCounts, present: set[str]) -> list[str]:
         coverage.append("cfg")
     if counts.cfg_dominance_count:
         coverage.append("cfg_dominance")
+    if counts.cfg_branch_fact_count:
+        coverage.append("branch_conditions")
     elif "xref_index_state" in present:
         coverage.append("callgraph_index_state")
     return coverage
@@ -439,6 +445,8 @@ def _missing_capabilities(counts: ProjectFactCounts, present: set[str]) -> list[
         missing.append("persisted_cfg")
     elif not counts.cfg_dominance_count:
         missing.append("cfg_dominance")
+    if (counts.basic_block_count or counts.cfg_edge_count) and not counts.cfg_branch_fact_count:
+        missing.append("branch_conditions")
     if "basic_blocks" not in present and "cfg_edges" not in present:
         missing.append("cfg_tables")
     return missing
