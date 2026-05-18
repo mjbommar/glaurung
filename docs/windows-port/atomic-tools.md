@@ -206,7 +206,9 @@ sit below full IR/CFG bug-class scanners:
   candidate review packet for operator triage. It can carry project
   fact coverage and Ghidra-parity gap context so the packet records
   which substrate was present or missing when the hit was produced,
-  including required project fact classes and promotion blockers.
+  including required project fact classes and promotion blockers. It
+  also passes matched and missing required gate semantics into the
+  structured `proven_gates` and `missing_required_gates` packet fields.
 - `windows_emit_review_packet` and `windows_compose_candidate_packets`
   preserve structured PDB identity, component-profile, patch-diff,
   project-fact, and Ghidra-delta context in every emitted candidate

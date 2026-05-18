@@ -145,6 +145,11 @@ void DriverDispatch(void *dst, void *user_buffer, ULONG len) {
     assert result.gate_status == "not_dominated"
     assert result.packet.claim_level == "candidate_not_finding"
     assert result.packet.gate_status == "not_dominated"
+    assert result.packet.proven_gates == []
+    assert result.packet.missing_required_gates == [
+        "destination_range_valid",
+        "byte_count_bounded",
+    ]
     assert result.packet.sink_kind == "copy"
     assert result.packet.source_arg == "user_buffer"
     assert result.packet.project_facts is not None

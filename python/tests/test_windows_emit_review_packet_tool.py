@@ -367,6 +367,61 @@ def test_windows_emit_review_packet_blocks_unresolved_required_gates(
     assert "promotion blocked" in packet.confidence_reason
 
 
+def test_windows_emit_review_packet_honors_explicit_missing_gates_for_dominated_status(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary="driver.sys",
+            entrypoint="Dispatch",
+            attacker_class="local_unprivileged",
+            source_role="buffer",
+            sink_symbol="RtlCopyMemory",
+            sink_kind="copy",
+            required_gates=["destination_range_valid", "byte_count_bounded"],
+            proven_gates=["destination_range_valid"],
+            missing_required_gates=["byte_count_bounded"],
+            gate_status="dominated",
+            required_project_facts=["function_names", "call_xrefs", "cfg"],
+            project_facts={
+                "target_id": "driver",
+                "build_label": "unit-test",
+                "project_path": "/projects/driver.glaurung",
+                "fact_coverage": ["function_names", "call_xrefs", "cfg"],
+                "missing_facts": [],
+                "counts": {
+                    "function_name_count": 5,
+                    "call_xref_count": 4,
+                    "basic_block_count": 9,
+                    "cfg_edge_count": 8,
+                },
+            },
+            ghidra_delta={
+                "target_id": "driver",
+                "component": "driver.sys",
+                "build_label": "unit-test",
+                "blocking_fact_classes": [],
+                "current_capabilities": ["cfg_path"],
+                "missing_capabilities": [],
+            },
+        ),
+    )
+
+    packet = result.packet
+    assert packet.proven_gates == ["destination_range_valid"]
+    assert packet.missing_required_gates == ["byte_count_bounded"]
+    assert packet.promotion_preconditions_met is False
+    assert any(
+        "required gate coverage unresolved: byte_count_bounded" in item
+        for item in packet.promotion_blockers
+    )
+
+
 def test_windows_emit_review_packet_auto_joins_manifest_context(
     tmp_path: Path,
 ) -> None:

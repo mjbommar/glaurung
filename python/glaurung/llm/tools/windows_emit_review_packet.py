@@ -133,6 +133,13 @@ class WindowsEmitReviewPacketArgs(BaseModel):
             "If empty with gate_status=dominated, all required gates are assumed proven."
         ),
     )
+    missing_required_gates: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Required gate semantics known to remain unproven. Supplying this "
+            "disables the dominated-status fallback that assumes all gates are proven."
+        ),
+    )
     gate_status: GateStatus = Field(
         "unknown",
         description="Current gate evidence for the source-to-sink path.",
@@ -281,6 +288,7 @@ class WindowsEmitReviewPacketTool(
         )
         proven_gates = _proven_gates(args, required_gates)
         missing_required_gates = _missing_required_gate_semantics(
+            args,
             required_gates,
             proven_gates,
         )
@@ -735,17 +743,26 @@ def _proven_gates(
 ) -> list[str]:
     if args.proven_gates:
         return _dedupe(args.proven_gates)
-    if args.gate_status == "dominated":
+    if args.gate_status == "dominated" and not args.missing_required_gates:
         return list(required_gates)
     return []
 
 
 def _missing_required_gate_semantics(
+    args: WindowsEmitReviewPacketArgs,
     required_gates: list[str],
     proven_gates: list[str],
 ) -> list[str]:
     proven = set(proven_gates)
-    return [gate for gate in required_gates if gate not in proven]
+    explicit_missing = set(args.missing_required_gates)
+    return _dedupe(
+        [
+            *[gate for gate in required_gates if gate not in proven],
+            *[gate for gate in args.missing_required_gates if gate not in proven],
+        ]
+        if explicit_missing
+        else [gate for gate in required_gates if gate not in proven]
+    )
 
 
 def _gate_promotion_blockers(
@@ -757,8 +774,10 @@ def _gate_promotion_blockers(
         return []
     unresolved = missing_required_gates or required_gates
     rendered = ", ".join(unresolved[:6])
-    if args.gate_status == "dominated" and not missing_required_gates:
-        return []
+    if args.gate_status == "dominated":
+        if not missing_required_gates:
+            return []
+        return [f"required gate coverage unresolved: {rendered}"]
     if args.gate_status in {"missing", "not_dominated", "gate_after_sink"}:
         return [f"required gate semantics not proven before sink: {rendered}"]
     if args.gate_status in {"unknown", "gate_before_sink", "gate_same_line"}:
