@@ -319,6 +319,7 @@ def test_windows_emit_review_packet_blocks_unresolved_required_gates(
             sink_symbol="RtlCopyMemory",
             sink_kind="copy",
             required_gates=["destination_range_valid", "byte_count_bounded"],
+            proven_gates=["destination_range_valid"],
             gate_status="unknown",
             required_project_facts=["function_names", "call_xrefs", "cfg"],
             project_facts={
@@ -356,8 +357,13 @@ def test_windows_emit_review_packet_blocks_unresolved_required_gates(
     )
 
     packet = result.packet
+    assert packet.proven_gates == ["destination_range_valid"]
+    assert packet.missing_required_gates == ["byte_count_bounded"]
     assert packet.promotion_preconditions_met is False
-    assert any("required gate coverage unresolved" in item for item in packet.promotion_blockers)
+    assert any(
+        "required gate coverage unresolved: byte_count_bounded" in item
+        for item in packet.promotion_blockers
+    )
     assert "promotion blocked" in packet.confidence_reason
 
 

@@ -123,9 +123,10 @@ sit below full IR/CFG bug-class scanners:
   call xrefs for compatible ASB gate operations and attaches persisted
   CFG dominance evidence plus compact `windows_project_cfg_path_query`
   path evidence. It also records which sink-required gate semantics the
-  gate metadata proves and which required gates remain unproven; packet
-  promotion stays blocked while required gate coverage is unresolved.
-  With `attach_gate_predicates`, a refined gate can also carry
+  gate metadata proves and which required gates remain unproven as
+  structured `proven_gates` and `missing_required_gates` packet fields;
+  packet promotion stays blocked while required gate coverage is
+  unresolved. With `attach_gate_predicates`, a refined gate can also carry
   path-filtered persisted branch-condition predicates from
   `cfg_branch_facts`. When a caller supplies `source_arg` or
   `source_arg_index`, it can attach local sink-argument match evidence

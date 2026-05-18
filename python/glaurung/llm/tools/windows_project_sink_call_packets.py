@@ -455,6 +455,11 @@ def _emit_packet(
             sink_symbol=sink_symbol,
             sink_kind=callsite.operation.sink_kind,
             required_gates=callsite.operation.required_gates,
+            proven_gates=(
+                gate_refinement.matched_required_gates
+                if gate_refinement is not None
+                else []
+            ),
             gate_status=gate_status,
             path=[
                 *path,
