@@ -126,6 +126,31 @@ _SUSPICIOUS_STRING_TOKENS: tuple[str, ...] = (
     ".dat",
 )
 
+_CAPABILITY_ORDER: tuple[str, ...] = (
+    "allocation",
+    "copy_format",
+    "dynamic_loading",
+    "file_io",
+    "network",
+    "registry",
+    "resource",
+    "com",
+)
+
+_SIGNAL_ORDER: tuple[str, ...] = (
+    "file-read-allocation-parser",
+    "file-read-allocation-flow",
+    "file-read-allocation-argument-flow",
+    "file-read-length-field-allocation-flow",
+    "dynamic-api-resolution",
+    "registry-write",
+    "resource-extraction",
+    "copy-or-format-sink",
+    "temp-file-write-delete",
+    "network-client",
+    "metadata-role:tls-callback",
+)
+
 
 class WindowsRiskCommand(BaseCommand):
     """Build a Windows-specific risk summary for a binary."""
@@ -334,11 +359,18 @@ class WindowsRiskCommand(BaseCommand):
                 constants = ", ".join(
                     const["hex"] for const in fn.get("suspicious_constants", [])[:4]
                 )
+                function_summary = fn.get("function_summary") or {}
+                capabilities = ", ".join(function_summary.get("capabilities") or [])
+                risk_signals = ", ".join(function_summary.get("risk_signals") or [])
                 api_calls = ", ".join(
                     _format_api_call_summary(call)
                     for call in fn.get("api_calls", [])[:3]
                 )
                 bits = []
+                if capabilities:
+                    bits.append(f"caps: {capabilities}")
+                if risk_signals:
+                    bits.append(f"signals: {risk_signals}")
                 if roles:
                     bits.append(f"roles: {roles}")
                 if apis:
@@ -396,6 +428,7 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     candidates = _select_candidates(function_rows, args.max_candidates)
     if not args.no_decompile and args.max_decompile > 0:
         _annotate_decompile_hits(path_str, args, candidates, imports)
+    _annotate_function_summaries(candidates)
 
     risk_items = _build_risk_items(risk_imports, candidates)
     candidates.sort(key=_function_sort_key)
@@ -740,6 +773,7 @@ def _function_row(func: Any) -> dict[str, Any]:
         "imports": [],
         "calls": [],
         "call_count": 0,
+        "function_summary": {},
         "flow_hints": [],
         "metadata_roles": [],
         "metadata_refs": [],
@@ -1323,6 +1357,136 @@ def _merge_row_flow_hints(
     if added:
         row["flow_hints"] = existing
         row["score"] += 10 * added
+
+
+def _annotate_function_summaries(function_rows: list[dict[str, Any]]) -> None:
+    for row in function_rows:
+        row["function_summary"] = _build_function_summary(row)
+
+
+def _build_function_summary(row: dict[str, Any]) -> dict[str, Any]:
+    suspicious_strings = [
+        str(item.get("text", ""))
+        for item in row.get("strings", [])
+        if item.get("suspicious") and str(item.get("text", ""))
+    ]
+    capabilities = _ordered_unique(
+        str(bucket) for bucket in (row.get("api_buckets") or {}).keys()
+    )
+    flow_kinds = [
+        str(hint.get("kind"))
+        for hint in row.get("flow_hints", [])
+        if str(hint.get("kind", ""))
+    ]
+    metadata_signals = [
+        f"metadata-role:{_metadata_role_signal_name(str(role))}"
+        for role in row.get("metadata_roles", [])
+    ]
+    risk_signals = _ordered_unique(
+        list(row.get("patterns") or []) + flow_kinds + metadata_signals,
+        order=_SIGNAL_ORDER,
+    )
+    return {
+        "capabilities": _ordered_unique(capabilities, order=_CAPABILITY_ORDER),
+        "risk_signals": risk_signals,
+        "call_summary": _call_summary(row),
+        "string_summary": {
+            "total": len(row.get("strings") or []),
+            "suspicious": suspicious_strings[:16],
+        },
+        "argument_roles": _argument_roles_summary(row),
+        "data_flows": _data_flow_summary(row),
+        "metadata_roles": list(row.get("metadata_roles") or []),
+    }
+
+
+def _ordered_unique(
+    values: Any,
+    *,
+    order: tuple[str, ...] = (),
+) -> list[str]:
+    seen = set()
+    out = []
+    for value in values:
+        text = str(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    rank = {name: idx for idx, name in enumerate(order)}
+    return sorted(out, key=lambda item: (rank.get(item, len(rank)), item.lower()))
+
+
+def _metadata_role_signal_name(role: str) -> str:
+    return role.replace("_", "-")
+
+
+def _call_summary(row: dict[str, Any]) -> dict[str, Any]:
+    imports = set(row.get("imports") or [])
+    import_calls = []
+    internal_calls = []
+    for call in row.get("calls", []):
+        target = str(call.get("target", ""))
+        if not target:
+            continue
+        if target in imports or _api_stem(target) in {_api_stem(name) for name in imports}:
+            import_calls.append(target)
+        elif call.get("target_va") is not None:
+            internal_calls.append(target)
+    return {
+        "total": int(row.get("call_count", len(row.get("calls") or []))),
+        "imports": _ordered_unique(import_calls)[:32],
+        "internal": _ordered_unique(internal_calls)[:32],
+    }
+
+
+def _argument_roles_summary(row: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    roles: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    seen: set[tuple[str, str, str, str]] = set()
+    for call in row.get("api_calls", []):
+        api = str(call.get("name", ""))
+        if not api:
+            continue
+        for arg in call.get("args", []):
+            role = str(arg.get("role", ""))
+            if not role:
+                continue
+            param = str(arg.get("param") or f"arg{arg.get('index', '?')}")
+            expr = str(arg.get("expr", ""))
+            key = (role, api, param, expr)
+            if key in seen:
+                continue
+            seen.add(key)
+            item: dict[str, Any] = {
+                "api": api,
+                "param": param,
+                "expr": expr,
+            }
+            c_type = str(arg.get("type", ""))
+            if c_type:
+                item["type"] = c_type
+            if isinstance(arg.get("value"), int):
+                item["value"] = int(arg["value"])
+            if arg.get("hex"):
+                item["hex"] = str(arg["hex"])
+            roles[role].append(item)
+    return {role: values[:16] for role, values in sorted(roles.items())}
+
+
+def _data_flow_summary(row: dict[str, Any]) -> list[dict[str, Any]]:
+    out = []
+    for hint in row.get("flow_hints", []):
+        kind = str(hint.get("kind", ""))
+        if not kind:
+            continue
+        out.append(
+            {
+                "kind": kind,
+                "summary": str(hint.get("summary", "")),
+                "evidence": list(hint.get("evidence") or [])[:12],
+            }
+        )
+    return out[:16]
 
 
 def _scan_api_hits(pseudocode: str, api_names: list[str]) -> list[str]:

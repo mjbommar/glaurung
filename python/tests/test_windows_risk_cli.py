@@ -208,6 +208,51 @@ def test_windows_risk_json_reports_parser_shape(
     assert "ReadFile" in report["functions"][0]["imports"]
     assert "file_io" in report["functions"][0]["api_buckets"]
     assert "network" in report["functions"][0]["api_buckets"]
+    function_summary = report["functions"][0]["function_summary"]
+    assert function_summary["capabilities"] == [
+        "allocation",
+        "copy_format",
+        "file_io",
+        "network",
+        "registry",
+        "resource",
+    ]
+    assert function_summary["risk_signals"][:3] == [
+        "file-read-allocation-parser",
+        "file-read-allocation-flow",
+        "file-read-allocation-argument-flow",
+    ]
+    assert function_summary["argument_roles"]["length"][:3] == [
+        {
+            "api": "ReadFile",
+            "param": "nNumberOfBytesToRead",
+            "expr": "4",
+            "type": "DWORD",
+            "value": 4,
+            "hex": "0x4",
+        },
+        {
+            "api": "LocalAlloc",
+            "param": "uBytes",
+            "expr": "stack_9",
+            "type": "SIZE_T",
+        },
+        {
+            "api": "ReadFile",
+            "param": "nNumberOfBytesToRead",
+            "expr": "stack_9",
+            "type": "DWORD",
+        },
+    ]
+    assert function_summary["string_summary"] == {
+        "total": 1,
+        "suspicious": ["MigrateModemSettings: ReadFile failed"],
+    }
+    assert function_summary["call_summary"] == {
+        "total": 1,
+        "imports": [],
+        "internal": ["helper"],
+    }
     assert report["functions"][0]["api_sequence"][:4] == [
         "CreateFileW",
         "ReadFile",
