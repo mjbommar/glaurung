@@ -107,6 +107,9 @@ from ..tools.windows_project_callsite_facts import (
 from ..tools.windows_project_sink_call_packets import (
     build_tool as build_windows_project_sink_call_packets,
 )
+from ..tools.windows_project_sink_operation_summary import (
+    build_tool as build_windows_project_sink_operation_summary,
+)
 from ..tools.windows_project_callgraph_slice import (
     build_tool as build_windows_project_callgraph_slice,
 )
@@ -979,6 +982,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_sink_call_packets())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_sink_operation_summary())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_callgraph_slice())

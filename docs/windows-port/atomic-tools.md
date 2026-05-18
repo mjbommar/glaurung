@@ -112,6 +112,14 @@ sit below full IR/CFG bug-class scanners:
   `function_names` rows. When callee names match `pe-sinks.yaml`, it
   attaches operation metadata so agents can query project-backed sink
   callsites before decompiling for operands.
+- `windows_project_sink_operation_summary` aggregates project-backed
+  ASB sink callsites by operation id and sink kind. It reports callsite
+  counts, caller-function counts, observed symbols, sink effects,
+  argument roles, required gates, and sample callsites. This gives
+  rules a compact operation inventory for ranking and selecting
+  validation targets before emitting one packet per callsite; source
+  reachability, argument value flow, and gate dominance remain separate
+  facts.
 - `windows_project_sink_call_packets` scans persisted project call xrefs
   for ASB sink operations and emits manifest-backed review packets from
   those exact callsites. This is the first broad project-scan packet
