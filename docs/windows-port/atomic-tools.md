@@ -128,8 +128,9 @@ sit below full IR/CFG bug-class scanners:
   `load([caller_arg0 + 0x20])`, plus RIP-relative global address
   arguments such as `global([rip + 0x1234])`; when the project has an
   exact data xref for the source instruction, it attaches the referenced
-  data VA. It is local evidence, not full alias, stack-frame, symbol, or
-  path proof.
+  data VA, and when `data_labels` has a row for that VA it attaches the
+  label name, C type, and size. It is local evidence, not full alias,
+  stack-frame, or path proof.
 - `windows_callsite_operand_facts` enumerates structured callsite
   argument facts from supplied or decompiled pseudocode, attaches
   optional callsite VA markers when present, and joins operation-backed

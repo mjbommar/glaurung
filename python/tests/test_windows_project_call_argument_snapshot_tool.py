@@ -67,6 +67,16 @@ CREATE TABLE xrefs (
     src_function_va INTEGER,
     indexed_at INTEGER
 );
+CREATE TABLE data_labels (
+    binary_id INTEGER NOT NULL,
+    va INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    c_type TEXT,
+    size INTEGER,
+    set_by TEXT,
+    set_at INTEGER,
+    PRIMARY KEY (binary_id, va)
+);
 """
     )
     conn.execute(
@@ -426,6 +436,10 @@ def test_windows_project_call_argument_snapshot_joins_global_data_xrefs(
         "INSERT INTO xrefs VALUES (?, ?, ?, ?, ?, ?, 0)",
         (2, 1, 0x1000, 0x3000, "data_read", 0x1000),
     )
+    conn.execute(
+        "INSERT INTO data_labels VALUES (?, ?, ?, ?, ?, ?, 0)",
+        (1, 0x3000, "cldflt!g_TestTable", "GUID[]", 16, "unit_test"),
+    )
     conn.commit()
     conn.close()
 
@@ -453,7 +467,11 @@ def test_windows_project_call_argument_snapshot_joins_global_data_xrefs(
     assert by_index[0].expression == "global([rip + 0x1234])"
     assert by_index[0].data_target_va == 0x3000
     assert by_index[0].data_target_kind == "data_read"
+    assert by_index[0].data_target_name == "cldflt!g_TestTable"
+    assert by_index[0].data_target_type == "GUID[]"
+    assert by_index[0].data_target_size == 16
     assert "project_data_xref_targets" in result.coverage
+    assert "project_data_label_targets" in result.coverage
 
 
 def test_windows_project_call_argument_snapshot_preserves_clobbered_address_base(

@@ -55,6 +55,9 @@ class ProjectCallArgumentFact(BaseModel):
     source_text: str | None = None
     data_target_va: int | None = None
     data_target_kind: str | None = None
+    data_target_name: str | None = None
+    data_target_type: str | None = None
+    data_target_size: int | None = None
     alias_depth: int = 0
     alias_kind: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
@@ -102,6 +105,15 @@ class _ResolvedExpression:
     expression: str
     alias_depth: int = 0
     alias_kind: str | None = None
+
+
+@dataclass(frozen=True)
+class _DataTarget:
+    va: int
+    kind: str
+    name: str | None = None
+    c_type: str | None = None
+    size: int | None = None
 
 
 class WindowsProjectCallArgumentSnapshotTool(
@@ -278,30 +290,46 @@ def _data_xref_targets(
     binary_id: int | None,
     caller_va: Any,
     callsite_va: int,
-) -> dict[int, tuple[int, str]]:
+) -> dict[int, _DataTarget]:
     if "xrefs" not in present or not isinstance(caller_va, int):
         return {}
     clauses = [
-        "kind IN ('data_read', 'data_write')",
-        "src_function_va = ?",
-        "src_va < ?",
+        "x.kind IN ('data_read', 'data_write')",
+        "x.src_function_va = ?",
+        "x.src_va < ?",
     ]
     params: list[object] = [caller_va, callsite_va]
     if binary_id is not None:
-        clauses.append("binary_id = ?")
+        clauses.append("x.binary_id = ?")
         params.append(binary_id)
-    rows = conn.execute(
-        f"""
-SELECT src_va, dst_va, kind
-FROM xrefs
+    if "data_labels" in present:
+        query = f"""
+SELECT x.src_va, x.dst_va, x.kind, dl.name, dl.c_type, dl.size
+FROM xrefs x
+LEFT JOIN data_labels dl ON dl.binary_id = x.binary_id AND dl.va = x.dst_va
 WHERE {' AND '.join(clauses)}
+ORDER BY x.src_va, x.xref_id
+"""
+    else:
+        query = f"""
+SELECT src_va, dst_va, kind, NULL AS name, NULL AS c_type, NULL AS size
+FROM xrefs
+WHERE {' AND '.join(clause.removeprefix('x.') for clause in clauses)}
 ORDER BY src_va, xref_id
-""",
-        params,
-    ).fetchall()
-    out: dict[int, tuple[int, str]] = {}
-    for src_va, dst_va, kind in rows:
-        out.setdefault(int(src_va), (int(dst_va), str(kind)))
+"""
+    rows = conn.execute(query, params).fetchall()
+    out: dict[int, _DataTarget] = {}
+    for src_va, dst_va, kind, name, c_type, size in rows:
+        out.setdefault(
+            int(src_va),
+            _DataTarget(
+                va=int(dst_va),
+                kind=str(kind),
+                name=str(name) if name is not None else None,
+                c_type=str(c_type) if c_type is not None else None,
+                size=int(size) if size is not None else None,
+            ),
+        )
     return out
 
 
@@ -337,7 +365,7 @@ def _disassemble_to_callsite(
 def _argument_snapshot(
     instructions: list[g.Instruction],
     callsite_va: int,
-    data_xrefs: dict[int, tuple[int, str]] | None = None,
+    data_xrefs: dict[int, _DataTarget] | None = None,
 ) -> list[ProjectCallArgumentFact]:
     data_xrefs = data_xrefs or {}
     assignments: dict[str, _Assignment] = {}
@@ -428,8 +456,11 @@ def _argument_snapshot(
                 expression=assignment.expression,
                 source_va=assignment.va,
                 source_text=assignment.source_text,
-                data_target_va=data_target[0] if data_target else None,
-                data_target_kind=data_target[1] if data_target else None,
+                data_target_va=data_target.va if data_target else None,
+                data_target_kind=data_target.kind if data_target else None,
+                data_target_name=data_target.name if data_target else None,
+                data_target_type=data_target.c_type if data_target else None,
+                data_target_size=data_target.size if data_target else None,
                 alias_depth=assignment.alias_depth,
                 alias_kind=assignment.alias_kind,
                 confidence=_assignment_confidence(
@@ -451,8 +482,11 @@ def _argument_snapshot(
                 expression=assignment.expression,
                 source_va=assignment.va,
                 source_text=assignment.source_text,
-                data_target_va=data_target[0] if data_target else None,
-                data_target_kind=data_target[1] if data_target else None,
+                data_target_va=data_target.va if data_target else None,
+                data_target_kind=data_target.kind if data_target else None,
+                data_target_name=data_target.name if data_target else None,
+                data_target_type=data_target.c_type if data_target else None,
+                data_target_size=data_target.size if data_target else None,
                 alias_depth=assignment.alias_depth,
                 alias_kind=assignment.alias_kind,
                 confidence=min(
@@ -469,8 +503,8 @@ def _argument_snapshot(
 
 def _data_target_for_assignment(
     assignment: _Assignment | _StackAssignment,
-    data_xrefs: dict[int, tuple[int, str]],
-) -> tuple[int, str] | None:
+    data_xrefs: dict[int, _DataTarget],
+) -> _DataTarget | None:
     if assignment.alias_kind != "global_address":
         return None
     return data_xrefs.get(assignment.va)
@@ -920,6 +954,8 @@ def _coverage(
         coverage.append("global_address_arguments")
     if any(arg.data_target_va is not None for arg in arguments):
         coverage.append("project_data_xref_targets")
+    if any(arg.data_target_name for arg in arguments):
+        coverage.append("project_data_label_targets")
     return coverage
 
 
