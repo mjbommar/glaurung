@@ -259,6 +259,14 @@ sit below full IR/CFG bug-class scanners:
   bundle readiness. Its claim level is
   `candidate_snapshot_mapping_not_reproduction`, so the mapping can be
   audited without treating the candidate as reproduced.
+- `windows_emit_validation_harness_template` emits an operator-facing
+  harness scaffold from a candidate packet, optional VM validation plan,
+  and optional candidate/snapshot mapping. It records preconditions,
+  stock/current run steps, required artifacts, a PowerShell skeleton,
+  and readiness blockers, and can write a `README.md` plus
+  `run-validation-template.ps1`. Its claim level is
+  `harness_template_not_execution`, so it is a run scaffold rather than
+  runtime proof.
 - `windows_record_validation_artifact_bundle` records operator-supplied
   runtime evidence after a VM validation plan is executed. It accepts
   artifact kinds such as KDNET attach logs, serial logs, crash dumps,

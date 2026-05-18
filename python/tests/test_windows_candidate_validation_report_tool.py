@@ -13,6 +13,9 @@ from glaurung.llm.tools.windows_emit_review_packet import (
     WindowsReviewPacket,
     WindowsReviewPathStep,
 )
+from glaurung.llm.tools.windows_emit_validation_harness_template import (
+    WindowsValidationHarnessTemplate,
+)
 from glaurung.llm.tools.windows_emit_vm_validation_plan import WindowsVmValidationPlan
 from glaurung.llm.tools.windows_rank_candidate_packets import RankedWindowsCandidate
 from glaurung.llm.tools.windows_record_candidate_snapshot_mapping import (
@@ -173,6 +176,25 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
                     ready_for_runtime_validation=True,
                 )
             ],
+            harness_templates=[
+                WindowsValidationHarnessTemplate(
+                    candidate_id="ready-candidate",
+                    harness_id="win-harness-ready-candidate",
+                    binary="cldflt.sys",
+                    entrypoint="HsmOsBlockPlaceholderAccess",
+                    sink_symbol="ZwSetValueKey",
+                    harness_strategy=["exercise placeholder policy sequence"],
+                    preconditions=["restore snapshot"],
+                    stock_steps=["Run stock"],
+                    current_steps=["Run current"],
+                    artifact_requirements=["kdnet attach transcript"],
+                    skeleton_commands=["$CandidateId = 'ready-candidate'"],
+                    blockers=[],
+                    ready_to_collect_artifacts=True,
+                    markdown="# harness\n",
+                    output_files=["/tmp/harness/README.md"],
+                )
+            ],
             markdown_path=str(report_path),
             add_to_kb=True,
         ),
@@ -192,6 +214,9 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
     assert "Snapshot mapping: ready" in result.markdown
     assert "Snapshot mapping confidence: high" in result.markdown
     assert "Snapshot mapping: none attached" in result.markdown
+    assert "Harness template: ready" in result.markdown
+    assert "Harness id: win-harness-ready-candidate" in result.markdown
+    assert "Harness template: none attached" in result.markdown
     assert "Runtime artifacts: ready" in result.markdown
     assert "Runtime execution: executed" in result.markdown
     assert "Runtime artifact summaries: kdnet_attach_log:aaaaaaaaaaaa:/evidence/kdnet-attach.log" in result.markdown

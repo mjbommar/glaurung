@@ -10,6 +10,7 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .windows_emit_validation_harness_template import WindowsValidationHarnessTemplate
 from .windows_rank_candidate_packets import RankedWindowsCandidate
 from .windows_record_candidate_snapshot_mapping import WindowsCandidateSnapshotMapping
 from .windows_record_validation_artifact_bundle import WindowsValidationArtifactBundle
@@ -42,6 +43,13 @@ class WindowsCandidateValidationReportArgs(BaseModel):
         description=(
             "Optional candidate/snapshot mappings emitted by "
             "windows_record_candidate_snapshot_mapping and joined by candidate_id."
+        ),
+    )
+    harness_templates: list[WindowsValidationHarnessTemplate] = Field(
+        default_factory=list,
+        description=(
+            "Optional validation harness templates emitted by "
+            "windows_emit_validation_harness_template and joined by candidate_id."
         ),
     )
     markdown_path: str | None = Field(
@@ -94,7 +102,8 @@ class WindowsCandidateValidationReportTool(
         candidates = args.ranked_candidates[: args.max_candidates]
         bundles = _artifact_bundles_by_candidate(args.artifact_bundles)
         mappings = _snapshot_mappings_by_candidate(args.snapshot_mappings)
-        markdown = _render_report(args.title, candidates, bundles, mappings)
+        harnesses = _harness_templates_by_candidate(args.harness_templates)
+        markdown = _render_report(args.title, candidates, bundles, mappings, harnesses)
         result = WindowsCandidateValidationReportResult(
             markdown=markdown,
             candidate_count=len(candidates),
@@ -125,9 +134,11 @@ def _render_report(
     candidates: list[RankedWindowsCandidate],
     artifact_bundles: dict[str, WindowsValidationArtifactBundle] | None = None,
     snapshot_mappings: dict[str, WindowsCandidateSnapshotMapping] | None = None,
+    harness_templates: dict[str, WindowsValidationHarnessTemplate] | None = None,
 ) -> str:
     artifact_bundles = artifact_bundles or {}
     snapshot_mappings = snapshot_mappings or {}
+    harness_templates = harness_templates or {}
     ready_count = sum(1 for item in candidates if item.validation_ready)
     blocked_count = sum(1 for item in candidates if not item.validation_ready)
     lines = [
@@ -148,6 +159,7 @@ def _render_report(
                 item,
                 artifact_bundles.get(item.packet.candidate_id),
                 snapshot_mappings.get(item.packet.candidate_id),
+                harness_templates.get(item.packet.candidate_id),
             )
         )
     return "\n".join(lines).rstrip() + "\n"
@@ -157,6 +169,7 @@ def _render_candidate(
     item: RankedWindowsCandidate,
     artifact_bundle: WindowsValidationArtifactBundle | None = None,
     snapshot_mapping: WindowsCandidateSnapshotMapping | None = None,
+    harness_template: WindowsValidationHarnessTemplate | None = None,
 ) -> list[str]:
     packet = item.packet
     status = "ready" if item.validation_ready else "blocked"
@@ -206,6 +219,18 @@ def _render_candidate(
         )
     else:
         lines.append("- Snapshot mapping: none attached")
+    if harness_template is not None:
+        harness_status = "ready" if harness_template.ready_to_collect_artifacts else "blocked"
+        lines.extend(
+            [
+                f"- Harness template: {harness_status}",
+                f"- Harness id: {harness_template.harness_id}",
+                f"- Harness blockers: {_list_or_none(harness_template.blockers)}",
+                f"- Harness output files: {_list_or_none(harness_template.output_files)}",
+            ]
+        )
+    else:
+        lines.append("- Harness template: none attached")
     if artifact_bundle is not None:
         bundle_status = "ready" if artifact_bundle.ready_for_review else "blocked"
         lines.extend(
@@ -253,6 +278,15 @@ def _snapshot_mappings_by_candidate(
     out: dict[str, WindowsCandidateSnapshotMapping] = {}
     for mapping in mappings:
         out.setdefault(mapping.candidate_id, mapping)
+    return out
+
+
+def _harness_templates_by_candidate(
+    templates: list[WindowsValidationHarnessTemplate],
+) -> dict[str, WindowsValidationHarnessTemplate]:
+    out: dict[str, WindowsValidationHarnessTemplate] = {}
+    for template in templates:
+        out.setdefault(template.candidate_id, template)
     return out
 
 
