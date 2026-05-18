@@ -1150,6 +1150,13 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     };
     let bits = if arch.is_64_bit() { 64 } else { 32 };
     let is_pe_image = data.len() >= 2 && &data[..2] == b"MZ";
+    let pe_import_thunks = if is_pe_image {
+        crate::analysis::pe_iat::pe_import_thunk_map(data)
+    } else {
+        Vec::new()
+    };
+    let pe_import_thunk_name_by_va: std::collections::HashMap<u64, String> =
+        pe_import_thunks.iter().cloned().collect();
     let flirt_name_by_va: std::collections::HashMap<u64, String> =
         flirt_seeds.iter().cloned().collect();
     let mut known: std::collections::HashSet<u64> = seeds.iter().map(|(a, _)| a.value).collect();
@@ -1231,6 +1238,21 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         if let Ok(addr) = Address::new(AddressKind::VA, va, bits, None, None) {
             seeds.push((addr, DiscoverySeedKind::Trusted));
             known.insert(va);
+        }
+    }
+
+    // PE import-thunk seeds. Many Windows binaries keep import thunks as tiny
+    // executable `jmp [IAT]` stubs. They are legitimate analyst-visible
+    // functions in Ghidra, but they often have no `.pdata` entry and may never
+    // be reached by direct-call backtracking. Seed them explicitly from the IAT
+    // scanner and retain the imported API name for post-discovery labelling.
+    for (va, _name) in &pe_import_thunks {
+        if known.contains(va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, *va, bits, None, None) {
+            seeds.push((addr, DiscoverySeedKind::Trusted));
+            known.insert(*va);
         }
     }
 
@@ -1333,6 +1355,20 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         // Apply renames
         for f in &mut functions {
             if let Some(name) = sym_by_va.get(&f.entry_point.value) {
+                f.name = name.clone();
+            }
+        }
+    }
+
+    // Import-thunk aliases are runtime names for local executable stubs. They
+    // should improve `sub_*` readability without overriding real symbols,
+    // exports, PDB, or later FLIRT names.
+    if !pe_import_thunk_name_by_va.is_empty() {
+        for f in &mut functions {
+            if !f.name.starts_with("sub_") {
+                continue;
+            }
+            if let Some(name) = pe_import_thunk_name_by_va.get(&f.entry_point.value) {
                 f.name = name.clone();
             }
         }
@@ -1552,6 +1588,56 @@ mod body_overlap_gate_tests {
         assert!(va_in_discovered_body(&[prior], Some(&current), 0x1040));
         assert!(va_in_discovered_body(&[], Some(&current), 0x3040));
         assert!(!va_in_discovered_body(&[], Some(&current), 0x4000));
+    }
+}
+
+#[cfg(test)]
+mod pe_import_thunk_seed_tests {
+    use super::{analyze_functions_bytes, Budgets};
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    #[test]
+    fn pe_import_thunks_are_discovered_as_functions() {
+        let path = Path::new(
+            "samples/binaries/platforms/windows/i386/export/windows/x86_64/O0/hello-c-mingw64-O0.exe",
+        );
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read sample");
+        let thunk_map = crate::analysis::pe_iat::pe_import_thunk_map(&data);
+        assert!(!thunk_map.is_empty(), "fixture has no PE import thunks");
+
+        let budgets = Budgets {
+            max_functions: 1024,
+            max_blocks: 1_000_000,
+            max_instructions: 30_000_000,
+            timeout_ms: 30_000,
+        };
+        let (functions, _cg) = analyze_functions_bytes(&data, &budgets);
+        let discovered: BTreeSet<u64> = functions.iter().map(|f| f.entry_point.value).collect();
+        let names_by_va: std::collections::BTreeMap<u64, &str> = functions
+            .iter()
+            .map(|f| (f.entry_point.value, f.name.as_str()))
+            .collect();
+        let missing: Vec<_> = thunk_map
+            .iter()
+            .filter(|(va, _name)| !discovered.contains(va))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "missing import thunk functions: {:?}",
+            missing
+        );
+        assert!(
+            thunk_map.iter().any(|(va, name)| {
+                name == "LeaveCriticalSection"
+                    && names_by_va.get(va) == Some(&"LeaveCriticalSection")
+            }),
+            "expected a named LeaveCriticalSection import thunk function"
+        );
     }
 }
 
