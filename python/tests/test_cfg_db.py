@@ -73,3 +73,50 @@ def test_cfg_db_persists_basic_blocks_and_edges(
         assert cfg_db.index_cfg(project, str(pe)) == 3
     finally:
         project.close()
+
+
+def test_cfg_db_precomputes_dominance_summaries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import glaurung as g
+
+    def fake_analyze_functions_path(*_args, **_kwargs):
+        return (
+            [
+                _Function(
+                    0x1000,
+                    [
+                        _Block("entry", 0x1000, 0x1010, 3, ["gate"], []),
+                        _Block("gate", 0x1010, 0x1020, 2, ["sink"], ["entry"]),
+                        _Block("sink", 0x1020, 0x1030, 1, [], ["gate"]),
+                    ],
+                )
+            ],
+            None,
+        )
+
+    monkeypatch.setattr(g.analysis, "analyze_functions_path", fake_analyze_functions_path)
+    pe = tmp_path / "driver.sys"
+    pe.write_bytes(b"MZ")
+    project_path = tmp_path / "driver.glaurung"
+
+    project = PersistentKnowledgeBase.open(project_path, binary_path=pe)
+    try:
+        cfg_db.index_cfg(project, str(pe))
+        assert cfg_db.index_cfg_dominance(project) == 3
+        assert cfg_db.is_dominance_indexed(project)
+        assert cfg_db.cfg_dominance_counts(project).function_count == 1
+        rows = {
+            row[0]: row[1:]
+            for row in project._conn.execute(
+                "SELECT block_id, immediate_dominator_id, "
+                "immediate_post_dominator_id, dominator_count, "
+                "post_dominator_count FROM cfg_dominance"
+            )
+        }
+        assert rows["entry"] == (None, "gate", 0, 2)
+        assert rows["gate"] == ("entry", "sink", 1, 1)
+        assert rows["sink"] == ("gate", None, 2, 0)
+    finally:
+        project.close()

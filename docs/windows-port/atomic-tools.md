@@ -141,8 +141,9 @@ sit below full IR/CFG bug-class scanners:
   `unknown`.
 - `windows_bootstrap_project_facts` can now persist native PE basic
   blocks and CFG edges into `.glaurung` projects via its `index_cfg`
-  step, so project summaries can report CFG coverage without re-running
-  on-demand function recovery.
+  step, then precompute immediate dominator/post-dominator summaries
+  via `index_cfg_dominance`, so project summaries can report CFG
+  coverage without re-running on-demand function recovery.
 - `windows_cfg_gate_to_sink` composes ASB gate/sink metadata with
   concrete gate and sink callsite VAs, runs CFG dominance, and returns
   a packet-ready gate status for candidate evidence.
@@ -157,8 +158,8 @@ sit below full IR/CFG bug-class scanners:
 
 These tools do not replace the Ghidra-grade facts this document still
 tracks: function matching across renamed builds, instruction-level
-diffs, richer callsite operands, dominance summaries over persisted CFG,
-and PDB-backed type facts.
+diffs, richer callsite operands, full path predicates over persisted
+CFG, and PDB-backed type facts.
 
 ## Per-tool authoring template
 

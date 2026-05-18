@@ -112,6 +112,25 @@ CREATE TABLE cfg_edges (
     indexed_at INTEGER NOT NULL,
     PRIMARY KEY (binary_id, function_va, src_block_id, dst_block_id, kind)
 );
+CREATE TABLE cfg_dominance (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    block_id TEXT NOT NULL,
+    immediate_dominator_id TEXT,
+    immediate_post_dominator_id TEXT,
+    reachable_from_entry INTEGER NOT NULL,
+    can_reach_exit INTEGER NOT NULL,
+    dominator_count INTEGER NOT NULL,
+    post_dominator_count INTEGER NOT NULL,
+    indexed_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, function_va, block_id)
+);
+CREATE TABLE cfg_dominance_index_state (
+    binary_id INTEGER PRIMARY KEY,
+    indexed_at INTEGER NOT NULL,
+    function_count INTEGER NOT NULL,
+    block_count INTEGER NOT NULL
+);
 """
     )
     conn.execute(
@@ -151,6 +170,14 @@ CREATE TABLE cfg_edges (
     conn.execute(
         "INSERT INTO cfg_edges VALUES (1, 0x1000, 'entry', 'sink', 'cfg', 0)"
     )
+    conn.executemany(
+        "INSERT INTO cfg_dominance VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (1, 0x1000, "entry", None, "sink", 1, 1, 0, 1, 0),
+            (1, 0x1000, "sink", "entry", None, 1, 1, 1, 0, 0),
+        ],
+    )
+    conn.execute("INSERT INTO cfg_dominance_index_state VALUES (1, 0, 1, 2)")
     conn.commit()
     conn.close()
     return project
@@ -177,6 +204,7 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert result.counts.function_prototype_count == 1
     assert result.counts.basic_block_count == 2
     assert result.counts.cfg_edge_count == 1
+    assert result.counts.cfg_dominance_count == 2
     assert result.functions[0].canonical == "nt!Entry"
     assert result.functions[0].call_out_count == 1
     assert result.functions[0].stack_var_count == 1
@@ -185,7 +213,9 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert "call_xrefs" in result.coverage
     assert "data_xrefs" in result.coverage
     assert "cfg" in result.coverage
+    assert "cfg_dominance" in result.coverage
     assert "persisted_cfg" not in result.missing_capabilities
+    assert "cfg_dominance" not in result.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence

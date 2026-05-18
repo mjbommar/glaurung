@@ -24,6 +24,8 @@ CORE_TABLES = (
     "evidence_log",
     "basic_blocks",
     "cfg_edges",
+    "cfg_dominance",
+    "cfg_dominance_index_state",
 )
 
 
@@ -65,6 +67,7 @@ class ProjectFactCounts(BaseModel):
     comment_count: int = 0
     basic_block_count: int = 0
     cfg_edge_count: int = 0
+    cfg_dominance_count: int = 0
 
 
 class ProjectFunctionFact(BaseModel):
@@ -223,6 +226,7 @@ def _counts(
         comment_count=_count(conn, present, "comments", binary_id, None),
         basic_block_count=_count(conn, present, "basic_blocks", binary_id, None),
         cfg_edge_count=_count(conn, present, "cfg_edges", binary_id, None),
+        cfg_dominance_count=_count(conn, present, "cfg_dominance", binary_id, None),
     )
 
 
@@ -414,6 +418,8 @@ def _coverage(counts: ProjectFactCounts, present: set[str]) -> list[str]:
         coverage.append("stack_frame_vars")
     if counts.basic_block_count or counts.cfg_edge_count:
         coverage.append("cfg")
+    if counts.cfg_dominance_count:
+        coverage.append("cfg_dominance")
     elif "xref_index_state" in present:
         coverage.append("callgraph_index_state")
     return coverage
@@ -431,6 +437,8 @@ def _missing_capabilities(counts: ProjectFactCounts, present: set[str]) -> list[
         missing.append("function_prototypes")
     if not (counts.basic_block_count or counts.cfg_edge_count):
         missing.append("persisted_cfg")
+    elif not counts.cfg_dominance_count:
+        missing.append("cfg_dominance")
     if "basic_blocks" not in present and "cfg_edges" not in present:
         missing.append("cfg_tables")
     return missing

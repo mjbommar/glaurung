@@ -38,6 +38,10 @@ class WindowsBootstrapProjectFactsArgs(BaseModel):
         True,
         description="If true, persist native PE basic blocks and CFG edges.",
     )
+    index_cfg_dominance: bool = Field(
+        True,
+        description="If true, precompute dominance summaries for persisted CFGs.",
+    )
     import_pdb_facts: bool = Field(
         True,
         description="If true and pdb_cache_dir is set, import matching PDB facts.",
@@ -151,6 +155,21 @@ class WindowsBootstrapProjectFactsTool(
                 )
             else:
                 steps.append(ProjectBootstrapStep(name="index_cfg", ran=False, ok=True))
+
+            if args.index_cfg_dominance:
+                steps.append(
+                    _run_count_step(
+                        "index_cfg_dominance",
+                        lambda: cfg_db.index_cfg_dominance(
+                            project,
+                            force=args.force_reindex,
+                        ),
+                    )
+                )
+            else:
+                steps.append(
+                    ProjectBootstrapStep(name="index_cfg_dominance", ran=False, ok=True)
+                )
 
             if args.import_pdb_facts and args.pdb_cache_dir:
                 step, pdb_counts = _run_pdb_import_step(project, pe_path, args)
@@ -296,6 +315,8 @@ def _fact_coverage(
         coverage.append("data_xrefs")
     if _step_has_facts(by_name.get("index_cfg")):
         coverage.append("persisted_cfg")
+    if _step_has_facts(by_name.get("index_cfg_dominance")):
+        coverage.append("cfg_dominance")
     if pdb_counts:
         if pdb_counts.cache_hit:
             coverage.append("cached_pdb")
@@ -324,6 +345,10 @@ def _missing_capabilities(
         missing.append("data_xrefs")
     if args.index_cfg and not _step_has_facts(by_name.get("index_cfg")):
         missing.append("persisted_cfg")
+    if args.index_cfg_dominance and not _step_has_facts(
+        by_name.get("index_cfg_dominance")
+    ):
+        missing.append("cfg_dominance")
     if args.import_pdb_facts and not pdb_counts:
         missing.append("pdb_import")
     if pdb_counts:
