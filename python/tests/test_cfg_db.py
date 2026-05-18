@@ -141,9 +141,9 @@ def test_cfg_db_persists_branch_condition_facts(
                 _Function(
                     0x1000,
                     [
-                        _Block("entry", 0x1000, 0x1010, 3, ["gate"], []),
-                        _Block("gate", 0x1010, 0x1020, 2, ["sink"], ["entry"]),
-                        _Block("sink", 0x1020, 0x1030, 1, [], ["gate"]),
+                        _Block("entry", 0x1000, 0x1010, 3, ["gate", "sink"], []),
+                        _Block("gate", 0x1010, 0x1030, 2, ["sink"], ["entry"]),
+                        _Block("sink", 0x1020, 0x1030, 1, [], ["entry", "gate"]),
                     ],
                 )
             ],
@@ -154,7 +154,7 @@ def test_cfg_db_persists_branch_condition_facts(
         if va == 0x1000:
             return [
                 _Instruction(0x1000, "cmp", ["rcx", "0x10"]),
-                _Instruction(0x1004, "jae", ["0x1010"]),
+                _Instruction(0x1004, "jae", ["0x1020"]),
             ]
         return []
 
@@ -173,15 +173,16 @@ def test_cfg_db_persists_branch_condition_facts(
         row = project._conn.execute(
             "SELECT block_id, branch_mnemonic, branch_operands_json, "
             "compare_mnemonic, compare_operands_json, condition_kind, "
-            "target_block_id FROM cfg_branch_facts"
+            "target_block_id, fallthrough_block_id FROM cfg_branch_facts"
         ).fetchone()
         assert row == (
             "entry",
             "jae",
-            '["0x1010"]',
+            '["0x1020"]',
             "cmp",
             '["rcx", "0x10"]',
             "unsigned_greater_equal",
+            "sink",
             "gate",
         )
     finally:

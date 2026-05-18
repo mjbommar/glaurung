@@ -428,6 +428,10 @@ def index_cfg_branch_facts(
         "WHERE binary_id = ? ORDER BY function_va, start_va",
         (kb.binary_id,),
     ).fetchall()
+    block_ranges = {
+        (int(function_va), str(block_id)): (int(start_va), int(end_va))
+        for function_va, block_id, start_va, end_va in block_rows
+    }
     successors = _successors_by_block(kb._conn, kb.binary_id)
     now = int(time.time())
     rows: list[
@@ -473,8 +477,10 @@ def index_cfg_branch_facts(
             continue
         fact = _branch_fact_from_instructions(
             str(block_id),
+            int(function_va),
             list(instructions),
             successors.get((int(function_va), str(block_id)), []),
+            block_ranges,
         )
         if fact is None:
             continue
@@ -546,8 +552,10 @@ def _successors_by_block(
 
 def _branch_fact_from_instructions(
     block_id: str,
+    function_va: int,
     instructions: list[object],
     successors: list[str],
+    block_ranges: dict[tuple[int, str], tuple[int, int]],
 ) -> tuple[int, str, str, int | None, str | None, str, str, str | None, str | None] | None:
     branch_index = None
     for index in range(len(instructions) - 1, -1, -1):
@@ -564,7 +572,7 @@ def _branch_fact_from_instructions(
         if mnemonic in {"cmp", "test"}:
             compare = candidate
             break
-    target_block_id = _target_successor(successors)
+    target_block_id = _target_successor(branch, function_va, successors, block_ranges)
     fallthrough_block_id = _fallthrough_successor(block_id, successors, target_block_id)
     return (
         int(getattr(getattr(branch, "address"), "value")),
@@ -621,10 +629,34 @@ def _condition_kind(mnemonic: str) -> str:
     return mapping.get(mnemonic, "conditional")
 
 
-def _target_successor(successors: list[str]) -> str | None:
-    # Native CFG edges are currently not typed true/false. Preserve a stable
-    # candidate target when present and keep fallthrough distinct below.
+def _target_successor(
+    branch: object,
+    function_va: int,
+    successors: list[str],
+    block_ranges: dict[tuple[int, str], tuple[int, int]],
+) -> str | None:
+    target_va = _branch_target_va(branch)
+    if target_va is not None:
+        for successor in successors:
+            start_va, _end_va = block_ranges.get((function_va, successor), (None, None))
+            if start_va == target_va:
+                return successor
+        for successor in successors:
+            start_va, end_va = block_ranges.get((function_va, successor), (None, None))
+            if start_va is not None and end_va is not None and start_va <= target_va < end_va:
+                return successor
     return successors[0] if successors else None
+
+
+def _branch_target_va(branch: object) -> int | None:
+    operands = _operand_texts(branch)
+    if not operands:
+        return None
+    text = operands[0].strip()
+    try:
+        return int(text, 0)
+    except ValueError:
+        return None
 
 
 def _fallthrough_successor(
