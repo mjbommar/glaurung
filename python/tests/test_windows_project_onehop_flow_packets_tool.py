@@ -255,6 +255,7 @@ def test_windows_project_onehop_flow_packets_emit_review_packet(
     tool = build_tool()
     binary = tmp_path / "driver.sys"
     binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
 
     def fake_disassemble_window_at(_path, start_va, **_kwargs):
         if start_va == 0x1000:
@@ -279,7 +280,7 @@ def test_windows_project_onehop_flow_packets_emit_review_packet(
         ctx.kb,
         tool.input_model(
             binary_path=str(binary),
-            project_path=str(_write_project(tmp_path)),
+            project_path=str(project),
             binary="driver.sys",
             build="unit-test",
             attacker_class="local_unprivileged",
@@ -352,6 +353,7 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
     tool = build_tool()
     binary = tmp_path / "driver.sys"
     binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
 
     def fake_disassemble_window_at(_path, start_va, **_kwargs):
         if start_va == 0x1000:
@@ -378,7 +380,7 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
         ctx.kb,
         tool.input_model(
             binary_path=str(binary),
-            project_path=str(_write_project(tmp_path)),
+            project_path=str(project),
             binary="driver.sys",
             build="unit-test",
             attacker_class="local_unprivileged",
@@ -442,6 +444,107 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
         and "entry@0x2040 jne: rdx != 0" in evidence.summary
         for evidence in packet.evidence
     )
+
+
+def test_windows_project_onehop_flow_packets_filters_helper_gate_refined_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+    incompatible_gates = tmp_path / "incompatible-gates.yaml"
+    incompatible_gates.write_text(
+        """
+- id: se_access_check
+  symbols: [SeAccessCheck]
+  gate_kind: access_check
+  proves: [access_checked]
+  required_conditions: [call_dominates_privileged_operation]
+  invalid_when: []
+""",
+        encoding="utf-8",
+    )
+
+    def fake_disassemble_window_at(_path, start_va, **_kwargs):
+        if start_va == 0x1000:
+            return [
+                _Insn(0x1000, "mov", ["rcx", "rdi"]),
+                _Insn(0x1004, "mov", ["rdx", "rsi"]),
+                _Insn(0x1100, "call", ["0x2000"]),
+            ]
+        if start_va == 0x2000:
+            return [
+                _Insn(0x2000, "mov", ["rcx", "r8"]),
+                _Insn(0x2004, "mov", ["rdx", "rdx"]),
+                _Insn(0x2080, "mov", ["rdx", "rdx"]),
+                _Insn(0x2100, "call", ["0x5000"]),
+            ]
+        return []
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+
+    no_gate = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            binary="driver.sys",
+            source_role="buffer",
+            source_arg="rsi",
+            sink_arg_index=1,
+            sinks_path=str(_write_sinks(tmp_path)),
+            gates_path=str(incompatible_gates),
+            helper_gate_refined_only=True,
+        ),
+    )
+    assert no_gate.onehop_argument_flow_count == 1
+    assert no_gate.packet_count == 0
+
+    def fake_disassemble_with_gate(_path, start_va, **_kwargs):
+        if start_va == 0x1000:
+            return [
+                _Insn(0x1000, "mov", ["rcx", "rdi"]),
+                _Insn(0x1004, "mov", ["rdx", "rsi"]),
+                _Insn(0x1100, "call", ["0x2000"]),
+            ]
+        if start_va == 0x2000:
+            return [
+                _Insn(0x2000, "mov", ["rcx", "r8"]),
+                _Insn(0x2004, "mov", ["rdx", "rdx"]),
+                _Insn(0x2050, "call", ["0x4000"]),
+                _Insn(0x2080, "mov", ["rdx", "rdx"]),
+                _Insn(0x2100, "call", ["0x5000"]),
+            ]
+        return []
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_with_gate)
+    refined = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            binary="driver.sys",
+            source_role="buffer",
+            source_arg="rsi",
+            sink_arg_index=1,
+            sinks_path=str(_write_sinks(tmp_path)),
+            gates_path=str(_write_gates(tmp_path)),
+            helper_gate_refined_only=True,
+        ),
+    )
+    assert refined.packet_count == 1
+    assert refined.helper_gate_refinement_count == 1
+    assert refined.packets[0].required_project_facts == [
+        "function_names",
+        "call_xrefs",
+        "cfg",
+        "cfg_dominance",
+    ]
 
 
 def test_memory_agent_registers_windows_project_onehop_flow_packets() -> None:

@@ -82,6 +82,13 @@ class WindowsProjectOnehopFlowPacketsArgs(BaseModel):
             "attach persisted-CFG dominance evidence before the helper-local sink."
         ),
     )
+    helper_gate_refined_only: bool = Field(
+        False,
+        description=(
+            "If true, emit only packets with compatible helper-local gate evidence. "
+            "This also enables helper-gate refinement."
+        ),
+    )
     attach_helper_gate_paths: bool = Field(
         False,
         description=(
@@ -234,6 +241,12 @@ class WindowsProjectOnehopFlowPacketsTool(
             (flow, _refine_helper_gate(ctx, kb, args, flow))
             for flow in flow_result.flows[: args.max_packets]
         ]
+        if args.helper_gate_refined_only:
+            packet_items = [
+                (flow, refinement)
+                for flow, refinement in packet_items
+                if refinement is not None
+            ]
         packets = [
             _emit_packet(ctx, kb, args, flow, gate_refinement)
             for flow, gate_refinement in packet_items
@@ -430,7 +443,9 @@ def _refine_helper_gate(
     args: WindowsProjectOnehopFlowPacketsArgs,
     flow: WindowsProjectOnehopArgumentFlow,
 ) -> _HelperGateRefinement | None:
-    if not args.refine_helper_gates or not flow.required_gates:
+    if not (args.refine_helper_gates or args.helper_gate_refined_only):
+        return None
+    if not flow.required_gates:
         return None
     try:
         gates_path = _resolve_metadata_path(args.gates_path, "data/kg/pe-gates.yaml")
@@ -783,7 +798,7 @@ def _gate_note(refinement: _HelperGateRefinement | None) -> str:
 
 def _required_project_facts(args: WindowsProjectOnehopFlowPacketsArgs) -> list[str]:
     facts = list(args.required_project_facts)
-    if args.refine_helper_gates:
+    if args.refine_helper_gates or args.helper_gate_refined_only:
         facts.extend(["cfg", "cfg_dominance"])
     if args.attach_helper_gate_paths:
         facts.append("cfg_paths")

@@ -174,7 +174,9 @@ sit below full IR/CFG bug-class scanners:
   required-gate blockers. It can also attach compact helper
   entry/gate-to-sink CFG path samples from persisted project CFG facts
   and nearby helper-gate branch-condition facts when those predicates
-  have been persisted.
+  have been persisted. `helper_gate_refined_only` filters output to
+  matched one-hop packets that have compatible helper-local gate
+  evidence.
 - `windows_project_call_argument_snapshot` uses a project callsite VA
   plus nearby disassembly to recover a conservative Windows x64
   RCX/RDX/R8/R9 argument snapshot plus obvious stack argument stores
