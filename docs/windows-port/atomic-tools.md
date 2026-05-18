@@ -97,6 +97,10 @@ sit below full IR/CFG bug-class scanners:
 - `windows_seed_binary_diff_triage` composes prior-public seed
   metadata with a pre/post binary diff and reports whether seed-named
   functions changed, stayed unchanged, or are absent from the pair.
+- `windows_cfg_dominance` checks whether a gate basic block dominates
+  a sink basic block using native PE function CFG recovery or supplied
+  fixture CFG rows. It reports `dominated`, `not_dominated`,
+  `same_block`, `unreachable`, or `unknown`.
 - `windows_emit_review_packet` and `windows_compose_candidate_packets`
   preserve structured PDB identity, component-profile, and patch-diff
   context in every emitted candidate packet, so downstream ranking and
