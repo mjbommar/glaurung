@@ -24,6 +24,7 @@ from .windows_emit_review_packet import (
     WindowsReviewPathStep,
 )
 from .windows_gate_semantics import (
+    gate_proof_sources,
     matched_required_gates,
     missing_required_gates,
 )
@@ -226,6 +227,7 @@ def _emit_packet(ctx, kb, args, operand, gate) -> WindowsReviewPacket:
         else []
     )
     proven_gates = _matched_required_gates(gate, required_gates)
+    proof_sources = _gate_proof_sources(gate, required_gates)
     missing_required_gates = _missing_required_gates(gate, required_gates)
     path = [
         WindowsReviewPathStep(
@@ -272,6 +274,7 @@ def _emit_packet(ctx, kb, args, operand, gate) -> WindowsReviewPacket:
             sink_kind=sink_kind,
             required_gates=required_gates,
             proven_gates=proven_gates,
+            gate_proof_sources=proof_sources,
             missing_required_gates=missing_required_gates,
             gate_status=gate.suggested_packet_gate_status,
             path=path,
@@ -312,6 +315,12 @@ def _missing_required_gates(gate, required_gates: list[str]) -> list[str]:
     if gate.gate.gate is None:
         return list(required_gates)
     return missing_required_gates(gate.gate.gate.proves, required_gates)
+
+
+def _gate_proof_sources(gate, required_gates: list[str]) -> dict[str, str]:
+    if gate.gate.gate is None:
+        return {}
+    return gate_proof_sources(gate.gate.gate.proves, required_gates)
 
 
 def build_tool() -> WindowsComposeSourceGateSinkPacketTool:

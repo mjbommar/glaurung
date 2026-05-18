@@ -27,3 +27,14 @@ def matched_required_gates(proves: list[str], required_gates: list[str]) -> list
 def missing_required_gates(proves: list[str], required_gates: list[str]) -> list[str]:
     expanded = set(expanded_gate_facts(proves))
     return [required for required in required_gates if required not in expanded]
+
+
+def gate_proof_sources(proves: list[str], required_gates: list[str]) -> dict[str, str]:
+    sources: dict[str, str] = {}
+    for fact in proves:
+        if fact in required_gates and fact not in sources:
+            sources[fact] = fact
+        for implied in _IMPLIED_GATE_FACTS.get(fact, ()):
+            if implied in required_gates and implied not in sources:
+                sources[implied] = fact
+    return sources

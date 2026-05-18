@@ -133,6 +133,14 @@ class WindowsEmitReviewPacketArgs(BaseModel):
             "If empty with gate_status=dominated, all required gates are assumed proven."
         ),
     )
+    gate_proof_sources: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Map required gate semantics to the concrete gate proof fact that "
+            "established each semantic, e.g. destination_range_valid -> "
+            "user_pointer_write_range_valid."
+        ),
+    )
     missing_required_gates: list[str] = Field(
         default_factory=list,
         description=(
@@ -230,6 +238,7 @@ class WindowsReviewPacket(BaseModel):
     sink_kind: str
     required_gates: list[str]
     proven_gates: list[str] = Field(default_factory=list)
+    gate_proof_sources: dict[str, str] = Field(default_factory=dict)
     missing_required_gates: list[str] = Field(default_factory=list)
     gate_status: GateStatus
     path: list[WindowsReviewPathStep]
@@ -323,6 +332,7 @@ class WindowsEmitReviewPacketTool(
             sink_kind=args.sink_kind,
             required_gates=required_gates,
             proven_gates=proven_gates,
+            gate_proof_sources=dict(args.gate_proof_sources),
             missing_required_gates=missing_required_gates,
             gate_status=args.gate_status,
             path=args.path,

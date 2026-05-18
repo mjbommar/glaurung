@@ -33,6 +33,7 @@ from .windows_function_arg_roles import (
     WindowsFunctionArgRolesTool,
 )
 from .windows_gate_semantics import (
+    gate_proof_sources,
     matched_required_gates,
     missing_required_gates,
 )
@@ -464,6 +465,11 @@ def _emit_packet(
                 if gate_refinement is not None
                 else []
             ),
+            gate_proof_sources=(
+                gate_refinement.gate_proof_sources
+                if gate_refinement is not None
+                else {}
+            ),
             gate_status=gate_status,
             path=[
                 *path,
@@ -536,6 +542,7 @@ class _GateRefinement:
     gate_va: int
     gate_proves: list[str]
     matched_required_gates: list[str]
+    gate_proof_sources: dict[str, str]
     missing_required_gates: list[str]
     packet_gate_status: GateStatus
     summary: str
@@ -601,6 +608,10 @@ def _refine_gate(
                 gate_va=candidate.callsite_va,
                 gate_proves=gate.proves,
                 matched_required_gates=matched_required_gates(
+                    gate.proves,
+                    sink_callsite.operation.required_gates,
+                ),
+                gate_proof_sources=gate_proof_sources(
                     gate.proves,
                     sink_callsite.operation.required_gates,
                 ),

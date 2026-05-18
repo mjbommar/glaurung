@@ -341,6 +341,9 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert packet.gate_status == "unknown"
     assert packet.required_gates == ["destination_range_valid", "byte_count_bounded"]
     assert packet.proven_gates == ["destination_range_valid"]
+    assert packet.gate_proof_sources == {
+        "destination_range_valid": "user_pointer_write_range_valid"
+    }
     assert packet.missing_required_gates == ["byte_count_bounded"]
     assert packet.source_arg == "rsi"
     assert packet.required_project_facts == [

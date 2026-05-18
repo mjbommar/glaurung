@@ -146,6 +146,9 @@ void DriverDispatch(void *dst, void *user_buffer, ULONG len) {
     assert result.packet.claim_level == "candidate_not_finding"
     assert result.packet.gate_status == "not_dominated"
     assert result.packet.proven_gates == ["destination_range_valid"]
+    assert result.packet.gate_proof_sources == {
+        "destination_range_valid": "user_pointer_write_range_valid"
+    }
     assert result.packet.missing_required_gates == [
         "byte_count_bounded",
     ]

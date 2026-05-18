@@ -124,7 +124,8 @@ sit below full IR/CFG bug-class scanners:
   CFG dominance evidence plus compact `windows_project_cfg_path_query`
   path evidence. It also records which sink-required gate semantics the
   gate metadata proves and which required gates remain unproven as
-  structured `proven_gates` and `missing_required_gates` packet fields;
+  structured `proven_gates`, `gate_proof_sources`, and
+  `missing_required_gates` packet fields;
   conservative gate-fact implications map facts such as
   `user_pointer_write_range_valid` to sink requirements such as
   `destination_range_valid`. Packet promotion stays blocked while
@@ -211,8 +212,9 @@ sit below full IR/CFG bug-class scanners:
   which substrate was present or missing when the hit was produced,
   including required project fact classes and promotion blockers. It
   also passes matched and missing required gate semantics into the
-  structured `proven_gates` and `missing_required_gates` packet fields,
-  using the same conservative gate-fact implication mapping.
+  structured `proven_gates`, `gate_proof_sources`, and
+  `missing_required_gates` packet fields, using the same conservative
+  gate-fact implication mapping.
 - `windows_emit_review_packet` and `windows_compose_candidate_packets`
   preserve structured PDB identity, component-profile, patch-diff,
   project-fact, and Ghidra-delta context in every emitted candidate
@@ -222,8 +224,9 @@ sit below full IR/CFG bug-class scanners:
   required project facts when the caller does not provide them and keep
   hits below promotion when required coverage, required gate semantics,
   or Ghidra parity are missing. They also carry structured
-  `proven_gates` and `missing_required_gates` fields for downstream
-  ranking and validation scripts. When `auto_join_manifest_context` is
+  `proven_gates`, `gate_proof_sources`, and `missing_required_gates`
+  fields for downstream ranking and validation scripts. When
+  `auto_join_manifest_context` is
   enabled, the packet emitter fills missing project/Ghidra context from ASB
   `pe-project-facts.yaml` and `pe-ghidra-delta.yaml` records by
   target, build label, and component.
