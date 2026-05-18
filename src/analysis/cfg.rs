@@ -1828,6 +1828,45 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     (functions, cg)
 }
 
+/// Discover one function starting exactly at `entry_va`.
+///
+/// This is intentionally narrower than [`analyze_functions_bytes`]: it does
+/// not walk the global seed roster or recurse into discovered callees. It is
+/// the escape hatch for analyst-selected addresses from another tool, PDB
+/// publics, or previous corpus triage where the target VA may sit beyond a
+/// bounded all-functions pass.
+pub fn discover_function_at_va_bytes(
+    data: &[u8],
+    entry_va: u64,
+    budgets: &Budgets,
+) -> Option<Function> {
+    let (regions, arch, end, _entry) = parse_exec_regions(data);
+    if regions.is_empty() || in_exec_regions(&regions, entry_va).is_none() {
+        return None;
+    }
+
+    let bits = if arch.is_64_bit() { 64 } else { 32 };
+    let entry = Address::new(AddressKind::VA, entry_va, bits, None, None).ok()?;
+    let pe_iat_name_by_va: std::collections::HashMap<u64, String> =
+        if data.len() >= 2 && &data[..2] == b"MZ" {
+            crate::analysis::pe_iat::pe_iat_map(data)
+                .into_iter()
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+    discover_function(
+        data,
+        arch,
+        end,
+        entry,
+        &regions,
+        budgets,
+        &pe_iat_name_by_va,
+    )
+    .map(|(func, _calls)| func)
+}
+
 #[cfg(test)]
 mod prologue_gate_tests {
     use super::looks_like_fn_start;

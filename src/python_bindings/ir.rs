@@ -313,7 +313,7 @@ fn decompile_at_py(
     style: &str,
     pdb_cache: &str,
 ) -> PyResult<String> {
-    use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+    use crate::analysis::cfg::{analyze_functions_bytes, discover_function_at_va_bytes, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
@@ -329,18 +329,27 @@ fn decompile_at_py(
         max_instructions,
         timeout_ms,
     };
-    let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
-    let func = funcs
+    let (mut funcs, _cg) = analyze_functions_bytes(&data, &budgets);
+    let func = match funcs
         .iter()
         .find(|f| f.entry_point.value == func_va)
-        .ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "no function at entry VA 0x{:x}",
-                func_va
-            ))
-        })?;
+        .cloned()
+    {
+        Some(func) => func,
+        None => {
+            let direct =
+                discover_function_at_va_bytes(&data, func_va, &budgets).ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "no function at entry VA 0x{:x}",
+                        func_va
+                    ))
+                })?;
+            funcs.push(direct.clone());
+            direct
+        }
+    };
     let (arch, cc) = detect_arch_and_call_conv(&data);
-    let lf = lift_function_from_bytes(&data, func, arch).ok_or_else(|| {
+    let lf = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
     let ssa = compute_ssa(&lf);

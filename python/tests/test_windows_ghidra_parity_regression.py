@@ -46,6 +46,7 @@ _MIGSTORE = GhidraFunctionReference(
 )
 
 _RASMIGPLUGIN = _WINDOWS_CORPUS / "rasmigplugin.dll"
+_TCPIP = _WINDOWS_CORPUS / "tcpip.sys"
 
 
 def _need(path: Path) -> Path:
@@ -133,3 +134,19 @@ def test_rasmigplugin_windows_risk_tracks_buffer_length_flow() -> None:
         for flow in summary["data_flows"]
     )
     assert summary["call_summary"]["total"] >= 1
+
+
+@pytest.mark.skipif(not _TCPIP.exists(), reason="tcpip corpus missing")
+def test_tcpip_ghidra_selected_strcpy_caller_decompiles_by_va() -> None:
+    # Ghidra finds this strcpy_s caller in tcpip.sys. The explicit analyst
+    # handoff path must not depend on Glaurung's bounded all-function worklist
+    # finding the VA first.
+    text = g.ir.decompile_at(
+        str(_need(_TCPIP)),
+        0x1C01933F4,
+        timeout_ms=10_000,
+        style="c",
+    )
+
+    assert "fn sub_1c01933f4" in text
+    assert "strcpy_s" in text
