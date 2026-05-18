@@ -294,6 +294,70 @@ fn iat_memory_call_target(ins: &Instruction, arch: BArch) -> Option<u64> {
     })
 }
 
+fn add_callgraph_edge_dedup(
+    cg: &mut CallGraph,
+    caller: &str,
+    callee: &str,
+    call_type: CallType,
+    callsite: Option<Address>,
+) {
+    cg.add_node(caller.to_string());
+    cg.add_node(callee.to_string());
+
+    if let Some(existing) = cg
+        .edges
+        .iter_mut()
+        .find(|edge| edge.caller == caller && edge.callee == callee && edge.call_type == call_type)
+    {
+        if let Some(site) = callsite {
+            existing.add_call_site(site);
+        }
+        return;
+    }
+
+    let mut edge = CallGraphEdge::new(caller.to_string(), callee.to_string(), call_type);
+    if let Some(site) = callsite {
+        edge.add_call_site(site);
+    }
+    cg.add_edge(edge);
+}
+
+fn function_owns_callsite(func: &Function, callsite_va: u64) -> bool {
+    if !func.basic_blocks.is_empty() {
+        return func.basic_blocks.iter().any(|bb| {
+            let start = bb.start_address.value;
+            let end = bb.end_address.value;
+            callsite_va >= start && callsite_va < end
+        });
+    }
+
+    func.all_ranges().into_iter().any(|range| {
+        let start = range.start.value;
+        let end = start.saturating_add(range.size);
+        callsite_va >= start && callsite_va < end
+    })
+}
+
+fn callsite_owner_name(
+    functions: &[Function],
+    fallback_entry_va: u64,
+    callsite_va: u64,
+) -> Option<String> {
+    functions
+        .iter()
+        .filter(|func| function_owns_callsite(func, callsite_va))
+        // Overlap can happen when recursive discovery finds a mid-function
+        // label. Prefer the innermost/highest entry that owns the callsite so
+        // one physical instruction is attributed to one final function.
+        .max_by_key(|func| func.entry_point.value)
+        .or_else(|| {
+            functions
+                .iter()
+                .find(|func| func.entry_point.value == fallback_entry_va)
+        })
+        .map(|func| func.name.clone())
+}
+
 /// Discover a single function starting at `entry` within executable regions.
 fn discover_function(
     data: &[u8],
@@ -1618,7 +1682,6 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
                     }
                 }
             }
-            cg.add_node(f.name.clone());
             functions.push(f);
         }
     }
@@ -1737,34 +1800,29 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     // the heuristic side.
     merge_compiler_split_chunks(&mut functions);
 
-    // Build callgraph using discovered functions where possible
+    // Build callgraph using final post-rename function names. Earlier seed
+    // names are intentionally discarded here; otherwise edges can reference
+    // renamed callers that are absent from the graph node set.
+    cg = CallGraph::new();
+    for f in &functions {
+        cg.add_node(f.name.clone());
+    }
+
     let name_by_va: std::collections::HashMap<u64, String> = functions
         .iter()
         .map(|f| (f.entry_point.value, f.name.clone()))
         .collect();
 
     for call in calls_all {
-        let caller = name_by_va
-            .get(&call.caller_entry_va)
-            .cloned()
+        let caller = callsite_owner_name(&functions, call.caller_entry_va, call.callsite_va)
             .unwrap_or_else(|| format!("sub_{:x}", call.caller_entry_va));
         let callee = call
             .target_name
             .or_else(|| call.target_va.and_then(|va| name_by_va.get(&va).cloned()))
             .or_else(|| call.target_va.map(|va| format!("sub_{:x}", va)))
             .unwrap_or_else(|| format!("indirect_{:x}", call.callsite_va));
-        cg.add_node(callee.clone());
-        let edge = Address::new(AddressKind::VA, call.callsite_va, bits, None, None)
-            .map(|site| {
-                CallGraphEdge::with_call_sites(
-                    caller.clone(),
-                    callee.clone(),
-                    call.call_type,
-                    vec![site],
-                )
-            })
-            .unwrap_or_else(|_| CallGraphEdge::new(caller.clone(), callee, call.call_type));
-        cg.add_edge(edge);
+        let callsite = Address::new(AddressKind::VA, call.callsite_va, bits, None, None).ok();
+        add_callgraph_edge_dedup(&mut cg, &caller, &callee, call.call_type, callsite);
     }
 
     (functions, cg)
@@ -1974,18 +2032,22 @@ mod pe_import_thunk_seed_tests {
 mod pe_iat_callgraph_tests {
     use super::{analyze_functions_bytes, Budgets};
     use crate::core::call_graph::CallType;
+    use std::collections::HashSet;
     use std::path::Path;
 
-    fn has_indirect_import_callsite(
+    fn count_indirect_import_callsite(
         cg: &crate::core::call_graph::CallGraph,
         callee: &str,
         callsite_va: u64,
-    ) -> bool {
-        cg.edges.iter().any(|edge| {
-            edge.call_type == CallType::Indirect
-                && edge.callee == callee
-                && edge.call_sites.iter().any(|site| site.value == callsite_va)
-        })
+    ) -> usize {
+        cg.edges
+            .iter()
+            .filter(|edge| {
+                edge.call_type == CallType::Indirect
+                    && edge.callee == callee
+                    && edge.call_sites.iter().any(|site| site.value == callsite_va)
+            })
+            .count()
     }
 
     #[test]
@@ -2012,19 +2074,43 @@ mod pe_iat_callgraph_tests {
             timeout_ms: 30_000,
         };
         let (_functions, cg) = analyze_functions_bytes(&data, &budgets);
+        cg.validate()
+            .expect("post-rename callgraph should reference known nodes");
 
-        assert!(
-            has_indirect_import_callsite(&cg, "GetStartupInfoA", 0x140001473),
-            "missing named GetStartupInfoA IAT call edge"
+        assert_eq!(
+            count_indirect_import_callsite(&cg, "GetStartupInfoA", 0x140001473),
+            1,
+            "expected one named GetStartupInfoA IAT call edge"
         );
-        assert!(
-            has_indirect_import_callsite(&cg, "VirtualQuery", 0x140001a69),
-            "missing named VirtualQuery IAT call edge"
+        assert_eq!(
+            count_indirect_import_callsite(&cg, "VirtualQuery", 0x140001a69),
+            1,
+            "expected one named VirtualQuery IAT call edge"
         );
-        assert!(
-            has_indirect_import_callsite(&cg, "VirtualProtect", 0x140001b4e),
-            "missing named VirtualProtect IAT call edge"
+        assert_eq!(
+            count_indirect_import_callsite(&cg, "VirtualProtect", 0x140001b4e),
+            1,
+            "expected one named VirtualProtect IAT call edge"
         );
+
+        let mut seen = HashSet::new();
+        for edge in &cg.edges {
+            for site in &edge.call_sites {
+                assert!(
+                    seen.insert((
+                        edge.caller.as_str(),
+                        edge.callee.as_str(),
+                        edge.call_type,
+                        site.value,
+                    )),
+                    "duplicate callsite edge: {} -> {} {:?} {:#x}",
+                    edge.caller,
+                    edge.callee,
+                    edge.call_type,
+                    site.value
+                );
+            }
+        }
     }
 }
 
