@@ -11,6 +11,7 @@ from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .windows_rank_candidate_packets import RankedWindowsCandidate
+from .windows_record_validation_artifact_bundle import WindowsValidationArtifactBundle
 
 
 class WindowsCandidateValidationReportArgs(BaseModel):
@@ -27,6 +28,13 @@ class WindowsCandidateValidationReportArgs(BaseModel):
         ge=1,
         le=50,
         description="Maximum ranked candidates to include.",
+    )
+    artifact_bundles: list[WindowsValidationArtifactBundle] = Field(
+        default_factory=list,
+        description=(
+            "Optional runtime artifact bundles emitted by "
+            "windows_record_validation_artifact_bundle and joined by candidate_id."
+        ),
     )
     markdown_path: str | None = Field(
         None,
@@ -76,7 +84,8 @@ class WindowsCandidateValidationReportTool(
         args: WindowsCandidateValidationReportArgs,
     ) -> WindowsCandidateValidationReportResult:
         candidates = args.ranked_candidates[: args.max_candidates]
-        markdown = _render_report(args.title, candidates)
+        bundles = _artifact_bundles_by_candidate(args.artifact_bundles)
+        markdown = _render_report(args.title, candidates, bundles)
         result = WindowsCandidateValidationReportResult(
             markdown=markdown,
             candidate_count=len(candidates),
@@ -102,7 +111,12 @@ class WindowsCandidateValidationReportTool(
         return result
 
 
-def _render_report(title: str, candidates: list[RankedWindowsCandidate]) -> str:
+def _render_report(
+    title: str,
+    candidates: list[RankedWindowsCandidate],
+    artifact_bundles: dict[str, WindowsValidationArtifactBundle] | None = None,
+) -> str:
+    artifact_bundles = artifact_bundles or {}
     ready_count = sum(1 for item in candidates if item.validation_ready)
     blocked_count = sum(1 for item in candidates if not item.validation_ready)
     lines = [
@@ -118,11 +132,14 @@ def _render_report(title: str, candidates: list[RankedWindowsCandidate]) -> str:
         "",
     ]
     for item in candidates:
-        lines.extend(_render_candidate(item))
+        lines.extend(_render_candidate(item, artifact_bundles.get(item.packet.candidate_id)))
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_candidate(item: RankedWindowsCandidate) -> list[str]:
+def _render_candidate(
+    item: RankedWindowsCandidate,
+    artifact_bundle: WindowsValidationArtifactBundle | None = None,
+) -> list[str]:
     packet = item.packet
     status = "ready" if item.validation_ready else "blocked"
     lines = [
@@ -157,6 +174,20 @@ def _render_candidate(item: RankedWindowsCandidate) -> list[str]:
         )
     else:
         lines.append("- Validation substrate: none attached")
+    if artifact_bundle is not None:
+        bundle_status = "ready" if artifact_bundle.ready_for_review else "blocked"
+        lines.extend(
+            [
+                f"- Runtime artifacts: {bundle_status}",
+                f"- Runtime execution: {artifact_bundle.execution_status}",
+                f"- Runtime artifact count: {artifact_bundle.artifact_count}",
+                f"- Missing runtime artifacts: {_list_or_none(artifact_bundle.missing_required_artifacts)}",
+                f"- Runtime artifact blockers: {_list_or_none(artifact_bundle.runtime_blockers)}",
+                f"- Runtime artifact summaries: {_artifact_summaries(artifact_bundle)}",
+            ]
+        )
+    else:
+        lines.append("- Runtime artifacts: none attached")
     lines.append("")
     return lines
 
@@ -165,6 +196,23 @@ def _list_or_none(values: list[str]) -> str:
     if not values:
         return "none"
     return "; ".join(values[:8])
+
+
+def _artifact_summaries(bundle: WindowsValidationArtifactBundle) -> str:
+    values = []
+    for artifact in bundle.artifacts[:8]:
+        digest = artifact.sha256[:12] if artifact.sha256 else "no-hash"
+        values.append(f"{artifact.kind}:{digest}:{artifact.path}")
+    return _list_or_none(values)
+
+
+def _artifact_bundles_by_candidate(
+    bundles: list[WindowsValidationArtifactBundle],
+) -> dict[str, WindowsValidationArtifactBundle]:
+    out: dict[str, WindowsValidationArtifactBundle] = {}
+    for bundle in bundles:
+        out.setdefault(bundle.candidate_id, bundle)
+    return out
 
 
 def _add_report_node(

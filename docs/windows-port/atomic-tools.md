@@ -247,8 +247,19 @@ sit below full IR/CFG bug-class scanners:
   keeping the claim level at `validation_plan_not_reproduction`.
 - `windows_candidate_validation_report` renders ranked candidates and
   attached VM validation plans into an operator-facing markdown handoff.
-  It can persist the report and add a KB evidence node, but it still
-  reports only planned validation until runtime artifacts are attached.
+  It can persist the report and add a KB evidence node. When supplied
+  with runtime artifact bundles, it displays execution status, artifact
+  counts, missing required artifacts, runtime blockers, and compact
+  artifact hash/path summaries.
+- `windows_record_validation_artifact_bundle` records operator-supplied
+  runtime evidence after a VM validation plan is executed. It accepts
+  artifact kinds such as KDNET attach logs, serial logs, crash dumps,
+  harness output, binary/PDB identity records, and stock/current
+  transcripts; requires paths and SHA256 digests for required
+  artifacts; can hash local existing paths on request; and emits a KB
+  evidence node. Its claim level is
+  `runtime_artifact_bundle_not_finding`, so it accounts for evidence
+  without promoting a candidate to a reproduced finding.
 
 These tools do not replace the Ghidra-grade facts this document still
 tracks: function matching across renamed builds, instruction-level

@@ -15,6 +15,10 @@ from glaurung.llm.tools.windows_emit_review_packet import (
 )
 from glaurung.llm.tools.windows_emit_vm_validation_plan import WindowsVmValidationPlan
 from glaurung.llm.tools.windows_rank_candidate_packets import RankedWindowsCandidate
+from glaurung.llm.tools.windows_record_validation_artifact_bundle import (
+    WindowsValidationArtifact,
+    WindowsValidationArtifactBundle,
+)
 
 
 def _ctx(tmp_path: Path) -> MemoryContext:
@@ -125,6 +129,25 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
                     validation_blockers=["KDNET attach is not validated: not_configured"],
                 ),
             ],
+            artifact_bundles=[
+                WindowsValidationArtifactBundle(
+                    candidate_id="ready-candidate",
+                    validation_id="win11_ltsc_v4_cold_postlogon",
+                    execution_status="executed",
+                    artifact_count=1,
+                    artifacts=[
+                        WindowsValidationArtifact(
+                            kind="kdnet_attach_log",
+                            path="/evidence/kdnet-attach.log",
+                            sha256="a" * 64,
+                            summary="debugger attached before harness run",
+                        )
+                    ],
+                    missing_required_artifacts=[],
+                    runtime_blockers=[],
+                    ready_for_review=True,
+                )
+            ],
             markdown_path=str(report_path),
             add_to_kb=True,
         ),
@@ -141,6 +164,10 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
     assert "KDNET attach proof: /evidence/kdnet-attach.log" in result.markdown
     assert "KDNET attach proof: none" in result.markdown
     assert "KDNET attach is not validated" in result.markdown
+    assert "Runtime artifacts: ready" in result.markdown
+    assert "Runtime execution: executed" in result.markdown
+    assert "Runtime artifact summaries: kdnet_attach_log:aaaaaaaaaaaa:/evidence/kdnet-attach.log" in result.markdown
+    assert "Runtime artifacts: none attached" in result.markdown
     assert report_path.read_text(encoding="utf-8") == result.markdown
     assert result.report_node_id is not None
     assert any(
