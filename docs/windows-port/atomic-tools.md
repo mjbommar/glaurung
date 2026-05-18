@@ -101,6 +101,9 @@ sit below full IR/CFG bug-class scanners:
   a sink basic block using native PE function CFG recovery or supplied
   fixture CFG rows. It reports `dominated`, `not_dominated`,
   `same_block`, `unreachable`, or `unknown`.
+- `windows_cfg_gate_to_sink` composes ASB gate/sink metadata with
+  concrete gate and sink callsite VAs, runs CFG dominance, and returns
+  a packet-ready gate status for candidate evidence.
 - `windows_emit_review_packet` and `windows_compose_candidate_packets`
   preserve structured PDB identity, component-profile, and patch-diff
   context in every emitted candidate packet, so downstream ranking and
