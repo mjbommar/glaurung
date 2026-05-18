@@ -134,6 +134,9 @@ from ..tools.windows_operation_metadata import (
 from ..tools.windows_list_operation_sinks import (
     build_tool as build_windows_list_operation_sinks,
 )
+from ..tools.windows_callsite_operand_facts import (
+    build_tool as build_windows_callsite_operand_facts,
+)
 from ..tools.windows_trace_arg_flow import (
     build_tool as build_windows_trace_arg_flow,
 )
@@ -921,6 +924,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_function_arg_roles()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_operation_metadata()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_list_operation_sinks()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_callsite_operand_facts())
+    )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_trace_arg_flow()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_source_sink_operand_match())
