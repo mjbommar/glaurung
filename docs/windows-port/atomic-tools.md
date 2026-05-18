@@ -68,6 +68,10 @@ sit below full IR/CFG bug-class scanners:
 - `windows_build_corpus` resolves ASB's priority Windows target
   manifest against caller-supplied corpus and `.glaurung` project
   roots.
+- `windows_project_fact_summary` inspects a `.glaurung` SQLite project
+  read-only and reports available PE project facts: function names,
+  call/data xrefs, prototypes, stack variables, comments, and CFG table
+  coverage.
 - `windows_pdb_identity_manifest` exposes ASB's target-to-PDB identity
   coverage, including CodeView GUID+age values, cached/missing status,
   and whether public symbols, type layouts, or prototypes are expected

@@ -92,6 +92,9 @@ from ..tools.windows_surface_metadata import (
 from ..tools.windows_build_corpus import (
     build_tool as build_windows_build_corpus,
 )
+from ..tools.windows_project_fact_summary import (
+    build_tool as build_windows_project_fact_summary,
+)
 from ..tools.windows_binary_diff_summary import (
     build_tool as build_windows_binary_diff_summary,
 )
@@ -885,6 +888,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_pe_decode_version_info()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_pe_view_manifest()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_build_corpus()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_project_fact_summary()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_binary_diff_summary()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_pdb_identity_manifest()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_reconcile_pdb_identity()))
