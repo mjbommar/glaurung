@@ -460,6 +460,9 @@ def _resolve_expression(
         )
         if address_source is not None:
             return address_source
+        stack_local = _resolve_stack_local_address(expression)
+        if stack_local is not None:
+            return stack_local
     frame_slot = _frame_slot_key(expression)
     if frame_slot is None:
         return _ResolvedExpression(expression=expression)
@@ -496,6 +499,19 @@ def _resolve_address_expression(
         expression=_format_address_expression(base_expression, displacement),
         alias_depth=alias_depth,
         alias_kind="derived_address",
+    )
+
+
+def _resolve_stack_local_address(expression: str) -> _ResolvedExpression | None:
+    memory = _simple_memory_expression(expression)
+    if memory is None:
+        return None
+    base_register, displacement = memory
+    if base_register != "rbp" or displacement >= 0:
+        return None
+    return _ResolvedExpression(
+        expression=_format_address_expression(base_register, displacement),
+        alias_kind="stack_local_address",
     )
 
 
@@ -771,6 +787,8 @@ def _coverage(
         coverage.append("simple_spill_reload_aliases")
     if any(arg.alias_kind == "derived_address" for arg in arguments):
         coverage.append("derived_address_arguments")
+    if any(arg.alias_kind == "stack_local_address" for arg in arguments):
+        coverage.append("stack_local_address_arguments")
     return coverage
 
 

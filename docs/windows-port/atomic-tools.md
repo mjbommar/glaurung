@@ -122,8 +122,10 @@ sit below full IR/CFG bug-class scanners:
   `[rsp+0x28]`. It also resolves simple straight-line register aliases,
   incoming caller-parameter aliases, same-window frame-slot
   spill/reload chains, and simple LEA-derived address expressions such
-  as `[caller_arg0 + 0x20]` in the local setup window. It is local
-  evidence, not full alias or path proof.
+  as `[caller_arg0 + 0x20]` in the local setup window. It also labels
+  conservative rbp-relative local stack addresses such as
+  `[rbp - 0x40]`. It is local evidence, not full alias, stack-frame, or
+  path proof.
 - `windows_callsite_operand_facts` enumerates structured callsite
   argument facts from supplied or decompiled pseudocode, attaches
   optional callsite VA markers when present, and joins operation-backed

@@ -129,7 +129,10 @@ def test_windows_project_call_argument_snapshot_recovers_register_args(
         ("r8", "0"),
         ("r9", "0x20"),
     ]
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[1].alias_kind == "stack_local_address"
     assert "windows_x64_register_arguments" in result.coverage
+    assert "stack_local_address_arguments" in result.coverage
     assert "stack_arguments" in result.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
