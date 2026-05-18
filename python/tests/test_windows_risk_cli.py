@@ -168,7 +168,9 @@ def test_windows_risk_json_reports_parser_shape(
             "var6 = ret; L_1010: arg2 = stack_9; arg3 = (rsp + 64); "
             "ReadFile(var3, var6); hres = FindResourceW(0, 0x401000, 10); "
             "size = SizeofResource(0, hres); loaded = LoadResource(0, hres); "
-            "LockResource(loaded); wcscpy(var6, var4); "
+            "resptr = LockResource(loaded); resbuf = LocalAlloc(64, size); "
+            "WriteFile(var3, resbuf, size, (rsp + 80)); "
+            "wcscpy(var6, var4); "
             "swprintf((rbp - 256), 0x180050000); "
             "GetTempPathW(260, (rbp - 520)); "
             "GetTempFileNameW((rbp - 520), 0x180050010, 0, (rbp - 1040)); "
@@ -228,6 +230,8 @@ def test_windows_risk_json_reports_parser_shape(
         "file-read-allocation-argument-flow",
     ]
     assert "registry-query-size-allocation-flow" in function_summary["risk_signals"]
+    assert "resource-size-allocation-flow" in function_summary["risk_signals"]
+    assert "resource-size-buffer-flow" in function_summary["risk_signals"]
     assert function_summary["argument_roles"]["length"][:3] == [
         {
             "api": "ReadFile",
@@ -318,6 +322,14 @@ def test_windows_risk_json_reports_parser_shape(
         hint["kind"] == "registry-query-size-allocation-flow"
         for hint in report["functions"][0]["flow_hints"]
     )
+    assert any(
+        hint["kind"] == "resource-size-allocation-flow"
+        for hint in report["functions"][0]["flow_hints"]
+    )
+    assert any(
+        hint["kind"] == "resource-size-buffer-flow"
+        for hint in report["functions"][0]["flow_hints"]
+    )
     assert any(var["offset"] == -128 for var in report["functions"][0]["stack_vars"])
     assert report["functions"][0]["suspicious_constants"][0] == {
         "value": 4,
@@ -344,6 +356,13 @@ def test_windows_risk_json_reports_parser_shape(
     assert any(
         item["kind"] == "registry-query-size-allocation-flow"
         for item in report["risk_items"]
+    )
+    assert any(
+        item["kind"] == "resource-size-allocation-flow"
+        for item in report["risk_items"]
+    )
+    assert any(
+        item["kind"] == "resource-size-buffer-flow" for item in report["risk_items"]
     )
     assert "resource" in report["risk_imports"]
     assert "resource-extraction" in report["functions"][0]["patterns"]

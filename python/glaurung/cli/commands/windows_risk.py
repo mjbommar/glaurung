@@ -143,6 +143,8 @@ _SIGNAL_ORDER: tuple[str, ...] = (
     "file-read-allocation-argument-flow",
     "file-read-length-field-allocation-flow",
     "registry-query-size-allocation-flow",
+    "resource-size-allocation-flow",
+    "resource-size-buffer-flow",
     "dynamic-api-resolution",
     "registry-write",
     "resource-extraction",
@@ -2013,6 +2015,7 @@ def _flow_hints_from_api_calls(api_calls: list[dict[str, Any]]) -> list[dict[str
             )
             break
     hints.extend(_file_read_length_field_flow_hints(api_calls))
+    hints.extend(_resource_size_flow_hints(api_calls))
     hints.extend(_registry_query_size_flow_hints(api_calls))
     return hints[:16]
 
@@ -2097,6 +2100,76 @@ def _find_later_read_with_length_expr(
             continue
         if _normalize_expr(str(length_arg.get("expr", ""))) == normalized_expr:
             return call, length_arg
+    return None
+
+
+def _resource_size_flow_hints(api_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    size_sources: list[tuple[int, dict[str, Any], str]] = []
+    for idx, call in enumerate(api_calls):
+        if not _is_sizeofresource_call(call):
+            continue
+        assigned_to = str(call.get("assigned_to", ""))
+        if not assigned_to:
+            continue
+        size_sources.append((idx, call, _normalize_expr(assigned_to)))
+
+    seen: set[tuple[str, str, str]] = set()
+    for size_idx, size_call, normalized_size in size_sources:
+        if not normalized_size:
+            continue
+        for later_call in api_calls[size_idx + 1 :]:
+            kind = _resource_size_flow_kind(later_call)
+            if kind is None:
+                continue
+            size_arg = _resource_size_arg(later_call)
+            if size_arg is None:
+                continue
+            if _normalize_expr(str(size_arg.get("expr", ""))) != normalized_size:
+                continue
+            key = (
+                kind,
+                str(size_call.get("assigned_to", "")),
+                str(later_call.get("name", "")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            hints.append(
+                {
+                    "kind": kind,
+                    "summary": (
+                        "SizeofResource result controls a later "
+                        f"{str(later_call.get('name', 'API'))} size argument"
+                    ),
+                    "evidence": [
+                        f"{size_call.get('name', 'SizeofResource')}.return="
+                        f"{size_call.get('assigned_to')}",
+                        _format_role_evidence(later_call, size_arg),
+                    ],
+                }
+            )
+    return hints
+
+
+def _resource_size_flow_kind(call: dict[str, Any]) -> str | None:
+    if _is_allocation_call(call):
+        return "resource-size-allocation-flow"
+    stem = _api_stem(str(call.get("name", "")))
+    if stem.startswith("writefile") or _is_copy_or_format_sink_stem(stem):
+        return "resource-size-buffer-flow"
+    return None
+
+
+def _resource_size_arg(call: dict[str, Any]) -> dict[str, Any] | None:
+    length_arg = _first_arg_with_role(call, "length")
+    if length_arg is not None:
+        return length_arg
+    stem = _api_stem(str(call.get("name", "")))
+    if _is_copy_or_format_sink_stem(stem):
+        args = list(call.get("args") or [])
+        if len(args) >= 3:
+            return args[2]
     return None
 
 
@@ -2187,6 +2260,10 @@ def _find_later_registry_value_read(
 
 def _is_readfile_call(call: dict[str, Any]) -> bool:
     return _api_stem(str(call.get("name", ""))).startswith("readfile")
+
+
+def _is_sizeofresource_call(call: dict[str, Any]) -> bool:
+    return _api_stem(str(call.get("name", ""))) == "sizeofresource"
 
 
 def _is_regqueryvalue_call(call: dict[str, Any]) -> bool:
