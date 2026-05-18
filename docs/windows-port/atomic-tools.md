@@ -160,6 +160,12 @@ sit below full IR/CFG bug-class scanners:
   data VA, and when `data_labels` has a row for that VA it attaches the
   label name, C type, and size. It is local evidence, not full alias,
   stack-frame, or path proof.
+- `windows_project_data_label_facts` reports project global data
+  references with label coverage. It lists labeled targets, unlabeled
+  data targets, sample source VAs, read/write counts, source-function
+  counts, and label metadata from `data_labels`, so rules can separate
+  known globals from unresolved project data references before relying
+  on call-argument global expressions.
 - `windows_callsite_operand_facts` enumerates structured callsite
   argument facts from supplied or decompiled pseudocode, attaches
   optional callsite VA markers when present, and joins operation-backed

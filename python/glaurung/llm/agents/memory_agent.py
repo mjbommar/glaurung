@@ -113,6 +113,9 @@ from ..tools.windows_project_callgraph_slice import (
 from ..tools.windows_project_call_argument_snapshot import (
     build_tool as build_windows_project_call_argument_snapshot,
 )
+from ..tools.windows_project_data_label_facts import (
+    build_tool as build_windows_project_data_label_facts,
+)
 from ..tools.windows_binary_diff_summary import (
     build_tool as build_windows_binary_diff_summary,
 )
@@ -970,6 +973,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_call_argument_snapshot())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_data_label_facts())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_binary_diff_summary()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_pdb_identity_manifest()))
