@@ -176,6 +176,7 @@ class WindowsProjectSinkCallPacketsResult(BaseModel):
     gate_refinement_count: int
     cfg_path_count: int
     gate_predicate_count: int
+    gate_missing_required_count: int
     source_value_match_count: int
     source_role_inference_count: int
     packets: list[WindowsReviewPacket]
@@ -226,6 +227,7 @@ class WindowsProjectSinkCallPacketsTool(
         gate_refinement_count = 0
         cfg_path_count = 0
         gate_predicate_count = 0
+        gate_missing_required_count = 0
         source_value_match_count = 0
         source_role_inference_count = 0
         for callsite in callsites.callsites:
@@ -242,6 +244,7 @@ class WindowsProjectSinkCallPacketsTool(
                 if gate_refinement.cfg_path is not None:
                     cfg_path_count += 1
                 gate_predicate_count += len(gate_refinement.predicates)
+                gate_missing_required_count += len(gate_refinement.missing_required_gates)
             inferred_roles = _infer_source_roles(ctx, kb, args, callsite)
             if inferred_roles:
                 source_role_inference_count += 1
@@ -284,6 +287,7 @@ class WindowsProjectSinkCallPacketsTool(
                         "gate_refinement_count": gate_refinement_count,
                         "cfg_path_count": cfg_path_count,
                         "gate_predicate_count": gate_predicate_count,
+                        "gate_missing_required_count": gate_missing_required_count,
                         "source_value_match_count": source_value_match_count,
                         "source_role_inference_count": source_role_inference_count,
                     },
@@ -302,6 +306,7 @@ class WindowsProjectSinkCallPacketsTool(
             gate_refinement_count=gate_refinement_count,
             cfg_path_count=cfg_path_count,
             gate_predicate_count=gate_predicate_count,
+            gate_missing_required_count=gate_missing_required_count,
             source_value_match_count=source_value_match_count,
             source_role_inference_count=source_role_inference_count,
             packets=packets,
@@ -386,6 +391,17 @@ def _emit_packet(
                     ],
                 )
             )
+        evidence.append(
+            WindowsReviewEvidence(
+                source="windows_project_gate_requirement_coverage",
+                summary=_gate_requirement_summary(gate_refinement),
+                provenance=[
+                    "windows_project_sink_call_packets",
+                    "asb_pe_gate_metadata",
+                    "asb_pe_sink_metadata",
+                ],
+            )
+        )
         if gate_refinement.predicates:
             evidence.append(
                 WindowsReviewEvidence(
@@ -509,6 +525,9 @@ class _SourceValueMatch:
 class _GateRefinement:
     gate_symbol: str
     gate_va: int
+    gate_proves: list[str]
+    matched_required_gates: list[str]
+    missing_required_gates: list[str]
     packet_gate_status: GateStatus
     summary: str
     provenance: list[str]
@@ -571,7 +590,20 @@ def _refine_gate(
             return _GateRefinement(
                 gate_symbol=name,
                 gate_va=candidate.callsite_va,
-                packet_gate_status=_packet_gate_status(dominance.status),
+                gate_proves=gate.proves,
+                matched_required_gates=_matched_required_gates(
+                    gate,
+                    sink_callsite.operation.required_gates,
+                ),
+                missing_required_gates=_missing_required_gates(
+                    gate,
+                    sink_callsite.operation.required_gates,
+                ),
+                packet_gate_status=_packet_gate_status(
+                    dominance.status,
+                    gate,
+                    sink_callsite.operation.required_gates,
+                ),
                 summary=(
                     f"{name}@0x{candidate.callsite_va:x} vs "
                     f"sink@0x{sink_callsite.callsite_va:x}: {dominance.reason}"
@@ -613,7 +645,13 @@ def _dominance(
         return None
 
 
-def _packet_gate_status(status: str) -> GateStatus:
+def _packet_gate_status(
+    status: str,
+    gate: GateRecord,
+    required_gates: list[str],
+) -> GateStatus:
+    if _missing_required_gates(gate, required_gates):
+        return "unknown"
     if status == "dominated":
         return "dominated"
     if status == "not_dominated":
@@ -621,6 +659,34 @@ def _packet_gate_status(status: str) -> GateStatus:
     if status == "same_block":
         return "gate_same_line"
     return "unknown"
+
+
+def _matched_required_gates(gate: GateRecord, required_gates: list[str]) -> list[str]:
+    proven = set(gate.proves)
+    return [required for required in required_gates if required in proven]
+
+
+def _missing_required_gates(gate: GateRecord, required_gates: list[str]) -> list[str]:
+    proven = set(gate.proves)
+    return [required for required in required_gates if required not in proven]
+
+
+def _gate_requirement_summary(refinement: _GateRefinement) -> str:
+    matched = (
+        ", ".join(refinement.matched_required_gates)
+        if refinement.matched_required_gates
+        else "none"
+    )
+    missing = (
+        ", ".join(refinement.missing_required_gates)
+        if refinement.missing_required_gates
+        else "none"
+    )
+    proves = ", ".join(refinement.gate_proves) if refinement.gate_proves else "none"
+    return (
+        f"{refinement.gate_symbol}@0x{refinement.gate_va:x} proves [{proves}]; "
+        f"matched required gates [{matched}]; missing required gates [{missing}]"
+    )
 
 
 def _gate_predicates(

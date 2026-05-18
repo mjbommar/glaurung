@@ -122,9 +122,11 @@ sit below full IR/CFG bug-class scanners:
   When `refine_gates` is enabled, it searches same-function project
   call xrefs for compatible ASB gate operations and attaches persisted
   CFG dominance evidence plus compact `windows_project_cfg_path_query`
-  path evidence. With `attach_gate_predicates`, a refined gate can also
-  carry path-filtered persisted branch-condition predicates from
-  `cfg_branch_facts`. When a caller supplies `source_arg` or
+  path evidence. It also records which sink-required gate semantics the
+  gate metadata proves and which required gates remain unproven. With
+  `attach_gate_predicates`, a refined gate can also carry path-filtered
+  persisted branch-condition predicates from `cfg_branch_facts`. When a
+  caller supplies `source_arg` or
   `source_arg_index`, it can attach local sink-argument match evidence
   that ties a known source expression to a concrete sink argument role.
   With `infer_source_roles`, it can also use ASB source metadata for the

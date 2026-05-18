@@ -331,13 +331,14 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert result.gate_refinement_count == 1
     assert result.cfg_path_count == 1
     assert result.gate_predicate_count == 1
+    assert result.gate_missing_required_count == 1
     assert result.source_value_match_count == 1
     packet = result.packets[0]
     assert packet.binary == "driver.sys"
     assert packet.entrypoint == "DriverDispatch"
     assert packet.sink_symbol == "RtlCopyMemory"
     assert packet.sink_kind == "copy"
-    assert packet.gate_status == "dominated"
+    assert packet.gate_status == "unknown"
     assert packet.required_gates == ["destination_range_valid", "byte_count_bounded"]
     assert packet.source_arg == "rsi"
     assert packet.required_project_facts == [
@@ -368,6 +369,18 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert "status=covered" in cfg_path_evidence[0].summary
     assert "entry_path=entry->gate->sink" in cfg_path_evidence[0].summary
     assert "gate_path=gate->sink" in cfg_path_evidence[0].summary
+    requirement_evidence = [
+        evidence
+        for evidence in packet.evidence
+        if evidence.source == "windows_project_gate_requirement_coverage"
+    ]
+    assert len(requirement_evidence) == 1
+    assert "matched required gates [destination_range_valid]" in (
+        requirement_evidence[0].summary
+    )
+    assert "missing required gates [byte_count_bounded]" in (
+        requirement_evidence[0].summary
+    )
     predicate_evidence = [
         evidence
         for evidence in packet.evidence
