@@ -214,15 +214,19 @@ sit below full IR/CFG bug-class scanners:
   expected gates, harness plan, regression signals, project coverage,
   and blocking Ghidra gaps backed the hit. Packets infer conservative
   required project facts when the caller does not provide them and keep
-  hits below promotion when required coverage or Ghidra parity is
-  missing. When `auto_join_manifest_context` is enabled, the packet
-  emitter fills missing project/Ghidra context from ASB
+  hits below promotion when required coverage, required gate semantics,
+  or Ghidra parity are missing. They also carry structured
+  `proven_gates` and `missing_required_gates` fields for downstream
+  ranking and validation scripts. When `auto_join_manifest_context` is
+  enabled, the packet emitter fills missing project/Ghidra context from ASB
   `pe-project-facts.yaml` and `pe-ghidra-delta.yaml` records by
   target, build label, and component.
 - `windows_rank_candidate_packets` now treats promotion preconditions
   separately from triage priority: a high-risk packet can still rank for
-  review, but it is not validation-ready while project coverage or
-  blocking Ghidra gaps remain.
+  review, but it is not validation-ready while project coverage,
+  required gate coverage, or blocking Ghidra gaps remain. The ranker
+  uses `missing_required_gates` directly in score reasons so partial
+  gate coverage is visible without parsing evidence text.
 
 These tools do not replace the Ghidra-grade facts this document still
 tracks: function matching across renamed builds, instruction-level

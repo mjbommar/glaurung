@@ -144,6 +144,15 @@ def _score_packet(packet: WindowsReviewPacket) -> tuple[float, list[str]]:
     elif packet.gate_status == "dominated":
         score -= 12.0
         reasons.append("gate is recorded as dominated")
+    if packet.missing_required_gates:
+        score += min(12.0, 4.0 * len(packet.missing_required_gates))
+        reasons.append(
+            "missing required gate semantics: "
+            + ", ".join(packet.missing_required_gates[:4])
+        )
+    if packet.proven_gates and not packet.missing_required_gates:
+        score -= 4.0
+        reasons.append("all required gate semantics are recorded as proven")
 
     provenance = " ".join(packet.provenance).lower()
     if any(token in provenance for token in ("dynamic", "trace", "vm", "kd")):

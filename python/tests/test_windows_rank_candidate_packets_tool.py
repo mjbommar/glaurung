@@ -33,6 +33,8 @@ def _packet(
     priority: str,
     confidence: float,
     provenance: list[str] | None = None,
+    proven_gates: list[str] | None = None,
+    missing_required_gates: list[str] | None = None,
     promotion_preconditions_met: bool = True,
     promotion_blockers: list[str] | None = None,
 ) -> WindowsReviewPacket:
@@ -47,6 +49,8 @@ def _packet(
         sink_symbol="RtlCopyMemory",
         sink_kind=sink_kind,
         required_gates=["destination_range_valid"],
+        proven_gates=proven_gates or [],
+        missing_required_gates=missing_required_gates or [],
         gate_status=gate_status,  # type: ignore[arg-type]
         path=[
             WindowsReviewPathStep(
@@ -109,14 +113,27 @@ def test_windows_rank_candidate_packets_orders_by_validation_priority(
         promotion_preconditions_met=False,
         promotion_blockers=["missing project fact coverage context"],
     )
+    partial_gate = _packet(
+        "partial-gate-coverage",
+        attacker_class="local_unprivileged",
+        sink_kind="copy",
+        gate_status="unknown",
+        priority="high",
+        confidence=0.7,
+        provenance=["cfg", "asb_pe_gate_metadata"],
+        proven_gates=["destination_range_valid"],
+        missing_required_gates=["byte_count_bounded"],
+        promotion_preconditions_met=False,
+        promotion_blockers=["required gate coverage unresolved: byte_count_bounded"],
+    )
 
     result = tool.run(
         ctx,
         ctx.kb,
-        tool.input_model(packets=[lower, blocked, higher], add_to_kb=True),
+        tool.input_model(packets=[lower, blocked, higher, partial_gate], add_to_kb=True),
     )
 
-    assert result.input_count == 3
+    assert result.input_count == 4
     assert result.ranked[0].packet.candidate_id == "remote-missing-gate"
     assert result.ranked[0].rank == 1
     assert result.ranked[0].validation_ready is True
@@ -126,6 +143,11 @@ def test_windows_rank_candidate_packets_orders_by_validation_priority(
     )
     assert blocked_rank.validation_ready is False
     assert any("promotion preconditions" in reason for reason in blocked_rank.reasons)
+    partial_rank = next(
+        item for item in result.ranked if item.packet.candidate_id == "partial-gate-coverage"
+    )
+    assert partial_rank.validation_ready is False
+    assert any("missing required gate semantics" in reason for reason in partial_rank.reasons)
     assert result.ranked[-1].packet.candidate_id == "internal-safe"
     assert result.ranked[-1].validation_ready is False
     assert result.evidence_node_id is not None
