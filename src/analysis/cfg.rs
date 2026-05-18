@@ -767,6 +767,33 @@ fn parse_pdata_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch)
     starts
 }
 
+/// Read PE TLS callback VAs as trusted loader-dispatched function starts.
+///
+/// TLS callbacks execute before the ordinary image entrypoint and often have
+/// no static call xref, so they need to be treated like metadata-provided
+/// entrypoints instead of recursive-discovery byproducts.
+fn parse_pe_tls_callback_starts(data: &[u8], regions: &[ExecRegion]) -> Vec<u64> {
+    let parser = match crate::formats::pe::PeParser::new(data) {
+        Ok(parser) => parser,
+        Err(_) => return Vec::new(),
+    };
+    let tls = match parser.tls() {
+        Ok(tls) => tls,
+        Err(_) => return Vec::new(),
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut starts = Vec::new();
+    for &va in &tls.callbacks {
+        if va == 0 || !seen.insert(va) {
+            continue;
+        }
+        if in_exec_regions(regions, va).is_some() {
+            starts.push(va);
+        }
+    }
+    starts
+}
+
 /// Read every export-table function VA from a PE.
 ///
 /// The `object` crate's `dynamic_symbols()` returns nothing for PE
@@ -1136,6 +1163,34 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         seeds = ordered;
     }
 
+    let bits = if arch.is_64_bit() { 64 } else { 32 };
+    let is_pe_image = data.len() >= 2 && &data[..2] == b"MZ";
+    let mut known: std::collections::HashSet<u64> = seeds.iter().map(|(a, _)| a.value).collect();
+
+    // PE TLS callbacks are loader-dispatched entry points: they can execute
+    // before DllMain / main and may have no direct call xref from code. Promote
+    // them early so tight function budgets still preserve this reachability
+    // surface instead of burying it behind broad signature scans.
+    let pe_tls_callbacks = if is_pe_image {
+        parse_pe_tls_callback_starts(data, &regions)
+    } else {
+        Vec::new()
+    };
+    let pe_tls_callback_name_by_va: std::collections::HashMap<u64, String> = pe_tls_callbacks
+        .iter()
+        .enumerate()
+        .map(|(idx, va)| (*va, format!("tls_callback_{}_{:x}", idx, va)))
+        .collect();
+    for va in &pe_tls_callbacks {
+        if known.contains(va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, *va, bits, None, None) {
+            seeds.push((addr, DiscoverySeedKind::Trusted));
+            known.insert(*va);
+        }
+    }
+
     // FLIRT seed augmentation. On stripped binaries (no symbol table),
     // the seed list is otherwise just the entrypoint, so the analyser
     // never finds any of the dozens of functions that exist. Scan exec
@@ -1148,8 +1203,6 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     } else {
         Vec::new()
     };
-    let bits = if arch.is_64_bit() { 64 } else { 32 };
-    let is_pe_image = data.len() >= 2 && &data[..2] == b"MZ";
     let pe_import_thunks = if is_pe_image {
         crate::analysis::pe_iat::pe_import_thunk_map(data)
     } else {
@@ -1159,7 +1212,6 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         pe_import_thunks.iter().cloned().collect();
     let flirt_name_by_va: std::collections::HashMap<u64, String> =
         flirt_seeds.iter().cloned().collect();
-    let mut known: std::collections::HashSet<u64> = seeds.iter().map(|(a, _)| a.value).collect();
     for (va, _name) in &flirt_seeds {
         if known.contains(va) {
             continue;
@@ -1401,6 +1453,19 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         apply_flirt_overrides(data, &mut functions, lib);
     }
 
+    // TLS callback labels are PE metadata names for anonymous loader entry
+    // points. Apply them after symbol/DWARF/FLIRT processing so real names win.
+    if !pe_tls_callback_name_by_va.is_empty() {
+        for f in &mut functions {
+            if !f.name.starts_with("sub_") {
+                continue;
+            }
+            if let Some(name) = pe_tls_callback_name_by_va.get(&f.entry_point.value) {
+                f.name = name.clone();
+            }
+        }
+    }
+
     // Fold compiler-emitted split chunks (e.g. GCC -O2 `<fn>.cold`) into
     // their parent function's `chunks` list so downstream consumers see
     // one logical function instead of N siblings. Runs after DWARF —
@@ -1638,6 +1703,112 @@ mod pe_import_thunk_seed_tests {
             }),
             "expected a named LeaveCriticalSection import thunk function"
         );
+    }
+}
+
+#[cfg(test)]
+mod pe_tls_callback_seed_tests {
+    use super::{
+        analyze_functions_bytes, parse_exec_regions, parse_pe_tls_callback_starts, Budgets,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::Path;
+
+    fn read_u16(data: &[u8], off: usize) -> Option<u16> {
+        data.get(off..off + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    }
+
+    fn read_u32(data: &[u8], off: usize) -> Option<u32> {
+        data.get(off..off + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn zero_range(data: &mut [u8], off: usize, len: usize) -> Option<()> {
+        for byte in data.get_mut(off..off + len)? {
+            *byte = 0;
+        }
+        Some(())
+    }
+
+    fn strip_coff_symbols_and_exception_directory(data: &mut [u8]) -> Option<()> {
+        if data.len() < 0x40 || data.get(0..2)? != b"MZ" {
+            return None;
+        }
+        let e_lfanew = read_u32(data, 0x3c)? as usize;
+        if e_lfanew + 24 > data.len() || data.get(e_lfanew..e_lfanew + 4)? != b"PE\0\0" {
+            return None;
+        }
+        let coff_off = e_lfanew + 4;
+        let opt_size = read_u16(data, coff_off + 16)? as usize;
+        let opt_off = coff_off + 20;
+        if opt_off + opt_size > data.len() {
+            return None;
+        }
+        zero_range(data, coff_off + 8, 8)?;
+
+        let dd_off = match read_u16(data, opt_off)? {
+            // PE32+
+            0x20b => opt_off + 112,
+            // PE32
+            0x10b => opt_off + 96,
+            _ => return None,
+        };
+        // IMAGE_DIRECTORY_ENTRY_EXCEPTION. Removing it makes the test prove
+        // TLS callback prioritisation independently of Win64 .pdata seeds.
+        zero_range(data, dd_off + 3 * 8, 8)?;
+        Some(())
+    }
+
+    #[test]
+    fn pe_tls_callbacks_are_priority_function_seeds() {
+        let path = Path::new(
+            "samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/pe_tls_callbacks-x86_64-mingw.exe",
+        );
+        if !path.exists() {
+            return;
+        }
+        let mut data = std::fs::read(path).expect("read sample");
+        strip_coff_symbols_and_exception_directory(&mut data)
+            .expect("strip symbol and exception metadata");
+
+        let (regions, _arch, _end, _entry) = parse_exec_regions(&data);
+        let callbacks = parse_pe_tls_callback_starts(&data, &regions);
+        assert!(!callbacks.is_empty(), "fixture has no PE TLS callbacks");
+
+        let budgets = Budgets {
+            max_functions: callbacks.len() + 1,
+            max_blocks: 1_000_000,
+            max_instructions: 30_000_000,
+            timeout_ms: 30_000,
+        };
+        let (functions, _cg) = analyze_functions_bytes(&data, &budgets);
+        let discovered: BTreeSet<u64> = functions.iter().map(|f| f.entry_point.value).collect();
+        let names_by_va: BTreeMap<u64, &str> = functions
+            .iter()
+            .map(|f| (f.entry_point.value, f.name.as_str()))
+            .collect();
+        let missing: Vec<u64> = callbacks
+            .iter()
+            .copied()
+            .filter(|va| !discovered.contains(va))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "missing TLS callback functions under tight budget: {:?}",
+            missing
+        );
+        for va in callbacks {
+            let name = names_by_va
+                .get(&va)
+                .copied()
+                .expect("callback function should be named");
+            assert!(
+                name.starts_with("tls_callback_"),
+                "anonymous TLS callback {va:#x} kept non-metadata name {name}"
+            );
+        }
     }
 }
 
