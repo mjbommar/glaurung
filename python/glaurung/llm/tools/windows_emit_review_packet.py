@@ -69,6 +69,25 @@ class WindowsDiffContext(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class WindowsProjectFactContext(BaseModel):
+    target_id: str | None = None
+    build_label: str | None = None
+    project_path: str | None = None
+    fact_coverage: list[str] = Field(default_factory=list)
+    missing_facts: list[str] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class WindowsGhidraDeltaContext(BaseModel):
+    target_id: str | None = None
+    component: str | None = None
+    build_label: str | None = None
+    blocking_fact_classes: list[str] = Field(default_factory=list)
+    current_capabilities: list[str] = Field(default_factory=list)
+    missing_capabilities: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class WindowsEmitReviewPacketArgs(BaseModel):
     candidate_id: str | None = Field(
         None,
@@ -126,6 +145,14 @@ class WindowsEmitReviewPacketArgs(BaseModel):
         None,
         description="Optional patch-regression or binary-diff context.",
     )
+    project_facts: WindowsProjectFactContext | None = Field(
+        None,
+        description="Optional .glaurung project fact coverage context.",
+    )
+    ghidra_delta: WindowsGhidraDeltaContext | None = Field(
+        None,
+        description="Optional Ghidra-parity gap context for this target.",
+    )
     notes: list[str] = Field(default_factory=list)
     add_to_kb: bool = Field(
         False,
@@ -152,6 +179,8 @@ class WindowsReviewPacket(BaseModel):
     pdb_identity: WindowsPdbIdentityContext | None = None
     component_profile: WindowsComponentProfileContext | None = None
     diff_context: WindowsDiffContext | None = None
+    project_facts: WindowsProjectFactContext | None = None
+    ghidra_delta: WindowsGhidraDeltaContext | None = None
     priority: CandidatePriority
     confidence: float = Field(ge=0.0, le=1.0)
     confidence_reason: str
@@ -219,6 +248,8 @@ class WindowsEmitReviewPacketTool(
             pdb_identity=args.pdb_identity,
             component_profile=args.component_profile,
             diff_context=args.diff_context,
+            project_facts=args.project_facts,
+            ghidra_delta=args.ghidra_delta,
             priority=priority,
             confidence=confidence,
             confidence_reason=reason,
@@ -287,6 +318,10 @@ def _context_provenance(args: WindowsEmitReviewPacketArgs) -> list[str]:
         provenance.append("asb_component_profile")
     if args.diff_context is not None:
         provenance.append("patch_diff_context")
+    if args.project_facts is not None:
+        provenance.append("asb_pe_project_facts_manifest")
+    if args.ghidra_delta is not None:
+        provenance.append("asb_pe_ghidra_delta_manifest")
     return provenance
 
 
@@ -362,6 +397,20 @@ def _confidence(
         else:
             score += 0.03
             reasons.append("diff context present but sparse")
+    if args.project_facts is not None:
+        if args.project_facts.fact_coverage:
+            score += 0.08
+            reasons.append("project fact coverage context present")
+        else:
+            score += 0.03
+            reasons.append("project fact context present but sparse")
+    if args.ghidra_delta is not None:
+        if args.ghidra_delta.blocking_fact_classes:
+            score -= 0.05
+            reasons.append("blocking Ghidra-parity gaps remain")
+        elif args.ghidra_delta.current_capabilities:
+            score += 0.03
+            reasons.append("Ghidra-parity context present")
     if args.path:
         score += min(0.15, 0.05 * len(args.path))
         reasons.append("source-to-sink path supplied")
@@ -409,6 +458,12 @@ def _next_validation(
         if args.diff_context.changed_functions:
             functions = ", ".join(args.diff_context.changed_functions[:4])
             steps.append(f"prioritize changed functions from diff context: {functions}")
+    if args.project_facts is not None and args.project_facts.missing_facts:
+        missing = ", ".join(args.project_facts.missing_facts[:4])
+        steps.append(f"account for missing project facts before promotion: {missing}")
+    if args.ghidra_delta is not None and args.ghidra_delta.blocking_fact_classes:
+        gaps = ", ".join(args.ghidra_delta.blocking_fact_classes[:4])
+        steps.append(f"close or explicitly caveat blocking Ghidra-parity gaps: {gaps}")
     return steps
 
 
@@ -433,6 +488,10 @@ def _false_positive_questions(
         questions.append("Did the component profile add a gate expectation that this path cannot reach?")
     if args.diff_context is not None and args.diff_context.missing_functions:
         questions.append("Are seed functions absent because of renaming, inlining, or build mismatch?")
+    if args.project_facts is not None and args.project_facts.missing_facts:
+        questions.append("Could missing project facts hide an alternate caller, data target, or path?")
+    if args.ghidra_delta is not None and args.ghidra_delta.blocking_fact_classes:
+        questions.append("Does a blocking Ghidra-parity gap invalidate the packet evidence?")
     if args.sink_kind.lower() in {"copy", "write"}:
         questions.append("Are size/count units consistent between source, checks, and sink?")
     if args.sink_kind.lower() in {"free", "refcount", "completion"}:

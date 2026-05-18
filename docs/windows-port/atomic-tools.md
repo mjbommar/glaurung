@@ -180,12 +180,15 @@ sit below full IR/CFG bug-class scanners:
   a packet-ready gate status for candidate evidence.
 - `windows_compose_source_gate_sink_packet` composes source/sink
   operand matching with CFG gate-to-sink evidence and emits a normal
-  candidate review packet for operator triage.
+  candidate review packet for operator triage. It can carry project
+  fact coverage and Ghidra-parity gap context so the packet records
+  which substrate was present or missing when the hit was produced.
 - `windows_emit_review_packet` and `windows_compose_candidate_packets`
-  preserve structured PDB identity, component-profile, and patch-diff
-  context in every emitted candidate packet, so downstream ranking and
-  validation can see which build/PDB, expected gates, harness plan, and
-  regression signals backed the hit.
+  preserve structured PDB identity, component-profile, patch-diff,
+  project-fact, and Ghidra-delta context in every emitted candidate
+  packet, so downstream ranking and validation can see which build/PDB,
+  expected gates, harness plan, regression signals, project coverage,
+  and blocking Ghidra gaps backed the hit.
 
 These tools do not replace the Ghidra-grade facts this document still
 tracks: function matching across renamed builds, instruction-level

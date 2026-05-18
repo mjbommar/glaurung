@@ -16,7 +16,9 @@ from .windows_emit_review_packet import (
     WindowsDiffContext,
     WindowsEmitReviewPacketArgs,
     WindowsEmitReviewPacketTool,
+    WindowsGhidraDeltaContext,
     WindowsPdbIdentityContext,
+    WindowsProjectFactContext,
     WindowsReviewEvidence,
     WindowsReviewPacket,
     WindowsReviewPathStep,
@@ -74,6 +76,8 @@ class WindowsComposeSourceGateSinkPacketArgs(BaseModel):
     pdb_identity: WindowsPdbIdentityContext | None = None
     component_profile: WindowsComponentProfileContext | None = None
     diff_context: WindowsDiffContext | None = None
+    project_facts: WindowsProjectFactContext | None = None
+    ghidra_delta: WindowsGhidraDeltaContext | None = None
     add_to_kb: bool = Field(
         False,
         description="If true, add a compact composition evidence node to the KB.",
@@ -243,6 +247,8 @@ def _emit_packet(ctx, kb, args, operand, gate) -> WindowsReviewPacket:
             pdb_identity=args.pdb_identity,
             component_profile=args.component_profile,
             diff_context=args.diff_context,
+            project_facts=args.project_facts,
+            ghidra_delta=args.ghidra_delta,
             notes=[
                 f"operand_status={operand.status}",
                 f"cfg_gate_status={gate.status}",

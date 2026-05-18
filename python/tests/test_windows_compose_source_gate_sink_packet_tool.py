@@ -118,6 +118,19 @@ void DriverDispatch(void *dst, void *user_buffer, ULONG len) {
             cfg_blocks=_cfg(bypass=True),
             gates_path=str(gates),
             sinks_path=str(sinks),
+            project_facts={
+                "target_id": "driver",
+                "build_label": "unit-test",
+                "project_path": "/projects/driver.glaurung",
+                "fact_coverage": ["cfg"],
+                "missing_facts": ["data_labels"],
+                "counts": {"cfg_edge_count": 3},
+            },
+            ghidra_delta={
+                "target_id": "driver",
+                "component": "driver.sys",
+                "blocking_fact_classes": ["call_argument_flow"],
+            },
             add_to_kb=True,
         ),
     )
@@ -128,6 +141,10 @@ void DriverDispatch(void *dst, void *user_buffer, ULONG len) {
     assert result.packet.gate_status == "not_dominated"
     assert result.packet.sink_kind == "copy"
     assert result.packet.source_arg == "user_buffer"
+    assert result.packet.project_facts is not None
+    assert result.packet.project_facts.counts["cfg_edge_count"] == 3
+    assert result.packet.ghidra_delta is not None
+    assert result.packet.ghidra_delta.blocking_fact_classes == ["call_argument_flow"]
     assert any(
         evidence.source == "windows_source_sink_operand_match"
         for evidence in result.packet.evidence

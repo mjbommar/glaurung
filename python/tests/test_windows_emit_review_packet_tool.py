@@ -95,6 +95,23 @@ def test_windows_emit_review_packet_normalizes_candidate(tmp_path: Path) -> None
                 "changed_functions": ["nt!NtExample"],
                 "diff_signals": ["added bounds gate"],
             },
+            project_facts={
+                "target_id": "ntoskrnl",
+                "build_label": "win11-ltsc-v4",
+                "project_path": "/projects/ntoskrnl.glaurung",
+                "fact_coverage": ["function_names", "call_xrefs", "cfg"],
+                "missing_facts": ["data_labels"],
+                "counts": {"function_name_count": 10, "call_xref_count": 7},
+            },
+            ghidra_delta={
+                "target_id": "ntoskrnl",
+                "component": "ntoskrnl.exe",
+                "build_label": "win11-ltsc-v4",
+                "blocking_fact_classes": ["type_layout"],
+                "current_capabilities": ["cfg_path"],
+                "missing_capabilities": ["field_names"],
+                "notes": ["type layouts not imported"],
+            },
             add_to_kb=True,
         ),
     )
@@ -112,14 +129,23 @@ def test_windows_emit_review_packet_normalizes_candidate(tmp_path: Path) -> None
     assert packet.component_profile.profile_id == "ntoskrnl-core"
     assert packet.diff_context is not None
     assert packet.diff_context.changed_functions == ["nt!NtExample"]
+    assert packet.project_facts is not None
+    assert packet.project_facts.counts["call_xref_count"] == 7
+    assert packet.ghidra_delta is not None
+    assert packet.ghidra_delta.blocking_fact_classes == ["type_layout"]
     assert "asb_pdb_identity_manifest" in packet.provenance
     assert "asb_component_profile" in packet.provenance
     assert "patch_diff_context" in packet.provenance
+    assert "asb_pe_project_facts_manifest" in packet.provenance
+    assert "asb_pe_ghidra_delta_manifest" in packet.provenance
     assert "user_pointer_captured" in packet.required_gates
     assert "VM validation" in " ".join(packet.next_validation)
     assert any("component validation" in step for step in packet.next_validation)
     assert any("patch-diff" in step for step in packet.next_validation)
+    assert any("missing project facts" in step for step in packet.next_validation)
+    assert any("Ghidra-parity gaps" in step for step in packet.next_validation)
     assert any("size/count units" in q for q in packet.false_positive_questions)
+    assert any("Ghidra-parity gap" in q for q in packet.false_positive_questions)
     assert "review packet only" in packet.notes[0]
     assert result.evidence_node_id is not None
     assert any(
