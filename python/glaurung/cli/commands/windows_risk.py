@@ -387,6 +387,7 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     _annotate_calls(function_rows, callgraph)
     _annotate_pe_metadata_roles(function_rows, pe_metadata)
     _annotate_named_import_functions(function_rows, imports)
+    _annotate_call_imports(function_rows, imports)
 
     data_xrefs = _collect_data_xrefs(path_str, args)
     _join_string_xrefs(path_str, args, data_xrefs, strings, by_va)
@@ -1084,6 +1085,48 @@ def _annotate_named_import_functions(
             {"kind": "import_thunk", "name": canonical},
             score=1,
         )
+
+
+def _annotate_call_imports(
+    function_rows: list[dict[str, Any]],
+    imports: list[str],
+) -> None:
+    lookup = _api_name_lookup(imports)
+    if not lookup:
+        return
+    by_va = {int(row["entry_va"]): row for row in function_rows}
+    for row in function_rows:
+        ordered_hits: list[str] = []
+        for call in sorted(row.get("calls") or [], key=_call_sort_key):
+            target_names = [str(call.get("target", ""))]
+            target_va = call.get("target_va")
+            if target_va is not None and int(target_va) in by_va:
+                target_names.append(str(by_va[int(target_va)].get("name", "")))
+            canonical = _first_import_match(target_names, lookup)
+            if canonical is None:
+                continue
+            ordered_hits.append(canonical)
+        if not ordered_hits:
+            continue
+        _merge_row_api_sequence(row, ordered_hits)
+        _merge_row_api_hits(row, ordered_hits, _patterns_from_api_hits(ordered_hits))
+
+
+def _call_sort_key(call: dict[str, Any]) -> tuple[int, str]:
+    sites = call.get("call_sites") or []
+    first_site = min((int(site) for site in sites), default=2**64 - 1)
+    return (first_site, str(call.get("target", "")))
+
+
+def _first_import_match(
+    names: list[str],
+    lookup: dict[str, str],
+) -> str | None:
+    for name in names:
+        canonical = lookup.get(name.lower()) or lookup.get(_api_stem(name))
+        if canonical is not None:
+            return canonical
+    return None
 
 
 def _add_metadata_role(

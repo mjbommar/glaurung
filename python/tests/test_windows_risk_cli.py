@@ -356,6 +356,100 @@ def test_windows_risk_plain_no_decompile_still_reports_imports(
     assert "LoadLibraryW" in out
 
 
+def test_windows_risk_no_decompile_maps_import_thunk_calls(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from glaurung.cli.main import GlaurungCLI
+
+    binary = tmp_path / "sample.exe"
+    binary.write_bytes(b"MZ")
+
+    caller = SimpleNamespace(
+        name="sub_1000",
+        entry_point=SimpleNamespace(value=0x1000),
+        basic_blocks=[SimpleNamespace(instruction_count=8)],
+        size=0x40,
+    )
+    thunk = SimpleNamespace(
+        name="ReadFile",
+        entry_point=SimpleNamespace(value=0x3000),
+        basic_blocks=[SimpleNamespace(instruction_count=1)],
+        size=0x8,
+    )
+    edge = SimpleNamespace(
+        caller="sub_1000",
+        callee="ReadFile",
+        call_type=SimpleNamespace(value=lambda: "direct"),
+        call_sites=[SimpleNamespace(value=0x1010)],
+    )
+
+    monkeypatch.setattr(
+        g.triage,
+        "list_symbols",
+        lambda *_args, **_kwargs: (
+            [],
+            [],
+            ["KERNEL32.dll!ReadFile"],
+            [],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        g.triage,
+        "analyze_path",
+        lambda *_args, **_kwargs: SimpleNamespace(strings=SimpleNamespace(strings=[])),
+    )
+    monkeypatch.setattr(
+        g.analysis,
+        "detect_entry_path",
+        lambda *_args, **_kwargs: ("PE", "x86_64", "little", 0x1000, 0),
+    )
+    monkeypatch.setattr(
+        g.analysis,
+        "analyze_functions_path",
+        lambda *_args, **_kwargs: ([caller, thunk], SimpleNamespace(edges=[edge])),
+    )
+    monkeypatch.setattr(g.analysis, "data_xrefs_path", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        g.analysis, "pe_list_resources_path", lambda *_args, **_kwargs: {}
+    )
+    monkeypatch.setattr(
+        g.analysis, "pe_view_resource_path", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        g.analysis,
+        "pe_tls_path",
+        lambda *_args, **_kwargs: {
+            "has_tls": False,
+            "has_callbacks": False,
+            "callback_count": 0,
+            "address_of_callbacks": 0,
+            "callbacks": [],
+            "callback_rvas": [],
+            "truncated": False,
+            "stop_reasons": [],
+        },
+    )
+
+    cli = GlaurungCLI()
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = cli.run(
+            ["windows-risk", str(binary), "--format", "json", "--no-decompile"]
+        )
+
+    assert rc == 0
+    report = json.loads(buf.getvalue())
+    caller_row = next(row for row in report["functions"] if row["entry_va"] == 0x1000)
+    assert caller_row["api_hits"] == ["ReadFile"]
+    assert caller_row["api_sequence"] == ["ReadFile"]
+    assert caller_row["api_buckets"] == {"file_io": ["ReadFile"]}
+    assert caller_row["imports"] == ["ReadFile"]
+    thunk_row = next(row for row in report["functions"] if row["entry_va"] == 0x3000)
+    assert thunk_row["metadata_roles"] == ["import_thunk"]
+
+
 def test_windows_risk_network_bucket_avoids_prefix_false_positives() -> None:
     from glaurung.cli.commands.windows_risk import _bucket_imports
 
