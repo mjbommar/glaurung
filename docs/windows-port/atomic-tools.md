@@ -112,6 +112,11 @@ sit below full IR/CFG bug-class scanners:
   `function_names` rows. When callee names match `pe-sinks.yaml`, it
   attaches operation metadata so agents can query project-backed sink
   callsites before decompiling for operands.
+- `windows_project_sink_call_packets` scans persisted project call xrefs
+  for ASB sink operations and emits manifest-backed review packets from
+  those exact callsites. This is the first broad project-scan packet
+  generator: it produces seed packets for operator/rule triage, while
+  source roles and gate proof still need dedicated source/gate rules.
 - `windows_project_callgraph_slice` returns incoming callers and
   outgoing callees around one project function, with exact callsite VAs
   and caller/callee names from persisted `.glaurung` call xrefs.
