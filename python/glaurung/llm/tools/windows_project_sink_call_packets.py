@@ -21,6 +21,7 @@ from .windows_check_gate_to_sink import (
 )
 from .windows_emit_review_packet import (
     GateStatus,
+    SourceRefinementStatus,
     WindowsEmitReviewPacketArgs,
     WindowsEmitReviewPacketTool,
     WindowsReviewEvidence,
@@ -184,6 +185,7 @@ class WindowsProjectSinkCallPacketsResult(BaseModel):
     gate_missing_required_count: int
     source_value_match_count: int
     source_role_inference_count: int
+    source_refinement_status_counts: dict[str, int] = Field(default_factory=dict)
     packets: list[WindowsReviewPacket]
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
@@ -235,6 +237,7 @@ class WindowsProjectSinkCallPacketsTool(
         gate_missing_required_count = 0
         source_value_match_count = 0
         source_role_inference_count = 0
+        source_refinement_status_counts: dict[str, int] = {}
         for callsite in callsites.callsites:
             if callsite.operation is None:
                 continue
@@ -261,6 +264,16 @@ class WindowsProjectSinkCallPacketsTool(
             )
             if source_match is not None:
                 source_value_match_count += 1
+            source_refinement = _source_refinement(
+                args,
+                callsite,
+                snapshot_args,
+                inferred_roles,
+                source_match,
+            )
+            source_refinement_status_counts[source_refinement.status] = (
+                source_refinement_status_counts.get(source_refinement.status, 0) + 1
+            )
             packets.append(
                 _emit_packet(
                     ctx,
@@ -270,6 +283,7 @@ class WindowsProjectSinkCallPacketsTool(
                     snapshot_args,
                     gate_refinement,
                     source_match,
+                    source_refinement,
                 )
             )
             if len(packets) >= args.max_packets:
@@ -295,6 +309,7 @@ class WindowsProjectSinkCallPacketsTool(
                         "gate_missing_required_count": gate_missing_required_count,
                         "source_value_match_count": source_value_match_count,
                         "source_role_inference_count": source_role_inference_count,
+                        "source_refinement_status_counts": source_refinement_status_counts,
                     },
                 )
             )
@@ -314,6 +329,7 @@ class WindowsProjectSinkCallPacketsTool(
             gate_missing_required_count=gate_missing_required_count,
             source_value_match_count=source_value_match_count,
             source_role_inference_count=source_role_inference_count,
+            source_refinement_status_counts=source_refinement_status_counts,
             packets=packets,
             evidence_node_id=evidence_node_id,
             notes=[
@@ -330,6 +346,7 @@ def _emit_packet(
     snapshot_args: list[ProjectCallArgumentFact],
     gate_refinement: "_GateRefinement | None",
     source_match: "_SourceValueMatch | None",
+    source_refinement: "_SourceRefinement",
 ) -> WindowsReviewPacket:
     assert callsite.operation is not None
     sink_symbol = (
@@ -442,6 +459,17 @@ def _emit_packet(
                 ],
             )
         )
+    if source_refinement.status != "not_requested" or source_refinement.blockers:
+        evidence.append(
+            WindowsReviewEvidence(
+                source="windows_project_source_refinement_status",
+                summary=source_refinement.summary,
+                provenance=[
+                    "windows_project_sink_call_packets",
+                    *source_refinement.provenance,
+                ],
+            )
+        )
     result = WindowsEmitReviewPacketTool().run(
         ctx,
         kb,
@@ -457,6 +485,9 @@ def _emit_packet(
                 else args.source_role
             ),
             source_arg=args.source_arg or (source_match.source_arg if source_match else None),
+            source_refinement_status=source_refinement.status,
+            source_refinement_sources=source_refinement.sources,
+            source_refinement_blockers=source_refinement.blockers,
             sink_symbol=sink_symbol,
             sink_kind=callsite.operation.sink_kind,
             required_gates=callsite.operation.required_gates,
@@ -492,7 +523,8 @@ def _emit_packet(
             manifest_component=args.manifest_component or args.binary,
             notes=[
                 "emitted from project sink-call scan",
-                "source role and gate status are placeholders until source/gate rules refine this packet",
+                _source_refinement_note(source_refinement.status),
+                "gate status is a placeholder until gate rules prove full required-gate coverage",
             ],
         ),
     )
@@ -533,6 +565,15 @@ class _SourceValueMatch:
     sink_arg_index: int
     sink_arg_role: str | None
     expression: str | None
+    summary: str
+
+
+@dataclass(frozen=True)
+class _SourceRefinement:
+    status: SourceRefinementStatus
+    sources: list[str]
+    blockers: list[str]
+    provenance: list[str]
     summary: str
 
 
@@ -893,6 +934,140 @@ def _infer_source_roles(
         if result.combined_roles:
             return result.combined_roles
     return []
+
+
+def _source_refinement(
+    args: WindowsProjectSinkCallPacketsArgs,
+    callsite: ProjectCallsiteFact,
+    snapshot_args: list[ProjectCallArgumentFact],
+    inferred_roles: list[ArgumentRoleEvidence],
+    source_match: _SourceValueMatch | None,
+) -> _SourceRefinement:
+    requested = (
+        args.source_arg_index is not None
+        or bool(args.source_arg)
+        or args.infer_source_roles
+    )
+    if source_match is not None:
+        sources = [
+            f"sink_arg{source_match.sink_arg_index}"
+            + (
+                f":{source_match.sink_arg_role}"
+                if source_match.sink_arg_role
+                else ""
+            ),
+            f"source_arg={source_match.source_arg}",
+            f"source_role={source_match.source_role}",
+        ]
+        if source_match.expression:
+            sources.append(f"expression={source_match.expression}")
+        return _SourceRefinement(
+            status="matched",
+            sources=sources,
+            blockers=[],
+            provenance=[
+                "windows_project_call_argument_snapshot",
+                "local_value_equivalence",
+            ],
+            summary="source refinement matched: " + "; ".join(sources),
+        )
+
+    role_sources = [_role_source(role) for role in inferred_roles]
+    role_sources = [source for source in role_sources if source]
+    if inferred_roles and not snapshot_args:
+        return _SourceRefinement(
+            status="inferred",
+            sources=role_sources,
+            blockers=[
+                "no local sink argument snapshot available to test inferred source roles"
+            ],
+            provenance=["asb_pe_source_metadata"],
+            summary=(
+                "source refinement inferred caller source roles but did not "
+                "test sink-argument equivalence: "
+                + "; ".join(role_sources)
+            ),
+        )
+    if inferred_roles:
+        return _SourceRefinement(
+            status="inferred",
+            sources=role_sources,
+            blockers=[
+                "inferred source roles did not match recovered sink arguments locally"
+            ],
+            provenance=[
+                "asb_pe_source_metadata",
+                "windows_project_call_argument_snapshot",
+            ],
+            summary=(
+                "source refinement inferred caller source roles without a local "
+                "sink-argument match: "
+                + "; ".join(role_sources)
+            ),
+        )
+
+    if not requested:
+        return _SourceRefinement(
+            status="not_requested",
+            sources=[],
+            blockers=[],
+            provenance=[],
+            summary="source refinement was not requested for this sink-only seed",
+        )
+
+    blockers: list[str] = []
+    if not snapshot_args:
+        blockers.append("no local sink argument snapshot available")
+    if args.source_arg:
+        blockers.append(
+            "source expression did not match recovered sink args: "
+            + args.source_arg
+        )
+    if args.source_arg_index is not None:
+        blockers.append(
+            "source argument index did not match recovered sink args: "
+            + str(args.source_arg_index)
+        )
+    if args.infer_source_roles:
+        caller = callsite.caller_name or callsite.caller_demangled or "unknown caller"
+        blockers.append(f"no ASB source metadata roles matched caller: {caller}")
+    return _SourceRefinement(
+        status="missing",
+        sources=[],
+        blockers=blockers,
+        provenance=[
+            "windows_project_sink_call_packets",
+            "windows_project_call_argument_snapshot",
+        ],
+        summary="source refinement missing: " + "; ".join(blockers),
+    )
+
+
+def _role_source(role: ArgumentRoleEvidence) -> str | None:
+    label = _source_label(role)
+    if not label:
+        return None
+    parts = [label]
+    if role.role:
+        parts.append(role.role)
+    if role.provenance:
+        parts.append(role.provenance)
+    return ":".join(parts)
+
+
+def _source_refinement_note(status: SourceRefinementStatus) -> str:
+    if status == "matched":
+        return "source refinement matched a local source value to a sink argument"
+    if status == "inferred":
+        return (
+            "source refinement inferred caller source roles but lacks local "
+            "value-equivalence proof"
+        )
+    if status == "missing":
+        return "source refinement was requested but remains missing"
+    if status == "ambiguous":
+        return "source refinement is ambiguous and needs rule/operator resolution"
+    return "source refinement was not requested; packet is a sink-only seed"
 
 
 def _source_match_from_argument(

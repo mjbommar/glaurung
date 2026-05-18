@@ -137,7 +137,10 @@ sit below full IR/CFG bug-class scanners:
   that ties a known source expression to a concrete sink argument role.
   With `infer_source_roles`, it can also use ASB source metadata for the
   caller symbol to infer source roles such as `caller_arg0` before doing
-  the same local sink-argument match.
+  the same local sink-argument match. Every emitted packet now carries a
+  normalized `source_refinement_status` plus source facts and blockers,
+  so downstream rules can distinguish sink-only seeds from inferred,
+  matched, missing, or ambiguous source refinement.
 - `windows_project_callgraph_slice` returns incoming callers and
   outgoing callees around one project function, with exact callsite VAs
   and caller/callee names from persisted `.glaurung` call xrefs.

@@ -333,6 +333,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert result.gate_predicate_count == 1
     assert result.gate_missing_required_count == 1
     assert result.source_value_match_count == 1
+    assert result.source_refinement_status_counts == {"matched": 1}
     packet = result.packets[0]
     assert packet.binary == "driver.sys"
     assert packet.entrypoint == "DriverDispatch"
@@ -346,6 +347,9 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     }
     assert packet.missing_required_gates == ["byte_count_bounded"]
     assert packet.source_arg == "rsi"
+    assert packet.source_refinement_status == "matched"
+    assert "source_arg=rsi" in packet.source_refinement_sources
+    assert packet.source_refinement_blockers == []
     assert packet.required_project_facts == [
         "function_names",
         "call_xrefs",
@@ -405,6 +409,13 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert len(value_evidence) == 1
     assert "source buffer rsi matches sink arg1" in value_evidence[0].summary
     assert "source_buffer" in value_evidence[0].summary
+    refinement_evidence = [
+        evidence
+        for evidence in packet.evidence
+        if evidence.source == "windows_project_source_refinement_status"
+    ]
+    assert len(refinement_evidence) == 1
+    assert "source refinement matched" in refinement_evidence[0].summary
     snapshot_evidence = [
         evidence
         for evidence in packet.evidence
@@ -460,9 +471,12 @@ def test_windows_project_sink_call_packets_infers_source_roles(
     assert result.packet_count == 1
     assert result.source_role_inference_count == 1
     assert result.source_value_match_count == 1
+    assert result.source_refinement_status_counts == {"matched": 1}
     packet = result.packets[0]
     assert packet.source_role == "buffer"
     assert packet.source_arg == "caller_arg0"
+    assert packet.source_refinement_status == "matched"
+    assert "source_arg=caller_arg0" in packet.source_refinement_sources
     value_evidence = [
         evidence
         for evidence in packet.evidence
@@ -471,6 +485,45 @@ def test_windows_project_sink_call_packets_infers_source_roles(
     assert len(value_evidence) == 1
     assert "source buffer caller_arg0 matches sink arg1" in value_evidence[0].summary
     assert "source_provenance=asb_pe_source_metadata" in value_evidence[0].summary
+
+
+def test_windows_project_sink_call_packets_marks_missing_source_refinement(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(_write_project(tmp_path)),
+            binary="driver.sys",
+            build="unit-test",
+            source_role="buffer",
+            source_arg="rsi",
+            sinks_path=str(_write_sinks(tmp_path)),
+            project_facts_path=str(_write_project_facts(tmp_path)),
+            ghidra_delta_path=str(_write_ghidra_delta(tmp_path)),
+            manifest_target_id="driver",
+            manifest_build_label="unit-test",
+            manifest_component="driver.sys",
+        ),
+    )
+
+    assert result.packet_count == 1
+    assert result.argument_snapshot_count == 0
+    assert result.source_value_match_count == 0
+    assert result.source_refinement_status_counts == {"missing": 1}
+    packet = result.packets[0]
+    assert packet.source_refinement_status == "missing"
+    assert "no local sink argument snapshot available" in (
+        packet.source_refinement_blockers
+    )
+    assert any(
+        "source refinement missing" in blocker
+        for blocker in packet.promotion_blockers
+    )
 
 
 def test_memory_agent_registers_windows_project_sink_call_packets() -> None:

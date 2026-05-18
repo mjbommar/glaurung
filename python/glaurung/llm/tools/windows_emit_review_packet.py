@@ -30,6 +30,13 @@ GateStatus = Literal[
     "not_dominated",
 ]
 CandidatePriority = Literal["low", "medium", "high"]
+SourceRefinementStatus = Literal[
+    "not_requested",
+    "inferred",
+    "matched",
+    "missing",
+    "ambiguous",
+]
 
 
 class WindowsReviewPathStep(BaseModel):
@@ -116,6 +123,21 @@ class WindowsEmitReviewPacketArgs(BaseModel):
     source_arg: str | None = Field(
         None,
         description="Optional source argument name, index, or expression.",
+    )
+    source_refinement_status: SourceRefinementStatus = Field(
+        "not_requested",
+        description=(
+            "How strongly this packet ties a source role/value to the sink: "
+            "not_requested, inferred, matched, missing, or ambiguous."
+        ),
+    )
+    source_refinement_sources: list[str] = Field(
+        default_factory=list,
+        description="Concrete source-refinement facts, labels, or provenance strings.",
+    )
+    source_refinement_blockers: list[str] = Field(
+        default_factory=list,
+        description="Missing facts that prevented source refinement.",
     )
     sink_symbol: str = Field(..., description="Security-relevant operation symbol.")
     sink_kind: str = Field(
@@ -234,6 +256,9 @@ class WindowsReviewPacket(BaseModel):
     attacker_class: str
     source_role: str
     source_arg: str | None
+    source_refinement_status: SourceRefinementStatus = "not_requested"
+    source_refinement_sources: list[str] = Field(default_factory=list)
+    source_refinement_blockers: list[str] = Field(default_factory=list)
     sink_symbol: str
     sink_kind: str
     required_gates: list[str]
@@ -328,6 +353,9 @@ class WindowsEmitReviewPacketTool(
             attacker_class=args.attacker_class,
             source_role=args.source_role,
             source_arg=args.source_arg,
+            source_refinement_status=args.source_refinement_status,
+            source_refinement_sources=list(args.source_refinement_sources),
+            source_refinement_blockers=list(args.source_refinement_blockers),
             sink_symbol=args.sink_symbol,
             sink_kind=args.sink_kind,
             required_gates=required_gates,
@@ -368,6 +396,7 @@ class WindowsEmitReviewPacketTool(
                         "priority": packet.priority,
                         "confidence": packet.confidence,
                         "gate_status": packet.gate_status,
+                        "source_refinement_status": packet.source_refinement_status,
                         "missing_required_gates": packet.missing_required_gates,
                     },
                 )
@@ -743,6 +772,16 @@ def _promotion_blockers(
     blockers.extend(
         _gate_promotion_blockers(args, required_gates, missing_required_gates)
     )
+    if args.source_refinement_status in {"missing", "ambiguous"}:
+        blockers.append(
+            "source refinement "
+            + args.source_refinement_status
+            + (
+                ": " + "; ".join(args.source_refinement_blockers[:4])
+                if args.source_refinement_blockers
+                else ""
+            )
+        )
 
     return blockers
 
