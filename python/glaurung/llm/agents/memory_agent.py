@@ -119,6 +119,9 @@ from ..tools.windows_compose_candidate_packets import (
 from ..tools.windows_rank_candidate_packets import (
     build_tool as build_windows_rank_candidate_packets,
 )
+from ..tools.windows_summarize_helper_side_effects import (
+    build_tool as build_windows_summarize_helper_side_effects,
+)
 from ..tools.identify_compiler_and_runtime import (
     build_tool as build_identify_compiler,
     IdentifyCompilerResult,
@@ -852,6 +855,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
         tool_to_pyd_ai(build_windows_compose_candidate_packets())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_rank_candidate_packets()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_summarize_helper_side_effects())
+    )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_agent_context()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_index_archive()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_obfuscation()))
