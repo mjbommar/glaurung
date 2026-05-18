@@ -107,6 +107,30 @@ class WindowsComposeCandidatePacketsArgs(BaseModel):
         None,
         description="Optional Ghidra-parity gap context for this target.",
     )
+    auto_join_manifest_context: bool = Field(
+        False,
+        description="If true, fill missing project/Ghidra context from ASB manifests.",
+    )
+    project_facts_path: str | None = Field(
+        None,
+        description="Optional path to ASB data/kg/pe-project-facts.yaml for auto-join.",
+    )
+    ghidra_delta_path: str | None = Field(
+        None,
+        description="Optional path to ASB data/kg/pe-ghidra-delta.yaml for auto-join.",
+    )
+    manifest_target_id: str | None = Field(
+        None,
+        description="Optional ASB target id used for manifest auto-join.",
+    )
+    manifest_build_label: str | None = Field(
+        None,
+        description="Optional ASB build label used for manifest auto-join.",
+    )
+    manifest_component: str | None = Field(
+        None,
+        description="Optional Windows component filename used for Ghidra-delta auto-join.",
+    )
     add_to_kb: bool = Field(
         False,
         description="If true, add a compact candidate-composition evidence node to the KB.",
@@ -359,6 +383,12 @@ def _emit_packet(
             project_facts=args.project_facts,
             required_project_facts=args.required_project_facts,
             ghidra_delta=args.ghidra_delta,
+            auto_join_manifest_context=args.auto_join_manifest_context,
+            project_facts_path=args.project_facts_path,
+            ghidra_delta_path=args.ghidra_delta_path,
+            manifest_target_id=args.manifest_target_id,
+            manifest_build_label=args.manifest_build_label,
+            manifest_component=args.manifest_component,
             notes=[
                 "composed from existing primitive tools",
                 "candidate is static triage evidence only",

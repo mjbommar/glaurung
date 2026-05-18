@@ -192,7 +192,10 @@ sit below full IR/CFG bug-class scanners:
   and blocking Ghidra gaps backed the hit. Packets infer conservative
   required project facts when the caller does not provide them and keep
   hits below promotion when required coverage or Ghidra parity is
-  missing.
+  missing. When `auto_join_manifest_context` is enabled, the packet
+  emitter fills missing project/Ghidra context from ASB
+  `pe-project-facts.yaml` and `pe-ghidra-delta.yaml` records by
+  target, build label, and component.
 - `windows_rank_candidate_packets` now treats promotion preconditions
   separately from triage priority: a high-risk packet can still rank for
   review, but it is not validation-ready while project coverage or

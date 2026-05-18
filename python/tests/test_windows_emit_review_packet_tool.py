@@ -19,6 +19,70 @@ def _ctx(tmp_path: Path) -> MemoryContext:
     return ctx
 
 
+def _write_packet_manifests(tmp_path: Path) -> tuple[Path, Path]:
+    project_facts = tmp_path / "pe-project-facts.yaml"
+    project_facts.write_text(
+        """
+- id: driver_project
+  target_id: driver
+  build_label: unit-test
+  build_number: "1"
+  architecture: x64
+  binary_filename: driver.sys
+  project_path: /projects/driver.glaurung
+  fact_sources: [unit_test]
+  fact_coverage: [function_names, call_xrefs]
+  missing_facts: [cfg]
+  counts:
+    function_name_count: 9
+    xref_count: 12
+    call_xref_count: 4
+    data_read_xref_count: 2
+    data_write_xref_count: 0
+    data_label_count: 0
+    function_prototype_count: 0
+    basic_block_count: 0
+    cfg_edge_count: 0
+    cfg_dominance_count: 0
+    cfg_branch_fact_count: 0
+""",
+        encoding="utf-8",
+    )
+    ghidra_delta = tmp_path / "pe-ghidra-delta.yaml"
+    ghidra_delta.write_text(
+        """
+- id: driver_call_argument_flow
+  target_id: driver
+  component: driver.sys
+  build_label: unit-test
+  fact_class: call_argument_flow
+  coverage_state: partial
+  blocking: false
+  ghidra_baseline: Ghidra shows call arguments.
+  glaurung_status: Unit test context is sufficient.
+  current_capabilities: [rcx_rdx_r8_r9_argument_snapshots]
+  missing_capabilities: [path_sensitive_argument_values]
+  next_actions: [add helper summaries]
+  evidence: [unit-test]
+- id: driver_type_layout
+  target_id: driver
+  component: driver.sys
+  build_label: unit-test
+  fact_class: type_layout
+  coverage_state: missing
+  blocking: true
+  ghidra_baseline: Ghidra applies field names.
+  glaurung_status: Type layouts are absent.
+  current_capabilities: [pdb_identity]
+  missing_capabilities: [field_offsets]
+  next_actions: [import PDB type layouts]
+  evidence: [unit-test]
+""",
+        encoding="utf-8",
+    )
+    return project_facts, ghidra_delta
+
+
 def test_windows_emit_review_packet_normalizes_candidate(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     tool = build_tool()
@@ -236,6 +300,54 @@ def test_windows_emit_review_packet_blocks_missing_required_project_facts(
     assert any("required project fact count is zero" in item for item in packet.promotion_blockers)
     assert "promotion blocked" in packet.confidence_reason
     assert any("clear promotion blockers" in step for step in packet.next_validation)
+
+
+def test_windows_emit_review_packet_auto_joins_manifest_context(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+    project_facts_path, ghidra_delta_path = _write_packet_manifests(tmp_path)
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary="driver.sys",
+            entrypoint="Dispatch",
+            attacker_class="local_unprivileged",
+            source_role="buffer",
+            sink_symbol="RtlCopyMemory",
+            sink_kind="copy",
+            gate_status="missing",
+            required_project_facts=["function_names", "call_xrefs"],
+            evidence=[
+                {
+                    "source": "windows_project_call_argument_snapshot",
+                    "summary": "call argument snapshot came from project facts",
+                    "provenance": ["cfg", "asb_pe_sink_metadata"],
+                }
+            ],
+            auto_join_manifest_context=True,
+            project_facts_path=str(project_facts_path),
+            ghidra_delta_path=str(ghidra_delta_path),
+            manifest_target_id="driver",
+            manifest_build_label="unit-test",
+            manifest_component="driver.sys",
+        ),
+    )
+
+    packet = result.packet
+    assert packet.project_facts is not None
+    assert packet.project_facts.project_path == "/projects/driver.glaurung"
+    assert packet.project_facts.counts["call_xref_count"] == 4
+    assert packet.ghidra_delta is not None
+    assert packet.ghidra_delta.blocking_fact_classes == ["type_layout"]
+    assert "rcx_rdx_r8_r9_argument_snapshots" in packet.ghidra_delta.current_capabilities
+    assert "asb_pe_project_facts_manifest" in packet.provenance
+    assert "asb_pe_ghidra_delta_manifest" in packet.provenance
+    assert packet.promotion_preconditions_met is False
+    assert any("blocking Ghidra-parity gaps" in item for item in packet.promotion_blockers)
 
 
 def test_memory_agent_registers_windows_emit_review_packet() -> None:

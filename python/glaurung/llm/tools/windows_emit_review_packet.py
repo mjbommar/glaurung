@@ -9,6 +9,15 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .windows_ghidra_delta_manifest import (
+    WindowsGhidraDeltaManifestArgs,
+    WindowsGhidraDeltaManifestTool,
+)
+from .windows_project_fact_manifest import (
+    ProjectFactRecord,
+    WindowsProjectFactManifestArgs,
+    WindowsProjectFactManifestTool,
+)
 
 
 GateStatus = Literal[
@@ -160,6 +169,33 @@ class WindowsEmitReviewPacketArgs(BaseModel):
         None,
         description="Optional Ghidra-parity gap context for this target.",
     )
+    auto_join_manifest_context: bool = Field(
+        False,
+        description=(
+            "If true, fill missing project_facts and ghidra_delta context from "
+            "ASB manifests using manifest_target_id/build/component or packet fields."
+        ),
+    )
+    project_facts_path: str | None = Field(
+        None,
+        description="Optional path to ASB data/kg/pe-project-facts.yaml for auto-join.",
+    )
+    ghidra_delta_path: str | None = Field(
+        None,
+        description="Optional path to ASB data/kg/pe-ghidra-delta.yaml for auto-join.",
+    )
+    manifest_target_id: str | None = Field(
+        None,
+        description="Optional ASB target id used for manifest auto-join.",
+    )
+    manifest_build_label: str | None = Field(
+        None,
+        description="Optional ASB build label used for manifest auto-join.",
+    )
+    manifest_component: str | None = Field(
+        None,
+        description="Optional Windows component filename used for Ghidra-delta auto-join.",
+    )
     notes: list[str] = Field(default_factory=list)
     add_to_kb: bool = Field(
         False,
@@ -227,6 +263,7 @@ class WindowsEmitReviewPacketTool(
         kb: KnowledgeBase,
         args: WindowsEmitReviewPacketArgs,
     ) -> WindowsEmitReviewPacketResult:
+        args = _with_manifest_context(ctx, kb, args)
         required_gates = _dedupe(
             [
                 *args.required_gates,
@@ -343,6 +380,158 @@ def _context_provenance(args: WindowsEmitReviewPacketArgs) -> list[str]:
     if args.ghidra_delta is not None:
         provenance.append("asb_pe_ghidra_delta_manifest")
     return provenance
+
+
+def _with_manifest_context(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsEmitReviewPacketArgs,
+) -> WindowsEmitReviewPacketArgs:
+    if not args.auto_join_manifest_context:
+        return args
+
+    updates: dict[str, object] = {}
+    if args.project_facts is None:
+        project_facts = _auto_project_fact_context(ctx, kb, args)
+        if project_facts is not None:
+            updates["project_facts"] = project_facts
+    if args.ghidra_delta is None:
+        ghidra_delta = _auto_ghidra_delta_context(ctx, kb, args)
+        if ghidra_delta is not None:
+            updates["ghidra_delta"] = ghidra_delta
+    if not updates:
+        return args
+    if hasattr(args, "model_copy"):
+        return args.model_copy(update=updates)
+    return args.copy(update=updates)
+
+
+def _auto_project_fact_context(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsEmitReviewPacketArgs,
+) -> WindowsProjectFactContext | None:
+    target_id = _manifest_target_id(args)
+    try:
+        result = WindowsProjectFactManifestTool().run(
+            ctx,
+            kb,
+            WindowsProjectFactManifestArgs(
+                project_facts_path=args.project_facts_path,
+                target_id=target_id,
+                binary_filename=args.binary if not target_id else None,
+                build_label=args.manifest_build_label,
+                add_to_kb=False,
+            ),
+        )
+    except FileNotFoundError:
+        if args.project_facts_path:
+            raise
+        return None
+    if not result.records:
+        return None
+    return _project_fact_context_from_record(_best_project_record(result.records, args))
+
+
+def _auto_ghidra_delta_context(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsEmitReviewPacketArgs,
+) -> WindowsGhidraDeltaContext | None:
+    target_id = _manifest_target_id(args)
+    component = args.manifest_component or args.binary
+    try:
+        result = WindowsGhidraDeltaManifestTool().run(
+            ctx,
+            kb,
+            WindowsGhidraDeltaManifestArgs(
+                ghidra_delta_path=args.ghidra_delta_path,
+                target_id=target_id,
+                component=component,
+                build_label=args.manifest_build_label,
+                max_records=512,
+                add_to_kb=False,
+            ),
+        )
+    except FileNotFoundError:
+        if args.ghidra_delta_path:
+            raise
+        return None
+    if not result.records:
+        return None
+
+    records = result.records
+    first = records[0]
+    return WindowsGhidraDeltaContext(
+        target_id=target_id or first.target_id,
+        component=component or first.component,
+        build_label=args.manifest_build_label or first.build_label,
+        blocking_fact_classes=_dedupe(
+            [record.fact_class for record in records if record.blocking]
+        ),
+        current_capabilities=_dedupe(
+            [
+                capability
+                for record in records
+                for capability in record.current_capabilities
+            ]
+        ),
+        missing_capabilities=_dedupe(
+            [
+                capability
+                for record in records
+                for capability in record.missing_capabilities
+            ]
+        ),
+        notes=[
+            f"{record.id}:{record.coverage_state}{':blocking' if record.blocking else ''}"
+            for record in records
+        ],
+    )
+
+
+def _manifest_target_id(args: WindowsEmitReviewPacketArgs) -> str | None:
+    if args.manifest_target_id:
+        return args.manifest_target_id
+    if args.pdb_identity is not None and args.pdb_identity.target_id:
+        return args.pdb_identity.target_id
+    if args.component_profile is not None and args.component_profile.target_id:
+        return args.component_profile.target_id
+    return None
+
+
+def _best_project_record(
+    records: list[ProjectFactRecord],
+    args: WindowsEmitReviewPacketArgs,
+) -> ProjectFactRecord:
+    if len(records) == 1:
+        return records[0]
+    if args.manifest_build_label:
+        for record in records:
+            if record.build_label == args.manifest_build_label:
+                return record
+    binary = args.binary.lower()
+    for record in records:
+        if record.binary_filename.lower() == binary:
+            return record
+    return records[0]
+
+
+def _project_fact_context_from_record(
+    record: ProjectFactRecord,
+) -> WindowsProjectFactContext:
+    if hasattr(record.counts, "model_dump"):
+        counts = record.counts.model_dump()
+    else:
+        counts = record.counts.dict()
+    return WindowsProjectFactContext(
+        target_id=record.target_id,
+        build_label=record.build_label,
+        project_path=record.project_path,
+        fact_coverage=record.fact_coverage,
+        missing_facts=record.missing_facts,
+        counts={key: int(value) for key, value in counts.items()},
+    )
 
 
 def _priority(
