@@ -16,6 +16,9 @@ from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 _C2 = Path(
     "samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0"
 )
+_PE32_PLUS = Path(
+    "samples/binaries/platforms/windows/i386/export/windows/x86_64/O0/hello-c-mingw64-O0.exe"
+)
 
 
 def _need(p: Path) -> Path:
@@ -121,6 +124,51 @@ def test_strings_xrefs_resolves_seeded_xref(tmp_path: Path) -> None:
     out = buf.getvalue()
     assert "use_string_fn" in out
     assert "0x1234" in out
+
+
+def test_strings_xrefs_matches_xref_inside_string_range() -> None:
+    from glaurung.cli.commands.string_xrefs import _xrefs_for_string_range
+
+    xref = (0x1234, 0x402002, 0x1000)
+    got = _xrefs_for_string_range({0x2002: [xref]}, 0x2000, 0x2010)
+    assert got == [xref]
+
+
+def test_strings_xrefs_can_index_real_pe_data_refs(tmp_path: Path) -> None:
+    from glaurung.cli.main import GlaurungCLI
+
+    binary = _need(_PE32_PLUS)
+    db = tmp_path / "pe-strxr.glaurung"
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+    kb.close()
+
+    cli = GlaurungCLI()
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = cli.run([
+            "strings-xrefs",
+            str(db),
+            "--binary",
+            str(binary),
+            "--index-data-xrefs",
+            "--used-only",
+            "--limit",
+            "200",
+            "--max-functions",
+            "512",
+            "--timeout-ms",
+            "30000",
+            "--format",
+            "json",
+        ])
+    assert rc == 0
+    rows = json.loads(buf.getvalue())
+    assert any(
+        "VirtualProtect failed" in row["text"]
+        and row["uses"] >= 1
+        and any(use["src_function_va"] for use in row["used_at"])
+        for row in rows
+    )
 
 
 def test_strings_xrefs_json_output(tmp_path: Path) -> None:

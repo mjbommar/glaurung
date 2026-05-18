@@ -57,6 +57,31 @@ def _build_offset_to_xref_map(
     return out
 
 
+def _string_storage_len(text: str, encoding: str) -> int:
+    encoding = encoding.lower()
+    if "16" in encoding:
+        return max(2, len(text) * 2)
+    return max(1, len(text))
+
+
+def _xrefs_for_string_range(
+    xref_map: Dict[int, List[Tuple[int, int, Optional[int]]]],
+    start: int,
+    end: int,
+) -> List[Tuple[int, int, Optional[int]]]:
+    used: List[Tuple[int, int, Optional[int]]] = []
+    seen: set[Tuple[int, int, Optional[int]]] = set()
+    for file_off, xrefs in xref_map.items():
+        if not (start <= int(file_off) < end):
+            continue
+        for xref in xrefs:
+            if xref in seen:
+                continue
+            seen.add(xref)
+            used.append(xref)
+    return used
+
+
 class StringsXrefsCommand(BaseCommand):
     """Strings window with xrefs back to code."""
 
@@ -92,6 +117,34 @@ class StringsXrefsCommand(BaseCommand):
             "--width", type=int, default=80,
             help="Truncate string text to this width (default 80)",
         )
+        parser.add_argument(
+            "--index-data-xrefs", action="store_true",
+            help="Run native data-xref recovery into the KB before rendering",
+        )
+        parser.add_argument(
+            "--force-index", action="store_true",
+            help="Rebuild existing data_read xrefs when used with --index-data-xrefs",
+        )
+        parser.add_argument(
+            "--max-functions", type=int, default=30_000,
+            help="Function discovery budget for --index-data-xrefs",
+        )
+        parser.add_argument(
+            "--max-blocks", type=int, default=1_000_000,
+            help="Basic-block budget for --index-data-xrefs",
+        )
+        parser.add_argument(
+            "--max-instructions", type=int, default=30_000_000,
+            help="Instruction budget for --index-data-xrefs",
+        )
+        parser.add_argument(
+            "--timeout-ms", type=int, default=600_000,
+            help="Analysis timeout for --index-data-xrefs",
+        )
+        parser.add_argument(
+            "--max-xrefs", type=int, default=1_000_000,
+            help="Maximum data xrefs to recover with --index-data-xrefs",
+        )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         db_path = Path(args.db)
@@ -124,6 +177,22 @@ class StringsXrefsCommand(BaseCommand):
                 return 4
             bin_str = str(bin_path)
 
+            if args.index_data_xrefs:
+                try:
+                    xref_db.index_data_xrefs(
+                        kb,
+                        bin_str,
+                        force=args.force_index,
+                        max_functions=args.max_functions,
+                        max_blocks=args.max_blocks,
+                        max_instructions=args.max_instructions,
+                        timeout_ms=args.timeout_ms,
+                        max_xrefs=args.max_xrefs,
+                    )
+                except Exception as e:
+                    formatter.output_plain(f"Error indexing data xrefs: {e}")
+                    return 6
+
             # Extract strings via triage.
             try:
                 art = g.triage.analyze_path(
@@ -141,7 +210,9 @@ class StringsXrefsCommand(BaseCommand):
                     continue
                 if len(s.text) < args.min_len:
                     continue
-                used = xref_map.get(int(s.offset), [])
+                start = int(s.offset)
+                end = start + _string_storage_len(str(s.text), str(s.encoding))
+                used = _xrefs_for_string_range(xref_map, start, end)
                 if args.used_only and not used:
                     continue
                 rows.append({
