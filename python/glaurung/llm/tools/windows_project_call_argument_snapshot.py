@@ -53,6 +53,7 @@ class ProjectCallArgumentFact(BaseModel):
     source_va: int | None = None
     source_text: str | None = None
     alias_depth: int = 0
+    alias_kind: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -80,6 +81,7 @@ class _Assignment:
     expression: str
     source_text: str
     alias_depth: int = 0
+    alias_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,12 +91,14 @@ class _StackAssignment:
     expression: str
     source_text: str
     alias_depth: int = 0
+    alias_kind: str | None = None
 
 
 @dataclass(frozen=True)
 class _ResolvedExpression:
     expression: str
     alias_depth: int = 0
+    alias_kind: str | None = None
 
 
 class WindowsProjectCallArgumentSnapshotTool(
@@ -292,6 +296,7 @@ def _argument_snapshot(
     callsite_va: int,
 ) -> list[ProjectCallArgumentFact]:
     assignments: dict[str, _Assignment] = {}
+    frame_assignments: dict[str, _Assignment] = {}
     stack_assignments: dict[int, _StackAssignment] = {}
     for instruction in instructions:
         va = int(instruction.address.value)
@@ -301,28 +306,54 @@ def _argument_snapshot(
             break
         if mnemonic == "call":
             assignments.clear()
+            frame_assignments.clear()
             stack_assignments.clear()
             continue
         assignment = _register_assignment(mnemonic, operands)
         if assignment is not None:
             register, expression = assignment
-            resolved = _resolve_expression(expression, assignments)
+            resolved = _resolve_expression(
+                expression,
+                assignments,
+                frame_assignments,
+            )
             assignments[register] = _Assignment(
                 va=va,
                 expression=resolved.expression,
                 source_text=_instruction_text(instruction),
                 alias_depth=resolved.alias_depth,
+                alias_kind=resolved.alias_kind,
+            )
+        frame_assignment = _frame_slot_assignment(mnemonic, operands)
+        if frame_assignment is not None:
+            slot, expression = frame_assignment
+            resolved = _resolve_expression(
+                expression,
+                assignments,
+                frame_assignments,
+            )
+            frame_assignments[slot] = _Assignment(
+                va=va,
+                expression=resolved.expression,
+                source_text=_instruction_text(instruction),
+                alias_depth=resolved.alias_depth,
+                alias_kind=resolved.alias_kind,
             )
         stack_assignment = _stack_argument_assignment(mnemonic, operands)
         if stack_assignment is not None:
             index, offset, expression = stack_assignment
-            resolved = _resolve_expression(expression, assignments)
+            resolved = _resolve_expression(
+                expression,
+                assignments,
+                frame_assignments,
+            )
             stack_assignments[index] = _StackAssignment(
                 va=va,
                 offset=offset,
                 expression=resolved.expression,
                 source_text=_instruction_text(instruction),
                 alias_depth=resolved.alias_depth,
+                alias_kind=resolved.alias_kind,
             )
 
     facts: list[ProjectCallArgumentFact] = []
@@ -339,6 +370,7 @@ def _argument_snapshot(
                 source_va=assignment.va,
                 source_text=assignment.source_text,
                 alias_depth=assignment.alias_depth,
+                alias_kind=assignment.alias_kind,
                 confidence=_assignment_confidence(
                     assignment.expression,
                     alias_depth=assignment.alias_depth,
@@ -358,6 +390,7 @@ def _argument_snapshot(
                 source_va=assignment.va,
                 source_text=assignment.source_text,
                 alias_depth=assignment.alias_depth,
+                alias_kind=assignment.alias_kind,
                 confidence=min(
                     _assignment_confidence(
                         assignment.expression,
@@ -386,15 +419,57 @@ def _register_assignment(mnemonic: str, operands: list[str]) -> tuple[str, str] 
 def _resolve_expression(
     expression: str,
     assignments: dict[str, _Assignment],
+    frame_assignments: dict[str, _Assignment],
 ) -> _ResolvedExpression:
     source_register = _canonical_register(expression)
     source = assignments.get(source_register)
-    if source is None:
+    if source is not None:
+        return _ResolvedExpression(
+            expression=source.expression,
+            alias_depth=source.alias_depth + 1,
+            alias_kind=source.alias_kind or "register",
+        )
+    frame_slot = _frame_slot_key(expression)
+    if frame_slot is None:
+        return _ResolvedExpression(expression=expression)
+    frame_source = frame_assignments.get(frame_slot)
+    if frame_source is None:
         return _ResolvedExpression(expression=expression)
     return _ResolvedExpression(
-        expression=source.expression,
-        alias_depth=source.alias_depth + 1,
+        expression=frame_source.expression,
+        alias_depth=frame_source.alias_depth + 1,
+        alias_kind="frame_slot",
     )
+
+
+def _frame_slot_assignment(
+    mnemonic: str,
+    operands: list[str],
+) -> tuple[str, str] | None:
+    if mnemonic != "mov" or len(operands) < 2:
+        return None
+    slot = _frame_slot_key(operands[0])
+    if slot is None:
+        return None
+    return slot, operands[1]
+
+
+def _frame_slot_key(raw: str) -> str | None:
+    text = raw.lower().strip()
+    text = re.sub(r"\b(?:byte|word|dword|qword|oword|xmmword)\s+ptr\s+", "", text)
+    text = text.replace(" ", "")
+    match = re.fullmatch(r"\[rbp([+-].+)?\]", text)
+    if not match:
+        return None
+    displacement = match.group(1)
+    if not displacement:
+        return "rbp+0x0"
+    try:
+        offset = _parse_int(displacement)
+    except ValueError:
+        return None
+    sign = "+" if offset >= 0 else "-"
+    return f"rbp{sign}0x{abs(offset):x}"
 
 
 def _stack_argument_assignment(
@@ -574,8 +649,10 @@ def _coverage(
         coverage.append("windows_x64_register_arguments")
     if any(arg.location == "stack" for arg in arguments):
         coverage.append("windows_x64_stack_arguments")
-    if any(arg.alias_depth > 0 for arg in arguments):
+    if any(arg.alias_kind == "register" for arg in arguments):
         coverage.append("simple_register_aliases")
+    if any(arg.alias_kind == "frame_slot" for arg in arguments):
+        coverage.append("simple_spill_reload_aliases")
     return coverage
 
 
