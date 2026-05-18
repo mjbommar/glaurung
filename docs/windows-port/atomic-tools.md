@@ -80,6 +80,11 @@ sit below full IR/CFG bug-class scanners:
   from a PE, checks Microsoft-style PDB cache resolution, optionally
   asks native PDB ingestion for type/public-symbol counts, and compares
   the live identity with ASB's manifest.
+- `windows_import_pdb_facts` persists matching PE/PDB public names,
+  requested struct/union layouts, and PDB procedure type records into a
+  `.glaurung` project, returning explicit import counts and remaining
+  gaps so agents can promote a project from cached-PDB state to
+  queryable type/name facts.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM
