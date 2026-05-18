@@ -113,6 +113,9 @@ from ..tools.windows_check_gate_to_sink import (
 from ..tools.windows_emit_review_packet import (
     build_tool as build_windows_emit_review_packet,
 )
+from ..tools.windows_compose_candidate_packets import (
+    build_tool as build_windows_compose_candidate_packets,
+)
 from ..tools.identify_compiler_and_runtime import (
     build_tool as build_identify_compiler,
     IdentifyCompilerResult,
@@ -842,6 +845,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_trace_onehop_flow()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_check_gate_to_sink()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_emit_review_packet()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_compose_candidate_packets())
+    )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_agent_context()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_index_archive()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_obfuscation()))
