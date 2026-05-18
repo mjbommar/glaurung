@@ -149,4 +149,4 @@ def test_tcpip_ghidra_selected_strcpy_caller_decompiles_by_va() -> None:
     )
 
     assert "fn sub_1c01933f4" in text
-    assert "strcpy_s" in text
+    assert "strcpy_s((var0 + 40), 256, var2)" in text
