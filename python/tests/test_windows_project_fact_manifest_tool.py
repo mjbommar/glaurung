@@ -41,6 +41,7 @@ def _write_project_facts(tmp_path: Path) -> Path:
     call_xref_count: 0
     data_read_xref_count: 5223
     data_write_xref_count: 0
+    data_label_count: 0
     function_prototype_count: 0
     basic_block_count: 0
     cfg_edge_count: 0
@@ -63,6 +64,7 @@ def _write_project_facts(tmp_path: Path) -> Path:
     xref_count: 20
     call_xref_count: 7
     data_read_xref_count: 5
+    data_label_count: 2
     function_prototype_count: 3
     basic_block_count: 30
     cfg_edge_count: 40
@@ -99,6 +101,7 @@ def test_windows_project_fact_manifest_filters_missing_call_xrefs(
     assert cldflt.project_path == "/projects/cldflt.glaurung"
     assert cldflt.counts.function_name_count == 974
     assert cldflt.counts.call_xref_count == 0
+    assert cldflt.counts.data_label_count == 0
     assert "data_xrefs" in cldflt.fact_coverage
     assert "persisted_cfg" in cldflt.missing_facts
     assert result.evidence_node_id is not None
@@ -129,6 +132,7 @@ def test_windows_project_fact_manifest_filters_available_capabilities(
     assert result.records[0].counts.cfg_edge_count == 40
     assert result.records[0].counts.cfg_dominance_count == 30
     assert result.records[0].counts.cfg_branch_fact_count == 12
+    assert result.records[0].counts.data_label_count == 2
 
 
 def test_memory_agent_registers_windows_project_fact_manifest() -> None:

@@ -54,6 +54,7 @@ class ProjectFactCounts(BaseModel):
     call_xref_count: int = 0
     data_read_xref_count: int = 0
     data_write_xref_count: int = 0
+    data_label_count: int = 0
     function_prototype_count: int = 0
     basic_block_count: int = 0
     cfg_edge_count: int = 0
@@ -196,6 +197,7 @@ def _record(entry: dict[str, Any], path: Path) -> ProjectFactRecord:
             call_xref_count=int(counts_raw.get("call_xref_count") or 0),
             data_read_xref_count=int(counts_raw.get("data_read_xref_count") or 0),
             data_write_xref_count=int(counts_raw.get("data_write_xref_count") or 0),
+            data_label_count=int(counts_raw.get("data_label_count") or 0),
             function_prototype_count=int(
                 counts_raw.get("function_prototype_count") or 0
             ),
