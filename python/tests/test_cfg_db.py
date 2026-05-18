@@ -187,3 +187,55 @@ def test_cfg_db_persists_branch_condition_facts(
         )
     finally:
         project.close()
+
+
+def test_cfg_db_persists_arithmetic_flag_branch_facts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import glaurung as g
+
+    def fake_analyze_functions_path(*_args, **_kwargs):
+        return (
+            [
+                _Function(
+                    0x1000,
+                    [
+                        _Block("entry", 0x1000, 0x1010, 3, ["taken", "fall"], []),
+                        _Block("taken", 0x1010, 0x1020, 1, [], ["entry"]),
+                        _Block("fall", 0x1020, 0x1030, 1, [], ["entry"]),
+                    ],
+                )
+            ],
+            None,
+        )
+
+    def fake_disassemble_window_at(_path: str, va: int, **_kwargs):
+        if va == 0x1000:
+            return [
+                _Instruction(0x1000, "sub", ["ecx", "1"]),
+                _Instruction(0x1003, "jne", ["0x1010"]),
+            ]
+        return []
+
+    monkeypatch.setattr(g.analysis, "analyze_functions_path", fake_analyze_functions_path)
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    pe = tmp_path / "driver.sys"
+    pe.write_bytes(b"MZ")
+    project = PersistentKnowledgeBase.open(tmp_path / "driver.glaurung", binary_path=pe)
+    try:
+        cfg_db.index_cfg(project, str(pe))
+        assert cfg_db.index_cfg_branch_facts(project, str(pe)) == 1
+        row = project._conn.execute(
+            "SELECT compare_mnemonic, compare_operands_json, condition_kind, "
+            "target_block_id, fallthrough_block_id FROM cfg_branch_facts"
+        ).fetchone()
+        assert row == (
+            "sub",
+            '["ecx", "1"]',
+            "not_equal",
+            "taken",
+            "fall",
+        )
+    finally:
+        project.close()

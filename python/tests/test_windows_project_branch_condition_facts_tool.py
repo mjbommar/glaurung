@@ -82,6 +82,21 @@ CREATE TABLE cfg_branch_facts (
             (
                 1,
                 0x1000,
+                "arith",
+                0x1028,
+                "jne",
+                '["0x1030"]',
+                0x1024,
+                "sub",
+                '["ecx", "1"]',
+                "not_equal",
+                "sink",
+                None,
+                0,
+            ),
+            (
+                1,
+                0x1000,
                 "gate",
                 0x1018,
                 "jne",
@@ -162,6 +177,26 @@ def test_windows_project_branch_condition_facts_filters_path_blocks(
     assert result.facts[0].compare_mnemonic == "test"
     assert result.facts[0].target_predicate == "rdx != 0"
     assert result.facts[0].fallthrough_predicate == "rdx == 0"
+
+
+def test_windows_project_branch_condition_facts_renders_arithmetic_flags(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(_write_project(tmp_path)),
+            block_id="arith",
+        ),
+    )
+
+    assert result.facts[0].compare_mnemonic == "sub"
+    assert result.facts[0].target_predicate == "(ecx - 1) != 0"
+    assert result.facts[0].fallthrough_predicate == "(ecx - 1) == 0"
 
 
 def test_memory_agent_registers_windows_project_branch_condition_facts() -> None:

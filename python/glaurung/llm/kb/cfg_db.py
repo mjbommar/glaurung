@@ -569,7 +569,7 @@ def _branch_fact_from_instructions(
     compare = None
     for candidate in reversed(instructions[:branch_index]):
         mnemonic = str(getattr(candidate, "mnemonic", "")).lower()
-        if mnemonic in {"cmp", "test"}:
+        if mnemonic in _FLAG_SOURCE_MNEMONICS:
             compare = candidate
             break
     target_block_id = _target_successor(branch, function_va, successors, block_ranges)
@@ -589,6 +589,19 @@ def _branch_fact_from_instructions(
 
 def _is_conditional_branch(mnemonic: str) -> bool:
     return mnemonic.startswith("j") and mnemonic not in {"jmp", "jmpe", "jmpl"}
+
+
+_FLAG_SOURCE_MNEMONICS = {
+    "cmp",
+    "test",
+    "sub",
+    "add",
+    "and",
+    "or",
+    "xor",
+    "inc",
+    "dec",
+}
 
 
 def _operand_texts(instruction: object) -> list[str]:

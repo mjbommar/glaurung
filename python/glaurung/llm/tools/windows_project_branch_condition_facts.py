@@ -325,6 +325,29 @@ def _predicate_text(
         return _predicate_from_operands(value, "0", condition_kind)
     if compare_mnemonic == "cmp" and len(compare_operands) >= 2:
         return _predicate_from_operands(compare_operands[0], compare_operands[1], condition_kind)
+    expression = _flag_result_expression(compare_mnemonic, compare_operands)
+    if expression is not None:
+        return _predicate_from_operands(expression, "0", condition_kind)
+    return None
+
+
+def _flag_result_expression(
+    compare_mnemonic: str,
+    compare_operands: list[str],
+) -> str | None:
+    if compare_mnemonic in {"and", "or", "xor", "sub", "add"} and len(compare_operands) >= 2:
+        op = {
+            "and": "&",
+            "or": "|",
+            "xor": "^",
+            "sub": "-",
+            "add": "+",
+        }[compare_mnemonic]
+        return f"({compare_operands[0]} {op} {compare_operands[1]})"
+    if compare_mnemonic == "inc" and compare_operands:
+        return f"({compare_operands[0]} + 1)"
+    if compare_mnemonic == "dec" and compare_operands:
+        return f"({compare_operands[0]} - 1)"
     return None
 
 
