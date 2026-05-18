@@ -206,6 +206,9 @@ from ..tools.windows_candidate_validation_report import (
 from ..tools.windows_record_validation_artifact_bundle import (
     build_tool as build_windows_record_validation_artifact_bundle,
 )
+from ..tools.windows_import_validation_artifact_directory import (
+    build_tool as build_windows_import_validation_artifact_directory,
+)
 from ..tools.windows_record_candidate_snapshot_mapping import (
     build_tool as build_windows_record_candidate_snapshot_mapping,
 )
@@ -1023,6 +1026,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_record_validation_artifact_bundle())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_import_validation_artifact_directory())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_record_candidate_snapshot_mapping())

@@ -283,6 +283,12 @@ sit below full IR/CFG bug-class scanners:
   evidence node. Its claim level is
   `runtime_artifact_bundle_not_finding`, so it accounts for evidence
   without promoting a candidate to a reproduced finding.
+- `windows_import_validation_artifact_directory` scans a local harness
+  output directory, classifies common Windows validation artifacts by
+  path/name, computes SHA256 hashes, and emits the same runtime artifact
+  bundle model consumed by candidate reports. It is the bridge from a
+  completed VM run directory to reportable evidence accounting, not a
+  reproduction verdict.
 
 These tools do not replace the Ghidra-grade facts this document still
 tracks: function matching across renamed builds, instruction-level
