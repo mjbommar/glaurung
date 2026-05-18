@@ -302,6 +302,79 @@ def test_windows_project_call_argument_snapshot_resolves_incoming_args(
     assert "incoming_argument_aliases" in result.coverage
 
 
+def test_windows_project_call_argument_snapshot_resolves_derived_address_args(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "lea", ["rdx", "[rcx + 0x20]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[1].expression == "[caller_arg0 + 0x20]"
+    assert by_index[1].source_text == "lea rdx, [rcx + 0x20]"
+    assert by_index[1].alias_depth == 1
+    assert by_index[1].alias_kind == "derived_address"
+    assert "derived_address_arguments" in result.coverage
+
+
+def test_windows_project_call_argument_snapshot_preserves_clobbered_address_base(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "add", ["rcx", "0x10"]),
+            _Insn(0x1004, "lea", ["rdx", "[rcx + 0x20]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[1].expression == "[rcx + 0x20]"
+    assert by_index[1].source_text == "lea rdx, [rcx + 0x20]"
+    assert by_index[1].alias_depth == 0
+    assert by_index[1].alias_kind is None
+    assert "derived_address_arguments" not in result.coverage
+
+
 def test_windows_project_call_argument_snapshot_invalidates_clobbered_incoming_args(
     tmp_path: Path,
     monkeypatch,

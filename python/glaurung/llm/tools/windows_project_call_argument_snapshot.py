@@ -320,6 +320,7 @@ def _argument_snapshot(
                 assignments,
                 frame_assignments,
                 clobbered_registers,
+                allow_address_alias=mnemonic == "lea",
             )
             assignments[register] = _Assignment(
                 va=va,
@@ -433,6 +434,8 @@ def _resolve_expression(
     assignments: dict[str, _Assignment],
     frame_assignments: dict[str, _Assignment],
     clobbered_registers: set[str],
+    *,
+    allow_address_alias: bool = False,
 ) -> _ResolvedExpression:
     source_register = _canonical_register(expression)
     source = assignments.get(source_register)
@@ -449,6 +452,14 @@ def _resolve_expression(
             alias_depth=1,
             alias_kind="incoming_arg",
         )
+    if allow_address_alias:
+        address_source = _resolve_address_expression(
+            expression,
+            assignments,
+            clobbered_registers,
+        )
+        if address_source is not None:
+            return address_source
     frame_slot = _frame_slot_key(expression)
     if frame_slot is None:
         return _ResolvedExpression(expression=expression)
@@ -460,6 +471,65 @@ def _resolve_expression(
         alias_depth=frame_source.alias_depth + 1,
         alias_kind="frame_slot",
     )
+
+
+def _resolve_address_expression(
+    expression: str,
+    assignments: dict[str, _Assignment],
+    clobbered_registers: set[str],
+) -> _ResolvedExpression | None:
+    memory = _simple_memory_expression(expression)
+    if memory is None:
+        return None
+    base_register, displacement = memory
+    source = assignments.get(base_register)
+    if source is not None:
+        base_expression = source.expression
+        alias_depth = source.alias_depth + 1
+    else:
+        incoming_role = WINDOWS_X64_ARG_ROLES.get(base_register)
+        if incoming_role is None or base_register in clobbered_registers:
+            return None
+        base_expression = f"caller_{incoming_role}"
+        alias_depth = 1
+    return _ResolvedExpression(
+        expression=_format_address_expression(base_expression, displacement),
+        alias_depth=alias_depth,
+        alias_kind="derived_address",
+    )
+
+
+def _simple_memory_expression(raw: str) -> tuple[str, int] | None:
+    text = _strip_memory_prefix(raw).replace(" ", "")
+    match = re.fullmatch(r"(?:[a-z][a-z0-9]*:)?\[([a-z0-9]+)([+-][^+\-*]+)?\]", text)
+    if not match:
+        return None
+    base_register = _canonical_register(match.group(1))
+    if not _is_register(base_register):
+        return None
+    displacement_text = match.group(2)
+    if displacement_text is None:
+        return base_register, 0
+    try:
+        displacement = _parse_int(displacement_text)
+    except ValueError:
+        return None
+    return base_register, displacement
+
+
+def _strip_memory_prefix(raw: str) -> str:
+    return re.sub(
+        r"\b(?:byte|word|dword|qword|oword|xmmword)\s+ptr\s+",
+        "",
+        raw.lower().strip(),
+    )
+
+
+def _format_address_expression(base_expression: str, displacement: int) -> str:
+    if displacement == 0:
+        return f"[{base_expression}]"
+    sign = "+" if displacement > 0 else "-"
+    return f"[{base_expression} {sign} 0x{abs(displacement):x}]"
 
 
 def _written_register(mnemonic: str, operands: list[str]) -> str | None:
@@ -502,8 +572,7 @@ def _frame_slot_assignment(
 
 
 def _frame_slot_key(raw: str) -> str | None:
-    text = raw.lower().strip()
-    text = re.sub(r"\b(?:byte|word|dword|qword|oword|xmmword)\s+ptr\s+", "", text)
+    text = _strip_memory_prefix(raw)
     text = text.replace(" ", "")
     match = re.fullmatch(r"\[rbp([+-].+)?\]", text)
     if not match:
@@ -533,8 +602,7 @@ def _stack_argument_assignment(
 
 
 def _stack_arg_offset(raw: str) -> int | None:
-    text = raw.lower().strip()
-    text = re.sub(r"\b(?:byte|word|dword|qword|oword|xmmword)\s+ptr\s+", "", text)
+    text = _strip_memory_prefix(raw)
     text = text.replace(" ", "")
     match = re.fullmatch(r"\[(rsp|esp)([+-].+)?\]", text)
     if not match:
@@ -569,8 +637,7 @@ def _parse_int(text: str) -> int:
 
 
 def _canonical_register(raw: str) -> str:
-    text = raw.lower().strip()
-    text = re.sub(r"\b(?:byte|word|dword|qword|oword|xmmword)\s+ptr\s+", "", text)
+    text = _strip_memory_prefix(raw)
     aliases = {
         "rax": "rax",
         "eax": "rax",
@@ -702,6 +769,8 @@ def _coverage(
         coverage.append("incoming_argument_aliases")
     if any(arg.alias_kind == "frame_slot" for arg in arguments):
         coverage.append("simple_spill_reload_aliases")
+    if any(arg.alias_kind == "derived_address" for arg in arguments):
+        coverage.append("derived_address_arguments")
     return coverage
 
 
