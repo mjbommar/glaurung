@@ -101,6 +101,9 @@ from ..tools.windows_operation_metadata import (
 from ..tools.windows_list_operation_sinks import (
     build_tool as build_windows_list_operation_sinks,
 )
+from ..tools.windows_trace_arg_flow import (
+    build_tool as build_windows_trace_arg_flow,
+)
 from ..tools.identify_compiler_and_runtime import (
     build_tool as build_identify_compiler,
     IdentifyCompilerResult,
@@ -826,6 +829,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_function_arg_roles()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_operation_metadata()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_list_operation_sinks()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_trace_arg_flow()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_agent_context()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_index_archive()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_obfuscation()))
