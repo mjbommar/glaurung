@@ -117,6 +117,8 @@ sit below full IR/CFG bug-class scanners:
   those exact callsites. This is the first broad project-scan packet
   generator: it produces seed packets for operator/rule triage, while
   source roles and gate proof still need dedicated source/gate rules.
+  When a PE `binary_path` is supplied, it also attaches the local
+  `windows_project_call_argument_snapshot` evidence for each callsite.
 - `windows_project_callgraph_slice` returns incoming callers and
   outgoing callees around one project function, with exact callsite VAs
   and caller/callee names from persisted `.glaurung` call xrefs.

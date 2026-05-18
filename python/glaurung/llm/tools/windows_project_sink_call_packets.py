@@ -18,10 +18,22 @@ from .windows_project_callsite_facts import (
     WindowsProjectCallsiteFactsArgs,
     WindowsProjectCallsiteFactsTool,
 )
+from .windows_project_call_argument_snapshot import (
+    ProjectCallArgumentFact,
+    WindowsProjectCallArgumentSnapshotArgs,
+    WindowsProjectCallArgumentSnapshotTool,
+)
 
 
 class WindowsProjectSinkCallPacketsArgs(BaseModel):
     project_path: str = Field(..., description="Path to a .glaurung SQLite project.")
+    binary_path: str | None = Field(
+        None,
+        description=(
+            "Optional PE binary path. When supplied, local call-argument snapshots "
+            "are attached to emitted packets."
+        ),
+    )
     binary: str = Field(..., description="Binary or driver filename.")
     build: str | None = Field(None, description="Windows build or corpus label.")
     attacker_class: str = Field(
@@ -88,6 +100,7 @@ class WindowsProjectSinkCallPacketsResult(BaseModel):
     project_path: str
     packet_count: int
     scanned_callsite_count: int
+    argument_snapshot_count: int
     packets: list[WindowsReviewPacket]
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
@@ -132,12 +145,16 @@ class WindowsProjectSinkCallPacketsTool(
         )
 
         packets: list[WindowsReviewPacket] = []
+        argument_snapshot_count = 0
         for callsite in callsites.callsites:
             if callsite.operation is None:
                 continue
             if args.sink_kind and callsite.operation.sink_kind != args.sink_kind:
                 continue
-            packets.append(_emit_packet(ctx, kb, args, callsite))
+            snapshot_args = _snapshot_arguments(ctx, kb, args, callsite)
+            if snapshot_args:
+                argument_snapshot_count += 1
+            packets.append(_emit_packet(ctx, kb, args, callsite, snapshot_args))
             if len(packets) >= args.max_packets:
                 break
 
@@ -154,6 +171,7 @@ class WindowsProjectSinkCallPacketsTool(
                         "sink_kind": args.sink_kind,
                         "packet_count": len(packets),
                         "scanned_callsite_count": callsites.scanned_call_count,
+                        "argument_snapshot_count": argument_snapshot_count,
                     },
                 )
             )
@@ -166,6 +184,7 @@ class WindowsProjectSinkCallPacketsTool(
             project_path=args.project_path,
             packet_count=len(packets),
             scanned_callsite_count=callsites.scanned_call_count,
+            argument_snapshot_count=argument_snapshot_count,
             packets=packets,
             evidence_node_id=evidence_node_id,
             notes=[
@@ -179,6 +198,7 @@ def _emit_packet(
     kb: KnowledgeBase,
     args: WindowsProjectSinkCallPacketsArgs,
     callsite: ProjectCallsiteFact,
+    snapshot_args: list[ProjectCallArgumentFact],
 ) -> WindowsReviewPacket:
     assert callsite.operation is not None
     sink_symbol = (
@@ -192,6 +212,31 @@ def _emit_packet(
         "function",
     )
     role = _first_arg_role(callsite)
+    evidence = [
+        WindowsReviewEvidence(
+            source="windows_project_callsite_facts",
+            summary=(
+                f"{entrypoint} calls {sink_symbol} at "
+                f"0x{callsite.callsite_va:x}; sink_kind="
+                f"{callsite.operation.sink_kind}"
+            ),
+            provenance=[
+                *callsite.provenance,
+                "windows_project_callsite_facts",
+            ],
+        )
+    ]
+    if snapshot_args:
+        evidence.append(
+            WindowsReviewEvidence(
+                source="windows_project_call_argument_snapshot",
+                summary=_argument_summary(snapshot_args),
+                provenance=[
+                    "windows_project_call_argument_snapshot",
+                    "nearby_disassembly",
+                ],
+            )
+        )
     result = WindowsEmitReviewPacketTool().run(
         ctx,
         kb,
@@ -216,20 +261,7 @@ def _emit_packet(
                     evidence=f"project call xref at VA 0x{callsite.callsite_va:x}",
                 )
             ],
-            evidence=[
-                WindowsReviewEvidence(
-                    source="windows_project_callsite_facts",
-                    summary=(
-                        f"{entrypoint} calls {sink_symbol} at "
-                        f"0x{callsite.callsite_va:x}; sink_kind="
-                        f"{callsite.operation.sink_kind}"
-                    ),
-                    provenance=[
-                        *callsite.provenance,
-                        "windows_project_callsite_facts",
-                    ],
-                )
-            ],
+            evidence=evidence,
             provenance=["project_sink_call_scan"],
             required_project_facts=args.required_project_facts,
             auto_join_manifest_context=True,
@@ -252,6 +284,40 @@ def _first_arg_role(callsite: ProjectCallsiteFact) -> tuple[int | None, str | No
         return None, None
     role = callsite.operation.arg_roles[0]
     return role.index, role.role
+
+
+def _snapshot_arguments(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsProjectSinkCallPacketsArgs,
+    callsite: ProjectCallsiteFact,
+) -> list[ProjectCallArgumentFact]:
+    if not args.binary_path:
+        return []
+    try:
+        result = WindowsProjectCallArgumentSnapshotTool().run(
+            ctx,
+            kb,
+            WindowsProjectCallArgumentSnapshotArgs(
+                binary_path=args.binary_path,
+                project_path=args.project_path,
+                callsite_va=callsite.callsite_va,
+                binary_id=args.binary_id,
+                add_to_kb=False,
+            ),
+        )
+    except Exception:
+        return []
+    return result.arguments
+
+
+def _argument_summary(arguments: list[ProjectCallArgumentFact]) -> str:
+    rendered = []
+    for argument in arguments[:6]:
+        expr = argument.expression or "unknown"
+        rendered.append(f"arg{argument.index}={expr}")
+    suffix = "" if len(arguments) <= 6 else f"; +{len(arguments) - 6} more"
+    return "local call argument snapshot: " + ", ".join(rendered) + suffix
 
 
 def _candidate_id(binary: str, callsite_va: int, sink_symbol: str) -> str:

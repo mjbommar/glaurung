@@ -11,6 +11,18 @@ from glaurung.llm.kb.models import NodeKind
 from glaurung.llm.tools.windows_project_sink_call_packets import build_tool
 
 
+class _Addr:
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+
+class _Insn:
+    def __init__(self, va: int, mnemonic: str, operands: list[str]) -> None:
+        self.address = _Addr(va)
+        self.mnemonic = mnemonic
+        self.operands = operands
+
+
 def _ctx(tmp_path: Path) -> MemoryContext:
     path = tmp_path / "sample.bin"
     path.write_bytes(b"MZ")
@@ -27,6 +39,7 @@ def _write_project(tmp_path: Path) -> Path:
         conn.execute(
             """
             CREATE TABLE xrefs (
+                xref_id INTEGER PRIMARY KEY,
                 binary_id INTEGER,
                 kind TEXT,
                 src_va INTEGER,
@@ -54,7 +67,7 @@ def _write_project(tmp_path: Path) -> Path:
             (0x5000, "RtlCopyMemory"),
         )
         conn.execute(
-            "INSERT INTO xrefs VALUES (1, 'call', ?, ?, ?)",
+            "INSERT INTO xrefs VALUES (1, 1, 'call', ?, ?, ?)",
             (0x1200, 0x1000, 0x5000),
         )
         conn.commit()
@@ -139,15 +152,29 @@ def _write_ghidra_delta(tmp_path: Path) -> Path:
 
 def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     ctx = _ctx(tmp_path)
     tool = build_tool()
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "mov", ["rcx", "rdi"]),
+            _Insn(0x1004, "mov", ["rdx", "rsi"]),
+            _Insn(0x1008, "mov", ["r8", "0x40"]),
+            _Insn(0x1200, "call", ["0x5000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
 
     result = tool.run(
         ctx,
         ctx.kb,
         tool.input_model(
             project_path=str(_write_project(tmp_path)),
+            binary_path=str(binary),
             binary="driver.sys",
             build="unit-test",
             attacker_class="local_unprivileged",
@@ -164,6 +191,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
 
     assert result.packet_count == 1
     assert result.scanned_callsite_count == 1
+    assert result.argument_snapshot_count == 1
     packet = result.packets[0]
     assert packet.binary == "driver.sys"
     assert packet.entrypoint == "DriverDispatch"
@@ -183,6 +211,14 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
         evidence.source == "windows_project_callsite_facts"
         for evidence in packet.evidence
     )
+    snapshot_evidence = [
+        evidence
+        for evidence in packet.evidence
+        if evidence.source == "windows_project_call_argument_snapshot"
+    ]
+    assert len(snapshot_evidence) == 1
+    assert "arg0=rdi" in snapshot_evidence[0].summary
+    assert "arg2=0x40" in snapshot_evidence[0].summary
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence
