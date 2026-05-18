@@ -242,9 +242,9 @@ sit below full IR/CFG bug-class scanners:
 - `windows_emit_vm_validation_plan` converts a static review packet into
   a concrete VM validation plan using ASB
   `pe-validation-inventory.yaml` records. The plan carries snapshot,
-  QMP/RDP, KDNET, harness, expected artifact, stock/current comparison,
-  and runtime-blocker fields while keeping the claim level at
-  `validation_plan_not_reproduction`.
+  QMP/RDP, KDNET status, KDNET attach-proof metadata, harness, expected
+  artifact, stock/current comparison, and runtime-blocker fields while
+  keeping the claim level at `validation_plan_not_reproduction`.
 - `windows_candidate_validation_report` renders ranked candidates and
   attached VM validation plans into an operator-facing markdown handoff.
   It can persist the report and add a KB evidence node, but it still

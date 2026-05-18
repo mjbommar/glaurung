@@ -149,6 +149,7 @@ def _render_candidate(item: RankedWindowsCandidate) -> list[str]:
                 f"- Snapshot: {plan.snapshot_name}",
                 f"- QMP/RDP: {plan.qmp_endpoint} / {plan.rdp_endpoint}",
                 f"- KDNET: port {plan.kdnet_port}, {plan.kdnet_status}",
+                f"- KDNET attach proof: {plan.kdnet_attach_proof or 'none'}",
                 f"- Validation blockers: {_list_or_none(item.validation_blockers)}",
                 f"- Expected artifacts: {_list_or_none(plan.expected_artifacts)}",
                 f"- Operator steps: {_list_or_none(plan.operator_steps)}",

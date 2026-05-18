@@ -85,6 +85,8 @@ def _ranked_candidate(
         kdnet_port=51000,
         kdnet_status="attach_validated" if validation_ready else "not_configured",
         debugger_status="attached_once" if validation_ready else "not_attached",
+        kdnet_attach_proof="/evidence/kdnet-attach.log" if validation_ready else None,
+        kdnet_last_attach_utc="2026-05-18T20:00:00Z" if validation_ready else None,
         harness_strategy=["exercise placeholder policy sequence"],
         validation_requirements=["pre_post_build_guard_comparison"],
         expected_artifacts=["C:\\Windows\\MEMORY.DMP"],
@@ -136,6 +138,8 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
     assert "Claim level: operator validation handoff, not reproduction." in result.markdown
     assert "## Rank 1: ready-candidate" in result.markdown
     assert "Validation substrate: win11_ltsc_v4_cold_postlogon" in result.markdown
+    assert "KDNET attach proof: /evidence/kdnet-attach.log" in result.markdown
+    assert "KDNET attach proof: none" in result.markdown
     assert "KDNET attach is not validated" in result.markdown
     assert report_path.read_text(encoding="utf-8") == result.markdown
     assert result.report_node_id is not None

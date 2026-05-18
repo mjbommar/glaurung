@@ -58,6 +58,8 @@ class WindowsValidationSubstrate(BaseModel):
     kdnet_port: int
     kdnet_status: str
     debugger_status: str
+    kdnet_attach_proof: str | None = None
+    kdnet_last_attach_utc: str | None = None
     boot_script: str
     expected_artifacts: list[str] = Field(default_factory=list)
     stock_current_comparison: list[str] = Field(default_factory=list)
@@ -79,6 +81,8 @@ class WindowsVmValidationPlan(BaseModel):
     kdnet_port: int
     kdnet_status: str
     debugger_status: str
+    kdnet_attach_proof: str | None = None
+    kdnet_last_attach_utc: str | None = None
     harness_strategy: list[str] = Field(default_factory=list)
     validation_requirements: list[str] = Field(default_factory=list)
     expected_artifacts: list[str] = Field(default_factory=list)
@@ -249,6 +253,8 @@ def _plan_from_packet(
         kdnet_port=substrate.kdnet_port,
         kdnet_status=substrate.kdnet_status,
         debugger_status=substrate.debugger_status,
+        kdnet_attach_proof=substrate.kdnet_attach_proof,
+        kdnet_last_attach_utc=substrate.kdnet_last_attach_utc,
         harness_strategy=harness_strategy,
         validation_requirements=validation_requirements,
         expected_artifacts=list(substrate.expected_artifacts),
@@ -293,6 +299,7 @@ def _operator_steps(
         f"Boot with {substrate.boot_script} and restore snapshot {substrate.snapshot_name}.",
         f"Confirm QMP on {substrate.qmp_endpoint} and RDP on {substrate.rdp_endpoint}.",
         f"Confirm KDNET UDP port {substrate.kdnet_port} status: {substrate.kdnet_status}.",
+        "Record KDNET attach proof path or transcript before treating debug as validated.",
         f"Verify binary/PDB identity for {packet.binary} before running the harness.",
     ]
     if harness_strategy:
@@ -320,6 +327,8 @@ def _blockers(
         blockers.append("KDNET host UDP forward is missing for the selected boot script")
     if substrate.debugger_status != "attached_once":
         blockers.append(f"debugger attach proof is missing: {substrate.debugger_status}")
+    if require_kdnet_attach and not substrate.kdnet_attach_proof:
+        blockers.append("KDNET attach proof artifact is missing")
     if not harness_strategy:
         blockers.append("component harness strategy is missing")
     if not packet.promotion_preconditions_met:

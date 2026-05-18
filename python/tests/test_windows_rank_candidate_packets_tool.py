@@ -275,6 +275,8 @@ def test_windows_rank_candidate_packets_accepts_ready_validation_plan(
         kdnet_port=51001,
         kdnet_status="attach_validated",
         debugger_status="attached_once",
+        kdnet_attach_proof="/evidence/kdnet-attach.log",
+        kdnet_last_attach_utc="2026-05-18T20:00:00Z",
         harness_strategy=["exercise syscall harness"],
         validation_requirements=["syscall_table_membership"],
         expected_artifacts=["C:\\Windows\\MEMORY.DMP"],

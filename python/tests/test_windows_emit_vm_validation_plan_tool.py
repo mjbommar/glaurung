@@ -39,6 +39,8 @@ def _write_inventory(tmp_path: Path) -> Path:
   kdnet_port: 51000
   kdnet_status: guest_configured_host_forward_missing
   debugger_status: not_attached
+  kdnet_attach_proof: null
+  kdnet_last_attach_utc: null
   boot_script: tools/windows/win11-fuzz/scripts/boot-win11-test.sh
   expected_artifacts:
     - /images/win11-test-serial.log
@@ -61,6 +63,8 @@ def _write_inventory(tmp_path: Path) -> Path:
   kdnet_port: 51001
   kdnet_status: attach_validated
   debugger_status: attached_once
+  kdnet_attach_proof: /evidence/kdnet-attach.log
+  kdnet_last_attach_utc: "2026-05-18T20:00:00Z"
   boot_script: tools/windows/win11-fuzz/scripts/boot-win11-25h2-test.sh
   expected_artifacts:
     - /images/win11-25h2-test-serial.log
@@ -140,8 +144,10 @@ def test_windows_emit_vm_validation_plan_surfaces_runtime_blockers(
     assert plan.snapshot_name == "cold-postlogon"
     assert plan.qmp_endpoint == "127.0.0.1:4447"
     assert plan.kdnet_status == "guest_configured_host_forward_missing"
+    assert plan.kdnet_attach_proof is None
     assert plan.ready_for_validation is False
     assert any("KDNET attach is not validated" in blocker for blocker in plan.blockers)
+    assert any("attach proof artifact" in blocker for blocker in plan.blockers)
     assert any("host UDP forward" in blocker for blocker in plan.blockers)
     assert any("static packet promotion blockers remain" in blocker for blocker in plan.blockers)
     assert any("Exercise placeholder creation" in step for step in plan.operator_steps)
@@ -173,6 +179,8 @@ def test_windows_emit_vm_validation_plan_can_use_explicit_ready_substrate(
     plan = result.plan
     assert result.selected_by == "validation_id"
     assert plan.validation_id == "win11_25h2_v1_cold_postlogon"
+    assert plan.kdnet_attach_proof == "/evidence/kdnet-attach.log"
+    assert plan.kdnet_last_attach_utc == "2026-05-18T20:00:00Z"
     assert not any("KDNET attach is not validated" in blocker for blocker in plan.blockers)
     assert not any("debugger attach proof is missing" in blocker for blocker in plan.blockers)
     assert any("static packet promotion blockers remain" in blocker for blocker in plan.blockers)
