@@ -7,7 +7,7 @@ from typing import Callable
 from pydantic import BaseModel, Field
 
 from ..context import MemoryContext
-from ..kb import pe_direct_calls, type_db, xref_db
+from ..kb import cfg_db, pe_direct_calls, type_db, xref_db
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.persistent import PersistentKnowledgeBase
 from ..kb.store import KnowledgeBase
@@ -33,6 +33,10 @@ class WindowsBootstrapProjectFactsArgs(BaseModel):
     index_data_xrefs: bool = Field(
         True,
         description="If true, persist direct code-to-data xrefs.",
+    )
+    index_cfg: bool = Field(
+        True,
+        description="If true, persist native PE basic blocks and CFG edges.",
     )
     import_pdb_facts: bool = Field(
         True,
@@ -82,9 +86,10 @@ class WindowsBootstrapProjectFactsTool(
                 name="windows_bootstrap_project_facts",
                 description=(
                     "Create or update a .glaurung Windows PE project with "
-                    "call xrefs, data xrefs, and optional PDB-backed facts."
+                    "call xrefs, data xrefs, CFG facts, and optional "
+                    "PDB-backed facts."
                 ),
-                tags=("windows", "pe", "project", "xrefs", "pdb"),
+                tags=("windows", "pe", "project", "xrefs", "cfg", "pdb"),
             ),
             WindowsBootstrapProjectFactsArgs,
             WindowsBootstrapProjectFactsResult,
@@ -132,6 +137,20 @@ class WindowsBootstrapProjectFactsTool(
                 )
             else:
                 steps.append(ProjectBootstrapStep(name="index_data_xrefs", ran=False, ok=True))
+
+            if args.index_cfg:
+                steps.append(
+                    _run_count_step(
+                        "index_cfg",
+                        lambda: cfg_db.index_cfg(
+                            project,
+                            str(pe_path),
+                            force=args.force_reindex,
+                        ),
+                    )
+                )
+            else:
+                steps.append(ProjectBootstrapStep(name="index_cfg", ran=False, ok=True))
 
             if args.import_pdb_facts and args.pdb_cache_dir:
                 step, pdb_counts = _run_pdb_import_step(project, pe_path, args)
@@ -275,6 +294,8 @@ def _fact_coverage(
         coverage.append("call_xrefs")
     if _step_has_facts(by_name.get("index_data_xrefs")):
         coverage.append("data_xrefs")
+    if _step_has_facts(by_name.get("index_cfg")):
+        coverage.append("persisted_cfg")
     if pdb_counts:
         if pdb_counts.cache_hit:
             coverage.append("cached_pdb")
@@ -301,6 +322,8 @@ def _missing_capabilities(
         missing.append("call_xrefs")
     if args.index_data_xrefs and not _step_has_facts(by_name.get("index_data_xrefs")):
         missing.append("data_xrefs")
+    if args.index_cfg and not _step_has_facts(by_name.get("index_cfg")):
+        missing.append("persisted_cfg")
     if args.import_pdb_facts and not pdb_counts:
         missing.append("pdb_import")
     if pdb_counts:

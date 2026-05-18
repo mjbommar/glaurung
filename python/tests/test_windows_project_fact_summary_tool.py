@@ -92,6 +92,26 @@ CREATE TABLE comments (
     set_at INTEGER,
     PRIMARY KEY (binary_id, va)
 );
+CREATE TABLE basic_blocks (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    block_id TEXT NOT NULL,
+    start_va INTEGER NOT NULL,
+    end_va INTEGER NOT NULL,
+    instruction_count INTEGER NOT NULL,
+    is_entry INTEGER NOT NULL DEFAULT 0,
+    indexed_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, function_va, block_id)
+);
+CREATE TABLE cfg_edges (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    src_block_id TEXT NOT NULL,
+    dst_block_id TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'cfg',
+    indexed_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, function_va, src_block_id, dst_block_id, kind)
+);
 """
     )
     conn.execute(
@@ -121,6 +141,16 @@ CREATE TABLE comments (
         "INSERT INTO stack_frame_vars VALUES (1, 0x1000, -8, 'var_8', 'ULONG', 1, 'auto', 0)"
     )
     conn.execute("INSERT INTO comments VALUES (1, 0x1000, 'entry comment', 'manual', 0)")
+    conn.executemany(
+        "INSERT INTO basic_blocks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (1, 0x1000, "entry", 0x1000, 0x1010, 3, 1, 0),
+            (1, 0x1000, "sink", 0x1010, 0x1020, 2, 0, 0),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO cfg_edges VALUES (1, 0x1000, 'entry', 'sink', 'cfg', 0)"
+    )
     conn.commit()
     conn.close()
     return project
@@ -145,6 +175,8 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert result.counts.data_read_xref_count == 1
     assert result.counts.data_write_xref_count == 1
     assert result.counts.function_prototype_count == 1
+    assert result.counts.basic_block_count == 2
+    assert result.counts.cfg_edge_count == 1
     assert result.functions[0].canonical == "nt!Entry"
     assert result.functions[0].call_out_count == 1
     assert result.functions[0].stack_var_count == 1
@@ -152,7 +184,8 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert "function_names" in result.coverage
     assert "call_xrefs" in result.coverage
     assert "data_xrefs" in result.coverage
-    assert "persisted_cfg" in result.missing_capabilities
+    assert "cfg" in result.coverage
+    assert "persisted_cfg" not in result.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence
