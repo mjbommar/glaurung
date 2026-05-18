@@ -87,6 +87,11 @@ sit below full IR/CFG bug-class scanners:
 - `windows_surface_catalog`, `windows_source_reachability`, and
   `windows_target_surface_profile` expose attacker-surface and
   validation context from ASB metadata.
+- `windows_project_callsite_facts` enumerates exact callsite VAs and
+  caller/callee identity from persisted `.glaurung` `xrefs` and
+  `function_names` rows. When callee names match `pe-sinks.yaml`, it
+  attaches operation metadata so agents can query project-backed sink
+  callsites before decompiling for operands.
 - `windows_callsite_operand_facts` enumerates structured callsite
   argument facts from supplied or decompiled pseudocode, attaches
   optional callsite VA markers when present, and joins operation-backed
