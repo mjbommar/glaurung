@@ -236,6 +236,12 @@ sit below full IR/CFG bug-class scanners:
   required gate coverage, or blocking Ghidra gaps remain. The ranker
   uses `missing_required_gates` directly in score reasons so partial
   gate coverage is visible without parsing evidence text.
+- `windows_emit_vm_validation_plan` converts a static review packet into
+  a concrete VM validation plan using ASB
+  `pe-validation-inventory.yaml` records. The plan carries snapshot,
+  QMP/RDP, KDNET, harness, expected artifact, stock/current comparison,
+  and runtime-blocker fields while keeping the claim level at
+  `validation_plan_not_reproduction`.
 
 These tools do not replace the Ghidra-grade facts this document still
 tracks: function matching across renamed builds, instruction-level
