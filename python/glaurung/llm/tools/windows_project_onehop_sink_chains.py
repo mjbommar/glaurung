@@ -70,6 +70,7 @@ class WindowsProjectOnehopSinkChain(BaseModel):
     sink_symbol: str
     sink_kind: str
     sink_effects: list[str] = Field(default_factory=list)
+    sink_arg_roles: dict[int, str] = Field(default_factory=dict)
     required_gates: list[str] = Field(default_factory=list)
     provenance: list[str] = Field(default_factory=list)
 
@@ -442,6 +443,7 @@ def _chain_from_rows(
         sink_symbol=str(sink_symbol),
         sink_kind=operation.sink_kind,
         sink_effects=list(operation.effects),
+        sink_arg_roles={role.index: role.role for role in operation.arg_roles},
         required_gates=list(operation.required_gates),
         provenance=[
             "persisted_project_call_xrefs",

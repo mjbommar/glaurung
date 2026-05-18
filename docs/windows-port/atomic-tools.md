@@ -163,6 +163,12 @@ sit below full IR/CFG bug-class scanners:
   evidence rather than a general interprocedural alias proof. Matched
   flows carry ASB sink effects and required-gate metadata so rule code
   can rank and explain the gate obligations for the bridged value.
+- `windows_project_onehop_flow_packets` converts those matched
+  caller/helper/sink argument flows into static Windows review packets.
+  It preserves the one-hop path, matched source-refinement facts, sink
+  effects, required gates, project-fact context, and Ghidra-gap context
+  while keeping gate status unknown until CFG/dominance rules prove the
+  required gates.
 - `windows_project_call_argument_snapshot` uses a project callsite VA
   plus nearby disassembly to recover a conservative Windows x64
   RCX/RDX/R8/R9 argument snapshot plus obvious stack argument stores

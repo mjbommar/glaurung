@@ -267,7 +267,7 @@ def _flow(
         caller_arg_expression=helper_arg.expression,
         caller_arg_register=helper_arg.register_name,
         helper_sink_arg_index=sink_arg.index,
-        helper_sink_arg_role=sink_arg.role,
+        helper_sink_arg_role=chain.sink_arg_roles.get(sink_arg.index, sink_arg.role),
         helper_sink_arg_expression=sink_arg.expression,
         sink_effects=chain.sink_effects,
         required_gates=chain.required_gates,

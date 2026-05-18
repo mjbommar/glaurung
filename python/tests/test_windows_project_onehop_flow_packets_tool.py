@@ -8,7 +8,7 @@ import glaurung as g
 from glaurung.llm.context import MemoryContext
 from glaurung.llm.kb.adapters import import_triage
 from glaurung.llm.kb.models import NodeKind
-from glaurung.llm.tools.windows_project_onehop_argument_flow import build_tool
+from glaurung.llm.tools.windows_project_onehop_flow_packets import build_tool
 
 
 class _Addr:
@@ -109,14 +109,69 @@ def _write_sinks(tmp_path: Path) -> Path:
     return sinks
 
 
-def test_windows_project_onehop_argument_flow_matches_helper_arg_to_sink(
+def _write_project_facts(tmp_path: Path) -> Path:
+    project_facts = tmp_path / "pe-project-facts.yaml"
+    project_facts.write_text(
+        """
+- id: driver_project
+  target_id: driver
+  build_label: unit-test
+  build_number: "1"
+  architecture: x64
+  binary_filename: driver.sys
+  project_path: /projects/driver.glaurung
+  fact_sources: [unit_test]
+  fact_coverage: [function_names, call_xrefs]
+  missing_facts: []
+  counts:
+    function_name_count: 3
+    xref_count: 2
+    call_xref_count: 2
+    data_read_xref_count: 0
+    data_write_xref_count: 0
+    data_label_count: 0
+    function_prototype_count: 0
+    basic_block_count: 0
+    cfg_edge_count: 0
+    cfg_dominance_count: 0
+    cfg_branch_fact_count: 0
+""",
+        encoding="utf-8",
+    )
+    return project_facts
+
+
+def _write_ghidra_delta(tmp_path: Path) -> Path:
+    ghidra_delta = tmp_path / "pe-ghidra-delta.yaml"
+    ghidra_delta.write_text(
+        """
+- id: driver_call_argument_flow
+  target_id: driver
+  component: driver.sys
+  build_label: unit-test
+  fact_class: call_argument_flow
+  coverage_state: partial
+  blocking: false
+  ghidra_baseline: Ghidra shows call arguments.
+  glaurung_status: One-hop snapshot flow covers explicit caller_argN.
+  current_capabilities: [project_onehop_argument_flow_snapshot_match]
+  missing_capabilities: [helper_side_effect_summaries]
+  next_actions: [add helper summaries]
+  evidence: [unit-test]
+""",
+        encoding="utf-8",
+    )
+    return ghidra_delta
+
+
+def test_windows_project_onehop_flow_packets_emit_review_packet(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    binary = tmp_path / "driver.sys"
-    binary.write_bytes(b"MZ")
     ctx = _ctx(tmp_path)
     tool = build_tool()
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
 
     def fake_disassemble_window_at(_path, start_va, **_kwargs):
         if start_va == 0x1000:
@@ -142,44 +197,72 @@ def test_windows_project_onehop_argument_flow_matches_helper_arg_to_sink(
         tool.input_model(
             binary_path=str(binary),
             project_path=str(_write_project(tmp_path)),
-            sinks_path=str(_write_sinks(tmp_path)),
-            caller_function_name="DriverDispatch",
+            binary="driver.sys",
+            build="unit-test",
+            attacker_class="local_unprivileged",
+            source_role="buffer",
             source_arg="rsi",
             sink_arg_index=1,
+            sinks_path=str(_write_sinks(tmp_path)),
+            project_facts_path=str(_write_project_facts(tmp_path)),
+            ghidra_delta_path=str(_write_ghidra_delta(tmp_path)),
+            manifest_target_id="driver",
+            manifest_build_label="unit-test",
+            manifest_component="driver.sys",
             add_to_kb=True,
         ),
     )
 
+    assert result.packet_count == 1
     assert result.scanned_chain_count == 1
-    assert result.helper_argument_snapshot_count == 1
-    assert result.sink_argument_snapshot_count == 1
-    assert result.flow_count == 1
-    flow = result.flows[0]
-    assert flow.caller_name == "DriverDispatch"
-    assert flow.helper_name == "CopyHelper"
-    assert flow.caller_arg_index == 1
-    assert flow.caller_arg_expression == "rsi"
-    assert flow.helper_sink_arg_index == 1
-    assert flow.helper_sink_arg_role == "source_buffer"
-    assert flow.helper_sink_arg_expression == "caller_arg1"
-    assert flow.sink_symbol == "RtlCopyMemory"
-    assert flow.sink_kind == "copy"
-    assert flow.sink_effects == ["writes_destination_range", "reads_source_range"]
-    assert flow.required_gates == ["destination_range_valid", "byte_count_bounded"]
-    assert "project_onehop_argument_flow" in result.coverage
-    assert "asb_sink_required_gate_metadata" in result.coverage
-    assert "helper_side_effect_summary" in result.missing_capabilities
+    assert result.onehop_argument_flow_count == 1
+    packet = result.packets[0]
+    assert packet.binary == "driver.sys"
+    assert packet.entrypoint == "DriverDispatch"
+    assert packet.source_role == "buffer"
+    assert packet.source_arg == "rsi"
+    assert packet.source_refinement_status == "matched"
+    assert "helper_sink_arg1:source_buffer" in packet.source_refinement_sources
+    assert packet.sink_symbol == "RtlCopyMemory"
+    assert packet.sink_kind == "copy"
+    assert packet.required_gates == ["destination_range_valid", "byte_count_bounded"]
+    assert packet.missing_required_gates == [
+        "destination_range_valid",
+        "byte_count_bounded",
+    ]
+    assert packet.gate_status == "unknown"
+    assert packet.project_facts is not None
+    assert packet.project_facts.counts["call_xref_count"] == 2
+    assert packet.ghidra_delta is not None
+    assert packet.ghidra_delta.current_capabilities == [
+        "project_onehop_argument_flow_snapshot_match"
+    ]
+    assert any(
+        evidence.source == "windows_project_onehop_argument_flow"
+        and "caller arg1 rsi reaches RtlCopyMemory arg1" in evidence.summary
+        for evidence in packet.evidence
+    )
+    assert any(
+        evidence.source == "windows_project_onehop_sink_gate_metadata"
+        and "required gates [destination_range_valid, byte_count_bounded]"
+        in evidence.summary
+        for evidence in packet.evidence
+    )
+    assert any(
+        "required gate coverage unresolved" in item
+        for item in packet.promotion_blockers
+    )
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence
-        and node.label == "windows_project_onehop_argument_flow"
+        and node.label == "windows_project_onehop_flow_packets"
         for node in ctx.kb.nodes()
     )
 
 
-def test_memory_agent_registers_windows_project_onehop_argument_flow() -> None:
+def test_memory_agent_registers_windows_project_onehop_flow_packets() -> None:
     from glaurung.llm.agents.memory_agent import create_memory_agent
 
     agent = create_memory_agent(model="test")
 
-    assert "windows_project_onehop_argument_flow" in agent._function_toolset.tools
+    assert "windows_project_onehop_flow_packets" in agent._function_toolset.tools

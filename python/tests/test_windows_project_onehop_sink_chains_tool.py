@@ -138,6 +138,11 @@ def test_windows_project_onehop_sink_chains_maps_helper_to_sink(
     assert chain.sink_callsite_va == 0x2100
     assert chain.sink_symbol == "RtlCopyMemory"
     assert chain.sink_kind == "copy"
+    assert chain.sink_arg_roles == {
+        0: "destination_buffer",
+        1: "source_buffer",
+        2: "byte_count",
+    }
     assert chain.required_gates == ["destination_range_valid", "byte_count_bounded"]
     assert "project_onehop_sink_chains" in result.coverage
     assert "interprocedural_value_equivalence" in result.missing_capabilities
