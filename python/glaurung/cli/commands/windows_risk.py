@@ -310,7 +310,10 @@ class WindowsRiskCommand(BaseCommand):
                 )
                 evidence = item.get("evidence") or []
                 if evidence:
-                    lines.append(f"    evidence: {', '.join(evidence[:6])}")
+                    lines.append(
+                        "    evidence: "
+                        + ", ".join(_format_evidence_item(e) for e in evidence[:6])
+                    )
         else:
             lines.append("  none")
 
@@ -318,6 +321,11 @@ class WindowsRiskCommand(BaseCommand):
         if report["functions"]:
             for fn in report["functions"][: report["summary"]["function_rows"]]:
                 apis = ", ".join(fn.get("api_hits") or [])
+                api_buckets = ", ".join(
+                    f"{bucket}={len(names)}"
+                    for bucket, names in sorted((fn.get("api_buckets") or {}).items())
+                )
+                roles = ", ".join(fn.get("metadata_roles") or [])
                 strings = ", ".join(repr(s["text"]) for s in fn.get("strings", [])[:3])
                 calls = ", ".join(call["target"] for call in fn.get("calls", [])[:4])
                 stack_vars = ", ".join(
@@ -331,8 +339,12 @@ class WindowsRiskCommand(BaseCommand):
                     for call in fn.get("api_calls", [])[:3]
                 )
                 bits = []
+                if roles:
+                    bits.append(f"roles: {roles}")
                 if apis:
                     bits.append(f"apis: {apis}")
+                if api_buckets:
+                    bits.append(f"buckets: {api_buckets}")
                 if api_calls:
                     bits.append(f"args: {api_calls}")
                 if calls:
@@ -373,6 +385,8 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     function_rows = [_function_row(func) for func in funcs]
     by_va = {row["entry_va"]: row for row in function_rows}
     _annotate_calls(function_rows, callgraph)
+    _annotate_pe_metadata_roles(function_rows, pe_metadata)
+    _annotate_named_import_functions(function_rows, imports)
 
     data_xrefs = _collect_data_xrefs(path_str, args)
     _join_string_xrefs(path_str, args, data_xrefs, strings, by_va)
@@ -719,12 +733,15 @@ def _function_row(func: Any) -> dict[str, Any]:
         "stack_vars": [],
         "suspicious_constants": [],
         "api_hits": [],
+        "api_buckets": {},
         "api_sequence": [],
         "api_calls": [],
         "imports": [],
         "calls": [],
         "call_count": 0,
         "flow_hints": [],
+        "metadata_roles": [],
+        "metadata_refs": [],
         "patterns": [],
         "decompile_error": None,
         "score": 0,
@@ -1001,7 +1018,12 @@ def _pattern_priority(row: dict[str, Any]) -> int:
         return 4
     if "dynamic-api-resolution" in patterns:
         return 3
-    if "registry-write" in patterns or "resource-extraction" in patterns:
+    metadata_roles = set(row.get("metadata_roles") or [])
+    if (
+        "registry-write" in patterns
+        or "resource-extraction" in patterns
+        or "tls_callback" in metadata_roles
+    ):
         return 2
     if patterns:
         return 1
@@ -1020,6 +1042,72 @@ def _annotate_string_api_hints(
         api_hits = _scan_api_hits(text, risk_api_names)
         patterns = _patterns_from_api_hits(api_hits)
         _merge_row_api_hits(row, api_hits, patterns)
+
+
+def _annotate_pe_metadata_roles(
+    function_rows: list[dict[str, Any]],
+    pe_metadata: dict[str, Any],
+) -> None:
+    by_va = {int(row["entry_va"]): row for row in function_rows}
+    tls = pe_metadata.get("tls") or {}
+    for idx, va in enumerate(int(value) for value in tls.get("callbacks") or []):
+        row = by_va.get(va)
+        if row is None:
+            continue
+        _add_metadata_role(
+            row,
+            "tls_callback",
+            {
+                "kind": "tls_callback",
+                "index": idx,
+                "va": va,
+                "address_of_callbacks": int(tls.get("address_of_callbacks", 0)),
+            },
+            score=6,
+        )
+
+
+def _annotate_named_import_functions(
+    function_rows: list[dict[str, Any]],
+    imports: list[str],
+) -> None:
+    lookup = _api_name_lookup(imports)
+    for row in function_rows:
+        name = str(row.get("name", ""))
+        canonical = lookup.get(name.lower()) or lookup.get(_api_stem(name))
+        if canonical is None:
+            continue
+        _merge_row_api_hits(row, [canonical], _patterns_from_api_hits([canonical]))
+        _add_metadata_role(
+            row,
+            "import_thunk",
+            {"kind": "import_thunk", "name": canonical},
+            score=1,
+        )
+
+
+def _add_metadata_role(
+    row: dict[str, Any],
+    role: str,
+    ref: dict[str, Any],
+    *,
+    score: int,
+) -> None:
+    roles = list(row.get("metadata_roles") or [])
+    if role not in roles:
+        roles.append(role)
+        row["metadata_roles"] = sorted(roles)
+        row["score"] += score
+
+    refs = list(row.get("metadata_refs") or [])
+    ref_key = (str(ref.get("kind")), int(ref.get("va", 0)), str(ref.get("name", "")))
+    seen = {
+        (str(item.get("kind")), int(item.get("va", 0)), str(item.get("name", "")))
+        for item in refs
+    }
+    if ref_key not in seen:
+        refs.append(ref)
+        row["metadata_refs"] = refs[:64]
 
 
 def _annotate_decompile_hits(
@@ -1080,10 +1168,27 @@ def _merge_row_api_hits(
             old_api_hits | set(api_hits), key=lambda item: item.lower()
         )
         row["imports"] = row["api_hits"]
+        row["api_buckets"] = _api_buckets_for_hits(row["api_hits"])
         row["score"] += len(new_api_hits)
     if new_patterns:
         row["patterns"] = sorted(old_patterns | set(patterns))
         row["score"] += 8 * len(new_patterns)
+
+
+def _api_buckets_for_hits(api_hits: list[str]) -> dict[str, list[str]]:
+    buckets: dict[str, list[str]] = {}
+    for bucket, prefixes in _RISK_IMPORT_BUCKETS.items():
+        names = sorted(
+            {
+                _clean_import_name(name)
+                for name in api_hits
+                if _matches_risk_import(bucket, name, prefixes)
+            },
+            key=lambda item: item.lower(),
+        )
+        if names:
+            buckets[bucket] = names
+    return buckets
 
 
 def _merge_row_stack_vars(
@@ -1616,6 +1721,17 @@ def _format_api_call_summary(call: dict[str, Any]) -> str:
     return f"{name}({', '.join(parts)})"
 
 
+def _format_evidence_item(item: Any) -> str:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, int):
+        return format_hex(item)
+    try:
+        return json.dumps(item, sort_keys=True)
+    except TypeError:
+        return str(item)
+
+
 def _stack_ref_pattern() -> re.Pattern[str]:
     return re.compile(
         r"\b(?P<base>[re]?[bs]p)\s*(?P<sign>[+-])\s*(?P<value>0x[0-9a-fA-F]+|\d+)"
@@ -1874,6 +1990,22 @@ def _build_risk_items(
                     "severity": severity,
                     "summary": f"{row['name']} has {pattern.replace('-', ' ')} shape",
                     "evidence": row.get("api_hits", [])[:12],
+                    "function_va": row["entry_va"],
+                }
+            )
+        for role in row.get("metadata_roles", []):
+            if role != "tls_callback":
+                continue
+            items.append(
+                {
+                    "kind": "metadata-role:tls-callback",
+                    "severity": "medium",
+                    "summary": f"{row['name']} is a PE TLS callback entrypoint",
+                    "evidence": [
+                        ref
+                        for ref in row.get("metadata_refs", [])
+                        if ref.get("kind") == "tls_callback"
+                    ][:4],
                     "function_va": row["entry_va"],
                 }
             )

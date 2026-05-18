@@ -81,13 +81,25 @@ def test_windows_risk_json_reports_parser_shape(
             basic_blocks=[SimpleNamespace(instruction_count=4)],
             size=0x20,
         )
+        import_thunk = SimpleNamespace(
+            name="ReadFile",
+            entry_point=SimpleNamespace(value=0x3000),
+            basic_blocks=[SimpleNamespace(instruction_count=1)],
+            size=0x10,
+        )
+        tls_callback = SimpleNamespace(
+            name="sub_401000",
+            entry_point=SimpleNamespace(value=0x401000),
+            basic_blocks=[SimpleNamespace(instruction_count=3)],
+            size=0x30,
+        )
         edge = SimpleNamespace(
             caller="sub_1000",
             callee="helper",
             call_type=SimpleNamespace(value=lambda: "direct"),
             call_sites=[SimpleNamespace(value=0x1020)],
         )
-        return [func, helper], SimpleNamespace(edges=[edge])
+        return [func, helper, import_thunk, tls_callback], SimpleNamespace(edges=[edge])
 
     monkeypatch.setattr(g.triage, "list_symbols", fake_list_symbols)
     monkeypatch.setattr(g.triage, "analyze_path", fake_analyze_path)
@@ -145,10 +157,11 @@ def test_windows_risk_json_reports_parser_shape(
         },
         raising=False,
     )
-    monkeypatch.setattr(
-        g.ir,
-        "decompile_at",
-        lambda *_args, **_kwargs: (
+
+    def fake_decompile_at(_path: str, va: int, **_kwargs: object) -> str:
+        if va != 0x1000:
+            return "fn helper { return; }"
+        return (
             "fn sub_1000 { tmp = (rbp - 128); CreateFileW(); "
             "ReadFile(var3, (rbp - 128), 4); LocalAlloc(64, stack_9); "
             "var6 = ret; L_1010: arg2 = stack_9; arg3 = (rsp + 64); "
@@ -166,8 +179,9 @@ def test_windows_risk_json_reports_parser_shape(
             "conn = WinHttpConnect(session, 0x180050040, 443, 0); "
             "req = WinHttpOpenRequest(conn, 0x180050060, 0x180050080, 0, 0, 0, 0); "
             "WinHttpSendRequest(req, 0, 0, 0, 0, 0, 0); RegSetValueExW(); }"
-        ),
-    )
+        )
+
+    monkeypatch.setattr(g.ir, "decompile_at", fake_decompile_at)
 
     cli = GlaurungCLI()
     buf = io.StringIO()
@@ -177,7 +191,7 @@ def test_windows_risk_json_reports_parser_shape(
     assert rc == 0
     report = json.loads(buf.getvalue())
     assert report["summary"]["format"] == "PE"
-    assert report["summary"]["function_count"] == 2
+    assert report["summary"]["function_count"] == 4
     assert report["summary"]["export_count"] == 1
     assert report["pe_metadata"]["resources"]["resources_by_type"] == {
         "VERSIONINFO": 1,
@@ -192,6 +206,8 @@ def test_windows_risk_json_reports_parser_shape(
         "call_sites": [0x1020],
     }
     assert "ReadFile" in report["functions"][0]["imports"]
+    assert "file_io" in report["functions"][0]["api_buckets"]
+    assert "network" in report["functions"][0]["api_buckets"]
     assert report["functions"][0]["api_sequence"][:4] == [
         "CreateFileW",
         "ReadFile",
@@ -279,6 +295,16 @@ def test_windows_risk_json_reports_parser_shape(
     assert report["functions"][0]["strings"][0]["text"].startswith(
         "MigrateModemSettings"
     )
+    tls_row = next(row for row in report["functions"] if row["entry_va"] == 0x401000)
+    assert tls_row["metadata_roles"] == ["tls_callback"]
+    assert tls_row["metadata_refs"][0]["address_of_callbacks"] == 0x402000
+    assert any(
+        item["kind"] == "metadata-role:tls-callback" and item["function_va"] == 0x401000
+        for item in report["risk_items"]
+    )
+    thunk_row = next(row for row in report["functions"] if row["entry_va"] == 0x3000)
+    assert thunk_row["metadata_roles"] == ["import_thunk"]
+    assert thunk_row["api_buckets"] == {"file_io": ["ReadFile"]}
 
 
 def test_windows_risk_plain_no_decompile_still_reports_imports(
@@ -352,6 +378,14 @@ def test_windows_risk_network_bucket_avoids_prefix_false_positives() -> None:
         "send",
         "socket",
     ]
+
+
+def test_windows_risk_plain_evidence_formats_structured_metadata() -> None:
+    from glaurung.cli.commands.windows_risk import _format_evidence_item
+
+    assert _format_evidence_item({"kind": "tls_callback", "va": 0x401000}) == (
+        '{"kind": "tls_callback", "va": 4198400}'
+    )
 
 
 def test_windows_risk_join_reads_unsampled_xref_string(
