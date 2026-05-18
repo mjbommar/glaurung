@@ -108,6 +108,9 @@ sit below full IR/CFG bug-class scanners:
 - `windows_cfg_gate_to_sink` composes ASB gate/sink metadata with
   concrete gate and sink callsite VAs, runs CFG dominance, and returns
   a packet-ready gate status for candidate evidence.
+- `windows_compose_source_gate_sink_packet` composes source/sink
+  operand matching with CFG gate-to-sink evidence and emits a normal
+  candidate review packet for operator triage.
 - `windows_emit_review_packet` and `windows_compose_candidate_packets`
   preserve structured PDB identity, component-profile, and patch-diff
   context in every emitted candidate packet, so downstream ranking and
