@@ -153,6 +153,10 @@ pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
     for (va, name) in crate::analysis::pe_iat::pe_iat_map(data) {
         out.insert(va, name);
     }
+    // PE import thunks: local executable stubs that jump through the IAT.
+    for (va, name) in crate::analysis::pe_iat::pe_import_thunk_map(data) {
+        out.insert(va, name);
+    }
     // Mach-O stubs / lazy / non-lazy pointers.
     for (va, name) in crate::analysis::macho_stubs::macho_stubs_map(data) {
         out.insert(va, name);
@@ -336,6 +340,65 @@ mod tests {
         assert_eq!(
             map.get(&0x180037800).map(String::as_str),
             Some("RtlAcquireSRWLockExclusive")
+        );
+    }
+
+    #[test]
+    fn collect_address_map_includes_pe_import_thunks_on_real_binary() {
+        let path = std::path::Path::new(
+            "samples/binaries/platforms/windows/i386/export/windows/x86_64/O0/hello-c-mingw64-O0.exe",
+        );
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).unwrap();
+        let thunks = crate::analysis::pe_iat::pe_import_thunk_map(&data);
+        let Some((thunk_va, import_name)) = thunks
+            .iter()
+            .find(|(_, name)| name.as_str() == "malloc" || name.as_str() == "LeaveCriticalSection")
+        else {
+            panic!("no PE import thunk alias found");
+        };
+        let map = collect_address_map(&data, path.to_str().unwrap_or(""));
+        assert!(
+            map.get(thunk_va).map(String::as_str) == Some(import_name.as_str()),
+            "PE import thunk alias did not survive resolved map (size={})",
+            map.len()
+        );
+    }
+
+    #[test]
+    fn pe_import_thunk_direct_call_gets_named() {
+        let path = std::path::Path::new(
+            "samples/binaries/platforms/windows/i386/export/windows/x86_64/O0/hello-c-mingw64-O0.exe",
+        );
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).unwrap();
+        let thunks = crate::analysis::pe_iat::pe_import_thunk_map(&data);
+        let Some((thunk_va, import_name)) = thunks
+            .iter()
+            .find(|(_, name)| name.as_str() == "malloc" || name.as_str() == "LeaveCriticalSection")
+        else {
+            panic!("no PE import thunk alias found");
+        };
+        let map = collect_address_map(&data, path.to_str().unwrap_or(""));
+        let lf = mk_single_block(vec![
+            Op::Call {
+                target: crate::ir::types::CallTarget::Direct(*thunk_va),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let r = recover(&lf, &ssa);
+        let mut f = lower(&lf, &r, "f");
+        resolve_names(&mut f, &map);
+        let text = render(&f);
+        assert!(text.contains(&format!("call {import_name}")), "got: {text}");
+        assert!(
+            !text.contains(&format!("call 0x{thunk_va:x}")),
+            "raw thunk VA leaked: {text}"
         );
     }
 

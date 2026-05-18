@@ -141,3 +141,11 @@ def test_decompile_pe32_plus_resolves_iat_names():
     )
     assert "GetStartupInfoA(arg2);" in text
     assert "0x14000d1ec(" not in text
+
+
+@pytest.mark.skipif(not PE32_PLUS_SAMPLE.exists(), reason="PE32+ sample missing")
+def test_pe_import_thunk_map_exposes_api_aliases():
+    got = g.analysis.pe_import_thunk_map_path(str(PE32_PLUS_SAMPLE))
+    names = {name for _, name in got}
+    assert {"malloc", "LeaveCriticalSection"} & names
+    assert any(va for va, _ in got)

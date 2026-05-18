@@ -4,6 +4,8 @@
 //! This lets us resolve indirect calls like `call [rip+disp]` on Windows x64
 //! and `call dword ptr [imm32]` on Windows x86 to symbol names.
 
+use std::collections::BTreeMap;
+
 #[derive(Debug, Clone, Copy)]
 struct CoffHeader {
     number_of_sections: u16,
@@ -299,4 +301,112 @@ pub fn pe_iat_map(data: &[u8]) -> Vec<(u64, String)> {
     }
 
     out
+}
+
+/// Build a best-effort map of executable PE import thunks to imported names.
+///
+/// Some Windows binaries call a local thunk whose whole body is `jmp [IAT]`.
+/// The normal IAT map names the slot, but a direct `call thunk_va` still renders
+/// as a raw address unless the thunk entry VA is also known. This scanner only
+/// aliases executable-section `jmp [mem]` patterns whose memory target exactly
+/// matches a known IAT slot.
+pub fn pe_import_thunk_map(data: &[u8]) -> Vec<(u64, String)> {
+    let iat_names: BTreeMap<u64, String> = pe_iat_map(data).into_iter().collect();
+    if iat_names.is_empty() {
+        return Vec::new();
+    }
+
+    let Ok(parser) = crate::formats::pe::PeParser::new(data) else {
+        return Vec::new();
+    };
+
+    let image_base = parser.image_base();
+    let is_64bit = parser.is_64bit();
+    let mut out: BTreeMap<u64, String> = BTreeMap::new();
+
+    for section in parser.sections() {
+        if !section.header.is_executable() {
+            continue;
+        }
+        let raw_start = section.header.pointer_to_raw_data as usize;
+        let raw_size = section.header.size_of_raw_data as usize;
+        let Some(raw_end) = raw_start
+            .checked_add(raw_size)
+            .map(|end| end.min(data.len()))
+        else {
+            continue;
+        };
+        if raw_start >= raw_end || raw_start >= data.len() {
+            continue;
+        }
+
+        let bytes = &data[raw_start..raw_end];
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let thunk_va = image_base
+                .saturating_add(u64::from(section.header.virtual_address))
+                .saturating_add(offset as u64);
+
+            let matched = if is_64bit {
+                match decode_x64_iat_jmp(bytes, offset, thunk_va) {
+                    Some((target_va, size)) => {
+                        if let Some(name) = iat_names.get(&target_va) {
+                            out.insert(thunk_va, name.clone());
+                        }
+                        Some(size)
+                    }
+                    None => None,
+                }
+            } else {
+                match decode_x86_iat_jmp(bytes, offset) {
+                    Some((target_va, size)) => {
+                        if let Some(name) = iat_names.get(&target_va) {
+                            out.insert(thunk_va, name.clone());
+                        }
+                        Some(size)
+                    }
+                    None => None,
+                }
+            };
+
+            offset += matched.unwrap_or(1);
+        }
+    }
+
+    out.into_iter().collect()
+}
+
+fn decode_x64_iat_jmp(bytes: &[u8], offset: usize, thunk_va: u64) -> Option<(u64, usize)> {
+    if offset + 7 <= bytes.len() && bytes[offset..].starts_with(&[0x48, 0xff, 0x25]) {
+        let disp = read_i32_le(bytes, offset + 3)? as i64;
+        let next_va = thunk_va.saturating_add(7);
+        return Some((add_signed_u64(next_va, disp), 7));
+    }
+    if offset + 6 <= bytes.len() && bytes[offset..].starts_with(&[0xff, 0x25]) {
+        let disp = read_i32_le(bytes, offset + 2)? as i64;
+        let next_va = thunk_va.saturating_add(6);
+        return Some((add_signed_u64(next_va, disp), 6));
+    }
+    None
+}
+
+fn decode_x86_iat_jmp(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
+    if offset + 6 <= bytes.len() && bytes[offset..].starts_with(&[0xff, 0x25]) {
+        let target = read_u32_le(bytes, offset + 2)? as u64;
+        return Some((target, 6));
+    }
+    None
+}
+
+fn read_i32_le(data: &[u8], off: usize) -> Option<i32> {
+    data.get(off..off + 4)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+fn add_signed_u64(base: u64, delta: i64) -> u64 {
+    if delta >= 0 {
+        base.saturating_add(delta as u64)
+    } else {
+        base.saturating_sub(delta.unsigned_abs())
+    }
 }
