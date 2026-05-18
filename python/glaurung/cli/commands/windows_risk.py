@@ -142,6 +142,7 @@ _SIGNAL_ORDER: tuple[str, ...] = (
     "file-read-allocation-flow",
     "file-read-allocation-argument-flow",
     "file-read-length-field-allocation-flow",
+    "registry-query-size-allocation-flow",
     "dynamic-api-resolution",
     "registry-write",
     "resource-extraction",
@@ -1595,7 +1596,6 @@ def _extract_api_calls(
 ) -> list[dict[str, Any]]:
     api_lookup = _api_name_lookup(api_names)
     calls: list[dict[str, Any]] = []
-    seen: set[tuple[str, tuple[str, ...]]] = set()
     call_pattern = re.compile(
         r"(?:(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*)?"
         r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<args>[^{}]*)\)"
@@ -1619,16 +1619,13 @@ def _extract_api_calls(
                 _split_call_args(call_match.group("args")),
                 pending_args,
             )
-            key = (canonical_name, tuple(arg_exprs))
-            if key not in seen:
-                seen.add(key)
-                call_row = _api_call_row(canonical_name, arg_exprs)
-                lhs = call_match.group("lhs")
-                if lhs:
-                    call_row["assigned_to"] = lhs
-                calls.append(call_row)
-                if len(calls) >= 64:
-                    break
+            call_row = _api_call_row(canonical_name, arg_exprs)
+            lhs = call_match.group("lhs")
+            if lhs:
+                call_row["assigned_to"] = lhs
+            calls.append(call_row)
+            if len(calls) >= 64:
+                break
         pending_args.clear()
     return calls
 
@@ -1877,6 +1874,10 @@ def _looks_like_length_param(name: str) -> bool:
 
 def _looks_like_output_length_param(name: str) -> bool:
     compact = name.replace("_", "")
+    if compact in {"lpcbdata", "lpcchvalue", "lpcbvalue"}:
+        return True
+    if compact.startswith(("lpcb", "pcb", "lpcch", "pcch")) and len(compact) > 4:
+        return True
     return any(
         token in compact
         for token in (
@@ -2012,6 +2013,7 @@ def _flow_hints_from_api_calls(api_calls: list[dict[str, Any]]) -> list[dict[str
             )
             break
     hints.extend(_file_read_length_field_flow_hints(api_calls))
+    hints.extend(_registry_query_size_flow_hints(api_calls))
     return hints[:16]
 
 
@@ -2098,8 +2100,97 @@ def _find_later_read_with_length_expr(
     return None
 
 
+def _registry_query_size_flow_hints(
+    api_calls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    for alloc_idx, alloc_call in enumerate(api_calls):
+        if not _is_allocation_call(alloc_call):
+            continue
+        alloc_size = _first_arg_with_role(alloc_call, "length")
+        if alloc_size is None:
+            continue
+        normalized_size = _normalize_expr(str(alloc_size.get("expr", "")))
+        if not normalized_size:
+            continue
+
+        prior_query = _find_prior_registry_size_query(
+            api_calls[:alloc_idx],
+            normalized_size,
+        )
+        if prior_query is None:
+            continue
+        later_query = _find_later_registry_value_read(
+            api_calls[alloc_idx + 1 :],
+            normalized_size,
+        )
+        if later_query is None:
+            continue
+
+        size_call, size_arg = prior_query
+        value_call, value_buffer, value_size = later_query
+        hints.append(
+            {
+                "kind": "registry-query-size-allocation-flow",
+                "summary": (
+                    "RegQueryValueEx size controls allocation and later "
+                    "registry value read size"
+                ),
+                "evidence": [
+                    _format_role_evidence(size_call, size_arg),
+                    _format_role_evidence(alloc_call, alloc_size),
+                    _format_role_evidence(value_call, value_buffer),
+                    _format_role_evidence(value_call, value_size),
+                ],
+            }
+        )
+    return hints
+
+
+def _find_prior_registry_size_query(
+    prior_calls: list[dict[str, Any]],
+    normalized_size_expr: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    for call in reversed(prior_calls):
+        if not _is_regqueryvalue_call(call):
+            continue
+        data_arg = _first_arg_with_role(call, "buffer")
+        size_arg = _first_arg_with_role(call, "out_length")
+        if data_arg is None or size_arg is None:
+            continue
+        if not _is_null_expr(str(data_arg.get("expr", ""))):
+            continue
+        if _normalize_expr(str(size_arg.get("expr", ""))) != normalized_size_expr:
+            continue
+        return call, size_arg
+    return None
+
+
+def _find_later_registry_value_read(
+    later_calls: list[dict[str, Any]],
+    normalized_size_expr: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
+    for call in later_calls:
+        if not _is_regqueryvalue_call(call):
+            continue
+        data_arg = _first_arg_with_role(call, "buffer")
+        size_arg = _first_arg_with_role(call, "out_length")
+        if data_arg is None or size_arg is None:
+            continue
+        if _is_null_expr(str(data_arg.get("expr", ""))):
+            continue
+        if _normalize_expr(str(size_arg.get("expr", ""))) != normalized_size_expr:
+            continue
+        return call, data_arg, size_arg
+    return None
+
+
 def _is_readfile_call(call: dict[str, Any]) -> bool:
     return _api_stem(str(call.get("name", ""))).startswith("readfile")
+
+
+def _is_regqueryvalue_call(call: dict[str, Any]) -> bool:
+    return _api_stem(str(call.get("name", ""))).startswith("regqueryvalue")
 
 
 def _is_small_fixed_read_length(arg: dict[str, Any]) -> bool:
@@ -2126,6 +2217,10 @@ def _first_arg_with_role(
 
 def _normalize_expr(expr: str) -> str:
     return re.sub(r"\s+", "", expr).lower()
+
+
+def _is_null_expr(expr: str) -> bool:
+    return _normalize_expr(expr) in {"0", "0x0", "null", "nullptr", "none"}
 
 
 def _format_role_evidence(call: dict[str, Any], arg: dict[str, Any]) -> str:

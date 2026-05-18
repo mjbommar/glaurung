@@ -48,6 +48,7 @@ def test_windows_risk_json_reports_parser_shape(
                 "WINHTTP.dll!WinHttpConnect",
                 "WINHTTP.dll!WinHttpOpenRequest",
                 "WINHTTP.dll!WinHttpSendRequest",
+                "ADVAPI32.dll!RegQueryValueExW",
             ],
             ["sample_export"],
             ["KERNEL32.dll"],
@@ -178,7 +179,11 @@ def test_windows_risk_json_reports_parser_shape(
             "session = WinHttpOpen(0x180050020, 0, 0, 0, 0); "
             "conn = WinHttpConnect(session, 0x180050040, 443, 0); "
             "req = WinHttpOpenRequest(conn, 0x180050060, 0x180050080, 0, 0, 0, 0); "
-            "WinHttpSendRequest(req, 0, 0, 0, 0, 0, 0); RegSetValueExW(); }"
+            "WinHttpSendRequest(req, 0, 0, 0, 0, 0, 0); "
+            "RegQueryValueExW(hkey, 0x180050100, 0, (rbp - 1680), 0, stack_9); "
+            "LocalAlloc(64, stack_9); "
+            "RegQueryValueExW(hkey, 0x180050100, 0, (rbp - 1680), var6, stack_9); "
+            "RegSetValueExW(); }"
         )
 
     monkeypatch.setattr(g.ir, "decompile_at", fake_decompile_at)
@@ -222,6 +227,7 @@ def test_windows_risk_json_reports_parser_shape(
         "file-read-allocation-flow",
         "file-read-allocation-argument-flow",
     ]
+    assert "registry-query-size-allocation-flow" in function_summary["risk_signals"]
     assert function_summary["argument_roles"]["length"][:3] == [
         {
             "api": "ReadFile",
@@ -308,6 +314,10 @@ def test_windows_risk_json_reports_parser_shape(
         hint["kind"] == "file-read-length-field-allocation-flow"
         for hint in report["functions"][0]["flow_hints"]
     )
+    assert any(
+        hint["kind"] == "registry-query-size-allocation-flow"
+        for hint in report["functions"][0]["flow_hints"]
+    )
     assert any(var["offset"] == -128 for var in report["functions"][0]["stack_vars"])
     assert report["functions"][0]["suspicious_constants"][0] == {
         "value": 4,
@@ -329,6 +339,10 @@ def test_windows_risk_json_reports_parser_shape(
     )
     assert any(
         item["kind"] == "file-read-length-field-allocation-flow"
+        for item in report["risk_items"]
+    )
+    assert any(
+        item["kind"] == "registry-query-size-allocation-flow"
         for item in report["risk_items"]
     )
     assert "resource" in report["risk_imports"]
