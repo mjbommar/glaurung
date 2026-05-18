@@ -11,6 +11,7 @@ from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .windows_rank_candidate_packets import RankedWindowsCandidate
+from .windows_record_candidate_snapshot_mapping import WindowsCandidateSnapshotMapping
 from .windows_record_validation_artifact_bundle import WindowsValidationArtifactBundle
 
 
@@ -34,6 +35,13 @@ class WindowsCandidateValidationReportArgs(BaseModel):
         description=(
             "Optional runtime artifact bundles emitted by "
             "windows_record_validation_artifact_bundle and joined by candidate_id."
+        ),
+    )
+    snapshot_mappings: list[WindowsCandidateSnapshotMapping] = Field(
+        default_factory=list,
+        description=(
+            "Optional candidate/snapshot mappings emitted by "
+            "windows_record_candidate_snapshot_mapping and joined by candidate_id."
         ),
     )
     markdown_path: str | None = Field(
@@ -85,7 +93,8 @@ class WindowsCandidateValidationReportTool(
     ) -> WindowsCandidateValidationReportResult:
         candidates = args.ranked_candidates[: args.max_candidates]
         bundles = _artifact_bundles_by_candidate(args.artifact_bundles)
-        markdown = _render_report(args.title, candidates, bundles)
+        mappings = _snapshot_mappings_by_candidate(args.snapshot_mappings)
+        markdown = _render_report(args.title, candidates, bundles, mappings)
         result = WindowsCandidateValidationReportResult(
             markdown=markdown,
             candidate_count=len(candidates),
@@ -115,8 +124,10 @@ def _render_report(
     title: str,
     candidates: list[RankedWindowsCandidate],
     artifact_bundles: dict[str, WindowsValidationArtifactBundle] | None = None,
+    snapshot_mappings: dict[str, WindowsCandidateSnapshotMapping] | None = None,
 ) -> str:
     artifact_bundles = artifact_bundles or {}
+    snapshot_mappings = snapshot_mappings or {}
     ready_count = sum(1 for item in candidates if item.validation_ready)
     blocked_count = sum(1 for item in candidates if not item.validation_ready)
     lines = [
@@ -132,13 +143,20 @@ def _render_report(
         "",
     ]
     for item in candidates:
-        lines.extend(_render_candidate(item, artifact_bundles.get(item.packet.candidate_id)))
+        lines.extend(
+            _render_candidate(
+                item,
+                artifact_bundles.get(item.packet.candidate_id),
+                snapshot_mappings.get(item.packet.candidate_id),
+            )
+        )
     return "\n".join(lines).rstrip() + "\n"
 
 
 def _render_candidate(
     item: RankedWindowsCandidate,
     artifact_bundle: WindowsValidationArtifactBundle | None = None,
+    snapshot_mapping: WindowsCandidateSnapshotMapping | None = None,
 ) -> list[str]:
     packet = item.packet
     status = "ready" if item.validation_ready else "blocked"
@@ -174,6 +192,20 @@ def _render_candidate(
         )
     else:
         lines.append("- Validation substrate: none attached")
+    if snapshot_mapping is not None:
+        mapping_status = (
+            "ready" if snapshot_mapping.ready_for_runtime_validation else "blocked"
+        )
+        lines.extend(
+            [
+                f"- Snapshot mapping: {mapping_status}",
+                f"- Snapshot mapping confidence: {snapshot_mapping.mapping_confidence}",
+                f"- Snapshot mapping evidence: {_list_or_none(snapshot_mapping.mapping_evidence)}",
+                f"- Snapshot mapping blockers: {_list_or_none(snapshot_mapping.mapping_blockers)}",
+            ]
+        )
+    else:
+        lines.append("- Snapshot mapping: none attached")
     if artifact_bundle is not None:
         bundle_status = "ready" if artifact_bundle.ready_for_review else "blocked"
         lines.extend(
@@ -212,6 +244,15 @@ def _artifact_bundles_by_candidate(
     out: dict[str, WindowsValidationArtifactBundle] = {}
     for bundle in bundles:
         out.setdefault(bundle.candidate_id, bundle)
+    return out
+
+
+def _snapshot_mappings_by_candidate(
+    mappings: list[WindowsCandidateSnapshotMapping],
+) -> dict[str, WindowsCandidateSnapshotMapping]:
+    out: dict[str, WindowsCandidateSnapshotMapping] = {}
+    for mapping in mappings:
+        out.setdefault(mapping.candidate_id, mapping)
     return out
 
 

@@ -248,9 +248,17 @@ sit below full IR/CFG bug-class scanners:
 - `windows_candidate_validation_report` renders ranked candidates and
   attached VM validation plans into an operator-facing markdown handoff.
   It can persist the report and add a KB evidence node. When supplied
-  with runtime artifact bundles, it displays execution status, artifact
-  counts, missing required artifacts, runtime blockers, and compact
-  artifact hash/path summaries.
+  with candidate/snapshot mappings and runtime artifact bundles, it
+  displays mapping confidence, mapping blockers, execution status,
+  artifact counts, missing required artifacts, runtime blockers, and
+  compact artifact hash/path summaries.
+- `windows_record_candidate_snapshot_mapping` records why a static
+  candidate maps to a specific validation snapshot. It checks candidate
+  id, binary name, project/Ghidra build label, optional ASB validation
+  inventory build number, plan runtime blockers, and optional artifact
+  bundle readiness. Its claim level is
+  `candidate_snapshot_mapping_not_reproduction`, so the mapping can be
+  audited without treating the candidate as reproduced.
 - `windows_record_validation_artifact_bundle` records operator-supplied
   runtime evidence after a VM validation plan is executed. It accepts
   artifact kinds such as KDNET attach logs, serial logs, crash dumps,

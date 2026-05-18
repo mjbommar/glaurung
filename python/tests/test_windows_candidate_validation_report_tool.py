@@ -15,6 +15,9 @@ from glaurung.llm.tools.windows_emit_review_packet import (
 )
 from glaurung.llm.tools.windows_emit_vm_validation_plan import WindowsVmValidationPlan
 from glaurung.llm.tools.windows_rank_candidate_packets import RankedWindowsCandidate
+from glaurung.llm.tools.windows_record_candidate_snapshot_mapping import (
+    WindowsCandidateSnapshotMapping,
+)
 from glaurung.llm.tools.windows_record_validation_artifact_bundle import (
     WindowsValidationArtifact,
     WindowsValidationArtifactBundle,
@@ -148,6 +151,28 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
                     ready_for_review=True,
                 )
             ],
+            snapshot_mappings=[
+                WindowsCandidateSnapshotMapping(
+                    candidate_id="ready-candidate",
+                    binary="cldflt.sys",
+                    candidate_build="26100.1742",
+                    candidate_build_label="win11-ltsc-v4",
+                    validation_id="win11_ltsc_v4_cold_postlogon",
+                    validation_build_label="win11-ltsc-v4",
+                    validation_build_number="26100.1742",
+                    snapshot_name="cold-postlogon",
+                    image_path="/images/win11-ltsc-v4.qcow2",
+                    ovmf_vars_path="/images/win11-ltsc-v4.OVMF_VARS.fd",
+                    qmp_endpoint="127.0.0.1:4447",
+                    rdp_endpoint="server0:3390",
+                    kdnet_port=51000,
+                    mapping_confidence="high",
+                    mapping_evidence=["candidate_id matches validation plan"],
+                    mapping_blockers=[],
+                    runtime_blockers=[],
+                    ready_for_runtime_validation=True,
+                )
+            ],
             markdown_path=str(report_path),
             add_to_kb=True,
         ),
@@ -164,6 +189,9 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
     assert "KDNET attach proof: /evidence/kdnet-attach.log" in result.markdown
     assert "KDNET attach proof: none" in result.markdown
     assert "KDNET attach is not validated" in result.markdown
+    assert "Snapshot mapping: ready" in result.markdown
+    assert "Snapshot mapping confidence: high" in result.markdown
+    assert "Snapshot mapping: none attached" in result.markdown
     assert "Runtime artifacts: ready" in result.markdown
     assert "Runtime execution: executed" in result.markdown
     assert "Runtime artifact summaries: kdnet_attach_log:aaaaaaaaaaaa:/evidence/kdnet-attach.log" in result.markdown
