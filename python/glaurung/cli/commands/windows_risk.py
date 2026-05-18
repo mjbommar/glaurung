@@ -1847,7 +1847,102 @@ def _flow_hints_from_api_calls(api_calls: list[dict[str, Any]]) -> list[dict[str
                 }
             )
             break
+    hints.extend(_file_read_length_field_flow_hints(api_calls))
     return hints[:16]
+
+
+def _file_read_length_field_flow_hints(
+    api_calls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    for alloc_idx, alloc_call in enumerate(api_calls):
+        if not _is_allocation_call(alloc_call):
+            continue
+        alloc_size = _first_arg_with_role(alloc_call, "length")
+        if alloc_size is None:
+            continue
+        alloc_expr = str(alloc_size.get("expr", ""))
+        normalized_alloc_expr = _normalize_expr(alloc_expr)
+        if not normalized_alloc_expr:
+            continue
+
+        length_seed = _find_prior_small_read_into_expr(
+            api_calls[:alloc_idx],
+            normalized_alloc_expr,
+        )
+        if length_seed is None:
+            continue
+
+        later_read = _find_later_read_with_length_expr(
+            api_calls[alloc_idx + 1 :],
+            normalized_alloc_expr,
+        )
+        if later_read is None:
+            continue
+
+        seed_call, seed_buffer, seed_length = length_seed
+        read_call, read_length = later_read
+        hints.append(
+            {
+                "kind": "file-read-length-field-allocation-flow",
+                "summary": (
+                    "small ReadFile length field controls allocation and "
+                    "later ReadFile length"
+                ),
+                "evidence": [
+                    _format_role_evidence(seed_call, seed_buffer),
+                    _format_role_evidence(seed_call, seed_length),
+                    _format_role_evidence(alloc_call, alloc_size),
+                    _format_role_evidence(read_call, read_length),
+                ],
+            }
+        )
+    return hints
+
+
+def _find_prior_small_read_into_expr(
+    prior_calls: list[dict[str, Any]],
+    normalized_expr: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
+    for call in reversed(prior_calls):
+        if not _is_readfile_call(call):
+            continue
+        buffer_arg = _first_arg_with_role(call, "buffer")
+        length_arg = _first_arg_with_role(call, "length")
+        if buffer_arg is None or length_arg is None:
+            continue
+        if _normalize_expr(str(buffer_arg.get("expr", ""))) != normalized_expr:
+            continue
+        if not _is_small_fixed_read_length(length_arg):
+            continue
+        return call, buffer_arg, length_arg
+    return None
+
+
+def _find_later_read_with_length_expr(
+    later_calls: list[dict[str, Any]],
+    normalized_expr: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    for call in later_calls:
+        if not _is_readfile_call(call):
+            continue
+        length_arg = _first_arg_with_role(call, "length")
+        if length_arg is None:
+            continue
+        if _normalize_expr(str(length_arg.get("expr", ""))) == normalized_expr:
+            return call, length_arg
+    return None
+
+
+def _is_readfile_call(call: dict[str, Any]) -> bool:
+    return _api_stem(str(call.get("name", ""))).startswith("readfile")
+
+
+def _is_small_fixed_read_length(arg: dict[str, Any]) -> bool:
+    value = arg.get("value")
+    if not isinstance(value, int):
+        return False
+    return 1 <= value <= 16
 
 
 def _is_allocation_call(call: dict[str, Any]) -> bool:

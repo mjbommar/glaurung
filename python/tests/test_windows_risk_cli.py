@@ -163,7 +163,7 @@ def test_windows_risk_json_reports_parser_shape(
             return "fn helper { return; }"
         return (
             "fn sub_1000 { tmp = (rbp - 128); CreateFileW(); "
-            "ReadFile(var3, (rbp - 128), 4); LocalAlloc(64, stack_9); "
+            "ReadFile(var3, stack_9, 4); LocalAlloc(64, stack_9); "
             "var6 = ret; L_1010: arg2 = stack_9; arg3 = (rsp + 64); "
             "ReadFile(var3, var6); hres = FindResourceW(0, 0x401000, 10); "
             "size = SizeofResource(0, hres); loaded = LoadResource(0, hres); "
@@ -222,7 +222,7 @@ def test_windows_risk_json_reports_parser_shape(
     assert read_call["return_type"] == "BOOL"
     assert read_call["args"][1] == {
         "index": 1,
-        "expr": "(rbp - 128)",
+        "expr": "stack_9",
         "param": "lpBuffer",
         "type": "LPVOID",
         "role": "buffer",
@@ -259,6 +259,10 @@ def test_windows_risk_json_reports_parser_shape(
         hint["kind"] == "file-read-allocation-argument-flow"
         for hint in report["functions"][0]["flow_hints"]
     )
+    assert any(
+        hint["kind"] == "file-read-length-field-allocation-flow"
+        for hint in report["functions"][0]["flow_hints"]
+    )
     assert any(var["offset"] == -128 for var in report["functions"][0]["stack_vars"])
     assert report["functions"][0]["suspicious_constants"][0] == {
         "value": 4,
@@ -276,6 +280,10 @@ def test_windows_risk_json_reports_parser_shape(
     )
     assert any(
         item["kind"] == "file-read-allocation-argument-flow"
+        for item in report["risk_items"]
+    )
+    assert any(
+        item["kind"] == "file-read-length-field-allocation-flow"
         for item in report["risk_items"]
     )
     assert "resource" in report["risk_imports"]
