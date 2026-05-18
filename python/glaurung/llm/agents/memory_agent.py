@@ -131,6 +131,9 @@ from ..tools.windows_diff_security_relevant_facts import (
 from ..tools.windows_regression_fixture_catalog import (
     build_tool as build_windows_regression_fixture_catalog,
 )
+from ..tools.windows_replay_regression_fixtures import (
+    build_tool as build_windows_replay_regression_fixtures,
+)
 from ..tools.identify_compiler_and_runtime import (
     build_tool as build_identify_compiler,
     IdentifyCompilerResult,
@@ -873,6 +876,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_regression_fixture_catalog())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_replay_regression_fixtures())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_agent_context()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_index_archive()))
