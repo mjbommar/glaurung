@@ -794,6 +794,121 @@ fn parse_pe_tls_callback_starts(data: &[u8], regions: &[ExecRegion]) -> Vec<u64>
     starts
 }
 
+/// Read PE Control Flow Guard function-id table entries as function starts.
+///
+/// GuardCFFunctionTable is a linker/loader-maintained array of valid indirect
+/// call targets. On modern Windows DLLs it is often a large function-start
+/// index that complements `.pdata`: it captures address-taken functions that
+/// may not be reachable from direct calls during bounded recursive discovery.
+fn parse_pe_guard_cf_function_starts(data: &[u8], regions: &[ExecRegion]) -> Vec<u64> {
+    const IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_MASK: u32 = 0xF000_0000;
+    const MAX_GUARD_CF_FUNCTIONS: usize = 2_000_000;
+
+    let parser = match crate::formats::pe::PeParser::new(data) {
+        Ok(parser) => parser,
+        Err(_) => return Vec::new(),
+    };
+    let load_config =
+        match parser.data_directory(crate::formats::pe::types::IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) {
+            Ok(dir) => dir,
+            Err(_) => return Vec::new(),
+        };
+    if load_config.virtual_address == 0 || load_config.size == 0 {
+        return Vec::new();
+    }
+    let load_config_off = match parser.rva_to_offset(load_config.virtual_address) {
+        Some(off) => off,
+        None => return Vec::new(),
+    };
+    let read_u32 = |off: usize| -> Option<u32> {
+        data.get(off..off + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let read_u64 = |off: usize| -> Option<u64> {
+        data.get(off..off + 8).map(|b| {
+            let lo = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64;
+            let hi = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as u64;
+            (hi << 32) | lo
+        })
+    };
+
+    // IMAGE_LOAD_CONFIG_DIRECTORY64:
+    //   GuardCFFunctionTable @ +0x80, Count @ +0x88, GuardFlags @ +0x90.
+    // IMAGE_LOAD_CONFIG_DIRECTORY32:
+    //   GuardCFFunctionTable @ +0x50, Count @ +0x54, GuardFlags @ +0x58.
+    let (table_va, count, guard_flags) = if parser.is_64bit() {
+        if load_config_off + 0x94 > data.len() {
+            return Vec::new();
+        }
+        let table_va = match read_u64(load_config_off + 0x80) {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+        let count = match read_u64(load_config_off + 0x88) {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+        let flags = match read_u32(load_config_off + 0x90) {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+        (table_va, count, flags)
+    } else {
+        if load_config_off + 0x5c > data.len() {
+            return Vec::new();
+        }
+        let table_va = match read_u32(load_config_off + 0x50) {
+            Some(v) => v as u64,
+            None => return Vec::new(),
+        };
+        let count = match read_u32(load_config_off + 0x54) {
+            Some(v) => v as u64,
+            None => return Vec::new(),
+        };
+        let flags = match read_u32(load_config_off + 0x58) {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
+        (table_va, count, flags)
+    };
+
+    if table_va == 0 || count == 0 {
+        return Vec::new();
+    }
+    let image_base = parser.image_base();
+    let table_rva = match table_va.checked_sub(image_base) {
+        Some(rva) if rva <= u32::MAX as u64 => rva as u32,
+        _ => return Vec::new(),
+    };
+    let table_off = match parser.rva_to_offset(table_rva) {
+        Some(off) => off,
+        None => return Vec::new(),
+    };
+    // The high nibble encodes additional per-entry flag bytes. A value of
+    // 1 means 5-byte entries: u32 target RVA + u8 flags.
+    let extra_entry_bytes =
+        ((guard_flags & IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_MASK) >> 28) as usize;
+    let stride = 4usize.saturating_add(extra_entry_bytes).max(4);
+    let cap = std::cmp::min(count as usize, MAX_GUARD_CF_FUNCTIONS);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut starts = Vec::new();
+    for i in 0..cap {
+        let off = table_off.saturating_add(i.saturating_mul(stride));
+        let rva = match read_u32(off) {
+            Some(v) if v != 0 => v,
+            _ => continue,
+        };
+        let va = image_base.saturating_add(rva as u64);
+        if !seen.insert(va) {
+            continue;
+        }
+        if in_exec_regions(regions, va).is_some() {
+            starts.push(va);
+        }
+    }
+    starts
+}
+
 /// Read every export-table function VA from a PE.
 ///
 /// The `object` crate's `dynamic_symbols()` returns nothing for PE
@@ -1188,6 +1303,26 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         if let Ok(addr) = Address::new(AddressKind::VA, *va, bits, None, None) {
             seeds.push((addr, DiscoverySeedKind::Trusted));
             known.insert(*va);
+        }
+    }
+
+    // PE GuardCF function-id table seeds. Modern Windows images often carry a
+    // large load-config table of valid indirect-call targets. Treat those as
+    // metadata-backed function starts before broad signature scanning, but gate
+    // body overlaps like `.pdata` so a malformed table cannot split already
+    // discovered function bodies.
+    let pe_guard_cf_functions = if is_pe_image {
+        parse_pe_guard_cf_function_starts(data, &regions)
+    } else {
+        Vec::new()
+    };
+    for va in pe_guard_cf_functions {
+        if known.contains(&va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, va, bits, None, None) {
+            seeds.push((addr, DiscoverySeedKind::BodyOverlapGated));
+            known.insert(va);
         }
     }
 
@@ -1809,6 +1944,47 @@ mod pe_tls_callback_seed_tests {
                 "anonymous TLS callback {va:#x} kept non-metadata name {name}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod pe_guard_cf_seed_tests {
+    use super::{
+        analyze_functions_bytes, parse_exec_regions, parse_pe_guard_cf_function_starts, Budgets,
+    };
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    #[test]
+    fn pe_guard_cf_table_entries_are_discovery_seeds_when_corpus_is_present() {
+        let path = Path::new(
+            "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/HologramWorld.dll",
+        );
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read HologramWorld.dll corpus sample");
+        let (regions, _arch, _end, _entry) = parse_exec_regions(&data);
+        let guard_cf = parse_pe_guard_cf_function_starts(&data, &regions);
+        assert!(
+            guard_cf.len() > 1_000,
+            "expected a large GuardCF function table"
+        );
+
+        let budgets = Budgets {
+            // entrypoint + two TLS callbacks + the first GuardCF entries
+            max_functions: 10,
+            max_blocks: 1_000_000,
+            max_instructions: 30_000_000,
+            timeout_ms: 30_000,
+        };
+        let (functions, _cg) = analyze_functions_bytes(&data, &budgets);
+        let discovered: BTreeSet<u64> = functions.iter().map(|f| f.entry_point.value).collect();
+        let first_guard_cf = guard_cf[0];
+        assert!(
+            discovered.contains(&first_guard_cf),
+            "first GuardCF seed {first_guard_cf:#x} was not discovered under tight budget"
+        );
     }
 }
 
