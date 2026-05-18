@@ -173,6 +173,9 @@ from ..tools.windows_cfg_dominance import (
 from ..tools.windows_cfg_gate_to_sink import (
     build_tool as build_windows_cfg_gate_to_sink,
 )
+from ..tools.windows_project_cfg_path_query import (
+    build_tool as build_windows_project_cfg_path_query,
+)
 from ..tools.windows_compose_source_gate_sink_packet import (
     build_tool as build_windows_compose_source_gate_sink_packet,
 )
@@ -967,6 +970,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_check_gate_to_sink()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_cfg_dominance()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_cfg_gate_to_sink()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_cfg_path_query())
+    )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_compose_source_gate_sink_packet())
     )

@@ -144,6 +144,11 @@ sit below full IR/CFG bug-class scanners:
   step, then precompute immediate dominator/post-dominator summaries
   via `index_cfg_dominance`, so project summaries can report CFG
   coverage without re-running on-demand function recovery.
+- `windows_project_cfg_path_query` reads persisted `.glaurung` CFG
+  tables to resolve containing blocks, branch/source-to-sink
+  reachability, and whether every entry-to-sink path passes through a
+  candidate gate. When coverage fails, it returns a compact bypass
+  block path for review packets.
 - `windows_cfg_gate_to_sink` composes ASB gate/sink metadata with
   concrete gate and sink callsite VAs, runs CFG dominance, and returns
   a packet-ready gate status for candidate evidence.
