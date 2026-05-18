@@ -98,6 +98,9 @@ from ..tools.windows_surface_catalog import (
 from ..tools.windows_source_reachability import (
     build_tool as build_windows_source_reachability,
 )
+from ..tools.windows_target_surface_profile import (
+    build_tool as build_windows_target_surface_profile,
+)
 from ..tools.windows_enumerate_entrypoints import (
     build_tool as build_windows_enumerate_entrypoints,
 )
@@ -866,6 +869,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_build_corpus()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_surface_catalog()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_source_reachability()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_target_surface_profile())
+    )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_surface_metadata()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_enumerate_entrypoints()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_function_arg_roles()))
