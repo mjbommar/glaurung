@@ -74,6 +74,7 @@ CREATE TABLE xrefs (
             [
                 (0x1000, "DriverDispatch"),
                 (0x2000, "CopyHelper"),
+                (0x4000, "ProbeForWrite"),
                 (0x5000, "RtlCopyMemory"),
             ],
         )
@@ -82,6 +83,39 @@ CREATE TABLE xrefs (
             [
                 (1, 0x1100, 0x2000, "call", 0x1000),
                 (2, 0x2100, 0x5000, "call", 0x2000),
+                (3, 0x2050, 0x4000, "call", 0x2000),
+            ],
+        )
+        conn.executescript(
+            """
+CREATE TABLE basic_blocks (
+    binary_id INTEGER,
+    function_va INTEGER,
+    block_id TEXT,
+    start_va INTEGER,
+    end_va INTEGER
+);
+CREATE TABLE cfg_edges (
+    binary_id INTEGER,
+    function_va INTEGER,
+    src_block_id TEXT,
+    dst_block_id TEXT
+);
+"""
+        )
+        conn.executemany(
+            "INSERT INTO basic_blocks VALUES (1, ?, ?, ?, ?)",
+            [
+                (0x2000, "entry", 0x2000, 0x2050),
+                (0x2000, "gate", 0x2050, 0x2080),
+                (0x2000, "sink", 0x2080, 0x2180),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO cfg_edges VALUES (1, ?, ?, ?)",
+            [
+                (0x2000, "entry", "gate"),
+                (0x2000, "gate", "sink"),
             ],
         )
         conn.commit()
@@ -109,6 +143,22 @@ def _write_sinks(tmp_path: Path) -> Path:
     return sinks
 
 
+def _write_gates(tmp_path: Path) -> Path:
+    gates = tmp_path / "pe-gates.yaml"
+    gates.write_text(
+        """
+- id: probeforwrite
+  symbols: [ProbeForWrite]
+  gate_kind: user_pointer
+  proves: [user_pointer_write_range_valid]
+  required_conditions: [call_dominates_write_sink]
+  invalid_when: [length_is_zero]
+""",
+        encoding="utf-8",
+    )
+    return gates
+
+
 def _write_project_facts(tmp_path: Path) -> Path:
     project_facts = tmp_path / "pe-project-facts.yaml"
     project_facts.write_text(
@@ -121,19 +171,19 @@ def _write_project_facts(tmp_path: Path) -> Path:
   binary_filename: driver.sys
   project_path: /projects/driver.glaurung
   fact_sources: [unit_test]
-  fact_coverage: [function_names, call_xrefs]
+  fact_coverage: [function_names, call_xrefs, cfg, cfg_dominance]
   missing_facts: []
   counts:
-    function_name_count: 3
-    xref_count: 2
-    call_xref_count: 2
+    function_name_count: 4
+    xref_count: 3
+    call_xref_count: 3
     data_read_xref_count: 0
     data_write_xref_count: 0
     data_label_count: 0
     function_prototype_count: 0
-    basic_block_count: 0
-    cfg_edge_count: 0
-    cfg_dominance_count: 0
+    basic_block_count: 3
+    cfg_edge_count: 2
+    cfg_dominance_count: 3
     cfg_branch_fact_count: 0
 """,
         encoding="utf-8",
@@ -232,7 +282,7 @@ def test_windows_project_onehop_flow_packets_emit_review_packet(
     ]
     assert packet.gate_status == "unknown"
     assert packet.project_facts is not None
-    assert packet.project_facts.counts["call_xref_count"] == 2
+    assert packet.project_facts.counts["call_xref_count"] == 3
     assert packet.ghidra_delta is not None
     assert packet.ghidra_delta.current_capabilities == [
         "project_onehop_argument_flow_snapshot_match"
@@ -257,6 +307,86 @@ def test_windows_project_onehop_flow_packets_emit_review_packet(
         node.kind == NodeKind.evidence
         and node.label == "windows_project_onehop_flow_packets"
         for node in ctx.kb.nodes()
+    )
+
+
+def test_windows_project_onehop_flow_packets_refines_helper_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+
+    def fake_disassemble_window_at(_path, start_va, **_kwargs):
+        if start_va == 0x1000:
+            return [
+                _Insn(0x1000, "mov", ["rcx", "rdi"]),
+                _Insn(0x1004, "mov", ["rdx", "rsi"]),
+                _Insn(0x1100, "call", ["0x2000"]),
+            ]
+        if start_va == 0x2000:
+            return [
+                _Insn(0x2000, "mov", ["rcx", "r8"]),
+                _Insn(0x2004, "mov", ["rdx", "rdx"]),
+                _Insn(0x2008, "mov", ["r8", "0x40"]),
+                _Insn(0x2050, "call", ["0x4000"]),
+                _Insn(0x2080, "mov", ["rdx", "rdx"]),
+                _Insn(0x2100, "call", ["0x5000"]),
+            ]
+        return []
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(_write_project(tmp_path)),
+            binary="driver.sys",
+            build="unit-test",
+            attacker_class="local_unprivileged",
+            source_role="buffer",
+            source_arg="rsi",
+            sink_arg_index=1,
+            sinks_path=str(_write_sinks(tmp_path)),
+            gates_path=str(_write_gates(tmp_path)),
+            refine_helper_gates=True,
+            project_facts_path=str(_write_project_facts(tmp_path)),
+            ghidra_delta_path=str(_write_ghidra_delta(tmp_path)),
+            manifest_target_id="driver",
+            manifest_build_label="unit-test",
+            manifest_component="driver.sys",
+        ),
+    )
+
+    assert result.packet_count == 1
+    assert result.helper_gate_refinement_count == 1
+    packet = result.packets[0]
+    assert packet.proven_gates == ["destination_range_valid"]
+    assert packet.gate_proof_sources == {
+        "destination_range_valid": "user_pointer_write_range_valid"
+    }
+    assert packet.missing_required_gates == ["byte_count_bounded"]
+    assert packet.gate_status == "unknown"
+    assert packet.required_project_facts == [
+        "function_names",
+        "call_xrefs",
+        "cfg",
+        "cfg_dominance",
+    ]
+    assert any(step.symbol == "ProbeForWrite" and step.role == "gate" for step in packet.path)
+    assert any(
+        evidence.source == "windows_project_onehop_helper_gate_dominance"
+        and "ProbeForWrite@0x2050" in evidence.summary
+        for evidence in packet.evidence
+    )
+    assert any(
+        evidence.source == "windows_project_onehop_helper_gate_requirement_coverage"
+        and "matched required gates [destination_range_valid]" in evidence.summary
+        for evidence in packet.evidence
     )
 
 

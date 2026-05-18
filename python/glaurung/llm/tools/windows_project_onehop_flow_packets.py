@@ -1,23 +1,47 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, Field
 
 from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .windows_cfg_dominance import (
+    WindowsCfgDominanceArgs,
+    WindowsCfgDominanceResult,
+    WindowsCfgDominanceTool,
+)
+from .windows_check_gate_to_sink import (
+    _gate_record,
+    _gates_by_symbol,
+    _load_yaml_list,
+    _matches_by_symbol,
+)
 from .windows_emit_review_packet import (
+    GateStatus,
     WindowsEmitReviewPacketArgs,
     WindowsEmitReviewPacketTool,
     WindowsReviewEvidence,
     WindowsReviewPacket,
     WindowsReviewPathStep,
 )
+from .windows_gate_semantics import (
+    gate_proof_sources,
+    matched_required_gates,
+    missing_required_gates,
+)
+from .windows_project_callsite_facts import (
+    WindowsProjectCallsiteFactsArgs,
+    WindowsProjectCallsiteFactsTool,
+)
 from .windows_project_onehop_argument_flow import (
     WindowsProjectOnehopArgumentFlow,
     WindowsProjectOnehopArgumentFlowArgs,
     WindowsProjectOnehopArgumentFlowTool,
 )
+from .windows_surface_metadata import GateRecord, _resolve_metadata_path
 
 
 class WindowsProjectOnehopFlowPacketsArgs(BaseModel):
@@ -36,6 +60,17 @@ class WindowsProjectOnehopFlowPacketsArgs(BaseModel):
     sinks_path: str | None = Field(
         None,
         description="Path to ASB data/kg/pe-sinks.yaml. Defaults to ASB_REPO or sibling repo.",
+    )
+    gates_path: str | None = Field(
+        None,
+        description="Path to ASB data/kg/pe-gates.yaml. Defaults to ASB_REPO or sibling repo.",
+    )
+    refine_helper_gates: bool = Field(
+        False,
+        description=(
+            "If true, look for compatible gate callsites inside the helper and "
+            "attach persisted-CFG dominance evidence before the helper-local sink."
+        ),
     )
     binary_id: int | None = Field(None, description="Optional project binary_id filter.")
     caller_function_va: int | None = Field(
@@ -104,6 +139,7 @@ class WindowsProjectOnehopFlowPacketsResult(BaseModel):
     packet_count: int
     scanned_chain_count: int
     onehop_argument_flow_count: int
+    helper_gate_refinement_count: int
     packets: list[WindowsReviewPacket]
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
@@ -156,10 +192,17 @@ class WindowsProjectOnehopFlowPacketsTool(
                 add_to_kb=False,
             ),
         )
-        packets = [
-            _emit_packet(ctx, kb, args, flow)
+        packet_items = [
+            (flow, _refine_helper_gate(ctx, kb, args, flow))
             for flow in flow_result.flows[: args.max_packets]
         ]
+        packets = [
+            _emit_packet(ctx, kb, args, flow, gate_refinement)
+            for flow, gate_refinement in packet_items
+        ]
+        helper_gate_refinement_count = sum(
+            1 for _flow, refinement in packet_items if refinement is not None
+        )
 
         evidence_node_id = None
         if args.add_to_kb:
@@ -173,6 +216,7 @@ class WindowsProjectOnehopFlowPacketsTool(
                         "packet_count": len(packets),
                         "scanned_chain_count": flow_result.scanned_chain_count,
                         "onehop_argument_flow_count": flow_result.flow_count,
+                        "helper_gate_refinement_count": helper_gate_refinement_count,
                     },
                 )
             )
@@ -186,6 +230,7 @@ class WindowsProjectOnehopFlowPacketsTool(
             packet_count=len(packets),
             scanned_chain_count=flow_result.scanned_chain_count,
             onehop_argument_flow_count=flow_result.flow_count,
+            helper_gate_refinement_count=helper_gate_refinement_count,
             packets=packets,
             evidence_node_id=evidence_node_id,
             notes=[
@@ -200,12 +245,14 @@ def _emit_packet(
     kb: KnowledgeBase,
     args: WindowsProjectOnehopFlowPacketsArgs,
     flow: WindowsProjectOnehopArgumentFlow,
+    gate_refinement: "_HelperGateRefinement | None",
 ) -> WindowsReviewPacket:
     source_arg = args.source_arg or flow.caller_arg_expression or (
         f"arg{flow.caller_arg_index}"
     )
     entrypoint = flow.caller_name or _va_label(flow.caller_va, "function")
     helper = flow.helper_name or _va_label(flow.helper_va, "helper")
+    gate_path = _gate_path_step(helper, gate_refinement)
     result = WindowsEmitReviewPacketTool().run(
         ctx,
         kb,
@@ -227,7 +274,26 @@ def _emit_packet(
             sink_symbol=flow.sink_symbol,
             sink_kind=flow.sink_kind,
             required_gates=flow.required_gates,
-            gate_status="unknown",
+            proven_gates=(
+                gate_refinement.matched_required_gates
+                if gate_refinement is not None
+                else []
+            ),
+            gate_proof_sources=(
+                gate_refinement.gate_proof_sources
+                if gate_refinement is not None
+                else {}
+            ),
+            missing_required_gates=(
+                gate_refinement.missing_required_gates
+                if gate_refinement is not None
+                else []
+            ),
+            gate_status=(
+                gate_refinement.packet_gate_status
+                if gate_refinement is not None
+                else "unknown"
+            ),
             path=[
                 WindowsReviewPathStep(
                     function=entrypoint,
@@ -238,6 +304,7 @@ def _emit_packet(
                         f"caller invokes helper at VA 0x{flow.helper_callsite_va:x}"
                     ),
                 ),
+                *gate_path,
                 WindowsReviewPathStep(
                     function=helper,
                     symbol=flow.sink_symbol,
@@ -265,13 +332,14 @@ def _emit_packet(
                         "asb_pe_sink_metadata",
                     ],
                 ),
+                *_gate_evidence(gate_refinement),
             ],
             provenance=[
                 "windows_project_onehop_flow_packets",
                 "windows_project_onehop_argument_flow",
                 "project_call_xrefs",
             ],
-            required_project_facts=list(args.required_project_facts),
+            required_project_facts=_required_project_facts(args),
             auto_join_manifest_context=True,
             project_facts_path=args.project_facts_path,
             ghidra_delta_path=args.ghidra_delta_path,
@@ -281,11 +349,214 @@ def _emit_packet(
             notes=[
                 "emitted from conservative one-hop argument-flow match",
                 "source refinement is matched only across one helper hop",
-                "gate status is unknown until dominance/path rules prove the required gates",
+                _gate_note(gate_refinement),
             ],
         ),
     )
     return result.packet
+
+
+@dataclass(frozen=True)
+class _HelperGateRefinement:
+    gate_symbol: str
+    gate_va: int
+    gate_proves: list[str]
+    matched_required_gates: list[str]
+    gate_proof_sources: dict[str, str]
+    missing_required_gates: list[str]
+    packet_gate_status: GateStatus
+    summary: str
+    provenance: list[str]
+    dominance: WindowsCfgDominanceResult
+
+
+def _refine_helper_gate(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsProjectOnehopFlowPacketsArgs,
+    flow: WindowsProjectOnehopArgumentFlow,
+) -> _HelperGateRefinement | None:
+    if not args.refine_helper_gates or not flow.required_gates:
+        return None
+    try:
+        gates_path = _resolve_metadata_path(args.gates_path, "data/kg/pe-gates.yaml")
+        gates = [_gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)]
+        function_calls = WindowsProjectCallsiteFactsTool().run(
+            ctx,
+            kb,
+            WindowsProjectCallsiteFactsArgs(
+                project_path=args.project_path,
+                sinks_path=args.sinks_path,
+                binary_id=args.binary_id,
+                function_va=flow.helper_va,
+                operation_only=False,
+                max_calls=512,
+                add_to_kb=False,
+            ),
+        ).callsites
+    except Exception:
+        return None
+
+    gates_by_symbol = _gates_by_symbol(gates)
+    for candidate in function_calls:
+        if candidate.callsite_va == flow.sink_callsite_va:
+            continue
+        name = candidate.callee_name or candidate.callee_demangled
+        if not name:
+            continue
+        for gate in _matches_by_symbol(name, gates_by_symbol):
+            if not _gate_compatible(gate, flow.required_gates):
+                continue
+            dominance = _dominance(ctx, kb, args, flow, candidate.callsite_va)
+            if dominance is None:
+                continue
+            matched = matched_required_gates(gate.proves, flow.required_gates)
+            missing = missing_required_gates(gate.proves, flow.required_gates)
+            return _HelperGateRefinement(
+                gate_symbol=name,
+                gate_va=candidate.callsite_va,
+                gate_proves=gate.proves,
+                matched_required_gates=matched,
+                gate_proof_sources=gate_proof_sources(
+                    gate.proves,
+                    flow.required_gates,
+                ),
+                missing_required_gates=missing,
+                packet_gate_status=_packet_gate_status(
+                    dominance.status,
+                    gate,
+                    flow.required_gates,
+                ),
+                summary=(
+                    f"{name}@0x{candidate.callsite_va:x} vs "
+                    f"sink@0x{flow.sink_callsite_va:x}: {dominance.reason}"
+                ),
+                provenance=dominance.provenance,
+                dominance=dominance,
+            )
+    return None
+
+
+def _dominance(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsProjectOnehopFlowPacketsArgs,
+    flow: WindowsProjectOnehopArgumentFlow,
+    gate_va: int,
+) -> WindowsCfgDominanceResult | None:
+    try:
+        return WindowsCfgDominanceTool().run(
+            ctx,
+            kb,
+            WindowsCfgDominanceArgs(
+                project_path=args.project_path,
+                function_va=flow.helper_va,
+                gate_va=gate_va,
+                sink_va=flow.sink_callsite_va,
+                add_to_kb=False,
+            ),
+        )
+    except Exception:
+        return None
+
+
+def _gate_compatible(gate: GateRecord, required_gates: list[str]) -> bool:
+    if not required_gates:
+        return False
+    return bool(matched_required_gates(gate.proves, required_gates))
+
+
+def _packet_gate_status(
+    status: str,
+    gate: GateRecord,
+    required_gates: list[str],
+) -> GateStatus:
+    if missing_required_gates(gate.proves, required_gates):
+        return "unknown"
+    if status == "dominated":
+        return "dominated"
+    if status == "not_dominated":
+        return "not_dominated"
+    if status == "same_block":
+        return "gate_same_line"
+    return "unknown"
+
+
+def _gate_path_step(
+    helper: str,
+    refinement: _HelperGateRefinement | None,
+) -> list[WindowsReviewPathStep]:
+    if refinement is None:
+        return []
+    return [
+        WindowsReviewPathStep(
+            function=helper,
+            symbol=refinement.gate_symbol,
+            role="gate",
+            evidence=f"helper-local gate call xref at VA 0x{refinement.gate_va:x}",
+        )
+    ]
+
+
+def _gate_evidence(
+    refinement: _HelperGateRefinement | None,
+) -> list[WindowsReviewEvidence]:
+    if refinement is None:
+        return []
+    return [
+        WindowsReviewEvidence(
+            source="windows_project_onehop_helper_gate_dominance",
+            summary=refinement.summary,
+            provenance=[
+                "windows_project_onehop_flow_packets",
+                "asb_pe_gate_metadata",
+                "persisted_project_cfg",
+                *refinement.provenance,
+            ],
+        ),
+        WindowsReviewEvidence(
+            source="windows_project_onehop_helper_gate_requirement_coverage",
+            summary=_gate_requirement_summary(refinement),
+            provenance=[
+                "windows_project_onehop_flow_packets",
+                "asb_pe_gate_metadata",
+                "asb_pe_sink_metadata",
+            ],
+        ),
+    ]
+
+
+def _gate_requirement_summary(refinement: _HelperGateRefinement) -> str:
+    matched = (
+        ", ".join(refinement.matched_required_gates)
+        if refinement.matched_required_gates
+        else "none"
+    )
+    missing = (
+        ", ".join(refinement.missing_required_gates)
+        if refinement.missing_required_gates
+        else "none"
+    )
+    proves = ", ".join(refinement.gate_proves) if refinement.gate_proves else "none"
+    return (
+        f"{refinement.gate_symbol}@0x{refinement.gate_va:x} proves [{proves}]; "
+        f"matched required gates [{matched}]; missing required gates [{missing}]"
+    )
+
+
+def _gate_note(refinement: _HelperGateRefinement | None) -> str:
+    if refinement is None:
+        return (
+            "gate status is unknown until dominance/path rules prove the required gates"
+        )
+    return "helper-local gate refinement attached from persisted CFG dominance"
+
+
+def _required_project_facts(args: WindowsProjectOnehopFlowPacketsArgs) -> list[str]:
+    facts = list(args.required_project_facts)
+    if args.refine_helper_gates:
+        facts.extend(["cfg", "cfg_dominance"])
+    return list(dict.fromkeys(facts))
 
 
 def _source_refinement_sources(
