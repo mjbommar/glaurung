@@ -127,6 +127,14 @@ sit below full IR/CFG bug-class scanners:
   and sample packet ids. This gives rules an operation-level view of
   missing gates while keeping source reachability and argument value
   flow as separate proof obligations.
+- `windows_project_operation_source_summary` runs the project
+  sink-packet source-refinement path with ASB source metadata and
+  aggregates the resulting packets by sink operation. It reports source
+  refinement status counts, matched/inferred/missing packet counts,
+  inferred source roles, local source args when proven, blockers, and
+  sample packet ids. This gives rules an operation-level source view
+  while still distinguishing metadata-only inference from local
+  source/sink value matches and full attacker reachability.
 - `windows_project_sink_call_packets` scans persisted project call xrefs
   for ASB sink operations and emits manifest-backed review packets from
   those exact callsites. This is the first broad project-scan packet
