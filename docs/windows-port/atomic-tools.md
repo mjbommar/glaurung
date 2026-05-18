@@ -120,6 +120,13 @@ sit below full IR/CFG bug-class scanners:
   validation targets before emitting one packet per callsite; source
   reachability, argument value flow, and gate dominance remain separate
   facts.
+- `windows_project_operation_gate_summary` runs the project sink-packet
+  gate refinement path and aggregates the resulting packets by sink
+  operation. It reports gate status counts, fully/partially/unproven
+  packet counts, proven gate semantics, missing required gate semantics,
+  and sample packet ids. This gives rules an operation-level view of
+  missing gates while keeping source reachability and argument value
+  flow as separate proof obligations.
 - `windows_project_sink_call_packets` scans persisted project call xrefs
   for ASB sink operations and emits manifest-backed review packets from
   those exact callsites. This is the first broad project-scan packet
