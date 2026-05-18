@@ -47,6 +47,10 @@ from .windows_project_branch_condition_facts import (
     WindowsProjectBranchConditionFactsArgs,
     WindowsProjectBranchConditionFactsTool,
 )
+from .windows_project_cfg_path_query import (
+    WindowsProjectCfgPathQueryArgs,
+    WindowsProjectCfgPathQueryTool,
+)
 from .windows_surface_metadata import GateRecord, _resolve_metadata_path
 
 
@@ -609,6 +613,7 @@ def _gate_predicates(
     function_va = sink_callsite.caller_va or dominance.function_va
     if function_va is None:
         return []
+    path_block_ids = _gate_path_block_ids(ctx, kb, args, sink_callsite, gate_callsite)
     try:
         result = WindowsProjectBranchConditionFactsTool().run(
             ctx,
@@ -616,6 +621,7 @@ def _gate_predicates(
             WindowsProjectBranchConditionFactsArgs(
                 project_path=args.project_path,
                 function_va=function_va,
+                path_block_ids=path_block_ids,
                 max_rows=128,
                 add_to_kb=False,
             ),
@@ -631,6 +637,33 @@ def _gate_predicates(
         args.max_gate_predicates,
     )
     return selected
+
+
+def _gate_path_block_ids(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsProjectSinkCallPacketsArgs,
+    sink_callsite: ProjectCallsiteFact,
+    gate_callsite: ProjectCallsiteFact,
+) -> list[str]:
+    if sink_callsite.caller_va is None:
+        return []
+    try:
+        result = WindowsProjectCfgPathQueryTool().run(
+            ctx,
+            kb,
+            WindowsProjectCfgPathQueryArgs(
+                project_path=args.project_path,
+                function_va=sink_callsite.caller_va,
+                gate_va=gate_callsite.callsite_va,
+                sink_va=sink_callsite.callsite_va,
+                max_path_blocks=64,
+                add_to_kb=False,
+            ),
+        )
+    except Exception:
+        return []
+    return result.entry_to_sink_path_block_ids
 
 
 def _select_gate_predicates(

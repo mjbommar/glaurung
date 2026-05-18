@@ -100,6 +100,9 @@ def test_windows_project_cfg_path_query_reports_covered_gate(
     assert result.entry_reaches_sink is True
     assert result.gate_reaches_sink is True
     assert result.all_paths_to_sink_pass_gate is True
+    assert result.entry_to_sink_path_block_ids == ["entry", "gate", "sink"]
+    assert result.branch_to_sink_path_block_ids == ["entry", "gate", "sink"]
+    assert result.gate_to_sink_path_block_ids == ["gate", "sink"]
     assert result.bypass_path_block_ids == []
     assert result.evidence_node_id is not None
     assert any(
@@ -127,6 +130,8 @@ def test_windows_project_cfg_path_query_reports_bypass_path(
 
     assert result.status == "bypass"
     assert result.all_paths_to_sink_pass_gate is False
+    assert result.entry_to_sink_path_block_ids == ["entry", "bypass", "sink"]
+    assert result.gate_to_sink_path_block_ids == ["gate", "sink"]
     assert result.bypass_path_block_ids == ["entry", "bypass", "sink"]
 
 
@@ -147,6 +152,7 @@ def test_windows_project_cfg_path_query_can_skip_gate_check(tmp_path: Path) -> N
     assert result.status == "not_requested"
     assert result.entry_reaches_sink is True
     assert result.branch_reaches_sink is True
+    assert result.entry_to_sink_path_block_ids == ["entry", "gate", "sink"]
     assert result.all_paths_to_sink_pass_gate is None
 
 

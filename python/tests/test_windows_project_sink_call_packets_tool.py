@@ -151,6 +151,24 @@ def _write_project(tmp_path: Path) -> Path:
                 0,
             ),
         )
+        conn.execute(
+            "INSERT INTO cfg_branch_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                0x1000,
+                "dead",
+                0x1400,
+                "je",
+                '["0x1410"]',
+                0x13fc,
+                "cmp",
+                '["eax", "0"]',
+                "equal",
+                "dead_sink",
+                "dead_fallthrough",
+                0,
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -234,7 +252,7 @@ def _write_project_facts(tmp_path: Path) -> Path:
     basic_block_count: 3
     cfg_edge_count: 2
     cfg_dominance_count: 3
-    cfg_branch_fact_count: 1
+    cfg_branch_fact_count: 2
 """,
         encoding="utf-8",
     )

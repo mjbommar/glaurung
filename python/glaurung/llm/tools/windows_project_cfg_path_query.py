@@ -65,6 +65,9 @@ class WindowsProjectCfgPathQueryResult(BaseModel):
     status: PathCoverageStatus = "unknown"
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     reason: str
+    entry_to_sink_path_block_ids: list[str] = Field(default_factory=list)
+    branch_to_sink_path_block_ids: list[str] = Field(default_factory=list)
+    gate_to_sink_path_block_ids: list[str] = Field(default_factory=list)
     bypass_path_block_ids: list[str] = Field(default_factory=list)
     provenance: list[str] = Field(default_factory=list)
     evidence_node_id: str | None = None
@@ -242,6 +245,11 @@ def _query(args: WindowsProjectCfgPathQueryArgs) -> WindowsProjectCfgPathQueryRe
         confidence,
         reason,
         bypass_path_block_ids=bypass_path[: args.max_path_blocks],
+        entry_to_sink_path_block_ids=entry_path[: args.max_path_blocks],
+        branch_to_sink_path_block_ids=(
+            branch_path[: args.max_path_blocks] if branch_path else []
+        ),
+        gate_to_sink_path_block_ids=gate_path[: args.max_path_blocks] if gate_path else [],
     )
     result.entry_reaches_sink = entry_path is not None
     result.branch_reaches_sink = branch_path is not None if branch_id is not None else None
@@ -286,14 +294,28 @@ def _blocks(
     binary_id: int,
     function_va: int,
 ) -> dict[str, tuple[int, int, bool]]:
+    columns = _table_columns(conn, "basic_blocks")
+    if "is_entry" in columns:
+        return {
+            str(row[0]): (int(row[1]), int(row[2]), bool(row[3]))
+            for row in conn.execute(
+                "SELECT block_id, start_va, end_va, is_entry FROM basic_blocks "
+                "WHERE binary_id = ? AND function_va = ? ORDER BY start_va",
+                (binary_id, function_va),
+            ).fetchall()
+        }
     return {
-        str(row[0]): (int(row[1]), int(row[2]), bool(row[3]))
+        str(row[0]): (int(row[1]), int(row[2]), False)
         for row in conn.execute(
-            "SELECT block_id, start_va, end_va, is_entry FROM basic_blocks "
+            "SELECT block_id, start_va, end_va FROM basic_blocks "
             "WHERE binary_id = ? AND function_va = ? ORDER BY start_va",
             (binary_id, function_va),
         ).fetchall()
     }
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
 def _edges(
@@ -379,6 +401,9 @@ def _result(
     reason: str,
     *,
     bypass_path_block_ids: list[str] | None = None,
+    entry_to_sink_path_block_ids: list[str] | None = None,
+    branch_to_sink_path_block_ids: list[str] | None = None,
+    gate_to_sink_path_block_ids: list[str] | None = None,
 ) -> WindowsProjectCfgPathQueryResult:
     return WindowsProjectCfgPathQueryResult(
         project_path=args.project_path,
@@ -392,6 +417,9 @@ def _result(
         status=status,
         confidence=confidence,
         reason=reason,
+        entry_to_sink_path_block_ids=entry_to_sink_path_block_ids or [],
+        branch_to_sink_path_block_ids=branch_to_sink_path_block_ids or [],
+        gate_to_sink_path_block_ids=gate_to_sink_path_block_ids or [],
         bypass_path_block_ids=bypass_path_block_ids or [],
         provenance=["persisted_project_cfg_sql"],
         notes=[
