@@ -354,6 +354,80 @@ def test_windows_risk_network_bucket_avoids_prefix_false_positives() -> None:
     ]
 
 
+def test_windows_risk_join_reads_unsampled_xref_string(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from glaurung.cli.commands.windows_risk import _join_string_xrefs
+
+    binary = tmp_path / "sample.dll"
+    payload = bytearray(0x300)
+    payload[0x200 : 0x200 + 37] = b"MigrateModemSettings: ReadFile failed\x00"
+    binary.write_bytes(payload)
+
+    monkeypatch.setattr(
+        g.analysis,
+        "va_to_file_offset_path",
+        lambda *_args, **_kwargs: 0x200,
+    )
+
+    row = {
+        "entry_va": 0x1000,
+        "strings": [],
+        "score": 0,
+    }
+    _join_string_xrefs(
+        str(binary),
+        SimpleNamespace(max_read_bytes=4096, max_file_size=4096, str_min_len=6),
+        [(0x1010, 0x402000, 0x1000)],
+        [],
+        {0x1000: row},
+    )
+
+    assert row["strings"][0]["text"] == "MigrateModemSettings: ReadFile failed"
+    assert row["strings"][0]["encoding"] == "ascii"
+    assert row["strings"][0]["suspicious"] is True
+    assert row["score"] == 2
+
+
+def test_windows_risk_join_reads_unsampled_utf16le_xref_string(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from glaurung.cli.commands.windows_risk import _join_string_xrefs
+
+    binary = tmp_path / "sample.dll"
+    payload = bytearray(0x400)
+    text = "Software\\Vendor\\Migration"
+    encoded = text.encode("utf-16le") + b"\x00\x00"
+    payload[0x280 : 0x280 + len(encoded)] = encoded
+    binary.write_bytes(payload)
+
+    monkeypatch.setattr(
+        g.analysis,
+        "va_to_file_offset_path",
+        lambda *_args, **_kwargs: 0x280,
+    )
+
+    row = {
+        "entry_va": 0x1000,
+        "strings": [],
+        "score": 0,
+    }
+    _join_string_xrefs(
+        str(binary),
+        SimpleNamespace(max_read_bytes=4096, max_file_size=4096, str_min_len=6),
+        [(0x1010, 0x402800, 0x1000)],
+        [],
+        {0x1000: row},
+    )
+
+    assert row["strings"][0]["text"] == text
+    assert row["strings"][0]["encoding"] == "utf16le"
+    assert row["strings"][0]["suspicious"] is True
+    assert row["score"] == 2
+
+
 def test_windows_risk_report_tool_uses_context_file(
     monkeypatch,
     tmp_path,

@@ -850,6 +850,8 @@ def _join_string_xrefs(
         if string is None:
             string = _find_string_by_range(int(offset), range_index)
         if string is None:
+            string = _read_xref_string_at_offset(path, int(offset), args)
+        if string is None:
             continue
         key = (src_fn, src_va, string["text"])
         if key in seen:
@@ -883,6 +885,96 @@ def _find_string_by_range(
         if start <= offset < end:
             return string
     return None
+
+
+def _read_xref_string_at_offset(
+    path: str,
+    offset: int,
+    args: argparse.Namespace,
+) -> dict[str, Any] | None:
+    if offset < 0:
+        return None
+    before = 128
+    after = 1024
+    try:
+        file_size = Path(path).stat().st_size
+        read_limit = min(
+            file_size,
+            int(getattr(args, "max_read_bytes", file_size)),
+            int(getattr(args, "max_file_size", file_size)),
+        )
+    except Exception:
+        return None
+    if offset >= read_limit:
+        return None
+    start = max(0, offset - before)
+    size = min(before + after, read_limit - start)
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            data = fh.read(size)
+    except OSError:
+        return None
+    origin = offset - start
+    candidates = [
+        _ascii_string_from_window(data, origin),
+        _utf16le_string_from_window(data, origin),
+    ]
+    min_len = int(getattr(args, "str_min_len", 6))
+    best: dict[str, Any] | None = None
+    for text, encoding in candidates:
+        if len(text) < min_len or _looks_like_code_byte_string(text):
+            continue
+        candidate = {
+            "offset": offset,
+            "encoding": encoding,
+            "text": text,
+            "suspicious": _is_suspicious_string(text),
+        }
+        if best is None or len(text) > len(str(best["text"])):
+            best = candidate
+    return best
+
+
+def _ascii_string_from_window(data: bytes, origin: int) -> tuple[str, str]:
+    if origin < 0 or origin >= len(data) or not _is_ascii_string_byte(data[origin]):
+        return "", "ascii"
+    start = origin
+    while start > 0 and _is_ascii_string_byte(data[start - 1]):
+        start -= 1
+    end = origin
+    while end < len(data) and _is_ascii_string_byte(data[end]):
+        end += 1
+    return data[start:end].decode("ascii", errors="ignore"), "ascii"
+
+
+def _is_ascii_string_byte(value: int) -> bool:
+    return value in {9, 10, 13} or 0x20 <= value <= 0x7E
+
+
+def _utf16le_string_from_window(data: bytes, origin: int) -> tuple[str, str]:
+    if origin < 0 or origin + 1 >= len(data):
+        return "", "utf16le"
+    if not _is_utf16le_printable_at(data, origin):
+        return "", "utf16le"
+    start = origin
+    while start >= 2 and _is_utf16le_printable_at(data, start - 2):
+        start -= 2
+    end = origin
+    while end + 1 < len(data) and _is_utf16le_printable_at(data, end):
+        end += 2
+    try:
+        return data[start:end].decode("utf-16le"), "utf16le"
+    except UnicodeDecodeError:
+        return "", "utf16le"
+
+
+def _is_utf16le_printable_at(data: bytes, offset: int) -> bool:
+    if offset < 0 or offset + 1 >= len(data):
+        return False
+    if data[offset + 1] != 0:
+        return False
+    return _is_ascii_string_byte(data[offset])
 
 
 def _select_candidates(
