@@ -276,7 +276,11 @@ class WindowsEmitReviewPacketTool(
             + _context_provenance(args)
         )
         required_project_facts = _required_project_facts(args)
-        promotion_blockers = _promotion_blockers(args, required_project_facts)
+        promotion_blockers = _promotion_blockers(
+            args,
+            required_project_facts,
+            required_gates,
+        )
         priority = _priority(args, required_gates)
         confidence, reason = _confidence(
             args,
@@ -662,6 +666,7 @@ def _required_project_facts(args: WindowsEmitReviewPacketArgs) -> list[str]:
 def _promotion_blockers(
     args: WindowsEmitReviewPacketArgs,
     required_project_facts: list[str],
+    required_gates: list[str],
 ) -> list[str]:
     blockers: list[str] = []
     facts = args.project_facts
@@ -698,8 +703,25 @@ def _promotion_blockers(
             "blocking Ghidra-parity gaps: "
             + ", ".join(args.ghidra_delta.blocking_fact_classes[:6])
         )
+    blockers.extend(_gate_promotion_blockers(args, required_gates))
 
     return blockers
+
+
+def _gate_promotion_blockers(
+    args: WindowsEmitReviewPacketArgs,
+    required_gates: list[str],
+) -> list[str]:
+    if not required_gates:
+        return []
+    required = ", ".join(required_gates[:6])
+    if args.gate_status == "dominated":
+        return []
+    if args.gate_status in {"missing", "not_dominated", "gate_after_sink"}:
+        return [f"required gate semantics not proven before sink: {required}"]
+    if args.gate_status in {"unknown", "gate_before_sink", "gate_same_line"}:
+        return [f"required gate coverage unresolved: {required}"]
+    return []
 
 
 def _project_fact_count(

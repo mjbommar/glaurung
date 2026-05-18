@@ -354,7 +354,11 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert packet.ghidra_delta.current_capabilities == [
         "rcx_rdx_r8_r9_argument_snapshots"
     ]
-    assert packet.promotion_preconditions_met is True
+    assert packet.promotion_preconditions_met is False
+    assert any(
+        "required gate coverage unresolved" in item
+        for item in packet.promotion_blockers
+    )
     assert any(
         evidence.source == "windows_project_callsite_facts"
         for evidence in packet.evidence

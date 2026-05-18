@@ -302,6 +302,65 @@ def test_windows_emit_review_packet_blocks_missing_required_project_facts(
     assert any("clear promotion blockers" in step for step in packet.next_validation)
 
 
+def test_windows_emit_review_packet_blocks_unresolved_required_gates(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary="driver.sys",
+            entrypoint="Dispatch",
+            attacker_class="local_unprivileged",
+            source_role="buffer",
+            sink_symbol="RtlCopyMemory",
+            sink_kind="copy",
+            required_gates=["destination_range_valid", "byte_count_bounded"],
+            gate_status="unknown",
+            required_project_facts=["function_names", "call_xrefs", "cfg"],
+            project_facts={
+                "target_id": "driver",
+                "build_label": "unit-test",
+                "project_path": "/projects/driver.glaurung",
+                "fact_coverage": ["function_names", "call_xrefs", "cfg"],
+                "missing_facts": [],
+                "counts": {
+                    "function_name_count": 5,
+                    "call_xref_count": 4,
+                    "basic_block_count": 9,
+                    "cfg_edge_count": 8,
+                },
+            },
+            ghidra_delta={
+                "target_id": "driver",
+                "component": "driver.sys",
+                "build_label": "unit-test",
+                "blocking_fact_classes": [],
+                "current_capabilities": ["cfg_path"],
+                "missing_capabilities": [],
+            },
+            evidence=[
+                {
+                    "source": "windows_project_gate_requirement_coverage",
+                    "summary": (
+                        "ProbeForWrite@0x1100 proves [destination_range_valid]; "
+                        "missing required gates [byte_count_bounded]"
+                    ),
+                    "provenance": ["asb_pe_gate_metadata", "asb_pe_sink_metadata"],
+                }
+            ],
+        ),
+    )
+
+    packet = result.packet
+    assert packet.promotion_preconditions_met is False
+    assert any("required gate coverage unresolved" in item for item in packet.promotion_blockers)
+    assert "promotion blocked" in packet.confidence_reason
+
+
 def test_windows_emit_review_packet_auto_joins_manifest_context(
     tmp_path: Path,
 ) -> None:

@@ -130,7 +130,11 @@ void NtExample(void *dst, void *src, ULONG len) {
     assert packet.project_facts is not None
     assert packet.required_project_facts == ["function_names", "call_xrefs"]
     assert packet.ghidra_delta is not None
-    assert packet.promotion_preconditions_met is True
+    assert packet.promotion_preconditions_met is False
+    assert any(
+        "required gate coverage unresolved" in item
+        for item in packet.promotion_blockers
+    )
     assert "user_pointer_captured" in packet.required_gates
     assert any(e.source == "windows_trace_arg_flow" for e in packet.evidence)
     assert result.evidence_node_id is not None
