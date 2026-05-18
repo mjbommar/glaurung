@@ -80,6 +80,8 @@ class WindowsProjectOnehopArgumentFlow(BaseModel):
     helper_sink_arg_index: int
     helper_sink_arg_role: str
     helper_sink_arg_expression: str | None = None
+    sink_effects: list[str] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
     provenance: list[str] = Field(default_factory=list)
 
@@ -267,10 +269,13 @@ def _flow(
         helper_sink_arg_index=sink_arg.index,
         helper_sink_arg_role=sink_arg.role,
         helper_sink_arg_expression=sink_arg.expression,
+        sink_effects=chain.sink_effects,
+        required_gates=chain.required_gates,
         confidence=round(min(helper_arg.confidence, sink_arg.confidence, 0.74), 2),
         provenance=[
             "windows_project_onehop_sink_chains",
             "windows_project_call_argument_snapshot",
+            "asb_pe_sink_metadata",
             "windows_x64_calling_convention",
             "helper_incoming_arg_match",
         ],
@@ -300,6 +305,7 @@ def _coverage(
                 "project_onehop_argument_flow",
                 "helper_incoming_arg_match",
                 "local_call_argument_snapshots",
+                "asb_sink_required_gate_metadata",
             ]
         )
     return list(dict.fromkeys(coverage))

@@ -163,7 +163,10 @@ def test_windows_project_onehop_argument_flow_matches_helper_arg_to_sink(
     assert flow.helper_sink_arg_expression == "caller_arg1"
     assert flow.sink_symbol == "RtlCopyMemory"
     assert flow.sink_kind == "copy"
+    assert flow.sink_effects == ["writes_destination_range", "reads_source_range"]
+    assert flow.required_gates == ["destination_range_valid", "byte_count_bounded"]
     assert "project_onehop_argument_flow" in result.coverage
+    assert "asb_sink_required_gate_metadata" in result.coverage
     assert "helper_side_effect_summary" in result.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
