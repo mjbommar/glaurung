@@ -68,6 +68,10 @@ sit below full IR/CFG bug-class scanners:
 - `windows_build_corpus` resolves ASB's priority Windows target
   manifest against caller-supplied corpus and `.glaurung` project
   roots.
+- `windows_pdb_identity_manifest` exposes ASB's target-to-PDB identity
+  coverage, including CodeView GUID+age values, cached/missing status,
+  and whether public symbols, type layouts, or prototypes are expected
+  for a target.
 - `windows_surface_catalog`, `windows_source_reachability`, and
   `windows_target_surface_profile` expose attacker-surface and
   validation context from ASB metadata.

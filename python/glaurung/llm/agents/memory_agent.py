@@ -95,6 +95,9 @@ from ..tools.windows_build_corpus import (
 from ..tools.windows_binary_diff_summary import (
     build_tool as build_windows_binary_diff_summary,
 )
+from ..tools.windows_pdb_identity_manifest import (
+    build_tool as build_windows_pdb_identity_manifest,
+)
 from ..tools.windows_surface_catalog import (
     build_tool as build_windows_surface_catalog,
 )
@@ -877,6 +880,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_pe_view_manifest()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_build_corpus()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_binary_diff_summary()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_pdb_identity_manifest()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_surface_catalog()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_source_reachability()))
     agent._function_toolset.add_tool(
