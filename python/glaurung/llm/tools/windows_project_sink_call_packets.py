@@ -49,6 +49,7 @@ from .windows_project_branch_condition_facts import (
 )
 from .windows_project_cfg_path_query import (
     WindowsProjectCfgPathQueryArgs,
+    WindowsProjectCfgPathQueryResult,
     WindowsProjectCfgPathQueryTool,
 )
 from .windows_surface_metadata import GateRecord, _resolve_metadata_path
@@ -173,6 +174,7 @@ class WindowsProjectSinkCallPacketsResult(BaseModel):
     scanned_callsite_count: int
     argument_snapshot_count: int
     gate_refinement_count: int
+    cfg_path_count: int
     gate_predicate_count: int
     source_value_match_count: int
     source_role_inference_count: int
@@ -222,6 +224,7 @@ class WindowsProjectSinkCallPacketsTool(
         packets: list[WindowsReviewPacket] = []
         argument_snapshot_count = 0
         gate_refinement_count = 0
+        cfg_path_count = 0
         gate_predicate_count = 0
         source_value_match_count = 0
         source_role_inference_count = 0
@@ -236,6 +239,8 @@ class WindowsProjectSinkCallPacketsTool(
             gate_refinement = _refine_gate(ctx, kb, args, callsite)
             if gate_refinement is not None:
                 gate_refinement_count += 1
+                if gate_refinement.cfg_path is not None:
+                    cfg_path_count += 1
                 gate_predicate_count += len(gate_refinement.predicates)
             inferred_roles = _infer_source_roles(ctx, kb, args, callsite)
             if inferred_roles:
@@ -277,6 +282,7 @@ class WindowsProjectSinkCallPacketsTool(
                         "scanned_callsite_count": callsites.scanned_call_count,
                         "argument_snapshot_count": argument_snapshot_count,
                         "gate_refinement_count": gate_refinement_count,
+                        "cfg_path_count": cfg_path_count,
                         "gate_predicate_count": gate_predicate_count,
                         "source_value_match_count": source_value_match_count,
                         "source_role_inference_count": source_role_inference_count,
@@ -294,6 +300,7 @@ class WindowsProjectSinkCallPacketsTool(
             scanned_callsite_count=callsites.scanned_call_count,
             argument_snapshot_count=argument_snapshot_count,
             gate_refinement_count=gate_refinement_count,
+            cfg_path_count=cfg_path_count,
             gate_predicate_count=gate_predicate_count,
             source_value_match_count=source_value_match_count,
             source_role_inference_count=source_role_inference_count,
@@ -367,6 +374,18 @@ def _emit_packet(
                 ],
             )
         )
+        if gate_refinement.cfg_path is not None:
+            evidence.append(
+                WindowsReviewEvidence(
+                    source="windows_project_cfg_path_query",
+                    summary=_cfg_path_summary(gate_refinement.cfg_path),
+                    provenance=[
+                        "windows_project_sink_call_packets",
+                        "windows_project_cfg_path_query",
+                        "persisted_project_cfg_sql",
+                    ],
+                )
+            )
         if gate_refinement.predicates:
             evidence.append(
                 WindowsReviewEvidence(
@@ -493,6 +512,7 @@ class _GateRefinement:
     packet_gate_status: GateStatus
     summary: str
     provenance: list[str]
+    cfg_path: WindowsProjectCfgPathQueryResult | None
     predicates: list[ProjectBranchConditionFact]
 
 
@@ -538,6 +558,7 @@ def _refine_gate(
             dominance = _dominance(ctx, kb, args, sink_callsite, candidate)
             if dominance is None:
                 continue
+            cfg_path = _gate_cfg_path_query(ctx, kb, args, sink_callsite, candidate)
             predicates = _gate_predicates(
                 ctx,
                 kb,
@@ -545,6 +566,7 @@ def _refine_gate(
                 sink_callsite,
                 candidate,
                 dominance,
+                cfg_path,
             )
             return _GateRefinement(
                 gate_symbol=name,
@@ -555,6 +577,7 @@ def _refine_gate(
                     f"sink@0x{sink_callsite.callsite_va:x}: {dominance.reason}"
                 ),
                 provenance=dominance.provenance,
+                cfg_path=cfg_path,
                 predicates=predicates,
             )
     return None
@@ -607,13 +630,14 @@ def _gate_predicates(
     sink_callsite: ProjectCallsiteFact,
     gate_callsite: ProjectCallsiteFact,
     dominance: WindowsCfgDominanceResult,
+    cfg_path: WindowsProjectCfgPathQueryResult | None,
 ) -> list[ProjectBranchConditionFact]:
     if not args.attach_gate_predicates or args.max_gate_predicates == 0:
         return []
     function_va = sink_callsite.caller_va or dominance.function_va
     if function_va is None:
         return []
-    path_block_ids = _gate_path_block_ids(ctx, kb, args, sink_callsite, gate_callsite)
+    path_block_ids = cfg_path.entry_to_sink_path_block_ids if cfg_path else []
     try:
         result = WindowsProjectBranchConditionFactsTool().run(
             ctx,
@@ -639,17 +663,17 @@ def _gate_predicates(
     return selected
 
 
-def _gate_path_block_ids(
+def _gate_cfg_path_query(
     ctx: MemoryContext,
     kb: KnowledgeBase,
     args: WindowsProjectSinkCallPacketsArgs,
     sink_callsite: ProjectCallsiteFact,
     gate_callsite: ProjectCallsiteFact,
-) -> list[str]:
+) -> WindowsProjectCfgPathQueryResult | None:
     if sink_callsite.caller_va is None:
-        return []
+        return None
     try:
-        result = WindowsProjectCfgPathQueryTool().run(
+        return WindowsProjectCfgPathQueryTool().run(
             ctx,
             kb,
             WindowsProjectCfgPathQueryArgs(
@@ -662,8 +686,18 @@ def _gate_path_block_ids(
             ),
         )
     except Exception:
-        return []
-    return result.entry_to_sink_path_block_ids
+        return None
+
+
+def _cfg_path_summary(result: WindowsProjectCfgPathQueryResult) -> str:
+    parts = [f"status={result.status}", f"reason={result.reason}"]
+    if result.entry_to_sink_path_block_ids:
+        parts.append("entry_path=" + "->".join(result.entry_to_sink_path_block_ids))
+    if result.gate_to_sink_path_block_ids:
+        parts.append("gate_path=" + "->".join(result.gate_to_sink_path_block_ids))
+    if result.bypass_path_block_ids:
+        parts.append("bypass_path=" + "->".join(result.bypass_path_block_ids))
+    return "; ".join(parts)
 
 
 def _select_gate_predicates(

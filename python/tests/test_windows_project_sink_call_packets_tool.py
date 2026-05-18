@@ -329,6 +329,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert result.scanned_callsite_count == 2
     assert result.argument_snapshot_count == 1
     assert result.gate_refinement_count == 1
+    assert result.cfg_path_count == 1
     assert result.gate_predicate_count == 1
     assert result.source_value_match_count == 1
     packet = result.packets[0]
@@ -358,6 +359,15 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
         for evidence in packet.evidence
     )
     assert any(evidence.source == "windows_cfg_dominance" for evidence in packet.evidence)
+    cfg_path_evidence = [
+        evidence
+        for evidence in packet.evidence
+        if evidence.source == "windows_project_cfg_path_query"
+    ]
+    assert len(cfg_path_evidence) == 1
+    assert "status=covered" in cfg_path_evidence[0].summary
+    assert "entry_path=entry->gate->sink" in cfg_path_evidence[0].summary
+    assert "gate_path=gate->sink" in cfg_path_evidence[0].summary
     predicate_evidence = [
         evidence
         for evidence in packet.evidence
