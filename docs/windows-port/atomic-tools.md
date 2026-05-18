@@ -60,6 +60,29 @@ direct exact refs above the comparison-05 bar. Known-index pointer
 loads recover the straightforward one-hop table refs; residual
 PARAM/table-entry refs are still tracked by comparison 05.
 
+## Landed metadata and patch-diff tools
+
+The current Windows-port bridge also includes deterministic tools that
+sit below full IR/CFG bug-class scanners:
+
+- `windows_build_corpus` resolves ASB's priority Windows target
+  manifest against caller-supplied corpus and `.glaurung` project
+  roots.
+- `windows_surface_catalog`, `windows_source_reachability`, and
+  `windows_target_surface_profile` expose attacker-surface and
+  validation context from ASB metadata.
+- `windows_vulnerability_seed_catalog` loads prior-public Windows
+  vulnerability seeds as reusable invariant metadata for
+  patch-regression triage, without using public PoCs as the scanner
+  substrate.
+- `windows_binary_diff_summary` wraps Glaurung's function-level binary
+  diff engine as an agent-callable Patch Tuesday primitive, returning
+  changed/added/removed function rows with hashes and sizes.
+
+These tools do not replace the Ghidra-grade facts this document still
+tracks: function matching across renamed builds, instruction-level
+diffs, callsite operands, CFG dominance, and PDB-backed type facts.
+
 ## Per-tool authoring template
 
 Each tool is one file under
