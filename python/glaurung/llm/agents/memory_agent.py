@@ -137,6 +137,9 @@ from ..tools.windows_list_operation_sinks import (
 from ..tools.windows_trace_arg_flow import (
     build_tool as build_windows_trace_arg_flow,
 )
+from ..tools.windows_source_sink_operand_match import (
+    build_tool as build_windows_source_sink_operand_match,
+)
 from ..tools.windows_trace_onehop_flow import (
     build_tool as build_windows_trace_onehop_flow,
 )
@@ -916,6 +919,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_operation_metadata()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_list_operation_sinks()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_trace_arg_flow()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_source_sink_operand_match())
+    )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_trace_onehop_flow()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_check_gate_to_sink()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_cfg_dominance()))

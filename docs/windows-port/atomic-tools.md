@@ -87,6 +87,10 @@ sit below full IR/CFG bug-class scanners:
 - `windows_surface_catalog`, `windows_source_reachability`, and
   `windows_target_surface_profile` expose attacker-surface and
   validation context from ASB metadata.
+- `windows_source_sink_operand_match` checks whether a traced source
+  value is exactly a selected sink argument, reaches it through a
+  simple alias, appears in a transformed expression, or does not match,
+  while attaching sink argument role metadata.
 - `windows_vulnerability_seed_catalog` loads prior-public Windows
   vulnerability seeds as reusable invariant metadata for
   patch-regression triage, without using public PoCs as the scanner
