@@ -167,6 +167,14 @@ class WindowsProjectSinkCallPacketsArgs(BaseModel):
         default_factory=lambda: ["function_names", "call_xrefs"],
         description="Project fact classes required before packet promotion.",
     )
+    source_gate_refined_only: bool = Field(
+        False,
+        description=(
+            "If true, emit only packets that have source refinement plus "
+            "same-function gate evidence. This is still local/static evidence, "
+            "not interprocedural value-flow proof."
+        ),
+    )
     max_packets: int = Field(16, ge=0, le=256, description="Maximum packets to emit.")
     add_to_kb: bool = Field(
         False,
@@ -185,6 +193,7 @@ class WindowsProjectSinkCallPacketsResult(BaseModel):
     gate_missing_required_count: int
     source_value_match_count: int
     source_role_inference_count: int
+    source_gate_refined_packet_count: int
     source_refinement_status_counts: dict[str, int] = Field(default_factory=dict)
     packets: list[WindowsReviewPacket]
     evidence_node_id: str | None = None
@@ -271,6 +280,12 @@ class WindowsProjectSinkCallPacketsTool(
                 inferred_roles,
                 source_match,
             )
+            is_source_gate_refined = _is_source_gate_refined(
+                source_refinement,
+                gate_refinement,
+            )
+            if args.source_gate_refined_only and not is_source_gate_refined:
+                continue
             source_refinement_status_counts[source_refinement.status] = (
                 source_refinement_status_counts.get(source_refinement.status, 0) + 1
             )
@@ -284,6 +299,7 @@ class WindowsProjectSinkCallPacketsTool(
                     gate_refinement,
                     source_match,
                     source_refinement,
+                    is_source_gate_refined,
                 )
             )
             if len(packets) >= args.max_packets:
@@ -309,6 +325,9 @@ class WindowsProjectSinkCallPacketsTool(
                         "gate_missing_required_count": gate_missing_required_count,
                         "source_value_match_count": source_value_match_count,
                         "source_role_inference_count": source_role_inference_count,
+                        "source_gate_refined_packet_count": _source_gate_refined_count(
+                            packets
+                        ),
                         "source_refinement_status_counts": source_refinement_status_counts,
                     },
                 )
@@ -329,6 +348,7 @@ class WindowsProjectSinkCallPacketsTool(
             gate_missing_required_count=gate_missing_required_count,
             source_value_match_count=source_value_match_count,
             source_role_inference_count=source_role_inference_count,
+            source_gate_refined_packet_count=_source_gate_refined_count(packets),
             source_refinement_status_counts=source_refinement_status_counts,
             packets=packets,
             evidence_node_id=evidence_node_id,
@@ -347,6 +367,7 @@ def _emit_packet(
     gate_refinement: "_GateRefinement | None",
     source_match: "_SourceValueMatch | None",
     source_refinement: "_SourceRefinement",
+    is_source_gate_refined: bool,
 ) -> WindowsReviewPacket:
     assert callsite.operation is not None
     sink_symbol = (
@@ -470,6 +491,21 @@ def _emit_packet(
                 ],
             )
         )
+    if is_source_gate_refined:
+        evidence.append(
+            WindowsReviewEvidence(
+                source="windows_project_source_gate_refined_scan",
+                summary=(
+                    "project scan packet has source refinement plus "
+                    "same-function gate evidence"
+                ),
+                provenance=[
+                    "windows_project_sink_call_packets",
+                    "windows_project_source_refinement_status",
+                    "windows_cfg_dominance",
+                ],
+            )
+        )
     result = WindowsEmitReviewPacketTool().run(
         ctx,
         kb,
@@ -524,6 +560,7 @@ def _emit_packet(
             notes=[
                 "emitted from project sink-call scan",
                 _source_refinement_note(source_refinement.status),
+                _source_gate_refined_note(is_source_gate_refined),
                 "gate status is a placeholder until gate rules prove full required-gate coverage",
             ],
         ),
@@ -590,6 +627,26 @@ class _GateRefinement:
     provenance: list[str]
     cfg_path: WindowsProjectCfgPathQueryResult | None
     predicates: list[ProjectBranchConditionFact]
+
+
+def _is_source_gate_refined(
+    source_refinement: _SourceRefinement,
+    gate_refinement: _GateRefinement | None,
+) -> bool:
+    if gate_refinement is None:
+        return False
+    return source_refinement.status in {"matched", "inferred"}
+
+
+def _source_gate_refined_count(packets: list[WindowsReviewPacket]) -> int:
+    return sum(
+        1
+        for packet in packets
+        if any(
+            evidence.source == "windows_project_source_gate_refined_scan"
+            for evidence in packet.evidence
+        )
+    )
 
 
 def _refine_gate(
@@ -1068,6 +1125,15 @@ def _source_refinement_note(status: SourceRefinementStatus) -> str:
     if status == "ambiguous":
         return "source refinement is ambiguous and needs rule/operator resolution"
     return "source refinement was not requested; packet is a sink-only seed"
+
+
+def _source_gate_refined_note(is_refined: bool) -> str:
+    if is_refined:
+        return (
+            "source/gate refinement present: source metadata or local value "
+            "match plus same-function gate evidence"
+        )
+    return "source/gate refinement incomplete for this project-scan packet"
 
 
 def _source_match_from_argument(

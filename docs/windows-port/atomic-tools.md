@@ -140,7 +140,11 @@ sit below full IR/CFG bug-class scanners:
   the same local sink-argument match. Every emitted packet now carries a
   normalized `source_refinement_status` plus source facts and blockers,
   so downstream rules can distinguish sink-only seeds from inferred,
-  matched, missing, or ambiguous source refinement.
+  matched, missing, or ambiguous source refinement. The scanner also
+  reports `source_gate_refined_packet_count` and can run with
+  `source_gate_refined_only` to return only packets that have source
+  refinement plus same-function gate evidence; this is a project-fact
+  candidate class, not interprocedural value-flow proof.
 - `windows_project_callgraph_slice` returns incoming callers and
   outgoing callees around one project function, with exact callsite VAs
   and caller/callee names from persisted `.glaurung` call xrefs.

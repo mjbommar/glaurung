@@ -333,6 +333,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert result.gate_predicate_count == 1
     assert result.gate_missing_required_count == 1
     assert result.source_value_match_count == 1
+    assert result.source_gate_refined_packet_count == 1
     assert result.source_refinement_status_counts == {"matched": 1}
     packet = result.packets[0]
     assert packet.binary == "driver.sys"
@@ -409,6 +410,12 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert len(value_evidence) == 1
     assert "source buffer rsi matches sink arg1" in value_evidence[0].summary
     assert "source_buffer" in value_evidence[0].summary
+    source_gate_evidence = [
+        evidence
+        for evidence in packet.evidence
+        if evidence.source == "windows_project_source_gate_refined_scan"
+    ]
+    assert len(source_gate_evidence) == 1
     refinement_evidence = [
         evidence
         for evidence in packet.evidence
@@ -471,6 +478,7 @@ def test_windows_project_sink_call_packets_infers_source_roles(
     assert result.packet_count == 1
     assert result.source_role_inference_count == 1
     assert result.source_value_match_count == 1
+    assert result.source_gate_refined_packet_count == 0
     assert result.source_refinement_status_counts == {"matched": 1}
     packet = result.packets[0]
     assert packet.source_role == "buffer"
@@ -514,6 +522,7 @@ def test_windows_project_sink_call_packets_marks_missing_source_refinement(
     assert result.packet_count == 1
     assert result.argument_snapshot_count == 0
     assert result.source_value_match_count == 0
+    assert result.source_gate_refined_packet_count == 0
     assert result.source_refinement_status_counts == {"missing": 1}
     packet = result.packets[0]
     assert packet.source_refinement_status == "missing"
@@ -523,6 +532,54 @@ def test_windows_project_sink_call_packets_marks_missing_source_refinement(
     assert any(
         "source refinement missing" in blocker
         for blocker in packet.promotion_blockers
+    )
+
+
+def test_windows_project_sink_call_packets_filters_source_gate_refined_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "mov", ["rcx", "rdi"]),
+            _Insn(0x1004, "mov", ["rdx", "rsi"]),
+            _Insn(0x1200, "call", ["0x5000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(_write_project(tmp_path)),
+            binary_path=str(binary),
+            binary="driver.sys",
+            build="unit-test",
+            source_role="buffer",
+            source_arg="rsi",
+            refine_gates=True,
+            gates_path=str(_write_gates(tmp_path)),
+            sinks_path=str(_write_sinks(tmp_path)),
+            project_facts_path=str(_write_project_facts(tmp_path)),
+            ghidra_delta_path=str(_write_ghidra_delta(tmp_path)),
+            manifest_target_id="driver",
+            manifest_build_label="unit-test",
+            manifest_component="driver.sys",
+            source_gate_refined_only=True,
+        ),
+    )
+
+    assert result.packet_count == 1
+    assert result.source_gate_refined_packet_count == 1
+    assert any(
+        evidence.source == "windows_project_source_gate_refined_scan"
+        for evidence in result.packets[0].evidence
     )
 
 
