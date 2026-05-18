@@ -37,6 +37,38 @@ class WindowsReviewEvidence(BaseModel):
     provenance: list[str] = Field(default_factory=list)
 
 
+class WindowsPdbIdentityContext(BaseModel):
+    target_id: str | None = None
+    expected_pdb_name: str | None = None
+    codeview_guid_age: str | None = None
+    cache_status: str | None = None
+    symbol_cache_path: str | None = None
+    fact_coverage: list[str] = Field(default_factory=list)
+    missing_facts: list[str] = Field(default_factory=list)
+
+
+class WindowsComponentProfileContext(BaseModel):
+    profile_id: str | None = None
+    target_id: str | None = None
+    component: str | None = None
+    entrypoint_kinds: list[str] = Field(default_factory=list)
+    required_gates: list[str] = Field(default_factory=list)
+    validation_requirements: list[str] = Field(default_factory=list)
+    harness_strategy: str | None = None
+    evidence_packet_fields: list[str] = Field(default_factory=list)
+
+
+class WindowsDiffContext(BaseModel):
+    seed_id: str | None = None
+    public_ids: list[str] = Field(default_factory=list)
+    pre_build: str | None = None
+    post_build: str | None = None
+    changed_functions: list[str] = Field(default_factory=list)
+    missing_functions: list[str] = Field(default_factory=list)
+    diff_signals: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class WindowsEmitReviewPacketArgs(BaseModel):
     candidate_id: str | None = Field(
         None,
@@ -82,6 +114,18 @@ class WindowsEmitReviewPacketArgs(BaseModel):
         default_factory=list,
         description="Overall fact provenance: PE, PDB, ASB metadata, IR, dynamic trace.",
     )
+    pdb_identity: WindowsPdbIdentityContext | None = Field(
+        None,
+        description="Optional target/PDB identity manifest context.",
+    )
+    component_profile: WindowsComponentProfileContext | None = Field(
+        None,
+        description="Optional high-risk Windows component profile context.",
+    )
+    diff_context: WindowsDiffContext | None = Field(
+        None,
+        description="Optional patch-regression or binary-diff context.",
+    )
     notes: list[str] = Field(default_factory=list)
     add_to_kb: bool = Field(
         False,
@@ -105,6 +149,9 @@ class WindowsReviewPacket(BaseModel):
     path: list[WindowsReviewPathStep]
     evidence: list[WindowsReviewEvidence]
     provenance: list[str]
+    pdb_identity: WindowsPdbIdentityContext | None = None
+    component_profile: WindowsComponentProfileContext | None = None
+    diff_context: WindowsDiffContext | None = None
     priority: CandidatePriority
     confidence: float = Field(ge=0.0, le=1.0)
     confidence_reason: str
@@ -141,9 +188,19 @@ class WindowsEmitReviewPacketTool(
         kb: KnowledgeBase,
         args: WindowsEmitReviewPacketArgs,
     ) -> WindowsEmitReviewPacketResult:
-        provenance = _dedupe(args.provenance + _evidence_provenance(args.evidence))
-        priority = _priority(args)
-        confidence, reason = _confidence(args, provenance)
+        required_gates = _dedupe(
+            [
+                *args.required_gates,
+                *(args.component_profile.required_gates if args.component_profile else []),
+            ]
+        )
+        provenance = _dedupe(
+            args.provenance
+            + _evidence_provenance(args.evidence)
+            + _context_provenance(args)
+        )
+        priority = _priority(args, required_gates)
+        confidence, reason = _confidence(args, provenance, required_gates)
         packet = WindowsReviewPacket(
             candidate_id=args.candidate_id or _candidate_id(args),
             binary=args.binary,
@@ -154,16 +211,19 @@ class WindowsEmitReviewPacketTool(
             source_arg=args.source_arg,
             sink_symbol=args.sink_symbol,
             sink_kind=args.sink_kind,
-            required_gates=args.required_gates,
+            required_gates=required_gates,
             gate_status=args.gate_status,
             path=args.path,
             evidence=args.evidence,
             provenance=provenance,
+            pdb_identity=args.pdb_identity,
+            component_profile=args.component_profile,
+            diff_context=args.diff_context,
             priority=priority,
             confidence=confidence,
             confidence_reason=reason,
             next_validation=_next_validation(args, priority),
-            false_positive_questions=_false_positive_questions(args),
+            false_positive_questions=_false_positive_questions(args, required_gates),
             notes=[
                 "review packet only; VM or dynamic validation is required before finding promotion",
                 *args.notes,
@@ -217,7 +277,23 @@ def _evidence_provenance(evidence: list[WindowsReviewEvidence]) -> list[str]:
     return out
 
 
-def _priority(args: WindowsEmitReviewPacketArgs) -> CandidatePriority:
+def _context_provenance(args: WindowsEmitReviewPacketArgs) -> list[str]:
+    provenance: list[str] = []
+    if args.pdb_identity is not None:
+        provenance.append("asb_pdb_identity_manifest")
+        if args.pdb_identity.cache_status:
+            provenance.append(f"pdb_cache_{args.pdb_identity.cache_status}")
+    if args.component_profile is not None:
+        provenance.append("asb_component_profile")
+    if args.diff_context is not None:
+        provenance.append("patch_diff_context")
+    return provenance
+
+
+def _priority(
+    args: WindowsEmitReviewPacketArgs,
+    required_gates: list[str],
+) -> CandidatePriority:
     score = 0
     attacker = args.attacker_class.lower()
     if any(token in attacker for token in ("remote", "network", "unpriv", "low", "appcontainer")):
@@ -238,6 +314,8 @@ def _priority(args: WindowsEmitReviewPacketArgs) -> CandidatePriority:
         score += 1
     if args.path:
         score += 1
+    if required_gates and not args.required_gates:
+        score += 1
     if len(args.path) > 3:
         score -= 1
     if score >= 5:
@@ -250,6 +328,7 @@ def _priority(args: WindowsEmitReviewPacketArgs) -> CandidatePriority:
 def _confidence(
     args: WindowsEmitReviewPacketArgs,
     provenance: list[str],
+    required_gates: list[str],
 ) -> tuple[float, str]:
     score = 0.2
     reasons: list[str] = ["base packet fields supplied"]
@@ -266,10 +345,27 @@ def _confidence(
     if any(token in provenance_text for token in ("dynamic", "trace", "vm", "kd")):
         score += 0.2
         reasons.append("dynamic evidence present")
+    if args.pdb_identity is not None:
+        if (args.pdb_identity.cache_status or "").lower() == "cached":
+            score += 0.1
+            reasons.append("cached PDB identity context present")
+        else:
+            score += 0.03
+            reasons.append("PDB identity context present but incomplete")
+    if args.component_profile is not None:
+        score += 0.1
+        reasons.append("component profile context present")
+    if args.diff_context is not None:
+        if args.diff_context.changed_functions or args.diff_context.diff_signals:
+            score += 0.1
+            reasons.append("patch-diff context present")
+        else:
+            score += 0.03
+            reasons.append("diff context present but sparse")
     if args.path:
         score += min(0.15, 0.05 * len(args.path))
         reasons.append("source-to-sink path supplied")
-    if args.required_gates:
+    if required_gates:
         score += 0.05
         reasons.append("expected gate semantics supplied")
     if args.gate_status == "unknown":
@@ -295,18 +391,48 @@ def _next_validation(
         steps.append("prove or reject that the observed gate dominates the sink")
     if priority == "high":
         steps.append("build a VM validation plan for the shortest reachable surface")
+    if args.pdb_identity is not None and args.pdb_identity.missing_facts:
+        facts = ", ".join(args.pdb_identity.missing_facts[:4])
+        steps.append(f"fill missing PDB-backed facts before promotion: {facts}")
+    if args.component_profile is not None:
+        if args.component_profile.validation_requirements:
+            reqs = ", ".join(args.component_profile.validation_requirements[:4])
+            steps.append(f"satisfy component validation requirements: {reqs}")
+        if args.component_profile.harness_strategy:
+            steps.append(
+                f"use component harness strategy: {args.component_profile.harness_strategy}"
+            )
+    if args.diff_context is not None:
+        if args.diff_context.diff_signals:
+            signals = ", ".join(args.diff_context.diff_signals[:4])
+            steps.append(f"compare patch-diff signals against the candidate: {signals}")
+        if args.diff_context.changed_functions:
+            functions = ", ".join(args.diff_context.changed_functions[:4])
+            steps.append(f"prioritize changed functions from diff context: {functions}")
     return steps
 
 
-def _false_positive_questions(args: WindowsEmitReviewPacketArgs) -> list[str]:
+def _false_positive_questions(
+    args: WindowsEmitReviewPacketArgs,
+    required_gates: list[str],
+) -> list[str]:
     questions = [
         "Is the source value actually attacker-controlled for this build and caller class?",
         "Does the source-to-sink path require a prior privilege, mode, object, or state gate?",
         "Do the sink arguments consume the same value, or only a sanitized copy?",
         "Do all feasible paths reach the sink, or only an unreachable/error path?",
     ]
-    if args.required_gates:
+    if required_gates:
         questions.append("Does an equivalent gate exist under a different wrapper or helper name?")
+    if args.pdb_identity is not None:
+        if (args.pdb_identity.cache_status or "").lower() != "cached":
+            questions.append("Is the PDB identity incomplete or stale for this exact binary build?")
+        if args.pdb_identity.missing_facts:
+            questions.append("Could missing PDB type/prototype facts change the source or sink roles?")
+    if args.component_profile is not None and args.component_profile.required_gates:
+        questions.append("Did the component profile add a gate expectation that this path cannot reach?")
+    if args.diff_context is not None and args.diff_context.missing_functions:
+        questions.append("Are seed functions absent because of renaming, inlining, or build mismatch?")
     if args.sink_kind.lower() in {"copy", "write"}:
         questions.append("Are size/count units consistent between source, checks, and sink?")
     if args.sink_kind.lower() in {"free", "refcount", "completion"}:

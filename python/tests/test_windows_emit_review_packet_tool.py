@@ -66,6 +66,35 @@ def test_windows_emit_review_packet_normalizes_candidate(tmp_path: Path) -> None
                 },
             ],
             provenance=["pdb_public_symbol"],
+            pdb_identity={
+                "target_id": "ntoskrnl",
+                "expected_pdb_name": "ntkrnlmp.pdb",
+                "codeview_guid_age": "ABCDEF0123456789ABCDEF01234567891",
+                "cache_status": "cached",
+                "symbol_cache_path": (
+                    "/nas4/data/symbol-cache/microsoft/ntkrnlmp.pdb/"
+                    "ABCDEF0123456789ABCDEF01234567891/ntkrnlmp.pdb"
+                ),
+                "fact_coverage": ["pdb_public_symbols", "pdb_type_layouts"],
+            },
+            component_profile={
+                "profile_id": "ntoskrnl-core",
+                "target_id": "ntoskrnl",
+                "component": "kernel",
+                "entrypoint_kinds": ["syscall"],
+                "required_gates": ["user_pointer_captured"],
+                "validation_requirements": ["vm_bugcheck_or_reject"],
+                "harness_strategy": "syscall harness in checked VM",
+                "evidence_packet_fields": ["pdb_identity", "source", "sink"],
+            },
+            diff_context={
+                "seed_id": "public-regression-shape",
+                "public_ids": ["CVE-2026-0000"],
+                "pre_build": "26100.1",
+                "post_build": "26100.2",
+                "changed_functions": ["nt!NtExample"],
+                "diff_signals": ["added bounds gate"],
+            },
             add_to_kb=True,
         ),
     )
@@ -77,7 +106,19 @@ def test_windows_emit_review_packet_normalizes_candidate(tmp_path: Path) -> None
     )
     assert packet.priority == "high"
     assert packet.confidence >= 0.6
+    assert packet.pdb_identity is not None
+    assert packet.pdb_identity.expected_pdb_name == "ntkrnlmp.pdb"
+    assert packet.component_profile is not None
+    assert packet.component_profile.profile_id == "ntoskrnl-core"
+    assert packet.diff_context is not None
+    assert packet.diff_context.changed_functions == ["nt!NtExample"]
+    assert "asb_pdb_identity_manifest" in packet.provenance
+    assert "asb_component_profile" in packet.provenance
+    assert "patch_diff_context" in packet.provenance
+    assert "user_pointer_captured" in packet.required_gates
     assert "VM validation" in " ".join(packet.next_validation)
+    assert any("component validation" in step for step in packet.next_validation)
+    assert any("patch-diff" in step for step in packet.next_validation)
     assert any("size/count units" in q for q in packet.false_positive_questions)
     assert "review packet only" in packet.notes[0]
     assert result.evidence_node_id is not None

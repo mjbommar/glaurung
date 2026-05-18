@@ -77,6 +77,25 @@ void NtExample(void *dst, void *src, ULONG len) {
             sinks_path=str(sinks),
             gate_kind="user_pointer",
             sink_kind="copy",
+            pdb_identity={
+                "target_id": "ntoskrnl",
+                "expected_pdb_name": "ntkrnlmp.pdb",
+                "cache_status": "cached",
+                "fact_coverage": ["pdb_public_symbols"],
+            },
+            component_profile={
+                "profile_id": "ntoskrnl-core",
+                "target_id": "ntoskrnl",
+                "component": "kernel",
+                "required_gates": ["user_pointer_captured"],
+                "validation_requirements": ["vm_bugcheck_or_reject"],
+                "harness_strategy": "syscall harness in checked VM",
+            },
+            diff_context={
+                "seed_id": "copy-gate-regression",
+                "changed_functions": ["nt!NtExample"],
+                "diff_signals": ["added probe"],
+            },
             add_to_kb=True,
         ),
     )
@@ -89,6 +108,13 @@ void NtExample(void *dst, void *src, ULONG len) {
     assert packet.sink_symbol == "RtlCopyMemory"
     assert packet.gate_status == "gate_before_sink"
     assert packet.path[0].role == "destination_buffer"
+    assert packet.pdb_identity is not None
+    assert packet.pdb_identity.expected_pdb_name == "ntkrnlmp.pdb"
+    assert packet.component_profile is not None
+    assert packet.component_profile.profile_id == "ntoskrnl-core"
+    assert packet.diff_context is not None
+    assert packet.diff_context.seed_id == "copy-gate-regression"
+    assert "user_pointer_captured" in packet.required_gates
     assert any(e.source == "windows_trace_arg_flow" for e in packet.evidence)
     assert result.evidence_node_id is not None
     assert any(

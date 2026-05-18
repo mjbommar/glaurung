@@ -12,8 +12,11 @@ from .windows_check_gate_to_sink import (
     WindowsCheckGateToSinkTool,
 )
 from .windows_emit_review_packet import (
+    WindowsComponentProfileContext,
+    WindowsDiffContext,
     WindowsEmitReviewPacketArgs,
     WindowsEmitReviewPacketTool,
+    WindowsPdbIdentityContext,
     WindowsReviewEvidence,
     WindowsReviewPacket,
     WindowsReviewPathStep,
@@ -77,6 +80,18 @@ class WindowsComposeCandidatePacketsArgs(BaseModel):
     pdb_cache: str = Field(
         "",
         description="Optional Microsoft-style PDB cache directory for decompile name recovery.",
+    )
+    pdb_identity: WindowsPdbIdentityContext | None = Field(
+        None,
+        description="Optional target/PDB identity manifest context to attach to packets.",
+    )
+    component_profile: WindowsComponentProfileContext | None = Field(
+        None,
+        description="Optional high-risk Windows component profile context.",
+    )
+    diff_context: WindowsDiffContext | None = Field(
+        None,
+        description="Optional patch-regression or binary-diff context.",
     )
     add_to_kb: bool = Field(
         False,
@@ -324,6 +339,9 @@ def _emit_packet(
             path=_path_steps(args, flow_kind, flow, helper, operation),
             evidence=evidence,
             provenance=["asb_pe_sink_metadata", "pseudocode_candidate_composition"],
+            pdb_identity=args.pdb_identity,
+            component_profile=args.component_profile,
+            diff_context=args.diff_context,
             notes=[
                 "composed from existing primitive tools",
                 "candidate is static triage evidence only",
