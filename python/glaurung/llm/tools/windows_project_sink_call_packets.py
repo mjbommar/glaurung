@@ -27,6 +27,11 @@ from .windows_emit_review_packet import (
     WindowsReviewPacket,
     WindowsReviewPathStep,
 )
+from .windows_function_arg_roles import (
+    ArgumentRoleEvidence,
+    WindowsFunctionArgRolesArgs,
+    WindowsFunctionArgRolesTool,
+)
 from .windows_project_callsite_facts import (
     ProjectCallsiteFact,
     WindowsProjectCallsiteFactsArgs,
@@ -70,6 +75,13 @@ class WindowsProjectSinkCallPacketsArgs(BaseModel):
             "Used only as local value-equivalence evidence."
         ),
     )
+    infer_source_roles: bool = Field(
+        False,
+        description=(
+            "If true, use ASB source metadata for the caller symbol to infer "
+            "candidate source roles for local sink-argument matching."
+        ),
+    )
     binary_id: int | None = Field(None, description="Optional project binary_id filter.")
     function_va: int | None = Field(
         None,
@@ -86,6 +98,10 @@ class WindowsProjectSinkCallPacketsArgs(BaseModel):
     sinks_path: str | None = Field(
         None,
         description="Path to ASB data/kg/pe-sinks.yaml. Defaults to ASB_REPO or sibling repo.",
+    )
+    sources_path: str | None = Field(
+        None,
+        description="Path to ASB data/kg/pe-sources.yaml. Defaults to ASB_REPO or sibling repo.",
     )
     gates_path: str | None = Field(
         None,
@@ -136,6 +152,7 @@ class WindowsProjectSinkCallPacketsResult(BaseModel):
     argument_snapshot_count: int
     gate_refinement_count: int
     source_value_match_count: int
+    source_role_inference_count: int
     packets: list[WindowsReviewPacket]
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
@@ -183,6 +200,7 @@ class WindowsProjectSinkCallPacketsTool(
         argument_snapshot_count = 0
         gate_refinement_count = 0
         source_value_match_count = 0
+        source_role_inference_count = 0
         for callsite in callsites.callsites:
             if callsite.operation is None:
                 continue
@@ -194,7 +212,15 @@ class WindowsProjectSinkCallPacketsTool(
             gate_refinement = _refine_gate(ctx, kb, args, callsite)
             if gate_refinement is not None:
                 gate_refinement_count += 1
-            source_match = _source_value_match(args, callsite, snapshot_args)
+            inferred_roles = _infer_source_roles(ctx, kb, args, callsite)
+            if inferred_roles:
+                source_role_inference_count += 1
+            source_match = _source_value_match(
+                args,
+                callsite,
+                snapshot_args,
+                inferred_roles,
+            )
             if source_match is not None:
                 source_value_match_count += 1
             packets.append(
@@ -227,6 +253,7 @@ class WindowsProjectSinkCallPacketsTool(
                         "argument_snapshot_count": argument_snapshot_count,
                         "gate_refinement_count": gate_refinement_count,
                         "source_value_match_count": source_value_match_count,
+                        "source_role_inference_count": source_role_inference_count,
                     },
                 )
             )
@@ -242,6 +269,7 @@ class WindowsProjectSinkCallPacketsTool(
             argument_snapshot_count=argument_snapshot_count,
             gate_refinement_count=gate_refinement_count,
             source_value_match_count=source_value_match_count,
+            source_role_inference_count=source_role_inference_count,
             packets=packets,
             evidence_node_id=evidence_node_id,
             notes=[
@@ -344,7 +372,11 @@ def _emit_packet(
             build=args.build,
             entrypoint=entrypoint,
             attacker_class=args.attacker_class,
-            source_role=args.source_role,
+            source_role=(
+                source_match.source_role
+                if source_match is not None and args.source_role == "unknown"
+                else args.source_role
+            ),
             source_arg=args.source_arg or (source_match.source_arg if source_match else None),
             sink_symbol=sink_symbol,
             sink_kind=callsite.operation.sink_kind,
@@ -406,6 +438,7 @@ def _dedupe(values: list[str]) -> list[str]:
 @dataclass(frozen=True)
 class _SourceValueMatch:
     source_arg: str
+    source_role: str
     sink_arg_index: int
     sink_arg_role: str | None
     expression: str | None
@@ -520,18 +553,74 @@ def _source_value_match(
     args: WindowsProjectSinkCallPacketsArgs,
     callsite: ProjectCallsiteFact,
     snapshot_args: list[ProjectCallArgumentFact],
+    inferred_roles: list[ArgumentRoleEvidence],
 ) -> _SourceValueMatch | None:
     if not snapshot_args:
         return None
-    if args.source_arg_index is None and not args.source_arg:
+    if args.source_arg_index is None and not args.source_arg and not inferred_roles:
         return None
 
     for argument in snapshot_args:
         if args.source_arg_index is not None and argument.index == args.source_arg_index:
-            return _source_match_from_argument(args, callsite, argument, f"arg{argument.index}")
+            return _source_match_from_argument(
+                args,
+                callsite,
+                argument,
+                f"arg{argument.index}",
+                args.source_role,
+            )
         if args.source_arg and _argument_matches_source(args.source_arg, argument):
-            return _source_match_from_argument(args, callsite, argument, args.source_arg)
+            return _source_match_from_argument(
+                args,
+                callsite,
+                argument,
+                args.source_arg,
+                args.source_role,
+            )
+        for role in inferred_roles:
+            source_label = _source_label(role)
+            if source_label and _argument_matches_inferred_role(role, argument):
+                return _source_match_from_argument(
+                    args,
+                    callsite,
+                    argument,
+                    source_label,
+                    role.role,
+                    source_provenance=role.provenance,
+                )
     return None
+
+
+def _infer_source_roles(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsProjectSinkCallPacketsArgs,
+    callsite: ProjectCallsiteFact,
+) -> list[ArgumentRoleEvidence]:
+    if not args.infer_source_roles:
+        return []
+    caller = callsite.caller_name or callsite.caller_demangled
+    if not caller:
+        return []
+    names = [caller]
+    if "!" in caller:
+        names.append(caller.split("!", 1)[1])
+    for name in names:
+        try:
+            result = WindowsFunctionArgRolesTool().run(
+                ctx,
+                kb,
+                WindowsFunctionArgRolesArgs(
+                    function_name=name,
+                    sources_path=args.sources_path,
+                    include_unmatched_prototype_args=False,
+                ),
+            )
+        except Exception:
+            continue
+        if result.combined_roles:
+            return result.combined_roles
+    return []
 
 
 def _source_match_from_argument(
@@ -539,11 +628,14 @@ def _source_match_from_argument(
     callsite: ProjectCallsiteFact,
     argument: ProjectCallArgumentFact,
     source_arg: str,
+    source_role: str,
+    *,
+    source_provenance: str | None = None,
 ) -> _SourceValueMatch:
     role = _operation_arg_role(callsite, argument.index)
     expression = argument.expression
     summary = (
-        f"source {args.source_role} {source_arg} matches sink arg"
+        f"source {source_role} {source_arg} matches sink arg"
         f"{argument.index}"
     )
     if role:
@@ -552,10 +644,12 @@ def _source_match_from_argument(
         summary += f" expression {expression}"
     return _SourceValueMatch(
         source_arg=source_arg,
+        source_role=source_role,
         sink_arg_index=argument.index,
         sink_arg_role=role,
         expression=expression,
-        summary=summary,
+        summary=summary
+        + (f"; source_provenance={source_provenance}" if source_provenance else ""),
     )
 
 
@@ -573,6 +667,28 @@ def _argument_matches_source(
         argument.source_text,
     ]
     return any(_norm(value) == needle for value in values if value)
+
+
+def _argument_matches_inferred_role(
+    role: ArgumentRoleEvidence,
+    argument: ProjectCallArgumentFact,
+) -> bool:
+    if role.index is not None:
+        if argument.expression == f"caller_arg{role.index}":
+            return True
+        if argument.alias_kind == "incoming_arg" and argument.expression == f"caller_arg{role.index}":
+            return True
+    if role.expression and _argument_matches_source(role.expression, argument):
+        return True
+    return False
+
+
+def _source_label(role: ArgumentRoleEvidence) -> str | None:
+    if role.expression:
+        return role.expression
+    if role.index is not None:
+        return f"caller_arg{role.index}"
+    return None
 
 
 def _operation_arg_role(

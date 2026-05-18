@@ -155,6 +155,23 @@ def _write_gates(tmp_path: Path) -> Path:
     return gates
 
 
+def _write_sources(tmp_path: Path) -> Path:
+    sources = tmp_path / "pe-sources.yaml"
+    sources.write_text(
+        """
+- id: driver_dispatch_user_buffer
+  surface: ioctl
+  symbols: [DriverDispatch]
+  attacker_class: windows-local-user
+  roles:
+    - index: 0
+      role: buffer
+""",
+        encoding="utf-8",
+    )
+    return sources
+
+
 def _write_project_facts(tmp_path: Path) -> Path:
     project_facts = tmp_path / "pe-project-facts.yaml"
     project_facts.write_text(
@@ -305,6 +322,58 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
         and node.label == "windows_project_sink_call_packets"
         for node in ctx.kb.nodes()
     )
+
+
+def test_windows_project_sink_call_packets_infers_source_roles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "mov", ["rdx", "rcx"]),
+            _Insn(0x1200, "call", ["0x5000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(_write_project(tmp_path)),
+            binary_path=str(binary),
+            binary="driver.sys",
+            build="unit-test",
+            infer_source_roles=True,
+            sources_path=str(_write_sources(tmp_path)),
+            sinks_path=str(_write_sinks(tmp_path)),
+            project_facts_path=str(_write_project_facts(tmp_path)),
+            ghidra_delta_path=str(_write_ghidra_delta(tmp_path)),
+            manifest_target_id="driver",
+            manifest_build_label="unit-test",
+            manifest_component="driver.sys",
+        ),
+    )
+
+    assert result.packet_count == 1
+    assert result.source_role_inference_count == 1
+    assert result.source_value_match_count == 1
+    packet = result.packets[0]
+    assert packet.source_role == "buffer"
+    assert packet.source_arg == "caller_arg0"
+    value_evidence = [
+        evidence
+        for evidence in packet.evidence
+        if evidence.source == "windows_project_sink_argument_match"
+    ]
+    assert len(value_evidence) == 1
+    assert "source buffer caller_arg0 matches sink arg1" in value_evidence[0].summary
+    assert "source_provenance=asb_pe_source_metadata" in value_evidence[0].summary
 
 
 def test_memory_agent_registers_windows_project_sink_call_packets() -> None:

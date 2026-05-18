@@ -124,6 +124,9 @@ sit below full IR/CFG bug-class scanners:
   CFG dominance evidence. When a caller supplies `source_arg` or
   `source_arg_index`, it can attach local sink-argument match evidence
   that ties a known source expression to a concrete sink argument role.
+  With `infer_source_roles`, it can also use ASB source metadata for the
+  caller symbol to infer source roles such as `caller_arg0` before doing
+  the same local sink-argument match.
 - `windows_project_callgraph_slice` returns incoming callers and
   outgoing callees around one project function, with exact callsite VAs
   and caller/callee names from persisted `.glaurung` call xrefs.
