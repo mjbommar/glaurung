@@ -627,14 +627,29 @@ def _bucket_imports(imports: list[str]) -> dict[str, list[str]]:
     buckets: dict[str, list[str]] = {}
     for bucket, prefixes in _RISK_IMPORT_BUCKETS.items():
         hits: list[str] = []
-        lower_prefixes = tuple(prefix.lower() for prefix in prefixes)
         for name in imports:
-            stem = _api_stem(name)
-            if stem.startswith(lower_prefixes):
+            if _matches_risk_import(bucket, name, prefixes):
                 hits.append(name)
         if hits:
             buckets[bucket] = sorted(set(hits))
     return buckets
+
+
+def _matches_risk_import(
+    bucket: str,
+    name: str,
+    prefixes: tuple[str, ...],
+) -> bool:
+    stem = _api_stem(name)
+    for prefix in prefixes:
+        lower_prefix = prefix.lower()
+        if bucket == "network" and lower_prefix in {"connect", "recv", "send"}:
+            if stem == lower_prefix:
+                return True
+            continue
+        if stem.startswith(lower_prefix):
+            return True
+    return False
 
 
 def _extract_strings(path: str, args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -1672,7 +1687,34 @@ def _patterns_from_api_hits(api_hits: list[str]) -> list[str]:
         and any(stem == "lockresource" for stem in stems)
     ):
         patterns.append("resource-extraction")
+    if _has_network_client_shape(stems):
+        patterns.append("network-client")
     return patterns
+
+
+def _has_network_client_shape(stems: set[str]) -> bool:
+    winsock = (
+        "wsastartup" in stems
+        and "socket" in stems
+        and "connect" in stems
+        and bool(stems & {"send", "recv"})
+    )
+    winhttp = (
+        "winhttpopen" in stems
+        and "winhttpconnect" in stems
+        and (
+            "winhttpsendrequest" in stems
+            or "winhttpopenrequest" in stems
+            or "winhttpreceiveresponse" in stems
+        )
+    )
+    wininet = any(stem.startswith("internetopen") for stem in stems) and (
+        "internetconnect" in stems
+        or "internetopenurl" in stems
+        or "httpsendrequest" in stems
+        or "internetreadfile" in stems
+    )
+    return winsock or winhttp or wininet
 
 
 def _is_copy_or_format_sink_stem(stem: str) -> bool:

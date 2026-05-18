@@ -40,6 +40,14 @@ def test_windows_risk_json_reports_parser_shape(
                 "ADVAPI32.dll!RegSetValueExW",
                 "msvcrt.dll!wcscpy",
                 "msvcrt.dll!swprintf",
+                "WS2_32.dll!WSAStartup",
+                "WS2_32.dll!socket",
+                "WS2_32.dll!connect",
+                "WS2_32.dll!send",
+                "WINHTTP.dll!WinHttpOpen",
+                "WINHTTP.dll!WinHttpConnect",
+                "WINHTTP.dll!WinHttpOpenRequest",
+                "WINHTTP.dll!WinHttpSendRequest",
             ],
             ["sample_export"],
             ["KERNEL32.dll"],
@@ -151,7 +159,13 @@ def test_windows_risk_json_reports_parser_shape(
             "GetTempPathW(260, (rbp - 520)); "
             "GetTempFileNameW((rbp - 520), 0x180050010, 0, (rbp - 1040)); "
             "WriteFile(var3, var6, stack_9, (rsp + 64)); "
-            "DeleteFileW((rbp - 1040)); RegSetValueExW(); }"
+            "DeleteFileW((rbp - 1040)); WSAStartup(514, (rbp - 1400)); "
+            "sock = socket(2, 1, 6); connect(sock, (rbp - 1600), 16); "
+            "send(sock, var6, stack_9, 0); "
+            "session = WinHttpOpen(0x180050020, 0, 0, 0, 0); "
+            "conn = WinHttpConnect(session, 0x180050040, 443, 0); "
+            "req = WinHttpOpenRequest(conn, 0x180050060, 0x180050080, 0, 0, 0, 0); "
+            "WinHttpSendRequest(req, 0, 0, 0, 0, 0, 0); RegSetValueExW(); }"
         ),
     )
 
@@ -258,6 +272,9 @@ def test_windows_risk_json_reports_parser_shape(
     assert any(
         item["kind"] == "temp-file-write-delete" for item in report["risk_items"]
     )
+    assert "network" in report["risk_imports"]
+    assert "network-client" in report["functions"][0]["patterns"]
+    assert any(item["kind"] == "network-client" for item in report["risk_items"])
     assert any(item["kind"] == "function-string-xrefs" for item in report["risk_items"])
     assert report["functions"][0]["strings"][0]["text"].startswith(
         "MigrateModemSettings"
@@ -311,6 +328,30 @@ def test_windows_risk_plain_no_decompile_still_reports_imports(
     assert "Windows Risk Summary" in out
     assert "dynamic_loading" in out
     assert "LoadLibraryW" in out
+
+
+def test_windows_risk_network_bucket_avoids_prefix_false_positives() -> None:
+    from glaurung.cli.commands.windows_risk import _bucket_imports
+
+    buckets = _bucket_imports(
+        [
+            "WSAStartup",
+            "socket",
+            "connect",
+            "send",
+            "recv",
+            "SendMessageW",
+            "ConnectNamedPipe",
+        ]
+    )
+
+    assert buckets["network"] == [
+        "WSAStartup",
+        "connect",
+        "recv",
+        "send",
+        "socket",
+    ]
 
 
 def test_windows_risk_report_tool_uses_context_file(
