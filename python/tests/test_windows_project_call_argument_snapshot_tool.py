@@ -414,6 +414,48 @@ def test_windows_project_call_argument_snapshot_labels_global_address_args(
     assert "global_address_arguments" in result.coverage
 
 
+def test_windows_project_call_argument_snapshot_joins_global_data_xrefs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+    conn = sqlite3.connect(project)
+    conn.execute(
+        "INSERT INTO xrefs VALUES (?, ?, ?, ?, ?, ?, 0)",
+        (2, 1, 0x1000, 0x3000, "data_read", 0x1000),
+    )
+    conn.commit()
+    conn.close()
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "lea", ["rcx", "[rip + 0x1234]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[0].expression == "global([rip + 0x1234])"
+    assert by_index[0].data_target_va == 0x3000
+    assert by_index[0].data_target_kind == "data_read"
+    assert "project_data_xref_targets" in result.coverage
+
+
 def test_windows_project_call_argument_snapshot_preserves_clobbered_address_base(
     tmp_path: Path,
     monkeypatch,
