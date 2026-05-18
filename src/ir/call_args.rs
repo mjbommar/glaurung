@@ -8,8 +8,14 @@
 //!    rcx/rdx/r8/r9; AArch64: x0..x7), and
 //! 2. that register is not read between the assignment and the call, and
 //! 3. no intervening statement has a side effect we can't reason about
-//!    (calls, stores are treated as a barrier to keep the transformation
+//!    (calls are treated as a barrier to keep the transformation
 //!    semantically safe).
+//!
+//! If a later slot was explicitly set but an earlier slot was never written
+//! since the previous call boundary, the pass fills that earlier slot from
+//! the function's incoming argument register. This covers common forwarding
+//! shapes such as Win64 `rdx = 256; call strnlen`, where `rcx` still carries
+//! the function's incoming first parameter.
 //!
 //! A 32-bit sub-register write (e.g. `%esi = 0`) also counts as writing the
 //! corresponding 64-bit arg register because on x86-64 the upper 32 bits of
@@ -72,6 +78,13 @@ fn slot_of(arch: CallConv, name: &str) -> Option<usize> {
         .position(|names| names.contains(&name))
 }
 
+fn incoming_arg_expr(arch: CallConv, slot: usize) -> Option<Expr> {
+    arg_slots(arch)
+        .get(slot)
+        .and_then(|names| names.first())
+        .map(|name| Expr::Reg(VReg::Phys((*name).to_string())))
+}
+
 /// Run argument reconstruction on `f` using the given calling convention.
 pub fn reconstruct_args(f: &mut Function, arch: CallConv) {
     fold_body(&mut f.body, arch);
@@ -121,6 +134,7 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
     // Map slot → (stmt_index, expression) for assignments we will eat.
     let mut found: Vec<Option<(usize, Expr)>> = vec![None; arg_slots(arch).len()];
     let mut read_between: Vec<bool> = vec![false; arg_slots(arch).len()];
+    let mut blocked_incoming: Vec<bool> = vec![false; arg_slots(arch).len()];
 
     // Walk backwards from the call.
     let mut i = call_idx;
@@ -140,6 +154,8 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
                             .any(|f| f.as_ref().is_some_and(|(_, e)| reads_reg_in_expr(e, dst)));
                         if !would_dangle && !read_between[slot] {
                             found[slot] = Some((i, src.clone()));
+                        } else {
+                            blocked_incoming[slot] = true;
                         }
                         mark_arg_reads_in_expr(src, arch, &mut read_between);
                         continue;
@@ -152,6 +168,7 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
             mark_arg_reads_in_expr(src, arch, &mut read_between);
         } else {
             mark_arg_reads_in_stmt(&body[i], arch, &mut read_between);
+            mark_arg_writes_in_stmt(&body[i], arch, &mut blocked_incoming);
         }
         if stop {
             break;
@@ -164,11 +181,20 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
     // gap is the safe choice.
     let mut args_out: Vec<Expr> = Vec::new();
     let mut used_stmt_indices: Vec<usize> = Vec::new();
-    for slot in &found {
-        match slot {
+    let Some(last_filled_slot) = found.iter().rposition(Option::is_some) else {
+        return;
+    };
+    for slot_idx in 0..=last_filled_slot {
+        match &found[slot_idx] {
             Some((stmt_idx, expr)) => {
                 args_out.push(expr.clone());
                 used_stmt_indices.push(*stmt_idx);
+            }
+            None if args_out.is_empty() && !blocked_incoming[slot_idx] => {
+                let Some(expr) = incoming_arg_expr(arch, slot_idx) else {
+                    break;
+                };
+                args_out.push(expr);
             }
             None => break,
         }
@@ -187,6 +213,17 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
     used_stmt_indices.sort_by(|a, b| b.cmp(a));
     for idx in used_stmt_indices {
         body.remove(idx);
+    }
+}
+
+fn mark_slot_write(reg: &VReg, arch: CallConv, blocked_incoming: &mut [bool]) {
+    let VReg::Phys(name) = reg else {
+        return;
+    };
+    if let Some(slot) = slot_of(arch, name.as_str()) {
+        if let Some(blocked) = blocked_incoming.get_mut(slot) {
+            *blocked = true;
+        }
     }
 }
 
@@ -284,6 +321,54 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
             }
         }
         Stmt::Pop { .. }
+        | Stmt::Goto { .. }
+        | Stmt::Label(_)
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => {}
+    }
+}
+
+fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [bool]) {
+    match s {
+        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
+            mark_slot_write(dst, arch, blocked_incoming);
+        }
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for stmt in then_body {
+                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+            }
+            if let Some(else_body) = else_body {
+                for stmt in else_body {
+                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                }
+            }
+        }
+        Stmt::While { body, .. } => {
+            for stmt in body {
+                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+            }
+        }
+        Stmt::Switch { cases, default, .. } => {
+            for (_case, body) in cases {
+                for stmt in body {
+                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                }
+            }
+            if let Some(default) = default {
+                for stmt in default {
+                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                }
+            }
+        }
+        Stmt::Store { .. }
+        | Stmt::Call { .. }
+        | Stmt::Return { .. }
+        | Stmt::Push { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Nop
@@ -623,6 +708,59 @@ mod tests {
             assert_eq!(args[2], Expr::Const(3));
         } else {
             panic!("expected Call, got {:?}", f.body[2]);
+        }
+    }
+
+    #[test]
+    fn win64_fills_leading_incoming_arg_when_later_slot_is_set() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdx", 256),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "strnlen".into(),
+                    },
+                    args: Vec::new(),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::Win64);
+
+        assert_eq!(f.body.len(), 1);
+        if let Stmt::Call { args, .. } = &f.body[0] {
+            assert_eq!(args, &vec![Expr::Reg(reg("rcx")), Expr::Const(256)]);
+        } else {
+            panic!("expected Call, got {:?}", f.body[0]);
+        }
+    }
+
+    #[test]
+    fn win64_does_not_fill_internal_argument_gap() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rcx", 1),
+                assign("r8", 3),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "foo".into(),
+                    },
+                    args: Vec::new(),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::Win64);
+
+        assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("r8")));
+        if let Stmt::Call { args, .. } = &f.body[1] {
+            assert_eq!(args, &vec![Expr::Const(1)]);
+        } else {
+            panic!("expected Call, got {:?}", f.body[1]);
         }
     }
 
