@@ -108,6 +108,9 @@ sit below full IR/CFG bug-class scanners:
   `function_names` rows. When callee names match `pe-sinks.yaml`, it
   attaches operation metadata so agents can query project-backed sink
   callsites before decompiling for operands.
+- `windows_project_callgraph_slice` returns incoming callers and
+  outgoing callees around one project function, with exact callsite VAs
+  and caller/callee names from persisted `.glaurung` call xrefs.
 - `windows_callsite_operand_facts` enumerates structured callsite
   argument facts from supplied or decompiled pseudocode, attaches
   optional callsite VA markers when present, and joins operation-backed
