@@ -165,7 +165,10 @@ sit below full IR/CFG bug-class scanners:
   data targets, sample source VAs, read/write counts, source-function
   counts, and label metadata from `data_labels`, so rules can separate
   known globals from unresolved project data references before relying
-  on call-argument global expressions.
+  on call-argument global expressions. With `attach_sink_context`, it
+  also joins ASB sink metadata to callsites in functions that reference
+  each data target, giving unlabeled globals a security-relevance
+  context without pretending their names or types are recovered.
 - `windows_callsite_operand_facts` enumerates structured callsite
   argument facts from supplied or decompiled pseudocode, attaches
   optional callsite VA markers when present, and joins operation-backed

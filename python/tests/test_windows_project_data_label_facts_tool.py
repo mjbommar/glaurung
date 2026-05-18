@@ -72,6 +72,7 @@ CREATE TABLE data_labels (
             [
                 (0x1000, "DriverDispatch"),
                 (0x2000, "Helper"),
+                (0x5000, "RtlCopyMemory"),
             ],
         )
         conn.executemany(
@@ -88,13 +89,32 @@ CREATE TABLE data_labels (
                 (2, 0x1018, 0x7000, "data_write", 0x1000),
                 (3, 0x2010, 0x7100, "data_read", 0x2000),
                 (4, 0x1020, 0x7200, "data_read", 0x1000),
-                (5, 0x3000, 0x9000, "call", 0x1000),
+                (5, 0x1030, 0x5000, "call", 0x1000),
             ],
         )
         conn.commit()
     finally:
         conn.close()
     return project
+
+
+def _write_sinks(tmp_path: Path) -> Path:
+    sinks = tmp_path / "pe-sinks.yaml"
+    sinks.write_text(
+        """
+- id: rtl_copy_memory
+  symbols: [RtlCopyMemory, memcpy]
+  sink_kind: copy
+  effects: [writes_destination_range, reads_source_range]
+  arg_roles:
+    0: destination_buffer
+    1: source_buffer
+    2: byte_count
+  required_gates: [destination_range_valid, byte_count_bounded]
+""",
+        encoding="utf-8",
+    )
+    return sinks
 
 
 def test_windows_project_data_label_facts_reports_label_coverage(
@@ -135,6 +155,34 @@ def test_windows_project_data_label_facts_reports_label_coverage(
         and node.label == "windows_project_data_label_facts"
         for node in ctx.kb.nodes()
     )
+
+
+def test_windows_project_data_label_facts_attaches_sink_context(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(_write_project(tmp_path)),
+            attach_sink_context=True,
+            sinks_path=str(_write_sinks(tmp_path)),
+        ),
+    )
+
+    assert result.data_targets_with_sink_context_count == 2
+    policy = next(label for label in result.labels if label.name == "gPolicyTable")
+    assert policy.source_function_sink_count == 1
+    assert policy.source_function_sink_kinds == ["copy"]
+    assert policy.source_function_sink_symbols == ["RtlCopyMemory"]
+    unresolved = next(
+        target for target in result.unlabeled_targets if target.va == 0x7200
+    )
+    assert unresolved.source_function_sink_count == 1
+    assert unresolved.source_function_sink_kinds == ["copy"]
 
 
 def test_windows_project_data_label_facts_filters_function_and_labeled_only(
