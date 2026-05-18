@@ -28,6 +28,10 @@ def test_windows_risk_json_reports_parser_shape(
             [
                 "KERNEL32.dll!CreateFileW",
                 "KERNEL32.dll!ReadFile",
+                "KERNEL32.dll!WriteFile",
+                "KERNEL32.dll!DeleteFileW",
+                "KERNEL32.dll!GetTempPathW",
+                "KERNEL32.dll!GetTempFileNameW",
                 "KERNEL32.dll!LocalAlloc",
                 "KERNEL32.dll!FindResourceW",
                 "KERNEL32.dll!SizeofResource",
@@ -143,7 +147,11 @@ def test_windows_risk_json_reports_parser_shape(
             "ReadFile(var3, var6); hres = FindResourceW(0, 0x401000, 10); "
             "size = SizeofResource(0, hres); loaded = LoadResource(0, hres); "
             "LockResource(loaded); wcscpy(var6, var4); "
-            "swprintf((rbp - 256), 0x180050000); RegSetValueExW(); }"
+            "swprintf((rbp - 256), 0x180050000); "
+            "GetTempPathW(260, (rbp - 520)); "
+            "GetTempFileNameW((rbp - 520), 0x180050010, 0, (rbp - 1040)); "
+            "WriteFile(var3, var6, stack_9, (rsp + 64)); "
+            "DeleteFileW((rbp - 1040)); RegSetValueExW(); }"
         ),
     )
 
@@ -228,6 +236,8 @@ def test_windows_risk_json_reports_parser_shape(
         "context": "ReadFile",
     }
     assert "file_io" in report["risk_imports"]
+    assert "GetTempPathW" in report["risk_imports"]["file_io"]
+    assert "GetTempFileNameW" in report["risk_imports"]["file_io"]
     assert any(
         item["kind"] == "file-read-allocation-parser" for item in report["risk_items"]
     )
@@ -244,6 +254,10 @@ def test_windows_risk_json_reports_parser_shape(
     assert "copy_format" in report["risk_imports"]
     assert "copy-or-format-sink" in report["functions"][0]["patterns"]
     assert any(item["kind"] == "copy-or-format-sink" for item in report["risk_items"])
+    assert "temp-file-write-delete" in report["functions"][0]["patterns"]
+    assert any(
+        item["kind"] == "temp-file-write-delete" for item in report["risk_items"]
+    )
     assert any(item["kind"] == "function-string-xrefs" for item in report["risk_items"])
     assert report["functions"][0]["strings"][0]["text"].startswith(
         "MigrateModemSettings"

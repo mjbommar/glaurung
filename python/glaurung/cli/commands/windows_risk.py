@@ -32,6 +32,8 @@ _RISK_IMPORT_BUCKETS: dict[str, tuple[str, ...]] = {
         "DeleteFile",
         "CopyFile",
         "MoveFile",
+        "GetTempPath",
+        "GetTempFileName",
         "CreateFileMapping",
         "MapViewOfFile",
     ),
