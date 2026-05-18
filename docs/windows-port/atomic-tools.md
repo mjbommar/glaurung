@@ -78,6 +78,9 @@ sit below full IR/CFG bug-class scanners:
 - `windows_binary_diff_summary` wraps Glaurung's function-level binary
   diff engine as an agent-callable Patch Tuesday primitive, returning
   changed/added/removed function rows with hashes and sizes.
+- `windows_seed_binary_diff_triage` composes prior-public seed
+  metadata with a pre/post binary diff and reports whether seed-named
+  functions changed, stayed unchanged, or are absent from the pair.
 
 These tools do not replace the Ghidra-grade facts this document still
 tracks: function matching across renamed builds, instruction-level

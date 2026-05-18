@@ -107,6 +107,9 @@ from ..tools.windows_target_surface_profile import (
 from ..tools.windows_vulnerability_seed_catalog import (
     build_tool as build_windows_vulnerability_seed_catalog,
 )
+from ..tools.windows_seed_binary_diff_triage import (
+    build_tool as build_windows_seed_binary_diff_triage,
+)
 from ..tools.windows_enumerate_entrypoints import (
     build_tool as build_windows_enumerate_entrypoints,
 )
@@ -881,6 +884,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_vulnerability_seed_catalog())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_seed_binary_diff_triage())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_surface_metadata()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_enumerate_entrypoints()))
