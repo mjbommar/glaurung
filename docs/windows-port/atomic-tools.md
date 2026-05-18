@@ -72,6 +72,10 @@ sit below full IR/CFG bug-class scanners:
   coverage, including CodeView GUID+age values, cached/missing status,
   and whether public symbols, type layouts, or prototypes are expected
   for a target.
+- `windows_reconcile_pdb_identity` extracts live CodeView/PDB identity
+  from a PE, checks Microsoft-style PDB cache resolution, optionally
+  asks native PDB ingestion for type/public-symbol counts, and compares
+  the live identity with ASB's manifest.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM
