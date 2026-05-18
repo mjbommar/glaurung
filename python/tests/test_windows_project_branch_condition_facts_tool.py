@@ -129,6 +129,9 @@ def test_windows_project_branch_condition_facts_returns_structured_rows(
     assert fact.compare_mnemonic == "cmp"
     assert fact.compare_operands == ["rcx", "0"]
     assert fact.condition_kind == "equal"
+    assert fact.inverse_condition_kind == "not_equal"
+    assert fact.target_predicate == "rcx == 0"
+    assert fact.fallthrough_predicate == "rcx != 0"
     assert fact.target_block_id == "gate"
     assert result.evidence_node_id is not None
     assert any(
@@ -157,6 +160,8 @@ def test_windows_project_branch_condition_facts_filters_path_blocks(
     assert [fact.block_id for fact in result.facts] == ["gate"]
     assert result.facts[0].on_supplied_path is True
     assert result.facts[0].compare_mnemonic == "test"
+    assert result.facts[0].target_predicate == "rdx != 0"
+    assert result.facts[0].fallthrough_predicate == "rdx == 0"
 
 
 def test_memory_agent_registers_windows_project_branch_condition_facts() -> None:

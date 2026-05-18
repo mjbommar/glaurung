@@ -24,6 +24,9 @@ class ProjectBranchConditionFact(BaseModel):
     compare_mnemonic: str | None = None
     compare_operands: list[str] = Field(default_factory=list)
     condition_kind: str
+    inverse_condition_kind: str | None = None
+    target_predicate: str | None = None
+    fallthrough_predicate: str | None = None
     target_block_id: str | None = None
     fallthrough_block_id: str | None = None
     on_supplied_path: bool | None = None
@@ -215,24 +218,46 @@ def _facts(
         params,
     ).fetchall()
     return [
-        ProjectBranchConditionFact(
-            function_va=int(row[0]),
-            block_id=str(row[1]),
-            block_start_va=int(row[2]) if row[2] is not None else None,
-            block_end_va=int(row[3]) if row[3] is not None else None,
-            branch_va=int(row[4]),
-            branch_mnemonic=str(row[5]),
-            branch_operands=_json_list(row[6]),
-            compare_va=int(row[7]) if row[7] is not None else None,
-            compare_mnemonic=str(row[8]) if row[8] is not None else None,
-            compare_operands=_json_list(row[9]),
-            condition_kind=str(row[10]),
-            target_block_id=str(row[11]) if row[11] is not None else None,
-            fallthrough_block_id=str(row[12]) if row[12] is not None else None,
-            on_supplied_path=(str(row[1]) in path_filter) if path_filter else None,
-        )
+        _fact_from_row(row, path_filter)
         for row in rows
     ]
+
+
+def _fact_from_row(
+    row: tuple,
+    path_filter: set[str],
+) -> ProjectBranchConditionFact:
+    compare_mnemonic = str(row[8]) if row[8] is not None else None
+    compare_operands = _json_list(row[9])
+    condition_kind = str(row[10])
+    inverse_condition_kind = _inverse_condition_kind(condition_kind)
+    return ProjectBranchConditionFact(
+        function_va=int(row[0]),
+        block_id=str(row[1]),
+        block_start_va=int(row[2]) if row[2] is not None else None,
+        block_end_va=int(row[3]) if row[3] is not None else None,
+        branch_va=int(row[4]),
+        branch_mnemonic=str(row[5]),
+        branch_operands=_json_list(row[6]),
+        compare_va=int(row[7]) if row[7] is not None else None,
+        compare_mnemonic=compare_mnemonic,
+        compare_operands=compare_operands,
+        condition_kind=condition_kind,
+        inverse_condition_kind=inverse_condition_kind,
+        target_predicate=_predicate_text(
+            compare_mnemonic,
+            compare_operands,
+            condition_kind,
+        ),
+        fallthrough_predicate=_predicate_text(
+            compare_mnemonic,
+            compare_operands,
+            inverse_condition_kind,
+        ),
+        target_block_id=str(row[11]) if row[11] is not None else None,
+        fallthrough_block_id=str(row[12]) if row[12] is not None else None,
+        on_supplied_path=(str(row[1]) in path_filter) if path_filter else None,
+    )
 
 
 def _where(args: WindowsProjectBranchConditionFactsArgs) -> tuple[str, list[object]]:
@@ -261,6 +286,64 @@ def _json_list(raw: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
+
+
+def _inverse_condition_kind(condition_kind: str | None) -> str | None:
+    if condition_kind is None:
+        return None
+    return {
+        "equal": "not_equal",
+        "not_equal": "equal",
+        "unsigned_greater": "unsigned_less_equal",
+        "unsigned_greater_equal": "unsigned_less",
+        "unsigned_less": "unsigned_greater_equal",
+        "unsigned_less_equal": "unsigned_greater",
+        "signed_greater": "signed_less_equal",
+        "signed_greater_equal": "signed_less",
+        "signed_less": "signed_greater_equal",
+        "signed_less_equal": "signed_greater",
+        "overflow": "not_overflow",
+        "not_overflow": "overflow",
+        "signed": "not_signed",
+        "not_signed": "signed",
+        "parity": "not_parity",
+        "not_parity": "parity",
+    }.get(condition_kind)
+
+
+def _predicate_text(
+    compare_mnemonic: str | None,
+    compare_operands: list[str],
+    condition_kind: str | None,
+) -> str | None:
+    if not compare_mnemonic or not condition_kind:
+        return None
+    if compare_mnemonic == "test" and len(compare_operands) >= 2:
+        lhs = compare_operands[0]
+        rhs = compare_operands[1]
+        value = lhs if lhs == rhs else f"({lhs} & {rhs})"
+        return _predicate_from_operands(value, "0", condition_kind)
+    if compare_mnemonic == "cmp" and len(compare_operands) >= 2:
+        return _predicate_from_operands(compare_operands[0], compare_operands[1], condition_kind)
+    return None
+
+
+def _predicate_from_operands(lhs: str, rhs: str, condition_kind: str) -> str | None:
+    op = {
+        "equal": "==",
+        "not_equal": "!=",
+        "unsigned_greater": ">u",
+        "unsigned_greater_equal": ">=u",
+        "unsigned_less": "<u",
+        "unsigned_less_equal": "<=u",
+        "signed_greater": ">s",
+        "signed_greater_equal": ">=s",
+        "signed_less": "<s",
+        "signed_less_equal": "<=s",
+    }.get(condition_kind)
+    if op is None:
+        return None
+    return f"{lhs} {op} {rhs}"
 
 
 def build_tool() -> WindowsProjectBranchConditionFactsTool:

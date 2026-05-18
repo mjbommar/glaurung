@@ -154,7 +154,9 @@ sit below full IR/CFG bug-class scanners:
 - `windows_project_branch_condition_facts` reads persisted
   `cfg_branch_facts` rows, returning conditional branch mnemonics,
   nearby `cmp`/`test` operands, condition classes, and target/fallthrough
-  block ids. It can filter to a path from `windows_project_cfg_path_query`.
+  block ids. It also renders simple taken/fallthrough predicates by
+  inverting the branch condition, and can filter to a path from
+  `windows_project_cfg_path_query`.
 - `windows_cfg_gate_to_sink` composes ASB gate/sink metadata with
   concrete gate and sink callsite VAs, runs CFG dominance, and returns
   a packet-ready gate status for candidate evidence.
