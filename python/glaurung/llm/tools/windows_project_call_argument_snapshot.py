@@ -455,6 +455,9 @@ def _resolve_expression(
             alias_kind="incoming_arg",
         )
     if allow_address_alias:
+        global_address = _resolve_global_address_expression(expression)
+        if global_address is not None:
+            return global_address
         address_source = _resolve_address_expression(
             expression,
             assignments,
@@ -512,6 +515,16 @@ def _resolve_address_expression(
     )
 
 
+def _resolve_global_address_expression(expression: str) -> _ResolvedExpression | None:
+    displacement = _rip_relative_displacement(expression)
+    if displacement is None:
+        return None
+    return _ResolvedExpression(
+        expression=f"global({_format_address_expression('rip', displacement)})",
+        alias_kind="global_address",
+    )
+
+
 def _resolve_memory_load_expression(
     expression: str,
     assignments: dict[str, _Assignment],
@@ -552,6 +565,20 @@ def _resolve_stack_local_address(expression: str) -> _ResolvedExpression | None:
         expression=_format_address_expression(base_register, displacement),
         alias_kind="stack_local_address",
     )
+
+
+def _rip_relative_displacement(raw: str) -> int | None:
+    text = _strip_memory_prefix(raw).replace(" ", "")
+    match = re.fullmatch(r"(?:[a-z][a-z0-9]*:)?\[rip([+-][^+\-*]+)?\]", text)
+    if not match:
+        return None
+    displacement_text = match.group(1)
+    if displacement_text is None:
+        return 0
+    try:
+        return _parse_int(displacement_text)
+    except ValueError:
+        return None
 
 
 def _simple_memory_expression(raw: str) -> tuple[str, int] | None:
@@ -830,6 +857,8 @@ def _coverage(
         coverage.append("stack_local_address_arguments")
     if any(arg.alias_kind == "memory_load" for arg in arguments):
         coverage.append("memory_load_arguments")
+    if any(arg.alias_kind == "global_address" for arg in arguments):
+        coverage.append("global_address_arguments")
     return coverage
 
 
