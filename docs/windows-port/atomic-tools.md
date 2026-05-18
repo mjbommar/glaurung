@@ -111,15 +111,18 @@ sit below full IR/CFG bug-class scanners:
   caller/callee identity from persisted `.glaurung` `xrefs` and
   `function_names` rows. When callee names match `pe-sinks.yaml`, it
   attaches operation metadata so agents can query project-backed sink
-  callsites before decompiling for operands.
+  callsites before decompiling for operands. It also normalizes
+  function-name aliases and import/thunk-style callee spellings such as
+  `__imp_*`, `j_*`, and module-qualified aliases before matching ASB
+  sink metadata.
 - `windows_project_sink_operation_summary` aggregates project-backed
   ASB sink callsites by operation id and sink kind. It reports callsite
-  counts, caller-function counts, observed symbols, sink effects,
-  argument roles, required gates, and sample callsites. This gives
-  rules a compact operation inventory for ranking and selecting
-  validation targets before emitting one packet per callsite; source
-  reachability, argument value flow, and gate dominance remain separate
-  facts.
+  counts, caller-function counts, observed raw/alias/normalized symbols,
+  sink effects, argument roles, required gates, and sample callsites.
+  This gives rules a compact operation inventory for ranking and
+  selecting validation targets before emitting one packet per callsite;
+  source reachability, argument value flow, and gate dominance remain
+  separate facts.
 - `windows_project_operation_gate_summary` runs the project sink-packet
   gate refinement path and aggregates the resulting packets by sink
   operation. It reports gate status counts, fully/partially/unproven

@@ -59,6 +59,7 @@ class WindowsProjectSinkOperationSample(BaseModel):
     caller_name: str | None = None
     callee_va: int
     callee_name: str | None = None
+    callee_resolution_kind: str = "direct_name"
 
 
 class WindowsProjectSinkOperationGroup(BaseModel):
@@ -209,7 +210,12 @@ def _groups(
                 observed_symbols=_uniq(
                     name
                     for site in sites
-                    for name in (site.callee_name, site.callee_demangled)
+                    for name in (
+                        site.callee_name,
+                        site.callee_demangled,
+                        *site.callee_aliases,
+                        *site.callee_normalized_names,
+                    )
                     if name
                 ),
                 sink_effects=operation.effects,
@@ -222,17 +228,12 @@ def _groups(
                         caller_name=site.caller_name,
                         callee_va=site.callee_va,
                         callee_name=site.callee_name,
+                        callee_resolution_kind=site.callee_resolution_kind,
                     )
                     for site in sites[:5]
                 ],
                 confidence=round(min(site.confidence for site in sites), 2),
-                provenance=[
-                    "windows_project_callsite_facts",
-                    "glaurung_project_xrefs",
-                    "glaurung_function_names",
-                    "asb_pe_sink_metadata",
-                    "project_sink_operation_summary",
-                ],
+                provenance=_group_provenance(sites),
             )
         )
         if len(out) >= max_groups:
@@ -283,6 +284,18 @@ def _uniq(values) -> list[str]:
         seen.add(value)
         out.append(value)
     return out
+
+
+def _group_provenance(sites: list[ProjectCallsiteFact]) -> list[str]:
+    provenance = [
+        "windows_project_callsite_facts",
+        "glaurung_project_xrefs",
+        "glaurung_function_names",
+    ]
+    if any(site.callee_resolution_kind != "direct_name" for site in sites):
+        provenance.append("glaurung_import_thunk_symbol_normalization")
+    provenance.extend(["asb_pe_sink_metadata", "project_sink_operation_summary"])
+    return provenance
 
 
 def build_tool() -> WindowsProjectSinkOperationSummaryTool:

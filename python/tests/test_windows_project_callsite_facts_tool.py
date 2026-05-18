@@ -123,6 +123,57 @@ CREATE TABLE function_prototypes (
     return project
 
 
+def _write_thunk_project(tmp_path: Path) -> Path:
+    project = tmp_path / "thunk.glaurung"
+    conn = sqlite3.connect(project)
+    conn.executescript(
+        """
+CREATE TABLE function_names (
+    binary_id INTEGER NOT NULL,
+    entry_va INTEGER NOT NULL,
+    canonical TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    set_by TEXT,
+    set_at INTEGER,
+    demangled TEXT,
+    flavor TEXT,
+    PRIMARY KEY (binary_id, entry_va)
+);
+CREATE TABLE xrefs (
+    xref_id INTEGER PRIMARY KEY,
+    binary_id INTEGER NOT NULL,
+    src_va INTEGER NOT NULL,
+    dst_va INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    src_function_va INTEGER,
+    indexed_at INTEGER
+);
+"""
+    )
+    conn.executemany(
+        "INSERT INTO function_names VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+        [
+            (1, 0x1000, "cldflt!Handler", "[]", "pdb", None, None),
+            (
+                1,
+                0x2500,
+                "__imp_RtlCopyMemory",
+                '["ntoskrnl!RtlCopyMemory"]',
+                "iat",
+                None,
+                "import",
+            ),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO xrefs VALUES (?, ?, ?, ?, ?, ?, 0)",
+        (1, 1, 0x1010, 0x2500, "call", 0x1000),
+    )
+    conn.commit()
+    conn.close()
+    return project
+
+
 def test_windows_project_callsite_facts_reads_project_xrefs(
     tmp_path: Path,
 ) -> None:
@@ -178,6 +229,36 @@ def test_windows_project_callsite_facts_filters_symbol_and_operation(
 
     assert [site.callsite_va for site in result.callsites] == [0x1010, 0x4010]
     assert all(site.operation and site.operation.id == "rtl_copy_memory" for site in result.callsites)
+
+
+def test_windows_project_callsite_facts_normalizes_import_thunk_aliases(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(_write_thunk_project(tmp_path)),
+            sinks_path=str(_write_sinks(tmp_path)),
+            call_symbol="RtlCopyMemory",
+            operation_only=True,
+        ),
+    )
+
+    assert result.scanned_call_count == 1
+    assert len(result.callsites) == 1
+    site = result.callsites[0]
+    assert site.callee_name == "__imp_RtlCopyMemory"
+    assert site.callee_aliases == ["ntoskrnl!RtlCopyMemory"]
+    assert "RtlCopyMemory" in site.callee_normalized_names
+    assert site.callee_resolution_kind == "import_or_thunk_name"
+    assert site.operation is not None
+    assert site.operation.id == "rtl_copy_memory"
+    assert "import_thunk_symbol_normalization" in result.coverage
+    assert "glaurung_import_thunk_symbol_normalization" in site.provenance
 
 
 def test_memory_agent_registers_windows_project_callsite_facts() -> None:

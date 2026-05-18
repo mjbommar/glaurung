@@ -111,6 +111,59 @@ CREATE TABLE xrefs (
     return project
 
 
+def _write_thunk_project(tmp_path: Path) -> Path:
+    project = tmp_path / "thunk-summary.glaurung"
+    conn = sqlite3.connect(project)
+    try:
+        conn.executescript(
+            """
+CREATE TABLE function_names (
+    binary_id INTEGER NOT NULL,
+    entry_va INTEGER NOT NULL,
+    canonical TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    set_by TEXT,
+    set_at INTEGER,
+    demangled TEXT,
+    flavor TEXT,
+    PRIMARY KEY (binary_id, entry_va)
+);
+CREATE TABLE xrefs (
+    xref_id INTEGER PRIMARY KEY,
+    binary_id INTEGER NOT NULL,
+    src_va INTEGER NOT NULL,
+    dst_va INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    src_function_va INTEGER,
+    indexed_at INTEGER
+);
+"""
+        )
+        conn.executemany(
+            "INSERT INTO function_names VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+            [
+                (1, 0x1000, "cldflt!Handler", "[]", "pdb", None, None),
+                (
+                    1,
+                    0x2500,
+                    "__imp_RtlCopyMemory",
+                    '["ntoskrnl!RtlCopyMemory"]',
+                    "iat",
+                    None,
+                    "import",
+                ),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO xrefs VALUES (?, ?, ?, ?, ?, ?, 0)",
+            (1, 1, 0x1010, 0x2500, "call", 0x1000),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return project
+
+
 def test_windows_project_sink_operation_summary_groups_project_sinks(
     tmp_path: Path,
 ) -> None:
@@ -180,6 +233,34 @@ def test_windows_project_sink_operation_summary_filters_kind(
 
     assert [group.operation_id for group in result.groups] == ["ex_free_pool"]
     assert result.operation_callsite_count == 1
+
+
+def test_windows_project_sink_operation_summary_groups_import_thunk_symbols(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(_write_thunk_project(tmp_path)),
+            sinks_path=str(_write_sinks(tmp_path)),
+        ),
+    )
+
+    assert result.operation_callsite_count == 1
+    assert result.operation_group_count == 1
+    group = result.groups[0]
+    assert group.operation_id == "rtl_copy_memory"
+    assert group.observed_symbols == [
+        "__imp_RtlCopyMemory",
+        "ntoskrnl!RtlCopyMemory",
+        "RtlCopyMemory",
+    ]
+    assert group.sample_callsites[0].callee_resolution_kind == "import_or_thunk_name"
+    assert "glaurung_import_thunk_symbol_normalization" in group.provenance
 
 
 def test_memory_agent_registers_windows_project_sink_operation_summary() -> None:

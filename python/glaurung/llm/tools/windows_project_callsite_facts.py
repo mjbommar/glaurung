@@ -57,6 +57,9 @@ class ProjectCallsiteFact(BaseModel):
     callee_va: int
     callee_name: str | None = None
     callee_demangled: str | None = None
+    callee_aliases: list[str] = Field(default_factory=list)
+    callee_normalized_names: list[str] = Field(default_factory=list)
+    callee_resolution_kind: str = "direct_name"
     callee_prototype: str | None = None
     operation: OperationRecord | None = None
     evidence_kind: str = "project_call_xref"
@@ -118,10 +121,10 @@ class WindowsProjectCallsiteFactsTool(
 
         facts: list[ProjectCallsiteFact] = []
         for row in rows:
-            callee_name = _best_name(row["callee_name"], row["callee_demangled"])
-            if args.call_symbol and not _call_symbol_matches(row, args.call_symbol):
+            callee_names = _callee_match_names(row)
+            if args.call_symbol and not _call_symbol_matches(callee_names, args.call_symbol):
                 continue
-            operation = _first_operation(callee_name or "", operations_by_symbol)
+            operation = _first_matching_operation(callee_names, operations_by_symbol)
             if args.operation_only and operation is None:
                 continue
             facts.append(_fact_from_row(row, operation))
@@ -200,23 +203,53 @@ def _query_callsite_rows(
     where = " AND ".join(clauses)
     fn_join = "function_names" in present
     proto_join = "function_prototypes" in present
-    query = _callsite_query(fn_join=fn_join, proto_join=proto_join, where=where)
+    fn_columns = _table_columns(conn, "function_names") if fn_join else set()
+    query = _callsite_query(
+        fn_join=fn_join,
+        proto_join=proto_join,
+        fn_columns=fn_columns,
+        where=where,
+    )
     cur = conn.execute(query, params)
     columns = [col[0] for col in cur.description or []]
     rows = cur.fetchall()
     return [dict(zip(columns, row, strict=True)) for row in rows]
 
 
-def _callsite_query(*, fn_join: bool, proto_join: bool, where: str) -> str:
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _callsite_query(
+    *,
+    fn_join: bool,
+    proto_join: bool,
+    fn_columns: set[str],
+    where: str,
+) -> str:
     caller_select = (
         "caller.canonical AS caller_name, caller.demangled AS caller_demangled"
+        if fn_join and "demangled" in fn_columns
+        else "caller.canonical AS caller_name, NULL AS caller_demangled"
         if fn_join
         else "NULL AS caller_name, NULL AS caller_demangled"
     )
     callee_select = (
         "callee.canonical AS callee_name, callee.demangled AS callee_demangled"
+        if fn_join and "demangled" in fn_columns
+        else "callee.canonical AS callee_name, NULL AS callee_demangled"
         if fn_join
         else "NULL AS callee_name, NULL AS callee_demangled"
+    )
+    callee_aliases_select = (
+        "callee.aliases_json AS callee_aliases_json"
+        if fn_join and "aliases_json" in fn_columns
+        else "NULL AS callee_aliases_json"
+    )
+    callee_meta_select = (
+        "callee.set_by AS callee_set_by, callee.flavor AS callee_flavor"
+        if fn_join and "set_by" in fn_columns and "flavor" in fn_columns
+        else "NULL AS callee_set_by, NULL AS callee_flavor"
     )
     proto_select = (
         "proto.return_type AS return_type, proto.params_json AS params_json"
@@ -247,6 +280,8 @@ SELECT
     x.dst_va AS callee_va,
     {caller_select},
     {callee_select},
+    {callee_aliases_select},
+    {callee_meta_select},
     {proto_select}
 FROM xrefs x
 {join_sql}
@@ -262,12 +297,22 @@ def _best_name(canonical: Any, demangled: Any) -> str | None:
     return None
 
 
-def _call_symbol_matches(row: dict[str, Any], symbol: str) -> bool:
-    for key in ("callee_name", "callee_demangled"):
-        value = row.get(key)
-        if isinstance(value, str) and _symbol_matches(value, symbol):
+def _call_symbol_matches(callee_names: list[str], symbol: str) -> bool:
+    for value in callee_names:
+        if _symbol_matches(value, symbol):
             return True
     return False
+
+
+def _first_matching_operation(
+    callee_names: list[str],
+    operations_by_symbol: dict[str, list[OperationRecord]],
+) -> OperationRecord | None:
+    for name in callee_names:
+        operation = _first_operation(name, operations_by_symbol)
+        if operation is not None:
+            return operation
+    return None
 
 
 def _fact_from_row(
@@ -275,8 +320,15 @@ def _fact_from_row(
     operation: OperationRecord | None,
 ) -> ProjectCallsiteFact:
     provenance = ["glaurung_project_xrefs"]
+    aliases = _callee_aliases(row)
+    normalized_names = _normalized_callee_names(row, aliases)
+    resolution_kind = _callee_resolution_kind(row, aliases, normalized_names)
     if row.get("callee_name") or row.get("callee_demangled"):
         provenance.append("glaurung_function_names")
+    if aliases:
+        provenance.append("glaurung_function_aliases")
+    if resolution_kind != "direct_name":
+        provenance.append("glaurung_import_thunk_symbol_normalization")
     if row.get("return_type") is not None or row.get("params_json") is not None:
         provenance.append("glaurung_function_prototypes")
     if operation:
@@ -290,11 +342,105 @@ def _fact_from_row(
         callee_va=int(row["callee_va"]),
         callee_name=row.get("callee_name"),
         callee_demangled=row.get("callee_demangled"),
+        callee_aliases=aliases,
+        callee_normalized_names=normalized_names,
+        callee_resolution_kind=resolution_kind,
         callee_prototype=_format_prototype(row),
         operation=operation,
-        confidence=0.84 if row.get("callee_name") else 0.68,
+        confidence=_confidence(row, resolution_kind),
         provenance=provenance,
     )
+
+
+def _callee_match_names(row: dict[str, Any]) -> list[str]:
+    aliases = _callee_aliases(row)
+    return _uniq_strings(
+        [
+            *_string_values(row.get("callee_demangled"), row.get("callee_name")),
+            *aliases,
+            *_normalized_callee_names(row, aliases),
+        ]
+    )
+
+
+def _callee_aliases(row: dict[str, Any]) -> list[str]:
+    raw = row.get("callee_aliases_json")
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    try:
+        aliases = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(aliases, list):
+        return []
+    return _uniq_strings(str(alias) for alias in aliases if str(alias).strip())
+
+
+def _normalized_callee_names(row: dict[str, Any], aliases: list[str]) -> list[str]:
+    names = _string_values(row.get("callee_demangled"), row.get("callee_name"), *aliases)
+    out: list[str] = []
+    for name in names:
+        out.extend(_normalized_symbol_variants(name))
+    return _uniq_strings(out)
+
+
+def _normalized_symbol_variants(symbol: str) -> list[str]:
+    suffix = symbol.rsplit("!", 1)[-1].rsplit("::", 1)[-1].strip()
+    if not suffix:
+        return []
+    variants = [suffix]
+    for prefix in ("__imp_", "__imp__", "_imp_", "imp_", "j_", "thunk_"):
+        if suffix.startswith(prefix):
+            variants.append(suffix.removeprefix(prefix))
+    if suffix.endswith("$thunk"):
+        variants.append(suffix.removesuffix("$thunk"))
+    if suffix.startswith("__imp_") and "@@" in suffix:
+        variants.append(suffix.removeprefix("__imp_").split("@@", 1)[0])
+    return [variant for variant in variants if variant and variant != symbol]
+
+
+def _callee_resolution_kind(
+    row: dict[str, Any],
+    aliases: list[str],
+    normalized_names: list[str],
+) -> str:
+    meta = " ".join(
+        str(value).lower()
+        for value in (row.get("callee_set_by"), row.get("callee_flavor"))
+        if value
+    )
+    raw_names = set(_string_values(row.get("callee_demangled"), row.get("callee_name")))
+    if any(word in meta for word in ("import", "iat", "thunk")):
+        return "import_or_thunk_name"
+    if aliases:
+        return "alias_name"
+    if any(name not in raw_names for name in normalized_names):
+        return "normalized_name"
+    return "direct_name"
+
+
+def _confidence(row: dict[str, Any], resolution_kind: str) -> float:
+    if not row.get("callee_name"):
+        return 0.68
+    if resolution_kind in {"import_or_thunk_name", "alias_name", "normalized_name"}:
+        return 0.8
+    return 0.84
+
+
+def _string_values(*values: Any) -> list[str]:
+    return [value for value in values if isinstance(value, str) and value.strip()]
+
+
+def _uniq_strings(values) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        value = str(value).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
 
 
 def _format_prototype(row: dict[str, Any]) -> str | None:
@@ -328,6 +474,11 @@ def _coverage(
         coverage.append("project_call_xrefs")
     if "function_names" in present and any(f.callee_name for f in facts):
         coverage.append("callee_names")
+    if any(
+        f.callee_aliases or f.callee_resolution_kind != "direct_name"
+        for f in facts
+    ):
+        coverage.append("import_thunk_symbol_normalization")
     if "function_prototypes" in present and any(f.callee_prototype for f in facts):
         coverage.append("callee_prototypes")
     if any(f.operation for f in facts):
