@@ -836,6 +836,25 @@ fn indent(out: &mut String, level: usize) {
     }
 }
 
+fn call_target_name(target: &Expr) -> Option<&str> {
+    match target {
+        Expr::Named { name, .. } => Some(name.as_str()),
+        Expr::Unknown(name) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn write_call_proto_hint(target: &Expr, out: &mut String) {
+    let Some(name) = call_target_name(target) else {
+        return;
+    };
+    let Some(proto) = crate::ir::winapi_prototypes::lookup(name) else {
+        return;
+    };
+    out.push_str(" // proto: ");
+    out.push_str(&crate::ir::winapi_prototypes::render_signature(proto));
+}
+
 fn write_stmt(s: &Stmt, out: &mut String, level: usize) {
     write_stmt_ctx(s, None, out, level);
 }
@@ -881,7 +900,9 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
                 write_expr_ctx(a, tm, out);
             }
             out.push(')');
-            out.push_str(";\n");
+            out.push(';');
+            write_call_proto_hint(target, out);
+            out.push('\n');
         }
         Stmt::Return { value } => {
             indent(out, level);
@@ -1289,7 +1310,9 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
                 }
                 write_expr_c(a, out);
             }
-            out.push_str(");\n");
+            out.push_str(");");
+            write_call_proto_hint(target, out);
+            out.push('\n');
         }
         Stmt::Return { value } => {
             indent(out, level);
@@ -1456,6 +1479,37 @@ mod tests {
         let ssa = compute_ssa(lf);
         let r = recover(lf, &ssa);
         render(&lower(lf, &r, name))
+    }
+
+    #[test]
+    fn winapi_calls_render_prototype_hints_without_changing_call_syntax() {
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "ReadFile".to_string(),
+                },
+                args: vec![
+                    Expr::Reg(VReg::phys("arg0")),
+                    Expr::Reg(VReg::phys("arg1")),
+                    Expr::Reg(VReg::phys("arg2")),
+                ],
+            }],
+        };
+
+        let plain = render(&f);
+        assert!(plain.contains("call ReadFile(%arg0, %arg1, %arg2);"));
+        assert!(plain.contains(
+            "// proto: BOOL ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesToRead"
+        ));
+
+        let c_style = render_c(&f);
+        assert!(c_style.contains("ReadFile(arg0, arg1, arg2);"));
+        assert!(c_style.contains(
+            "// proto: BOOL ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesToRead"
+        ));
     }
 
     #[test]
