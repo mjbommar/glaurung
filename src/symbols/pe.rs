@@ -4,6 +4,7 @@ use super::types::{BudgetCaps, SymbolSummary};
 use crate::symbols::analysis::suspicious;
 
 // Minimal PE header parsing for counts under strict bounds
+const RSDS_SCAN_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 struct CoffHeader {
@@ -58,6 +59,35 @@ fn rva_to_offset(rva: u32, secs: &[SectionHdr]) -> Option<usize> {
         }
     }
     None
+}
+
+fn rsds_search_ranges(
+    data_len: usize,
+    debug_offset: Option<usize>,
+    debug_size: u32,
+) -> Vec<(usize, usize)> {
+    match debug_offset {
+        Some(start) => {
+            if start >= data_len {
+                return Vec::new();
+            }
+            let size = (debug_size as usize).min(RSDS_SCAN_LIMIT);
+            let end = start.saturating_add(size).min(data_len);
+            if start < end {
+                vec![(start, end)]
+            } else {
+                Vec::new()
+            }
+        }
+        None => {
+            let end = data_len.min(RSDS_SCAN_LIMIT);
+            if end == 0 {
+                Vec::new()
+            } else {
+                vec![(0, end)]
+            }
+        }
+    }
 }
 
 /// Attempt to summarize PE imports/exports and flags from the header-limited buffer.
@@ -551,15 +581,11 @@ pub fn summarize_pe(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
             // RSDS format: 'RSDS' (4) + GUID (16) + Age (4) + UTF-8 path (NUL-terminated)
             let mut found: Option<String> = None;
             // Try to locate the debug dir first
-            let search_ranges: Vec<(usize, usize)> =
-                if let Some(off) = rva_to_offset(debug_dd.rva, &sections) {
-                    let sz = (debug_dd.size as usize).min(64 * 1024); // bound
-                    let end = (off + sz).min(data.len());
-                    vec![(off, end)]
-                } else {
-                    // Fallback: scan first 64 KiB
-                    vec![(0usize, data.len().min(64 * 1024))]
-                };
+            let search_ranges = rsds_search_ranges(
+                data.len(),
+                rva_to_offset(debug_dd.rva, &sections),
+                debug_dd.size,
+            );
             for (start, end) in search_ranges {
                 let hay = &data[start..end];
                 if let Some(pos) = memchr::memmem::find(hay, b"RSDS") {
@@ -594,5 +620,31 @@ pub fn summarize_pe(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
         relocations_present: Some(relocations_present),
         rpaths: None,
         runpaths: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rsds_search_ranges_skip_debug_offset_beyond_truncated_buffer() {
+        let ranges = rsds_search_ranges(1024, Some(5_105_004), 64 * 1024);
+
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn rsds_search_ranges_clamp_debug_range_to_buffer() {
+        let ranges = rsds_search_ranges(1024, Some(1000), 128);
+
+        assert_eq!(ranges, vec![(1000, 1024)]);
+    }
+
+    #[test]
+    fn rsds_search_ranges_fallback_to_initial_scan_without_debug_offset() {
+        let ranges = rsds_search_ranges(100_000, None, 128);
+
+        assert_eq!(ranges, vec![(0, RSDS_SCAN_LIMIT)]);
     }
 }
