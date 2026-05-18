@@ -321,6 +321,7 @@ def _argument_snapshot(
                 frame_assignments,
                 clobbered_registers,
                 allow_address_alias=mnemonic == "lea",
+                allow_memory_load_alias=mnemonic in {"mov", "movsxd", "movzx"},
             )
             assignments[register] = _Assignment(
                 va=va,
@@ -436,6 +437,7 @@ def _resolve_expression(
     clobbered_registers: set[str],
     *,
     allow_address_alias: bool = False,
+    allow_memory_load_alias: bool = False,
 ) -> _ResolvedExpression:
     source_register = _canonical_register(expression)
     source = assignments.get(source_register)
@@ -463,6 +465,14 @@ def _resolve_expression(
         stack_local = _resolve_stack_local_address(expression)
         if stack_local is not None:
             return stack_local
+    if allow_memory_load_alias:
+        memory_load = _resolve_memory_load_expression(
+            expression,
+            assignments,
+            clobbered_registers,
+        )
+        if memory_load is not None:
+            return memory_load
     frame_slot = _frame_slot_key(expression)
     if frame_slot is None:
         return _ResolvedExpression(expression=expression)
@@ -499,6 +509,35 @@ def _resolve_address_expression(
         expression=_format_address_expression(base_expression, displacement),
         alias_depth=alias_depth,
         alias_kind="derived_address",
+    )
+
+
+def _resolve_memory_load_expression(
+    expression: str,
+    assignments: dict[str, _Assignment],
+    clobbered_registers: set[str],
+) -> _ResolvedExpression | None:
+    memory = _simple_memory_expression(expression)
+    if memory is None:
+        return None
+    base_register, displacement = memory
+    source = assignments.get(base_register)
+    if source is not None:
+        if source.alias_kind != "incoming_arg":
+            return None
+        base_expression = source.expression
+        alias_depth = source.alias_depth + 1
+    else:
+        incoming_role = WINDOWS_X64_ARG_ROLES.get(base_register)
+        if incoming_role is None or base_register in clobbered_registers:
+            return None
+        base_expression = f"caller_{incoming_role}"
+        alias_depth = 1
+    address_expression = _format_address_expression(base_expression, displacement)
+    return _ResolvedExpression(
+        expression=f"load({address_expression})",
+        alias_depth=alias_depth,
+        alias_kind="memory_load",
     )
 
 
@@ -789,6 +828,8 @@ def _coverage(
         coverage.append("derived_address_arguments")
     if any(arg.alias_kind == "stack_local_address" for arg in arguments):
         coverage.append("stack_local_address_arguments")
+    if any(arg.alias_kind == "memory_load" for arg in arguments):
+        coverage.append("memory_load_arguments")
     return coverage
 
 

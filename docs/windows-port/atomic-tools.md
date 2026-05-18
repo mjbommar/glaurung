@@ -124,8 +124,9 @@ sit below full IR/CFG bug-class scanners:
   spill/reload chains, and simple LEA-derived address expressions such
   as `[caller_arg0 + 0x20]` in the local setup window. It also labels
   conservative rbp-relative local stack addresses such as
-  `[rbp - 0x40]`. It is local evidence, not full alias, stack-frame, or
-  path proof.
+  `[rbp - 0x40]` and simple memory loads from known bases such as
+  `load([caller_arg0 + 0x20])`. It is local evidence, not full alias,
+  stack-frame, or path proof.
 - `windows_callsite_operand_facts` enumerates structured callsite
   argument facts from supplied or decompiled pseudocode, attaches
   optional callsite VA markers when present, and joins operation-backed

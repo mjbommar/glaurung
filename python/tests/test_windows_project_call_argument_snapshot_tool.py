@@ -269,6 +269,43 @@ def test_windows_project_call_argument_snapshot_recovers_spill_reload(
     assert "full_alias_tracking" in result.missing_capabilities
 
 
+def test_windows_project_call_argument_snapshot_resolves_memory_load_args(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "mov", ["rax", "qword ptr [rcx + 0x20]"]),
+            _Insn(0x1004, "mov", ["rdx", "rax"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[1].expression == "load([caller_arg0 + 0x20])"
+    assert by_index[1].source_text == "mov rdx, rax"
+    assert by_index[1].alias_depth == 2
+    assert by_index[1].alias_kind == "memory_load"
+    assert "memory_load_arguments" in result.coverage
+
+
 def test_windows_project_call_argument_snapshot_resolves_incoming_args(
     tmp_path: Path,
     monkeypatch,
