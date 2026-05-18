@@ -114,6 +114,47 @@ def test_windows_bootstrap_project_facts_can_skip_steps(tmp_path: Path) -> None:
     assert result.missing_capabilities == []
 
 
+def test_windows_bootstrap_project_facts_zero_count_is_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from glaurung.llm.kb import xref_db
+
+    def fake_index_callgraph(*_args, **_kwargs) -> int:
+        return 0
+
+    def fake_index_data_xrefs(*_args, **_kwargs) -> int:
+        return 3
+
+    monkeypatch.setattr(xref_db, "index_callgraph", fake_index_callgraph)
+    monkeypatch.setattr(xref_db, "index_data_xrefs", fake_index_data_xrefs)
+
+    pe = tmp_path / "driver.sys"
+    pe.write_bytes(b"MZ")
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pe_path=str(pe),
+            project_path=str(tmp_path / "driver.glaurung"),
+            import_pdb_facts=False,
+        ),
+    )
+
+    assert [(step.name, step.ok, step.count) for step in result.steps] == [
+        ("index_callgraph", True, 0),
+        ("index_data_xrefs", True, 3),
+        ("import_pdb_facts", True, 0),
+    ]
+    assert "call_xrefs" not in result.fact_coverage
+    assert "data_xrefs" in result.fact_coverage
+    assert "call_xrefs" in result.missing_capabilities
+    assert "data_xrefs" not in result.missing_capabilities
+
+
 def test_memory_agent_registers_windows_bootstrap_project_facts() -> None:
     from glaurung.llm.agents.memory_agent import create_memory_agent
 

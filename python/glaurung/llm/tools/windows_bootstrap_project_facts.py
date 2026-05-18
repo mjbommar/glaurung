@@ -261,17 +261,9 @@ def _fact_coverage(
 ) -> list[str]:
     coverage: list[str] = []
     by_name = {step.name: step for step in steps}
-    if (
-        by_name.get("index_callgraph")
-        and by_name["index_callgraph"].ran
-        and by_name["index_callgraph"].ok
-    ):
+    if _step_has_facts(by_name.get("index_callgraph")):
         coverage.append("call_xrefs")
-    if (
-        by_name.get("index_data_xrefs")
-        and by_name["index_data_xrefs"].ran
-        and by_name["index_data_xrefs"].ok
-    ):
+    if _step_has_facts(by_name.get("index_data_xrefs")):
         coverage.append("data_xrefs")
     if pdb_counts:
         if pdb_counts.cache_hit:
@@ -292,13 +284,9 @@ def _missing_capabilities(
 ) -> list[str]:
     missing: list[str] = []
     by_name = {step.name: step for step in steps}
-    if args.index_callgraph and (
-        not by_name.get("index_callgraph") or not by_name["index_callgraph"].ok
-    ):
+    if args.index_callgraph and not _step_has_facts(by_name.get("index_callgraph")):
         missing.append("call_xrefs")
-    if args.index_data_xrefs and (
-        not by_name.get("index_data_xrefs") or not by_name["index_data_xrefs"].ok
-    ):
+    if args.index_data_xrefs and not _step_has_facts(by_name.get("index_data_xrefs")):
         missing.append("data_xrefs")
     if args.import_pdb_facts and not pdb_counts:
         missing.append("pdb_import")
@@ -314,6 +302,10 @@ def _missing_capabilities(
         if not pdb_counts.imported_function_proto:
             missing.append("pdb_function_prototypes")
     return missing
+
+
+def _step_has_facts(step: ProjectBootstrapStep | None) -> bool:
+    return bool(step and step.ran and step.ok and step.count > 0)
 
 
 def build_tool() -> MemoryTool[
