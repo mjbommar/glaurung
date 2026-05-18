@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import glaurung as g
+from glaurung.cli.commands.windows_risk import build_windows_risk_report
 
 
 _WINDOWS_CORPUS = Path("/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64")
@@ -43,6 +45,8 @@ _MIGSTORE = GhidraFunctionReference(
     ),
 )
 
+_RASMIGPLUGIN = _WINDOWS_CORPUS / "rasmigplugin.dll"
+
 
 def _need(path: Path) -> Path:
     if not path.exists():
@@ -59,6 +63,22 @@ def _analyze(path: Path) -> list:
         timeout_ms=120_000,
     )
     return funcs
+
+
+def _risk_args() -> SimpleNamespace:
+    return SimpleNamespace(
+        max_read_bytes=104_857_600,
+        max_file_size=1_073_741_824,
+        max_functions=4096,
+        max_candidates=5,
+        max_decompile=3,
+        timeout_ms=30_000,
+        str_min_len=6,
+        str_max_samples=10_000,
+        max_xrefs=500_000,
+        pdb_cache="",
+        no_decompile=False,
+    )
 
 
 @pytest.mark.skipif(not _MIGSTORE.path.exists(), reason="migstore corpus missing")
@@ -85,3 +105,31 @@ def test_migstore_function_discovery_tracks_ghidra_reference() -> None:
             f"{ref.path.name}: Ghidra target {va:#x} lost its non-generic name"
         )
 
+
+@pytest.mark.skipif(not _RASMIGPLUGIN.exists(), reason="rasmigplugin corpus missing")
+def test_rasmigplugin_windows_risk_tracks_buffer_length_flow() -> None:
+    report = build_windows_risk_report(_need(_RASMIGPLUGIN), _risk_args())
+
+    assert report["summary"]["function_count"] >= 800
+    risk_kinds = {str(item["kind"]) for item in report["risk_items"]}
+    assert "file-read-allocation-flow" in risk_kinds
+    assert "file-read-allocation-argument-flow" in risk_kinds
+
+    row = next(
+        (
+            candidate
+            for candidate in report["functions"]
+            if "file-read-allocation-argument-flow"
+            in (candidate.get("function_summary") or {}).get("risk_signals", [])
+        ),
+        None,
+    )
+    assert row is not None, "no candidate summary retained the buffer/length flow"
+    assert row.get("decompile_error") is None
+    summary = row["function_summary"]
+    assert {"buffer", "length"} <= set(summary["argument_roles"])
+    assert any(
+        flow["kind"] == "file-read-allocation-argument-flow"
+        for flow in summary["data_flows"]
+    )
+    assert summary["call_summary"]["total"] >= 1
