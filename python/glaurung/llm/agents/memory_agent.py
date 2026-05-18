@@ -200,6 +200,9 @@ from ..tools.windows_rank_candidate_packets import (
 from ..tools.windows_emit_vm_validation_plan import (
     build_tool as build_windows_emit_vm_validation_plan,
 )
+from ..tools.windows_candidate_validation_report import (
+    build_tool as build_windows_candidate_validation_report,
+)
 from ..tools.windows_summarize_helper_side_effects import (
     build_tool as build_windows_summarize_helper_side_effects,
 )
@@ -1002,6 +1005,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_rank_candidate_packets()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_emit_vm_validation_plan())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_candidate_validation_report())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_summarize_helper_side_effects())

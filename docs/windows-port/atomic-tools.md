@@ -245,6 +245,10 @@ sit below full IR/CFG bug-class scanners:
   QMP/RDP, KDNET, harness, expected artifact, stock/current comparison,
   and runtime-blocker fields while keeping the claim level at
   `validation_plan_not_reproduction`.
+- `windows_candidate_validation_report` renders ranked candidates and
+  attached VM validation plans into an operator-facing markdown handoff.
+  It can persist the report and add a KB evidence node, but it still
+  reports only planned validation until runtime artifacts are attached.
 
 These tools do not replace the Ghidra-grade facts this document still
 tracks: function matching across renamed builds, instruction-level
