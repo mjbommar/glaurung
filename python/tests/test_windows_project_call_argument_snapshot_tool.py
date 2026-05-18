@@ -139,6 +139,50 @@ def test_windows_project_call_argument_snapshot_recovers_register_args(
     )
 
 
+def test_windows_project_call_argument_snapshot_recovers_stack_args(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "mov", ["rcx", "rdi"]),
+            _Insn(0x1004, "mov", ["qword ptr [rsp + 0x20]", "rax"]),
+            _Insn(0x1008, "mov", ["dword ptr [rsp+28h]", "0x40"]),
+            _Insn(0x100C, "mov", ["qword ptr [rsp + 0x18]", "0xdead"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    stack_args = [arg for arg in result.arguments if arg.location == "stack"]
+    stack_arg_rows = [
+        (arg.index, arg.register_name, arg.stack_offset, arg.expression)
+        for arg in stack_args
+    ]
+    assert stack_arg_rows == [
+        (4, "stack+0x20", 0x20, "rax"),
+        (5, "stack+0x28", 0x28, "0x40"),
+    ]
+    assert "windows_x64_stack_arguments" in result.coverage
+    assert "stack_arguments" not in result.missing_capabilities
+
+
 def test_memory_agent_registers_windows_project_call_argument_snapshot() -> None:
     from glaurung.llm.agents.memory_agent import create_memory_agent
 

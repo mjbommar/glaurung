@@ -113,8 +113,9 @@ sit below full IR/CFG bug-class scanners:
   and caller/callee names from persisted `.glaurung` call xrefs.
 - `windows_project_call_argument_snapshot` uses a project callsite VA
   plus nearby disassembly to recover a conservative Windows x64
-  RCX/RDX/R8/R9 argument snapshot for that call. It is local evidence,
-  not full alias or path proof.
+  RCX/RDX/R8/R9 argument snapshot plus obvious stack argument stores
+  at Windows x64 outgoing stack slots such as `[rsp+0x20]` and
+  `[rsp+0x28]`. It is local evidence, not full alias or path proof.
 - `windows_callsite_operand_facts` enumerates structured callsite
   argument facts from supplied or decompiled pseudocode, attaches
   optional callsite VA markers when present, and joins operation-backed

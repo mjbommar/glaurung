@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,9 @@ from .base import MemoryTool, ToolMeta
 
 
 WINDOWS_X64_ARGS = (("rcx", "arg0"), ("rdx", "arg1"), ("r8", "arg2"), ("r9", "arg3"))
+WINDOWS_X64_STACK_ARG_BASE = 0x20
+WINDOWS_X64_STACK_ARG_SLOT = 8
+WINDOWS_X64_MAX_STACK_ARG_OFFSET = 0x100
 
 
 class WindowsProjectCallArgumentSnapshotArgs(BaseModel):
@@ -42,6 +46,8 @@ class ProjectCallArgumentFact(BaseModel):
     index: int
     register_name: str
     role: str
+    location: str = "register"
+    stack_offset: int | None = None
     expression: str | None = None
     source_va: int | None = None
     source_text: str | None = None
@@ -78,7 +84,8 @@ class WindowsProjectCallArgumentSnapshotTool(
                 name="windows_project_call_argument_snapshot",
                 description=(
                     "Recover a conservative Windows x64 RCX/RDX/R8/R9 argument "
-                    "snapshot for one persisted PE callsite using nearby disassembly."
+                    "snapshot and obvious stack argument stores for one persisted "
+                    "PE callsite using nearby disassembly."
                 ),
                 tags=("windows", "pe", "project", "callsites", "arguments"),
             ),
@@ -152,7 +159,8 @@ class WindowsProjectCallArgumentSnapshotTool(
             missing_capabilities=missing,
             evidence_node_id=evidence_node_id,
             notes=[
-                "argument snapshot is local and conservative; aliases, stack arguments, and path conditions need IR/CFG facts"
+                "argument snapshot is local and conservative; aliases, non-obvious "
+                "stack arguments, and path conditions need IR/CFG facts"
             ],
         )
 
@@ -167,7 +175,9 @@ def _present_tables(conn: sqlite3.Connection) -> set[str]:
 def _first_binary_id(conn: sqlite3.Connection, present: set[str]) -> int | None:
     if "binaries" not in present:
         return None
-    row = conn.execute("SELECT binary_id FROM binaries ORDER BY binary_id LIMIT 1").fetchone()
+    row = conn.execute(
+        "SELECT binary_id FROM binaries ORDER BY binary_id LIMIT 1"
+    ).fetchone()
     return int(row[0]) if row else None
 
 
@@ -257,6 +267,7 @@ def _argument_snapshot(
     callsite_va: int,
 ) -> list[ProjectCallArgumentFact]:
     assignments: dict[str, tuple[int, str, str]] = {}
+    stack_assignments: dict[int, tuple[int, int, str, str]] = {}
     for instruction in instructions:
         va = int(instruction.address.value)
         mnemonic = str(instruction.mnemonic or "").lower()
@@ -265,12 +276,21 @@ def _argument_snapshot(
             break
         if mnemonic == "call":
             assignments.clear()
+            stack_assignments.clear()
             continue
         assignment = _register_assignment(mnemonic, operands)
-        if assignment is None:
-            continue
-        register, expression = assignment
-        assignments[register] = (va, expression, _instruction_text(instruction))
+        if assignment is not None:
+            register, expression = assignment
+            assignments[register] = (va, expression, _instruction_text(instruction))
+        stack_assignment = _stack_argument_assignment(mnemonic, operands)
+        if stack_assignment is not None:
+            index, offset, expression = stack_assignment
+            stack_assignments[index] = (
+                va,
+                offset,
+                expression,
+                _instruction_text(instruction),
+            )
 
     facts: list[ProjectCallArgumentFact] = []
     for index, (register, role) in enumerate(WINDOWS_X64_ARGS):
@@ -288,7 +308,22 @@ def _argument_snapshot(
                 confidence=_assignment_confidence(expression),
             )
         )
-    return facts
+    for index in sorted(stack_assignments):
+        source_va, offset, expression, source_text = stack_assignments[index]
+        facts.append(
+            ProjectCallArgumentFact(
+                index=index,
+                register_name=f"stack+0x{offset:x}",
+                role=f"arg{index}",
+                location="stack",
+                stack_offset=offset,
+                expression=expression,
+                source_va=source_va,
+                source_text=source_text,
+                confidence=min(_assignment_confidence(expression), 0.72),
+            )
+        )
+    return sorted(facts, key=lambda fact: fact.index)
 
 
 def _register_assignment(mnemonic: str, operands: list[str]) -> tuple[str, str] | None:
@@ -302,6 +337,55 @@ def _register_assignment(mnemonic: str, operands: list[str]) -> tuple[str, str] 
     if mnemonic == "xor" and _canonical_register(operands[1]) == dst:
         return dst, "0"
     return None
+
+
+def _stack_argument_assignment(
+    mnemonic: str,
+    operands: list[str],
+) -> tuple[int, int, str] | None:
+    if mnemonic != "mov" or len(operands) < 2:
+        return None
+    offset = _stack_arg_offset(operands[0])
+    if offset is None:
+        return None
+    index = 4 + ((offset - WINDOWS_X64_STACK_ARG_BASE) // WINDOWS_X64_STACK_ARG_SLOT)
+    return index, offset, operands[1]
+
+
+def _stack_arg_offset(raw: str) -> int | None:
+    text = raw.lower().strip()
+    text = re.sub(r"\b(?:byte|word|dword|qword|oword|xmmword)\s+ptr\s+", "", text)
+    text = text.replace(" ", "")
+    match = re.fullmatch(r"\[(rsp|esp)([+-].+)?\]", text)
+    if not match:
+        return None
+    displacement = match.group(2)
+    if not displacement:
+        offset = 0
+    else:
+        try:
+            offset = _parse_int(displacement)
+        except ValueError:
+            return None
+    if offset < WINDOWS_X64_STACK_ARG_BASE:
+        return None
+    if offset > WINDOWS_X64_MAX_STACK_ARG_OFFSET:
+        return None
+    if (offset - WINDOWS_X64_STACK_ARG_BASE) % WINDOWS_X64_STACK_ARG_SLOT:
+        return None
+    return offset
+
+
+def _parse_int(text: str) -> int:
+    sign = 1
+    if text.startswith("+"):
+        text = text[1:]
+    elif text.startswith("-"):
+        sign = -1
+        text = text[1:]
+    if text.endswith("h") and not text.startswith("0x"):
+        return sign * int(text[:-1], 16)
+    return sign * int(text, 0)
 
 
 def _canonical_register(raw: str) -> str:
@@ -351,8 +435,10 @@ def _coverage(
         coverage.append("function_names")
     if instructions:
         coverage.append("nearby_disassembly")
-    if arguments:
+    if any(arg.location == "register" for arg in arguments):
         coverage.append("windows_x64_register_arguments")
+    if any(arg.location == "stack" for arg in arguments):
+        coverage.append("windows_x64_stack_arguments")
     return coverage
 
 
@@ -366,9 +452,11 @@ def _missing_capabilities(
         missing.append("function_names")
     if not instructions:
         missing.append("nearby_disassembly")
-    if len(arguments) < len(WINDOWS_X64_ARGS):
+    register_arguments = [arg for arg in arguments if arg.location == "register"]
+    if len(register_arguments) < len(WINDOWS_X64_ARGS):
         missing.append("all_register_arguments")
-    missing.append("stack_arguments")
+    if not any(arg.location == "stack" for arg in arguments):
+        missing.append("stack_arguments")
     missing.append("alias_tracking")
     missing.append("cfg_path_conditions")
     return missing
