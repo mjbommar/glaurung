@@ -46,6 +46,25 @@ def _write_sinks(tmp_path: Path) -> Path:
     return sinks
 
 
+def _write_non_sinks(tmp_path: Path) -> Path:
+    non_sinks = tmp_path / "pe-non-sink-operations.yaml"
+    non_sinks.write_text(
+        """
+- id: wpp_trace_helpers
+  symbols: [WPP_SF_*]
+  category: telemetry
+  disposition: deprioritize
+  notes: Trace helper calls are not security sinks by themselves.
+- id: compiler_cookie_check
+  symbols: [__security_check_cookie]
+  category: compiler_runtime
+  disposition: deprioritize
+""",
+        encoding="utf-8",
+    )
+    return non_sinks
+
+
 def _write_project(tmp_path: Path) -> Path:
     project = tmp_path / "coverage.glaurung"
     conn = sqlite3.connect(project)
@@ -90,6 +109,8 @@ CREATE TABLE xrefs (
                     "import",
                 ),
                 (1, 0x3000, "KeAcquireSpinLock", "[]", "pdb", None, None),
+                (1, 0x3100, "WPP_SF_iid", "[]", "pdb", None, None),
+                (1, 0x3200, "__security_check_cookie", "[]", "pdb", None, None),
             ],
         )
         conn.executemany(
@@ -98,7 +119,9 @@ CREATE TABLE xrefs (
                 (1, 1, 0x1010, 0x2000, "call", 0x1000),
                 (2, 1, 0x1020, 0x2500, "call", 0x1000),
                 (3, 1, 0x1030, 0x3000, "call", 0x1000),
-                (4, 1, 0x1110, 0x9000, "call", 0x1100),
+                (4, 1, 0x1040, 0x3100, "call", 0x1000),
+                (5, 1, 0x1050, 0x3200, "call", 0x1000),
+                (6, 1, 0x1110, 0x9000, "call", 0x1100),
             ],
         )
         conn.commit()
@@ -119,29 +142,41 @@ def test_windows_project_operation_coverage_summary_reports_backlog(
         tool.input_model(
             project_path=str(_write_project(tmp_path)),
             sinks_path=str(_write_sinks(tmp_path)),
+            non_sinks_path=str(_write_non_sinks(tmp_path)),
             add_to_kb=True,
         ),
     )
 
-    assert result.scanned_callsite_count == 4
-    assert result.returned_callsite_count == 4
+    assert result.scanned_callsite_count == 6
+    assert result.returned_callsite_count == 6
     assert result.operation_callsite_count == 2
     assert result.alias_or_thunk_match_count == 1
-    assert result.unmatched_named_callsite_count == 1
+    assert result.unmatched_named_callsite_count == 3
     assert result.unmatched_unnamed_callsite_count == 1
-    assert result.operation_match_rate == 0.5
+    assert result.known_non_sink_callsite_count == 2
+    assert result.actionable_unmatched_named_callsite_count == 1
+    assert result.operation_match_rate == 0.3333
     assert result.operation_kind_counts == {"copy": 2}
+    assert result.non_sink_category_counts == {
+        "compiler_runtime": 1,
+        "telemetry": 1,
+    }
     assert result.resolution_kind_counts == {
-        "direct_name": 3,
+        "direct_name": 5,
         "import_or_thunk_name": 1,
     }
     assert result.unmatched_groups[0].symbol == "KeAcquireSpinLock"
     assert result.unmatched_groups[0].recommended_next_action == (
         "classify callee semantics and add ASB sink metadata if security-relevant"
     )
+    by_known = {group.symbol: group for group in result.known_non_sink_groups}
+    assert by_known["WPP_SF_iid"].non_sink_category == "telemetry"
+    assert by_known["__security_check_cookie"].non_sink_category == "compiler_runtime"
+    assert result.non_sinks_path is not None
     assert "operation_match_rate" in result.coverage
     assert "alias_or_import_thunk_operation_match_counts" in result.coverage
     assert "unmatched_project_callsite_summary" in result.coverage
+    assert "known_non_sink_operation_filter" in result.coverage
     assert "asb_sink_metadata_for_unmatched_symbols" in result.missing_capabilities
     assert "indirect_call_target_resolution" in result.missing_capabilities
     assert result.evidence_node_id is not None

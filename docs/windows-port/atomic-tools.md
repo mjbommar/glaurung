@@ -128,8 +128,10 @@ sit below full IR/CFG bug-class scanners:
   operations. It reports operation match rate, sink-kind counts,
   alias/import-thunk match counts, named unmatched callees, unnamed
   unresolved call targets, and recommended metadata/target-resolution
-  next actions. This turns operation-classifier gaps into reviewable
-  backlog data.
+  next actions. When a non-sink metadata file is supplied, known
+  telemetry/debug/compiler support calls are counted separately from
+  actionable unmatched backlog. This turns operation-classifier gaps
+  into reviewable backlog data without promoting trace helpers to sinks.
 - `windows_project_operation_gate_summary` runs the project sink-packet
   gate refinement path and aggregates the resulting packets by sink
   operation. It reports gate status counts, fully/partially/unproven
