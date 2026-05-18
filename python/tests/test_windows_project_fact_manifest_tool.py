@@ -44,6 +44,8 @@ def _write_project_facts(tmp_path: Path) -> Path:
     function_prototype_count: 0
     basic_block_count: 0
     cfg_edge_count: 0
+    cfg_dominance_count: 0
+    cfg_branch_fact_count: 0
 - id: ntoskrnl_project
   target_id: ntoskrnl
   build_label: win11-ltsc-v4
@@ -64,6 +66,8 @@ def _write_project_facts(tmp_path: Path) -> Path:
     function_prototype_count: 3
     basic_block_count: 30
     cfg_edge_count: 40
+    cfg_dominance_count: 30
+    cfg_branch_fact_count: 12
 """,
         encoding="utf-8",
     )
@@ -123,6 +127,8 @@ def test_windows_project_fact_manifest_filters_available_capabilities(
 
     assert [record.id for record in result.records] == ["ntoskrnl_project"]
     assert result.records[0].counts.cfg_edge_count == 40
+    assert result.records[0].counts.cfg_dominance_count == 30
+    assert result.records[0].counts.cfg_branch_fact_count == 12
 
 
 def test_memory_agent_registers_windows_project_fact_manifest() -> None:

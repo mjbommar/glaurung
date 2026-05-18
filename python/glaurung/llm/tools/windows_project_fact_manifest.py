@@ -57,6 +57,8 @@ class ProjectFactCounts(BaseModel):
     function_prototype_count: int = 0
     basic_block_count: int = 0
     cfg_edge_count: int = 0
+    cfg_dominance_count: int = 0
+    cfg_branch_fact_count: int = 0
 
 
 class ProjectFactRecord(BaseModel):
@@ -199,6 +201,8 @@ def _record(entry: dict[str, Any], path: Path) -> ProjectFactRecord:
             ),
             basic_block_count=int(counts_raw.get("basic_block_count") or 0),
             cfg_edge_count=int(counts_raw.get("cfg_edge_count") or 0),
+            cfg_dominance_count=int(counts_raw.get("cfg_dominance_count") or 0),
+            cfg_branch_fact_count=int(counts_raw.get("cfg_branch_fact_count") or 0),
         ),
         notes=str(entry.get("notes") or ""),
     )

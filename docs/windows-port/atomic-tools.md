@@ -82,7 +82,8 @@ sit below full IR/CFG bug-class scanners:
 - `windows_project_fact_manifest` exposes ASB's persisted project-fact
   coverage records, including `.glaurung` project paths, selected row
   counts, available fact classes, and missing Ghidra-parity substrate
-  such as call xrefs or CFG facts.
+  such as call xrefs, CFG facts, dominance summaries, or branch
+  condition facts.
 - `windows_pdb_identity_manifest` exposes ASB's target-to-PDB identity
   coverage, including CodeView GUID+age values, cached/missing status,
   and whether public symbols, type layouts, or prototypes are expected
