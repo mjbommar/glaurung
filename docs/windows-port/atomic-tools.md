@@ -148,6 +148,12 @@ sit below full IR/CFG bug-class scanners:
 - `windows_project_callgraph_slice` returns incoming callers and
   outgoing callees around one project function, with exact callsite VAs
   and caller/callee names from persisted `.glaurung` call xrefs.
+- `windows_project_onehop_sink_chains` finds caller -> helper -> ASB
+  sink call chains from persisted project call xrefs. It returns exact
+  helper callsite VAs, helper function VAs/names, helper-local sink
+  callsite VAs, sink kind/effects, and required gate metadata. This is
+  one-hop topology for prioritizing helper summaries; it does not prove
+  caller-argument propagation into the helper sink.
 - `windows_project_call_argument_snapshot` uses a project callsite VA
   plus nearby disassembly to recover a conservative Windows x64
   RCX/RDX/R8/R9 argument snapshot plus obvious stack argument stores
