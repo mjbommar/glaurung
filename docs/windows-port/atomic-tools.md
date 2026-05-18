@@ -235,7 +235,10 @@ sit below full IR/CFG bug-class scanners:
   review, but it is not validation-ready while project coverage,
   required gate coverage, or blocking Ghidra gaps remain. The ranker
   uses `missing_required_gates` directly in score reasons so partial
-  gate coverage is visible without parsing evidence text.
+  gate coverage is visible without parsing evidence text. When supplied
+  with `windows_emit_vm_validation_plan` output, ranked items carry the
+  matched validation plan and its runtime blockers, and validation-ready
+  stays false until both static packet and VM-plan prerequisites pass.
 - `windows_emit_vm_validation_plan` converts a static review packet into
   a concrete VM validation plan using ASB
   `pe-validation-inventory.yaml` records. The plan carries snapshot,

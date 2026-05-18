@@ -13,6 +13,7 @@ from glaurung.llm.tools.windows_emit_review_packet import (
     WindowsReviewPathStep,
 )
 from glaurung.llm.tools.windows_rank_candidate_packets import build_tool
+from glaurung.llm.tools.windows_emit_vm_validation_plan import WindowsVmValidationPlan
 
 
 def _ctx(tmp_path: Path) -> MemoryContext:
@@ -190,6 +191,109 @@ def test_windows_rank_candidate_packets_honors_max_results(tmp_path: Path) -> No
 
     assert len(result.ranked) == 1
     assert result.ranked[0].rank == 1
+
+
+def test_windows_rank_candidate_packets_carries_validation_plan_blockers(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+    packet = _packet(
+        "runtime-blocked",
+        attacker_class="remote_network",
+        sink_kind="copy",
+        gate_status="missing",
+        priority="high",
+        confidence=0.8,
+        provenance=["ir_fact", "asb_pe_sink_metadata"],
+    )
+    plan = WindowsVmValidationPlan(
+        candidate_id="runtime-blocked",
+        binary="ntoskrnl.exe",
+        build="26100.1",
+        validation_id="win11_ltsc_v4_cold_postlogon",
+        build_label="win11-ltsc-v4",
+        snapshot_name="cold-postlogon",
+        image_path="/images/win11-ltsc-v4.qcow2",
+        ovmf_vars_path="/images/win11-ltsc-v4.OVMF_VARS.fd",
+        qmp_endpoint="127.0.0.1:4447",
+        rdp_endpoint="server0:3390",
+        kdnet_port=51000,
+        kdnet_status="guest_configured_host_forward_missing",
+        debugger_status="not_attached",
+        harness_strategy=["exercise syscall harness"],
+        validation_requirements=["syscall_table_membership"],
+        expected_artifacts=["C:\\Windows\\MEMORY.DMP"],
+        stock_current_comparison=["Run stock", "Run current"],
+        operator_steps=["Boot VM", "Run harness"],
+        blockers=["KDNET attach is not validated: guest_configured_host_forward_missing"],
+        ready_for_validation=False,
+    )
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(packets=[packet], validation_plans=[plan]),
+    )
+
+    ranked = result.ranked[0]
+    assert ranked.packet.candidate_id == "runtime-blocked"
+    assert ranked.validation_plan is not None
+    assert ranked.validation_plan.validation_id == "win11_ltsc_v4_cold_postlogon"
+    assert ranked.validation_ready is False
+    assert ranked.validation_blockers == [
+        "KDNET attach is not validated: guest_configured_host_forward_missing"
+    ]
+    assert any("runtime blockers" in reason for reason in ranked.reasons)
+
+
+def test_windows_rank_candidate_packets_accepts_ready_validation_plan(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+    packet = _packet(
+        "runtime-ready",
+        attacker_class="remote_network",
+        sink_kind="copy",
+        gate_status="missing",
+        priority="high",
+        confidence=0.8,
+        provenance=["ir_fact", "asb_pe_sink_metadata"],
+    )
+    plan = WindowsVmValidationPlan(
+        candidate_id="runtime-ready",
+        binary="ntoskrnl.exe",
+        build="26100.1",
+        validation_id="win11_25h2_v1_cold_postlogon",
+        build_label="win11-25h2-v1",
+        snapshot_name="cold-postlogon",
+        image_path="/images/win11-25h2-v1.qcow2",
+        ovmf_vars_path="/images/win11-25h2-v1.OVMF_VARS.fd",
+        qmp_endpoint="127.0.0.1:4446",
+        rdp_endpoint="server0:3391",
+        kdnet_port=51001,
+        kdnet_status="attach_validated",
+        debugger_status="attached_once",
+        harness_strategy=["exercise syscall harness"],
+        validation_requirements=["syscall_table_membership"],
+        expected_artifacts=["C:\\Windows\\MEMORY.DMP"],
+        stock_current_comparison=["Run stock", "Run current"],
+        operator_steps=["Boot VM", "Run harness"],
+        blockers=[],
+        ready_for_validation=True,
+    )
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(packets=[packet], validation_plans=[plan]),
+    )
+
+    ranked = result.ranked[0]
+    assert ranked.validation_ready is True
+    assert ranked.validation_blockers == []
+    assert any("VM validation plan is ready" in reason for reason in ranked.reasons)
 
 
 def test_memory_agent_registers_windows_rank_candidate_packets() -> None:

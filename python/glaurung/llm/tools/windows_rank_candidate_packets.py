@@ -7,12 +7,20 @@ from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .windows_emit_review_packet import WindowsReviewPacket
+from .windows_emit_vm_validation_plan import WindowsVmValidationPlan
 
 
 class WindowsRankCandidatePacketsArgs(BaseModel):
     packets: list[WindowsReviewPacket] = Field(
         ...,
         description="Review packets emitted by windows_emit_review_packet or composer.",
+    )
+    validation_plans: list[WindowsVmValidationPlan] = Field(
+        default_factory=list,
+        description=(
+            "Optional VM validation plans emitted by windows_emit_vm_validation_plan. "
+            "Plans are joined by candidate_id and used to expose runtime blockers."
+        ),
     )
     max_results: int = Field(20, description="Maximum ranked packets to return.")
     add_to_kb: bool = Field(
@@ -25,6 +33,8 @@ class RankedWindowsCandidate(BaseModel):
     rank: int
     score: float
     packet: WindowsReviewPacket
+    validation_plan: WindowsVmValidationPlan | None = None
+    validation_blockers: list[str] = Field(default_factory=list)
     reasons: list[str]
     validation_ready: bool
 
@@ -59,16 +69,20 @@ class WindowsRankCandidatePacketsTool(
         kb: KnowledgeBase,
         args: WindowsRankCandidatePacketsArgs,
     ) -> WindowsRankCandidatePacketsResult:
+        validation_plans = _validation_plans_by_candidate(args.validation_plans)
         ranked = [
             RankedWindowsCandidate(
                 rank=0,
                 score=score,
                 packet=packet,
+                validation_plan=validation_plan,
+                validation_blockers=_validation_blockers(validation_plan),
                 reasons=reasons,
-                validation_ready=_validation_ready(packet),
+                validation_ready=_validation_ready(packet, validation_plan),
             )
             for packet in args.packets
-            for score, reasons in [_score_packet(packet)]
+            for validation_plan in [validation_plans.get(packet.candidate_id)]
+            for score, reasons in [_score_packet(packet, validation_plan)]
         ]
         ranked.sort(key=lambda item: item.score, reverse=True)
         ranked = ranked[: max(0, args.max_results)]
@@ -103,7 +117,10 @@ class WindowsRankCandidatePacketsTool(
         )
 
 
-def _score_packet(packet: WindowsReviewPacket) -> tuple[float, list[str]]:
+def _score_packet(
+    packet: WindowsReviewPacket,
+    validation_plan: WindowsVmValidationPlan | None = None,
+) -> tuple[float, list[str]]:
     score = packet.confidence * 30.0
     reasons = [f"confidence contributes {packet.confidence:.2f}"]
 
@@ -173,11 +190,21 @@ def _score_packet(packet: WindowsReviewPacket) -> tuple[float, list[str]]:
     if packet.promotion_blockers:
         score -= min(20.0, 5.0 * len(packet.promotion_blockers))
         reasons.append("packet has promotion blockers")
+    if validation_plan is not None:
+        if validation_plan.ready_for_validation:
+            score += 10.0
+            reasons.append("VM validation plan is ready")
+        else:
+            score -= min(18.0, 6.0 * len(validation_plan.blockers))
+            reasons.append("VM validation plan has runtime blockers")
 
     return round(max(0.0, score), 2), reasons
 
 
-def _validation_ready(packet: WindowsReviewPacket) -> bool:
+def _validation_ready(
+    packet: WindowsReviewPacket,
+    validation_plan: WindowsVmValidationPlan | None = None,
+) -> bool:
     attacker = packet.attacker_class.lower()
     reachable = any(
         token in attacker for token in ("remote", "network", "unpriv", "low", "appcontainer", "lpac")
@@ -188,13 +215,33 @@ def _validation_ready(packet: WindowsReviewPacket) -> bool:
         "gate_after_sink",
         "unknown",
     }
-    return (
+    packet_ready = (
         reachable
         and gate_concern
         and bool(packet.path)
         and packet.promotion_preconditions_met
         and not packet.promotion_blockers
     )
+    if validation_plan is None:
+        return packet_ready
+    return packet_ready and validation_plan.ready_for_validation
+
+
+def _validation_blockers(
+    validation_plan: WindowsVmValidationPlan | None,
+) -> list[str]:
+    if validation_plan is None:
+        return []
+    return list(validation_plan.blockers)
+
+
+def _validation_plans_by_candidate(
+    plans: list[WindowsVmValidationPlan],
+) -> dict[str, WindowsVmValidationPlan]:
+    out: dict[str, WindowsVmValidationPlan] = {}
+    for plan in plans:
+        out.setdefault(plan.candidate_id, plan)
+    return out
 
 
 def build_tool() -> MemoryTool[
