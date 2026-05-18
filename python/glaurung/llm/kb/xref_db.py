@@ -1562,7 +1562,9 @@ def propagate_types_at_callsites(
             # Strip the @plt suffix so 'printf@plt' → 'printf' matches
             # the prototype bundle keys.
             clean = str(name).split("@", 1)[0]
-            name_by_va.setdefault(int(va), clean)
+            old = name_by_va.get(int(va))
+            if old is None or old.startswith("sub_"):
+                name_by_va[int(va)] = clean
     except Exception:
         pass
 

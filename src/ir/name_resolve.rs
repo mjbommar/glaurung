@@ -196,6 +196,30 @@ pub fn collect_address_map_with_pdb_cache(
     out
 }
 
+/// Add the current CFG discovery result as a fallback call-target map.
+///
+/// Import, export, symbol, and PDB names are stronger and should already
+/// occupy exact-address entries in `out`. This helper only fills otherwise
+/// anonymous local function entries so stripped Windows decompile output can
+/// say `sub_180012340()` instead of `0x180012340()`.
+pub fn add_discovered_function_names(
+    out: &mut HashMap<u64, String>,
+    funcs: &[crate::core::function::Function],
+) -> usize {
+    let mut added = 0usize;
+    for func in funcs {
+        let va = func.entry_point.value;
+        if va == 0 || func.name.is_empty() {
+            continue;
+        }
+        if let std::collections::hash_map::Entry::Vacant(slot) = out.entry(va) {
+            slot.insert(func.name.clone());
+            added += 1;
+        }
+    }
+    added
+}
+
 fn collect_pe_exports(data: &[u8], out: &mut HashMap<u64, String>) {
     let Ok(parser) = crate::formats::pe::PeParser::new(data) else {
         return;
@@ -434,6 +458,45 @@ mod tests {
             !text.contains(&format!("call 0x{thunk_va:x}")),
             "raw thunk VA leaked: {text}"
         );
+    }
+
+    #[test]
+    fn discovered_function_names_fill_only_missing_addresses() {
+        let entry = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x401000,
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        let func = crate::core::function::Function::new(
+            "sub_401000".to_string(),
+            entry,
+            crate::core::function::FunctionKind::Normal,
+        )
+        .unwrap();
+        let imported_entry = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x402000,
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        let imported_func = crate::core::function::Function::new(
+            "sub_402000".to_string(),
+            imported_entry,
+            crate::core::function::FunctionKind::Normal,
+        )
+        .unwrap();
+        let mut map = HashMap::from([(0x402000, "ReadFile".to_string())]);
+
+        let added = add_discovered_function_names(&mut map, &[func, imported_func]);
+
+        assert_eq!(added, 1);
+        assert_eq!(map.get(&0x401000).map(String::as_str), Some("sub_401000"));
+        assert_eq!(map.get(&0x402000).map(String::as_str), Some("ReadFile"));
     }
 
     #[test]

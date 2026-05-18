@@ -17,6 +17,9 @@ _C2_DEMO = Path(
 _HELLO_DEBUG = Path(
     "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug"
 )
+_RASMIGPLUGIN = Path(
+    "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/rasmigplugin.dll"
+)
 
 
 def _need(p: Path) -> Path:
@@ -177,3 +180,20 @@ def test_manual_rename_propagates_to_decompile_output(tmp_path: Path) -> None:
     )
     # The default `var_110` name should NOT also appear (it was renamed).
     assert "var_110" not in rendered
+
+
+@pytest.mark.skipif(not _RASMIGPLUGIN.exists(), reason="rasmigplugin corpus missing")
+def test_decompile_uses_discovered_names_for_internal_windows_calls() -> None:
+    text = g.ir.decompile_at(
+        str(_RASMIGPLUGIN),
+        0x180001900,
+        max_blocks=256,
+        max_instructions=20_000,
+        timeout_ms=30_000,
+        style="c",
+    )
+
+    assert "sub_180004554(" in text
+    assert "sub_180001210(" in text
+    assert "0x180004554(" not in text
+    assert "0x180001210(" not in text

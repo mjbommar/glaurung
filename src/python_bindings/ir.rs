@@ -351,8 +351,9 @@ fn decompile_at_py(
     crate::ir::dce::prune_dead_flags(&mut f);
     crate::ir::call_args::reconstruct_args(&mut f, cc);
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    let addr_map =
+    let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
@@ -508,8 +509,9 @@ fn decompile_all_py(
     let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    let addr_map =
+    let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
