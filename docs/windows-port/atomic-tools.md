@@ -154,6 +154,13 @@ sit below full IR/CFG bug-class scanners:
   callsite VAs, sink kind/effects, and required gate metadata. This is
   one-hop topology for prioritizing helper summaries; it does not prove
   caller-argument propagation into the helper sink.
+- `windows_project_onehop_argument_flow` composes one-hop sink-chain
+  topology with `windows_project_call_argument_snapshot` on both the
+  caller-to-helper callsite and the helper-local sink callsite. It emits
+  a flow only when a caller-supplied helper argument matches a
+  helper-local sink argument rendered as the corresponding
+  `caller_argN`, so the result is conservative calling-convention
+  evidence rather than a general interprocedural alias proof.
 - `windows_project_call_argument_snapshot` uses a project callsite VA
   plus nearby disassembly to recover a conservative Windows x64
   RCX/RDX/R8/R9 argument snapshot plus obvious stack argument stores

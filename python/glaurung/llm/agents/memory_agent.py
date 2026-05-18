@@ -119,6 +119,9 @@ from ..tools.windows_project_data_label_facts import (
 from ..tools.windows_project_onehop_sink_chains import (
     build_tool as build_windows_project_onehop_sink_chains,
 )
+from ..tools.windows_project_onehop_argument_flow import (
+    build_tool as build_windows_project_onehop_argument_flow,
+)
 from ..tools.windows_binary_diff_summary import (
     build_tool as build_windows_binary_diff_summary,
 )
@@ -982,6 +985,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_onehop_sink_chains())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_onehop_argument_flow())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_binary_diff_summary()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_pdb_identity_manifest()))
