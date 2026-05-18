@@ -198,7 +198,7 @@ fn classify_ctrl_flow(mnemonic: &str, arch: BArch) -> (bool, bool, bool) {
     // returns (is_branch, is_call, is_ret)
     match arch {
         BArch::X86 | BArch::X86_64 => {
-            if m == "ret" || m == "retq" {
+            if m == "ret" || m == "retq" || m == "int3" || m == "ud2" || m == "hlt" {
                 return (false, false, true);
             }
             if m == "call" {
@@ -2397,6 +2397,47 @@ mod pe_export_name_tests {
                 names.contains(name),
                 "stripped CFG did not apply PE export name {name}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod pe_pdata_int3_boundary_tests {
+    use super::{analyze_functions_bytes, Budgets};
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    #[test]
+    fn int3_padding_does_not_swallow_next_pdata_function() {
+        let path =
+            Path::new("/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/migstore.dll");
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read migstore.dll corpus sample");
+        let budgets = Budgets {
+            max_functions: 512,
+            max_blocks: 1_000_000,
+            max_instructions: 30_000_000,
+            timeout_ms: 30_000,
+        };
+        let (functions, _cg) = analyze_functions_bytes(&data, &budgets);
+        let discovered: BTreeSet<u64> = functions.iter().map(|f| f.entry_point.value).collect();
+
+        assert!(
+            discovered.contains(&0x180004900),
+            "the .pdata function at 0x180004900 was hidden by prior int3 padding"
+        );
+        for func in &functions {
+            for block in &func.basic_blocks {
+                let start = block.start_address.value;
+                let end = block.end_address.value;
+                assert!(
+                    !(start < 0x180004900 && 0x180004900 < end),
+                    "block {start:#x}..{end:#x} in {} crosses the .pdata function start",
+                    func.name
+                );
+            }
         }
     }
 }
