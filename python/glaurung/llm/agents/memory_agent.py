@@ -122,6 +122,9 @@ from ..tools.windows_project_onehop_sink_chains import (
 from ..tools.windows_project_onehop_argument_flow import (
     build_tool as build_windows_project_onehop_argument_flow,
 )
+from ..tools.windows_project_helper_argument_summary import (
+    build_tool as build_windows_project_helper_argument_summary,
+)
 from ..tools.windows_project_onehop_flow_packets import (
     build_tool as build_windows_project_onehop_flow_packets,
 )
@@ -991,6 +994,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_onehop_argument_flow())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_helper_argument_summary())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_onehop_flow_packets())

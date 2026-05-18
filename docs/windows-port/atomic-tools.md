@@ -163,6 +163,13 @@ sit below full IR/CFG bug-class scanners:
   evidence rather than a general interprocedural alias proof. Matched
   flows carry ASB sink effects and required-gate metadata so rule code
   can rank and explain the gate obligations for the bridged value.
+- `windows_project_helper_argument_summary` aggregates those matched
+  one-hop argument-flow facts into per-helper-argument summaries. It
+  records which incoming helper argument reaches which helper-local sink
+  roles, sink callsites, sink effects, and required gates. This gives
+  rules a reusable helper-use summary without claiming general helper
+  side effects, return-value flow, alias-aware propagation, or
+  path-sensitive value constraints.
 - `windows_project_onehop_flow_packets` converts those matched
   caller/helper/sink argument flows into static Windows review packets.
   It preserves the one-hop path, matched source-refinement facts, sink
