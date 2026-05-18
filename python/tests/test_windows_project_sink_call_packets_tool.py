@@ -114,6 +114,43 @@ def _write_project(tmp_path: Path) -> Path:
                 (0x1000, "gate", "sink"),
             ],
         )
+        conn.execute(
+            """
+            CREATE TABLE cfg_branch_facts (
+                binary_id INTEGER,
+                function_va INTEGER,
+                block_id TEXT,
+                branch_va INTEGER,
+                branch_mnemonic TEXT,
+                branch_operands_json TEXT,
+                compare_va INTEGER,
+                compare_mnemonic TEXT,
+                compare_operands_json TEXT,
+                condition_kind TEXT,
+                target_block_id TEXT,
+                fallthrough_block_id TEXT,
+                indexed_at INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO cfg_branch_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                0x1000,
+                "entry",
+                0x1080,
+                "jne",
+                '["0x1100"]',
+                0x107c,
+                "test",
+                '["rdi", "rdi"]',
+                "not_equal",
+                "gate",
+                "reject",
+                0,
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -184,7 +221,7 @@ def _write_project_facts(tmp_path: Path) -> Path:
   binary_filename: driver.sys
   project_path: /projects/driver.glaurung
   fact_sources: [unit_test]
-  fact_coverage: [function_names, call_xrefs, cfg, cfg_dominance]
+  fact_coverage: [function_names, call_xrefs, cfg, cfg_dominance, branch_conditions]
   missing_facts: []
   counts:
     function_name_count: 2
@@ -197,7 +234,7 @@ def _write_project_facts(tmp_path: Path) -> Path:
     basic_block_count: 3
     cfg_edge_count: 2
     cfg_dominance_count: 3
-    cfg_branch_fact_count: 0
+    cfg_branch_fact_count: 1
 """,
         encoding="utf-8",
     )
@@ -258,6 +295,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
             source_role="buffer",
             source_arg="rsi",
             refine_gates=True,
+            attach_gate_predicates=True,
             gates_path=str(_write_gates(tmp_path)),
             sinks_path=str(_write_sinks(tmp_path)),
             project_facts_path=str(_write_project_facts(tmp_path)),
@@ -273,6 +311,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert result.scanned_callsite_count == 2
     assert result.argument_snapshot_count == 1
     assert result.gate_refinement_count == 1
+    assert result.gate_predicate_count == 1
     assert result.source_value_match_count == 1
     packet = result.packets[0]
     assert packet.binary == "driver.sys"
@@ -287,6 +326,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
         "call_xrefs",
         "cfg",
         "cfg_dominance",
+        "branch_conditions",
     ]
     assert packet.project_facts is not None
     assert packet.project_facts.counts["call_xref_count"] == 1
@@ -300,6 +340,13 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
         for evidence in packet.evidence
     )
     assert any(evidence.source == "windows_cfg_dominance" for evidence in packet.evidence)
+    predicate_evidence = [
+        evidence
+        for evidence in packet.evidence
+        if evidence.source == "windows_project_branch_condition_facts"
+    ]
+    assert len(predicate_evidence) == 1
+    assert "entry@0x1080 jne: rdi != 0" in predicate_evidence[0].summary
     value_evidence = [
         evidence
         for evidence in packet.evidence

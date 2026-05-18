@@ -42,6 +42,11 @@ from .windows_project_call_argument_snapshot import (
     WindowsProjectCallArgumentSnapshotArgs,
     WindowsProjectCallArgumentSnapshotTool,
 )
+from .windows_project_branch_condition_facts import (
+    ProjectBranchConditionFact,
+    WindowsProjectBranchConditionFactsArgs,
+    WindowsProjectBranchConditionFactsTool,
+)
 from .windows_surface_metadata import GateRecord, _resolve_metadata_path
 
 
@@ -114,6 +119,19 @@ class WindowsProjectSinkCallPacketsArgs(BaseModel):
             "function and attach persisted-CFG dominance evidence."
         ),
     )
+    attach_gate_predicates: bool = Field(
+        False,
+        description=(
+            "If true, attach nearby persisted branch-condition facts for refined "
+            "gate callsites when cfg_branch_facts are available."
+        ),
+    )
+    max_gate_predicates: int = Field(
+        4,
+        ge=0,
+        le=32,
+        description="Maximum branch-condition facts to attach per refined gate.",
+    )
     project_facts_path: str | None = Field(
         None,
         description="Optional path to ASB data/kg/pe-project-facts.yaml for packet auto-join.",
@@ -151,6 +169,7 @@ class WindowsProjectSinkCallPacketsResult(BaseModel):
     scanned_callsite_count: int
     argument_snapshot_count: int
     gate_refinement_count: int
+    gate_predicate_count: int
     source_value_match_count: int
     source_role_inference_count: int
     packets: list[WindowsReviewPacket]
@@ -199,6 +218,7 @@ class WindowsProjectSinkCallPacketsTool(
         packets: list[WindowsReviewPacket] = []
         argument_snapshot_count = 0
         gate_refinement_count = 0
+        gate_predicate_count = 0
         source_value_match_count = 0
         source_role_inference_count = 0
         for callsite in callsites.callsites:
@@ -212,6 +232,7 @@ class WindowsProjectSinkCallPacketsTool(
             gate_refinement = _refine_gate(ctx, kb, args, callsite)
             if gate_refinement is not None:
                 gate_refinement_count += 1
+                gate_predicate_count += len(gate_refinement.predicates)
             inferred_roles = _infer_source_roles(ctx, kb, args, callsite)
             if inferred_roles:
                 source_role_inference_count += 1
@@ -252,6 +273,7 @@ class WindowsProjectSinkCallPacketsTool(
                         "scanned_callsite_count": callsites.scanned_call_count,
                         "argument_snapshot_count": argument_snapshot_count,
                         "gate_refinement_count": gate_refinement_count,
+                        "gate_predicate_count": gate_predicate_count,
                         "source_value_match_count": source_value_match_count,
                         "source_role_inference_count": source_role_inference_count,
                     },
@@ -268,6 +290,7 @@ class WindowsProjectSinkCallPacketsTool(
             scanned_callsite_count=callsites.scanned_call_count,
             argument_snapshot_count=argument_snapshot_count,
             gate_refinement_count=gate_refinement_count,
+            gate_predicate_count=gate_predicate_count,
             source_value_match_count=source_value_match_count,
             source_role_inference_count=source_role_inference_count,
             packets=packets,
@@ -340,6 +363,18 @@ def _emit_packet(
                 ],
             )
         )
+        if gate_refinement.predicates:
+            evidence.append(
+                WindowsReviewEvidence(
+                    source="windows_project_branch_condition_facts",
+                    summary=_predicate_summary(gate_refinement.predicates),
+                    provenance=[
+                        "windows_project_sink_call_packets",
+                        "windows_project_branch_condition_facts",
+                        "persisted_project_branch_facts",
+                    ],
+                )
+            )
     if snapshot_args:
         evidence.append(
             WindowsReviewEvidence(
@@ -421,6 +456,8 @@ def _required_project_facts(args: WindowsProjectSinkCallPacketsArgs) -> list[str
     facts = list(args.required_project_facts)
     if args.refine_gates:
         facts.extend(["cfg", "cfg_dominance"])
+    if args.attach_gate_predicates:
+        facts.append("branch_conditions")
     return _dedupe(facts)
 
 
@@ -452,6 +489,7 @@ class _GateRefinement:
     packet_gate_status: GateStatus
     summary: str
     provenance: list[str]
+    predicates: list[ProjectBranchConditionFact]
 
 
 def _refine_gate(
@@ -496,6 +534,14 @@ def _refine_gate(
             dominance = _dominance(ctx, kb, args, sink_callsite, candidate)
             if dominance is None:
                 continue
+            predicates = _gate_predicates(
+                ctx,
+                kb,
+                args,
+                sink_callsite,
+                candidate,
+                dominance,
+            )
             return _GateRefinement(
                 gate_symbol=name,
                 gate_va=candidate.callsite_va,
@@ -505,6 +551,7 @@ def _refine_gate(
                     f"sink@0x{sink_callsite.callsite_va:x}: {dominance.reason}"
                 ),
                 provenance=dominance.provenance,
+                predicates=predicates,
             )
     return None
 
@@ -547,6 +594,89 @@ def _packet_gate_status(status: str) -> GateStatus:
     if status == "same_block":
         return "gate_same_line"
     return "unknown"
+
+
+def _gate_predicates(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsProjectSinkCallPacketsArgs,
+    sink_callsite: ProjectCallsiteFact,
+    gate_callsite: ProjectCallsiteFact,
+    dominance: WindowsCfgDominanceResult,
+) -> list[ProjectBranchConditionFact]:
+    if not args.attach_gate_predicates or args.max_gate_predicates == 0:
+        return []
+    function_va = sink_callsite.caller_va or dominance.function_va
+    if function_va is None:
+        return []
+    try:
+        result = WindowsProjectBranchConditionFactsTool().run(
+            ctx,
+            kb,
+            WindowsProjectBranchConditionFactsArgs(
+                project_path=args.project_path,
+                function_va=function_va,
+                max_rows=128,
+                add_to_kb=False,
+            ),
+        )
+    except Exception:
+        return []
+    if not result.facts:
+        return []
+    selected = _select_gate_predicates(
+        result.facts,
+        gate_callsite.callsite_va,
+        dominance,
+        args.max_gate_predicates,
+    )
+    return selected
+
+
+def _select_gate_predicates(
+    facts: list[ProjectBranchConditionFact],
+    gate_va: int,
+    dominance: WindowsCfgDominanceResult,
+    max_count: int,
+) -> list[ProjectBranchConditionFact]:
+    gate_block_id = dominance.gate_block_id
+    entry_block_id = dominance.entry_block_id
+    sink_block_id = dominance.sink_block_id
+
+    def score(fact: ProjectBranchConditionFact) -> tuple[int, int, int, int]:
+        relation = 4
+        if gate_block_id and fact.block_id == gate_block_id:
+            relation = 0
+        elif gate_block_id and (
+            fact.target_block_id == gate_block_id
+            or fact.fallthrough_block_id == gate_block_id
+        ):
+            relation = 1
+        elif entry_block_id and fact.block_id == entry_block_id:
+            relation = 2
+        elif sink_block_id and (
+            fact.target_block_id == sink_block_id
+            or fact.fallthrough_block_id == sink_block_id
+        ):
+            relation = 3
+        direction = 0 if fact.branch_va <= gate_va else 1
+        return (relation, direction, abs(fact.branch_va - gate_va), fact.branch_va)
+
+    ranked = sorted(facts, key=score)
+    useful = [fact for fact in ranked if score(fact)[0] < 4]
+    return (useful or ranked)[:max_count]
+
+
+def _predicate_summary(facts: list[ProjectBranchConditionFact]) -> str:
+    rendered = []
+    for fact in facts:
+        predicate = (
+            fact.target_predicate or fact.fallthrough_predicate or fact.condition_kind
+        )
+        rendered.append(
+            f"{fact.block_id}@0x{fact.branch_va:x} {fact.branch_mnemonic}: {predicate}"
+        )
+    return "nearby gate branch predicates: " + "; ".join(rendered)
 
 
 def _source_value_match(
