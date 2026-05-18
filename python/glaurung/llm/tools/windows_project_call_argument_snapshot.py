@@ -17,6 +17,7 @@ from .base import MemoryTool, ToolMeta
 
 
 WINDOWS_X64_ARGS = (("rcx", "arg0"), ("rdx", "arg1"), ("r8", "arg2"), ("r9", "arg3"))
+WINDOWS_X64_ARG_ROLES = {register: role for register, role in WINDOWS_X64_ARGS}
 WINDOWS_X64_STACK_ARG_BASE = 0x20
 WINDOWS_X64_STACK_ARG_SLOT = 8
 WINDOWS_X64_MAX_STACK_ARG_OFFSET = 0x100
@@ -298,6 +299,7 @@ def _argument_snapshot(
     assignments: dict[str, _Assignment] = {}
     frame_assignments: dict[str, _Assignment] = {}
     stack_assignments: dict[int, _StackAssignment] = {}
+    clobbered_registers: set[str] = set()
     for instruction in instructions:
         va = int(instruction.address.value)
         mnemonic = str(instruction.mnemonic or "").lower()
@@ -308,6 +310,7 @@ def _argument_snapshot(
             assignments.clear()
             frame_assignments.clear()
             stack_assignments.clear()
+            clobbered_registers.clear()
             continue
         assignment = _register_assignment(mnemonic, operands)
         if assignment is not None:
@@ -316,6 +319,7 @@ def _argument_snapshot(
                 expression,
                 assignments,
                 frame_assignments,
+                clobbered_registers,
             )
             assignments[register] = _Assignment(
                 va=va,
@@ -324,6 +328,12 @@ def _argument_snapshot(
                 alias_depth=resolved.alias_depth,
                 alias_kind=resolved.alias_kind,
             )
+            clobbered_registers.add(register)
+        else:
+            written_register = _written_register(mnemonic, operands)
+            if written_register is not None:
+                assignments.pop(written_register, None)
+                clobbered_registers.add(written_register)
         frame_assignment = _frame_slot_assignment(mnemonic, operands)
         if frame_assignment is not None:
             slot, expression = frame_assignment
@@ -331,6 +341,7 @@ def _argument_snapshot(
                 expression,
                 assignments,
                 frame_assignments,
+                clobbered_registers,
             )
             frame_assignments[slot] = _Assignment(
                 va=va,
@@ -346,6 +357,7 @@ def _argument_snapshot(
                 expression,
                 assignments,
                 frame_assignments,
+                clobbered_registers,
             )
             stack_assignments[index] = _StackAssignment(
                 va=va,
@@ -420,6 +432,7 @@ def _resolve_expression(
     expression: str,
     assignments: dict[str, _Assignment],
     frame_assignments: dict[str, _Assignment],
+    clobbered_registers: set[str],
 ) -> _ResolvedExpression:
     source_register = _canonical_register(expression)
     source = assignments.get(source_register)
@@ -428,6 +441,13 @@ def _resolve_expression(
             expression=source.expression,
             alias_depth=source.alias_depth + 1,
             alias_kind=source.alias_kind or "register",
+        )
+    incoming_role = WINDOWS_X64_ARG_ROLES.get(source_register)
+    if incoming_role is not None and source_register not in clobbered_registers:
+        return _ResolvedExpression(
+            expression=f"caller_{incoming_role}",
+            alias_depth=1,
+            alias_kind="incoming_arg",
         )
     frame_slot = _frame_slot_key(expression)
     if frame_slot is None:
@@ -440,6 +460,33 @@ def _resolve_expression(
         alias_depth=frame_source.alias_depth + 1,
         alias_kind="frame_slot",
     )
+
+
+def _written_register(mnemonic: str, operands: list[str]) -> str | None:
+    if not operands:
+        return None
+    if mnemonic not in {
+        "add",
+        "and",
+        "dec",
+        "imul",
+        "inc",
+        "lea",
+        "mov",
+        "movsxd",
+        "movzx",
+        "neg",
+        "not",
+        "or",
+        "sar",
+        "shl",
+        "shr",
+        "sub",
+        "xor",
+    }:
+        return None
+    register = _canonical_register(operands[0])
+    return register if _is_register(register) else None
 
 
 def _frame_slot_assignment(
@@ -651,6 +698,8 @@ def _coverage(
         coverage.append("windows_x64_stack_arguments")
     if any(arg.alias_kind == "register" for arg in arguments):
         coverage.append("simple_register_aliases")
+    if any(arg.alias_kind == "incoming_arg" for arg in arguments):
+        coverage.append("incoming_argument_aliases")
     if any(arg.alias_kind == "frame_slot" for arg in arguments):
         coverage.append("simple_spill_reload_aliases")
     return coverage
