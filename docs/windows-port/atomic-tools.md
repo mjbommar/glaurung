@@ -121,7 +121,9 @@ sit below full IR/CFG bug-class scanners:
   `windows_project_call_argument_snapshot` evidence for each callsite.
   When `refine_gates` is enabled, it searches same-function project
   call xrefs for compatible ASB gate operations and attaches persisted
-  CFG dominance evidence.
+  CFG dominance evidence. When a caller supplies `source_arg` or
+  `source_arg_index`, it can attach local sink-argument match evidence
+  that ties a known source expression to a concrete sink argument role.
 - `windows_project_callgraph_slice` returns incoming callers and
   outgoing callees around one project function, with exact callsite VAs
   and caller/callee names from persisted `.glaurung` call xrefs.

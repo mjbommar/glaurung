@@ -167,8 +167,8 @@ def _write_project_facts(tmp_path: Path) -> Path:
   binary_filename: driver.sys
   project_path: /projects/driver.glaurung
   fact_sources: [unit_test]
-  fact_coverage: [function_names, call_xrefs]
-  missing_facts: [cfg]
+  fact_coverage: [function_names, call_xrefs, cfg, cfg_dominance]
+  missing_facts: []
   counts:
     function_name_count: 2
     xref_count: 1
@@ -177,9 +177,9 @@ def _write_project_facts(tmp_path: Path) -> Path:
     data_write_xref_count: 0
     data_label_count: 0
     function_prototype_count: 0
-    basic_block_count: 0
-    cfg_edge_count: 0
-    cfg_dominance_count: 0
+    basic_block_count: 3
+    cfg_edge_count: 2
+    cfg_dominance_count: 3
     cfg_branch_fact_count: 0
 """,
         encoding="utf-8",
@@ -239,6 +239,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
             build="unit-test",
             attacker_class="local_unprivileged",
             source_role="buffer",
+            source_arg="rsi",
             refine_gates=True,
             gates_path=str(_write_gates(tmp_path)),
             sinks_path=str(_write_sinks(tmp_path)),
@@ -255,6 +256,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert result.scanned_callsite_count == 2
     assert result.argument_snapshot_count == 1
     assert result.gate_refinement_count == 1
+    assert result.source_value_match_count == 1
     packet = result.packets[0]
     assert packet.binary == "driver.sys"
     assert packet.entrypoint == "DriverDispatch"
@@ -262,7 +264,13 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     assert packet.sink_kind == "copy"
     assert packet.gate_status == "dominated"
     assert packet.required_gates == ["destination_range_valid", "byte_count_bounded"]
-    assert packet.required_project_facts == ["function_names", "call_xrefs"]
+    assert packet.source_arg == "rsi"
+    assert packet.required_project_facts == [
+        "function_names",
+        "call_xrefs",
+        "cfg",
+        "cfg_dominance",
+    ]
     assert packet.project_facts is not None
     assert packet.project_facts.counts["call_xref_count"] == 1
     assert packet.ghidra_delta is not None
@@ -275,6 +283,14 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
         for evidence in packet.evidence
     )
     assert any(evidence.source == "windows_cfg_dominance" for evidence in packet.evidence)
+    value_evidence = [
+        evidence
+        for evidence in packet.evidence
+        if evidence.source == "windows_project_sink_argument_match"
+    ]
+    assert len(value_evidence) == 1
+    assert "source buffer rsi matches sink arg1" in value_evidence[0].summary
+    assert "source_buffer" in value_evidence[0].summary
     snapshot_evidence = [
         evidence
         for evidence in packet.evidence

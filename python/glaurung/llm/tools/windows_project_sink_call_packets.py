@@ -8,7 +8,11 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
-from .windows_cfg_dominance import WindowsCfgDominanceResult, WindowsCfgDominanceTool, WindowsCfgDominanceArgs
+from .windows_cfg_dominance import (
+    WindowsCfgDominanceArgs,
+    WindowsCfgDominanceResult,
+    WindowsCfgDominanceTool,
+)
 from .windows_check_gate_to_sink import (
     _gate_record,
     _gates_by_symbol,
@@ -58,6 +62,13 @@ class WindowsProjectSinkCallPacketsArgs(BaseModel):
     source_arg: str | None = Field(
         None,
         description="Optional source argument/expression if already known.",
+    )
+    source_arg_index: int | None = Field(
+        None,
+        description=(
+            "Optional sink call argument index expected to carry the source value. "
+            "Used only as local value-equivalence evidence."
+        ),
     )
     binary_id: int | None = Field(None, description="Optional project binary_id filter.")
     function_va: int | None = Field(
@@ -124,6 +135,7 @@ class WindowsProjectSinkCallPacketsResult(BaseModel):
     scanned_callsite_count: int
     argument_snapshot_count: int
     gate_refinement_count: int
+    source_value_match_count: int
     packets: list[WindowsReviewPacket]
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
@@ -170,6 +182,7 @@ class WindowsProjectSinkCallPacketsTool(
         packets: list[WindowsReviewPacket] = []
         argument_snapshot_count = 0
         gate_refinement_count = 0
+        source_value_match_count = 0
         for callsite in callsites.callsites:
             if callsite.operation is None:
                 continue
@@ -181,8 +194,19 @@ class WindowsProjectSinkCallPacketsTool(
             gate_refinement = _refine_gate(ctx, kb, args, callsite)
             if gate_refinement is not None:
                 gate_refinement_count += 1
+            source_match = _source_value_match(args, callsite, snapshot_args)
+            if source_match is not None:
+                source_value_match_count += 1
             packets.append(
-                _emit_packet(ctx, kb, args, callsite, snapshot_args, gate_refinement)
+                _emit_packet(
+                    ctx,
+                    kb,
+                    args,
+                    callsite,
+                    snapshot_args,
+                    gate_refinement,
+                    source_match,
+                )
             )
             if len(packets) >= args.max_packets:
                 break
@@ -202,6 +226,7 @@ class WindowsProjectSinkCallPacketsTool(
                         "scanned_callsite_count": callsites.scanned_call_count,
                         "argument_snapshot_count": argument_snapshot_count,
                         "gate_refinement_count": gate_refinement_count,
+                        "source_value_match_count": source_value_match_count,
                     },
                 )
             )
@@ -216,6 +241,7 @@ class WindowsProjectSinkCallPacketsTool(
             scanned_callsite_count=callsites.scanned_call_count,
             argument_snapshot_count=argument_snapshot_count,
             gate_refinement_count=gate_refinement_count,
+            source_value_match_count=source_value_match_count,
             packets=packets,
             evidence_node_id=evidence_node_id,
             notes=[
@@ -231,6 +257,7 @@ def _emit_packet(
     callsite: ProjectCallsiteFact,
     snapshot_args: list[ProjectCallArgumentFact],
     gate_refinement: "_GateRefinement | None",
+    source_match: "_SourceValueMatch | None",
 ) -> WindowsReviewPacket:
     assert callsite.operation is not None
     sink_symbol = (
@@ -296,6 +323,18 @@ def _emit_packet(
                 ],
             )
         )
+    if source_match is not None:
+        evidence.append(
+            WindowsReviewEvidence(
+                source="windows_project_sink_argument_match",
+                summary=source_match.summary,
+                provenance=[
+                    "windows_project_call_argument_snapshot",
+                    "asb_pe_sink_metadata",
+                    "local_value_equivalence",
+                ],
+            )
+        )
     result = WindowsEmitReviewPacketTool().run(
         ctx,
         kb,
@@ -306,7 +345,7 @@ def _emit_packet(
             entrypoint=entrypoint,
             attacker_class=args.attacker_class,
             source_role=args.source_role,
-            source_arg=args.source_arg,
+            source_arg=args.source_arg or (source_match.source_arg if source_match else None),
             sink_symbol=sink_symbol,
             sink_kind=callsite.operation.sink_kind,
             required_gates=callsite.operation.required_gates,
@@ -323,7 +362,7 @@ def _emit_packet(
             ],
             evidence=evidence,
             provenance=["project_sink_call_scan"],
-            required_project_facts=args.required_project_facts,
+            required_project_facts=_required_project_facts(args),
             auto_join_manifest_context=True,
             project_facts_path=args.project_facts_path,
             ghidra_delta_path=args.ghidra_delta_path,
@@ -344,6 +383,33 @@ def _first_arg_role(callsite: ProjectCallsiteFact) -> tuple[int | None, str | No
         return None, None
     role = callsite.operation.arg_roles[0]
     return role.index, role.role
+
+
+def _required_project_facts(args: WindowsProjectSinkCallPacketsArgs) -> list[str]:
+    facts = list(args.required_project_facts)
+    if args.refine_gates:
+        facts.extend(["cfg", "cfg_dominance"])
+    return _dedupe(facts)
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+@dataclass(frozen=True)
+class _SourceValueMatch:
+    source_arg: str
+    sink_arg_index: int
+    sink_arg_role: str | None
+    expression: str | None
+    summary: str
 
 
 @dataclass(frozen=True)
@@ -448,6 +514,81 @@ def _packet_gate_status(status: str) -> GateStatus:
     if status == "same_block":
         return "gate_same_line"
     return "unknown"
+
+
+def _source_value_match(
+    args: WindowsProjectSinkCallPacketsArgs,
+    callsite: ProjectCallsiteFact,
+    snapshot_args: list[ProjectCallArgumentFact],
+) -> _SourceValueMatch | None:
+    if not snapshot_args:
+        return None
+    if args.source_arg_index is None and not args.source_arg:
+        return None
+
+    for argument in snapshot_args:
+        if args.source_arg_index is not None and argument.index == args.source_arg_index:
+            return _source_match_from_argument(args, callsite, argument, f"arg{argument.index}")
+        if args.source_arg and _argument_matches_source(args.source_arg, argument):
+            return _source_match_from_argument(args, callsite, argument, args.source_arg)
+    return None
+
+
+def _source_match_from_argument(
+    args: WindowsProjectSinkCallPacketsArgs,
+    callsite: ProjectCallsiteFact,
+    argument: ProjectCallArgumentFact,
+    source_arg: str,
+) -> _SourceValueMatch:
+    role = _operation_arg_role(callsite, argument.index)
+    expression = argument.expression
+    summary = (
+        f"source {args.source_role} {source_arg} matches sink arg"
+        f"{argument.index}"
+    )
+    if role:
+        summary += f" ({role})"
+    if expression:
+        summary += f" expression {expression}"
+    return _SourceValueMatch(
+        source_arg=source_arg,
+        sink_arg_index=argument.index,
+        sink_arg_role=role,
+        expression=expression,
+        summary=summary,
+    )
+
+
+def _argument_matches_source(
+    source_arg: str,
+    argument: ProjectCallArgumentFact,
+) -> bool:
+    needle = _norm(source_arg)
+    if needle == f"arg{argument.index}":
+        return True
+    values = [
+        argument.expression,
+        argument.register_name,
+        argument.role,
+        argument.source_text,
+    ]
+    return any(_norm(value) == needle for value in values if value)
+
+
+def _operation_arg_role(
+    callsite: ProjectCallsiteFact,
+    index: int,
+) -> str | None:
+    if callsite.operation is None:
+        return None
+    for role in callsite.operation.arg_roles:
+        if role.index == index:
+            return role.role
+    return None
+
+
+def _norm(value: str) -> str:
+    return value.strip().lower().replace(" ", "")
 
 
 def _snapshot_arguments(
