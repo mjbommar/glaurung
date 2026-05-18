@@ -36,6 +36,11 @@ from .windows_project_callsite_facts import (
     WindowsProjectCallsiteFactsArgs,
     WindowsProjectCallsiteFactsTool,
 )
+from .windows_project_cfg_path_query import (
+    WindowsProjectCfgPathQueryArgs,
+    WindowsProjectCfgPathQueryResult,
+    WindowsProjectCfgPathQueryTool,
+)
 from .windows_project_onehop_argument_flow import (
     WindowsProjectOnehopArgumentFlow,
     WindowsProjectOnehopArgumentFlowArgs,
@@ -71,6 +76,19 @@ class WindowsProjectOnehopFlowPacketsArgs(BaseModel):
             "If true, look for compatible gate callsites inside the helper and "
             "attach persisted-CFG dominance evidence before the helper-local sink."
         ),
+    )
+    attach_helper_gate_paths: bool = Field(
+        False,
+        description=(
+            "If true with refine_helper_gates, attach compact persisted CFG "
+            "entry/gate-to-sink path evidence for the helper-local gate."
+        ),
+    )
+    max_helper_gate_path_blocks: int = Field(
+        64,
+        ge=1,
+        le=512,
+        description="Maximum helper CFG block ids to include in gate path evidence.",
     )
     binary_id: int | None = Field(None, description="Optional project binary_id filter.")
     caller_function_va: int | None = Field(
@@ -140,6 +158,7 @@ class WindowsProjectOnehopFlowPacketsResult(BaseModel):
     scanned_chain_count: int
     onehop_argument_flow_count: int
     helper_gate_refinement_count: int
+    helper_cfg_path_count: int
     packets: list[WindowsReviewPacket]
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
@@ -203,6 +222,11 @@ class WindowsProjectOnehopFlowPacketsTool(
         helper_gate_refinement_count = sum(
             1 for _flow, refinement in packet_items if refinement is not None
         )
+        helper_cfg_path_count = sum(
+            1
+            for _flow, refinement in packet_items
+            if refinement is not None and refinement.cfg_path is not None
+        )
 
         evidence_node_id = None
         if args.add_to_kb:
@@ -217,6 +241,7 @@ class WindowsProjectOnehopFlowPacketsTool(
                         "scanned_chain_count": flow_result.scanned_chain_count,
                         "onehop_argument_flow_count": flow_result.flow_count,
                         "helper_gate_refinement_count": helper_gate_refinement_count,
+                        "helper_cfg_path_count": helper_cfg_path_count,
                     },
                 )
             )
@@ -231,6 +256,7 @@ class WindowsProjectOnehopFlowPacketsTool(
             scanned_chain_count=flow_result.scanned_chain_count,
             onehop_argument_flow_count=flow_result.flow_count,
             helper_gate_refinement_count=helper_gate_refinement_count,
+            helper_cfg_path_count=helper_cfg_path_count,
             packets=packets,
             evidence_node_id=evidence_node_id,
             notes=[
@@ -368,6 +394,7 @@ class _HelperGateRefinement:
     summary: str
     provenance: list[str]
     dominance: WindowsCfgDominanceResult
+    cfg_path: WindowsProjectCfgPathQueryResult | None
 
 
 def _refine_helper_gate(
@@ -412,6 +439,13 @@ def _refine_helper_gate(
                 continue
             matched = matched_required_gates(gate.proves, flow.required_gates)
             missing = missing_required_gates(gate.proves, flow.required_gates)
+            cfg_path = _cfg_path_query(
+                ctx,
+                kb,
+                args,
+                flow,
+                candidate.callsite_va,
+            )
             return _HelperGateRefinement(
                 gate_symbol=name,
                 gate_va=candidate.callsite_va,
@@ -433,6 +467,7 @@ def _refine_helper_gate(
                 ),
                 provenance=dominance.provenance,
                 dominance=dominance,
+                cfg_path=cfg_path,
             )
     return None
 
@@ -453,6 +488,32 @@ def _dominance(
                 function_va=flow.helper_va,
                 gate_va=gate_va,
                 sink_va=flow.sink_callsite_va,
+                add_to_kb=False,
+            ),
+        )
+    except Exception:
+        return None
+
+
+def _cfg_path_query(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsProjectOnehopFlowPacketsArgs,
+    flow: WindowsProjectOnehopArgumentFlow,
+    gate_va: int,
+) -> WindowsProjectCfgPathQueryResult | None:
+    if not args.attach_helper_gate_paths:
+        return None
+    try:
+        return WindowsProjectCfgPathQueryTool().run(
+            ctx,
+            kb,
+            WindowsProjectCfgPathQueryArgs(
+                project_path=args.project_path,
+                function_va=flow.helper_va,
+                gate_va=gate_va,
+                sink_va=flow.sink_callsite_va,
+                max_path_blocks=args.max_helper_gate_path_blocks,
                 add_to_kb=False,
             ),
         )
@@ -523,7 +584,37 @@ def _gate_evidence(
                 "asb_pe_sink_metadata",
             ],
         ),
+        *_cfg_path_evidence(refinement),
     ]
+
+
+def _cfg_path_evidence(
+    refinement: _HelperGateRefinement,
+) -> list[WindowsReviewEvidence]:
+    if refinement.cfg_path is None:
+        return []
+    return [
+        WindowsReviewEvidence(
+            source="windows_project_onehop_helper_cfg_path",
+            summary=_cfg_path_summary(refinement.cfg_path),
+            provenance=[
+                "windows_project_onehop_flow_packets",
+                "windows_project_cfg_path_query",
+                "persisted_project_cfg_sql",
+            ],
+        )
+    ]
+
+
+def _cfg_path_summary(result: WindowsProjectCfgPathQueryResult) -> str:
+    parts = [f"status={result.status}", f"reason={result.reason}"]
+    if result.entry_to_sink_path_block_ids:
+        parts.append("entry_path=" + "->".join(result.entry_to_sink_path_block_ids))
+    if result.gate_to_sink_path_block_ids:
+        parts.append("gate_path=" + "->".join(result.gate_to_sink_path_block_ids))
+    if result.bypass_path_block_ids:
+        parts.append("bypass_path=" + "->".join(result.bypass_path_block_ids))
+    return "; ".join(parts)
 
 
 def _gate_requirement_summary(refinement: _HelperGateRefinement) -> str:
@@ -556,6 +647,8 @@ def _required_project_facts(args: WindowsProjectOnehopFlowPacketsArgs) -> list[s
     facts = list(args.required_project_facts)
     if args.refine_helper_gates:
         facts.extend(["cfg", "cfg_dominance"])
+    if args.attach_helper_gate_paths:
+        facts.append("cfg_paths")
     return list(dict.fromkeys(facts))
 
 

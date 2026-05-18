@@ -266,6 +266,7 @@ def test_windows_project_onehop_flow_packets_emit_review_packet(
     assert result.packet_count == 1
     assert result.scanned_chain_count == 1
     assert result.onehop_argument_flow_count == 1
+    assert result.helper_cfg_path_count == 0
     packet = result.packets[0]
     assert packet.binary == "driver.sys"
     assert packet.entrypoint == "DriverDispatch"
@@ -354,6 +355,7 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
             sinks_path=str(_write_sinks(tmp_path)),
             gates_path=str(_write_gates(tmp_path)),
             refine_helper_gates=True,
+            attach_helper_gate_paths=True,
             project_facts_path=str(_write_project_facts(tmp_path)),
             ghidra_delta_path=str(_write_ghidra_delta(tmp_path)),
             manifest_target_id="driver",
@@ -364,6 +366,7 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
 
     assert result.packet_count == 1
     assert result.helper_gate_refinement_count == 1
+    assert result.helper_cfg_path_count == 1
     packet = result.packets[0]
     assert packet.proven_gates == ["destination_range_valid"]
     assert packet.gate_proof_sources == {
@@ -376,8 +379,12 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
         "call_xrefs",
         "cfg",
         "cfg_dominance",
+        "cfg_paths",
     ]
-    assert any(step.symbol == "ProbeForWrite" and step.role == "gate" for step in packet.path)
+    assert any(
+        step.symbol == "ProbeForWrite" and step.role == "gate"
+        for step in packet.path
+    )
     assert any(
         evidence.source == "windows_project_onehop_helper_gate_dominance"
         and "ProbeForWrite@0x2050" in evidence.summary
@@ -386,6 +393,12 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
     assert any(
         evidence.source == "windows_project_onehop_helper_gate_requirement_coverage"
         and "matched required gates [destination_range_valid]" in evidence.summary
+        for evidence in packet.evidence
+    )
+    assert any(
+        evidence.source == "windows_project_onehop_helper_cfg_path"
+        and "entry_path=entry->gate->sink" in evidence.summary
+        and "gate_path=gate->sink" in evidence.summary
         for evidence in packet.evidence
     )
 
