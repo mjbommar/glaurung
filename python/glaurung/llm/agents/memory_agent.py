@@ -95,6 +95,9 @@ from ..tools.windows_build_corpus import (
 from ..tools.windows_project_fact_summary import (
     build_tool as build_windows_project_fact_summary,
 )
+from ..tools.windows_project_fact_manifest import (
+    build_tool as build_windows_project_fact_manifest,
+)
 from ..tools.windows_bootstrap_project_facts import (
     build_tool as build_windows_bootstrap_project_facts,
 )
@@ -915,6 +918,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_bootstrap_project_facts())
     )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_project_fact_manifest()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_project_fact_summary()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_callsite_facts())
