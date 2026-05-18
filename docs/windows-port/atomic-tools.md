@@ -135,6 +135,12 @@ sit below full IR/CFG bug-class scanners:
   sample packet ids. This gives rules an operation-level source view
   while still distinguishing metadata-only inference from local
   source/sink value matches and full attacker reachability.
+- `windows_project_operation_risk_summary` joins operation-level gate
+  and source summaries into ranked static review groups. It scores by
+  sink kind, packet count, missing gate semantics, partial gate proof,
+  and source-refinement strength, while preserving explicit blockers
+  for end-to-end reachability, path-sensitive value flow, and runtime
+  validation. This is triage ranking, not finding promotion.
 - `windows_project_sink_call_packets` scans persisted project call xrefs
   for ASB sink operations and emits manifest-backed review packets from
   those exact callsites. This is the first broad project-scan packet
