@@ -70,9 +70,11 @@ sit below full IR/CFG bug-class scanners:
   roots.
 - `windows_bootstrap_project_facts` creates or updates a `.glaurung`
   project for one Windows PE by composing callgraph indexing,
-  code-to-data xref indexing, and optional PDB fact import. It returns
-  per-step counts, elapsed time, coverage, and remaining missing
-  capabilities so agents can prepare a project before running rules.
+  code-to-data xref indexing, optional PDB fact import, and a
+  conservative PE `E8 rel32` direct-call fallback when generic
+  callgraph recovery produces no call edges. It returns per-step
+  counts, elapsed time, coverage, and remaining missing capabilities
+  so agents can prepare a project before running rules.
 - `windows_project_fact_summary` inspects a `.glaurung` SQLite project
   read-only and reports available PE project facts: function names,
   call/data xrefs, prototypes, stack variables, comments, and CFG table

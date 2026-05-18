@@ -7,7 +7,7 @@ from typing import Callable
 from pydantic import BaseModel, Field
 
 from ..context import MemoryContext
-from ..kb import type_db, xref_db
+from ..kb import pe_direct_calls, type_db, xref_db
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.persistent import PersistentKnowledgeBase
 from ..kb.store import KnowledgeBase
@@ -138,6 +138,14 @@ class WindowsBootstrapProjectFactsTool(
                 steps.append(step)
             else:
                 steps.append(ProjectBootstrapStep(name="import_pdb_facts", ran=False, ok=True))
+
+            if args.index_callgraph and not _has_call_xref_facts(steps):
+                steps.append(
+                    _run_count_step(
+                        "index_pe_direct_calls",
+                        lambda: pe_direct_calls.index_pe_direct_calls(project, pe_path),
+                    )
+                )
         finally:
             project.close()
 
@@ -261,7 +269,9 @@ def _fact_coverage(
 ) -> list[str]:
     coverage: list[str] = []
     by_name = {step.name: step for step in steps}
-    if _step_has_facts(by_name.get("index_callgraph")):
+    if _step_has_facts(by_name.get("index_callgraph")) or _step_has_facts(
+        by_name.get("index_pe_direct_calls")
+    ):
         coverage.append("call_xrefs")
     if _step_has_facts(by_name.get("index_data_xrefs")):
         coverage.append("data_xrefs")
@@ -284,7 +294,10 @@ def _missing_capabilities(
 ) -> list[str]:
     missing: list[str] = []
     by_name = {step.name: step for step in steps}
-    if args.index_callgraph and not _step_has_facts(by_name.get("index_callgraph")):
+    if args.index_callgraph and not (
+        _step_has_facts(by_name.get("index_callgraph"))
+        or _step_has_facts(by_name.get("index_pe_direct_calls"))
+    ):
         missing.append("call_xrefs")
     if args.index_data_xrefs and not _step_has_facts(by_name.get("index_data_xrefs")):
         missing.append("data_xrefs")
@@ -306,6 +319,14 @@ def _missing_capabilities(
 
 def _step_has_facts(step: ProjectBootstrapStep | None) -> bool:
     return bool(step and step.ran and step.ok and step.count > 0)
+
+
+def _has_call_xref_facts(steps: list[ProjectBootstrapStep]) -> bool:
+    return any(
+        step.name in {"index_callgraph", "index_pe_direct_calls"}
+        and _step_has_facts(step)
+        for step in steps
+    )
 
 
 def build_tool() -> MemoryTool[

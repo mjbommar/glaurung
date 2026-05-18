@@ -148,6 +148,7 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
         ("index_callgraph", True, 0),
         ("index_data_xrefs", True, 3),
         ("import_pdb_facts", True, 0),
+        ("index_pe_direct_calls", True, 0),
     ]
     assert "call_xrefs" not in result.fact_coverage
     assert "data_xrefs" in result.fact_coverage
