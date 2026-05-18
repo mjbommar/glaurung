@@ -146,6 +146,7 @@ _SIGNAL_ORDER: tuple[str, ...] = (
     "resource-size-allocation-flow",
     "resource-size-buffer-flow",
     "dynamic-api-resolution",
+    "dynamic-api-resolution-flow",
     "registry-write",
     "resource-extraction",
     "copy-or-format-sink",
@@ -2017,6 +2018,7 @@ def _flow_hints_from_api_calls(api_calls: list[dict[str, Any]]) -> list[dict[str
     hints.extend(_file_read_length_field_flow_hints(api_calls))
     hints.extend(_resource_size_flow_hints(api_calls))
     hints.extend(_registry_query_size_flow_hints(api_calls))
+    hints.extend(_dynamic_api_resolution_flow_hints(api_calls))
     return hints[:16]
 
 
@@ -2220,6 +2222,49 @@ def _registry_query_size_flow_hints(
     return hints
 
 
+def _dynamic_api_resolution_flow_hints(
+    api_calls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+    loaded_modules: dict[str, dict[str, Any]] = {}
+    seen: set[tuple[str, str]] = set()
+    for call in api_calls:
+        assigned_to = str(call.get("assigned_to", ""))
+        if assigned_to and _is_loadlibrary_call(call):
+            loaded_modules[_normalize_expr(assigned_to)] = call
+            continue
+        if not _is_getprocaddress_call(call):
+            continue
+        module_arg = _first_arg_with_role(call, "handle")
+        proc_arg = _first_arg_with_role(call, "name")
+        if module_arg is None:
+            continue
+        module_expr = _normalize_expr(str(module_arg.get("expr", "")))
+        load_call = loaded_modules.get(module_expr)
+        if load_call is None:
+            continue
+        proc_expr = str(proc_arg.get("expr", "")) if proc_arg is not None else ""
+        key = (module_expr, proc_expr)
+        if key in seen:
+            continue
+        seen.add(key)
+        evidence = [
+            f"{load_call.get('name', 'LoadLibrary')}.return="
+            f"{load_call.get('assigned_to')}",
+            _format_role_evidence(call, module_arg),
+        ]
+        if proc_arg is not None:
+            evidence.append(_format_role_evidence(call, proc_arg))
+        hints.append(
+            {
+                "kind": "dynamic-api-resolution-flow",
+                "summary": "LoadLibrary result is used for GetProcAddress dispatch",
+                "evidence": evidence,
+            }
+        )
+    return hints
+
+
 def _find_prior_registry_size_query(
     prior_calls: list[dict[str, Any]],
     normalized_size_expr: str,
@@ -2268,6 +2313,14 @@ def _is_sizeofresource_call(call: dict[str, Any]) -> bool:
 
 def _is_regqueryvalue_call(call: dict[str, Any]) -> bool:
     return _api_stem(str(call.get("name", ""))).startswith("regqueryvalue")
+
+
+def _is_loadlibrary_call(call: dict[str, Any]) -> bool:
+    return _api_stem(str(call.get("name", ""))).startswith("loadlibrary")
+
+
+def _is_getprocaddress_call(call: dict[str, Any]) -> bool:
+    return _api_stem(str(call.get("name", ""))).startswith("getprocaddress")
 
 
 def _is_small_fixed_read_length(arg: dict[str, Any]) -> bool:

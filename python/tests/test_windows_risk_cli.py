@@ -560,6 +560,58 @@ def test_windows_risk_network_bucket_avoids_prefix_false_positives() -> None:
     ]
 
 
+def test_windows_risk_detects_dynamic_api_dispatch_flow() -> None:
+    from glaurung.cli.commands.windows_risk import (
+        _build_function_summary,
+        _extract_api_calls,
+        _flow_hints_from_api_calls,
+    )
+
+    api_calls = _extract_api_calls(
+        (
+            "module = LoadLibraryW(0x180050000); "
+            "proc = GetProcAddress(module, 0x180050100);"
+        ),
+        ["LoadLibraryW", "GetProcAddress"],
+    )
+    flow_hints = _flow_hints_from_api_calls(api_calls)
+
+    assert flow_hints == [
+        {
+            "kind": "dynamic-api-resolution-flow",
+            "summary": "LoadLibrary result is used for GetProcAddress dispatch",
+            "evidence": [
+                "LoadLibraryW.return=module",
+                "GetProcAddress.hModule=module",
+                "GetProcAddress.lpProcName=0x180050100",
+            ],
+        }
+    ]
+    summary = _build_function_summary(
+        {
+            "api_buckets": {"dynamic_loading": ["GetProcAddress", "LoadLibraryW"]},
+            "patterns": ["dynamic-api-resolution"],
+            "flow_hints": flow_hints,
+            "metadata_roles": [],
+            "strings": [],
+            "calls": [],
+            "call_count": 0,
+            "imports": ["GetProcAddress", "LoadLibraryW"],
+            "api_calls": api_calls,
+        }
+    )
+    assert summary["risk_signals"] == [
+        "dynamic-api-resolution",
+        "dynamic-api-resolution-flow",
+    ]
+    assert summary["argument_roles"]["handle"][0] == {
+        "api": "GetProcAddress",
+        "param": "hModule",
+        "expr": "module",
+        "type": "HMODULE",
+    }
+
+
 def test_windows_risk_plain_evidence_formats_structured_metadata() -> None:
     from glaurung.cli.commands.windows_risk import _format_evidence_item
 
