@@ -101,6 +101,21 @@ CREATE TABLE cfg_edges (
     src_block_id TEXT,
     dst_block_id TEXT
 );
+CREATE TABLE cfg_branch_facts (
+    binary_id INTEGER,
+    function_va INTEGER,
+    block_id TEXT,
+    branch_va INTEGER,
+    branch_mnemonic TEXT,
+    branch_operands_json TEXT,
+    compare_va INTEGER,
+    compare_mnemonic TEXT,
+    compare_operands_json TEXT,
+    condition_kind TEXT,
+    target_block_id TEXT,
+    fallthrough_block_id TEXT,
+    indexed_at INTEGER
+);
 """
         )
         conn.executemany(
@@ -117,6 +132,24 @@ CREATE TABLE cfg_edges (
                 (0x2000, "entry", "gate"),
                 (0x2000, "gate", "sink"),
             ],
+        )
+        conn.execute(
+            "INSERT INTO cfg_branch_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                0x2000,
+                "entry",
+                0x2040,
+                "jne",
+                '["0x2050"]',
+                0x203c,
+                "test",
+                '["rdx", "rdx"]',
+                "not_equal",
+                "gate",
+                "reject",
+                0,
+            ),
         )
         conn.commit()
     finally:
@@ -171,7 +204,7 @@ def _write_project_facts(tmp_path: Path) -> Path:
   binary_filename: driver.sys
   project_path: /projects/driver.glaurung
   fact_sources: [unit_test]
-  fact_coverage: [function_names, call_xrefs, cfg, cfg_dominance]
+  fact_coverage: [function_names, call_xrefs, cfg, cfg_dominance, branch_conditions]
   missing_facts: []
   counts:
     function_name_count: 4
@@ -184,7 +217,7 @@ def _write_project_facts(tmp_path: Path) -> Path:
     basic_block_count: 3
     cfg_edge_count: 2
     cfg_dominance_count: 3
-    cfg_branch_fact_count: 0
+    cfg_branch_fact_count: 1
 """,
         encoding="utf-8",
     )
@@ -356,6 +389,7 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
             gates_path=str(_write_gates(tmp_path)),
             refine_helper_gates=True,
             attach_helper_gate_paths=True,
+            attach_helper_gate_predicates=True,
             project_facts_path=str(_write_project_facts(tmp_path)),
             ghidra_delta_path=str(_write_ghidra_delta(tmp_path)),
             manifest_target_id="driver",
@@ -367,6 +401,7 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
     assert result.packet_count == 1
     assert result.helper_gate_refinement_count == 1
     assert result.helper_cfg_path_count == 1
+    assert result.helper_gate_predicate_count == 1
     packet = result.packets[0]
     assert packet.proven_gates == ["destination_range_valid"]
     assert packet.gate_proof_sources == {
@@ -380,6 +415,7 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
         "cfg",
         "cfg_dominance",
         "cfg_paths",
+        "branch_conditions",
     ]
     assert any(
         step.symbol == "ProbeForWrite" and step.role == "gate"
@@ -399,6 +435,11 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
         evidence.source == "windows_project_onehop_helper_cfg_path"
         and "entry_path=entry->gate->sink" in evidence.summary
         and "gate_path=gate->sink" in evidence.summary
+        for evidence in packet.evidence
+    )
+    assert any(
+        evidence.source == "windows_project_onehop_helper_branch_condition_facts"
+        and "entry@0x2040 jne: rdx != 0" in evidence.summary
         for evidence in packet.evidence
     )
 

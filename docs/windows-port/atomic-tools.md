@@ -172,7 +172,9 @@ sit below full IR/CFG bug-class scanners:
   compatible helper-local gate callsites and persisted CFG dominance
   evidence before the helper-local sink, while preserving any unproven
   required-gate blockers. It can also attach compact helper
-  entry/gate-to-sink CFG path samples from persisted project CFG facts.
+  entry/gate-to-sink CFG path samples from persisted project CFG facts
+  and nearby helper-gate branch-condition facts when those predicates
+  have been persisted.
 - `windows_project_call_argument_snapshot` uses a project callsite VA
   plus nearby disassembly to recover a conservative Windows x64
   RCX/RDX/R8/R9 argument snapshot plus obvious stack argument stores

@@ -36,6 +36,11 @@ from .windows_project_callsite_facts import (
     WindowsProjectCallsiteFactsArgs,
     WindowsProjectCallsiteFactsTool,
 )
+from .windows_project_branch_condition_facts import (
+    ProjectBranchConditionFact,
+    WindowsProjectBranchConditionFactsArgs,
+    WindowsProjectBranchConditionFactsTool,
+)
 from .windows_project_cfg_path_query import (
     WindowsProjectCfgPathQueryArgs,
     WindowsProjectCfgPathQueryResult,
@@ -83,6 +88,19 @@ class WindowsProjectOnehopFlowPacketsArgs(BaseModel):
             "If true with refine_helper_gates, attach compact persisted CFG "
             "entry/gate-to-sink path evidence for the helper-local gate."
         ),
+    )
+    attach_helper_gate_predicates: bool = Field(
+        False,
+        description=(
+            "If true with refine_helper_gates, attach nearby persisted branch "
+            "condition facts for the helper-local gate path."
+        ),
+    )
+    max_helper_gate_predicates: int = Field(
+        4,
+        ge=0,
+        le=32,
+        description="Maximum helper branch-condition facts to attach per packet.",
     )
     max_helper_gate_path_blocks: int = Field(
         64,
@@ -159,6 +177,7 @@ class WindowsProjectOnehopFlowPacketsResult(BaseModel):
     onehop_argument_flow_count: int
     helper_gate_refinement_count: int
     helper_cfg_path_count: int
+    helper_gate_predicate_count: int
     packets: list[WindowsReviewPacket]
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
@@ -227,6 +246,11 @@ class WindowsProjectOnehopFlowPacketsTool(
             for _flow, refinement in packet_items
             if refinement is not None and refinement.cfg_path is not None
         )
+        helper_gate_predicate_count = sum(
+            len(refinement.predicates)
+            for _flow, refinement in packet_items
+            if refinement is not None
+        )
 
         evidence_node_id = None
         if args.add_to_kb:
@@ -242,6 +266,7 @@ class WindowsProjectOnehopFlowPacketsTool(
                         "onehop_argument_flow_count": flow_result.flow_count,
                         "helper_gate_refinement_count": helper_gate_refinement_count,
                         "helper_cfg_path_count": helper_cfg_path_count,
+                        "helper_gate_predicate_count": helper_gate_predicate_count,
                     },
                 )
             )
@@ -257,6 +282,7 @@ class WindowsProjectOnehopFlowPacketsTool(
             onehop_argument_flow_count=flow_result.flow_count,
             helper_gate_refinement_count=helper_gate_refinement_count,
             helper_cfg_path_count=helper_cfg_path_count,
+            helper_gate_predicate_count=helper_gate_predicate_count,
             packets=packets,
             evidence_node_id=evidence_node_id,
             notes=[
@@ -395,6 +421,7 @@ class _HelperGateRefinement:
     provenance: list[str]
     dominance: WindowsCfgDominanceResult
     cfg_path: WindowsProjectCfgPathQueryResult | None
+    predicates: list[ProjectBranchConditionFact]
 
 
 def _refine_helper_gate(
@@ -446,6 +473,15 @@ def _refine_helper_gate(
                 flow,
                 candidate.callsite_va,
             )
+            predicates = _gate_predicates(
+                ctx,
+                kb,
+                args,
+                flow,
+                candidate.callsite_va,
+                dominance,
+                cfg_path,
+            )
             return _HelperGateRefinement(
                 gate_symbol=name,
                 gate_va=candidate.callsite_va,
@@ -468,6 +504,7 @@ def _refine_helper_gate(
                 provenance=dominance.provenance,
                 dominance=dominance,
                 cfg_path=cfg_path,
+                predicates=predicates,
             )
     return None
 
@@ -519,6 +556,42 @@ def _cfg_path_query(
         )
     except Exception:
         return None
+
+
+def _gate_predicates(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsProjectOnehopFlowPacketsArgs,
+    flow: WindowsProjectOnehopArgumentFlow,
+    gate_va: int,
+    dominance: WindowsCfgDominanceResult,
+    cfg_path: WindowsProjectCfgPathQueryResult | None,
+) -> list[ProjectBranchConditionFact]:
+    if not args.attach_helper_gate_predicates or args.max_helper_gate_predicates == 0:
+        return []
+    path_block_ids = cfg_path.entry_to_sink_path_block_ids if cfg_path else []
+    try:
+        result = WindowsProjectBranchConditionFactsTool().run(
+            ctx,
+            kb,
+            WindowsProjectBranchConditionFactsArgs(
+                project_path=args.project_path,
+                function_va=flow.helper_va,
+                path_block_ids=path_block_ids,
+                max_rows=128,
+                add_to_kb=False,
+            ),
+        )
+    except Exception:
+        return []
+    if not result.facts:
+        return []
+    return _select_gate_predicates(
+        result.facts,
+        gate_va,
+        dominance,
+        args.max_helper_gate_predicates,
+    )
 
 
 def _gate_compatible(gate: GateRecord, required_gates: list[str]) -> bool:
@@ -585,7 +658,72 @@ def _gate_evidence(
             ],
         ),
         *_cfg_path_evidence(refinement),
+        *_predicate_evidence(refinement),
     ]
+
+
+def _predicate_evidence(
+    refinement: _HelperGateRefinement,
+) -> list[WindowsReviewEvidence]:
+    if not refinement.predicates:
+        return []
+    return [
+        WindowsReviewEvidence(
+            source="windows_project_onehop_helper_branch_condition_facts",
+            summary=_predicate_summary(refinement.predicates),
+            provenance=[
+                "windows_project_onehop_flow_packets",
+                "windows_project_branch_condition_facts",
+                "persisted_project_branch_facts",
+            ],
+        )
+    ]
+
+
+def _select_gate_predicates(
+    facts: list[ProjectBranchConditionFact],
+    gate_va: int,
+    dominance: WindowsCfgDominanceResult,
+    max_count: int,
+) -> list[ProjectBranchConditionFact]:
+    gate_block_id = dominance.gate_block_id
+    entry_block_id = dominance.entry_block_id
+    sink_block_id = dominance.sink_block_id
+
+    def score(fact: ProjectBranchConditionFact) -> tuple[int, int, int, int]:
+        relation = 4
+        if gate_block_id and fact.block_id == gate_block_id:
+            relation = 0
+        elif gate_block_id and (
+            fact.target_block_id == gate_block_id
+            or fact.fallthrough_block_id == gate_block_id
+        ):
+            relation = 1
+        elif entry_block_id and fact.block_id == entry_block_id:
+            relation = 2
+        elif sink_block_id and (
+            fact.target_block_id == sink_block_id
+            or fact.fallthrough_block_id == sink_block_id
+        ):
+            relation = 3
+        direction = 0 if fact.branch_va <= gate_va else 1
+        return (relation, direction, abs(fact.branch_va - gate_va), fact.branch_va)
+
+    ranked = sorted(facts, key=score)
+    useful = [fact for fact in ranked if score(fact)[0] < 4]
+    return (useful or ranked)[:max_count]
+
+
+def _predicate_summary(facts: list[ProjectBranchConditionFact]) -> str:
+    rendered = []
+    for fact in facts:
+        predicate = (
+            fact.target_predicate or fact.fallthrough_predicate or fact.condition_kind
+        )
+        rendered.append(
+            f"{fact.block_id}@0x{fact.branch_va:x} {fact.branch_mnemonic}: {predicate}"
+        )
+    return "nearby helper gate branch predicates: " + "; ".join(rendered)
 
 
 def _cfg_path_evidence(
@@ -649,6 +787,8 @@ def _required_project_facts(args: WindowsProjectOnehopFlowPacketsArgs) -> list[s
         facts.extend(["cfg", "cfg_dominance"])
     if args.attach_helper_gate_paths:
         facts.append("cfg_paths")
+    if args.attach_helper_gate_predicates:
+        facts.append("branch_conditions")
     return list(dict.fromkeys(facts))
 
 
