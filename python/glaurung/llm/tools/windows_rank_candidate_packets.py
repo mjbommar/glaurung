@@ -158,6 +158,12 @@ def _score_packet(packet: WindowsReviewPacket) -> tuple[float, list[str]]:
     if not packet.path:
         score -= 10.0
         reasons.append("no source-to-sink path supplied")
+    if not packet.promotion_preconditions_met:
+        score -= 25.0
+        reasons.append("promotion preconditions are not met")
+    if packet.promotion_blockers:
+        score -= min(20.0, 5.0 * len(packet.promotion_blockers))
+        reasons.append("packet has promotion blockers")
 
     return round(max(0.0, score), 2), reasons
 
@@ -173,7 +179,13 @@ def _validation_ready(packet: WindowsReviewPacket) -> bool:
         "gate_after_sink",
         "unknown",
     }
-    return reachable and gate_concern and bool(packet.path)
+    return (
+        reachable
+        and gate_concern
+        and bool(packet.path)
+        and packet.promotion_preconditions_met
+        and not packet.promotion_blockers
+    )
 
 
 def build_tool() -> MemoryTool[

@@ -131,8 +131,11 @@ def test_windows_emit_review_packet_normalizes_candidate(tmp_path: Path) -> None
     assert packet.diff_context.changed_functions == ["nt!NtExample"]
     assert packet.project_facts is not None
     assert packet.project_facts.counts["call_xref_count"] == 7
+    assert packet.required_project_facts == ["function_names", "call_xrefs"]
     assert packet.ghidra_delta is not None
     assert packet.ghidra_delta.blocking_fact_classes == ["type_layout"]
+    assert packet.promotion_preconditions_met is False
+    assert any("blocking Ghidra-parity gaps" in item for item in packet.promotion_blockers)
     assert "asb_pdb_identity_manifest" in packet.provenance
     assert "asb_component_profile" in packet.provenance
     assert "patch_diff_context" in packet.provenance
@@ -185,7 +188,54 @@ def test_windows_emit_review_packet_keeps_safe_gate_lower_priority(
     assert result.packet.candidate_id == "manual-id"
     assert result.packet.priority == "low"
     assert result.packet.confidence_reason
+    assert result.packet.promotion_preconditions_met is False
+    assert "missing project fact coverage context" in result.packet.promotion_blockers
     assert any("ownership transfer" in q for q in result.packet.false_positive_questions)
+
+
+def test_windows_emit_review_packet_blocks_missing_required_project_facts(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary="driver.sys",
+            entrypoint="Dispatch",
+            attacker_class="local_unprivileged",
+            source_role="buffer",
+            sink_symbol="RtlCopyMemory",
+            sink_kind="copy",
+            gate_status="not_dominated",
+            required_project_facts=["function_names", "call_xrefs", "cfg"],
+            project_facts={
+                "target_id": "driver",
+                "build_label": "unit-test",
+                "project_path": "/projects/driver.glaurung",
+                "fact_coverage": ["function_names"],
+                "missing_facts": ["cfg"],
+                "counts": {"function_name_count": 5, "call_xref_count": 0},
+            },
+            evidence=[
+                {
+                    "source": "windows_cfg_gate_to_sink",
+                    "summary": "gate does not dominate sink",
+                    "provenance": ["cfg", "asb_pe_gate_metadata"],
+                }
+            ],
+        ),
+    )
+
+    packet = result.packet
+    assert packet.required_project_facts == ["function_names", "call_xrefs", "cfg"]
+    assert packet.promotion_preconditions_met is False
+    assert any("missing required project fact coverage" in item for item in packet.promotion_blockers)
+    assert any("required project fact count is zero" in item for item in packet.promotion_blockers)
+    assert "promotion blocked" in packet.confidence_reason
+    assert any("clear promotion blockers" in step for step in packet.next_validation)
 
 
 def test_memory_agent_registers_windows_emit_review_packet() -> None:

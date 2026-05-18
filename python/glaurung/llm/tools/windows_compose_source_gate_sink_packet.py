@@ -77,6 +77,10 @@ class WindowsComposeSourceGateSinkPacketArgs(BaseModel):
     component_profile: WindowsComponentProfileContext | None = None
     diff_context: WindowsDiffContext | None = None
     project_facts: WindowsProjectFactContext | None = None
+    required_project_facts: list[str] = Field(
+        default_factory=list,
+        description="Project fact classes required before packet promotion.",
+    )
     ghidra_delta: WindowsGhidraDeltaContext | None = None
     add_to_kb: bool = Field(
         False,
@@ -248,6 +252,7 @@ def _emit_packet(ctx, kb, args, operand, gate) -> WindowsReviewPacket:
             component_profile=args.component_profile,
             diff_context=args.diff_context,
             project_facts=args.project_facts,
+            required_project_facts=args.required_project_facts,
             ghidra_delta=args.ghidra_delta,
             notes=[
                 f"operand_status={operand.status}",

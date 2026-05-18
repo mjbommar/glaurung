@@ -149,6 +149,13 @@ class WindowsEmitReviewPacketArgs(BaseModel):
         None,
         description="Optional .glaurung project fact coverage context.",
     )
+    required_project_facts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Project fact classes required before this packet can be promoted. "
+            "If empty, a conservative set is inferred from the packet shape."
+        ),
+    )
     ghidra_delta: WindowsGhidraDeltaContext | None = Field(
         None,
         description="Optional Ghidra-parity gap context for this target.",
@@ -180,7 +187,10 @@ class WindowsReviewPacket(BaseModel):
     component_profile: WindowsComponentProfileContext | None = None
     diff_context: WindowsDiffContext | None = None
     project_facts: WindowsProjectFactContext | None = None
+    required_project_facts: list[str] = Field(default_factory=list)
     ghidra_delta: WindowsGhidraDeltaContext | None = None
+    promotion_preconditions_met: bool
+    promotion_blockers: list[str] = Field(default_factory=list)
     priority: CandidatePriority
     confidence: float = Field(ge=0.0, le=1.0)
     confidence_reason: str
@@ -228,8 +238,15 @@ class WindowsEmitReviewPacketTool(
             + _evidence_provenance(args.evidence)
             + _context_provenance(args)
         )
+        required_project_facts = _required_project_facts(args)
+        promotion_blockers = _promotion_blockers(args, required_project_facts)
         priority = _priority(args, required_gates)
-        confidence, reason = _confidence(args, provenance, required_gates)
+        confidence, reason = _confidence(
+            args,
+            provenance,
+            required_gates,
+            promotion_blockers,
+        )
         packet = WindowsReviewPacket(
             candidate_id=args.candidate_id or _candidate_id(args),
             binary=args.binary,
@@ -249,11 +266,14 @@ class WindowsEmitReviewPacketTool(
             component_profile=args.component_profile,
             diff_context=args.diff_context,
             project_facts=args.project_facts,
+            required_project_facts=required_project_facts,
             ghidra_delta=args.ghidra_delta,
+            promotion_preconditions_met=not promotion_blockers,
+            promotion_blockers=promotion_blockers,
             priority=priority,
             confidence=confidence,
             confidence_reason=reason,
-            next_validation=_next_validation(args, priority),
+            next_validation=_next_validation(args, priority, promotion_blockers),
             false_positive_questions=_false_positive_questions(args, required_gates),
             notes=[
                 "review packet only; VM or dynamic validation is required before finding promotion",
@@ -364,6 +384,7 @@ def _confidence(
     args: WindowsEmitReviewPacketArgs,
     provenance: list[str],
     required_gates: list[str],
+    promotion_blockers: list[str],
 ) -> tuple[float, str]:
     score = 0.2
     reasons: list[str] = ["base packet fields supplied"]
@@ -420,15 +441,105 @@ def _confidence(
     if args.gate_status == "unknown":
         score -= 0.1
         reasons.append("gate status unknown")
+    if promotion_blockers:
+        score -= 0.12
+        reasons.append("promotion blocked by unmet project/Ghidra preconditions")
     if not args.evidence:
         score -= 0.1
         reasons.append("no atomic evidence items supplied")
     return max(0.0, min(0.95, round(score, 2))), "; ".join(reasons)
 
 
+def _required_project_facts(args: WindowsEmitReviewPacketArgs) -> list[str]:
+    if args.required_project_facts:
+        return _dedupe(args.required_project_facts)
+
+    required = ["function_names"]
+    if args.sink_symbol or args.path:
+        required.append("call_xrefs")
+    if args.gate_status in {"dominated", "not_dominated"} or any(
+        item.source in {"windows_cfg_gate_to_sink", "windows_project_cfg_path_query"}
+        for item in args.evidence
+    ):
+        required.extend(["cfg", "cfg_dominance"])
+    if any(
+        item.source == "windows_project_branch_condition_facts"
+        for item in args.evidence
+    ):
+        required.append("branch_conditions")
+    return _dedupe(required)
+
+
+def _promotion_blockers(
+    args: WindowsEmitReviewPacketArgs,
+    required_project_facts: list[str],
+) -> list[str]:
+    blockers: list[str] = []
+    facts = args.project_facts
+    if facts is None:
+        blockers.append("missing project fact coverage context")
+    else:
+        if not facts.project_path:
+            blockers.append("missing .glaurung project path")
+        if not facts.fact_coverage:
+            blockers.append("no project fact coverage classes supplied")
+        missing_required = [
+            fact
+            for fact in required_project_facts
+            if fact not in facts.fact_coverage or fact in facts.missing_facts
+        ]
+        if missing_required:
+            blockers.append(
+                "missing required project fact coverage: "
+                + ", ".join(missing_required[:6])
+            )
+        zero_counts = [
+            fact
+            for fact in required_project_facts
+            if _project_fact_count(facts, fact) == 0
+        ]
+        if zero_counts:
+            blockers.append(
+                "required project fact count is zero: "
+                + ", ".join(zero_counts[:6])
+            )
+
+    if args.ghidra_delta is not None and args.ghidra_delta.blocking_fact_classes:
+        blockers.append(
+            "blocking Ghidra-parity gaps: "
+            + ", ".join(args.ghidra_delta.blocking_fact_classes[:6])
+        )
+
+    return blockers
+
+
+def _project_fact_count(
+    facts: WindowsProjectFactContext,
+    fact_class: str,
+) -> int | None:
+    count_keys = {
+        "function_names": ("function_name_count",),
+        "call_xrefs": ("call_xref_count",),
+        "data_xrefs": ("data_read_xref_count", "data_write_xref_count", "xref_count"),
+        "data_labels": ("data_label_count",),
+        "function_prototypes": ("function_prototype_count",),
+        "cfg": ("basic_block_count", "cfg_edge_count"),
+        "cfg_dominance": ("cfg_dominance_count",),
+        "branch_conditions": ("cfg_branch_fact_count",),
+    }
+    keys = count_keys.get(fact_class)
+    if not keys:
+        return None
+    present = [facts.counts[key] for key in keys if key in facts.counts]
+    if not present:
+        return None
+    return min(present)
+
+
 def _next_validation(
     args: WindowsEmitReviewPacketArgs,
     priority: CandidatePriority,
+    promotion_blockers: list[str],
 ) -> list[str]:
     steps = [
         "verify the source role against the function prototype or PDB type data",
@@ -464,6 +575,11 @@ def _next_validation(
     if args.ghidra_delta is not None and args.ghidra_delta.blocking_fact_classes:
         gaps = ", ".join(args.ghidra_delta.blocking_fact_classes[:4])
         steps.append(f"close or explicitly caveat blocking Ghidra-parity gaps: {gaps}")
+    if promotion_blockers:
+        steps.append(
+            "clear promotion blockers before treating this packet as more than a seed: "
+            + "; ".join(promotion_blockers[:4])
+        )
     return steps
 
 

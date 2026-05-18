@@ -16,7 +16,9 @@ from .windows_emit_review_packet import (
     WindowsDiffContext,
     WindowsEmitReviewPacketArgs,
     WindowsEmitReviewPacketTool,
+    WindowsGhidraDeltaContext,
     WindowsPdbIdentityContext,
+    WindowsProjectFactContext,
     WindowsReviewEvidence,
     WindowsReviewPacket,
     WindowsReviewPathStep,
@@ -92,6 +94,18 @@ class WindowsComposeCandidatePacketsArgs(BaseModel):
     diff_context: WindowsDiffContext | None = Field(
         None,
         description="Optional patch-regression or binary-diff context.",
+    )
+    project_facts: WindowsProjectFactContext | None = Field(
+        None,
+        description="Optional .glaurung project fact coverage context.",
+    )
+    required_project_facts: list[str] = Field(
+        default_factory=list,
+        description="Project fact classes required before packet promotion.",
+    )
+    ghidra_delta: WindowsGhidraDeltaContext | None = Field(
+        None,
+        description="Optional Ghidra-parity gap context for this target.",
     )
     add_to_kb: bool = Field(
         False,
@@ -342,6 +356,9 @@ def _emit_packet(
             pdb_identity=args.pdb_identity,
             component_profile=args.component_profile,
             diff_context=args.diff_context,
+            project_facts=args.project_facts,
+            required_project_facts=args.required_project_facts,
+            ghidra_delta=args.ghidra_delta,
             notes=[
                 "composed from existing primitive tools",
                 "candidate is static triage evidence only",

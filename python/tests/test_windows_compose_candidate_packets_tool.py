@@ -96,6 +96,19 @@ void NtExample(void *dst, void *src, ULONG len) {
                 "changed_functions": ["nt!NtExample"],
                 "diff_signals": ["added probe"],
             },
+            project_facts={
+                "target_id": "ntoskrnl",
+                "build_label": "unit-test",
+                "project_path": "/projects/ntoskrnl.glaurung",
+                "fact_coverage": ["function_names", "call_xrefs"],
+                "counts": {"function_name_count": 10, "call_xref_count": 3},
+            },
+            required_project_facts=["function_names", "call_xrefs"],
+            ghidra_delta={
+                "target_id": "ntoskrnl",
+                "component": "ntoskrnl.exe",
+                "current_capabilities": ["call_argument_flow"],
+            },
             add_to_kb=True,
         ),
     )
@@ -114,6 +127,10 @@ void NtExample(void *dst, void *src, ULONG len) {
     assert packet.component_profile.profile_id == "ntoskrnl-core"
     assert packet.diff_context is not None
     assert packet.diff_context.seed_id == "copy-gate-regression"
+    assert packet.project_facts is not None
+    assert packet.required_project_facts == ["function_names", "call_xrefs"]
+    assert packet.ghidra_delta is not None
+    assert packet.promotion_preconditions_met is True
     assert "user_pointer_captured" in packet.required_gates
     assert any(e.source == "windows_trace_arg_flow" for e in packet.evidence)
     assert result.evidence_node_id is not None

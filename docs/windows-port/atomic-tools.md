@@ -182,13 +182,21 @@ sit below full IR/CFG bug-class scanners:
   operand matching with CFG gate-to-sink evidence and emits a normal
   candidate review packet for operator triage. It can carry project
   fact coverage and Ghidra-parity gap context so the packet records
-  which substrate was present or missing when the hit was produced.
+  which substrate was present or missing when the hit was produced,
+  including required project fact classes and promotion blockers.
 - `windows_emit_review_packet` and `windows_compose_candidate_packets`
   preserve structured PDB identity, component-profile, patch-diff,
   project-fact, and Ghidra-delta context in every emitted candidate
   packet, so downstream ranking and validation can see which build/PDB,
   expected gates, harness plan, regression signals, project coverage,
-  and blocking Ghidra gaps backed the hit.
+  and blocking Ghidra gaps backed the hit. Packets infer conservative
+  required project facts when the caller does not provide them and keep
+  hits below promotion when required coverage or Ghidra parity is
+  missing.
+- `windows_rank_candidate_packets` now treats promotion preconditions
+  separately from triage priority: a high-risk packet can still rank for
+  review, but it is not validation-ready while project coverage or
+  blocking Ghidra gaps remain.
 
 These tools do not replace the Ghidra-grade facts this document still
 tracks: function matching across renamed builds, instruction-level

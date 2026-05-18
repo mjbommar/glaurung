@@ -122,9 +122,15 @@ void DriverDispatch(void *dst, void *user_buffer, ULONG len) {
                 "target_id": "driver",
                 "build_label": "unit-test",
                 "project_path": "/projects/driver.glaurung",
-                "fact_coverage": ["cfg"],
+                "fact_coverage": ["function_names", "call_xrefs", "cfg", "cfg_dominance"],
                 "missing_facts": ["data_labels"],
-                "counts": {"cfg_edge_count": 3},
+                "counts": {
+                    "function_name_count": 2,
+                    "call_xref_count": 1,
+                    "basic_block_count": 3,
+                    "cfg_edge_count": 3,
+                    "cfg_dominance_count": 3,
+                },
             },
             ghidra_delta={
                 "target_id": "driver",
@@ -143,8 +149,16 @@ void DriverDispatch(void *dst, void *user_buffer, ULONG len) {
     assert result.packet.source_arg == "user_buffer"
     assert result.packet.project_facts is not None
     assert result.packet.project_facts.counts["cfg_edge_count"] == 3
+    assert result.packet.required_project_facts == [
+        "function_names",
+        "call_xrefs",
+        "cfg",
+        "cfg_dominance",
+    ]
     assert result.packet.ghidra_delta is not None
     assert result.packet.ghidra_delta.blocking_fact_classes == ["call_argument_flow"]
+    assert result.packet.promotion_preconditions_met is False
+    assert any("blocking Ghidra-parity gaps" in item for item in result.packet.promotion_blockers)
     assert any(
         evidence.source == "windows_source_sink_operand_match"
         for evidence in result.packet.evidence

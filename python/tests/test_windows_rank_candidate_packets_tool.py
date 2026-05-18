@@ -33,6 +33,8 @@ def _packet(
     priority: str,
     confidence: float,
     provenance: list[str] | None = None,
+    promotion_preconditions_met: bool = True,
+    promotion_blockers: list[str] | None = None,
 ) -> WindowsReviewPacket:
     return WindowsReviewPacket(
         candidate_id=candidate_id,
@@ -62,6 +64,9 @@ def _packet(
             )
         ],
         provenance=provenance or ["pseudocode_candidate_composition"],
+        required_project_facts=["function_names", "call_xrefs"],
+        promotion_preconditions_met=promotion_preconditions_met,
+        promotion_blockers=promotion_blockers or [],
         priority=priority,  # type: ignore[arg-type]
         confidence=confidence,
         confidence_reason="test",
@@ -93,20 +98,36 @@ def test_windows_rank_candidate_packets_orders_by_validation_priority(
         confidence=0.65,
         provenance=["ir_fact", "asb_pe_sink_metadata"],
     )
+    blocked = _packet(
+        "blocked-missing-facts",
+        attacker_class="remote_network",
+        sink_kind="copy",
+        gate_status="missing",
+        priority="high",
+        confidence=0.9,
+        provenance=["ir_fact", "asb_pe_sink_metadata"],
+        promotion_preconditions_met=False,
+        promotion_blockers=["missing project fact coverage context"],
+    )
 
     result = tool.run(
         ctx,
         ctx.kb,
-        tool.input_model(packets=[lower, higher], add_to_kb=True),
+        tool.input_model(packets=[lower, blocked, higher], add_to_kb=True),
     )
 
-    assert result.input_count == 2
+    assert result.input_count == 3
     assert result.ranked[0].packet.candidate_id == "remote-missing-gate"
     assert result.ranked[0].rank == 1
     assert result.ranked[0].validation_ready is True
     assert any("remote or network" in reason for reason in result.ranked[0].reasons)
-    assert result.ranked[1].packet.candidate_id == "internal-safe"
-    assert result.ranked[1].validation_ready is False
+    blocked_rank = next(
+        item for item in result.ranked if item.packet.candidate_id == "blocked-missing-facts"
+    )
+    assert blocked_rank.validation_ready is False
+    assert any("promotion preconditions" in reason for reason in blocked_rank.reasons)
+    assert result.ranked[-1].packet.candidate_id == "internal-safe"
+    assert result.ranked[-1].validation_ready is False
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence
