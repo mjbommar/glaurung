@@ -1077,6 +1077,38 @@ fn parse_pe_export_function_starts(data: &[u8], regions: &[ExecRegion], arch: BA
     starts
 }
 
+fn parse_pe_export_function_names(
+    data: &[u8],
+    regions: &[ExecRegion],
+) -> std::collections::HashMap<u64, String> {
+    let mut out = std::collections::HashMap::new();
+    let parser = match crate::formats::pe::PeParser::new(data) {
+        Ok(parser) => parser,
+        Err(_) => return out,
+    };
+    let image_base = parser.image_base();
+    let exports = match parser.exports() {
+        Ok(exports) => exports,
+        Err(_) => return out,
+    };
+    for export in &exports.exports {
+        if export.forwarder.is_some() || export.rva == 0 {
+            continue;
+        }
+        let Some(name) = export.name else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let va = image_base.saturating_add(u64::from(export.rva));
+        if in_exec_regions(regions, va).is_some() {
+            out.entry(va).or_insert_with(|| name.to_string());
+        }
+    }
+    out
+}
+
 fn parse_function_seeds(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<Address> {
     let bits = if arch.is_64_bit() { 64 } else { 32 };
     let mut seeds: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
@@ -1418,6 +1450,11 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     // covered by .pdata). Exports are trusted entry points, so insert
     // them before the body-overlap-gated .pdata seeds below.
     let export_starts = parse_pe_export_function_starts(data, &regions, arch);
+    let pe_export_name_by_va = if is_pe_image {
+        parse_pe_export_function_names(data, &regions)
+    } else {
+        std::collections::HashMap::new()
+    };
     for va in export_starts {
         if known.contains(&va) {
             continue;
@@ -1542,6 +1579,20 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         // Apply renames
         for f in &mut functions {
             if let Some(name) = sym_by_va.get(&f.entry_point.value) {
+                f.name = name.clone();
+            }
+        }
+    }
+
+    // PE export aliases are runtime-visible names. The object crate does not
+    // expose PE exports through dynamic_symbols(), so apply the parsed export
+    // table directly for stripped DLLs while preserving stronger symbol names.
+    if !pe_export_name_by_va.is_empty() {
+        for f in &mut functions {
+            if !f.name.starts_with("sub_") {
+                continue;
+            }
+            if let Some(name) = pe_export_name_by_va.get(&f.entry_point.value) {
                 f.name = name.clone();
             }
         }
@@ -1985,6 +2036,146 @@ mod pe_guard_cf_seed_tests {
             discovered.contains(&first_guard_cf),
             "first GuardCF seed {first_guard_cf:#x} was not discovered under tight budget"
         );
+    }
+}
+
+#[cfg(test)]
+mod pe_export_name_tests {
+    use super::{
+        analyze_functions_bytes, parse_exec_regions, parse_pe_export_function_names, Budgets,
+    };
+    use object::{Object, ObjectSymbol};
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    fn read_u16(data: &[u8], off: usize) -> Option<u16> {
+        data.get(off..off + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    }
+
+    fn read_u32(data: &[u8], off: usize) -> Option<u32> {
+        data.get(off..off + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn zero_range(data: &mut [u8], off: usize, len: usize) -> Option<()> {
+        for byte in data.get_mut(off..off + len)? {
+            *byte = 0;
+        }
+        Some(())
+    }
+
+    fn strip_coff_symbols_and_debug_sections(data: &mut [u8]) -> Option<()> {
+        if data.len() < 0x40 || data.get(0..2)? != b"MZ" {
+            return None;
+        }
+        let e_lfanew = read_u32(data, 0x3c)? as usize;
+        if e_lfanew + 24 > data.len() || data.get(e_lfanew..e_lfanew + 4)? != b"PE\0\0" {
+            return None;
+        }
+        let coff_off = e_lfanew + 4;
+        let n_sections = read_u16(data, coff_off + 2)? as usize;
+        let opt_size = read_u16(data, coff_off + 16)? as usize;
+        let opt_off = coff_off + 20;
+        if opt_off + opt_size > data.len() {
+            return None;
+        }
+
+        // COFF PointerToSymbolTable + NumberOfSymbols.
+        zero_range(data, coff_off + 8, 8)?;
+
+        let magic = read_u16(data, opt_off)?;
+        let dd_off = match magic {
+            0x20b => opt_off + 112,
+            0x10b => opt_off + 96,
+            _ => return None,
+        };
+        let num_dirs_off = if magic == 0x20b {
+            opt_off + 108
+        } else {
+            opt_off + 92
+        };
+        if read_u32(data, num_dirs_off).unwrap_or(0) > 6 {
+            // IMAGE_DIRECTORY_ENTRY_DEBUG.
+            zero_range(data, dd_off + 6 * 8, 8)?;
+        }
+
+        let sec_off = opt_off + opt_size;
+        for idx in 0..n_sections {
+            let off = sec_off + idx * 40;
+            if off + 40 > data.len() {
+                break;
+            }
+            let raw_name = data.get(off..off + 8)?;
+            let end = raw_name.iter().position(|&b| b == 0).unwrap_or(8);
+            let name = String::from_utf8_lossy(&raw_name[..end]).to_ascii_lowercase();
+            if !name.starts_with(".debug") {
+                continue;
+            }
+            // Hide DWARF sections from object::section_by_name without
+            // touching exports or executable code.
+            zero_range(data, off, 8)?;
+            zero_range(data, off + 8, 4)?;
+            zero_range(data, off + 16, 4)?;
+        }
+        Some(())
+    }
+
+    #[test]
+    fn pe_export_names_label_stripped_cfg_functions() {
+        let path =
+            Path::new("samples/binaries/platforms/linux/amd64/export/libraries/shared/mathlib.dll");
+        if !path.exists() {
+            return;
+        }
+        let mut data = std::fs::read(path).expect("read mathlib.dll sample");
+        strip_coff_symbols_and_debug_sections(&mut data).expect("strip symbols/debug metadata");
+
+        let obj = object::read::File::parse(&data[..]).expect("parse stripped PE");
+        let has_mathlib_add_symbol = obj
+            .symbols()
+            .any(|sym| sym.name().ok() == Some("mathlib_add"))
+            || obj
+                .dynamic_symbols()
+                .any(|sym| sym.name().ok() == Some("mathlib_add"));
+        assert!(
+            !has_mathlib_add_symbol,
+            "test fixture still exposes mathlib_add through object symbols"
+        );
+        assert!(
+            crate::debug::dwarf::extract_dwarf_functions(&data).is_empty(),
+            "test fixture still exposes DWARF functions"
+        );
+
+        let (regions, _arch, _endian, _entry) = parse_exec_regions(&data);
+        let export_names = parse_pe_export_function_names(&data, &regions);
+        let expected = [
+            "mathlib_add",
+            "mathlib_array_sum",
+            "mathlib_random",
+            "mathlib_version",
+        ];
+        for name in expected {
+            assert!(
+                export_names.values().any(|candidate| candidate == name),
+                "missing parsed PE export name {name}"
+            );
+        }
+
+        let budgets = Budgets {
+            max_functions: 256,
+            max_blocks: 1_000_000,
+            max_instructions: 30_000_000,
+            timeout_ms: 30_000,
+        };
+        let (functions, _cg) = analyze_functions_bytes(&data, &budgets);
+        let names: BTreeSet<&str> = functions.iter().map(|f| f.name.as_str()).collect();
+        for name in expected {
+            assert!(
+                names.contains(name),
+                "stripped CFG did not apply PE export name {name}"
+            );
+        }
     }
 }
 
