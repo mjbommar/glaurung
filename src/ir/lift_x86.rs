@@ -10,7 +10,8 @@
 //! * `mov` between reg / imm / mem → [`Op::Assign`] / [`Op::Load`] / [`Op::Store`]
 //! * `add`, `sub`, `and`, `or`, `xor`, `shl`, `shr`, `sar`, `imul`, `div` → [`Op::Bin`]
 //! * `not`, `neg` → [`Op::Un`]
-//! * `inc`, `dec`, `xadd`, `xchg` on registers / memory → [`Op::Bin`] or load-modify-store
+//! * `inc`, `dec`, `xadd`, `xchg`, `cmpxchg` on registers / memory → [`Op::Bin`] or load-modify-store
+//! * `stos*` string stores → representative store + destination-pointer advance
 //! * `cmp` → [`Op::Cmp`] writing `ZF`/`CF`/`SF`
 //! * `test` → [`Op::Cmp`] writing `ZF`/`SF`
 //! * `setcc` → [`Op::Assign`] / [`Op::Store`] from the corresponding flag
@@ -222,6 +223,27 @@ fn div_accumulator_name(instr: &iced_x86::Instruction, bits: u32) -> &'static st
     }
 }
 
+fn accumulator_name_for_width(width: u8, bits: u32) -> &'static str {
+    match width {
+        1 => "al",
+        2 => "ax",
+        4 => "eax",
+        8 => "rax",
+        _ if bits == 64 => "rax",
+        _ => "eax",
+    }
+}
+
+fn stos_width(mnem: Mnemonic) -> Option<u8> {
+    match mnem {
+        Mnemonic::Stosb => Some(1),
+        Mnemonic::Stosw => Some(2),
+        Mnemonic::Stosd => Some(4),
+        Mnemonic::Stosq => Some(8),
+        _ => None,
+    }
+}
+
 fn push_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     // push <src>:
     //   rsp = rsp - width
@@ -312,6 +334,128 @@ fn pop_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             rhs: Value::Const(width as i64),
         },
     ]
+}
+
+fn stos_ops(mnem: Mnemonic, bits: u32) -> Vec<Op> {
+    let Some(width) = stos_width(mnem) else {
+        return vec![Op::Unknown {
+            mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
+        }];
+    };
+    let dst = VReg::phys(if bits == 64 { "rdi" } else { "edi" });
+    let acc = VReg::phys(accumulator_name_for_width(width, bits));
+    vec![
+        Op::Store {
+            addr: MemOp {
+                base: Some(dst.clone()),
+                index: None,
+                scale: 0,
+                disp: 0,
+                size: width,
+                segment: None,
+            },
+            src: Value::Reg(acc),
+        },
+        // Direction-flag-aware repetition is a future mid-IR concern. The
+        // common compiler pattern clears DF, so advance once to preserve the
+        // observable pointer dataflow without emitting unknown(stos*).
+        Op::Bin {
+            dst: dst.clone(),
+            op: BinOp::Add,
+            lhs: Value::Reg(dst),
+            rhs: Value::Const(i64::from(width)),
+        },
+    ]
+}
+
+fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
+    if instr.op_count() != 2 || instr.op_kind(1) != OpKind::Register {
+        return vec![Op::Unknown {
+            mnemonic: "cmpxchg".into(),
+        }];
+    }
+
+    let src = Value::Reg(VReg::phys(reg_name(instr.op_register(1))));
+    let old = VReg::Temp(0);
+    let acc = match instr.op_kind(0) {
+        OpKind::Register => {
+            let dst = instr.op_register(0);
+            VReg::phys(accumulator_name_for_width(reg_size(dst), bits))
+        }
+        OpKind::Memory => VReg::phys(accumulator_name_for_width(
+            instr.memory_size().size() as u8,
+            bits,
+        )),
+        _ => {
+            return vec![Op::Unknown {
+                mnemonic: "cmpxchg".into(),
+            }]
+        }
+    };
+
+    let mut ops = Vec::new();
+    match instr.op_kind(0) {
+        OpKind::Register => {
+            let dst = VReg::phys(reg_name(instr.op_register(0)));
+            ops.push(Op::Assign {
+                dst: old.clone(),
+                src: Value::Reg(dst.clone()),
+            });
+            ops.push(Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(acc.clone()),
+                rhs: Value::Reg(old.clone()),
+            });
+            ops.push(Op::CondAssign {
+                dst,
+                cond: VReg::Flag(Flag::Z),
+                src,
+            });
+        }
+        OpKind::Memory => {
+            let addr = mem_op_of(instr);
+            let new_value = VReg::Temp(1);
+            ops.push(Op::Load {
+                dst: old.clone(),
+                addr: addr.clone(),
+            });
+            ops.push(Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(acc.clone()),
+                rhs: Value::Reg(old.clone()),
+            });
+            ops.push(Op::Assign {
+                dst: new_value.clone(),
+                src: Value::Reg(old.clone()),
+            });
+            ops.push(Op::CondAssign {
+                dst: new_value.clone(),
+                cond: VReg::Flag(Flag::Z),
+                src,
+            });
+            ops.push(Op::Store {
+                addr,
+                src: Value::Reg(new_value),
+            });
+        }
+        _ => unreachable!("checked above"),
+    }
+
+    let not_equal = VReg::Temp(2);
+    ops.push(Op::Cmp {
+        dst: not_equal.clone(),
+        op: CmpOp::Eq,
+        lhs: Value::Reg(VReg::Flag(Flag::Z)),
+        rhs: Value::Const(0),
+    });
+    ops.push(Op::CondAssign {
+        dst: acc,
+        cond: not_equal,
+        src: Value::Reg(old),
+    });
+    ops
 }
 
 /// Lift a single iced instruction into zero or more LLIR ops.
@@ -821,6 +965,10 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         }
         Mnemonic::Push => push_ops(instr, bits),
         Mnemonic::Pop => pop_ops(instr, bits),
+        Mnemonic::Stosb | Mnemonic::Stosw | Mnemonic::Stosd | Mnemonic::Stosq => {
+            stos_ops(mnem, bits)
+        }
+        Mnemonic::Cmpxchg => cmpxchg_ops(instr, bits),
         Mnemonic::Inc => {
             if instr.op_count() == 1 {
                 match instr.op_kind(0) {
@@ -1473,6 +1621,114 @@ mod tests {
                 dst,
                 src: Value::Reg(VReg::Temp(0)),
             } if *dst == VReg::phys("rbx")
+        ));
+    }
+
+    #[test]
+    fn stosq_lifts_to_store_and_destination_advance() {
+        // rep stosq  (f3 48 ab). Repetition is not modelled yet, but the
+        // representative store and rdi advance preserve the core dataflow.
+        let ops = lift64(&[0xf3, 0x48, 0xab]);
+        assert_eq!(ops.len(), 2, "got: {:#?}", ops);
+        match &ops[0].op {
+            Op::Store {
+                addr:
+                    MemOp {
+                        base: Some(base),
+                        size: 8,
+                        ..
+                    },
+                src: Value::Reg(src),
+            } => {
+                assert_eq!(*base, VReg::phys("rdi"));
+                assert_eq!(*src, VReg::phys("rax"));
+            }
+            other => panic!("expected stosq store, got {:?}", other),
+        }
+        assert!(matches!(
+            &ops[1].op,
+            Op::Bin {
+                dst,
+                op: BinOp::Add,
+                lhs: Value::Reg(lhs),
+                rhs: Value::Const(8),
+            } if *dst == VReg::phys("rdi") && *lhs == VReg::phys("rdi")
+        ));
+    }
+
+    #[test]
+    fn cmpxchg_reg_reg_lifts_to_compare_and_conditional_updates() {
+        // cmpxchg rbx, rcx  (48 0f b1 cb)
+        let ops = lift64(&[0x48, 0x0f, 0xb1, 0xcb]);
+        assert_eq!(ops.len(), 5, "got: {:#?}", ops);
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign {
+                dst: VReg::Temp(0),
+                src: Value::Reg(src),
+            } if *src == VReg::phys("rbx")
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(lhs),
+                rhs: Value::Reg(VReg::Temp(0)),
+            } if *lhs == VReg::phys("rax")
+        ));
+        assert!(matches!(
+            &ops[2].op,
+            Op::CondAssign {
+                dst,
+                cond: VReg::Flag(Flag::Z),
+                src: Value::Reg(src),
+            } if *dst == VReg::phys("rbx") && *src == VReg::phys("rcx")
+        ));
+        assert!(matches!(
+            &ops[4].op,
+            Op::CondAssign {
+                dst,
+                cond: VReg::Temp(2),
+                src: Value::Reg(VReg::Temp(0)),
+            } if *dst == VReg::phys("rax")
+        ));
+    }
+
+    #[test]
+    fn cmpxchg_mem_reg_lifts_to_conditional_store_shape() {
+        // cmpxchg qword ptr [rip+0x10], rcx  (48 0f b1 0d 10 00 00 00)
+        let ops = lift64(&[0x48, 0x0f, 0xb1, 0x0d, 0x10, 0x00, 0x00, 0x00]);
+        assert_eq!(ops.len(), 7, "got: {:#?}", ops);
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(0),
+                addr: MemOp { size: 8, .. },
+            }
+        ));
+        assert!(matches!(
+            &ops[3].op,
+            Op::CondAssign {
+                dst: VReg::Temp(1),
+                cond: VReg::Flag(Flag::Z),
+                src: Value::Reg(src),
+            } if *src == VReg::phys("rcx")
+        ));
+        assert!(matches!(
+            &ops[4].op,
+            Op::Store {
+                src: Value::Reg(VReg::Temp(1)),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &ops[6].op,
+            Op::CondAssign {
+                dst,
+                cond: VReg::Temp(2),
+                src: Value::Reg(VReg::Temp(0)),
+            } if *dst == VReg::phys("rax")
         ));
     }
 
