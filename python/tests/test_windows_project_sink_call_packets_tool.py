@@ -67,8 +67,52 @@ def _write_project(tmp_path: Path) -> Path:
             (0x5000, "RtlCopyMemory"),
         )
         conn.execute(
+            "INSERT INTO function_names VALUES (1, ?, ?, NULL)",
+            (0x4000, "ProbeForWrite"),
+        )
+        conn.execute(
             "INSERT INTO xrefs VALUES (1, 1, 'call', ?, ?, ?)",
             (0x1200, 0x1000, 0x5000),
+        )
+        conn.execute(
+            "INSERT INTO xrefs VALUES (2, 1, 'call', ?, ?, ?)",
+            (0x1100, 0x1000, 0x4000),
+        )
+        conn.execute(
+            """
+            CREATE TABLE basic_blocks (
+                binary_id INTEGER,
+                function_va INTEGER,
+                block_id TEXT,
+                start_va INTEGER,
+                end_va INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE cfg_edges (
+                binary_id INTEGER,
+                function_va INTEGER,
+                src_block_id TEXT,
+                dst_block_id TEXT
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO basic_blocks VALUES (1, ?, ?, ?, ?)",
+            [
+                (0x1000, "entry", 0x1000, 0x1100),
+                (0x1000, "gate", 0x1100, 0x1180),
+                (0x1000, "sink", 0x1180, 0x1280),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO cfg_edges VALUES (1, ?, ?, ?)",
+            [
+                (0x1000, "entry", "gate"),
+                (0x1000, "gate", "sink"),
+            ],
         )
         conn.commit()
     finally:
@@ -93,6 +137,22 @@ def _write_sinks(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return sinks
+
+
+def _write_gates(tmp_path: Path) -> Path:
+    gates = tmp_path / "pe-gates.yaml"
+    gates.write_text(
+        """
+- id: probeforwrite
+  symbols: [ProbeForWrite]
+  gate_kind: user_pointer
+  proves: [destination_range_valid]
+  required_conditions: [call_dominates_write_sink]
+  invalid_when: [length_is_zero]
+""",
+        encoding="utf-8",
+    )
+    return gates
 
 
 def _write_project_facts(tmp_path: Path) -> Path:
@@ -179,6 +239,8 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
             build="unit-test",
             attacker_class="local_unprivileged",
             source_role="buffer",
+            refine_gates=True,
+            gates_path=str(_write_gates(tmp_path)),
             sinks_path=str(_write_sinks(tmp_path)),
             project_facts_path=str(_write_project_facts(tmp_path)),
             ghidra_delta_path=str(_write_ghidra_delta(tmp_path)),
@@ -190,14 +252,15 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
     )
 
     assert result.packet_count == 1
-    assert result.scanned_callsite_count == 1
+    assert result.scanned_callsite_count == 2
     assert result.argument_snapshot_count == 1
+    assert result.gate_refinement_count == 1
     packet = result.packets[0]
     assert packet.binary == "driver.sys"
     assert packet.entrypoint == "DriverDispatch"
     assert packet.sink_symbol == "RtlCopyMemory"
     assert packet.sink_kind == "copy"
-    assert packet.gate_status == "unknown"
+    assert packet.gate_status == "dominated"
     assert packet.required_gates == ["destination_range_valid", "byte_count_bounded"]
     assert packet.required_project_facts == ["function_names", "call_xrefs"]
     assert packet.project_facts is not None
@@ -211,6 +274,7 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
         evidence.source == "windows_project_callsite_facts"
         for evidence in packet.evidence
     )
+    assert any(evidence.source == "windows_cfg_dominance" for evidence in packet.evidence)
     snapshot_evidence = [
         evidence
         for evidence in packet.evidence
