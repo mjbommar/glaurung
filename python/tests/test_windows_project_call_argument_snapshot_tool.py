@@ -183,6 +183,48 @@ def test_windows_project_call_argument_snapshot_recovers_stack_args(
     assert "stack_arguments" not in result.missing_capabilities
 
 
+def test_windows_project_call_argument_snapshot_resolves_simple_aliases(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "mov", ["rax", "[rbp - 0x40]"]),
+            _Insn(0x1004, "mov", ["r10", "0x80"]),
+            _Insn(0x1008, "mov", ["rcx", "rax"]),
+            _Insn(0x100C, "mov", ["qword ptr [rsp + 0x20]", "r10"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[0].expression == "[rbp - 0x40]"
+    assert by_index[0].source_text == "mov rcx, rax"
+    assert by_index[0].alias_depth == 1
+    assert by_index[4].expression == "0x80"
+    assert by_index[4].source_text == "mov qword ptr [rsp + 0x20], r10"
+    assert by_index[4].alias_depth == 1
+    assert "simple_register_aliases" in result.coverage
+    assert "full_alias_tracking" in result.missing_capabilities
+
+
 def test_memory_agent_registers_windows_project_call_argument_snapshot() -> None:
     from glaurung.llm.agents.memory_agent import create_memory_agent
 

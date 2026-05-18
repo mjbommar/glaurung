@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,7 @@ class ProjectCallArgumentFact(BaseModel):
     expression: str | None = None
     source_va: int | None = None
     source_text: str | None = None
+    alias_depth: int = 0
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -70,6 +72,29 @@ class WindowsProjectCallArgumentSnapshotResult(BaseModel):
     missing_capabilities: list[str] = Field(default_factory=list)
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _Assignment:
+    va: int
+    expression: str
+    source_text: str
+    alias_depth: int = 0
+
+
+@dataclass(frozen=True)
+class _StackAssignment:
+    va: int
+    offset: int
+    expression: str
+    source_text: str
+    alias_depth: int = 0
+
+
+@dataclass(frozen=True)
+class _ResolvedExpression:
+    expression: str
+    alias_depth: int = 0
 
 
 class WindowsProjectCallArgumentSnapshotTool(
@@ -159,8 +184,8 @@ class WindowsProjectCallArgumentSnapshotTool(
             missing_capabilities=missing,
             evidence_node_id=evidence_node_id,
             notes=[
-                "argument snapshot is local and conservative; aliases, non-obvious "
-                "stack arguments, and path conditions need IR/CFG facts"
+                "argument snapshot is local and conservative; full aliasing, "
+                "non-obvious stack arguments, and path conditions need IR/CFG facts"
             ],
         )
 
@@ -266,8 +291,8 @@ def _argument_snapshot(
     instructions: list[g.Instruction],
     callsite_va: int,
 ) -> list[ProjectCallArgumentFact]:
-    assignments: dict[str, tuple[int, str, str]] = {}
-    stack_assignments: dict[int, tuple[int, int, str, str]] = {}
+    assignments: dict[str, _Assignment] = {}
+    stack_assignments: dict[int, _StackAssignment] = {}
     for instruction in instructions:
         va = int(instruction.address.value)
         mnemonic = str(instruction.mnemonic or "").lower()
@@ -281,46 +306,65 @@ def _argument_snapshot(
         assignment = _register_assignment(mnemonic, operands)
         if assignment is not None:
             register, expression = assignment
-            assignments[register] = (va, expression, _instruction_text(instruction))
+            resolved = _resolve_expression(expression, assignments)
+            assignments[register] = _Assignment(
+                va=va,
+                expression=resolved.expression,
+                source_text=_instruction_text(instruction),
+                alias_depth=resolved.alias_depth,
+            )
         stack_assignment = _stack_argument_assignment(mnemonic, operands)
         if stack_assignment is not None:
             index, offset, expression = stack_assignment
-            stack_assignments[index] = (
-                va,
-                offset,
-                expression,
-                _instruction_text(instruction),
+            resolved = _resolve_expression(expression, assignments)
+            stack_assignments[index] = _StackAssignment(
+                va=va,
+                offset=offset,
+                expression=resolved.expression,
+                source_text=_instruction_text(instruction),
+                alias_depth=resolved.alias_depth,
             )
 
     facts: list[ProjectCallArgumentFact] = []
     for index, (register, role) in enumerate(WINDOWS_X64_ARGS):
         if register not in assignments:
             continue
-        source_va, expression, source_text = assignments[register]
+        assignment = assignments[register]
         facts.append(
             ProjectCallArgumentFact(
                 index=index,
                 register_name=register,
                 role=role,
-                expression=expression,
-                source_va=source_va,
-                source_text=source_text,
-                confidence=_assignment_confidence(expression),
+                expression=assignment.expression,
+                source_va=assignment.va,
+                source_text=assignment.source_text,
+                alias_depth=assignment.alias_depth,
+                confidence=_assignment_confidence(
+                    assignment.expression,
+                    alias_depth=assignment.alias_depth,
+                ),
             )
         )
     for index in sorted(stack_assignments):
-        source_va, offset, expression, source_text = stack_assignments[index]
+        assignment = stack_assignments[index]
         facts.append(
             ProjectCallArgumentFact(
                 index=index,
-                register_name=f"stack+0x{offset:x}",
+                register_name=f"stack+0x{assignment.offset:x}",
                 role=f"arg{index}",
                 location="stack",
-                stack_offset=offset,
-                expression=expression,
-                source_va=source_va,
-                source_text=source_text,
-                confidence=min(_assignment_confidence(expression), 0.72),
+                stack_offset=assignment.offset,
+                expression=assignment.expression,
+                source_va=assignment.va,
+                source_text=assignment.source_text,
+                alias_depth=assignment.alias_depth,
+                confidence=min(
+                    _assignment_confidence(
+                        assignment.expression,
+                        alias_depth=assignment.alias_depth,
+                    ),
+                    0.72,
+                ),
             )
         )
     return sorted(facts, key=lambda fact: fact.index)
@@ -330,13 +374,27 @@ def _register_assignment(mnemonic: str, operands: list[str]) -> tuple[str, str] 
     if len(operands) < 2:
         return None
     dst = _canonical_register(operands[0])
-    if dst not in {reg for reg, _role in WINDOWS_X64_ARGS}:
+    if not _is_register(dst):
         return None
     if mnemonic in {"mov", "movsxd", "movzx", "lea"}:
         return dst, operands[1]
     if mnemonic == "xor" and _canonical_register(operands[1]) == dst:
         return dst, "0"
     return None
+
+
+def _resolve_expression(
+    expression: str,
+    assignments: dict[str, _Assignment],
+) -> _ResolvedExpression:
+    source_register = _canonical_register(expression)
+    source = assignments.get(source_register)
+    if source is None:
+        return _ResolvedExpression(expression=expression)
+    return _ResolvedExpression(
+        expression=source.expression,
+        alias_depth=source.alias_depth + 1,
+    )
 
 
 def _stack_argument_assignment(
@@ -390,16 +448,44 @@ def _parse_int(text: str) -> int:
 
 def _canonical_register(raw: str) -> str:
     text = raw.lower().strip()
-    text = text.removeprefix("qword ptr ").removeprefix("dword ptr ")
+    text = re.sub(r"\b(?:byte|word|dword|qword|oword|xmmword)\s+ptr\s+", "", text)
     aliases = {
+        "rax": "rax",
+        "eax": "rax",
+        "ax": "rax",
+        "al": "rax",
+        "ah": "rax",
+        "rbx": "rbx",
+        "ebx": "rbx",
+        "bx": "rbx",
+        "bl": "rbx",
+        "bh": "rbx",
         "rcx": "rcx",
         "ecx": "rcx",
         "cx": "rcx",
         "cl": "rcx",
+        "ch": "rcx",
         "rdx": "rdx",
         "edx": "rdx",
         "dx": "rdx",
         "dl": "rdx",
+        "dh": "rdx",
+        "rsi": "rsi",
+        "esi": "rsi",
+        "si": "rsi",
+        "sil": "rsi",
+        "rdi": "rdi",
+        "edi": "rdi",
+        "di": "rdi",
+        "dil": "rdi",
+        "rbp": "rbp",
+        "ebp": "rbp",
+        "bp": "rbp",
+        "bpl": "rbp",
+        "rsp": "rsp",
+        "esp": "rsp",
+        "sp": "rsp",
+        "spl": "rsp",
         "r8": "r8",
         "r8d": "r8",
         "r8w": "r8",
@@ -408,8 +494,53 @@ def _canonical_register(raw: str) -> str:
         "r9d": "r9",
         "r9w": "r9",
         "r9b": "r9",
+        "r10": "r10",
+        "r10d": "r10",
+        "r10w": "r10",
+        "r10b": "r10",
+        "r11": "r11",
+        "r11d": "r11",
+        "r11w": "r11",
+        "r11b": "r11",
+        "r12": "r12",
+        "r12d": "r12",
+        "r12w": "r12",
+        "r12b": "r12",
+        "r13": "r13",
+        "r13d": "r13",
+        "r13w": "r13",
+        "r13b": "r13",
+        "r14": "r14",
+        "r14d": "r14",
+        "r14w": "r14",
+        "r14b": "r14",
+        "r15": "r15",
+        "r15d": "r15",
+        "r15w": "r15",
+        "r15b": "r15",
     }
     return aliases.get(text, text)
+
+
+def _is_register(text: str) -> bool:
+    return text in {
+        "rax",
+        "rbx",
+        "rcx",
+        "rdx",
+        "rsi",
+        "rdi",
+        "rbp",
+        "rsp",
+        "r8",
+        "r9",
+        "r10",
+        "r11",
+        "r12",
+        "r13",
+        "r14",
+        "r15",
+    }
 
 
 def _instruction_text(instruction: g.Instruction) -> str:
@@ -417,12 +548,16 @@ def _instruction_text(instruction: g.Instruction) -> str:
     return f"{instruction.mnemonic} {operands}".strip()
 
 
-def _assignment_confidence(expression: str) -> float:
+def _assignment_confidence(expression: str, *, alias_depth: int = 0) -> float:
     if expression == "0" or expression.lower().startswith(("0x", "-0x")):
-        return 0.82
-    if expression.startswith("[") or " ptr " in expression.lower():
-        return 0.7
-    return 0.76
+        base = 0.82
+    elif expression.startswith("[") or " ptr " in expression.lower():
+        base = 0.7
+    else:
+        base = 0.76
+    if alias_depth:
+        return max(0.55, base - (0.04 * alias_depth))
+    return base
 
 
 def _coverage(
@@ -439,6 +574,8 @@ def _coverage(
         coverage.append("windows_x64_register_arguments")
     if any(arg.location == "stack" for arg in arguments):
         coverage.append("windows_x64_stack_arguments")
+    if any(arg.alias_depth > 0 for arg in arguments):
+        coverage.append("simple_register_aliases")
     return coverage
 
 
@@ -457,7 +594,7 @@ def _missing_capabilities(
         missing.append("all_register_arguments")
     if not any(arg.location == "stack" for arg in arguments):
         missing.append("stack_arguments")
-    missing.append("alias_tracking")
+    missing.append("full_alias_tracking")
     missing.append("cfg_path_conditions")
     return missing
 

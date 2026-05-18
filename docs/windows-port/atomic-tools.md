@@ -115,7 +115,9 @@ sit below full IR/CFG bug-class scanners:
   plus nearby disassembly to recover a conservative Windows x64
   RCX/RDX/R8/R9 argument snapshot plus obvious stack argument stores
   at Windows x64 outgoing stack slots such as `[rsp+0x20]` and
-  `[rsp+0x28]`. It is local evidence, not full alias or path proof.
+  `[rsp+0x28]`. It also resolves simple straight-line register aliases
+  in the local setup window. It is local evidence, not full alias or
+  path proof.
 - `windows_callsite_operand_facts` enumerates structured callsite
   argument facts from supplied or decompiled pseudocode, attaches
   optional callsite VA markers when present, and joins operation-backed
