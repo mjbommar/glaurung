@@ -123,6 +123,13 @@ sit below full IR/CFG bug-class scanners:
   selecting validation targets before emitting one packet per callsite;
   source reachability, argument value flow, and gate dominance remain
   separate facts.
+- `windows_project_operation_coverage_summary` measures how much of a
+  project's callsite inventory is already classified as ASB sink
+  operations. It reports operation match rate, sink-kind counts,
+  alias/import-thunk match counts, named unmatched callees, unnamed
+  unresolved call targets, and recommended metadata/target-resolution
+  next actions. This turns operation-classifier gaps into reviewable
+  backlog data.
 - `windows_project_operation_gate_summary` runs the project sink-packet
   gate refinement path and aggregates the resulting packets by sink
   operation. It reports gate status counts, fully/partially/unproven

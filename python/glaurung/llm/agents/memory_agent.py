@@ -110,6 +110,9 @@ from ..tools.windows_project_sink_call_packets import (
 from ..tools.windows_project_sink_operation_summary import (
     build_tool as build_windows_project_sink_operation_summary,
 )
+from ..tools.windows_project_operation_coverage_summary import (
+    build_tool as build_windows_project_operation_coverage_summary,
+)
 from ..tools.windows_project_operation_gate_summary import (
     build_tool as build_windows_project_operation_gate_summary,
 )
@@ -994,6 +997,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_sink_operation_summary())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_operation_coverage_summary())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_operation_gate_summary())
