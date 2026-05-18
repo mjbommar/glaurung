@@ -61,12 +61,21 @@ _RISK_IMPORT_BUCKETS: dict[str, tuple[str, ...]] = {
         "StringFromCLSID",
     ),
     "copy_format": (
+        "CopyMemory",
+        "RtlCopyMemory",
+        "RtlMoveMemory",
+        "lstrcpy",
+        "lstrcat",
+        "lstrcpyn",
         "memcpy",
         "memmove",
+        "strncpy",
         "strcpy",
         "strcat",
         "sprintf",
+        "wsprintf",
         "swprintf",
+        "wcsncpy",
         "wcscpy",
         "wcscat",
     ),
@@ -1648,9 +1657,7 @@ def _patterns_from_api_hits(api_hits: list[str]) -> list[str]:
         stem.startswith("getprocaddress") for stem in stems
     ):
         patterns.append("dynamic-api-resolution")
-    if any(
-        stem in {"memcpy", "memmove", "strcpy", "strcat", "sprintf"} for stem in stems
-    ):
+    if any(_is_copy_or_format_sink_stem(stem) for stem in stems):
         patterns.append("copy-or-format-sink")
     if any(stem.startswith("writefile") for stem in stems) and any(
         stem.startswith("deletefile") for stem in stems
@@ -1664,6 +1671,29 @@ def _patterns_from_api_hits(api_hits: list[str]) -> list[str]:
     ):
         patterns.append("resource-extraction")
     return patterns
+
+
+def _is_copy_or_format_sink_stem(stem: str) -> bool:
+    prefixes = (
+        "copymemory",
+        "rtlcopymemory",
+        "rtlmovememory",
+        "lstrcpy",
+        "lstrcat",
+        "lstrcpyn",
+        "memcpy",
+        "memmove",
+        "strncpy",
+        "strcpy",
+        "strcat",
+        "sprintf",
+        "wsprintf",
+        "swprintf",
+        "wcsncpy",
+        "wcscpy",
+        "wcscat",
+    )
+    return stem.startswith(prefixes)
 
 
 def _build_risk_items(

@@ -34,6 +34,8 @@ def test_windows_risk_json_reports_parser_shape(
                 "KERNEL32.dll!LoadResource",
                 "KERNEL32.dll!LockResource",
                 "ADVAPI32.dll!RegSetValueExW",
+                "msvcrt.dll!wcscpy",
+                "msvcrt.dll!swprintf",
             ],
             ["sample_export"],
             ["KERNEL32.dll"],
@@ -140,7 +142,8 @@ def test_windows_risk_json_reports_parser_shape(
             "var6 = ret; L_1010: arg2 = stack_9; arg3 = (rsp + 64); "
             "ReadFile(var3, var6); hres = FindResourceW(0, 0x401000, 10); "
             "size = SizeofResource(0, hres); loaded = LoadResource(0, hres); "
-            "LockResource(loaded); RegSetValueExW(); }"
+            "LockResource(loaded); wcscpy(var6, var4); "
+            "swprintf((rbp - 256), 0x180050000); RegSetValueExW(); }"
         ),
     )
 
@@ -218,7 +221,7 @@ def test_windows_risk_json_reports_parser_shape(
         hint["kind"] == "file-read-allocation-argument-flow"
         for hint in report["functions"][0]["flow_hints"]
     )
-    assert report["functions"][0]["stack_vars"][0]["offset"] == -128
+    assert any(var["offset"] == -128 for var in report["functions"][0]["stack_vars"])
     assert report["functions"][0]["suspicious_constants"][0] == {
         "value": 4,
         "hex": "0x4",
@@ -238,6 +241,9 @@ def test_windows_risk_json_reports_parser_shape(
     assert "resource" in report["risk_imports"]
     assert "resource-extraction" in report["functions"][0]["patterns"]
     assert any(item["kind"] == "resource-extraction" for item in report["risk_items"])
+    assert "copy_format" in report["risk_imports"]
+    assert "copy-or-format-sink" in report["functions"][0]["patterns"]
+    assert any(item["kind"] == "copy-or-format-sink" for item in report["risk_items"])
     assert any(item["kind"] == "function-string-xrefs" for item in report["risk_items"])
     assert report["functions"][0]["strings"][0]["text"].startswith(
         "MigrateModemSettings"
