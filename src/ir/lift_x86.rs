@@ -64,8 +64,13 @@ fn segment_override(seg: Register) -> Option<String> {
 }
 
 fn mem_op_of(instr: &iced_x86::Instruction) -> MemOp {
+    let base = if instr.memory_base() == Register::RIP {
+        None
+    } else {
+        maybe_reg(instr.memory_base())
+    };
     MemOp {
-        base: maybe_reg(instr.memory_base()),
+        base,
         index: maybe_reg(instr.memory_index()),
         scale: instr.memory_index_scale() as u8,
         disp: instr.memory_displacement64() as i64,
@@ -1964,7 +1969,7 @@ mod tests {
             Op::Load {
                 dst: VReg::Temp(10),
                 addr,
-            } if addr.base == Some(VReg::phys("rip")) && addr.size == 1
+            } if addr.base.is_none() && addr.disp == 0x1007 && addr.size == 1
         ));
         assert!(ops.iter().any(|i| matches!(
             &i.op,

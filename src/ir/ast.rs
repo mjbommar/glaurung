@@ -185,14 +185,19 @@ fn lower_value(v: &Value) -> Expr {
 }
 
 fn lower_memop(m: &MemOp) -> Expr {
-    Expr::Deref {
-        addr: Box::new(Expr::Lea {
+    let addr = if m.base.is_none() && m.index.is_none() && m.segment.is_none() && m.disp >= 0 {
+        Expr::Addr(m.disp as u64)
+    } else {
+        Expr::Lea {
             base: m.base.clone(),
             index: m.index.clone(),
             scale: m.scale,
             disp: m.disp,
             segment: m.segment.clone(),
-        }),
+        }
+    };
+    Expr::Deref {
+        addr: Box::new(addr),
         size: m.size,
     }
 }

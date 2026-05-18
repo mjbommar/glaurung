@@ -141,6 +141,8 @@ def test_decompile_pe32_plus_resolves_iat_names():
     )
     assert "GetStartupInfoA(arg2);" in text
     assert "0x14000d1ec(" not in text
+    assert "Sleep" in text
+    assert "0x14000d21c" not in text
 
 
 @pytest.mark.skipif(not PE32_PLUS_SAMPLE.exists(), reason="PE32+ sample missing")

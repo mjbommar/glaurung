@@ -94,6 +94,20 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
             }
         }
         Expr::Deref { addr, .. } => resolve_expr(addr, addr_map),
+        Expr::Lea {
+            base: None,
+            index: None,
+            disp,
+            segment: None,
+            ..
+        } if *disp >= 0 => {
+            if let Some(name) = addr_map.get(&(*disp as u64)) {
+                *e = Expr::Named {
+                    va: *disp as u64,
+                    name: name.clone(),
+                };
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             resolve_expr(lhs, addr_map);
             resolve_expr(rhs, addr_map);
@@ -307,6 +321,26 @@ mod tests {
         resolve_names(&mut f, &map);
         let text = render(&f);
         assert!(text.contains("%rdi = hello_str"), "got: {}", text);
+    }
+
+    #[test]
+    fn absolute_memory_deref_addr_gets_named() {
+        let lf = mk_single_block(vec![
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: crate::ir::types::MemOp::plain(None, None, 1, 0x2008, 8),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let r = recover(&lf, &ssa);
+        let mut f = lower(&lf, &r, "f");
+        let mut map = HashMap::new();
+        map.insert(0x2008, "ReadFile".to_string());
+        resolve_names(&mut f, &map);
+        let text = render(&f);
+        assert!(text.contains("*(u64)ReadFile"), "got: {}", text);
+        assert!(!text.contains("0x2008"), "raw IAT VA leaked: {}", text);
     }
 
     #[test]
