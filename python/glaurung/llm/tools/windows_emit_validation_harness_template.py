@@ -12,6 +12,7 @@ from .base import MemoryTool, ToolMeta
 from .windows_emit_review_packet import WindowsReviewPacket
 from .windows_emit_vm_validation_plan import WindowsVmValidationPlan
 from .windows_record_candidate_snapshot_mapping import WindowsCandidateSnapshotMapping
+from .windows_validation_harness_recipe import WindowsValidationHarnessRecipe
 
 
 class WindowsEmitValidationHarnessTemplateArgs(BaseModel):
@@ -26,6 +27,10 @@ class WindowsEmitValidationHarnessTemplateArgs(BaseModel):
     snapshot_mapping: WindowsCandidateSnapshotMapping | None = Field(
         None,
         description="Optional candidate/snapshot mapping to gate harness readiness.",
+    )
+    harness_recipe: WindowsValidationHarnessRecipe | None = Field(
+        None,
+        description="Optional component-specific validation harness recipe.",
     )
     output_dir: str | None = Field(
         None,
@@ -130,14 +135,15 @@ def _build_template(
     packet = args.candidate_packet
     plan = args.validation_plan
     mapping = args.snapshot_mapping
+    recipe = args.harness_recipe
     harness_id = _harness_id(packet.candidate_id)
-    strategy = _harness_strategy(packet, plan)
-    preconditions = _preconditions(packet, plan, mapping)
-    stock_steps = _stock_steps(packet, plan)
-    current_steps = _current_steps(packet, plan)
-    artifacts = _artifact_requirements(plan)
-    commands = _skeleton_commands(packet, plan)
-    blockers = _blockers(strategy, plan, mapping, artifacts)
+    strategy = _harness_strategy(packet, plan, recipe)
+    preconditions = _preconditions(packet, plan, mapping, recipe)
+    stock_steps = _stock_steps(packet, plan, recipe)
+    current_steps = _current_steps(packet, plan, recipe)
+    artifacts = _artifact_requirements(plan, recipe)
+    commands = _skeleton_commands(packet, plan, recipe)
+    blockers = _blockers(strategy, plan, mapping, artifacts, recipe)
     markdown = _markdown(
         packet,
         harness_id=harness_id,
@@ -175,8 +181,11 @@ def _harness_id(candidate_id: str) -> str:
 def _harness_strategy(
     packet: WindowsReviewPacket,
     plan: WindowsVmValidationPlan | None,
+    recipe: WindowsValidationHarnessRecipe | None,
 ) -> list[str]:
     strategy: list[str] = []
+    if recipe is not None:
+        strategy.append(f"{recipe.trigger_kind}: " + "; ".join(recipe.setup_steps[:3]))
     if plan is not None:
         strategy.extend(plan.harness_strategy)
     if packet.component_profile is not None and packet.component_profile.harness_strategy:
@@ -193,6 +202,7 @@ def _preconditions(
     packet: WindowsReviewPacket,
     plan: WindowsVmValidationPlan | None,
     mapping: WindowsCandidateSnapshotMapping | None,
+    recipe: WindowsValidationHarnessRecipe | None,
 ) -> list[str]:
     values = [
         f"Confirm candidate id {packet.candidate_id}.",
@@ -211,13 +221,18 @@ def _preconditions(
         values.append(
             f"Review snapshot mapping confidence {mapping.mapping_confidence} before execution."
         )
+    if recipe is not None:
+        values.extend(recipe.setup_steps)
     return _dedupe(values)
 
 
 def _stock_steps(
     packet: WindowsReviewPacket,
     plan: WindowsVmValidationPlan | None,
+    recipe: WindowsValidationHarnessRecipe | None,
 ) -> list[str]:
+    if recipe is not None:
+        return [f"Stock: {command}" for command in recipe.stock_commands]
     if plan is not None and plan.stock_current_comparison:
         return [f"Stock: {step}" for step in plan.stock_current_comparison]
     return [
@@ -229,7 +244,10 @@ def _stock_steps(
 def _current_steps(
     packet: WindowsReviewPacket,
     plan: WindowsVmValidationPlan | None,
+    recipe: WindowsValidationHarnessRecipe | None,
 ) -> list[str]:
+    if recipe is not None:
+        return [f"Current: {command}" for command in recipe.current_commands]
     steps = [
         f"Current: run the same harness against {packet.binary} with unchanged inputs.",
         "Current: save stdout, stderr, serial log, debugger transcript, and binary identity.",
@@ -240,13 +258,18 @@ def _current_steps(
     return steps
 
 
-def _artifact_requirements(plan: WindowsVmValidationPlan | None) -> list[str]:
+def _artifact_requirements(
+    plan: WindowsVmValidationPlan | None,
+    recipe: WindowsValidationHarnessRecipe | None,
+) -> list[str]:
     artifacts = [
         "kdnet attach transcript with timestamp",
         "harness stdout and stderr",
         "exact binary identity and PDB identity transcript",
         "stock/current comparison notes",
     ]
+    if recipe is not None:
+        artifacts.extend(recipe.artifact_requirements)
     if plan is not None:
         artifacts.extend(plan.expected_artifacts)
     return _dedupe(artifacts)
@@ -255,6 +278,7 @@ def _artifact_requirements(plan: WindowsVmValidationPlan | None) -> list[str]:
 def _skeleton_commands(
     packet: WindowsReviewPacket,
     plan: WindowsVmValidationPlan | None,
+    recipe: WindowsValidationHarnessRecipe | None,
 ) -> list[str]:
     commands = [
         "$ErrorActionPreference = 'Stop'",
@@ -270,6 +294,17 @@ def _skeleton_commands(
     if plan is not None:
         commands.insert(5, f"$Snapshot = '{plan.snapshot_name}'")
         commands.insert(6, f"$KdnetPort = {plan.kdnet_port}")
+    if recipe is not None:
+        commands.extend(
+            [
+                f"# Recipe: {recipe.id}",
+                f"# Trigger: {recipe.trigger_kind}",
+                "# Stock commands",
+                *recipe.stock_commands,
+                "# Current commands",
+                *recipe.current_commands,
+            ]
+        )
     return commands
 
 
@@ -278,6 +313,7 @@ def _blockers(
     plan: WindowsVmValidationPlan | None,
     mapping: WindowsCandidateSnapshotMapping | None,
     artifacts: list[str],
+    recipe: WindowsValidationHarnessRecipe | None,
 ) -> list[str]:
     blockers: list[str] = []
     if not strategy:
@@ -299,6 +335,8 @@ def _blockers(
             )
     if not artifacts:
         blockers.append("runtime artifact requirements are missing")
+    if recipe is not None and recipe.known_blockers:
+        blockers.append("harness recipe has known blockers: " + "; ".join(recipe.known_blockers[:6]))
     return _dedupe(blockers)
 
 

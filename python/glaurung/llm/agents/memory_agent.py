@@ -212,6 +212,9 @@ from ..tools.windows_record_candidate_snapshot_mapping import (
 from ..tools.windows_emit_validation_harness_template import (
     build_tool as build_windows_emit_validation_harness_template,
 )
+from ..tools.windows_validation_harness_recipe import (
+    build_tool as build_windows_validation_harness_recipe,
+)
 from ..tools.windows_summarize_helper_side_effects import (
     build_tool as build_windows_summarize_helper_side_effects,
 )
@@ -1026,6 +1029,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_emit_validation_harness_template())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_validation_harness_recipe())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_summarize_helper_side_effects())

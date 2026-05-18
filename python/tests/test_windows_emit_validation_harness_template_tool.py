@@ -17,6 +17,9 @@ from glaurung.llm.tools.windows_emit_vm_validation_plan import WindowsVmValidati
 from glaurung.llm.tools.windows_record_candidate_snapshot_mapping import (
     WindowsCandidateSnapshotMapping,
 )
+from glaurung.llm.tools.windows_validation_harness_recipe import (
+    WindowsValidationHarnessRecipe,
+)
 
 
 def _ctx(tmp_path: Path) -> MemoryContext:
@@ -132,6 +135,24 @@ def _mapping() -> WindowsCandidateSnapshotMapping:
     )
 
 
+def _recipe() -> WindowsValidationHarnessRecipe:
+    return WindowsValidationHarnessRecipe(
+        id="cldflt_placeholder_policy_recipe",
+        profile_id="cldflt_cloud_filter_policy",
+        target_id="cldflt",
+        component="cldflt.sys",
+        surfaces=["cloud_filter", "registry"],
+        trigger_kind="cloud_filter_placeholder_policy_sequence",
+        setup_steps=["Prepare provider root."],
+        stock_commands=["powershell -File run-cldflt.ps1 -Mode Stock"],
+        current_commands=["powershell -File run-cldflt.ps1 -Mode Current"],
+        artifact_requirements=["Registry export."],
+        known_blockers=["KDNET attach proof is not recorded."],
+        operator_notes=["Preserve caller token."],
+        notes="Unit fixture.",
+    )
+
+
 def test_windows_emit_validation_harness_template_writes_operator_scaffold(
     tmp_path: Path,
 ) -> None:
@@ -146,6 +167,7 @@ def test_windows_emit_validation_harness_template_writes_operator_scaffold(
             candidate_packet=_packet(),
             validation_plan=_plan(),
             snapshot_mapping=_mapping(),
+            harness_recipe=_recipe(),
             output_dir=str(output_dir),
             add_to_kb=True,
         ),
@@ -153,11 +175,14 @@ def test_windows_emit_validation_harness_template_writes_operator_scaffold(
 
     template = result.template
     assert template.claim_level == "harness_template_not_execution"
-    assert template.ready_to_collect_artifacts is True
-    assert template.blockers == []
+    assert template.ready_to_collect_artifacts is False
     assert template.harness_id == "win-harness-candidate-1"
     assert any("placeholder policy sequence" in item for item in template.harness_strategy)
     assert any("C:\\Windows\\MEMORY.DMP" in item for item in template.artifact_requirements)
+    assert any("Registry export" in item for item in template.artifact_requirements)
+    assert any("run-cldflt.ps1" in item for item in template.skeleton_commands)
+    assert any("harness recipe has known blockers" in item for item in template.blockers)
+    assert template.ready_to_collect_artifacts is False
     assert "$CandidateId = 'candidate-1'" in template.skeleton_commands
     assert "# Windows Validation Harness Template: candidate-1" in template.markdown
     assert (output_dir / "README.md").read_text(encoding="utf-8") == template.markdown
@@ -168,7 +193,7 @@ def test_windows_emit_validation_harness_template_writes_operator_scaffold(
     assert any(
         node.kind == NodeKind.evidence
         and node.label == "windows_emit_validation_harness_template"
-        and node.props["ready_to_collect_artifacts"] is True
+        and node.props["ready_to_collect_artifacts"] is False
         for node in ctx.kb.nodes()
     )
 
