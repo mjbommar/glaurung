@@ -8,10 +8,11 @@
 //!
 //! * `nop` → [`Op::Nop`]
 //! * `mov` between reg / imm / mem → [`Op::Assign`] / [`Op::Load`] / [`Op::Store`]
-//! * `add`, `sub`, `and`, `or`, `xor`, `shl`, `shr`, `sar`, `imul`, `div` → [`Op::Bin`]
+//! * `add`, `sub`, `sbb`, `and`, `or`, `xor`, `shl`, `shr`, `sar`, `imul`, `div` → [`Op::Bin`]
 //! * `not`, `neg` → [`Op::Un`]
 //! * `inc`, `dec`, `xadd`, `xchg`, `cmpxchg` on registers / memory → [`Op::Bin`] or load-modify-store
-//! * `stos*` string stores → representative store + destination-pointer advance
+//! * `movsd` / `stos*` string ops → representative copy/store + pointer advance
+//! * common SSE moves/zeroing (`movsd`, `movaps`, `xorps`) → assign/load/store/bin
 //! * `cmp` → [`Op::Cmp`] writing `ZF`/`CF`/`SF`
 //! * `test` → [`Op::Cmp`] writing `ZF`/`SF`
 //! * `setcc` → [`Op::Assign`] / [`Op::Store`] from the corresponding flag
@@ -25,7 +26,7 @@
 //!
 //! Anything outside this set becomes [`Op::Unknown`] with the source mnemonic.
 
-use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
+use iced_x86::{Code, Decoder, DecoderOptions, Mnemonic, OpKind, Register};
 
 use crate::ir::types::*;
 
@@ -373,6 +374,198 @@ fn stos_ops(mnem: Mnemonic, bits: u32) -> Vec<Op> {
     ]
 }
 
+fn string_movs_ops(width: u8, bits: u32) -> Vec<Op> {
+    let src_ptr = VReg::phys(if bits == 64 { "rsi" } else { "esi" });
+    let dst_ptr = VReg::phys(if bits == 64 { "rdi" } else { "edi" });
+    let tmp = VReg::Temp(0);
+    vec![
+        Op::Load {
+            dst: tmp.clone(),
+            addr: MemOp {
+                base: Some(src_ptr.clone()),
+                index: None,
+                scale: 0,
+                disp: 0,
+                size: width,
+                segment: None,
+            },
+        },
+        Op::Store {
+            addr: MemOp {
+                base: Some(dst_ptr.clone()),
+                index: None,
+                scale: 0,
+                disp: 0,
+                size: width,
+                segment: None,
+            },
+            src: Value::Reg(tmp),
+        },
+        Op::Bin {
+            dst: src_ptr.clone(),
+            op: BinOp::Add,
+            lhs: Value::Reg(src_ptr),
+            rhs: Value::Const(i64::from(width)),
+        },
+        Op::Bin {
+            dst: dst_ptr.clone(),
+            op: BinOp::Add,
+            lhs: Value::Reg(dst_ptr),
+            rhs: Value::Const(i64::from(width)),
+        },
+    ]
+}
+
+fn scalar_move_ops(instr: &iced_x86::Instruction, width: u8, mnemonic: &str) -> Vec<Op> {
+    if instr.op_count() != 2 {
+        return vec![Op::Unknown {
+            mnemonic: mnemonic.into(),
+        }];
+    }
+    match (instr.op_kind(0), instr.op_kind(1)) {
+        (OpKind::Register, OpKind::Register) => vec![Op::Assign {
+            dst: VReg::phys(reg_name(instr.op_register(0))),
+            src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+        }],
+        (OpKind::Register, OpKind::Memory) => {
+            let mut addr = mem_op_of(instr);
+            addr.size = width;
+            vec![Op::Load {
+                dst: VReg::phys(reg_name(instr.op_register(0))),
+                addr,
+            }]
+        }
+        (OpKind::Memory, OpKind::Register) => {
+            let mut addr = mem_op_of(instr);
+            addr.size = width;
+            vec![Op::Store {
+                addr,
+                src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+            }]
+        }
+        _ => vec![Op::Unknown {
+            mnemonic: mnemonic.into(),
+        }],
+    }
+}
+
+fn sbb_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2 {
+        return vec![Op::Unknown {
+            mnemonic: "sbb".into(),
+        }];
+    }
+
+    let carry = Value::Reg(VReg::Flag(Flag::C));
+    match instr.op_kind(0) {
+        OpKind::Register => {
+            let dst = VReg::phys(reg_name(instr.op_register(0)));
+            let mut ops = Vec::new();
+            let Some(rhs) = cmp_operand_as_value(instr, 1, VReg::Temp(0), &mut ops) else {
+                return vec![Op::Unknown {
+                    mnemonic: "sbb".into(),
+                }];
+            };
+            ops.push(Op::Bin {
+                dst: dst.clone(),
+                op: BinOp::Sub,
+                lhs: Value::Reg(dst.clone()),
+                rhs,
+            });
+            ops.push(Op::Bin {
+                dst: dst.clone(),
+                op: BinOp::Sub,
+                lhs: Value::Reg(dst),
+                rhs: carry,
+            });
+            ops
+        }
+        OpKind::Memory => {
+            let addr = mem_op_of(instr);
+            let mut ops = Vec::new();
+            let Some(rhs) = cmp_operand_as_value(instr, 1, VReg::Temp(1), &mut ops) else {
+                return vec![Op::Unknown {
+                    mnemonic: "sbb".into(),
+                }];
+            };
+            let tmp = VReg::Temp(0);
+            ops.insert(
+                0,
+                Op::Load {
+                    dst: tmp.clone(),
+                    addr: addr.clone(),
+                },
+            );
+            ops.push(Op::Bin {
+                dst: tmp.clone(),
+                op: BinOp::Sub,
+                lhs: Value::Reg(tmp.clone()),
+                rhs,
+            });
+            ops.push(Op::Bin {
+                dst: tmp.clone(),
+                op: BinOp::Sub,
+                lhs: Value::Reg(tmp.clone()),
+                rhs: carry,
+            });
+            ops.push(Op::Store {
+                addr,
+                src: Value::Reg(tmp),
+            });
+            ops
+        }
+        _ => vec![Op::Unknown {
+            mnemonic: "sbb".into(),
+        }],
+    }
+}
+
+fn xorps_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2 || instr.op_kind(0) != OpKind::Register {
+        return vec![Op::Unknown {
+            mnemonic: "xorps".into(),
+        }];
+    }
+    let dst = VReg::phys(reg_name(instr.op_register(0)));
+    match instr.op_kind(1) {
+        OpKind::Register => {
+            let src = VReg::phys(reg_name(instr.op_register(1)));
+            if src == dst {
+                return vec![Op::Assign {
+                    dst,
+                    src: Value::Const(0),
+                }];
+            }
+            vec![Op::Bin {
+                dst: dst.clone(),
+                op: BinOp::Xor,
+                lhs: Value::Reg(dst),
+                rhs: Value::Reg(src),
+            }]
+        }
+        OpKind::Memory => {
+            let tmp = VReg::Temp(0);
+            let mut addr = mem_op_of(instr);
+            addr.size = 16;
+            vec![
+                Op::Load {
+                    dst: tmp.clone(),
+                    addr,
+                },
+                Op::Bin {
+                    dst: dst.clone(),
+                    op: BinOp::Xor,
+                    lhs: Value::Reg(dst),
+                    rhs: Value::Reg(tmp),
+                },
+            ]
+        }
+        _ => vec![Op::Unknown {
+            mnemonic: "xorps".into(),
+        }],
+    }
+}
+
 fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     if instr.op_count() != 2 || instr.op_kind(1) != OpKind::Register {
         return vec![Op::Unknown {
@@ -517,7 +710,11 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     }
 
     match mnem {
-        Mnemonic::Nop | Mnemonic::Endbr32 | Mnemonic::Endbr64 | Mnemonic::Int3 => vec![Op::Nop],
+        Mnemonic::Nop
+        | Mnemonic::Endbr32
+        | Mnemonic::Endbr64
+        | Mnemonic::Int3
+        | Mnemonic::Fninit => vec![Op::Nop],
         Mnemonic::Mov => {
             if instr.op_count() != 2 {
                 return vec![Op::Unknown {
@@ -579,6 +776,10 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 }],
             }
         }
+        Mnemonic::Cdqe => vec![Op::Assign {
+            dst: VReg::phys("rax"),
+            src: Value::Reg(VReg::phys("eax")),
+        }],
         Mnemonic::Lea => {
             if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
                 // When the base is RIP we can resolve to an absolute VA.
@@ -692,6 +893,13 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
                     }];
                 }
+            }
+        }
+        Mnemonic::Movsd => {
+            if instr.code() == Code::Movsd_m32_m32 {
+                string_movs_ops(4, bits)
+            } else {
+                scalar_move_ops(instr, 8, "movsd")
             }
         }
         Mnemonic::Cmp => {
@@ -968,6 +1176,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
             }]
         }
+        Mnemonic::Sbb => sbb_ops(instr),
+        Mnemonic::Xorps => xorps_ops(instr),
         Mnemonic::Push => push_ops(instr, bits),
         Mnemonic::Pop => pop_ops(instr, bits),
         Mnemonic::Stosb | Mnemonic::Stosw | Mnemonic::Stosd | Mnemonic::Stosq => {
@@ -1762,6 +1972,126 @@ mod tests {
             }
             other => panic!("expected accumulator Div, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn cdqe_lifts_to_rax_from_eax_assign() {
+        let ops = lift64(&[0x48, 0x98]);
+        assert_eq!(ops.len(), 1, "got: {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign {
+                dst,
+                src: Value::Reg(src),
+            } if *dst == VReg::phys("rax") && *src == VReg::phys("eax")
+        ));
+    }
+
+    #[test]
+    fn sbb_reg_reg_lifts_to_sub_with_carry_dependency() {
+        let ops = lift64(&[0x48, 0x19, 0xc8]);
+        assert_eq!(ops.len(), 2, "got: {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Bin {
+                dst,
+                op: BinOp::Sub,
+                lhs: Value::Reg(lhs),
+                rhs: Value::Reg(rhs),
+            } if *dst == VReg::phys("rax")
+                && *lhs == VReg::phys("rax")
+                && *rhs == VReg::phys("rcx")
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Bin {
+                dst,
+                op: BinOp::Sub,
+                lhs: Value::Reg(lhs),
+                rhs: Value::Reg(rhs),
+            } if *dst == VReg::phys("rax")
+                && *lhs == VReg::phys("rax")
+                && *rhs == VReg::Flag(Flag::C)
+        ));
+    }
+
+    #[test]
+    fn xorps_self_lifts_to_zero_assign() {
+        let ops = lift64(&[0x0f, 0x57, 0xc0]);
+        assert_eq!(ops.len(), 1, "got: {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign {
+                dst,
+                src: Value::Const(0),
+            } if *dst == VReg::phys("xmm0")
+        ));
+    }
+
+    #[test]
+    fn movsd_scalar_reg_reg_lifts_to_assign() {
+        let ops = lift64(&[0xf2, 0x0f, 0x10, 0xc1]);
+        assert_eq!(ops.len(), 1, "got: {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign {
+                dst,
+                src: Value::Reg(src),
+            } if *dst == VReg::phys("xmm0") && *src == VReg::phys("xmm1")
+        ));
+    }
+
+    #[test]
+    fn movsd_string_lifts_to_copy_and_pointer_advance() {
+        let ops = lift64(&[0xa5]);
+        assert_eq!(ops.len(), 4, "got: {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(0),
+                addr: MemOp {
+                    base: Some(src),
+                    size: 4,
+                    ..
+                },
+            } if *src == VReg::phys("rsi")
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Store {
+                addr: MemOp {
+                    base: Some(dst),
+                    size: 4,
+                    ..
+                },
+                src: Value::Reg(VReg::Temp(0)),
+            } if *dst == VReg::phys("rdi")
+        ));
+        assert!(matches!(
+            &ops[2].op,
+            Op::Bin {
+                dst,
+                op: BinOp::Add,
+                rhs: Value::Const(4),
+                ..
+            } if *dst == VReg::phys("rsi")
+        ));
+        assert!(matches!(
+            &ops[3].op,
+            Op::Bin {
+                dst,
+                op: BinOp::Add,
+                rhs: Value::Const(4),
+                ..
+            } if *dst == VReg::phys("rdi")
+        ));
+    }
+
+    #[test]
+    fn fninit_lifts_to_nop() {
+        let ops = lift64(&[0xdb, 0xe3]);
+        assert_eq!(ops.len(), 1, "got: {ops:#?}");
+        assert_eq!(ops[0].op, Op::Nop);
     }
 
     #[test]

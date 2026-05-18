@@ -186,6 +186,84 @@ def test_div_lifts_to_bin_div_dict():
     ]
 
 
+def test_cdqe_lifts_to_rax_from_eax_assign():
+    ops = g.ir.lift_bytes(bytes([0x48, 0x98]), 0x1000, 64)
+    assert ops == [
+        {
+            "va": 0x1000,
+            "kind": "assign",
+            "dst": "rax",
+            "src": {"kind": "reg", "name": "eax"},
+        }
+    ]
+
+
+def test_sbb_reg_reg_lifts_to_sub_with_carry_dependency():
+    ops = g.ir.lift_bytes(bytes([0x48, 0x19, 0xC8]), 0x1000, 64)
+    assert ops == [
+        {
+            "va": 0x1000,
+            "kind": "bin",
+            "dst": "rax",
+            "op": "sub",
+            "lhs": {"kind": "reg", "name": "rax"},
+            "rhs": {"kind": "reg", "name": "rcx"},
+        },
+        {
+            "va": 0x1000,
+            "kind": "bin",
+            "dst": "rax",
+            "op": "sub",
+            "lhs": {"kind": "reg", "name": "rax"},
+            "rhs": {"kind": "reg", "name": "%cf"},
+        },
+    ]
+
+
+def test_xorps_self_lifts_to_zero_assign():
+    ops = g.ir.lift_bytes(bytes([0x0F, 0x57, 0xC0]), 0x1000, 64)
+    assert ops == [
+        {
+            "va": 0x1000,
+            "kind": "assign",
+            "dst": "xmm0",
+            "src": {"kind": "const", "value": 0},
+        }
+    ]
+
+
+def test_movsd_scalar_lifts_to_assign():
+    ops = g.ir.lift_bytes(bytes([0xF2, 0x0F, 0x10, 0xC1]), 0x1000, 64)
+    assert ops == [
+        {
+            "va": 0x1000,
+            "kind": "assign",
+            "dst": "xmm0",
+            "src": {"kind": "reg", "name": "xmm1"},
+        }
+    ]
+
+
+def test_movsd_string_lifts_to_copy_and_pointer_advance():
+    ops = g.ir.lift_bytes(bytes([0xA5]), 0x1000, 64)
+    assert [o["kind"] for o in ops] == ["load", "store", "bin", "bin"]
+    assert ops[0]["dst"] == "%t0"
+    assert ops[0]["addr"]["base"] == "rsi"
+    assert ops[0]["addr"]["size"] == 4
+    assert ops[1]["addr"]["base"] == "rdi"
+    assert ops[1]["src"] == {"kind": "reg", "name": "%t0"}
+    assert ops[2]["dst"] == "rsi"
+    assert ops[2]["rhs"] == {"kind": "const", "value": 4}
+    assert ops[3]["dst"] == "rdi"
+    assert ops[3]["rhs"] == {"kind": "const", "value": 4}
+
+
+def test_fninit_lifts_to_nop_dict():
+    assert g.ir.lift_bytes(bytes([0xDB, 0xE3]), 0x1000, 64) == [
+        {"va": 0x1000, "kind": "nop"}
+    ]
+
+
 def test_lift_bytes_rejects_invalid_bits():
     with pytest.raises(ValueError):
         g.ir.lift_bytes(bytes([0x90]), 0, 48)
