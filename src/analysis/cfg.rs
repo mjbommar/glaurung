@@ -65,6 +65,23 @@ impl DiscoverySeedKind {
     }
 }
 
+#[derive(Debug, Clone)]
+struct FunctionCallEdge {
+    callsite_va: u64,
+    target_va: Option<u64>,
+    target_name: Option<String>,
+    call_type: CallType,
+}
+
+#[derive(Debug, Clone)]
+struct RecordedCallEdge {
+    caller_entry_va: u64,
+    callsite_va: u64,
+    target_va: Option<u64>,
+    target_name: Option<String>,
+    call_type: CallType,
+}
+
 fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Option<Address>) {
     let mut regions = Vec::new();
     let mut arch = BArch::Unknown;
@@ -255,6 +272,28 @@ fn immediate_target(ins: &Instruction) -> Option<u64> {
         .map(|v| v as u64)
 }
 
+fn iat_memory_call_target(ins: &Instruction, arch: BArch) -> Option<u64> {
+    if !matches!(arch, BArch::X86 | BArch::X86_64) {
+        return None;
+    }
+
+    ins.operands.iter().find_map(|op| {
+        if !op.is_memory() || op.index.is_some() {
+            return None;
+        }
+        let disp = op.displacement?;
+        if disp < 0 {
+            return None;
+        }
+        let base = op.base.as_deref().unwrap_or("").to_ascii_lowercase();
+        match arch {
+            BArch::X86_64 if base.is_empty() || base == "rip" => Some(disp as u64),
+            BArch::X86 if base.is_empty() => Some(disp as u64),
+            _ => None,
+        }
+    })
+}
+
 /// Discover a single function starting at `entry` within executable regions.
 fn discover_function(
     data: &[u8],
@@ -263,7 +302,8 @@ fn discover_function(
     entry: Address,
     regions: &[ExecRegion],
     budgets: &Budgets,
-) -> Option<(Function, Vec<(u64, u64)>)> {
+    pe_iat_name_by_va: &std::collections::HashMap<u64, String>,
+) -> Option<(Function, Vec<FunctionCallEdge>)> {
     let darch: crate::core::disassembler::Architecture = arch.into();
     let backend = registry::for_arch(darch, end)?;
     let bits = darch.address_bits();
@@ -275,7 +315,7 @@ fn discover_function(
     let mut seen: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
     let mut blocks: HashMap<u64, (u64, u32)> = HashMap::new(); // start_va -> (end_va, instr_count)
     let mut edges: Vec<(u64, u64, ControlFlowEdgeKind)> = Vec::new();
-    let mut call_edges: Vec<(u64, u64)> = Vec::new(); // (callsite_va, callee_va)
+    let mut call_edges: Vec<FunctionCallEdge> = Vec::new();
 
     if let Some(r) = in_exec_regions(regions, entry.value) {
         let _ = r;
@@ -327,7 +367,21 @@ fn discover_function(
                 // so downstream xref tables can report callsites, not just
                 // caller-function granularity.
                 if let Some(tgt) = immediate_target(&ins) {
-                    call_edges.push((cur_va, tgt));
+                    call_edges.push(FunctionCallEdge {
+                        callsite_va: cur_va,
+                        target_va: Some(tgt),
+                        target_name: None,
+                        call_type: CallType::Direct,
+                    });
+                } else if let Some(slot_va) = iat_memory_call_target(&ins, arch) {
+                    if let Some(name) = pe_iat_name_by_va.get(&slot_va) {
+                        call_edges.push(FunctionCallEdge {
+                            callsite_va: cur_va,
+                            target_va: Some(slot_va),
+                            target_name: Some(name.clone()),
+                            call_type: CallType::Indirect,
+                        });
+                    }
                 }
                 // continue to fallthrough
             } else if is_branch {
@@ -1375,6 +1429,13 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     } else {
         Vec::new()
     };
+    let pe_iat_name_by_va: std::collections::HashMap<u64, String> = if is_pe_image {
+        crate::analysis::pe_iat::pe_iat_map(data)
+            .into_iter()
+            .collect()
+    } else {
+        std::collections::HashMap::new()
+    };
     let pe_import_thunk_name_by_va: std::collections::HashMap<u64, String> =
         pe_import_thunks.iter().cloned().collect();
     let flirt_name_by_va: std::collections::HashMap<u64, String> =
@@ -1505,7 +1566,7 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     // other seed source. Worklist-based to keep the iteration bounded
     // by `max_functions` while still propagating xrefs to a fixed
     // point.
-    let mut calls_all: Vec<(u64, u64, u64)> = Vec::new(); // (caller_entry_va, callsite_va, callee_va)
+    let mut calls_all: Vec<RecordedCallEdge> = Vec::new();
     let mut worklist: std::collections::VecDeque<(Address, DiscoverySeedKind)> =
         seeds.into_iter().collect();
     while let Some((seed, seed_kind)) = worklist.pop_front() {
@@ -1522,22 +1583,38 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         {
             continue;
         }
-        if let Some((f, calls)) =
-            discover_function(data, arch, end, seed.clone(), &regions, budgets)
-        {
-            for (callsite_va, callee_va) in &calls {
-                calls_all.push((f.entry_point.value, *callsite_va, *callee_va));
+        if let Some((f, calls)) = discover_function(
+            data,
+            arch,
+            end,
+            seed.clone(),
+            &regions,
+            budgets,
+            &pe_iat_name_by_va,
+        ) {
+            for call in &calls {
+                calls_all.push(RecordedCallEdge {
+                    caller_entry_va: f.entry_point.value,
+                    callsite_va: call.callsite_va,
+                    target_va: call.target_va,
+                    target_name: call.target_name.clone(),
+                    call_type: call.call_type,
+                });
                 // Xref-backtracking seed: any direct call/jump target
                 // landing in an exec region that we haven't already
                 // queued becomes a new candidate function entry.
-                if !known.contains(callee_va)
-                    && in_exec_regions(&regions, *callee_va).is_some()
-                    && !va_in_discovered_body(&functions, Some(&f), *callee_va)
-                    && (!is_pe_image || pe_xref_seed_looks_like_function_start(data, *callee_va))
+                let Some(callee_va) = call.target_va else {
+                    continue;
+                };
+                if call.call_type == CallType::Direct
+                    && !known.contains(&callee_va)
+                    && in_exec_regions(&regions, callee_va).is_some()
+                    && !va_in_discovered_body(&functions, Some(&f), callee_va)
+                    && (!is_pe_image || pe_xref_seed_looks_like_function_start(data, callee_va))
                 {
-                    if let Ok(addr) = Address::new(AddressKind::VA, *callee_va, bits, None, None) {
+                    if let Ok(addr) = Address::new(AddressKind::VA, callee_va, bits, None, None) {
                         worklist.push_back((addr, DiscoverySeedKind::Xref));
-                        known.insert(*callee_va);
+                        known.insert(callee_va);
                     }
                 }
             }
@@ -1666,26 +1743,27 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         .map(|f| (f.entry_point.value, f.name.clone()))
         .collect();
 
-    for (caller_entry_va, callsite_va, callee_va) in calls_all {
+    for call in calls_all {
         let caller = name_by_va
-            .get(&caller_entry_va)
+            .get(&call.caller_entry_va)
             .cloned()
-            .unwrap_or_else(|| format!("sub_{:x}", caller_entry_va));
-        let callee = name_by_va
-            .get(&callee_va)
-            .cloned()
-            .unwrap_or_else(|| format!("sub_{:x}", callee_va));
+            .unwrap_or_else(|| format!("sub_{:x}", call.caller_entry_va));
+        let callee = call
+            .target_name
+            .or_else(|| call.target_va.and_then(|va| name_by_va.get(&va).cloned()))
+            .or_else(|| call.target_va.map(|va| format!("sub_{:x}", va)))
+            .unwrap_or_else(|| format!("indirect_{:x}", call.callsite_va));
         cg.add_node(callee.clone());
-        let edge = Address::new(AddressKind::VA, callsite_va, bits, None, None)
+        let edge = Address::new(AddressKind::VA, call.callsite_va, bits, None, None)
             .map(|site| {
                 CallGraphEdge::with_call_sites(
                     caller.clone(),
                     callee.clone(),
-                    CallType::Direct,
+                    call.call_type,
                     vec![site],
                 )
             })
-            .unwrap_or_else(|_| CallGraphEdge::new(caller.clone(), callee, CallType::Direct));
+            .unwrap_or_else(|_| CallGraphEdge::new(caller.clone(), callee, call.call_type));
         cg.add_edge(edge);
     }
 
@@ -1888,6 +1966,64 @@ mod pe_import_thunk_seed_tests {
                     && names_by_va.get(va) == Some(&"LeaveCriticalSection")
             }),
             "expected a named LeaveCriticalSection import thunk function"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pe_iat_callgraph_tests {
+    use super::{analyze_functions_bytes, Budgets};
+    use crate::core::call_graph::CallType;
+    use std::path::Path;
+
+    fn has_indirect_import_callsite(
+        cg: &crate::core::call_graph::CallGraph,
+        callee: &str,
+        callsite_va: u64,
+    ) -> bool {
+        cg.edges.iter().any(|edge| {
+            edge.call_type == CallType::Indirect
+                && edge.callee == callee
+                && edge.call_sites.iter().any(|site| site.value == callsite_va)
+        })
+    }
+
+    #[test]
+    fn pe_iat_memory_calls_are_named_indirect_callgraph_edges() {
+        let path = Path::new(
+            "samples/binaries/platforms/windows/i386/export/windows/x86_64/O0/hello-c-mingw64-O0.exe",
+        );
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).expect("read sample");
+        let iat = crate::analysis::pe_iat::pe_iat_map(&data);
+        for expected in ["GetStartupInfoA", "VirtualQuery", "VirtualProtect"] {
+            assert!(
+                iat.iter().any(|(_va, name)| name == expected),
+                "fixture IAT does not expose {expected}"
+            );
+        }
+
+        let budgets = Budgets {
+            max_functions: 1024,
+            max_blocks: 1_000_000,
+            max_instructions: 30_000_000,
+            timeout_ms: 30_000,
+        };
+        let (_functions, cg) = analyze_functions_bytes(&data, &budgets);
+
+        assert!(
+            has_indirect_import_callsite(&cg, "GetStartupInfoA", 0x140001473),
+            "missing named GetStartupInfoA IAT call edge"
+        );
+        assert!(
+            has_indirect_import_callsite(&cg, "VirtualQuery", 0x140001a69),
+            "missing named VirtualQuery IAT call edge"
+        );
+        assert!(
+            has_indirect_import_callsite(&cg, "VirtualProtect", 0x140001b4e),
+            "missing named VirtualProtect IAT call edge"
         );
     }
 }
