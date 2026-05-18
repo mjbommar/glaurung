@@ -100,6 +100,9 @@ sit below full IR/CFG bug-class scanners:
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM
   harness strategy.
+- `windows_ghidra_delta_manifest` exposes ASB's explicit Ghidra-parity
+  gap records, so agents can ask which fact classes are present,
+  partial, missing, or blocking automated Windows triage.
 - `windows_surface_catalog`, `windows_source_reachability`, and
   `windows_target_surface_profile` expose attacker-surface and
   validation context from ASB metadata.

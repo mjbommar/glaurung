@@ -125,6 +125,9 @@ from ..tools.windows_import_pdb_facts import (
 from ..tools.windows_component_profile import (
     build_tool as build_windows_component_profile,
 )
+from ..tools.windows_ghidra_delta_manifest import (
+    build_tool as build_windows_ghidra_delta_manifest,
+)
 from ..tools.windows_surface_catalog import (
     build_tool as build_windows_surface_catalog,
 )
@@ -946,6 +949,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_reconcile_pdb_identity()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_import_pdb_facts()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_component_profile()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_ghidra_delta_manifest()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_surface_catalog()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_source_reachability()))
     agent._function_toolset.add_tool(
