@@ -86,6 +86,9 @@ from ..tools.list_suspicious_imports import (
     build_tool as build_list_suspicious_imports,
     SuspiciousImportsResult,
 )
+from ..tools.windows_surface_metadata import (
+    build_tool as build_windows_surface_metadata,
+)
 from ..tools.identify_compiler_and_runtime import (
     build_tool as build_identify_compiler,
     IdentifyCompilerResult,
@@ -806,6 +809,7 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_pe_list_resources()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_pe_decode_version_info()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_pe_view_manifest()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_surface_metadata()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_agent_context()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_index_archive()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_java_detect_obfuscation()))
