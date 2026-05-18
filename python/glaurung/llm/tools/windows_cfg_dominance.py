@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 from collections import deque
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -33,13 +35,24 @@ class CfgBlockFact(BaseModel):
 class WindowsCfgDominanceArgs(BaseModel):
     function_va: int | None = Field(
         None,
-        description="Function entry VA. Required when cfg_blocks is omitted.",
+        description=(
+            "Function entry VA. Required when cfg_blocks and project_path are omitted."
+        ),
     )
     gate_va: int = Field(..., description="VA of the validation gate call or branch.")
     sink_va: int = Field(..., description="VA of the sink call or memory operation.")
     cfg_blocks: list[CfgBlockFact] = Field(
         default_factory=list,
-        description="Optional explicit CFG blocks; if omitted, native CFG analysis is used.",
+        description=(
+            "Optional explicit CFG blocks; otherwise project_path or native CFG "
+            "analysis is used."
+        ),
+    )
+    project_path: str | None = Field(
+        None,
+        description=(
+            "Optional .glaurung project path with persisted basic_blocks/cfg_edges."
+        ),
     )
     max_functions: int = Field(256, description="Native function discovery cap.")
     max_blocks: int = Field(512, description="Native per-function basic block cap.")
@@ -124,8 +137,19 @@ def _blocks(
 ) -> tuple[list[CfgBlockFact], int | None, list[str], list[str]]:
     if args.cfg_blocks:
         return args.cfg_blocks, args.function_va, ["supplied_cfg_blocks"], []
+    if args.project_path:
+        blocks, function_va, notes = _blocks_from_project(args)
+        if blocks:
+            return blocks, function_va, ["persisted_project_cfg"], notes
+        if notes:
+            return [], args.function_va, ["persisted_project_cfg"], notes
     if args.function_va is None:
-        return [], None, ["native_cfg_not_run"], ["function_va or cfg_blocks is required"]
+        return (
+            [],
+            None,
+            ["native_cfg_not_run"],
+            ["function_va, project_path, or cfg_blocks is required"],
+        )
     try:
         funcs, _cg = g.analysis.analyze_functions_path(
             str(ctx.file_path),
@@ -150,6 +174,90 @@ def _blocks(
             [],
         )
     return [], args.function_va, ["glaurung_native_cfg"], ["function_va not found"]
+
+
+def _blocks_from_project(
+    args: WindowsCfgDominanceArgs,
+) -> tuple[list[CfgBlockFact], int | None, list[str]]:
+    project_path = Path(args.project_path or "")
+    if not project_path.exists():
+        return [], args.function_va, [f"{project_path}: .glaurung project does not exist"]
+    try:
+        conn = sqlite3.connect(f"file:{project_path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        return [], args.function_va, [f"failed to open project CFG tables: {exc}"]
+    try:
+        present = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        if "basic_blocks" not in present or "cfg_edges" not in present:
+            return [], args.function_va, ["project lacks persisted CFG tables"]
+        resolved = _resolve_project_function(conn, args)
+        if resolved is None:
+            return [], args.function_va, ["no persisted CFG function contains gate and sink"]
+        binary_id, function_va = resolved
+        rows = conn.execute(
+            "SELECT block_id, start_va, end_va FROM basic_blocks "
+            "WHERE binary_id = ? AND function_va = ? ORDER BY start_va",
+            (binary_id, function_va),
+        ).fetchall()
+        edges = conn.execute(
+            "SELECT src_block_id, dst_block_id FROM cfg_edges "
+            "WHERE binary_id = ? AND function_va = ?",
+            (binary_id, function_va),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        return [], args.function_va, [f"failed to read persisted CFG tables: {exc}"]
+    finally:
+        conn.close()
+
+    successors: dict[str, list[str]] = {}
+    predecessors: dict[str, list[str]] = {}
+    for src, dst in edges:
+        src_id = str(src)
+        dst_id = str(dst)
+        successors.setdefault(src_id, []).append(dst_id)
+        predecessors.setdefault(dst_id, []).append(src_id)
+    blocks = [
+        CfgBlockFact(
+            id=str(row[0]),
+            start_va=int(row[1]),
+            end_va=int(row[2]),
+            successor_ids=successors.get(str(row[0]), []),
+            predecessor_ids=predecessors.get(str(row[0]), []),
+        )
+        for row in rows
+    ]
+    return blocks, function_va, []
+
+
+def _resolve_project_function(
+    conn: sqlite3.Connection,
+    args: WindowsCfgDominanceArgs,
+) -> tuple[int, int] | None:
+    if args.function_va is not None:
+        row = conn.execute(
+            "SELECT binary_id, function_va FROM basic_blocks "
+            "WHERE function_va = ? ORDER BY binary_id LIMIT 1",
+            (args.function_va,),
+        ).fetchone()
+        return (int(row[0]), int(row[1])) if row else None
+
+    gate_rows = conn.execute(
+        "SELECT binary_id, function_va FROM basic_blocks "
+        "WHERE start_va <= ? AND ? < end_va",
+        (args.gate_va, args.gate_va),
+    ).fetchall()
+    sink_rows = conn.execute(
+        "SELECT binary_id, function_va FROM basic_blocks "
+        "WHERE start_va <= ? AND ? < end_va",
+        (args.sink_va, args.sink_va),
+    ).fetchall()
+    gate_functions = {(int(row[0]), int(row[1])) for row in gate_rows}
+    sink_functions = {(int(row[0]), int(row[1])) for row in sink_rows}
+    matches = sorted(gate_functions & sink_functions)
+    return matches[0] if matches else None
 
 
 def _block_from_native(block: object) -> CfgBlockFact:

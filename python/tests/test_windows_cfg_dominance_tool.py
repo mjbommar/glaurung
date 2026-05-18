@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import glaurung as g
@@ -19,6 +20,53 @@ def _ctx(tmp_path: Path) -> MemoryContext:
     return ctx
 
 
+def _write_project_cfg(tmp_path: Path) -> Path:
+    project = tmp_path / "driver.glaurung"
+    conn = sqlite3.connect(project)
+    conn.executescript(
+        """
+CREATE TABLE basic_blocks (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    block_id TEXT NOT NULL,
+    start_va INTEGER NOT NULL,
+    end_va INTEGER NOT NULL,
+    instruction_count INTEGER NOT NULL,
+    is_entry INTEGER NOT NULL DEFAULT 0,
+    indexed_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, function_va, block_id)
+);
+CREATE TABLE cfg_edges (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    src_block_id TEXT NOT NULL,
+    dst_block_id TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'cfg',
+    indexed_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, function_va, src_block_id, dst_block_id, kind)
+);
+"""
+    )
+    conn.executemany(
+        "INSERT INTO basic_blocks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (1, 0x1000, "entry", 0x1000, 0x1010, 2, 1, 0),
+            (1, 0x1000, "gate", 0x1010, 0x1020, 2, 0, 0),
+            (1, 0x1000, "sink", 0x1020, 0x1030, 2, 0, 0),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO cfg_edges VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (1, 0x1000, "entry", "gate", "cfg", 0),
+            (1, 0x1000, "gate", "sink", "cfg", 0),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return project
+
+
 def test_windows_cfg_dominance_reports_same_block(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     tool = build_tool()
@@ -26,10 +74,10 @@ def test_windows_cfg_dominance_reports_same_block(tmp_path: Path) -> None:
     result = tool.run(
         ctx,
         ctx.kb,
-            tool.input_model(
-                function_va=0x1000,
-                gate_va=0x1010,
-                sink_va=0x1018,
+        tool.input_model(
+            function_va=0x1000,
+            gate_va=0x1010,
+            sink_va=0x1018,
             cfg_blocks=[
                 {
                     "id": "entry",
@@ -147,6 +195,29 @@ def test_windows_cfg_dominance_reports_not_dominated(tmp_path: Path) -> None:
 
     assert result.status == "not_dominated"
     assert "does not pass through gate block" in result.reason
+
+
+def test_windows_cfg_dominance_reads_persisted_project_cfg(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(_write_project_cfg(tmp_path)),
+            gate_va=0x1014,
+            sink_va=0x1024,
+        ),
+    )
+
+    assert result.status == "dominated"
+    assert result.function_va == 0x1000
+    assert result.gate_block_id == "gate"
+    assert result.sink_block_id == "sink"
+    assert result.provenance == ["persisted_project_cfg"]
+    assert result.block_count == 3
+    assert result.edge_count == 2
 
 
 def test_memory_agent_registers_windows_cfg_dominance() -> None:

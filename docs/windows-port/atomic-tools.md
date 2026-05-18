@@ -135,9 +135,10 @@ sit below full IR/CFG bug-class scanners:
   metadata with a pre/post binary diff and reports whether seed-named
   functions changed, stayed unchanged, or are absent from the pair.
 - `windows_cfg_dominance` checks whether a gate basic block dominates
-  a sink basic block using native PE function CFG recovery or supplied
-  fixture CFG rows. It reports `dominated`, `not_dominated`,
-  `same_block`, `unreachable`, or `unknown`.
+  a sink basic block using persisted `.glaurung` CFG tables, native PE
+  function CFG recovery, or supplied fixture CFG rows. It reports
+  `dominated`, `not_dominated`, `same_block`, `unreachable`, or
+  `unknown`.
 - `windows_bootstrap_project_facts` can now persist native PE basic
   blocks and CFG edges into `.glaurung` projects via its `index_cfg`
   step, so project summaries can report CFG coverage without re-running
