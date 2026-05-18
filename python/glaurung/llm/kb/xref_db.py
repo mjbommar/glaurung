@@ -503,6 +503,69 @@ def is_data_xrefs_indexed(kb: PersistentKnowledgeBase) -> bool:
     return cur.fetchone() is not None
 
 
+def _has_function_names(kb: PersistentKnowledgeBase) -> bool:
+    _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM function_names WHERE binary_id = ? LIMIT 1",
+        (kb.binary_id,),
+    )
+    return cur.fetchone() is not None
+
+
+def _populate_analyzer_function_names(kb: PersistentKnowledgeBase, funcs) -> int:
+    name_rows = [
+        (
+            kb.binary_id,
+            int(f.entry_point.value),
+            f.name,
+            "[]",
+            "analyzer",
+            int(time.time()),
+        )
+        for f in funcs
+    ]
+    cur = kb._conn.cursor()
+    cur.executemany(
+        "INSERT OR IGNORE INTO function_names "
+        "(binary_id, entry_va, canonical, aliases_json, set_by, set_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        name_rows,
+    )
+    kb._conn.commit()
+    return len(name_rows)
+
+
+def _populate_function_names_from_analysis(
+    kb: PersistentKnowledgeBase,
+    binary_path: str,
+    *,
+    max_read_bytes: int,
+    max_file_size: int,
+    max_functions: int,
+    max_blocks: int,
+    max_instructions: int,
+    timeout_ms: int,
+) -> int:
+    import glaurung as g
+
+    funcs, _cg = g.analysis.analyze_functions_path(
+        binary_path,
+        max_read_bytes=max_read_bytes,
+        max_file_size=max_file_size,
+        max_functions=max_functions,
+        max_blocks=max_blocks,
+        max_instructions=max_instructions,
+        timeout_ms=timeout_ms,
+    )
+    count = _populate_analyzer_function_names(kb, funcs)
+    try:
+        demangle_function_names(kb)
+    except Exception:
+        pass
+    return count
+
+
 def index_callgraph(
     kb: PersistentKnowledgeBase,
     binary_path: str,
@@ -574,17 +637,7 @@ def index_callgraph(
         raise
 
     # Populate function_names with whatever the analyser supplied.
-    name_rows = [
-        (kb.binary_id, int(f.entry_point.value), f.name, "[]", "analyzer", int(time.time()))
-        for f in funcs
-    ]
-    cur.executemany(
-        "INSERT OR IGNORE INTO function_names "
-        "(binary_id, entry_va, canonical, aliases_json, set_by, set_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        name_rows,
-    )
-    kb._conn.commit()
+    _populate_analyzer_function_names(kb, funcs)
 
     # Go binaries are stripped of regular symbols but always ship a
     # `.gopclntab` section. Walk it and upgrade every `sub_<hex>` row
@@ -630,6 +683,7 @@ def index_data_xrefs(
     max_instructions: int = 30_000_000,
     timeout_ms: int = 600_000,
     max_xrefs: int = 1_000_000,
+    populate_function_names: bool = True,
 ) -> int:
     """Run native direct code-to-data xref recovery and persist ``data_read`` rows.
 
@@ -639,6 +693,17 @@ def index_data_xrefs(
     """
     _ensure_schema(kb._conn)
     if is_data_xrefs_indexed(kb) and not force:
+        if populate_function_names and not _has_function_names(kb):
+            _populate_function_names_from_analysis(
+                kb,
+                binary_path,
+                max_read_bytes=max_read_bytes,
+                max_file_size=max_file_size,
+                max_functions=max_functions,
+                max_blocks=max_blocks,
+                max_instructions=max_instructions,
+                timeout_ms=timeout_ms,
+            )
         return _row_count(kb, "data_read")
 
     import glaurung as g
@@ -686,6 +751,17 @@ def index_data_xrefs(
     except Exception:
         kb._conn.rollback()
         raise
+    if populate_function_names:
+        _populate_function_names_from_analysis(
+            kb,
+            binary_path,
+            max_read_bytes=max_read_bytes,
+            max_file_size=max_file_size,
+            max_functions=max_functions,
+            max_blocks=max_blocks,
+            max_instructions=max_instructions,
+            timeout_ms=timeout_ms,
+        )
     return _row_count(kb, "data_read")
 
 

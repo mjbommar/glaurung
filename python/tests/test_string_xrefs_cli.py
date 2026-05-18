@@ -166,7 +166,7 @@ def test_strings_xrefs_can_index_real_pe_data_refs(tmp_path: Path) -> None:
     assert any(
         "VirtualProtect failed" in row["text"]
         and row["uses"] >= 1
-        and any(use["src_function_va"] for use in row["used_at"])
+        and any(use["src_function"] == "__report_error" for use in row["used_at"])
         for row in rows
     )
 

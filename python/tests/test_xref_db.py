@@ -187,7 +187,16 @@ def test_index_data_xrefs_persists_exact_source_and_function_vas(
             (0x401020, 0x404048, 0x401000),
         ]
 
+    def fake_analyze_functions_path(_path: str, **_kwargs: object) -> tuple[list, object]:
+        return [
+            SimpleNamespace(
+                name="uses_data",
+                entry_point=SimpleNamespace(value=0x401000),
+            )
+        ], SimpleNamespace(edges=[])
+
     monkeypatch.setattr(g.analysis, "data_xrefs_path", fake_data_xrefs_path)
+    monkeypatch.setattr(g.analysis, "analyze_functions_path", fake_analyze_functions_path)
 
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
     xref_db.add_xref(kb, src_va=0x400100, dst_va=0x400200, kind="call",
@@ -201,6 +210,9 @@ def test_index_data_xrefs_persists_exact_source_and_function_vas(
     assert [(r.src_va, r.dst_va, r.kind, r.src_function_va) for r in rows] == [
         (0x401010, 0x404040, "data_read", 0x401000),
     ]
+    fn = xref_db.get_function_name(kb, 0x401000)
+    assert fn is not None
+    assert fn.display == "uses_data"
     assert xref_db.list_xrefs_to(kb, 0x400200, kinds=["call"])
     kb.close()
 
