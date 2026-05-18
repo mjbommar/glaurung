@@ -23,6 +23,10 @@ from .windows_emit_review_packet import (
     WindowsReviewPacket,
     WindowsReviewPathStep,
 )
+from .windows_gate_semantics import (
+    matched_required_gates,
+    missing_required_gates,
+)
 from .windows_source_sink_operand_match import (
     WindowsSourceSinkOperandMatchArgs,
     WindowsSourceSinkOperandMatchTool,
@@ -301,15 +305,13 @@ def _emit_packet(ctx, kb, args, operand, gate) -> WindowsReviewPacket:
 def _matched_required_gates(gate, required_gates: list[str]) -> list[str]:
     if gate.gate.gate is None:
         return []
-    proven = set(gate.gate.gate.proves)
-    return [required for required in required_gates if required in proven]
+    return matched_required_gates(gate.gate.gate.proves, required_gates)
 
 
 def _missing_required_gates(gate, required_gates: list[str]) -> list[str]:
     if gate.gate.gate is None:
         return list(required_gates)
-    proven = set(gate.gate.gate.proves)
-    return [required for required in required_gates if required not in proven]
+    return missing_required_gates(gate.gate.gate.proves, required_gates)
 
 
 def build_tool() -> WindowsComposeSourceGateSinkPacketTool:

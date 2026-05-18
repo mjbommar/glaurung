@@ -32,6 +32,10 @@ from .windows_function_arg_roles import (
     WindowsFunctionArgRolesArgs,
     WindowsFunctionArgRolesTool,
 )
+from .windows_gate_semantics import (
+    matched_required_gates,
+    missing_required_gates,
+)
 from .windows_project_callsite_facts import (
     ProjectCallsiteFact,
     WindowsProjectCallsiteFactsArgs,
@@ -596,12 +600,12 @@ def _refine_gate(
                 gate_symbol=name,
                 gate_va=candidate.callsite_va,
                 gate_proves=gate.proves,
-                matched_required_gates=_matched_required_gates(
-                    gate,
+                matched_required_gates=matched_required_gates(
+                    gate.proves,
                     sink_callsite.operation.required_gates,
                 ),
-                missing_required_gates=_missing_required_gates(
-                    gate,
+                missing_required_gates=missing_required_gates(
+                    gate.proves,
                     sink_callsite.operation.required_gates,
                 ),
                 packet_gate_status=_packet_gate_status(
@@ -621,10 +625,9 @@ def _refine_gate(
 
 
 def _gate_compatible(gate: GateRecord, required_gates: list[str]) -> bool:
-    required = set(required_gates)
-    if not required:
+    if not required_gates:
         return False
-    return bool(required & set(gate.proves))
+    return bool(matched_required_gates(gate.proves, required_gates))
 
 
 def _dominance(
@@ -655,7 +658,7 @@ def _packet_gate_status(
     gate: GateRecord,
     required_gates: list[str],
 ) -> GateStatus:
-    if _missing_required_gates(gate, required_gates):
+    if missing_required_gates(gate.proves, required_gates):
         return "unknown"
     if status == "dominated":
         return "dominated"
@@ -664,16 +667,6 @@ def _packet_gate_status(
     if status == "same_block":
         return "gate_same_line"
     return "unknown"
-
-
-def _matched_required_gates(gate: GateRecord, required_gates: list[str]) -> list[str]:
-    proven = set(gate.proves)
-    return [required for required in required_gates if required in proven]
-
-
-def _missing_required_gates(gate: GateRecord, required_gates: list[str]) -> list[str]:
-    proven = set(gate.proves)
-    return [required for required in required_gates if required not in proven]
 
 
 def _gate_requirement_summary(refinement: _GateRefinement) -> str:

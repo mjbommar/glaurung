@@ -201,7 +201,7 @@ def _write_gates(tmp_path: Path) -> Path:
 - id: probeforwrite
   symbols: [ProbeForWrite]
   gate_kind: user_pointer
-  proves: [destination_range_valid]
+  proves: [user_pointer_write_range_valid]
   required_conditions: [call_dominates_write_sink]
   invalid_when: [length_is_zero]
 """,

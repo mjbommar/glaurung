@@ -125,8 +125,11 @@ sit below full IR/CFG bug-class scanners:
   path evidence. It also records which sink-required gate semantics the
   gate metadata proves and which required gates remain unproven as
   structured `proven_gates` and `missing_required_gates` packet fields;
-  packet promotion stays blocked while required gate coverage is
-  unresolved. With `attach_gate_predicates`, a refined gate can also carry
+  conservative gate-fact implications map facts such as
+  `user_pointer_write_range_valid` to sink requirements such as
+  `destination_range_valid`. Packet promotion stays blocked while
+  required gate coverage is unresolved. With `attach_gate_predicates`, a
+  refined gate can also carry
   path-filtered persisted branch-condition predicates from
   `cfg_branch_facts`. When a caller supplies `source_arg` or
   `source_arg_index`, it can attach local sink-argument match evidence
@@ -208,7 +211,8 @@ sit below full IR/CFG bug-class scanners:
   which substrate was present or missing when the hit was produced,
   including required project fact classes and promotion blockers. It
   also passes matched and missing required gate semantics into the
-  structured `proven_gates` and `missing_required_gates` packet fields.
+  structured `proven_gates` and `missing_required_gates` packet fields,
+  using the same conservative gate-fact implication mapping.
 - `windows_emit_review_packet` and `windows_compose_candidate_packets`
   preserve structured PDB identity, component-profile, patch-diff,
   project-fact, and Ghidra-delta context in every emitted candidate
