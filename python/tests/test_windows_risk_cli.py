@@ -29,6 +29,10 @@ def test_windows_risk_json_reports_parser_shape(
                 "KERNEL32.dll!CreateFileW",
                 "KERNEL32.dll!ReadFile",
                 "KERNEL32.dll!LocalAlloc",
+                "KERNEL32.dll!FindResourceW",
+                "KERNEL32.dll!SizeofResource",
+                "KERNEL32.dll!LoadResource",
+                "KERNEL32.dll!LockResource",
                 "ADVAPI32.dll!RegSetValueExW",
             ],
             ["sample_export"],
@@ -134,7 +138,9 @@ def test_windows_risk_json_reports_parser_shape(
             "fn sub_1000 { tmp = (rbp - 128); CreateFileW(); "
             "ReadFile(var3, (rbp - 128), 4); LocalAlloc(64, stack_9); "
             "var6 = ret; L_1010: arg2 = stack_9; arg3 = (rsp + 64); "
-            "ReadFile(var3, var6); RegSetValueExW(); }"
+            "ReadFile(var3, var6); hres = FindResourceW(0, 0x401000, 10); "
+            "size = SizeofResource(0, hres); loaded = LoadResource(0, hres); "
+            "LockResource(loaded); RegSetValueExW(); }"
         ),
     )
 
@@ -229,6 +235,9 @@ def test_windows_risk_json_reports_parser_shape(
         item["kind"] == "file-read-allocation-argument-flow"
         for item in report["risk_items"]
     )
+    assert "resource" in report["risk_imports"]
+    assert "resource-extraction" in report["functions"][0]["patterns"]
+    assert any(item["kind"] == "resource-extraction" for item in report["risk_items"])
     assert any(item["kind"] == "function-string-xrefs" for item in report["risk_items"])
     assert report["functions"][0]["strings"][0]["text"].startswith(
         "MigrateModemSettings"

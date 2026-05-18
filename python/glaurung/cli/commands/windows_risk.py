@@ -81,6 +81,17 @@ _RISK_IMPORT_BUCKETS: dict[str, tuple[str, ...]] = {
         "recv",
         "send",
     ),
+    "resource": (
+        "FindResource",
+        "FindResourceEx",
+        "SizeofResource",
+        "LoadResource",
+        "LockResource",
+        "EnumResource",
+        "BeginUpdateResource",
+        "UpdateResource",
+        "EndUpdateResource",
+    ),
 }
 
 _SUSPICIOUS_STRING_TOKENS: tuple[str, ...] = (
@@ -872,7 +883,7 @@ def _pattern_priority(row: dict[str, Any]) -> int:
         return 4
     if "dynamic-api-resolution" in patterns:
         return 3
-    if "registry-write" in patterns:
+    if "registry-write" in patterns or "resource-extraction" in patterns:
         return 2
     if patterns:
         return 1
@@ -1645,6 +1656,13 @@ def _patterns_from_api_hits(api_hits: list[str]) -> list[str]:
         stem.startswith("deletefile") for stem in stems
     ):
         patterns.append("temp-file-write-delete")
+    if (
+        any(stem.startswith("findresource") for stem in stems)
+        and any(stem == "sizeofresource" for stem in stems)
+        and any(stem == "loadresource" for stem in stems)
+        and any(stem == "lockresource" for stem in stems)
+    ):
+        patterns.append("resource-extraction")
     return patterns
 
 
@@ -1655,7 +1673,7 @@ def _build_risk_items(
     items = []
     for bucket, names in risk_imports.items():
         severity = "medium" if bucket in {"file_io", "registry"} else "low"
-        if bucket in {"dynamic_loading", "copy_format"}:
+        if bucket in {"dynamic_loading", "copy_format", "resource"}:
             severity = "medium"
         items.append(
             {
