@@ -257,15 +257,17 @@ sit below full IR/CFG bug-class scanners:
   VA plus nearby post-call disassembly to recover a conservative local
   Windows x64 `RAX` return-value use snapshot. It classifies immediate
   checks such as `test rax, rax` or `cmp eax, ...`, adjacent
-  conditional branch relations, stores to registers or memory, argument
-  passing through RCX/RDX/R8/R9 before a nested call, arithmetic or
-  bitwise uses, and obvious clobbers such as zeroing or a nested call
-  before a proven use. This is the first low-level return-flow
+  conditional branch relations, branch-taken/fallthrough constraints
+  for adjacent zero/status checks, stores to registers or memory,
+  argument passing through RCX/RDX/R8/R9 before a nested call,
+  arithmetic or bitwise uses, and obvious clobbers such as zeroing or a
+  nested call before a proven use. This is the first low-level return-flow
   primitive for helper status checks, size-returning helpers,
   allocation-result checks, reference-acquire success paths, and
-  policy-query helpers. It is local evidence only; path-sensitive
-  return flow, non-adjacent flag flow, full alias tracking, and helper
-  side-effect summaries remain separate facts.
+  policy-query helpers. The branch constraints are local adjacent-branch
+  facts only; interprocedural return flow, non-adjacent flag flow, full
+  alias tracking, and helper side-effect summaries remain separate
+  facts.
 - `windows_project_operation_return_value_summary` joins ASB
   operation-classification backlog entries to exact project callsites
   and samples those callsites with

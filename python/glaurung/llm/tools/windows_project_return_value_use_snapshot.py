@@ -67,6 +67,8 @@ class ProjectReturnValueUseFact(BaseModel):
     argument_role: str | None = None
     branch_va: int | None = None
     branch_text: str | None = None
+    branch_taken_constraint: str | None = None
+    fallthrough_constraint: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     notes: list[str] = Field(default_factory=list)
 
@@ -339,6 +341,7 @@ def _comparison_fact(
         instruction,
         expression=", ".join(operands),
         branch=next_branch,
+        branch_constraint=_branch_constraint(mnemonic, operands, next_branch),
         confidence=0.86 if next_branch is not None else 0.78,
     )
 
@@ -469,6 +472,7 @@ def _fact(
     expression: str | None = None,
     argument_role: str | None = None,
     branch: g.Instruction | None = None,
+    branch_constraint: tuple[str, str] | None = None,
     confidence: float,
     notes: list[str] | None = None,
 ) -> ProjectReturnValueUseFact:
@@ -482,9 +486,69 @@ def _fact(
         argument_role=argument_role,
         branch_va=int(branch.address.value) if branch is not None else None,
         branch_text=_instruction_text(branch) if branch is not None else None,
+        branch_taken_constraint=branch_constraint[0] if branch_constraint else None,
+        fallthrough_constraint=branch_constraint[1] if branch_constraint else None,
         confidence=confidence,
         notes=notes or [],
     )
+
+
+def _branch_constraint(
+    compare_mnemonic: str,
+    compare_operands: list[str],
+    branch: g.Instruction | None,
+) -> tuple[str, str] | None:
+    if branch is None:
+        return None
+    branch_mnemonic = str(branch.mnemonic or "").lower()
+    if compare_mnemonic == "test" and _is_self_zero_test(compare_operands):
+        return _zero_constraint(branch_mnemonic)
+    if compare_mnemonic == "cmp" and _is_zero_compare(compare_operands):
+        return _zero_constraint(branch_mnemonic)
+    return None
+
+
+def _is_self_zero_test(operands: list[str]) -> bool:
+    return len(operands) >= 2 and _same_register(operands[0], operands[1])
+
+
+def _is_zero_compare(operands: list[str]) -> bool:
+    if len(operands) < 2:
+        return False
+    return _is_zero_immediate(operands[1])
+
+
+def _is_zero_immediate(operand: str) -> bool:
+    text = operand.strip().lower()
+    return text in {"0", "0x0"}
+
+
+def _zero_constraint(branch_mnemonic: str) -> tuple[str, str] | None:
+    if branch_mnemonic in {"je", "jz"}:
+        return ("return_value_zero_or_null", "return_value_nonzero")
+    if branch_mnemonic in {"jne", "jnz"}:
+        return ("return_value_nonzero", "return_value_zero_or_null")
+    if branch_mnemonic in {"jl", "jnge"}:
+        return (
+            "return_value_signed_less_than_zero",
+            "return_value_signed_greater_equal_zero",
+        )
+    if branch_mnemonic in {"jle", "jng"}:
+        return (
+            "return_value_signed_less_equal_zero",
+            "return_value_signed_greater_than_zero",
+        )
+    if branch_mnemonic in {"jg", "jnle"}:
+        return (
+            "return_value_signed_greater_than_zero",
+            "return_value_signed_less_equal_zero",
+        )
+    if branch_mnemonic in {"jge", "jnl"}:
+        return (
+            "return_value_signed_greater_equal_zero",
+            "return_value_signed_less_than_zero",
+        )
+    return None
 
 
 def _operand_mentions_alias(operand: str, aliases: set[str]) -> bool:
@@ -524,6 +588,8 @@ def _coverage(
         coverage.append("return_value_check")
     if any(use.branch_va is not None for use in uses):
         coverage.append("adjacent_branch_relation")
+    if any(use.branch_taken_constraint is not None for use in uses):
+        coverage.append("adjacent_branch_return_constraint")
     if any(use.use_kind in {"stored_to_register", "stored_to_memory"} for use in uses):
         coverage.append("return_value_store")
     if any(use.use_kind == "passed_as_argument" for use in uses):
