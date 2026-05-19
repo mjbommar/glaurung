@@ -266,6 +266,15 @@ sit below full IR/CFG bug-class scanners:
   policy-query helpers. It is local evidence only; path-sensitive
   return flow, non-adjacent flag flow, full alias tracking, and helper
   side-effect summaries remain separate facts.
+- `windows_project_operation_return_value_summary` joins ASB
+  operation-classification backlog entries to exact project callsites
+  and samples those callsites with
+  `windows_project_return_value_use_snapshot`. It aggregates use-kind
+  counts, checked callsite counts, adjacent-branch counts, clobber
+  counts, ignored-in-window counts, and representative sample facts per
+  backlog entry. This turns requirements such as `return_value_flow` on
+  groups like `HsmpGetStreamSize` into measurable project evidence
+  without claiming interprocedural or path-sensitive return-flow proof.
 - `windows_project_data_label_facts` reports project global data
   references with label coverage. It lists labeled targets, unlabeled
   data targets, sample source VAs, read/write counts, source-function
