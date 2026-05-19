@@ -251,8 +251,13 @@ sit below full IR/CFG bug-class scanners:
   arguments such as `global([rip + 0x1234])`; when the project has an
   exact data xref for the source instruction, it attaches the referenced
   data VA, and when `data_labels` has a row for that VA it attaches the
-  label name, C type, and size. It is local evidence, not full alias,
-  stack-frame, or path proof.
+  label name, C type, and size. It now adds conservative value-role
+  labels such as `local_pointer`, `global_pointer`, `field_derived`,
+  `caller_argument`, `zero_or_null`, `integer_constant`, and data-label
+  hints such as `path`, `registry_value`, `handle`, `length`, `count`,
+  `flag`, `object`, `callback`, or `selector`. These roles are local
+  expression classifications, not attacker-control, sink-role, full
+  alias, stack-frame, or path proof.
 - `windows_project_return_value_use_snapshot` uses a project callsite
   VA plus nearby post-call disassembly to recover a conservative local
   Windows x64 `RAX` return-value use snapshot. It classifies immediate

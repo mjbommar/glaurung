@@ -141,8 +141,12 @@ def test_windows_project_call_argument_snapshot_recovers_register_args(
     ]
     by_index = {arg.index: arg for arg in result.arguments}
     assert by_index[1].alias_kind == "stack_local_address"
+    assert by_index[1].value_role == "local_pointer"
+    assert by_index[2].value_role == "zero_or_null"
+    assert by_index[3].value_role == "integer_constant"
     assert "windows_x64_register_arguments" in result.coverage
     assert "stack_local_address_arguments" in result.coverage
+    assert "argument_value_roles" in result.coverage
     assert "stack_arguments" in result.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
@@ -313,6 +317,7 @@ def test_windows_project_call_argument_snapshot_resolves_memory_load_args(
     assert by_index[1].source_text == "mov rdx, rax"
     assert by_index[1].alias_depth == 2
     assert by_index[1].alias_kind == "memory_load"
+    assert by_index[1].value_role == "field_derived"
     assert "memory_load_arguments" in result.coverage
 
 
@@ -349,6 +354,7 @@ def test_windows_project_call_argument_snapshot_resolves_incoming_args(
     assert by_index[1].source_text == "mov rdx, rcx"
     assert by_index[1].alias_depth == 1
     assert by_index[1].alias_kind == "incoming_arg"
+    assert by_index[1].value_role == "caller_argument"
     assert "incoming_argument_aliases" in result.coverage
 
 
@@ -385,6 +391,7 @@ def test_windows_project_call_argument_snapshot_resolves_derived_address_args(
     assert by_index[1].source_text == "lea rdx, [rcx + 0x20]"
     assert by_index[1].alias_depth == 1
     assert by_index[1].alias_kind == "derived_address"
+    assert by_index[1].value_role == "field_derived"
     assert "derived_address_arguments" in result.coverage
 
 
@@ -421,6 +428,7 @@ def test_windows_project_call_argument_snapshot_labels_global_address_args(
     assert by_index[0].source_text == "lea rcx, [rip + 0x1234]"
     assert by_index[0].alias_depth == 0
     assert by_index[0].alias_kind == "global_address"
+    assert by_index[0].value_role == "global_pointer"
     assert "global_address_arguments" in result.coverage
 
 
@@ -470,8 +478,53 @@ def test_windows_project_call_argument_snapshot_joins_global_data_xrefs(
     assert by_index[0].data_target_name == "cldflt!g_TestTable"
     assert by_index[0].data_target_type == "GUID[]"
     assert by_index[0].data_target_size == 16
+    assert by_index[0].value_role == "global_pointer"
     assert "project_data_xref_targets" in result.coverage
     assert "project_data_label_targets" in result.coverage
+
+
+def test_windows_project_call_argument_snapshot_uses_data_label_role_hints(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+    conn = sqlite3.connect(project)
+    conn.execute(
+        "INSERT INTO xrefs VALUES (?, ?, ?, ?, ?, ?, 0)",
+        (2, 1, 0x1000, 0x3000, "data_read", 0x1000),
+    )
+    conn.execute(
+        "INSERT INTO data_labels VALUES (?, ?, ?, ?, ?, ?, 0)",
+        (1, 0x3000, "cldflt!g_RegistryPath", "UNICODE_STRING", 16, "unit_test"),
+    )
+    conn.commit()
+    conn.close()
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "lea", ["rcx", "[rip + 0x1234]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    assert result.arguments[0].value_role == "path"
+    assert "path or name" in (result.arguments[0].value_role_reason or "")
+    assert "argument_value_roles" in result.coverage
 
 
 def test_windows_project_call_argument_snapshot_preserves_clobbered_address_base(

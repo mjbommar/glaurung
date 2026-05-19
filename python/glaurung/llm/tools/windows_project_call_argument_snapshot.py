@@ -48,6 +48,8 @@ class ProjectCallArgumentFact(BaseModel):
     index: int
     register_name: str
     role: str
+    value_role: str | None = None
+    value_role_reason: str | None = None
     location: str = "register"
     stack_offset: int | None = None
     expression: str | None = None
@@ -114,6 +116,12 @@ class _DataTarget:
     name: str | None = None
     c_type: str | None = None
     size: int | None = None
+
+
+@dataclass(frozen=True)
+class _ValueRole:
+    role: str
+    reason: str
 
 
 class WindowsProjectCallArgumentSnapshotTool(
@@ -448,11 +456,14 @@ def _argument_snapshot(
             continue
         assignment = assignments[register]
         data_target = _data_target_for_assignment(assignment, data_xrefs)
+        value_role = _value_role(assignment.expression, assignment.alias_kind, data_target)
         facts.append(
             ProjectCallArgumentFact(
                 index=index,
                 register_name=register,
                 role=role,
+                value_role=value_role.role if value_role else None,
+                value_role_reason=value_role.reason if value_role else None,
                 expression=assignment.expression,
                 source_va=assignment.va,
                 source_text=assignment.source_text,
@@ -472,11 +483,14 @@ def _argument_snapshot(
     for index in sorted(stack_assignments):
         assignment = stack_assignments[index]
         data_target = _data_target_for_assignment(assignment, data_xrefs)
+        value_role = _value_role(assignment.expression, assignment.alias_kind, data_target)
         facts.append(
             ProjectCallArgumentFact(
                 index=index,
                 register_name=f"stack+0x{assignment.offset:x}",
                 role=f"arg{index}",
+                value_role=value_role.role if value_role else None,
+                value_role_reason=value_role.reason if value_role else None,
                 location="stack",
                 stack_offset=assignment.offset,
                 expression=assignment.expression,
@@ -508,6 +522,67 @@ def _data_target_for_assignment(
     if assignment.alias_kind != "global_address":
         return None
     return data_xrefs.get(assignment.va)
+
+
+def _value_role(
+    expression: str,
+    alias_kind: str | None,
+    data_target: _DataTarget | None,
+) -> _ValueRole | None:
+    data_role = _data_target_value_role(data_target)
+    if data_role is not None:
+        return data_role
+    text = expression.strip().lower()
+    if text in {"0", "0x0"}:
+        return _ValueRole("zero_or_null", "literal zero argument")
+    if _looks_like_integer_literal(text):
+        return _ValueRole("integer_constant", "immediate integer argument")
+    if alias_kind == "stack_local_address":
+        return _ValueRole("local_pointer", "address of rbp-relative stack local")
+    if alias_kind == "global_address":
+        return _ValueRole("global_pointer", "RIP-relative global address")
+    if alias_kind in {"derived_address", "memory_load"}:
+        return _ValueRole("field_derived", f"{alias_kind} expression")
+    if alias_kind == "incoming_arg":
+        return _ValueRole("caller_argument", "direct alias of incoming caller argument")
+    return None
+
+
+def _data_target_value_role(data_target: _DataTarget | None) -> _ValueRole | None:
+    if data_target is None:
+        return None
+    haystack = " ".join(
+        value.lower()
+        for value in (data_target.name, data_target.c_type)
+        if value is not None
+    )
+    if any(token in haystack for token in ("path", "name", "filename")):
+        return _ValueRole("path", "data label name/type suggests path or name")
+    if any(token in haystack for token in ("registry", "reg_")):
+        return _ValueRole("registry_value", "data label name/type suggests registry data")
+    if "callback" in haystack or "routine" in haystack:
+        return _ValueRole("callback", "data label name/type suggests callback")
+    if "handle" in haystack:
+        return _ValueRole("handle", "data label name/type suggests handle")
+    if any(token in haystack for token in ("length", "size", "bytes")):
+        return _ValueRole("length", "data label name/type suggests length or size")
+    if "count" in haystack:
+        return _ValueRole("count", "data label name/type suggests count")
+    if any(token in haystack for token in ("flag", "option", "mask")):
+        return _ValueRole("flag", "data label name/type suggests flag/options")
+    if any(token in haystack for token in ("object", "file", "stream", "context")):
+        return _ValueRole("object", "data label name/type suggests object/context")
+    if any(token in haystack for token in ("selector", "class", "index")):
+        return _ValueRole("selector", "data label name/type suggests selector")
+    return _ValueRole("global_pointer", "labeled global data target")
+
+
+def _looks_like_integer_literal(text: str) -> bool:
+    try:
+        _parse_int(text)
+    except ValueError:
+        return False
+    return True
 
 
 def _register_assignment(mnemonic: str, operands: list[str]) -> tuple[str, str] | None:
@@ -956,6 +1031,8 @@ def _coverage(
         coverage.append("project_data_xref_targets")
     if any(arg.data_target_name for arg in arguments):
         coverage.append("project_data_label_targets")
+    if any(arg.value_role is not None for arg in arguments):
+        coverage.append("argument_value_roles")
     return coverage
 
 
