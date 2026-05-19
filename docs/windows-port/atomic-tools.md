@@ -253,6 +253,19 @@ sit below full IR/CFG bug-class scanners:
   data VA, and when `data_labels` has a row for that VA it attaches the
   label name, C type, and size. It is local evidence, not full alias,
   stack-frame, or path proof.
+- `windows_project_return_value_use_snapshot` uses a project callsite
+  VA plus nearby post-call disassembly to recover a conservative local
+  Windows x64 `RAX` return-value use snapshot. It classifies immediate
+  checks such as `test rax, rax` or `cmp eax, ...`, adjacent
+  conditional branch relations, stores to registers or memory, argument
+  passing through RCX/RDX/R8/R9 before a nested call, arithmetic or
+  bitwise uses, and obvious clobbers such as zeroing or a nested call
+  before a proven use. This is the first low-level return-flow
+  primitive for helper status checks, size-returning helpers,
+  allocation-result checks, reference-acquire success paths, and
+  policy-query helpers. It is local evidence only; path-sensitive
+  return flow, non-adjacent flag flow, full alias tracking, and helper
+  side-effect summaries remain separate facts.
 - `windows_project_data_label_facts` reports project global data
   references with label coverage. It lists labeled targets, unlabeled
   data targets, sample source VAs, read/write counts, source-function
