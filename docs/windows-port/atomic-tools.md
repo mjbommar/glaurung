@@ -275,6 +275,14 @@ sit below full IR/CFG bug-class scanners:
   backlog entry. This turns requirements such as `return_value_flow` on
   groups like `HsmpGetStreamSize` into measurable project evidence
   without claiming interprocedural or path-sensitive return-flow proof.
+- `windows_operation_return_value_snapshots` loads checked-in ASB
+  return-value snapshot data such as
+  `data/kg/pe-operation-return-value-snapshots.yaml`. Agents can filter
+  by target, component, backlog id, symbol, return-use kind, and minimum
+  sample count, and receive bounded representative callsite samples with
+  instruction VAs and branch facts. This is a catalogue query for
+  precomputed local evidence, not a disassembly pass or a finding
+  verdict.
 - `windows_project_data_label_facts` reports project global data
   references with label coverage. It lists labeled targets, unlabeled
   data targets, sample source VAs, read/write counts, source-function

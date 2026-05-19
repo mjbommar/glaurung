@@ -197,6 +197,9 @@ from ..tools.windows_operation_metadata import (
 from ..tools.windows_operation_classification_backlog import (
     build_tool as build_windows_operation_classification_backlog,
 )
+from ..tools.windows_operation_return_value_snapshots import (
+    build_tool as build_windows_operation_return_value_snapshots,
+)
 from ..tools.windows_list_operation_sinks import (
     build_tool as build_windows_list_operation_sinks,
 )
@@ -1075,6 +1078,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_operation_metadata()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_operation_classification_backlog())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_operation_return_value_snapshots())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_list_operation_sinks()))
     agent._function_toolset.add_tool(
