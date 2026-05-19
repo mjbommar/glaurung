@@ -138,6 +138,12 @@ sit below full IR/CFG bug-class scanners:
   required capability, relevance, and callsite count so agents can move
   from broad operation coverage numbers to concrete classifier work
   items. These entries are not sink claims or findings.
+- `windows_project_operation_backlog_summary` joins that curated backlog
+  to exact `.glaurung` project callsites. It reports which backlog
+  entries are present in the current project, current project callsite
+  and caller counts, sample callsite VAs, resolution-kind counts, and
+  the required capabilities still blocking classification. This turns a
+  static work queue into project-backed classifier evidence.
 - `windows_project_operation_gate_summary` runs the project sink-packet
   gate refinement path and aggregates the resulting packets by sink
   operation. It reports gate status counts, fully/partially/unproven
