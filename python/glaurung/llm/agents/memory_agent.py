@@ -185,6 +185,9 @@ from ..tools.windows_function_arg_roles import (
 from ..tools.windows_operation_metadata import (
     build_tool as build_windows_operation_metadata,
 )
+from ..tools.windows_operation_classification_backlog import (
+    build_tool as build_windows_operation_classification_backlog,
+)
 from ..tools.windows_list_operation_sinks import (
     build_tool as build_windows_list_operation_sinks,
 )
@@ -1052,6 +1055,9 @@ def register_analysis_tools(agent: Agent) -> Agent:
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_enumerate_entrypoints()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_function_arg_roles()))
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_operation_metadata()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_operation_classification_backlog())
+    )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_list_operation_sinks()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_callsite_operand_facts())

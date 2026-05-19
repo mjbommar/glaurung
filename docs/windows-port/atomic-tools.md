@@ -132,6 +132,12 @@ sit below full IR/CFG bug-class scanners:
   telemetry/debug/compiler support calls are counted separately from
   actionable unmatched backlog. This turns operation-classifier gaps
   into reviewable backlog data without promoting trace helpers to sinks.
+- `windows_operation_classification_backlog` loads ASB's curated
+  operation-classification backlog for actionable unmatched project call
+  groups. It filters by target, component, symbol, triage category,
+  required capability, relevance, and callsite count so agents can move
+  from broad operation coverage numbers to concrete classifier work
+  items. These entries are not sink claims or findings.
 - `windows_project_operation_gate_summary` runs the project sink-packet
   gate refinement path and aggregates the resulting packets by sink
   operation. It reports gate status counts, fully/partially/unproven
