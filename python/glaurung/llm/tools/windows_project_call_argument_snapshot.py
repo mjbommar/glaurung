@@ -11,7 +11,9 @@ from pydantic import BaseModel, Field
 import glaurung as g
 
 from ..context import MemoryContext
+from ..kb import windows_callsite_facts
 from ..kb.models import Edge, Node, NodeKind
+from ..kb.persistent import PersistentKnowledgeBase
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 
@@ -21,12 +23,18 @@ WINDOWS_X64_ARG_ROLES = {register: role for register, role in WINDOWS_X64_ARGS}
 WINDOWS_X64_STACK_ARG_BASE = 0x20
 WINDOWS_X64_STACK_ARG_SLOT = 8
 WINDOWS_X64_MAX_STACK_ARG_OFFSET = 0x100
+WINDOWS_X64_INCOMING_STACK_ARG_BASE = 0x28
+WINDOWS_X64_MAX_INCOMING_STACK_ARG_OFFSET = 0x200
 
 
 class WindowsProjectCallArgumentSnapshotArgs(BaseModel):
-    binary_path: str = Field(..., description="Path to the PE binary backing the project.")
+    binary_path: str = Field(
+        ..., description="Path to the PE binary backing the project."
+    )
     project_path: str = Field(..., description="Path to a .glaurung SQLite project.")
-    callsite_va: int = Field(..., description="Exact callsite VA from persisted call xrefs.")
+    callsite_va: int = Field(
+        ..., description="Exact callsite VA from persisted call xrefs."
+    )
     binary_id: int | None = Field(None, description="Optional binary_id filter.")
     max_window_bytes: int = Field(
         4096,
@@ -41,6 +49,13 @@ class WindowsProjectCallArgumentSnapshotArgs(BaseModel):
     add_to_kb: bool = Field(
         False,
         description="If true, add a compact call-argument evidence node to the KB.",
+    )
+    persist_to_project: bool = Field(
+        False,
+        description=(
+            "If true, persist recovered call-argument rows into the project DB "
+            "for later rule queries."
+        ),
     )
 
 
@@ -124,6 +139,14 @@ class _ValueRole:
     reason: str
 
 
+@dataclass(frozen=True)
+class _IndexedMemoryExpression:
+    base_register: str | None
+    index_register: str | None
+    scale: int
+    displacement: int
+
+
 class WindowsProjectCallArgumentSnapshotTool(
     MemoryTool[
         WindowsProjectCallArgumentSnapshotArgs,
@@ -180,6 +203,20 @@ class WindowsProjectCallArgumentSnapshotTool(
         arguments = _argument_snapshot(instructions, args.callsite_va, data_xrefs)
         coverage = _coverage(row, instructions, arguments)
         missing = _missing_capabilities(row, instructions, arguments)
+        if args.persist_to_project:
+            project = PersistentKnowledgeBase.open(
+                project_path, binary_path=binary_path
+            )
+            try:
+                windows_callsite_facts.persist_callsite_argument_facts(
+                    project,
+                    binary_id=binary_id,
+                    callsite_va=args.callsite_va,
+                    arguments=arguments,
+                )
+            finally:
+                project.close()
+            coverage.append("project_persisted_callsite_arguments")
 
         evidence_node_id = None
         if args.add_to_kb:
@@ -279,7 +316,7 @@ SELECT
     {callee_select}
 FROM xrefs x
 {joins}
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 ORDER BY x.xref_id
 LIMIT 1
 """,
@@ -315,14 +352,14 @@ def _data_xref_targets(
 SELECT x.src_va, x.dst_va, x.kind, dl.name, dl.c_type, dl.size
 FROM xrefs x
 LEFT JOIN data_labels dl ON dl.binary_id = x.binary_id AND dl.va = x.dst_va
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 ORDER BY x.src_va, x.xref_id
 """
     else:
         query = f"""
 SELECT src_va, dst_va, kind, NULL AS name, NULL AS c_type, NULL AS size
 FROM xrefs
-WHERE {' AND '.join(clause.removeprefix('x.') for clause in clauses)}
+WHERE {" AND ".join(clause.removeprefix("x.") for clause in clauses)}
 ORDER BY src_va, xref_id
 """
     rows = conn.execute(query, params).fetchall()
@@ -349,9 +386,12 @@ def _disassemble_to_callsite(
     caller_va = row.get("caller_va")
     if not isinstance(caller_va, int):
         caller_va = args.callsite_va
-    window_bytes = min(args.max_window_bytes, max(16, args.callsite_va - caller_va + 16))
+    window_bytes = min(
+        args.max_window_bytes, max(16, args.callsite_va - caller_va + 16)
+    )
     try:
-        instructions = g.disasm.disassemble_window_at(
+        disasm = getattr(g, "disasm")
+        instructions = disasm.disassemble_window_at(
             str(binary_path),
             caller_va,
             window_bytes=window_bytes,
@@ -380,10 +420,14 @@ def _argument_snapshot(
     frame_assignments: dict[str, _Assignment] = {}
     stack_assignments: dict[int, _StackAssignment] = {}
     clobbered_registers: set[str] = set()
+    written_stack_entry_offsets: set[int] = set()
+    rsp_delta = 0
     for instruction in instructions:
         va = int(instruction.address.value)
         mnemonic = str(instruction.mnemonic or "").lower()
-        operands = [str(op).strip() for op in getattr(instruction, "operands", []) or []]
+        operands = [
+            str(op).strip() for op in getattr(instruction, "operands", []) or []
+        ]
         if va == callsite_va:
             break
         if mnemonic == "call":
@@ -392,6 +436,7 @@ def _argument_snapshot(
             stack_assignments.clear()
             clobbered_registers.clear()
             continue
+        rsp_delta += _rsp_delta_update(mnemonic, operands)
         assignment = _register_assignment(mnemonic, operands)
         if assignment is not None:
             register, expression = assignment
@@ -400,6 +445,8 @@ def _argument_snapshot(
                 assignments,
                 frame_assignments,
                 clobbered_registers,
+                rsp_delta=rsp_delta,
+                written_stack_entry_offsets=written_stack_entry_offsets,
                 allow_address_alias=mnemonic == "lea",
                 allow_memory_load_alias=mnemonic in {"mov", "movsxd", "movzx"},
             )
@@ -412,11 +459,29 @@ def _argument_snapshot(
             )
             clobbered_registers.add(register)
         else:
-            written_register = _written_register(mnemonic, operands)
+            arithmetic = _arithmetic_register_assignment(
+                mnemonic,
+                operands,
+                assignments,
+                clobbered_registers,
+            )
+            if arithmetic is not None:
+                register, resolved = arithmetic
+                assignments[register] = _Assignment(
+                    va=va,
+                    expression=resolved.expression,
+                    source_text=_instruction_text(instruction),
+                    alias_depth=resolved.alias_depth,
+                    alias_kind=resolved.alias_kind,
+                )
+                clobbered_registers.add(register)
+                written_register = None
+            else:
+                written_register = _written_register(mnemonic, operands)
             if written_register is not None:
                 assignments.pop(written_register, None)
                 clobbered_registers.add(written_register)
-        frame_assignment = _frame_slot_assignment(mnemonic, operands)
+        frame_assignment = _frame_slot_assignment(mnemonic, operands, rsp_delta)
         if frame_assignment is not None:
             slot, expression = frame_assignment
             resolved = _resolve_expression(
@@ -424,6 +489,8 @@ def _argument_snapshot(
                 assignments,
                 frame_assignments,
                 clobbered_registers,
+                rsp_delta=rsp_delta,
+                written_stack_entry_offsets=written_stack_entry_offsets,
             )
             frame_assignments[slot] = _Assignment(
                 va=va,
@@ -440,6 +507,8 @@ def _argument_snapshot(
                 assignments,
                 frame_assignments,
                 clobbered_registers,
+                rsp_delta=rsp_delta,
+                written_stack_entry_offsets=written_stack_entry_offsets,
             )
             stack_assignments[index] = _StackAssignment(
                 va=va,
@@ -449,6 +518,9 @@ def _argument_snapshot(
                 alias_depth=resolved.alias_depth,
                 alias_kind=resolved.alias_kind,
             )
+        stack_entry_offset = _stack_entry_offset_written(mnemonic, operands, rsp_delta)
+        if stack_entry_offset is not None:
+            written_stack_entry_offsets.add(stack_entry_offset)
 
     facts: list[ProjectCallArgumentFact] = []
     for index, (register, role) in enumerate(WINDOWS_X64_ARGS):
@@ -456,7 +528,9 @@ def _argument_snapshot(
             continue
         assignment = assignments[register]
         data_target = _data_target_for_assignment(assignment, data_xrefs)
-        value_role = _value_role(assignment.expression, assignment.alias_kind, data_target)
+        value_role = _value_role(
+            assignment.expression, assignment.alias_kind, data_target
+        )
         facts.append(
             ProjectCallArgumentFact(
                 index=index,
@@ -483,7 +557,9 @@ def _argument_snapshot(
     for index in sorted(stack_assignments):
         assignment = stack_assignments[index]
         data_target = _data_target_for_assignment(assignment, data_xrefs)
-        value_role = _value_role(assignment.expression, assignment.alias_kind, data_target)
+        value_role = _value_role(
+            assignment.expression, assignment.alias_kind, data_target
+        )
         facts.append(
             ProjectCallArgumentFact(
                 index=index,
@@ -538,13 +614,19 @@ def _value_role(
     if _looks_like_integer_literal(text):
         return _ValueRole("integer_constant", "immediate integer argument")
     if alias_kind == "stack_local_address":
-        return _ValueRole("local_pointer", "address of rbp-relative stack local")
+        return _ValueRole("local_pointer", "address of stack-local storage")
     if alias_kind == "global_address":
         return _ValueRole("global_pointer", "RIP-relative global address")
     if alias_kind in {"derived_address", "memory_load"}:
         return _ValueRole("field_derived", f"{alias_kind} expression")
     if alias_kind == "incoming_arg":
         return _ValueRole("caller_argument", "direct alias of incoming caller argument")
+    if alias_kind == "incoming_stack_arg":
+        return _ValueRole(
+            "caller_argument", "direct alias of incoming caller stack argument"
+        )
+    if alias_kind == "arithmetic":
+        return _ValueRole("computed_value", "simple arithmetic expression")
     return None
 
 
@@ -559,7 +641,9 @@ def _data_target_value_role(data_target: _DataTarget | None) -> _ValueRole | Non
     if any(token in haystack for token in ("path", "name", "filename")):
         return _ValueRole("path", "data label name/type suggests path or name")
     if any(token in haystack for token in ("registry", "reg_")):
-        return _ValueRole("registry_value", "data label name/type suggests registry data")
+        return _ValueRole(
+            "registry_value", "data label name/type suggests registry data"
+        )
     if "callback" in haystack or "routine" in haystack:
         return _ValueRole("callback", "data label name/type suggests callback")
     if "handle" in haystack:
@@ -598,12 +682,109 @@ def _register_assignment(mnemonic: str, operands: list[str]) -> tuple[str, str] 
     return None
 
 
+_ARITHMETIC_MNEMONICS = {"add", "and", "or", "sar", "shl", "shr", "sub"}
+
+
+def _arithmetic_register_assignment(
+    mnemonic: str,
+    operands: list[str],
+    assignments: dict[str, _Assignment],
+    clobbered_registers: set[str],
+) -> tuple[str, _ResolvedExpression] | None:
+    if mnemonic not in _ARITHMETIC_MNEMONICS or len(operands) < 2:
+        return None
+    register = _canonical_register(operands[0])
+    if not _is_register(register):
+        return None
+    source = assignments.get(register)
+    if source is not None:
+        base_expression = source.expression
+        alias_depth = source.alias_depth + 1
+    else:
+        incoming_role = WINDOWS_X64_ARG_ROLES.get(register)
+        if incoming_role is None or register in clobbered_registers:
+            return None
+        base_expression = f"caller_{incoming_role}"
+        alias_depth = 1
+    rhs = _arithmetic_operand_expression(operands[1], assignments)
+    if rhs is None:
+        return None
+    expression = _arithmetic_expression(mnemonic, base_expression, rhs)
+    if expression is None:
+        return None
+    return register, _ResolvedExpression(
+        expression=expression,
+        alias_depth=alias_depth,
+        alias_kind="arithmetic",
+    )
+
+
+def _arithmetic_operand_expression(
+    raw: str,
+    assignments: dict[str, _Assignment],
+) -> str | None:
+    register = _canonical_register(raw)
+    if _is_register(register):
+        source = assignments.get(register)
+        return source.expression if source is not None else None
+    try:
+        value = _parse_int(raw)
+    except ValueError:
+        return None
+    return _hex(value)
+
+
+def _arithmetic_expression(mnemonic: str, lhs: str, rhs: str) -> str | None:
+    lhs_int = _parse_int_or_none(lhs)
+    rhs_int = _parse_int_or_none(rhs)
+    if lhs_int is not None and rhs_int is not None:
+        if mnemonic == "add":
+            return _hex(lhs_int + rhs_int)
+        if mnemonic == "sub":
+            return _hex(lhs_int - rhs_int)
+        if mnemonic == "shl":
+            return _hex(lhs_int << rhs_int)
+        if mnemonic in {"shr", "sar"}:
+            return _hex(lhs_int >> rhs_int)
+        if mnemonic == "and":
+            return _hex(lhs_int & rhs_int)
+        if mnemonic == "or":
+            return _hex(lhs_int | rhs_int)
+    operators = {
+        "add": "+",
+        "and": "&",
+        "or": "|",
+        "sar": ">>",
+        "shl": "<<",
+        "shr": ">>",
+        "sub": "-",
+    }
+    operator = operators.get(mnemonic)
+    if operator is None:
+        return None
+    return f"({lhs} {operator} {rhs})"
+
+
+def _parse_int_or_none(text: str) -> int | None:
+    try:
+        return _parse_int(text)
+    except ValueError:
+        return None
+
+
+def _hex(value: int) -> str:
+    sign = "-" if value < 0 else ""
+    return f"{sign}0x{abs(value):x}"
+
+
 def _resolve_expression(
     expression: str,
     assignments: dict[str, _Assignment],
     frame_assignments: dict[str, _Assignment],
     clobbered_registers: set[str],
     *,
+    rsp_delta: int = 0,
+    written_stack_entry_offsets: set[int] | None = None,
     allow_address_alias: bool = False,
     allow_memory_load_alias: bool = False,
 ) -> _ResolvedExpression:
@@ -636,7 +817,20 @@ def _resolve_expression(
         stack_local = _resolve_stack_local_address(expression)
         if stack_local is not None:
             return stack_local
+        rsp_stack_local = _resolve_rsp_stack_local_address(
+            expression,
+            rsp_delta=rsp_delta,
+        )
+        if rsp_stack_local is not None:
+            return rsp_stack_local
     if allow_memory_load_alias:
+        incoming_stack_arg = _resolve_incoming_stack_argument_expression(
+            expression,
+            rsp_delta=rsp_delta,
+            written_stack_entry_offsets=written_stack_entry_offsets or set(),
+        )
+        if incoming_stack_arg is not None:
+            return incoming_stack_arg
         memory_load = _resolve_memory_load_expression(
             expression,
             assignments,
@@ -644,7 +838,7 @@ def _resolve_expression(
         )
         if memory_load is not None:
             return memory_load
-    frame_slot = _frame_slot_key(expression)
+    frame_slot = _frame_slot_key(expression, rsp_delta)
     if frame_slot is None:
         return _ResolvedExpression(expression=expression)
     frame_source = frame_assignments.get(frame_slot)
@@ -662,6 +856,13 @@ def _resolve_address_expression(
     assignments: dict[str, _Assignment],
     clobbered_registers: set[str],
 ) -> _ResolvedExpression | None:
+    indexed = _indexed_memory_expression(expression)
+    if indexed is not None and indexed.index_register is not None:
+        return _resolve_indexed_address_expression(
+            indexed,
+            assignments,
+            clobbered_registers,
+        )
     memory = _simple_memory_expression(expression)
     if memory is None:
         return None
@@ -681,6 +882,77 @@ def _resolve_address_expression(
         alias_depth=alias_depth,
         alias_kind="derived_address",
     )
+
+
+def _resolve_indexed_address_expression(
+    memory: _IndexedMemoryExpression,
+    assignments: dict[str, _Assignment],
+    clobbered_registers: set[str],
+) -> _ResolvedExpression | None:
+    parts: list[str] = []
+    alias_depth = 0
+    if memory.base_register is not None:
+        base = _resolve_address_register_operand(
+            memory.base_register,
+            assignments,
+            clobbered_registers,
+        )
+        if base is None:
+            return None
+        parts.append(base.expression)
+        alias_depth = max(alias_depth, base.alias_depth)
+    if memory.index_register is not None:
+        index = _resolve_address_register_operand(
+            memory.index_register,
+            assignments,
+            clobbered_registers,
+        )
+        if index is None:
+            return None
+        parts.append(_scaled_index_expression(index.expression, memory.scale))
+        alias_depth = max(alias_depth, index.alias_depth)
+    return _ResolvedExpression(
+        expression=_format_indexed_address_expression(parts, memory.displacement),
+        alias_depth=alias_depth,
+        alias_kind="derived_address",
+    )
+
+
+def _resolve_address_register_operand(
+    register: str,
+    assignments: dict[str, _Assignment],
+    clobbered_registers: set[str],
+) -> _ResolvedExpression | None:
+    source = assignments.get(register)
+    if source is not None:
+        return _ResolvedExpression(
+            expression=source.expression,
+            alias_depth=source.alias_depth + 1,
+            alias_kind=source.alias_kind,
+        )
+    incoming_role = WINDOWS_X64_ARG_ROLES.get(register)
+    if incoming_role is None or register in clobbered_registers:
+        return None
+    return _ResolvedExpression(
+        expression=f"caller_{incoming_role}",
+        alias_depth=1,
+        alias_kind="incoming_arg",
+    )
+
+
+def _scaled_index_expression(expression: str, scale: int) -> str:
+    if scale == 1:
+        return expression
+    return f"({expression} * {_hex(scale)})"
+
+
+def _format_indexed_address_expression(parts: list[str], displacement: int) -> str:
+    inner = " + ".join(parts) if parts else "0"
+    if displacement > 0:
+        inner = f"{inner} + {_hex(displacement)}"
+    elif displacement < 0:
+        inner = f"{inner} - {_hex(abs(displacement))}"
+    return f"[{inner}]"
 
 
 def _resolve_global_address_expression(expression: str) -> _ResolvedExpression | None:
@@ -722,6 +994,36 @@ def _resolve_memory_load_expression(
     )
 
 
+def _resolve_incoming_stack_argument_expression(
+    expression: str,
+    *,
+    rsp_delta: int,
+    written_stack_entry_offsets: set[int],
+) -> _ResolvedExpression | None:
+    memory = _simple_memory_expression(expression)
+    if memory is None:
+        return None
+    base_register, displacement = memory
+    if base_register != "rsp":
+        return None
+    entry_offset = rsp_delta + displacement
+    if entry_offset < WINDOWS_X64_INCOMING_STACK_ARG_BASE:
+        return None
+    if entry_offset > WINDOWS_X64_MAX_INCOMING_STACK_ARG_OFFSET:
+        return None
+    if entry_offset in written_stack_entry_offsets:
+        return None
+    relative = entry_offset - WINDOWS_X64_INCOMING_STACK_ARG_BASE
+    if relative % WINDOWS_X64_STACK_ARG_SLOT:
+        return None
+    index = 4 + (relative // WINDOWS_X64_STACK_ARG_SLOT)
+    return _ResolvedExpression(
+        expression=f"caller_arg{index}",
+        alias_depth=1,
+        alias_kind="incoming_stack_arg",
+    )
+
+
 def _resolve_stack_local_address(expression: str) -> _ResolvedExpression | None:
     memory = _simple_memory_expression(expression)
     if memory is None:
@@ -731,6 +1033,28 @@ def _resolve_stack_local_address(expression: str) -> _ResolvedExpression | None:
         return None
     return _ResolvedExpression(
         expression=_format_address_expression(base_register, displacement),
+        alias_kind="stack_local_address",
+    )
+
+
+def _resolve_rsp_stack_local_address(
+    expression: str,
+    *,
+    rsp_delta: int,
+) -> _ResolvedExpression | None:
+    if rsp_delta >= 0:
+        return None
+    memory = _simple_memory_expression(expression)
+    if memory is None:
+        return None
+    base_register, displacement = memory
+    if base_register != "rsp":
+        return None
+    entry_offset = rsp_delta + displacement
+    if entry_offset >= 0:
+        return None
+    return _ResolvedExpression(
+        expression=f"stack_local({_format_address_expression('rsp', displacement)})",
         alias_kind="stack_local_address",
     )
 
@@ -765,6 +1089,62 @@ def _simple_memory_expression(raw: str) -> tuple[str, int] | None:
     except ValueError:
         return None
     return base_register, displacement
+
+
+def _indexed_memory_expression(raw: str) -> _IndexedMemoryExpression | None:
+    text = _strip_memory_prefix(raw).replace(" ", "")
+    match = re.fullmatch(r"(?:[a-z][a-z0-9]*:)?\[(?P<body>[^\]]+)\]", text)
+    if not match:
+        return None
+    base_register: str | None = None
+    index_register: str | None = None
+    scale = 1
+    displacement = 0
+    saw_index = False
+    for term in re.findall(r"[+-]?[^+-]+", match.group("body")):
+        sign = -1 if term.startswith("-") else 1
+        term_body = term[1:] if term[:1] in {"+", "-"} else term
+        scaled = re.fullmatch(r"([a-z0-9]+)\*(0x[0-9a-f]+|\d+)", term_body)
+        if scaled:
+            register = _canonical_register(scaled.group(1))
+            if sign < 0 or not _is_register(register) or index_register is not None:
+                return None
+            parsed_scale = _parse_int_or_none(scaled.group(2))
+            if parsed_scale is None or parsed_scale not in {1, 2, 4, 8}:
+                return None
+            index_register = register
+            scale = parsed_scale
+            saw_index = True
+            continue
+        register = _canonical_register(term_body)
+        if _is_register(register):
+            if sign < 0:
+                return None
+            if base_register is None:
+                base_register = register
+            elif index_register is None:
+                index_register = register
+                scale = 1
+                saw_index = True
+            else:
+                return None
+            continue
+        value = _parse_int_or_none(term_body)
+        if value is None:
+            return None
+        displacement += sign * value
+    if base_register is None and index_register is None:
+        return None
+    return (
+        _IndexedMemoryExpression(
+            base_register=base_register,
+            index_register=index_register,
+            scale=scale,
+            displacement=displacement,
+        )
+        if saw_index
+        else None
+    )
 
 
 def _strip_memory_prefix(raw: str) -> str:
@@ -809,33 +1189,76 @@ def _written_register(mnemonic: str, operands: list[str]) -> str | None:
     return register if _is_register(register) else None
 
 
+def _rsp_delta_update(mnemonic: str, operands: list[str]) -> int:
+    if mnemonic == "push":
+        return -WINDOWS_X64_STACK_ARG_SLOT
+    if mnemonic == "pop":
+        return WINDOWS_X64_STACK_ARG_SLOT
+    if len(operands) < 2 or _canonical_register(operands[0]) != "rsp":
+        return 0
+    try:
+        value = _parse_int(operands[1])
+    except ValueError:
+        return 0
+    if mnemonic == "sub":
+        return -value
+    if mnemonic == "add":
+        return value
+    return 0
+
+
+def _stack_entry_offset_written(
+    mnemonic: str,
+    operands: list[str],
+    rsp_delta: int,
+) -> int | None:
+    if mnemonic != "mov" or len(operands) < 2:
+        return None
+    memory = _simple_memory_expression(operands[0])
+    if memory is None:
+        return None
+    base_register, displacement = memory
+    if base_register != "rsp":
+        return None
+    return rsp_delta + displacement
+
+
 def _frame_slot_assignment(
     mnemonic: str,
     operands: list[str],
+    rsp_delta: int,
 ) -> tuple[str, str] | None:
     if mnemonic != "mov" or len(operands) < 2:
         return None
-    slot = _frame_slot_key(operands[0])
+    slot = _frame_slot_key(operands[0], rsp_delta)
     if slot is None:
         return None
     return slot, operands[1]
 
 
-def _frame_slot_key(raw: str) -> str | None:
+def _frame_slot_key(raw: str, rsp_delta: int = 0) -> str | None:
     text = _strip_memory_prefix(raw)
     text = text.replace(" ", "")
-    match = re.fullmatch(r"\[rbp([+-].+)?\]", text)
+    match = re.fullmatch(r"\[(rbp|rsp)([+-].+)?\]", text)
     if not match:
         return None
-    displacement = match.group(1)
+    base = _canonical_register(match.group(1))
+    displacement = match.group(2)
     if not displacement:
-        return "rbp+0x0"
-    try:
-        offset = _parse_int(displacement)
-    except ValueError:
+        offset = 0
+    else:
+        try:
+            offset = _parse_int(displacement)
+        except ValueError:
+            return None
+    if base == "rbp":
+        sign = "+" if offset >= 0 else "-"
+        return f"rbp{sign}0x{abs(offset):x}"
+    entry_offset = rsp_delta + offset
+    if entry_offset >= 0:
         return None
-    sign = "+" if offset >= 0 else "-"
-    return f"rbp{sign}0x{abs(offset):x}"
+    sign = "+" if entry_offset >= 0 else "-"
+    return f"rsp{sign}0x{abs(entry_offset):x}"
 
 
 def _stack_argument_assignment(
@@ -1017,6 +1440,10 @@ def _coverage(
         coverage.append("simple_register_aliases")
     if any(arg.alias_kind == "incoming_arg" for arg in arguments):
         coverage.append("incoming_argument_aliases")
+    if any(arg.alias_kind == "incoming_stack_arg" for arg in arguments):
+        coverage.append("incoming_stack_argument_aliases")
+    if any(arg.alias_kind == "arithmetic" for arg in arguments):
+        coverage.append("arithmetic_argument_expressions")
     if any(arg.alias_kind == "frame_slot" for arg in arguments):
         coverage.append("simple_spill_reload_aliases")
     if any(arg.alias_kind == "derived_address" for arg in arguments):

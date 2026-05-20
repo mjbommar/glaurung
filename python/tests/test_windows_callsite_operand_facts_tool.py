@@ -83,6 +83,11 @@ NTSTATUS Handler(void *dst, void *src, ULONG len) {
         "source_buffer",
         "byte_count",
     ]
+    assert [(arg.abi_location, arg.register_name) for arg in copy.arguments] == [
+        ("register", "rcx"),
+        ("register", "rdx"),
+        ("register", "r8"),
+    ]
     assert copy.arguments[2].expression == "len"
     assert copy.arguments[2].normalized_expression == "len"
     assert copy.operation is not None
@@ -91,6 +96,7 @@ NTSTATUS Handler(void *dst, void *src, ULONG len) {
     assert free.arguments[0].expression == "(void *)dst"
     assert free.arguments[0].normalized_expression == "dst"
     assert result.evidence_node_id is not None
+    assert "x64_abi_argument_locations" in result.coverage
     assert any(
         node.kind == NodeKind.evidence
         and node.label == "windows_callsite_operand_facts"
@@ -144,6 +150,36 @@ RtlCopyMemory(dst, src, len);
     assert result.callsites[0].operation is None
     assert result.callsites[0].arguments[1].role is None
     assert result.callsites[1].operation is not None
+
+
+def test_windows_callsite_operand_facts_labels_x64_stack_arguments(
+    tmp_path: Path,
+) -> None:
+    sinks = _write_sinks(tmp_path)
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            sinks_path=str(sinks),
+            pseudocode="Helper(a0, a1, a2, a3, a4, a5);",
+        ),
+    )
+
+    args = result.callsites[0].arguments
+    assert [
+        (arg.index, arg.abi_location, arg.register_name, arg.stack_offset)
+        for arg in args
+    ] == [
+        (0, "register", "rcx", None),
+        (1, "register", "rdx", None),
+        (2, "register", "r8", None),
+        (3, "register", "r9", None),
+        (4, "stack", "stack+0x20", 0x20),
+        (5, "stack", "stack+0x28", 0x28),
+    ]
 
 
 def test_memory_agent_registers_windows_callsite_operand_facts() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -34,6 +34,9 @@ _CONTROL_WORDS = {
     "__try",
     "__except",
 }
+_WINDOWS_X64_ARG_REGISTERS = ("rcx", "rdx", "r8", "r9")
+_WINDOWS_X64_STACK_ARG_BASE = 0x20
+_WINDOWS_X64_STACK_ARG_SLOT = 8
 
 
 class WindowsCallsiteOperandFactsArgs(BaseModel):
@@ -58,7 +61,9 @@ class WindowsCallsiteOperandFactsArgs(BaseModel):
         description="If true, return only calls that match ASB operation/sink metadata.",
     )
     max_calls: int = Field(64, description="Maximum callsites to return.")
-    timeout_ms: int = Field(500, description="Decompile timeout when function_va is used.")
+    timeout_ms: int = Field(
+        500, description="Decompile timeout when function_va is used."
+    )
     pdb_cache: str = Field(
         "",
         description="Optional Microsoft-style PDB cache directory for decompile name recovery.",
@@ -74,6 +79,9 @@ class CallsiteArgumentFact(BaseModel):
     expression: str
     normalized_expression: str
     role: str | None = None
+    abi_location: Literal["register", "stack"] | None = None
+    register_name: str | None = None
+    stack_offset: int | None = None
     provenance: list[str] = Field(default_factory=list)
 
 
@@ -97,6 +105,8 @@ class WindowsCallsiteOperandFactsResult(BaseModel):
     scanned_call_count: int
     operation_count_total: int
     pseudocode_source: str
+    coverage: list[str] = Field(default_factory=list)
+    missing_capabilities: list[str] = Field(default_factory=list)
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
 
@@ -125,7 +135,10 @@ class WindowsCallsiteOperandFactsTool(
         args: WindowsCallsiteOperandFactsArgs,
     ) -> WindowsCallsiteOperandFactsResult:
         sinks_path = _resolve_metadata_path(args.sinks_path, "data/kg/pe-sinks.yaml")
-        operations = [_operation_record(entry, sinks_path) for entry in _load_yaml_list(sinks_path)]
+        operations = [
+            _operation_record(entry, sinks_path)
+            for entry in _load_yaml_list(sinks_path)
+        ]
         operations_by_symbol = _operations_by_symbol(operations)
         text, source, notes = _scan_text(ctx, args)
         calls = _extract_calls(text)
@@ -167,6 +180,8 @@ class WindowsCallsiteOperandFactsTool(
             scanned_call_count=len(calls),
             operation_count_total=len(operations),
             pseudocode_source=source,
+            coverage=_coverage(facts),
+            missing_capabilities=_missing_capabilities(facts, calls),
             evidence_node_id=evidence_node_id,
             notes=notes,
         )
@@ -191,7 +206,8 @@ def _scan_text(
         notes.append("no pseudocode or function_va supplied")
         return "", "none", notes
     try:
-        text = g.ir.decompile_at(
+        ir = getattr(g, "ir")
+        text = ir.decompile_at(
             str(ctx.file_path),
             int(args.function_va),
             timeout_ms=max(200, int(args.timeout_ms)),
@@ -259,6 +275,9 @@ def _callsite_fact(
                 expression=arg.strip(),
                 normalized_expression=_normalize_expression(arg),
                 role=_arg_role(operation, idx),
+                abi_location=_abi_location(idx),
+                register_name=_abi_register_name(idx),
+                stack_offset=_abi_stack_offset(idx),
                 provenance=provenance.copy(),
             )
             for idx, arg in enumerate(call.args)
@@ -268,6 +287,48 @@ def _callsite_fact(
         confidence=0.74 if operation else 0.55,
         provenance=provenance,
     )
+
+
+def _abi_location(index: int) -> Literal["register", "stack"]:
+    return "register" if index < len(_WINDOWS_X64_ARG_REGISTERS) else "stack"
+
+
+def _abi_register_name(index: int) -> str:
+    if index < len(_WINDOWS_X64_ARG_REGISTERS):
+        return _WINDOWS_X64_ARG_REGISTERS[index]
+    offset = _abi_stack_offset(index)
+    return f"stack+0x{offset:x}" if offset is not None else "stack"
+
+
+def _abi_stack_offset(index: int) -> int | None:
+    if index < len(_WINDOWS_X64_ARG_REGISTERS):
+        return None
+    return _WINDOWS_X64_STACK_ARG_BASE + (
+        (index - len(_WINDOWS_X64_ARG_REGISTERS)) * _WINDOWS_X64_STACK_ARG_SLOT
+    )
+
+
+def _coverage(facts: list[CallsiteOperandFact]) -> list[str]:
+    coverage: list[str] = []
+    if facts:
+        coverage.append("callsite_operands")
+    if any(site.arguments for site in facts):
+        coverage.append("x64_abi_argument_locations")
+    if any(site.operation is not None for site in facts):
+        coverage.append("operation_role_metadata")
+    return coverage
+
+
+def _missing_capabilities(
+    facts: list[CallsiteOperandFact],
+    calls: list[_Call],
+) -> list[str]:
+    missing: list[str] = []
+    if not calls:
+        missing.append("callsite_operands")
+    if not any(site.operation is not None for site in facts):
+        missing.append("operation_role_metadata")
+    return missing
 
 
 def _arg_role(operation: OperationRecord | None, index: int) -> str | None:

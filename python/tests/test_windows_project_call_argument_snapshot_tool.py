@@ -115,7 +115,9 @@ def test_windows_project_call_argument_snapshot_recovers_register_args(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -156,6 +158,128 @@ def test_windows_project_call_argument_snapshot_recovers_register_args(
     )
 
 
+def test_windows_project_call_argument_snapshot_resolves_rsp_stack_local_address(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "sub", ["rsp", "0x80"]),
+            _Insn(0x1004, "lea", ["rdx", "[rsp + 0x30]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[1].expression == "stack_local([rsp + 0x30])"
+    assert by_index[1].source_text == "lea rdx, [rsp + 0x30]"
+    assert by_index[1].alias_kind == "stack_local_address"
+    assert by_index[1].value_role == "local_pointer"
+    assert "stack_local_address_arguments" in result.coverage
+
+
+def test_windows_project_call_argument_snapshot_does_not_mark_home_space_local(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "lea", ["rdx", "[rsp + 0x20]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[1].expression == "[rsp + 0x20]"
+    assert by_index[1].alias_kind is None
+    assert "stack_local_address_arguments" not in result.coverage
+
+
+def test_windows_project_call_argument_snapshot_can_persist_project_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "mov", ["rcx", "rdi"]),
+            _Insn(0x1004, "xor", ["r9d", "r9d"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+            persist_to_project=True,
+        ),
+    )
+
+    assert "project_persisted_callsite_arguments" in result.coverage
+    conn = sqlite3.connect(project)
+    try:
+        rows = conn.execute(
+            "SELECT callsite_va, argument_index, register_name, expression, value_role "
+            "FROM callsite_argument_facts ORDER BY argument_index"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [
+        (0x1014, 0, "rcx", "rdi", None),
+        (0x1014, 3, "r9", "0", "zero_or_null"),
+    ]
+
+
 def test_windows_project_call_argument_snapshot_recovers_stack_args(
     tmp_path: Path,
     monkeypatch,
@@ -173,7 +297,9 @@ def test_windows_project_call_argument_snapshot_recovers_stack_args(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -217,7 +343,9 @@ def test_windows_project_call_argument_snapshot_resolves_simple_aliases(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -260,7 +388,9 @@ def test_windows_project_call_argument_snapshot_recovers_spill_reload(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -283,6 +413,48 @@ def test_windows_project_call_argument_snapshot_recovers_spill_reload(
     assert "full_alias_tracking" in result.missing_capabilities
 
 
+def test_windows_project_call_argument_snapshot_recovers_rsp_spill_reload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "sub", ["rsp", "0x80"]),
+            _Insn(0x1004, "mov", ["rax", "qword ptr [rcx + 0x20]"]),
+            _Insn(0x1008, "mov", ["qword ptr [rsp + 0x10]", "rax"]),
+            _Insn(0x100C, "mov", ["rdx", "qword ptr [rsp + 0x10]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[1].expression == "load([caller_arg0 + 0x20])"
+    assert by_index[1].source_text == "mov rdx, qword ptr [rsp + 0x10]"
+    assert by_index[1].alias_depth == 3
+    assert by_index[1].alias_kind == "frame_slot"
+    assert "simple_spill_reload_aliases" in result.coverage
+    assert "memory_load_arguments" not in result.coverage
+
+
 def test_windows_project_call_argument_snapshot_resolves_memory_load_args(
     tmp_path: Path,
     monkeypatch,
@@ -298,7 +470,9 @@ def test_windows_project_call_argument_snapshot_resolves_memory_load_args(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -335,7 +509,9 @@ def test_windows_project_call_argument_snapshot_resolves_incoming_args(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -358,6 +534,133 @@ def test_windows_project_call_argument_snapshot_resolves_incoming_args(
     assert "incoming_argument_aliases" in result.coverage
 
 
+def test_windows_project_call_argument_snapshot_resolves_incoming_stack_args(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "sub", ["rsp", "0x40"]),
+            _Insn(0x1004, "mov", ["rax", "qword ptr [rsp + 0x68]"]),
+            _Insn(0x1008, "mov", ["rcx", "rax"]),
+            _Insn(0x100C, "mov", ["rdx", "qword ptr [rsp + 0x70]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[0].expression == "caller_arg4"
+    assert by_index[0].source_text == "mov rcx, rax"
+    assert by_index[0].alias_depth == 2
+    assert by_index[0].alias_kind == "incoming_stack_arg"
+    assert by_index[0].value_role == "caller_argument"
+    assert by_index[1].expression == "caller_arg5"
+    assert by_index[1].source_text == "mov rdx, qword ptr [rsp + 0x70]"
+    assert by_index[1].alias_depth == 1
+    assert by_index[1].alias_kind == "incoming_stack_arg"
+    assert "incoming_stack_argument_aliases" in result.coverage
+
+
+def test_windows_project_call_argument_snapshot_forwards_incoming_stack_arg_to_stack(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "sub", ["rsp", "0x40"]),
+            _Insn(0x1004, "mov", ["rax", "qword ptr [rsp + 0x68]"]),
+            _Insn(0x1008, "mov", ["qword ptr [rsp + 0x20]", "rax"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[4].location == "stack"
+    assert by_index[4].stack_offset == 0x20
+    assert by_index[4].expression == "caller_arg4"
+    assert by_index[4].alias_depth == 2
+    assert by_index[4].alias_kind == "incoming_stack_arg"
+    assert by_index[4].value_role == "caller_argument"
+    assert "windows_x64_stack_arguments" in result.coverage
+    assert "incoming_stack_argument_aliases" in result.coverage
+
+
+def test_windows_project_call_argument_snapshot_does_not_forward_clobbered_stack_arg(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "sub", ["rsp", "0x40"]),
+            _Insn(0x1004, "mov", ["qword ptr [rsp + 0x68]", "rax"]),
+            _Insn(0x1008, "mov", ["rcx", "qword ptr [rsp + 0x68]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[0].expression == "qword ptr [rsp + 0x68]"
+    assert by_index[0].alias_kind is None
+    assert "incoming_stack_argument_aliases" not in result.coverage
+
+
 def test_windows_project_call_argument_snapshot_resolves_derived_address_args(
     tmp_path: Path,
     monkeypatch,
@@ -372,7 +675,9 @@ def test_windows_project_call_argument_snapshot_resolves_derived_address_args(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -395,6 +700,161 @@ def test_windows_project_call_argument_snapshot_resolves_derived_address_args(
     assert "derived_address_arguments" in result.coverage
 
 
+def test_windows_project_call_argument_snapshot_recovers_constant_arithmetic_args(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "mov", ["r8d", "4"]),
+            _Insn(0x1004, "shl", ["r8d", "1"]),
+            _Insn(0x1008, "add", ["r8d", "2"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[2].expression == "0xa"
+    assert by_index[2].source_text == "add r8d, 2"
+    assert by_index[2].alias_kind == "arithmetic"
+    assert by_index[2].value_role == "integer_constant"
+    assert "arithmetic_argument_expressions" in result.coverage
+
+
+def test_windows_project_call_argument_snapshot_recovers_caller_arg_arithmetic(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "mov", ["rdx", "rcx"]),
+            _Insn(0x1004, "add", ["rdx", "0x20"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[1].expression == "(caller_arg0 + 0x20)"
+    assert by_index[1].source_text == "add rdx, 0x20"
+    assert by_index[1].alias_depth == 2
+    assert by_index[1].alias_kind == "arithmetic"
+    assert by_index[1].value_role == "computed_value"
+    assert "arithmetic_argument_expressions" in result.coverage
+
+
+def test_windows_project_call_argument_snapshot_resolves_indexed_lea_args(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "lea", ["r8", "[rcx + rdx*4 + 0x10]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[2].expression == "[caller_arg0 + (caller_arg1 * 0x4) + 0x10]"
+    assert by_index[2].source_text == "lea r8, [rcx + rdx*4 + 0x10]"
+    assert by_index[2].alias_depth == 1
+    assert by_index[2].alias_kind == "derived_address"
+    assert by_index[2].value_role == "field_derived"
+    assert "derived_address_arguments" in result.coverage
+
+
+def test_windows_project_call_argument_snapshot_resolves_self_scaled_lea_args(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    binary = tmp_path / "driver.sys"
+    binary.write_bytes(b"MZ")
+    project = _write_project(tmp_path)
+
+    def fake_disassemble_window_at(*_args, **_kwargs):
+        return [
+            _Insn(0x1000, "lea", ["r8", "[rdx + rdx*2]"]),
+            _Insn(0x1014, "call", ["0x2000"]),
+        ]
+
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            callsite_va=0x1014,
+        ),
+    )
+
+    by_index = {arg.index: arg for arg in result.arguments}
+    assert by_index[2].expression == "[caller_arg1 + (caller_arg1 * 0x2)]"
+    assert by_index[2].source_text == "lea r8, [rdx + rdx*2]"
+    assert by_index[2].alias_kind == "derived_address"
+
+
 def test_windows_project_call_argument_snapshot_labels_global_address_args(
     tmp_path: Path,
     monkeypatch,
@@ -409,7 +869,9 @@ def test_windows_project_call_argument_snapshot_labels_global_address_args(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -457,7 +919,9 @@ def test_windows_project_call_argument_snapshot_joins_global_data_xrefs(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -508,7 +972,9 @@ def test_windows_project_call_argument_snapshot_uses_data_label_role_hints(
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -527,7 +993,7 @@ def test_windows_project_call_argument_snapshot_uses_data_label_role_hints(
     assert "argument_value_roles" in result.coverage
 
 
-def test_windows_project_call_argument_snapshot_preserves_clobbered_address_base(
+def test_windows_project_call_argument_snapshot_recovers_arithmetic_address_base(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -542,7 +1008,9 @@ def test_windows_project_call_argument_snapshot_preserves_clobbered_address_base
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -557,14 +1025,15 @@ def test_windows_project_call_argument_snapshot_preserves_clobbered_address_base
     )
 
     by_index = {arg.index: arg for arg in result.arguments}
-    assert by_index[1].expression == "[rcx + 0x20]"
+    assert by_index[1].expression == "[(caller_arg0 + 0x10) + 0x20]"
     assert by_index[1].source_text == "lea rdx, [rcx + 0x20]"
-    assert by_index[1].alias_depth == 0
-    assert by_index[1].alias_kind is None
-    assert "derived_address_arguments" not in result.coverage
+    assert by_index[1].alias_depth == 2
+    assert by_index[1].alias_kind == "derived_address"
+    assert by_index[1].value_role == "field_derived"
+    assert "derived_address_arguments" in result.coverage
 
 
-def test_windows_project_call_argument_snapshot_invalidates_clobbered_incoming_args(
+def test_windows_project_call_argument_snapshot_recovers_arithmetic_incoming_args(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -579,7 +1048,9 @@ def test_windows_project_call_argument_snapshot_invalidates_clobbered_incoming_a
             _Insn(0x1014, "call", ["0x2000"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    monkeypatch.setattr(
+        getattr(g, "disasm"), "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -594,11 +1065,12 @@ def test_windows_project_call_argument_snapshot_invalidates_clobbered_incoming_a
     )
 
     by_index = {arg.index: arg for arg in result.arguments}
-    assert by_index[1].expression == "rcx"
+    assert by_index[1].expression == "(caller_arg0 + 0x10)"
     assert by_index[1].source_text == "mov rdx, rcx"
-    assert by_index[1].alias_depth == 0
-    assert by_index[1].alias_kind is None
-    assert "incoming_argument_aliases" not in result.coverage
+    assert by_index[1].alias_depth == 2
+    assert by_index[1].alias_kind == "arithmetic"
+    assert by_index[1].value_role == "computed_value"
+    assert "arithmetic_argument_expressions" in result.coverage
 
 
 def test_memory_agent_registers_windows_project_call_argument_snapshot() -> None:
