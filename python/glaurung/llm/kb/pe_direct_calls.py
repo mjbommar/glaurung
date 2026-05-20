@@ -1,10 +1,11 @@
 """Conservative PE direct-call xref recovery.
 
 This fallback fills a specific PE gap in the generic callgraph indexer:
-scan executable sections for x86/x64 ``E8 rel32`` calls and persist only
-those whose target is an already-known function entry. The target filter
-keeps the pass deliberately conservative; PDB public/function names make
-the useful Windows case work without treating arbitrary bytes as code.
+scan executable sections for x86/x64 ``E8 rel32`` candidates, then persist
+only candidates that native disassembly confirms are instruction-boundary
+direct calls to already-known function entries. The target and instruction
+filters keep the pass deliberately conservative; PDB public/function names
+make the useful Windows case work without treating arbitrary bytes as code.
 """
 
 from __future__ import annotations
@@ -13,7 +14,9 @@ import bisect
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
+
+import glaurung as g
 
 from .persistent import PersistentKnowledgeBase
 from . import xref_db
@@ -29,12 +32,17 @@ class PeExecutableSection:
 def index_pe_direct_calls(
     kb: PersistentKnowledgeBase,
     binary_path: str | Path,
+    *,
+    target_entries: Iterable[int] | None = None,
 ) -> int:
     """Persist direct PE ``E8 rel32`` calls to known function entries.
 
     Returns the number of new or existing rows represented by this pass.
     The function never deletes rows; it is intended as a supplement when
-    the generic analyzer has no PE call edges.
+    the generic analyzer has no PE call edges. When ``target_entries`` is
+    supplied, the pass performs a focused candidate validation for those
+    destinations; this is useful for analyst-led xref expansion on a known
+    PDB/API target without paying for full CFG recovery.
     """
 
     xref_db._ensure_schema(kb._conn)
@@ -43,15 +51,81 @@ def index_pe_direct_calls(
         return 0
     entries = [entry for entry, _name in functions]
     known_targets = set(entries)
+    if target_entries is not None:
+        known_targets &= {int(entry) for entry in target_entries}
+        if not known_targets:
+            return 0
 
     data = Path(binary_path).read_bytes()
     sections = _executable_sections(data)
     if not sections:
         return 0
 
+    if target_entries is not None:
+        return _index_focused_targets(
+            kb,
+            binary_path,
+            data,
+            sections,
+            entries,
+            known_targets,
+        )
+
     rows: list[tuple[int, int, int, str, Optional[int], int]] = []
     seen: set[tuple[int, int, str]] = set()
     now = int(time.time())
+    for section in sections:
+        try:
+            instructions = g.disasm.disassemble_window_at(
+                str(binary_path),
+                section.va_start,
+                window_bytes=section.raw_size,
+                max_instructions=max(64, min(1_000_000, section.raw_size)),
+                max_time_ms=max(1_000, min(10_000, section.raw_size // 200)),
+            )
+        except Exception:
+            continue
+        for instruction in instructions:
+            mnemonic = str(instruction.mnemonic or "").lower()
+            raw = bytes(getattr(instruction, "bytes", b"") or b"")
+            if mnemonic != "call" or len(raw) < 5 or raw[0] != 0xE8:
+                continue
+            src_va = int(instruction.address.value)
+            rel = int.from_bytes(raw[1:5], "little", signed=True)
+            dst_va = (src_va + 5 + rel) & 0xFFFFFFFFFFFFFFFF
+            if dst_va not in known_targets:
+                continue
+            src_function_va = _containing_function(entries, src_va)
+            if src_function_va is None:
+                continue
+            key = (src_va, dst_va, "call")
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append((kb.binary_id, src_va, dst_va, "call", src_function_va, now))
+    if not rows:
+        return 0
+    cur = kb._conn.cursor()
+    cur.executemany(
+        "INSERT OR IGNORE INTO xrefs "
+        "(binary_id, src_va, dst_va, kind, src_function_va, indexed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    kb._conn.commit()
+    return xref_db._row_count(kb, "call")
+
+
+def _index_focused_targets(
+    kb: PersistentKnowledgeBase,
+    binary_path: str | Path,
+    data: bytes,
+    sections: list[PeExecutableSection],
+    entries: list[int],
+    known_targets: set[int],
+) -> int:
+    candidates: list[tuple[int, int, int]] = []
+    seen: set[tuple[int, int, str]] = set()
     for section in sections:
         end = min(len(data), section.raw_start + section.raw_size)
         blob = data[section.raw_start:end]
@@ -70,10 +144,18 @@ def index_pe_direct_calls(
             if key in seen:
                 continue
             seen.add(key)
-            rows.append((kb.binary_id, src_va, dst_va, "call", src_function_va, now))
+            candidates.append((src_va, dst_va, src_function_va))
 
+    rows = [
+        (kb.binary_id, src_va, dst_va, "call", src_function_va, int(time.time()))
+        for src_va, dst_va, src_function_va in _validate_focused_candidates(
+            binary_path,
+            candidates,
+            known_targets,
+        )
+    ]
     if not rows:
-        return 0
+        return xref_db._row_count(kb, "call")
     cur = kb._conn.cursor()
     cur.executemany(
         "INSERT OR IGNORE INTO xrefs "
@@ -83,6 +165,49 @@ def index_pe_direct_calls(
     )
     kb._conn.commit()
     return xref_db._row_count(kb, "call")
+
+
+def _validate_focused_candidates(
+    binary_path: str | Path,
+    candidates: list[tuple[int, int, int]],
+    known_targets: set[int],
+) -> list[tuple[int, int, int]]:
+    grouped: dict[int, list[tuple[int, int]]] = {}
+    for src_va, dst_va, src_function_va in candidates:
+        grouped.setdefault(src_function_va, []).append((src_va, dst_va))
+
+    out: list[tuple[int, int, int]] = []
+    for src_function_va, function_candidates in grouped.items():
+        wanted = {src_va: dst_va for src_va, dst_va in function_candidates}
+        last_src = max(wanted)
+        window_bytes = min(max(16, last_src - src_function_va + 16), 1_048_576)
+        max_instructions = min(250_000, max(64, window_bytes))
+        try:
+            instructions = g.disasm.disassemble_window_at(
+                str(binary_path),
+                src_function_va,
+                window_bytes=window_bytes,
+                max_instructions=max_instructions,
+                max_time_ms=5_000,
+            )
+        except Exception:
+            continue
+        for instruction in instructions:
+            src_va = int(instruction.address.value)
+            expected_dst = wanted.get(src_va)
+            if expected_dst is None:
+                if src_va > last_src:
+                    break
+                continue
+            mnemonic = str(instruction.mnemonic or "").lower()
+            raw = bytes(getattr(instruction, "bytes", b"") or b"")
+            if mnemonic != "call" or len(raw) < 5 or raw[0] != 0xE8:
+                continue
+            rel = int.from_bytes(raw[1:5], "little", signed=True)
+            dst_va = (src_va + 5 + rel) & 0xFFFFFFFFFFFFFFFF
+            if dst_va == expected_dst and dst_va in known_targets:
+                out.append((src_va, dst_va, src_function_va))
+    return out
 
 
 def _function_entries(kb: PersistentKnowledgeBase) -> list[tuple[int, str]]:

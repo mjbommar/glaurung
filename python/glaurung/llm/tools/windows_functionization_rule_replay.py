@@ -254,6 +254,8 @@ def _case_signal(
         return (*_import_thunk_signal(case_text, selected), [])
     if rule_id == "win-pe-internal-start-body-split-candidates":
         return (*_body_split_signal(case_text, selected, rows), [])
+    if rule_id == "win-pe-tail-jump-thunk-boundary-gate":
+        return "unsupported", "tail_jump_thunk_requires_concrete_bytes", [], []
     return "unsupported", "unsupported_rule_id", [rule_id], []
 
 
@@ -268,7 +270,11 @@ def _native_case_signal(
     if not address_text:
         return "failed", "native_replay_missing_address", [binary_path_text], []
     try:
-        address = int(address_text, 16) if address_text.startswith("0x") else int(address_text)
+        address = (
+            int(address_text, 16)
+            if address_text.startswith("0x")
+            else int(address_text)
+        )
     except ValueError as exc:
         return "failed", "native_replay_invalid_address", [str(exc)], []
     binary_path = Path(binary_path_text)
@@ -424,6 +430,8 @@ def _native_reason_codes(
             codes.append("native_head:tiny_return_helper")
         if head.startswith(b"\x48\xff\x25") or head.startswith(b"\xff\x25"):
             codes.append("native_head:indirect_jump_thunk_shape")
+        if _is_tail_jump_thunk(head):
+            codes.append("native_head:tail_jump_thunk_shape")
     return _dedupe(codes)
 
 
@@ -507,6 +515,16 @@ def _scanner_replay_state(
                 return "strict_function", "rip_relative_import_thunk_with_target"
             return "candidate_or_label", "rip_relative_indirect_jump_without_import"
         return "candidate_or_label", "not_import_thunk_shape"
+    if rule_id == "win-pe-tail-jump-thunk-boundary-gate":
+        if _is_tail_jump_thunk(blob):
+            if (
+                bool(case.get("has_xref"))
+                or bool(case.get("has_table_provenance"))
+                or bool(case.get("has_pdata"))
+            ):
+                return "strict_function", "tail_jump_thunk_with_boundary_provenance"
+            return "candidate_or_label", "tail_jump_thunk_without_provenance"
+        return "candidate_or_label", "not_tail_jump_thunk_shape"
     if rule_id == "win-pe-tiny-stub-provenance-gate":
         if _is_tiny_return_helper(blob):
             if bool(case.get("has_xref")) or bool(case.get("has_table_provenance")):
@@ -560,6 +578,16 @@ def _is_simd_head(blob: bytes) -> bool:
         and blob[0] == 0x0F
         and blob[1] in {0x10, 0x11, 0x28, 0x29, 0x6F, 0x7F}
     ) or bool(blob and blob[0] in {0xC4, 0xC5, 0x62})
+
+
+def _is_tail_jump_thunk(blob: bytes) -> bool:
+    return len(blob) >= 2 and (
+        blob[0] == 0xE9
+        or blob[0] == 0xEB
+        or blob.startswith(b"\x48\xb8")
+        and len(blob) >= 12
+        and blob[10:12] == b"\xff\xe0"
+    )
 
 
 def _tiny_stub_signal(

@@ -356,6 +356,21 @@ class WindowsCommand(BaseCommand):
         bootstrap_project.add_argument("--project-path", required=True)
         bootstrap_project.add_argument("--pdb-cache-dir")
         bootstrap_project.add_argument(
+            "--analysis-config",
+            dest="analysis_config_path",
+            help=(
+                "Optional Windows analysis config YAML/JSON. Defaults to "
+                ".glaurung/windows-analysis.yaml or "
+                "$GLAURUNG_WINDOWS_ANALYSIS_CONFIG when present."
+            ),
+        )
+        bootstrap_project.add_argument("--max-read-bytes", type=int)
+        bootstrap_project.add_argument("--max-file-size", type=int)
+        bootstrap_project.add_argument("--max-functions", type=int)
+        bootstrap_project.add_argument("--max-blocks", type=int)
+        bootstrap_project.add_argument("--max-instructions", type=int)
+        bootstrap_project.add_argument("--timeout-ms", type=int)
+        bootstrap_project.add_argument(
             "--project-facts-output-path",
             help="Optional pe-project-facts.yaml path to update with this project.",
         )
@@ -380,6 +395,18 @@ class WindowsCommand(BaseCommand):
             default=True,
         )
         bootstrap_project.add_argument(
+            "--no-index-pe-direct-calls",
+            action="store_false",
+            dest="index_pe_direct_calls",
+            default=True,
+        )
+        bootstrap_project.add_argument(
+            "--no-index-function-boundaries",
+            action="store_false",
+            dest="index_function_boundaries",
+            default=True,
+        )
+        bootstrap_project.add_argument(
             "--no-index-data-xrefs",
             action="store_false",
             dest="index_data_xrefs",
@@ -401,6 +428,18 @@ class WindowsCommand(BaseCommand):
             "--no-index-branch-conditions",
             action="store_false",
             dest="index_branch_conditions",
+            default=True,
+        )
+        bootstrap_project.add_argument(
+            "--no-index-sysinfo-dispatch",
+            action="store_false",
+            dest="index_sysinfo_dispatch",
+            default=True,
+        )
+        bootstrap_project.add_argument(
+            "--no-index-callsite-path-conditions",
+            action="store_false",
+            dest="index_callsite_path_conditions",
             default=True,
         )
         bootstrap_project.add_argument(
@@ -515,8 +554,7 @@ class WindowsCommand(BaseCommand):
         promotion_apply = subparsers.add_parser(
             "runner-artifact-promotion-apply",
             help=(
-                "Verify and optionally apply reviewed runner artifact "
-                "promotion plans"
+                "Verify and optionally apply reviewed runner artifact promotion plans"
             ),
         )
         self._add_common_child_arguments(promotion_apply)
@@ -610,7 +648,9 @@ class WindowsCommand(BaseCommand):
         )
         pipeline.add_argument("--operation-backlog-required-capability")
         pipeline.add_argument("--operation-backlog-triage-category")
-        pipeline.add_argument("--operation-backlog-min-callsite-count", type=int, default=0)
+        pipeline.add_argument(
+            "--operation-backlog-min-callsite-count", type=int, default=0
+        )
         pipeline.add_argument(
             "--patch-diff-binary-a",
             help="Optional pre-change binary path for patch-diff packet emission",
@@ -1115,11 +1155,22 @@ def _execute_bootstrap_project_facts(
             project_path=args.project_path,
             pdb_cache_dir=args.pdb_cache_dir,
             struct_names=list(args.struct_names),
+            analysis_config_path=args.analysis_config_path,
+            max_read_bytes=args.max_read_bytes,
+            max_file_size=args.max_file_size,
+            max_functions=args.max_functions,
+            max_blocks=args.max_blocks,
+            max_instructions=args.max_instructions,
+            timeout_ms=args.timeout_ms,
             index_callgraph=args.index_callgraph,
+            index_pe_direct_calls=args.index_pe_direct_calls,
+            index_function_boundaries=args.index_function_boundaries,
             index_data_xrefs=args.index_data_xrefs,
             index_cfg=args.index_cfg,
             index_cfg_dominance=args.index_cfg_dominance,
             index_branch_conditions=args.index_branch_conditions,
+            index_sysinfo_dispatch=args.index_sysinfo_dispatch,
+            index_callsite_path_conditions=args.index_callsite_path_conditions,
             import_pdb_facts=args.import_pdb_facts,
             max_pdb_prototypes=args.max_pdb_prototypes,
             force_reindex=args.force_reindex,
@@ -1170,7 +1221,9 @@ def _execute_blocker_task_plan(
 ) -> int:
     tool = build_windows_pipeline_blocker_task_plan()
     artifact = g.triage.analyze_bytes(b"MZ")
-    file_path = args.preflight_path or args.blocker_worklist_path or "<windows-blockers>"
+    file_path = (
+        args.preflight_path or args.blocker_worklist_path or "<windows-blockers>"
+    )
     ctx = MemoryContext(file_path=str(file_path), artifact=artifact)
     result = tool.run(
         ctx=ctx,
@@ -1553,10 +1606,7 @@ def _format_runner_artifact_promotion_apply_human(
     if result.actions:
         lines.append("Actions:")
         lines.extend(
-            (
-                f"  {action.status} {action.source_path} "
-                f"-> {action.destination_path}"
-            )
+            (f"  {action.status} {action.source_path} -> {action.destination_path}")
             for action in result.actions[:20]
         )
     if result.blockers:
@@ -1611,8 +1661,7 @@ def _format_symbol_similarity_plan_human(
         lines.append(f"  script={result.output_script_path}")
     for step in result.steps[:20]:
         lines.append(
-            f"  {step.kind} ready={step.ready} "
-            f"tool={step.next_tool_name or '-'}"
+            f"  {step.kind} ready={step.ready} tool={step.next_tool_name or '-'}"
         )
         if step.command_text:
             lines.append(f"    {step.command_text}")

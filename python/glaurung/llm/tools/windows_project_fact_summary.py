@@ -28,6 +28,10 @@ CORE_TABLES = (
     "cfg_dominance_index_state",
     "cfg_branch_facts",
     "cfg_branch_index_state",
+    "function_boundaries",
+    "windows_sysinfo_dispatch",
+    "callsite_argument_facts",
+    "callsite_path_conditions",
 )
 
 
@@ -71,6 +75,10 @@ class ProjectFactCounts(BaseModel):
     cfg_edge_count: int = 0
     cfg_dominance_count: int = 0
     cfg_branch_fact_count: int = 0
+    function_boundary_count: int = 0
+    sysinfo_dispatch_count: int = 0
+    callsite_argument_fact_count: int = 0
+    callsite_path_condition_count: int = 0
 
 
 class ProjectFunctionFact(BaseModel):
@@ -189,7 +197,11 @@ def _table_statuses(conn: sqlite3.Connection) -> list[ProjectFactTableStatus]:
     statuses = []
     for table in CORE_TABLES:
         count = _table_count(conn, table) if table in present else 0
-        statuses.append(ProjectFactTableStatus(name=table, present=table in present, row_count=count))
+        statuses.append(
+            ProjectFactTableStatus(
+                name=table, present=table in present, row_count=count
+            )
+        )
     return statuses
 
 
@@ -200,7 +212,9 @@ def _table_count(conn: sqlite3.Connection, table: str) -> int:
 def _first_binary_id(conn: sqlite3.Connection, present: set[str]) -> int | None:
     if "binaries" not in present:
         return None
-    row = conn.execute("SELECT binary_id FROM binaries ORDER BY binary_id LIMIT 1").fetchone()
+    row = conn.execute(
+        "SELECT binary_id FROM binaries ORDER BY binary_id LIMIT 1"
+    ).fetchone()
     return int(row[0]) if row else None
 
 
@@ -215,8 +229,12 @@ def _counts(
         xref_count=_count(conn, present, "xrefs", binary_id, None),
         call_xref_count=_count(conn, present, "xrefs", binary_id, "kind = 'call'"),
         jump_xref_count=_count(conn, present, "xrefs", binary_id, "kind = 'jump'"),
-        data_read_xref_count=_count(conn, present, "xrefs", binary_id, "kind = 'data_read'"),
-        data_write_xref_count=_count(conn, present, "xrefs", binary_id, "kind = 'data_write'"),
+        data_read_xref_count=_count(
+            conn, present, "xrefs", binary_id, "kind = 'data_read'"
+        ),
+        data_write_xref_count=_count(
+            conn, present, "xrefs", binary_id, "kind = 'data_write'"
+        ),
         data_label_count=_count(conn, present, "data_labels", binary_id, None),
         function_prototype_count=_count(
             conn,
@@ -225,12 +243,44 @@ def _counts(
             binary_id,
             None,
         ),
-        stack_frame_var_count=_count(conn, present, "stack_frame_vars", binary_id, None),
+        stack_frame_var_count=_count(
+            conn, present, "stack_frame_vars", binary_id, None
+        ),
         comment_count=_count(conn, present, "comments", binary_id, None),
         basic_block_count=_count(conn, present, "basic_blocks", binary_id, None),
         cfg_edge_count=_count(conn, present, "cfg_edges", binary_id, None),
         cfg_dominance_count=_count(conn, present, "cfg_dominance", binary_id, None),
-        cfg_branch_fact_count=_count(conn, present, "cfg_branch_facts", binary_id, None),
+        cfg_branch_fact_count=_count(
+            conn, present, "cfg_branch_facts", binary_id, None
+        ),
+        function_boundary_count=_count(
+            conn,
+            present,
+            "function_boundaries",
+            binary_id,
+            None,
+        ),
+        sysinfo_dispatch_count=_count(
+            conn,
+            present,
+            "windows_sysinfo_dispatch",
+            binary_id,
+            None,
+        ),
+        callsite_argument_fact_count=_count(
+            conn,
+            present,
+            "callsite_argument_facts",
+            binary_id,
+            None,
+        ),
+        callsite_path_condition_count=_count(
+            conn,
+            present,
+            "callsite_path_conditions",
+            binary_id,
+            None,
+        ),
     )
 
 
@@ -252,7 +302,9 @@ def _count(
     if extra_where:
         clauses.append(extra_where)
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
-    return int(conn.execute(f"SELECT COUNT(*) FROM {table}{where}", params).fetchone()[0])
+    return int(
+        conn.execute(f"SELECT COUNT(*) FROM {table}{where}", params).fetchone()[0]
+    )
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -292,7 +344,9 @@ def _function_facts(
             demangled=row[2],
             flavor=row[3],
             set_by=row[4],
-            call_out_count=_per_function_count(conn, present, binary_id, int(row[0]), "call"),
+            call_out_count=_per_function_count(
+                conn, present, binary_id, int(row[0]), "call"
+            ),
             data_read_count=_per_function_count(
                 conn,
                 present,
@@ -329,7 +383,9 @@ def _per_function_count(
         clauses.insert(0, "binary_id = ?")
         params.insert(0, binary_id)
     where = " AND ".join(clauses)
-    return int(conn.execute(f"SELECT COUNT(*) FROM xrefs WHERE {where}", params).fetchone()[0])
+    return int(
+        conn.execute(f"SELECT COUNT(*) FROM xrefs WHERE {where}", params).fetchone()[0]
+    )
 
 
 def _stack_var_count(
@@ -426,7 +482,15 @@ def _coverage(counts: ProjectFactCounts, present: set[str]) -> list[str]:
         coverage.append("cfg_dominance")
     if counts.cfg_branch_fact_count:
         coverage.append("branch_conditions")
-    elif "xref_index_state" in present:
+    if counts.function_boundary_count:
+        coverage.append("function_boundaries")
+    if counts.sysinfo_dispatch_count:
+        coverage.append("sysinfo_dispatch")
+    if counts.callsite_argument_fact_count:
+        coverage.append("callsite_argument_facts")
+    if counts.callsite_path_condition_count:
+        coverage.append("callsite_path_conditions")
+    if "xref_index_state" in present:
         coverage.append("callgraph_index_state")
     return coverage
 
@@ -441,12 +505,22 @@ def _missing_capabilities(counts: ProjectFactCounts, present: set[str]) -> list[
         missing.append("data_xrefs")
     if not counts.function_prototype_count:
         missing.append("function_prototypes")
+    if not counts.function_boundary_count:
+        missing.append("function_boundaries")
     if not (counts.basic_block_count or counts.cfg_edge_count):
         missing.append("persisted_cfg")
     elif not counts.cfg_dominance_count:
         missing.append("cfg_dominance")
-    if (counts.basic_block_count or counts.cfg_edge_count) and not counts.cfg_branch_fact_count:
+    if (
+        counts.basic_block_count or counts.cfg_edge_count
+    ) and not counts.cfg_branch_fact_count:
         missing.append("branch_conditions")
+    if not counts.sysinfo_dispatch_count:
+        missing.append("sysinfo_dispatch")
+    if not counts.callsite_argument_fact_count:
+        missing.append("callsite_argument_facts")
+    if not counts.callsite_path_condition_count:
+        missing.append("callsite_path_conditions")
     if "basic_blocks" not in present and "cfg_edges" not in present:
         missing.append("cfg_tables")
     return missing

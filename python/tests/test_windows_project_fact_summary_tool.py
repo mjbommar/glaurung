@@ -153,6 +153,18 @@ CREATE TABLE cfg_branch_index_state (
     function_count INTEGER NOT NULL,
     branch_count INTEGER NOT NULL
 );
+CREATE TABLE function_boundaries (
+    boundary_id INTEGER PRIMARY KEY,
+    binary_id INTEGER NOT NULL,
+    entry_va INTEGER NOT NULL,
+    end_va INTEGER,
+    size INTEGER,
+    source TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    name TEXT,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    indexed_at INTEGER NOT NULL
+);
 """
     )
     conn.execute(
@@ -206,6 +218,10 @@ CREATE TABLE cfg_branch_index_state (
         "0x1004, 'cmp', '[\"rcx\", \"0\"]', 'equal', 'sink', NULL, 0)"
     )
     conn.execute("INSERT INTO cfg_branch_index_state VALUES (1, 0, 1, 1)")
+    conn.execute(
+        "INSERT INTO function_boundaries VALUES "
+        "(1, 1, 0x1000, 0x1020, 0x20, 'pdb', 0.95, 'nt!Entry', '{}', 0)"
+    )
     conn.commit()
     conn.close()
     return project
@@ -234,6 +250,7 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert result.counts.cfg_edge_count == 1
     assert result.counts.cfg_dominance_count == 2
     assert result.counts.cfg_branch_fact_count == 1
+    assert result.counts.function_boundary_count == 1
     assert result.functions[0].canonical == "nt!Entry"
     assert result.functions[0].call_out_count == 1
     assert result.functions[0].stack_var_count == 1
@@ -244,6 +261,7 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert "cfg" in result.coverage
     assert "cfg_dominance" in result.coverage
     assert "branch_conditions" in result.coverage
+    assert "function_boundaries" in result.coverage
     assert "persisted_cfg" not in result.missing_capabilities
     assert "cfg_dominance" not in result.missing_capabilities
     assert "branch_conditions" not in result.missing_capabilities

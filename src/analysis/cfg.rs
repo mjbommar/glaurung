@@ -478,6 +478,9 @@ fn pe_tail_target_looks_like_function_start(data: &[u8], target_va: u64) -> bool
     let Some(file_off) = pe_va_to_file_off(data, target_va) else {
         return false;
     };
+    if file_off >= data.len() {
+        return false;
+    }
     if has_function_boundary_marker(data, file_off) {
         return true;
     }
@@ -900,6 +903,9 @@ fn cap_discovered_functions_at_va(functions: &mut [Function], va: u64) -> usize 
 fn pe_xref_seed_looks_like_function_start(data: &[u8], va: u64) -> bool {
     match pe_va_to_file_off(data, va) {
         Some(file_off) => {
+            if file_off >= data.len() {
+                return false;
+            }
             !pe_head_looks_like_simd_continuation(&data[file_off..])
                 && looks_like_fn_start(data, file_off)
         }
@@ -1004,6 +1010,9 @@ fn thunk_scan_has_padding(data: &[u8], file_off: usize, len: usize) -> bool {
 }
 
 fn pe_thunk_scan_candidate(data: &[u8], file_off: usize, va: u64, _regions: &[ExecRegion]) -> bool {
+    if file_off >= data.len() {
+        return false;
+    }
     let Some(matched) = classify_pe_thunk_head(va, &data[file_off..]) else {
         return false;
     };
@@ -1126,6 +1135,9 @@ fn pe_tiny_stub_scan_candidate(
     va: u64,
     regions: &[ExecRegion],
 ) -> bool {
+    if file_off >= data.len() {
+        return false;
+    }
     if pe_head_looks_like_simd_continuation(&data[file_off..]) {
         return false;
     }
@@ -1210,6 +1222,9 @@ fn scan_pe_tiny_stub_function_starts(
 }
 
 fn pe_low_confidence_call_target_head(data: &[u8], file_off: usize) -> bool {
+    if file_off >= data.len() {
+        return false;
+    }
     if pe_head_looks_like_simd_continuation(&data[file_off..]) {
         return false;
     }
@@ -1232,6 +1247,9 @@ fn classify_code_label(data: &[u8], va: u64) -> String {
     let Some(file_off) = pe_va_to_file_off(data, va) else {
         return "block_label".to_string();
     };
+    if file_off >= data.len() {
+        return "block_label".to_string();
+    }
     let head = &data[file_off..];
     if pe_head_looks_like_simd_continuation(head) {
         return "simd_block_label".to_string();
@@ -1680,6 +1698,9 @@ fn classify_function_shapes(
         let Some(file_off) = pe_va_to_file_off(data, func.entry_point.value) else {
             continue;
         };
+        if file_off >= data.len() {
+            continue;
+        }
         let head_end = std::cmp::min(file_off.saturating_add(16), data.len());
         let Some(matched) =
             classify_pe_thunk_head(func.entry_point.value, &data[file_off..head_end])

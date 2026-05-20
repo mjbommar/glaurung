@@ -130,6 +130,7 @@ def test_checked_in_windows_rule_authoring_replay_fixture_loads() -> None:
         "win-pe-data-ref-padding-boundary-gate",
         "win-pe-import-thunk-shape-catalog",
         "win-pe-internal-start-body-split-candidates",
+        "win-pe-tail-jump-thunk-boundary-gate",
     } <= rule_ids
     assert all(fixture.cases for fixture in fixtures)
     assert any(

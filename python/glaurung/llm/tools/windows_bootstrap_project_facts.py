@@ -10,10 +10,19 @@ import yaml
 from pydantic import BaseModel, Field
 
 from ..context import MemoryContext
-from ..kb import cfg_db, pe_direct_calls, type_db, xref_db
+from ..kb import (
+    cfg_db,
+    pe_direct_calls,
+    type_db,
+    windows_boundaries,
+    windows_callsite_facts,
+    windows_sysinfo,
+    xref_db,
+)
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.persistent import PersistentKnowledgeBase
 from ..kb.store import KnowledgeBase
+from glaurung.windows_config import WindowsAnalysisConfig, load_windows_analysis_config
 from .base import MemoryTool, ToolMeta
 from .windows_import_pdb_facts import PdbFactImportCounts
 from .windows_project_fact_summary import (
@@ -25,7 +34,9 @@ from .windows_project_fact_summary import (
 
 class WindowsBootstrapProjectFactsArgs(BaseModel):
     pe_path: str = Field(..., description="Path to the Windows PE binary to index.")
-    project_path: str = Field(..., description="Path to create or update as a .glaurung project.")
+    project_path: str = Field(
+        ..., description="Path to create or update as a .glaurung project."
+    )
     pdb_cache_dir: str | None = Field(
         None,
         description="Optional Microsoft-style PDB cache directory for PDB fact import.",
@@ -34,9 +45,60 @@ class WindowsBootstrapProjectFactsArgs(BaseModel):
         default_factory=list,
         description="Optional PDB struct/class/union names to import as type layouts.",
     )
+    analysis_config_path: str | None = Field(
+        None,
+        description=(
+            "Optional Windows analysis config YAML/JSON. Defaults to "
+            ".glaurung/windows-analysis.yaml or $GLAURUNG_WINDOWS_ANALYSIS_CONFIG."
+        ),
+    )
+    max_read_bytes: int | None = Field(
+        None,
+        ge=1,
+        description="Override maximum bytes read from the PE during analysis.",
+    )
+    max_file_size: int | None = Field(
+        None,
+        ge=1,
+        description="Override maximum allowed PE file size during analysis.",
+    )
+    max_functions: int | None = Field(
+        None,
+        ge=0,
+        description="Override maximum functions; 0 means unlimited.",
+    )
+    max_blocks: int | None = Field(
+        None,
+        ge=1,
+        description="Override maximum CFG basic blocks.",
+    )
+    max_instructions: int | None = Field(
+        None,
+        ge=1,
+        description="Override maximum decoded/lifted instructions.",
+    )
+    timeout_ms: int | None = Field(
+        None,
+        ge=1,
+        description="Override per-analysis timeout in milliseconds.",
+    )
     index_callgraph: bool = Field(
         True,
         description="If true, persist call xrefs and analyzer function names.",
+    )
+    index_pe_direct_calls: bool = Field(
+        True,
+        description=(
+            "If true, scan executable PE sections for rel32 calls to known "
+            "function-name targets. This runs without full CFG dependence."
+        ),
+    )
+    index_function_boundaries: bool = Field(
+        True,
+        description=(
+            "If true, persist confidence-ranked function-boundary candidates "
+            "from PDB/public names, .pdata, and call-target facts."
+        ),
     )
     index_data_xrefs: bool = Field(
         True,
@@ -53,6 +115,19 @@ class WindowsBootstrapProjectFactsArgs(BaseModel):
     index_branch_conditions: bool = Field(
         True,
         description="If true, persist conditional branch and compare operand facts.",
+    )
+    index_sysinfo_dispatch: bool = Field(
+        True,
+        description=(
+            "If true, persist first-class NtQuerySystemInformation class-to-helper "
+            "dispatch facts."
+        ),
+    )
+    index_callsite_path_conditions: bool = Field(
+        True,
+        description=(
+            "If true, attach nearby persisted branch-condition facts to callsites."
+        ),
     )
     import_pdb_facts: bool = Field(
         True,
@@ -162,10 +237,53 @@ class WindowsBootstrapProjectFactsTool(
         if not pe_path.exists():
             raise ValueError(f"{pe_path}: PE binary does not exist")
 
+        config = _analysis_config(args)
         project = PersistentKnowledgeBase.open(project_path, binary_path=pe_path)
         steps: list[ProjectBootstrapStep] = []
         pdb_counts: PdbFactImportCounts | None = None
         try:
+            if args.import_pdb_facts and args.pdb_cache_dir:
+                step, pdb_counts = _run_pdb_import_step(project, pe_path, args)
+                steps.append(step)
+            else:
+                steps.append(
+                    ProjectBootstrapStep(name="import_pdb_facts", ran=False, ok=True)
+                )
+
+            if args.index_pe_direct_calls:
+                steps.append(
+                    _run_count_step(
+                        "index_pe_direct_calls",
+                        lambda: pe_direct_calls.index_pe_direct_calls(project, pe_path),
+                    )
+                )
+            else:
+                steps.append(
+                    ProjectBootstrapStep(
+                        name="index_pe_direct_calls", ran=False, ok=True
+                    )
+                )
+
+            if args.index_function_boundaries:
+                steps.append(
+                    _run_count_step(
+                        "index_function_boundaries",
+                        lambda: windows_boundaries.index_function_boundaries(
+                            project,
+                            pe_path,
+                            force=args.force_reindex,
+                        ),
+                    )
+                )
+            else:
+                steps.append(
+                    ProjectBootstrapStep(
+                        name="index_function_boundaries",
+                        ran=False,
+                        ok=True,
+                    )
+                )
+
             if args.index_callgraph:
                 steps.append(
                     _run_count_step(
@@ -174,11 +292,19 @@ class WindowsBootstrapProjectFactsTool(
                             project,
                             str(pe_path),
                             force=args.force_reindex,
+                            max_read_bytes=config.max_read_bytes,
+                            max_file_size=config.max_file_size,
+                            max_functions=config.max_functions,
+                            max_blocks=config.max_blocks,
+                            max_instructions=config.max_instructions,
+                            timeout_ms=config.timeout_ms,
                         ),
                     )
                 )
             else:
-                steps.append(ProjectBootstrapStep(name="index_callgraph", ran=False, ok=True))
+                steps.append(
+                    ProjectBootstrapStep(name="index_callgraph", ran=False, ok=True)
+                )
 
             if args.index_data_xrefs:
                 steps.append(
@@ -192,7 +318,9 @@ class WindowsBootstrapProjectFactsTool(
                     )
                 )
             else:
-                steps.append(ProjectBootstrapStep(name="index_data_xrefs", ran=False, ok=True))
+                steps.append(
+                    ProjectBootstrapStep(name="index_data_xrefs", ran=False, ok=True)
+                )
 
             if args.index_cfg:
                 steps.append(
@@ -202,6 +330,12 @@ class WindowsBootstrapProjectFactsTool(
                             project,
                             str(pe_path),
                             force=args.force_reindex,
+                            max_read_bytes=config.max_read_bytes,
+                            max_file_size=config.max_file_size,
+                            max_functions=config.max_functions,
+                            max_blocks=config.max_blocks,
+                            max_instructions=config.max_instructions,
+                            timeout_ms=config.timeout_ms,
                         ),
                     )
                 )
@@ -231,6 +365,7 @@ class WindowsBootstrapProjectFactsTool(
                             project,
                             str(pe_path),
                             force=args.force_reindex,
+                            timeout_ms=config.timeout_ms,
                         ),
                     )
                 )
@@ -243,19 +378,44 @@ class WindowsBootstrapProjectFactsTool(
                     )
                 )
 
-            if args.import_pdb_facts and args.pdb_cache_dir:
-                step, pdb_counts = _run_pdb_import_step(project, pe_path, args)
-                steps.append(step)
-            else:
-                steps.append(ProjectBootstrapStep(name="import_pdb_facts", ran=False, ok=True))
-
-            if args.index_callgraph and not _has_call_xref_facts(steps):
+            if args.index_sysinfo_dispatch:
                 steps.append(
                     _run_count_step(
-                        "index_pe_direct_calls",
-                        lambda: pe_direct_calls.index_pe_direct_calls(project, pe_path),
+                        "index_sysinfo_dispatch",
+                        lambda: windows_sysinfo.index_sysinfo_dispatch_facts(
+                            project,
+                            force=args.force_reindex,
+                        ),
                     )
                 )
+            else:
+                steps.append(
+                    ProjectBootstrapStep(
+                        name="index_sysinfo_dispatch",
+                        ran=False,
+                        ok=True,
+                    )
+                )
+
+            if args.index_callsite_path_conditions:
+                steps.append(
+                    _run_count_step(
+                        "index_callsite_path_conditions",
+                        lambda: windows_callsite_facts.index_callsite_path_conditions(
+                            project,
+                            force=args.force_reindex,
+                        ),
+                    )
+                )
+            else:
+                steps.append(
+                    ProjectBootstrapStep(
+                        name="index_callsite_path_conditions",
+                        ran=False,
+                        ok=True,
+                    )
+                )
+
         finally:
             project.close()
 
@@ -314,7 +474,9 @@ def _run_count_step(name: str, fn: Callable[[], int]) -> ProjectBootstrapStep:
     start = perf_counter()
     try:
         count = int(fn())
-    except Exception as exc:  # pragma: no cover - native analyzer errors vary.
+    except BaseException as exc:  # pragma: no cover - native analyzer errors vary.
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
         return ProjectBootstrapStep(
             name=name,
             ran=True,
@@ -328,6 +490,18 @@ def _run_count_step(name: str, fn: Callable[[], int]) -> ProjectBootstrapStep:
         ok=True,
         count=count,
         elapsed_ms=round((perf_counter() - start) * 1000, 1),
+    )
+
+
+def _analysis_config(args: WindowsBootstrapProjectFactsArgs) -> WindowsAnalysisConfig:
+    return load_windows_analysis_config(args.analysis_config_path).with_overrides(
+        max_read_bytes=args.max_read_bytes,
+        max_file_size=args.max_file_size,
+        max_functions=args.max_functions,
+        max_blocks=args.max_blocks,
+        max_instructions=args.max_instructions,
+        timeout_ms=args.timeout_ms,
+        pdb_cache_dir=args.pdb_cache_dir,
     )
 
 
@@ -402,10 +576,16 @@ def _fact_coverage(
         coverage.append("data_xrefs")
     if _step_has_facts(by_name.get("index_cfg")):
         coverage.append("persisted_cfg")
+    if _step_has_facts(by_name.get("index_function_boundaries")):
+        coverage.append("function_boundaries")
     if _step_has_facts(by_name.get("index_cfg_dominance")):
         coverage.append("cfg_dominance")
     if _step_has_facts(by_name.get("index_branch_conditions")):
         coverage.append("branch_conditions")
+    if _step_has_facts(by_name.get("index_sysinfo_dispatch")):
+        coverage.append("sysinfo_dispatch")
+    if _step_has_facts(by_name.get("index_callsite_path_conditions")):
+        coverage.append("callsite_path_conditions")
     if pdb_counts:
         if pdb_counts.cache_hit:
             coverage.append("cached_pdb")
@@ -425,7 +605,7 @@ def _missing_capabilities(
 ) -> list[str]:
     missing: list[str] = []
     by_name = {step.name: step for step in steps}
-    if args.index_callgraph and not (
+    if (args.index_callgraph or args.index_pe_direct_calls) and not (
         _step_has_facts(by_name.get("index_callgraph"))
         or _step_has_facts(by_name.get("index_pe_direct_calls"))
     ):
@@ -434,6 +614,10 @@ def _missing_capabilities(
         missing.append("data_xrefs")
     if args.index_cfg and not _step_has_facts(by_name.get("index_cfg")):
         missing.append("persisted_cfg")
+    if args.index_function_boundaries and not _step_has_facts(
+        by_name.get("index_function_boundaries")
+    ):
+        missing.append("function_boundaries")
     if args.index_cfg_dominance and not _step_has_facts(
         by_name.get("index_cfg_dominance")
     ):
@@ -442,6 +626,14 @@ def _missing_capabilities(
         by_name.get("index_branch_conditions")
     ):
         missing.append("branch_conditions")
+    if args.index_sysinfo_dispatch and not _step_has_facts(
+        by_name.get("index_sysinfo_dispatch")
+    ):
+        missing.append("sysinfo_dispatch")
+    if args.index_callsite_path_conditions and not _step_has_facts(
+        by_name.get("index_callsite_path_conditions")
+    ):
+        missing.append("callsite_path_conditions")
     if args.import_pdb_facts and not pdb_counts:
         missing.append("pdb_import")
     if pdb_counts:
@@ -515,8 +707,7 @@ def _project_fact_record(
         "fact_coverage": list(summary.coverage),
         "missing_facts": list(summary.missing_capabilities),
         "counts": _manifest_counts(summary),
-        "notes": args.manifest_note
-        or "generated by windows_bootstrap_project_facts",
+        "notes": args.manifest_note or "generated by windows_bootstrap_project_facts",
     }
 
 
@@ -547,6 +738,12 @@ def _fact_sources(
         sources.append("cfg_db")
     if summary.counts.cfg_branch_fact_count:
         sources.append("cfg_branch_facts")
+    if summary.counts.function_boundary_count:
+        sources.append("function_boundaries")
+    if summary.counts.sysinfo_dispatch_count:
+        sources.append("windows_sysinfo_dispatch")
+    if summary.counts.callsite_path_condition_count:
+        sources.append("callsite_path_conditions")
     return _dedupe(sources)
 
 
@@ -564,6 +761,10 @@ def _manifest_counts(summary: WindowsProjectFactSummaryResult) -> dict[str, int]
         "cfg_edge_count": counts.cfg_edge_count,
         "cfg_dominance_count": counts.cfg_dominance_count,
         "cfg_branch_fact_count": counts.cfg_branch_fact_count,
+        "function_boundary_count": counts.function_boundary_count,
+        "sysinfo_dispatch_count": counts.sysinfo_dispatch_count,
+        "callsite_argument_fact_count": counts.callsite_argument_fact_count,
+        "callsite_path_condition_count": counts.callsite_path_condition_count,
     }
 
 

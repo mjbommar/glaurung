@@ -121,6 +121,27 @@ def _write_concrete_byte_fixtures(tmp_path: Path) -> Path:
     expected_state: label_or_rejected_start
     expected: padding bytes are not functions
     rationale: concrete bytes guard for padding data-ref false positives
+- rule_id: win-pe-tail-jump-thunk-boundary-gate
+  kind: tail_jump_thunk_precision_gate
+  seed_class: tail_jump_thunk
+  cases:
+  - id: rel32_tail_jump_with_xref
+    kind: positive
+    fixture: synthetic bytes
+    address: "0x140004000"
+    bytes_hex: "e9 34 12 00 00"
+    has_xref: true
+    expected_state: strict_function
+    expected: direct tail-jump thunk with xref is strict
+    rationale: concrete bytes guard for tail-jump thunk recall
+  - id: rel32_tail_jump_without_provenance
+    kind: negative
+    fixture: synthetic bytes
+    address: "0x140004100"
+    bytes_hex: "e9 34 12 00 00"
+    expected_state: candidate_or_label
+    expected: direct tail-jump shape alone is not strict
+    rationale: concrete bytes guard for branch-byte over-promotion
 """,
         encoding="utf-8",
     )
@@ -174,9 +195,9 @@ def test_windows_functionization_rule_replay_passes_checked_in_fixture_yaml(
         ),
     )
 
-    assert result.fixture_count == 5
-    assert result.case_count == 11
-    assert result.passed_count == 11
+    assert result.fixture_count == 6
+    assert result.case_count == 13
+    assert result.passed_count == 13
     assert result.failed_count == 0
     assert result.unsupported_count == 0
     assert "not a scanner code change" in result.notes[0]
@@ -203,6 +224,7 @@ def test_windows_functionization_rule_replay_passes_checked_in_fixture_yaml(
             "import_thunk_recall_fixture_covered",
             "synthetic_negative_thunk_shape_present",
         },
+        "win-pe-tail-jump-thunk-boundary-gate": {"concrete_bytes_replay"},
         "win-pe-native-function-start-replay": {
             "native_glaurung_function_start_replay"
         },
@@ -213,7 +235,9 @@ def test_windows_functionization_rule_replay_passes_checked_in_fixture_yaml(
         if fixture.rule_id == "win-pe-native-function-start-replay"
     ).cases
     assert all(case.native_replay for case in native_cases)
-    assert any("seed_kind:entrypoint" in case.native_reason_codes for case in native_cases)
+    assert any(
+        "seed_kind:entrypoint" in case.native_reason_codes for case in native_cases
+    )
     assert any("seed_kind:none" in case.native_reason_codes for case in native_cases)
     assert any(
         code.startswith("scan_rejection:")
@@ -275,9 +299,9 @@ def test_windows_functionization_rule_replay_checks_concrete_bytes(
         ),
     )
 
-    assert result.fixture_count == 3
-    assert result.case_count == 3
-    assert result.passed_count == 3
+    assert result.fixture_count == 4
+    assert result.case_count == 5
+    assert result.passed_count == 5
     assert all(
         case.scanner_replay for fixture in result.fixtures for case in fixture.cases
     )
@@ -292,6 +316,17 @@ def test_windows_functionization_rule_replay_checks_concrete_bytes(
         "bytes=48 ff 25 00 00 00 00",
         "address=0x140002000",
     ]
+    details_by_case = {
+        case.case_id: case.details
+        for fixture in result.fixtures
+        for case in fixture.cases
+    }
+    assert details_by_case["rel32_tail_jump_with_xref"][2] == (
+        "reason=tail_jump_thunk_with_boundary_provenance"
+    )
+    assert details_by_case["rel32_tail_jump_without_provenance"][2] == (
+        "reason=tail_jump_thunk_without_provenance"
+    )
 
 
 def test_windows_functionization_rule_replay_checks_native_analyzer_output(
@@ -319,14 +354,10 @@ def test_windows_functionization_rule_replay_checks_native_analyzer_output(
     assert positive.binary_path.endswith("SurfacePenBleLcAddrAdaptationDriver.sys")
     assert positive.signal == "native_glaurung_function_start_replay"
     assert positive.status == "passed"
-    assert any(
-        detail == "actual_state=strict_function" for detail in positive.details
-    )
+    assert any(detail == "actual_state=strict_function" for detail in positive.details)
     assert "seed_kind:entrypoint" in positive.native_reason_codes
     assert "seed_detail:initial_seed" in positive.native_reason_codes
-    assert any(
-        detail == "expected_seed_kind=entrypoint" for detail in positive.details
-    )
+    assert any(detail == "expected_seed_kind=entrypoint" for detail in positive.details)
     negative = cases["ze_loader_simd_missing_start_stays_candidate"]
     assert negative.native_replay is True
     assert negative.status == "passed"
@@ -387,7 +418,9 @@ def test_windows_functionization_rule_replay_surfaces_address_rejection_records(
 
     case = result.fixtures[0].cases[0]
     assert case.status == "passed"
-    assert "scan_rejection_at_address:body_overlap:tiny_stub" in case.native_reason_codes
+    assert (
+        "scan_rejection_at_address:body_overlap:tiny_stub" in case.native_reason_codes
+    )
     assert any(
         detail.startswith("native_address_scan_rejections=body_overlap:tiny_stub")
         for detail in case.details

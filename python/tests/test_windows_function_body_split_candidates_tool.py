@@ -39,7 +39,7 @@ def test_windows_function_body_split_candidates_finds_webservices_overmerge(
             comparison_path=str(COMPARISON),
             diagnostics_path=str(DIAGNOSTICS),
             file="win10-webservices.dll",
-            max_rows=6,
+            max_rows=24,
         ),
     )
 
@@ -49,6 +49,13 @@ def test_windows_function_body_split_candidates_finds_webservices_overmerge(
     assert result.rows[0].owner_total_size > 200_000
     assert "large_owner_function" in result.rows[0].reason_codes
     assert result.rows[0].recommended_action == "split_existing_function_body"
+    assert result.rows[0].evidence_basis
+    by_address = {row.address: row for row in result.rows}
+    table_backed = by_address["0x180002730"]
+    assert table_backed.code_pointer_ref_count == 1
+    assert table_backed.split_confidence == "high"
+    assert "code_pointer_ref" in table_backed.evidence_basis
+    assert "owner_overlap" in table_backed.evidence_basis
 
 
 def test_windows_function_body_split_candidates_keeps_pdata_overlap_context(
@@ -71,6 +78,8 @@ def test_windows_function_body_split_candidates_keeps_pdata_overlap_context(
 
     assert result.rows
     assert result.rows[0].pdata_body_overlap_starts == 2
+    assert result.rows[0].split_confidence == "high"
+    assert "pdata_body_overlap" in result.rows[0].evidence_basis
     assert "pdata_overlap" in result.rows[0].reason_codes
     assert result.evidence_node_id is not None
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import glaurung as g
+from glaurung.windows_config import WindowsAnalysisConfig, load_windows_analysis_config
 
 from .base import BaseCommand
 from ..formatters.base import BaseFormatter, OutputFormat
@@ -78,18 +79,39 @@ def _disasm_pane(file_path: str, va: int, window_bytes: int = 96) -> List[str]:
 
 def _pseudo_pane(
     kb, binary_path: str, va: int,
-    *, max_lines: int = 30, function_va: Optional[int] = None,
+    *,
+    max_lines: int = 30,
+    function_va: Optional[int] = None,
+    config: WindowsAnalysisConfig | None = None,
 ) -> List[str]:
     """Decompile the enclosing function and return a slice of the
     rendered output that contains `va`. Highlights any line whose
     leading address matches the target."""
-    from glaurung.llm.kb import xref_db
+    from glaurung.llm.kb import windows_boundaries, xref_db
     fn_va = function_va
+    config = config or WindowsAnalysisConfig()
+    boundary = None
+    try:
+        boundary = windows_boundaries.best_boundary_for_va(kb, int(va))
+    except Exception:
+        boundary = None
+    if fn_va is None and boundary is not None:
+        fn_va = boundary.entry_va
     if fn_va is None:
         # Discover functions and find the one containing this VA.
         try:
-            funcs, _cg = g.analysis.analyze_functions_path(binary_path)
-        except Exception as e:
+            funcs, _cg = g.analysis.analyze_functions_path(
+                binary_path,
+                config.max_read_bytes,
+                config.max_file_size,
+                config.max_functions,
+                config.max_blocks,
+                config.max_instructions,
+                config.timeout_ms,
+            )
+        except BaseException as e:
+            if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
             return [f"(function discovery failed: {e})"]
         for f in funcs:
             try:
@@ -102,10 +124,34 @@ def _pseudo_pane(
         return [f"(VA 0x{va:x} not inside any discovered function)"]
     try:
         text = xref_db.render_decompile_with_names(
-            kb, binary_path, fn_va, timeout_ms=500, style="c",
+            kb,
+            binary_path,
+            fn_va,
+            max_blocks=config.max_blocks,
+            max_instructions=config.max_instructions,
+            timeout_ms=config.timeout_ms,
+            style="c",
+            pdb_cache=config.pdb_cache_dir or "",
         )
     except Exception as e:
-        return [f"(decompile failed: {e})"]
+        if boundary is None or boundary.end_va is None:
+            return [f"(decompile failed: {e})"]
+        try:
+            text = g.ir.decompile_range_at(
+                binary_path,
+                int(boundary.entry_va),
+                int(boundary.entry_va),
+                int(boundary.end_va),
+                max_blocks=config.max_blocks,
+                max_instructions=config.max_instructions,
+                timeout_ms=config.timeout_ms,
+                style="c",
+                pdb_cache=config.pdb_cache_dir or "",
+            )
+        except Exception as range_exc:
+            return [
+                f"(decompile failed: {e}; range fallback failed: {range_exc})"
+            ]
     lines = text.splitlines()
     return lines[:max_lines]
 
@@ -125,6 +171,19 @@ class ViewCommand(BaseCommand):
         parser.add_argument(
             "--binary", type=Path, default=None,
             help="Optional: binary path the KB was opened against",
+        )
+        parser.add_argument(
+            "--analysis-config",
+            help=(
+                "Optional Windows analysis config YAML/JSON. Defaults to "
+                ".glaurung/windows-analysis.yaml or "
+                "$GLAURUNG_WINDOWS_ANALYSIS_CONFIG when present."
+            ),
+        )
+        parser.add_argument(
+            "--pdb-cache",
+            default=None,
+            help="Optional PDB cache override for pseudocode name resolution.",
         )
         parser.add_argument(
             "--hex-window", type=int, default=64,
@@ -153,6 +212,13 @@ class ViewCommand(BaseCommand):
             va = int(args.va, 0)
         except ValueError:
             formatter.output_plain(f"Error: bad VA: {args.va!r}")
+            return 2
+        try:
+            config = load_windows_analysis_config(args.analysis_config).with_overrides(
+                pdb_cache_dir=args.pdb_cache,
+            )
+        except Exception as e:
+            formatter.output_plain(f"Error loading analysis config: {e}")
             return 2
 
         from glaurung.llm.kb.persistent import PersistentKnowledgeBase
@@ -187,7 +253,13 @@ class ViewCommand(BaseCommand):
                 if args.pane in ("disasm", "all") else []
             )
             pseudo_lines = (
-                _pseudo_pane(kb, bin_str, va, max_lines=args.pseudo_lines)
+                _pseudo_pane(
+                    kb,
+                    bin_str,
+                    va,
+                    max_lines=args.pseudo_lines,
+                    config=config,
+                )
                 if args.pane in ("pseudo", "all") else []
             )
 
@@ -211,7 +283,7 @@ class ViewCommand(BaseCommand):
                     formatter.output_plain(ln)
                 formatter.output_plain("")
             if args.pane in ("pseudo", "all"):
-                formatter.output_plain(f"── pseudocode (enclosing function) ──")
+                formatter.output_plain("── pseudocode (enclosing function) ──")
                 for ln in pseudo_lines:
                     formatter.output_plain(ln)
         finally:

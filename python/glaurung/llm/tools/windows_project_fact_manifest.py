@@ -21,9 +21,15 @@ class WindowsProjectFactManifestArgs(BaseModel):
             "Defaults to ASB_REPO or sibling repo."
         ),
     )
-    target_id: str | None = Field(None, description="Optional build-corpus target id filter.")
-    binary_filename: str | None = Field(None, description="Optional PE filename filter.")
-    build_label: str | None = Field(None, description="Optional build/corpus label filter.")
+    target_id: str | None = Field(
+        None, description="Optional build-corpus target id filter."
+    )
+    binary_filename: str | None = Field(
+        None, description="Optional PE filename filter."
+    )
+    build_label: str | None = Field(
+        None, description="Optional build/corpus label filter."
+    )
     requires_fact: str | None = Field(
         None,
         description="Optional required project fact, e.g. call_xrefs or persisted_cfg.",
@@ -60,6 +66,10 @@ class ProjectFactCounts(BaseModel):
     cfg_edge_count: int = 0
     cfg_dominance_count: int = 0
     cfg_branch_fact_count: int = 0
+    function_boundary_count: int = 0
+    sysinfo_dispatch_count: int = 0
+    callsite_argument_fact_count: int = 0
+    callsite_path_condition_count: int = 0
 
 
 class ProjectFactRecord(BaseModel):
@@ -125,7 +135,9 @@ class WindowsProjectFactManifestTool(
         records_with_call_xrefs_total = sum(
             record.counts.call_xref_count > 0 for record in records
         )
-        records_with_cfg_total = sum(record.counts.cfg_edge_count > 0 for record in records)
+        records_with_cfg_total = sum(
+            record.counts.cfg_edge_count > 0 for record in records
+        )
         records = _filter_records(records, args)
 
         evidence_node_id = None
@@ -205,6 +217,14 @@ def _record(entry: dict[str, Any], path: Path) -> ProjectFactRecord:
             cfg_edge_count=int(counts_raw.get("cfg_edge_count") or 0),
             cfg_dominance_count=int(counts_raw.get("cfg_dominance_count") or 0),
             cfg_branch_fact_count=int(counts_raw.get("cfg_branch_fact_count") or 0),
+            function_boundary_count=int(counts_raw.get("function_boundary_count") or 0),
+            sysinfo_dispatch_count=int(counts_raw.get("sysinfo_dispatch_count") or 0),
+            callsite_argument_fact_count=int(
+                counts_raw.get("callsite_argument_fact_count") or 0
+            ),
+            callsite_path_condition_count=int(
+                counts_raw.get("callsite_path_condition_count") or 0
+            ),
         ),
         notes=str(entry.get("notes") or ""),
     )

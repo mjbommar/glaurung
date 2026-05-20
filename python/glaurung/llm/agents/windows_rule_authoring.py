@@ -31,6 +31,7 @@ RuleWorkItemKind = Literal[
     "import_thunk_recall_guard",
     "data_ref_precision_gate",
     "body_split_recall_guard",
+    "tail_jump_thunk_precision_gate",
     "seed_class_metric",
     "native_function_start_replay",
 ]
@@ -84,6 +85,11 @@ class WindowsRuleReplayCase(BaseModel):
     rationale: str
     binary_path: str | None = None
     address: str | None = None
+    bytes_hex: str | None = None
+    has_xref: bool = False
+    has_table_provenance: bool = False
+    has_pdata: bool = False
+    has_import_target: bool = False
     expected_seed_kind: str | None = None
 
 
@@ -522,8 +528,52 @@ def _replay_fixtures(
         )
         for item in work_items
     ]
+    fixtures.append(_tail_jump_thunk_replay_fixture())
     fixtures.append(_native_function_start_replay_fixture())
     return fixtures
+
+
+def _tail_jump_thunk_replay_fixture() -> WindowsRuleReplayFixture:
+    return WindowsRuleReplayFixture(
+        rule_id="win-pe-tail-jump-thunk-boundary-gate",
+        kind="tail_jump_thunk_precision_gate",
+        seed_class="tail_jump_thunk",
+        implementation_scope=[
+            "direct tail-jump thunk recognition",
+            "boundary provenance gate",
+        ],
+        non_goals=[
+            "do not promote every branch target as a function",
+            "do not treat import thunks as tail-jump thunks",
+        ],
+        cases=[
+            WindowsRuleReplayCase(
+                id="direct_rel32_tail_jump_with_xref_promotes",
+                kind="positive",
+                fixture="synthetic jmp rel32 thunk",
+                address="0x140004000",
+                bytes_hex="e9 34 12 00 00",
+                has_xref=True,
+                expected_state="strict_function",
+                expected=(
+                    "direct tail-jump thunk with caller provenance is a strict function"
+                ),
+                rationale="preserves common Ghidra/IDA tail-call thunk boundaries",
+            ),
+            WindowsRuleReplayCase(
+                id="unreferenced_tail_jump_shape_stays_candidate",
+                kind="negative",
+                fixture="synthetic unreferenced jmp rel32 bytes",
+                address="0x140004100",
+                bytes_hex="e9 34 12 00 00",
+                expected_state="candidate_or_label",
+                expected="shape-only tail jump is a candidate or label",
+                rationale=(
+                    "prevents branch-byte over-promotion without boundary evidence"
+                ),
+            ),
+        ],
+    )
 
 
 def _native_function_start_replay_fixture() -> WindowsRuleReplayFixture:
@@ -552,8 +602,7 @@ def _native_function_start_replay_fixture() -> WindowsRuleReplayFixture:
                 expected_seed_kind="entrypoint",
                 expected="native Glaurung emits the address as a function start",
                 rationale=(
-                    "checks native promotion and seed provenance on a vendored "
-                    "driver"
+                    "checks native promotion and seed provenance on a vendored driver"
                 ),
             ),
             WindowsRuleReplayCase(
@@ -567,12 +616,9 @@ def _native_function_start_replay_fixture() -> WindowsRuleReplayFixture:
                 expected_state="candidate_or_label",
                 expected_seed_kind="none",
                 expected=(
-                    "native Glaurung does not emit this SIMD-headed Ghidra-only "
-                    "address"
+                    "native Glaurung does not emit this SIMD-headed Ghidra-only address"
                 ),
-                rationale=(
-                    "checks native demotion behavior on a real vendored DLL"
-                ),
+                rationale=("checks native demotion behavior on a real vendored DLL"),
             ),
         ],
     )

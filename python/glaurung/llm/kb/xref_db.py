@@ -564,6 +564,12 @@ def index_callgraph(
     binary_path: str,
     *,
     force: bool = False,
+    max_read_bytes: int = 104_857_600,
+    max_file_size: int = 104_857_600,
+    max_functions: int = 0,
+    max_blocks: int = 1_000_000,
+    max_instructions: int = 30_000_000,
+    timeout_ms: int = 600_000,
 ) -> int:
     """Run ``analyze_functions_path`` once and persist the resulting
     callgraph as ``call`` xrefs. Skips work when the binary is already
@@ -578,7 +584,15 @@ def index_callgraph(
 
     import glaurung as g
 
-    funcs, cg = g.analysis.analyze_functions_path(binary_path)
+    funcs, cg = g.analysis.analyze_functions_path(
+        binary_path,
+        max_read_bytes,
+        max_file_size,
+        max_functions,
+        max_blocks,
+        max_instructions,
+        timeout_ms,
+    )
     # Build name → entry-VA map; the callgraph emits edges by name.
     va_by_name = {f.name: int(f.entry_point.value) for f in funcs}
     # gcc-emitted callgraph also uses ``sub_<hex>`` for unnamed funcs.
@@ -1949,6 +1963,7 @@ def render_decompile_with_names(
     max_instructions: int = 10_000,
     timeout_ms: int = 500,
     style: str = "c",
+    pdb_cache: str = "",
     include_locals_prelude: bool = True,
     include_call_proto_hints: bool = True,
 ) -> str:
@@ -1978,6 +1993,7 @@ def render_decompile_with_names(
         max_instructions=max_instructions,
         timeout_ms=timeout_ms,
         style=style,
+        pdb_cache=pdb_cache,
     )
     slots = list_stack_vars(kb, function_va=function_va)
     name_by_offset: dict[int, str] = {s.offset: s.name for s in slots}
