@@ -10,10 +10,21 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
-from .windows_check_gate_to_sink import WindowsCheckGateToSinkArgs, WindowsCheckGateToSinkTool
+from .windows_api_contract_primitives import (
+    WindowsApiContractPrimitivesArgs,
+    WindowsApiContractPrimitivesTool,
+)
+from .windows_check_gate_to_sink import (
+    WindowsCheckGateToSinkArgs,
+    WindowsCheckGateToSinkTool,
+)
 from .windows_compare_selector_cases import (
     WindowsCompareSelectorCasesArgs,
     WindowsCompareSelectorCasesTool,
+)
+from .windows_syscall_stub_atlas import (
+    WindowsSyscallStubAtlasArgs,
+    WindowsSyscallStubAtlasTool,
 )
 from .windows_regression_fixture_catalog import (
     WindowsRegressionFixture,
@@ -207,7 +218,7 @@ def _detect_unchecked_user_pointer_write(
         ),
     )
     bad = [
-        assessment.status
+        str(assessment.status)
         for assessment in result.assessments
         if assessment.status in {"missing", "gate_after_sink"}
     ]
@@ -227,7 +238,9 @@ def _detect_weak_length_check_before_copy(
         return False, "no_copy_sink", []
     status_line = _first_line(lines[:copy_line], r"\bStatus\s*=")
     return_line = _first_line(lines[:copy_line], r"\breturn\b")
-    detected = status_line is not None and (return_line is None or return_line < status_line)
+    detected = status_line is not None and (
+        return_line is None or return_line < status_line
+    )
     return detected, "status_set_but_copy_continues", [f"copy_line={copy_line + 1}"]
 
 
@@ -242,7 +255,11 @@ def _detect_refcount_missing_on_error_path(
     deref = _first_line(lines, r"\bObDereferenceObject\s*\(")
     later_use = _first_line(lines[(deref or 0) + 1 :], r"\bUseObject\s*\(")
     detected = deref is not None and later_use is not None
-    return detected, "use_after_ob_dereference", [f"deref_line={deref + 1}" if deref is not None else "no_deref"]
+    return (
+        detected,
+        "use_after_ob_dereference",
+        [f"deref_line={deref + 1}" if deref is not None else "no_deref"],
+    )
 
 
 def _detect_use_after_completion(
@@ -256,9 +273,11 @@ def _detect_use_after_completion(
     complete = _first_line(lines, r"\bIoCompleteRequest\s*\(")
     later_irp = _first_line(lines[(complete or 0) + 1 :], r"\bIrp\s*->")
     detected = complete is not None and later_irp is not None
-    return detected, "irp_access_after_completion", [
-        f"complete_line={complete + 1}" if complete is not None else "no_completion"
-    ]
+    return (
+        detected,
+        "irp_access_after_completion",
+        [f"complete_line={complete + 1}" if complete is not None else "no_completion"],
+    )
 
 
 def _detect_callback_stale_pointer(
@@ -270,11 +289,15 @@ def _detect_callback_stale_pointer(
     del ctx, kb, args
     lines = pseudocode.splitlines()
     deref = _first_line(lines, r"\bObDereferenceObject\s*\(")
-    later_callback = _first_line(lines[(deref or 0) + 1 :], r"\bCallback\s*\(\s*Object\s*\)")
+    later_callback = _first_line(
+        lines[(deref or 0) + 1 :], r"\bCallback\s*\(\s*Object\s*\)"
+    )
     detected = deref is not None and later_callback is not None
-    return detected, "callback_after_ob_dereference", [
-        f"deref_line={deref + 1}" if deref is not None else "no_deref"
-    ]
+    return (
+        detected,
+        "callback_after_ob_dereference",
+        [f"deref_line={deref + 1}" if deref is not None else "no_deref"],
+    )
 
 
 def _detect_irql_context_violation(
@@ -286,7 +309,9 @@ def _detect_irql_context_violation(
     del ctx, kb, args
     lines = pseudocode.splitlines()
     raise_line = _first_line(lines, r"\bKeRaiseIrql\b")
-    helper_line = _first_line(lines, r"\b(Pageable|Blocking|PageableOrBlocking)Helper\s*\(")
+    helper_line = _first_line(
+        lines, r"\b(Pageable|Blocking|PageableOrBlocking)Helper\s*\("
+    )
     lower_line = _first_line(lines, r"\bKeLowerIrql\b")
     detected = (
         raise_line is not None
@@ -294,11 +319,15 @@ def _detect_irql_context_violation(
         and lower_line is not None
         and raise_line < helper_line < lower_line
     )
-    return detected, "helper_reached_at_raised_irql", [
-        f"raise={raise_line}",
-        f"helper={helper_line}",
-        f"lower={lower_line}",
-    ]
+    return (
+        detected,
+        "helper_reached_at_raised_irql",
+        [
+            f"raise={raise_line}",
+            f"helper={helper_line}",
+            f"lower={lower_line}",
+        ],
+    )
 
 
 def _detect_integer_overflow_into_allocation_copy(
@@ -313,11 +342,20 @@ def _detect_integer_overflow_into_allocation_copy(
     allocation = _first_line(lines, r"\bExAllocatePool")
     copy = _first_line(lines, r"\bRtlCopyMemory\s*\(")
     guard = _first_line(lines[: multiply or 0], r"\bCount\s*>\s*[A-Za-z0-9_]+")
-    detected = multiply is not None and allocation is not None and copy is not None and guard is None
-    return detected, "count_to_bytes_without_prior_cap", [
-        f"multiply={multiply}",
-        f"guard={guard}",
-    ]
+    detected = (
+        multiply is not None
+        and allocation is not None
+        and copy is not None
+        and guard is None
+    )
+    return (
+        detected,
+        "count_to_bytes_without_prior_cap",
+        [
+            f"multiply={multiply}",
+            f"guard={guard}",
+        ],
+    )
 
 
 def _detect_selector_case_missing_validation(
@@ -345,6 +383,60 @@ def _detect_selector_case_missing_validation(
     return bool(signals), "selector_case_gate_asymmetry", signals
 
 
+def _api_contract_primitive_detector(primitive_kind: str) -> Detector:
+    def detect(
+        ctx: MemoryContext,
+        kb: KnowledgeBase,
+        args: WindowsFixtureReplayArgs,
+        pseudocode: str,
+    ) -> tuple[bool, str, list[str]]:
+        del args
+        result = WindowsApiContractPrimitivesTool().run(
+            ctx,
+            kb,
+            WindowsApiContractPrimitivesArgs(pseudocode=pseudocode),
+        )
+        count = result.primitive_counts.get(primitive_kind, 0)
+        snippets = [
+            primitive.snippet
+            for primitive in result.primitives
+            if primitive.kind == primitive_kind
+        ]
+        return (
+            bool(count),
+            f"api_contract_primitive:{primitive_kind}",
+            [
+                f"{primitive_kind}={count}",
+                *snippets[:4],
+            ],
+        )
+
+    return detect
+
+
+def _detect_syscall_stub(
+    ctx: MemoryContext,
+    kb: KnowledgeBase,
+    args: WindowsFixtureReplayArgs,
+    pseudocode: str,
+) -> tuple[bool, str, list[str]]:
+    del args
+    result = WindowsSyscallStubAtlasTool().run(
+        ctx,
+        kb,
+        WindowsSyscallStubAtlasArgs(pseudocode=pseudocode),
+    )
+    rows = [
+        f"{stub.user_stub_symbol}:{stub.syscall_hex}:{stub.service_table}"
+        for stub in result.stubs
+    ]
+    return (
+        bool(result.stubs),
+        "syscall_stub_atlas",
+        [f"syscalls={len(rows)}", *rows[:4]],
+    )
+
+
 def _first_line(lines: list[str], pattern: str) -> int | None:
     regex = re.compile(pattern)
     for index, line in enumerate(lines):
@@ -353,7 +445,35 @@ def _first_line(lines: list[str], pattern: str) -> int | None:
     return None
 
 
+_API_CONTRACT_REPLAY_PRIMITIVES = {
+    "probe_for_read",
+    "probe_for_write",
+    "user_buffer_copy",
+    "return_length_write",
+    "string_conversion_copy",
+    "ioctl_call",
+    "pool_allocation",
+    "pool_free",
+    "registry_query",
+    "registry_write",
+    "object_reference",
+    "object_release",
+    "irp_access",
+    "mdl_access",
+    "alpc_message",
+    "trace_emit",
+    "callback_registration",
+    "callback_dispatch",
+    "requestor_mode_read",
+    "privilege_check",
+    "token_reference",
+    "token_query",
+    "token_release",
+}
+
+
 _DETECTORS: dict[str, Detector] = {
+    "syscall_stub": _detect_syscall_stub,
     "unchecked_user_pointer_write": _detect_unchecked_user_pointer_write,
     "weak_length_check_before_copy": _detect_weak_length_check_before_copy,
     "refcount_missing_on_error_path": _detect_refcount_missing_on_error_path,
@@ -362,6 +482,10 @@ _DETECTORS: dict[str, Detector] = {
     "irql_context_violation": _detect_irql_context_violation,
     "integer_overflow_into_allocation_copy": _detect_integer_overflow_into_allocation_copy,
     "selector_case_missing_validation": _detect_selector_case_missing_validation,
+    **{
+        primitive: _api_contract_primitive_detector(primitive)
+        for primitive in _API_CONTRACT_REPLAY_PRIMITIVES
+    },
 }
 
 

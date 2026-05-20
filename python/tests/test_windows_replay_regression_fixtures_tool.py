@@ -114,6 +114,73 @@ def _write_fixtures(tmp_path: Path) -> Path:
                 break;
             }
         }
+- id: registry_query_contract
+  bug_class: contract
+  primitive: registry_query
+  source_roles: [key_handle, output_buffer, return_length]
+  sink_kinds: [registry_query]
+  required_gates: []
+  cases:
+    - id: zw_query_value_key
+      expected: positive
+      description: Registry query writes key-value information.
+      pseudocode: |
+        void Handler(HANDLE KeyHandle, ULONG Length) {
+            ZwQueryValueKey(KeyHandle, &ValueName, KeyValuePartialInformation, KeyInfo, Length, &ResultLength);
+        }
+    - id: no_registry_query
+      expected: negative
+      description: No registry API contract.
+      pseudocode: |
+        void Handler(void *Out, void *Src, ULONG Len) {
+            RtlCopyMemory(Out, Src, Len);
+        }
+- id: privilege_check_contract
+  bug_class: contract
+  primitive: privilege_check
+  source_roles: [privilege, access_mode]
+  sink_kinds: [privilege_check]
+  required_gates: []
+  cases:
+    - id: se_single_privilege_check
+      expected: positive
+      description: Privilege check gates a sensitive path.
+      pseudocode: |
+        void Handler(void) {
+            if (!SeSinglePrivilegeCheck(SeLoadDriverPrivilege, ExGetPreviousMode())) {
+                return;
+            }
+        }
+    - id: no_privilege_check
+      expected: negative
+      description: No privilege API contract.
+      pseudocode: |
+        void Handler(void *Out, void *Src, ULONG Len) {
+            RtlCopyMemory(Out, Src, Len);
+        }
+- id: native_syscall_stub_contract
+  bug_class: syscall_surface
+  primitive: syscall_stub
+  source_roles: [syscall_number, syscall_name]
+  sink_kinds: [syscall]
+  required_gates: []
+  cases:
+    - id: nt_query_system_information_stub
+      expected: positive
+      description: Native syscall stub exposes a service number.
+      pseudocode: |
+        fn NtQuerySystemInformation {
+            ret = 0x36;
+            unknown(syscall);
+            return;
+        }
+    - id: helper_without_syscall
+      expected: negative
+      description: Regular helper is not a syscall stub.
+      pseudocode: |
+        void Helper(void) {
+            return;
+        }
 """,
         encoding="utf-8",
     )
@@ -164,9 +231,9 @@ def test_windows_replay_regression_fixtures_passes_supported_cases(
         ),
     )
 
-    assert result.fixture_count == 2
-    assert result.case_count == 4
-    assert result.passed_count == 4
+    assert result.fixture_count == 5
+    assert result.case_count == 10
+    assert result.passed_count == 10
     assert result.failed_count == 0
     assert result.unsupported_count == 0
     assert {replay.status for replay in result.replays} == {"passed"}
@@ -175,6 +242,12 @@ def test_windows_replay_regression_fixtures_passes_supported_cases(
         "probe_before_copy": False,
         "missing_case_gate": True,
         "all_cases_gated": False,
+        "zw_query_value_key": True,
+        "no_registry_query": False,
+        "se_single_privilege_check": True,
+        "no_privilege_check": False,
+        "nt_query_system_information_stub": True,
+        "helper_without_syscall": False,
     }
     assert "not live reachability" in result.notes[0]
     assert result.evidence_node_id is not None
