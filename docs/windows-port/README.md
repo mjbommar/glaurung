@@ -19,8 +19,39 @@ comparison-05 KB refs above 90%. The Windows regression corpus now
 also has a Ghidra parity dashboard, a conservative PE code-pointer
 scanner for VA/RVA callback tables, function-start confidence
 taxonomy, code-label facts, `glaurung windows diff-ghidra`, and
-Python helpers under `glaurung.windows_analysis`. The remaining
-windows-port work is PARAM/table-entry string-reference coverage,
+Python helpers under `glaurung.windows_analysis`. Unknown-end call-target
+boundary candidates now only match the exact entry address instead of claiming
+unbounded function bodies. Reduced regression-fixture
+replay can now assert bug-pattern detectors, syscall-stub extraction, and
+individual API-contract primitive extraction with positive/negative pseudocode
+cases. The API-contract
+substrate now also recognizes Glaurung IR pointer writes, Windows
+Rtl string conversion sinks, IOCTL and pool API contracts,
+registry/object-manager/IRP/MDL/ALPC/ETW/WPP/callback contracts,
+IO_STACK_LOCATION DeviceIoControl fields, IRP buffer fields, WDF request
+buffer helpers,
+security-boundary contracts for requestor mode, privilege checks, and token
+reference/query/release, wrapper-to-sink forwarding, persisted callsite argument facts, Windows
+x64 callsite ABI locations, nearby callsite path conditions, and first-class
+`NtQuerySystemInformation{Ex}` dispatch facts for high-risk helper
+triage. The first evidence-backed pretty-lift path now packages raw
+Glaurung IR, API-contract primitives, argument roles, function and call
+prototypes, Windows x64 function-entry ABI argument facts, ordered callsite
+facts with per-argument ABI facts and prototype-backed argument rendering,
+stdlib type-only prototype role inference, import-thunk alias prototype
+propagation, and low-confidence local helper prototype inference from argument
+names,
+callsite return-target facts, selector-table facts, structured path
+conditions including status, bounds, selector, NULL, mode, and privilege gates, loop summaries, normalized memory accesses, field-offset groups,
+typed C dereference normalization with width metadata,
+global/table/global-count/callback/function-pointer-table/jump-table/import-thunk/vtable data-reference facts, explicit unknown/unresolved sections,
+output writes, and string-copy sinks into a validated C-like analyst view that
+can be consumed by pydantic-ai agents without treating model prose as ground truth. The
+pretty-lift validator now rejects candidate lifts that drop required
+API-contract source/sink primitives such as probes, copies, IOCTLs, registry
+queries, object references, IRP/MDL accesses, ALPC messages, traces, pool calls,
+and callbacks. The
+remaining windows-port work is PARAM/table-entry string-reference coverage,
 broader PDB follow-up surface, BSim-style similarity, and deeper
 Windows-specific atomic tools.
 
@@ -55,6 +86,9 @@ forking; the contract is asb ADR 0023 (mirrored here as
 - Read `windows-api-type-sync.md` for the generated Win32/WDK
   prototype bundle, NuGet source lock, manifest, and curated
   semantic overlay workflow.
+- Read `windows-analysis-config.md` for shared Windows PE analysis
+  budgets, symbol/cache config, explicit-range decompile usage, and
+  the current ntoskrnl/ntdll project-fact bootstrap flow.
 - Read `glaurung_vs_ghidra_vendor_windows.md` and
   `glaurung-vs-ghidra-regression-review.md` for the current
   10-file Ghidra parity dashboard and debug notes.
@@ -97,8 +131,11 @@ forking; the contract is asb ADR 0023 (mirrored here as
 | #179  | PDB ingestion (`src/symbols/pdb.rs`)       | every kg-pe rule that needs PDB-derived types | `pdb-ingestion-design.md` | type path + public function-name binding shipped; alias summaries remain |
 | #199  | PE hardening: delay-import / manifest / VersionInfo / TLS callbacks | grounded malware triage, driver TLS-callback bug class | `pe-hardening-design.md` | shipped |
 | xrefs | PE direct code-to-data refs                | strings-xrefs and data-use queries over Windows binaries | `IDA_GHIDRA_PARITY.md` #154/#222 | selected KB-ref coverage exceeds 90%; UTF-16 raw strings fixed; residual PARAM/table-entry refs remain |
-| parity | Ghidra regression corpus and debug report | Windows function-start confidence and callback-table discovery | `glaurung_vs_ghidra_vendor_windows.md`, `glaurung-vs-ghidra-regression-review.md`, `glaurung-vs-ghidra-full-debug-review.md` | 30-file stress dashboard; SurfacePen callback-table gap closed; adjustor tiny-stub gate reduced Glaurung-only starts from 27,637 to 3,116 |
+| parity | Ghidra regression corpus and debug report | Windows function-start confidence and callback-table discovery | `glaurung_vs_ghidra_vendor_windows.md`, `glaurung-vs-ghidra-regression-review.md`, `glaurung-vs-ghidra-full-debug-review.md` | 30-file stress dashboard; SurfacePen callback-table gap closed; adjustor tiny-stub gate reduced Glaurung-only starts from 27,637 to 3,116; unknown-end call targets no longer claim unbounded interiors; functionization replay fixtures now cover tail-jump thunk promotion only when xref/table/.pdata provenance exists |
 | agents | IDA/Ghidra-like agentic analyst workflows | pydantic-ai Windows review agents over deterministic low-level evidence tools | `agentic-ai-functionality-roadmap.md`, `atomic-tools.md` | roadmap added; low-level function-start explanation and boundary-diff tools remain next |
+| contracts | API-contract primitives and sysinfo dispatch facts | proactive high-risk path triage in DLL/SYS/EXE RE workflows | `windows-analysis-config.md`, `atomic-tools.md` | Glaurung IR writes, Rtl string sinks, IOCTL, IO_STACK_LOCATION DeviceIoControl fields, IRP buffer fields, WDF request buffer helpers, pool, registry, object-manager, IRP, MDL, ALPC, ETW/WPP, callback, requestor-mode, privilege-check, and token API contracts, CmpQueryDowncastString wrapper semantics, callsite argument persistence, x64 ABI callsite locations, path-condition attachment, sysinfo dispatch facts, and reduced fixture replay for API-contract primitive expectations shipped |
+| lift | Evidence-backed pretty lift for Windows functions | Ghidra/IDA-like analyst readability while preserving Glaurung facts | `windows_function_pretty_lift` tool, `windows_pretty_lift_agent` | deterministic packet, renderer, validator, pydantic-ai agent prompt, ordered callsite facts, per-argument callsite ABI facts, callsite return-target facts, prototype-backed callsite argument rendering, import-thunk alias prototype propagation, stdlib type-only prototype role inference, low-confidence local helper prototype inference from argument names, Windows x64 function-entry ABI argument facts, function/call prototype facts, structured path-condition facts including status macros, bounds gates, selector gates, NULL/zero gates, mode gates, and privilege gates, loop summaries, normalized memory-access facts including typed C dereferences with width metadata, field-offset groups, explicit unknown sections, data-reference facts for globals, global count bounds, selector loads, absolute calls, callback pointers, indexed function-pointer-table dispatch, jump-table dispatch, import-thunk dispatch, and vtable-style dispatch, and validator rejection for omitted API-contract source/sink primitives shipped |
+| syscalls | User-mode syscall stub atlas, diff, and handler correlation | SSDT-like service-number materialization from `ntdll`/`win32u` before live table comparison | `windows_syscall_stub_atlas`, `windows_syscall_atlas_diff`, `windows_syscall_handler_correlate` tools | PE `binary_path` export scanning, lifted `ret/eax = imm; syscall`, assembly `mov eax, imm; syscall`, and raw x64 `mov r10, rcx; mov eax, imm32; ...; syscall; ret` rows with export symbol or byte offset, RVA/VA/file offset, section, module, service-table family, service number, confidence, byte-pattern evidence, dispatch shape, KUSER_SHARED_DATA syscall-gate detection, legacy `int 2e` fallback detection, coverage flags, optional KB evidence node, reduced replay-fixture coverage, atlas diff rows for added/removed/renumbered/moved/byte-pattern/dispatch-shape-changed service entries, and handler correlation through PDB-backed `.glaurung` `function_names` or an external precomputed handler map shipped; true live SSDT comparison remains future work |
 | #186  | BSim-equivalent function similarity         | Patch Tuesday cross-build diff for n-day | `bsim-similarity-design.md` | not started |
 | tools | 12-15 Windows-specific `llm/tools/` files   | rule-as-tool encoding for tier-1 bug classes | `atomic-tools.md` | not started |
 

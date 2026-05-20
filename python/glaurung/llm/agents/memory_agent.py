@@ -278,6 +278,12 @@ from ..tools.windows_project_cfg_path_query import (
 from ..tools.windows_project_branch_condition_facts import (
     build_tool as build_windows_project_branch_condition_facts,
 )
+from ..tools.windows_project_sysinfo_dispatch_facts import (
+    build_tool as build_windows_project_sysinfo_dispatch_facts,
+)
+from ..tools.windows_project_zero_length_write_paths import (
+    build_tool as build_windows_project_zero_length_write_paths,
+)
 from ..tools.windows_compose_source_gate_sink_packet import (
     build_tool as build_windows_compose_source_gate_sink_packet,
 )
@@ -316,6 +322,24 @@ from ..tools.windows_summarize_helper_side_effects import (
 )
 from ..tools.windows_compare_selector_cases import (
     build_tool as build_windows_compare_selector_cases,
+)
+from ..tools.windows_api_contract_primitives import (
+    build_tool as build_windows_api_contract_primitives,
+)
+from ..tools.windows_api_contract_rule_scan import (
+    build_tool as build_windows_api_contract_rule_scan,
+)
+from ..tools.windows_function_pretty_lift import (
+    build_tool as build_windows_function_pretty_lift,
+)
+from ..tools.windows_syscall_stub_atlas import (
+    build_tool as build_windows_syscall_stub_atlas,
+)
+from ..tools.windows_syscall_atlas_diff import (
+    build_tool as build_windows_syscall_atlas_diff,
+)
+from ..tools.windows_syscall_handler_correlate import (
+    build_tool as build_windows_syscall_handler_correlate,
 )
 from ..tools.windows_diff_security_relevant_facts import (
     build_tool as build_windows_diff_security_relevant_facts,
@@ -697,7 +721,9 @@ def register_analysis_tools(
             ctx.deps, ctx.deps.kb, tool.input_model(max_functions=max_functions)
         )
 
-    async def map_symbol_addresses(ctx: RunContext[MemoryContext]) -> MapSymbolAddressesResult:
+    async def map_symbol_addresses(
+        ctx: RunContext[MemoryContext],
+    ) -> MapSymbolAddressesResult:
         tool = build_map_symbol_addresses()
         return tool.run(ctx.deps, ctx.deps.kb, tool.input_model())
 
@@ -998,7 +1024,9 @@ def register_analysis_tools(
     tool_agent.tool(propose_types_for_function, name="propose_types_for_function")
 
     # Embedded-content tools (Sprint 1) — archive extraction + magic scan.
-    async def enumerate_archive(ctx: RunContext[MemoryContext], path: str) -> EnumerateArchiveResult:
+    async def enumerate_archive(
+        ctx: RunContext[MemoryContext], path: str
+    ) -> EnumerateArchiveResult:
         tool = build_enumerate_archive()
         return tool.run(ctx.deps, ctx.deps.kb, tool.input_model(path=path))
 
@@ -1243,6 +1271,12 @@ def register_analysis_tools(
         tool_to_pyd_ai(build_windows_project_branch_condition_facts())
     )
     agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_sysinfo_dispatch_facts())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_zero_length_write_paths())
+    )
+    agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_compose_source_gate_sink_packet())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_emit_review_packet()))
@@ -1278,6 +1312,20 @@ def register_analysis_tools(
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_compare_selector_cases())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_api_contract_primitives())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_api_contract_rule_scan())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_function_pretty_lift())
+    )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_syscall_stub_atlas()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_syscall_atlas_diff()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_syscall_handler_correlate())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_diff_security_relevant_facts())
