@@ -47,6 +47,24 @@ def test_decompile_func_flag_accepts_hex_va():
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
+def test_decompile_accepts_explicit_function_range():
+    result = _run(
+        [
+            str(SAMPLE),
+            "--func",
+            "0x1840",
+            "--range-start",
+            "0x1840",
+            "--range-end",
+            "0x1880",
+        ]
+    )
+    assert result.returncode == 0, result.stderr
+    assert "function sub_1840 @ 0x1840 {" in result.stdout
+    assert "__libc_start_main" in result.stdout
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
 def test_decompile_unknown_va_reports_error():
     result = _run([str(SAMPLE), "--func", "0xdeadbeef"])
     # Error reported on stdout via formatter.output_plain; exit code 2.

@@ -80,6 +80,9 @@ $RECYCLE.BIN/
 *.log
 .env
 .env.local
+.glaurung/*
+!.glaurung/
+!.glaurung/windows-analysis.yaml
 
 # Samples outputs (keep committed for reproducibility)
 # (Intentionally not ignored)

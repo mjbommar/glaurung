@@ -1,0 +1,14 @@
+# Shared defaults for Windows PE analysis commands.
+#
+# These limits are intentionally sized for system DLLs and kernel images.
+# Per-command CLI flags can still narrow them for fast smoke tests.
+max-read-bytes: 104857600
+max-file-size: 104857600
+max-functions: 0
+max-blocks: 1000000
+max-instructions: 30000000
+timeout-ms: 600000
+pdb-cache-dir: tests/fixtures/msvc-pdb
+symbol-cache-dir: .glaurung/symbol-cache
+symbol-server: https://msdl.microsoft.com/download/symbols
+corpus-manifest: docs/windows-port/pe-project-facts.yaml

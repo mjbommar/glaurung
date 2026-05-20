@@ -14,6 +14,7 @@ import json
 from typing import Optional
 
 import glaurung as g
+from glaurung.windows_config import load_windows_analysis_config
 
 from .base import BaseCommand
 from ..formatters.base import BaseFormatter, OutputFormat
@@ -30,6 +31,14 @@ class DecompileCommand(BaseCommand):
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("path", help="Path to file")
+        parser.add_argument(
+            "--analysis-config",
+            help=(
+                "Optional Windows analysis config YAML/JSON. Defaults to "
+                ".glaurung/windows-analysis.yaml or "
+                "$GLAURUNG_WINDOWS_ANALYSIS_CONFIG when present."
+            ),
+        )
         parser.add_argument(
             "--func",
             dest="func",
@@ -60,8 +69,32 @@ class DecompileCommand(BaseCommand):
         parser.add_argument(
             "--timeout-ms",
             type=int,
-            default=500,
-            help="Per-function analysis timeout in milliseconds (default: 500).",
+            default=None,
+            help="Per-function analysis timeout in milliseconds. Defaults to analysis config.",
+        )
+        parser.add_argument(
+            "--max-blocks",
+            type=int,
+            default=None,
+            help="Per-function max basic blocks. Defaults to analysis config.",
+        )
+        parser.add_argument(
+            "--max-instructions",
+            type=int,
+            default=None,
+            help="Per-function max instructions. Defaults to analysis config.",
+        )
+        parser.add_argument(
+            "--range-start",
+            type=lambda x: int(x, 0),
+            default=None,
+            help="Explicit function range start VA for range-seeded decompile.",
+        )
+        parser.add_argument(
+            "--range-end",
+            type=lambda x: int(x, 0),
+            default=None,
+            help="Explicit exclusive function range end VA for range-seeded decompile.",
         )
         parser.add_argument(
             "--style",
@@ -88,12 +121,21 @@ class DecompileCommand(BaseCommand):
         as_json = formatter.format_type in (OutputFormat.JSON, OutputFormat.JSONL)
 
         try:
+            config = load_windows_analysis_config(args.analysis_config).with_overrides(
+                max_blocks=args.max_blocks,
+                max_instructions=args.max_instructions,
+                timeout_ms=args.timeout_ms,
+                pdb_cache_dir=args.pdb_cache or None,
+            )
+            timeout_ms = config.timeout_ms
+            max_blocks = config.max_blocks
+            max_instructions = config.max_instructions
             if args.all:
                 results = g.ir.decompile_all(
                     str(path),
                     args.limit,
-                    timeout_ms=args.timeout_ms,
-                    pdb_cache=args.pdb_cache,
+                    timeout_ms=timeout_ms,
+                    pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
                 )
                 if as_json:
                     payload = [
@@ -119,14 +161,34 @@ class DecompileCommand(BaseCommand):
 
             try:
                 style = "c" if args.style == "c" else ""
-                text = g.ir.decompile_at(
-                    str(path),
-                    int(func_va),
-                    timeout_ms=args.timeout_ms,
-                    types=args.types,
-                    style=style,
-                    pdb_cache=args.pdb_cache,
-                )
+                if args.range_end is not None or args.range_start is not None:
+                    range_start = args.range_start if args.range_start is not None else int(func_va)
+                    if args.range_end is None:
+                        formatter.output_plain("Error: --range-end is required with --range-start")
+                        return 2
+                    text = g.ir.decompile_range_at(
+                        str(path),
+                        int(func_va),
+                        int(range_start),
+                        int(args.range_end),
+                        max_blocks=max_blocks,
+                        max_instructions=max_instructions,
+                        timeout_ms=timeout_ms,
+                        types=args.types,
+                        style=style,
+                        pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
+                    )
+                else:
+                    text = g.ir.decompile_at(
+                        str(path),
+                        int(func_va),
+                        max_blocks=max_blocks,
+                        max_instructions=max_instructions,
+                        timeout_ms=timeout_ms,
+                        types=args.types,
+                        style=style,
+                        pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
+                    )
             except ValueError as e:
                 formatter.output_plain(f"Error: {e}")
                 return 2

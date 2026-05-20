@@ -10,14 +10,16 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import _native, analysis, disasm  # ty: ignore[unresolved-import]
+from .windows_config import WindowsAnalysisConfig
 
 
-DEFAULT_MAX_READ_BYTES = 104_857_600
-DEFAULT_MAX_FILE_SIZE = 104_857_600
-DEFAULT_MAX_FUNCTIONS = 0
-DEFAULT_MAX_BLOCKS = 1_000_000
-DEFAULT_MAX_INSTRUCTIONS = 30_000_000
-DEFAULT_TIMEOUT_MS = 600_000
+_DEFAULT_CONFIG = WindowsAnalysisConfig()
+DEFAULT_MAX_READ_BYTES = _DEFAULT_CONFIG.max_read_bytes
+DEFAULT_MAX_FILE_SIZE = _DEFAULT_CONFIG.max_file_size
+DEFAULT_MAX_FUNCTIONS = _DEFAULT_CONFIG.max_functions
+DEFAULT_MAX_BLOCKS = _DEFAULT_CONFIG.max_blocks
+DEFAULT_MAX_INSTRUCTIONS = _DEFAULT_CONFIG.max_instructions
+DEFAULT_TIMEOUT_MS = _DEFAULT_CONFIG.timeout_ms
 
 
 def _hex(value: int | None) -> str | None:

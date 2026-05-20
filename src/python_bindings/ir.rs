@@ -396,6 +396,136 @@ fn decompile_at_py(
     })
 }
 
+#[pyfunction]
+#[pyo3(name = "decompile_range_at")]
+#[pyo3(signature = (path, func_va, range_start, range_end, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, types=true, style="", pdb_cache=""))]
+fn decompile_range_at_py(
+    path: String,
+    func_va: u64,
+    range_start: u64,
+    range_end: u64,
+    max_blocks: usize,
+    max_instructions: usize,
+    timeout_ms: u64,
+    types: bool,
+    style: &str,
+    pdb_cache: &str,
+) -> PyResult<String> {
+    use crate::core::address::{Address, AddressKind};
+    use crate::core::address_range::AddressRange;
+    use crate::core::basic_block::BasicBlock;
+    use crate::core::function::{Function, FunctionKind};
+    use crate::ir::ast::{lower, render, render_with_types};
+    use crate::ir::expr_reconstruct::reconstruct;
+    use crate::ir::lift_function::lift_function_from_bytes;
+    use crate::ir::ssa::compute_ssa;
+    use crate::ir::structure::recover;
+    use crate::ir::types_recover::recover_types;
+
+    if range_end <= range_start {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "range_end must be greater than range_start",
+        ));
+    }
+    if func_va < range_start || func_va >= range_end {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "func_va must lie inside [range_start, range_end)",
+        ));
+    }
+    if max_blocks == 0 || max_instructions == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "max_blocks and max_instructions must be non-zero",
+        ));
+    }
+    let _ = timeout_ms;
+
+    let data = std::fs::read(&path)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let (arch, cc) = detect_arch_and_call_conv(&data);
+    let bits = match arch {
+        crate::core::binary::Arch::X86 => 32,
+        crate::core::binary::Arch::X86_64 | crate::core::binary::Arch::AArch64 => 64,
+        _ => 64,
+    };
+    let max_bytes = (max_instructions as u64).saturating_mul(16).max(1);
+    let capped_end = range_end.min(range_start.saturating_add(max_bytes));
+    let entry = Address::new(AddressKind::VA, func_va, bits, None, None)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let block_start = Address::new(AddressKind::VA, range_start, bits, None, None)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let block_end = Address::new(AddressKind::VA, capped_end, bits, None, None)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let range = AddressRange::new(block_start.clone(), capped_end - range_start, None)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let mut func = Function::new(format!("sub_{:x}", func_va), entry, FunctionKind::Normal)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    func.range = Some(range.clone());
+    func.size = Some(range.size);
+    func.chunks.push(range);
+    func.basic_blocks.push(BasicBlock::new(
+        format!("bb_{:x}", range_start),
+        block_start,
+        block_end,
+        1,
+        Some(Vec::new()),
+        Some(Vec::new()),
+    ));
+
+    let lf = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
+    })?;
+    let ssa = compute_ssa(&lf);
+    let region = recover(&lf, &ssa);
+    let mut f = lower(&lf, &region, func.name.clone());
+    reconstruct(&mut f);
+    crate::ir::const_fold::fold_constants(&mut f);
+    crate::ir::dce::prune_dead_flags(&mut f);
+    crate::ir::call_args::reconstruct_args(&mut f, cc);
+    let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
+    let addr_map =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+    let field_map =
+        pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
+    crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
+    let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
+    crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
+    crate::ir::canary::recognise_canary(&mut f);
+    crate::ir::stack_locals::promote_stack_locals(&mut f);
+    let tm = if types {
+        Some(recover_types(&lf))
+    } else {
+        None
+    };
+    crate::ir::naming::apply_role_names(&mut f, cc);
+    crate::ir::canary::collapse_canary_save(&mut f);
+    if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
+        crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
+    }
+    crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
+    crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
+    crate::ir::label_prune::prune_unreferenced_labels(&mut f);
+    if matches!(
+        cc,
+        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
+    ) {
+        crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
+    }
+    if let Some(field_map) = &field_map {
+        crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
+    }
+    Ok(if style == "c" {
+        crate::ir::ast::render_c(&f)
+    } else {
+        match tm {
+            Some(tm) => {
+                let renamed = remap_type_map(&tm, &f, cc);
+                render_with_types(&f, &renamed)
+            }
+            None => render(&f),
+        }
+    })
+}
+
 /// Rebuild a TypeMap whose keys match the post-rename AST. We walk the
 /// original physical-register TypeMap and, for each entry, look up the
 /// alias the naming pass would have produced. Any remaining entries keep
@@ -547,6 +677,7 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
     ir_mod.add_function(wrap_pyfunction!(lift_bytes_py, &ir_mod)?)?;
     ir_mod.add_function(wrap_pyfunction!(lift_window_at_py, &ir_mod)?)?;
     ir_mod.add_function(wrap_pyfunction!(decompile_at_py, &ir_mod)?)?;
+    ir_mod.add_function(wrap_pyfunction!(decompile_range_at_py, &ir_mod)?)?;
     ir_mod.add_function(wrap_pyfunction!(decompile_all_py, &ir_mod)?)?;
     m.add_submodule(&ir_mod)?;
     Ok(())
