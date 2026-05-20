@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from pathlib import Path
 from time import perf_counter
-from typing import Callable
+from typing import Any, Callable
 
+import yaml
 from pydantic import BaseModel, Field
 
 from ..context import MemoryContext
@@ -13,6 +16,11 @@ from ..kb.persistent import PersistentKnowledgeBase
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .windows_import_pdb_facts import PdbFactImportCounts
+from .windows_project_fact_summary import (
+    WindowsProjectFactSummaryArgs,
+    WindowsProjectFactSummaryResult,
+    WindowsProjectFactSummaryTool,
+)
 
 
 class WindowsBootstrapProjectFactsArgs(BaseModel):
@@ -59,6 +67,44 @@ class WindowsBootstrapProjectFactsArgs(BaseModel):
         False,
         description="If true, rebuild callgraph/data-xref indexes even when present.",
     )
+    project_facts_output_path: str | None = Field(
+        None,
+        description=(
+            "Optional ASB pe-project-facts.yaml path to update with a manifest "
+            "record for the generated .glaurung project."
+        ),
+    )
+    project_fact_id: str | None = Field(
+        None,
+        description=(
+            "Optional stable manifest record id. Defaults to "
+            "<target_id>_<build_label>_<binary-stem>."
+        ),
+    )
+    target_id: str | None = Field(
+        None,
+        description="Optional build-corpus target id for the manifest row.",
+    )
+    build_label: str | None = Field(
+        None,
+        description="Optional build label for the manifest row.",
+    )
+    build_number: str | None = Field(
+        None,
+        description="Optional Windows build number for the manifest row.",
+    )
+    architecture: str = Field(
+        "x64",
+        description="Architecture string for the manifest row.",
+    )
+    binary_filename: str | None = Field(
+        None,
+        description="Optional PE filename override for the manifest row.",
+    )
+    manifest_note: str | None = Field(
+        None,
+        description="Optional note to store on the generated manifest row.",
+    )
     add_to_kb: bool = Field(
         False,
         description="If true, add a compact bootstrap evidence node to the active KB.",
@@ -81,6 +127,8 @@ class WindowsBootstrapProjectFactsResult(BaseModel):
     pdb_counts: PdbFactImportCounts | None = None
     fact_coverage: list[str] = Field(default_factory=list)
     missing_capabilities: list[str] = Field(default_factory=list)
+    project_facts_output_path: str | None = None
+    project_fact_record_id: str | None = None
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
 
@@ -213,6 +261,17 @@ class WindowsBootstrapProjectFactsTool(
 
         coverage = _fact_coverage(steps, pdb_counts)
         missing = _missing_capabilities(steps, pdb_counts, args)
+        project_summary = WindowsProjectFactSummaryTool().run(
+            ctx,
+            kb,
+            WindowsProjectFactSummaryArgs(project_path=str(project_path)),
+        )
+        manifest_path, record_id = _write_project_fact_manifest_record(
+            args=args,
+            pe_path=pe_path,
+            project_path=project_path,
+            summary=project_summary,
+        )
         evidence_node_id = None
         if args.add_to_kb:
             node = kb.add_node(
@@ -224,6 +283,8 @@ class WindowsBootstrapProjectFactsTool(
                         "project_path": str(project_path),
                         "coverage": coverage,
                         "missing_capabilities": missing,
+                        "project_facts_output_path": manifest_path,
+                        "project_fact_record_id": record_id,
                         "steps": [step.model_dump() for step in steps],
                     },
                 )
@@ -240,6 +301,8 @@ class WindowsBootstrapProjectFactsTool(
             pdb_counts=pdb_counts,
             fact_coverage=coverage,
             missing_capabilities=missing,
+            project_facts_output_path=manifest_path,
+            project_fact_record_id=record_id,
             evidence_node_id=evidence_node_id,
             notes=[
                 "bootstrap prepares project facts only; source reachability and vulnerability truth are not implied"
@@ -393,6 +456,137 @@ def _missing_capabilities(
         if not pdb_counts.imported_function_proto:
             missing.append("pdb_function_prototypes")
     return missing
+
+
+def _write_project_fact_manifest_record(
+    *,
+    args: WindowsBootstrapProjectFactsArgs,
+    pe_path: Path,
+    project_path: Path,
+    summary: WindowsProjectFactSummaryResult,
+) -> tuple[str | None, str | None]:
+    if not args.project_facts_output_path:
+        return None, None
+    path = Path(args.project_facts_output_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = _project_fact_record(args, pe_path, project_path, summary)
+    existing = _load_manifest_records(path)
+    key = str(record["id"])
+    updated: list[dict[str, Any]] = []
+    replaced = False
+    for item in existing:
+        if str(item.get("id") or "") == key:
+            updated.append(record)
+            replaced = True
+        else:
+            updated.append(item)
+    if not replaced:
+        updated.append(record)
+    path.write_text(
+        yaml.safe_dump(updated, sort_keys=False, allow_unicode=False),
+        encoding="utf-8",
+    )
+    return str(path), key
+
+
+def _project_fact_record(
+    args: WindowsBootstrapProjectFactsArgs,
+    pe_path: Path,
+    project_path: Path,
+    summary: WindowsProjectFactSummaryResult,
+) -> dict[str, Any]:
+    binary_filename = args.binary_filename or pe_path.name
+    target_id = args.target_id or Path(binary_filename).stem
+    build_label = args.build_label or "unknown"
+    record_id = args.project_fact_id or _slug(
+        f"{target_id}_{build_label}_{Path(binary_filename).stem}"
+    )
+    return {
+        "id": record_id,
+        "target_id": target_id,
+        "build_label": build_label,
+        "build_number": args.build_number or "unknown",
+        "architecture": args.architecture,
+        "binary_filename": binary_filename,
+        "project_path": str(project_path),
+        "project_sha256": _sha256_file(project_path),
+        "project_size_bytes": project_path.stat().st_size,
+        "fact_sources": _fact_sources(args, summary),
+        "fact_coverage": list(summary.coverage),
+        "missing_facts": list(summary.missing_capabilities),
+        "counts": _manifest_counts(summary),
+        "notes": args.manifest_note
+        or "generated by windows_bootstrap_project_facts",
+    }
+
+
+def _load_manifest_records(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or []
+    if not isinstance(raw, list):
+        raise ValueError(f"{path}: expected top-level list")
+    out: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}: manifest entry {idx} is not a mapping")
+        out.append(dict(item))
+    return out
+
+
+def _fact_sources(
+    args: WindowsBootstrapProjectFactsArgs,
+    summary: WindowsProjectFactSummaryResult,
+) -> list[str]:
+    sources = ["windows_bootstrap_project_facts"]
+    if args.import_pdb_facts and args.pdb_cache_dir:
+        sources.append("pdb_cache")
+    if summary.counts.call_xref_count:
+        sources.append("xref_db")
+    if summary.counts.basic_block_count or summary.counts.cfg_edge_count:
+        sources.append("cfg_db")
+    if summary.counts.cfg_branch_fact_count:
+        sources.append("cfg_branch_facts")
+    return _dedupe(sources)
+
+
+def _manifest_counts(summary: WindowsProjectFactSummaryResult) -> dict[str, int]:
+    counts = summary.counts
+    return {
+        "function_name_count": counts.function_name_count,
+        "xref_count": counts.xref_count,
+        "call_xref_count": counts.call_xref_count,
+        "data_read_xref_count": counts.data_read_xref_count,
+        "data_write_xref_count": counts.data_write_xref_count,
+        "data_label_count": counts.data_label_count,
+        "function_prototype_count": counts.function_prototype_count,
+        "basic_block_count": counts.basic_block_count,
+        "cfg_edge_count": counts.cfg_edge_count,
+        "cfg_dominance_count": counts.cfg_dominance_count,
+        "cfg_branch_fact_count": counts.cfg_branch_fact_count,
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_").lower() or "project"
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
 
 
 def _step_has_facts(step: ProjectBootstrapStep | None) -> bool:

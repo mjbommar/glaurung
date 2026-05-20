@@ -149,12 +149,20 @@ def test_windows_emit_vm_validation_plan_surfaces_runtime_blockers(
     assert any("KDNET attach is not validated" in blocker for blocker in plan.blockers)
     assert any("attach proof artifact" in blocker for blocker in plan.blockers)
     assert any("host UDP forward" in blocker for blocker in plan.blockers)
-    assert any("static packet promotion blockers remain" in blocker for blocker in plan.blockers)
+    assert any(
+        "static packet promotion blockers remain" in blocker
+        for blocker in plan.blockers
+    )
+    assert result.evidence_bundle.claim_level == "validation_plan_not_reproduction"
+    assert result.evidence_bundle.subject.validation_id == plan.validation_id
+    assert result.evidence_bundle.coverage.validation_ready is False
+    assert result.evidence_bundle.blockers == plan.blockers
     assert any("Exercise placeholder creation" in step for step in plan.operator_steps)
     assert any("MEMORY.DMP" in artifact for artifact in plan.expected_artifacts)
     assert result.evidence_node_id is not None
     assert any(
-        node.kind == NodeKind.evidence and node.label == "windows_emit_vm_validation_plan"
+        node.kind == NodeKind.evidence
+        and node.label == "windows_emit_vm_validation_plan"
         for node in ctx.kb.nodes()
     )
 
@@ -181,9 +189,16 @@ def test_windows_emit_vm_validation_plan_can_use_explicit_ready_substrate(
     assert plan.validation_id == "win11_25h2_v1_cold_postlogon"
     assert plan.kdnet_attach_proof == "/evidence/kdnet-attach.log"
     assert plan.kdnet_last_attach_utc == "2026-05-18T20:00:00Z"
-    assert not any("KDNET attach is not validated" in blocker for blocker in plan.blockers)
-    assert not any("debugger attach proof is missing" in blocker for blocker in plan.blockers)
-    assert any("static packet promotion blockers remain" in blocker for blocker in plan.blockers)
+    assert not any(
+        "KDNET attach is not validated" in blocker for blocker in plan.blockers
+    )
+    assert not any(
+        "debugger attach proof is missing" in blocker for blocker in plan.blockers
+    )
+    assert any(
+        "static packet promotion blockers remain" in blocker
+        for blocker in plan.blockers
+    )
 
 
 def test_memory_agent_registers_windows_emit_vm_validation_plan() -> None:

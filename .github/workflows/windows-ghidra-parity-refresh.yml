@@ -1,0 +1,95 @@
+name: Windows Ghidra Parity Refresh
+
+on:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      ghidra-headless:
+        description: "Path to Ghidra analyzeHeadless on the runner"
+        required: false
+        default: "/nas4/data/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless"
+      analysis-timeout-s:
+        description: "Per-file Ghidra analysis timeout"
+        required: false
+        default: "75"
+      timeout-s:
+        description: "Whole analyzeHeadless command timeout per file"
+        required: false
+        default: "130"
+
+permissions:
+  contents: read
+
+jobs:
+  ghidra-parity:
+    name: Refresh Windows Ghidra parity artifacts
+    runs-on: [self-hosted, linux, ghidra]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - name: Resolve Ghidra path
+        id: ghidra
+        run: |
+          GHIDRA_HEADLESS="${{ inputs['ghidra-headless'] || '/nas4/data/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless' }}"
+          if [ ! -x "$GHIDRA_HEADLESS" ]; then
+            echo "Ghidra analyzeHeadless not executable: $GHIDRA_HEADLESS" >&2
+            exit 2
+          fi
+          echo "path=$GHIDRA_HEADLESS" >> "$GITHUB_OUTPUT"
+      - name: Refresh parity dashboard
+        run: |
+          mkdir -p artifacts/windows-ghidra-parity
+          uv run python scripts/windows_ghidra_parity.py \
+            --corpus samples/binaries/platforms/windows/vendor/realworld \
+            --ghidra "${{ steps.ghidra.outputs.path }}" \
+            --previous-json docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json \
+            --output-json artifacts/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_refresh.json \
+            --output-md artifacts/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_refresh.md \
+            --analysis-timeout-s "${{ inputs['analysis-timeout-s'] || '75' }}" \
+            --timeout-s "${{ inputs['timeout-s'] || '130' }}"
+      - name: Write corpus review note for refreshed artifacts
+        run: |
+          uv run glaurung windows corpus-guard \
+            --format json \
+            --comparison-path artifacts/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_refresh.json \
+            --review-notes-path artifacts/windows-ghidra-parity/corpus-review.md \
+            --allow-drift \
+            > artifacts/windows-ghidra-parity/corpus-guard.json
+      - name: Review refreshed parity artifacts
+        run: |
+          uv run glaurung windows runner-artifact-review \
+            --format json \
+            --mode ghidra_parity \
+            --artifact-dir artifacts/windows-ghidra-parity \
+            --output-path artifacts/windows-ghidra-parity/runner-artifact-review.json \
+            > artifacts/windows-ghidra-parity/runner-artifact-review.stdout.json
+      - name: Plan refreshed parity promotion
+        run: |
+          uv run glaurung windows runner-artifact-promotion-plan \
+            --format json \
+            --artifact-dir artifacts/windows-ghidra-parity \
+            --review-path artifacts/windows-ghidra-parity/runner-artifact-review.json \
+            --docs-root docs/windows-port \
+            --output-path artifacts/windows-ghidra-parity/runner-artifact-promotion-plan.json \
+            > artifacts/windows-ghidra-parity/runner-artifact-promotion-plan.stdout.json
+      - name: Dry-run refreshed parity promotion apply
+        run: |
+          uv run glaurung windows runner-artifact-promotion-apply \
+            --format json \
+            --plan-path artifacts/windows-ghidra-parity/runner-artifact-promotion-plan.json \
+            --output-path artifacts/windows-ghidra-parity/runner-artifact-promotion-apply.json \
+            --review-markdown-path artifacts/windows-ghidra-parity/runner-artifact-promotion-apply.md \
+            > artifacts/windows-ghidra-parity/runner-artifact-promotion-apply.stdout.json
+      - name: Upload refreshed parity artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ghidra-parity-refresh
+          path: artifacts/windows-ghidra-parity/
+          if-no-files-found: error

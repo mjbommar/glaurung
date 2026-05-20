@@ -97,7 +97,12 @@ pub fn pe_iat_map(data: &[u8]) -> Vec<(u64, String)> {
     } else {
         return out;
     };
-    let num_dirs = read_u32_le(data, opt_off + 92).unwrap_or(0); // NumberOfRvaAndSizes
+    let num_dirs_off = if is_pe32_plus {
+        opt_off + 108
+    } else {
+        opt_off + 92
+    };
+    let num_dirs = read_u32_le(data, num_dirs_off).unwrap_or(0); // NumberOfRvaAndSizes
     let opt = OptionalHeaderLocs {
         data_dir_offset,
         num_data_dirs: num_dirs,

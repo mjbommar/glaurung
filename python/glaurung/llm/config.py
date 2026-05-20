@@ -3,8 +3,7 @@
 import os
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Dict
-from pydantic_ai import Agent
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +49,10 @@ class LLMConfig:
         system_prompt: str,
         model: Optional[str] = None,
         output_type: Optional[type] = None,
-        **kwargs,
-    ) -> Agent:
+        **kwargs: Any,
+    ) -> Any:
+        from pydantic_ai import Agent
+
         model = model or self.default_model
         if self.openai_api_key and "openai" in model:
             os.environ["OPENAI_API_KEY"] = self.openai_api_key
@@ -63,13 +64,16 @@ class LLMConfig:
             os.environ["GEMINI_API_KEY"] = self.gemini_api_key
         if self.enable_logging:
             logger.info(f"Creating agent with model: {model}")
-        agent_kwargs = {"model": model, "system_prompt": system_prompt}
+        agent_kwargs: dict[str, Any] = {
+            "model": model,
+            "system_prompt": system_prompt,
+        }
         if output_type:
             agent_kwargs["output_type"] = output_type
         agent_kwargs.update(kwargs)
         return Agent(**agent_kwargs)
 
-    def available_models(self) -> Dict[str, bool]:
+    def available_models(self) -> dict[str, bool]:
         return {
             "openai": bool(self.openai_api_key or os.getenv("OPENAI_API_KEY")),
             "anthropic": bool(self.anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")),

@@ -198,8 +198,20 @@ def test_windows_emit_review_packet_normalizes_candidate(tmp_path: Path) -> None
     assert packet.required_project_facts == ["function_names", "call_xrefs"]
     assert packet.ghidra_delta is not None
     assert packet.ghidra_delta.blocking_fact_classes == ["type_layout"]
+    assert result.evidence_bundle.claim_level == "candidate_not_finding"
+    assert result.evidence_bundle.subject.candidate_id == packet.candidate_id
+    assert result.evidence_bundle.subject.binary == "ntoskrnl.exe"
+    assert result.evidence_bundle.coverage.fact_coverage == [
+        "function_names",
+        "call_xrefs",
+        "cfg",
+    ]
+    assert result.evidence_bundle.coverage.stale_or_blocking_facts == ["type_layout"]
+    assert result.evidence_bundle.blockers == packet.promotion_blockers
     assert packet.promotion_preconditions_met is False
-    assert any("blocking Ghidra-parity gaps" in item for item in packet.promotion_blockers)
+    assert any(
+        "blocking Ghidra-parity gaps" in item for item in packet.promotion_blockers
+    )
     assert "asb_pdb_identity_manifest" in packet.provenance
     assert "asb_component_profile" in packet.provenance
     assert "patch_diff_context" in packet.provenance
@@ -254,7 +266,9 @@ def test_windows_emit_review_packet_keeps_safe_gate_lower_priority(
     assert result.packet.confidence_reason
     assert result.packet.promotion_preconditions_met is False
     assert "missing project fact coverage context" in result.packet.promotion_blockers
-    assert any("ownership transfer" in q for q in result.packet.false_positive_questions)
+    assert any(
+        "ownership transfer" in q for q in result.packet.false_positive_questions
+    )
 
 
 def test_windows_emit_review_packet_blocks_missing_required_project_facts(
@@ -296,8 +310,14 @@ def test_windows_emit_review_packet_blocks_missing_required_project_facts(
     packet = result.packet
     assert packet.required_project_facts == ["function_names", "call_xrefs", "cfg"]
     assert packet.promotion_preconditions_met is False
-    assert any("missing required project fact coverage" in item for item in packet.promotion_blockers)
-    assert any("required project fact count is zero" in item for item in packet.promotion_blockers)
+    assert any(
+        "missing required project fact coverage" in item
+        for item in packet.promotion_blockers
+    )
+    assert any(
+        "required project fact count is zero" in item
+        for item in packet.promotion_blockers
+    )
     assert "promotion blocked" in packet.confidence_reason
     assert any("clear promotion blockers" in step for step in packet.next_validation)
 
@@ -428,6 +448,78 @@ def test_windows_emit_review_packet_honors_explicit_missing_gates_for_dominated_
     )
 
 
+def test_windows_emit_review_packet_carries_notebook_decisions(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary="driver.sys",
+            entrypoint="Dispatch",
+            attacker_class="local_unprivileged",
+            source_role="buffer",
+            sink_symbol="RtlCopyMemory",
+            sink_kind="copy",
+            required_gates=["byte_count_bounded"],
+            gate_status="missing",
+            project_facts={
+                "target_id": "driver",
+                "build_label": "unit-test",
+                "project_path": "/projects/driver.glaurung",
+                "fact_coverage": ["function_names", "call_xrefs"],
+                "missing_facts": [],
+                "counts": {"function_name_count": 5, "call_xref_count": 4},
+            },
+            notebook_decisions=[
+                {
+                    "kind": "comment",
+                    "va": 0x140001000,
+                    "comment": "reviewed suspicious copy call",
+                    "provenance": ["analyst:notebook"],
+                },
+                {
+                    "kind": "suppression",
+                    "va": 0x140001020,
+                    "state": "suppressed_false_start",
+                    "reason": "Ghidra label is a shared epilogue",
+                    "provenance": ["analyst:functionization_review"],
+                },
+            ],
+        ),
+    )
+
+    packet = result.packet
+    assert len(packet.notebook_decisions) == 2
+    assert "windows_analyst_notebook" in packet.provenance
+    assert packet.promotion_preconditions_met is False
+    assert any(
+        "attached notebook decision blocks promotion" in item
+        for item in packet.promotion_blockers
+    )
+    assert (
+        "analyst_notebook_decisions"
+        in result.evidence_bundle.coverage.fact_coverage
+    )
+    notebook_refs = [
+        ref
+        for ref in result.evidence_bundle.evidence_refs
+        if ref.source == "windows_analyst_notebook"
+    ]
+    assert len(notebook_refs) == 2
+    assert notebook_refs[1].reason_codes == [
+        "notebook:suppression",
+        "notebook_state:suppressed_false_start",
+    ]
+    assert any(
+        "attached notebook comments" in question
+        for question in packet.false_positive_questions
+    )
+
+
 def test_windows_emit_review_packet_auto_joins_manifest_context(
     tmp_path: Path,
 ) -> None:
@@ -469,11 +561,15 @@ def test_windows_emit_review_packet_auto_joins_manifest_context(
     assert packet.project_facts.counts["call_xref_count"] == 4
     assert packet.ghidra_delta is not None
     assert packet.ghidra_delta.blocking_fact_classes == ["type_layout"]
-    assert "rcx_rdx_r8_r9_argument_snapshots" in packet.ghidra_delta.current_capabilities
+    assert (
+        "rcx_rdx_r8_r9_argument_snapshots" in packet.ghidra_delta.current_capabilities
+    )
     assert "asb_pe_project_facts_manifest" in packet.provenance
     assert "asb_pe_ghidra_delta_manifest" in packet.provenance
     assert packet.promotion_preconditions_met is False
-    assert any("blocking Ghidra-parity gaps" in item for item in packet.promotion_blockers)
+    assert any(
+        "blocking Ghidra-parity gaps" in item for item in packet.promotion_blockers
+    )
 
 
 def test_memory_agent_registers_windows_emit_review_packet() -> None:

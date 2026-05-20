@@ -1,0 +1,640 @@
+{
+  "schema_version": 2,
+  "purpose": "Vendored real-world Windows PE smoke corpus for Glaurung parser and triage development.",
+  "selection_method": "Initial deterministic random sample with seed glaurung-windows-vendor-2026-05-19-v2, plus targeted high-volume expansion glaurung-windows-vendor-2026-05-19-v3. The expansion adds 20 non-duplicate Windows 10/11 system DLLs and Windows Update vendor app/driver DLL/SYS/EXE targets selected for common deployment, large code volume, and analysis stress coverage.",
+  "created_utc_date": "2026-05-19",
+  "source_roots": [
+    "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/",
+    "/nas4/data/binary-analysis/glaurung/binaries/windows-11-x64/",
+    "/nas4/data/binary-analysis/glaurung/binaries/windows-8-pro-x64/",
+    "/nas4/data/binary-analysis/glaurung/binaries/windows-update/",
+    "/nas4/data/binary-analysis/windows-drivers.sqfs mounted at /mnt/windows-drivers-sqfs/"
+  ],
+  "license_note": "These are third-party Windows binaries copied for local parser/regression testing. Keep provenance and hashes with the corpus; review redistribution constraints before publishing outside this repository/workspace.",
+  "curation": {
+    "tool": "windows_corpus_curator",
+    "fixture_count": 30,
+    "fast_baseline_count": 10,
+    "stress_count": 20,
+    "fields_added": [
+      "suite",
+      "binary_kind",
+      "architecture",
+      "pdb_status",
+      "stress_purpose",
+      "ghidra_internal_functions",
+      "glaurung_functions",
+      "missing_entries",
+      "extra_entries"
+    ]
+  },
+  "fixtures": [
+    {
+      "file": "sqfs-amd-clinfo.exe",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/sqfs-amd-clinfo.exe",
+      "suite": "fast_baseline",
+      "source_label": "windows_drivers_sqfs",
+      "source_path": "/mnt/windows-drivers-sqfs/drivers/AMD/FORCED/Legacy/10x64/21.19.137.514/B308962/clinfo.exe",
+      "file_description": "PE32+ executable for MS Windows 6.00 (console), x86-64, 5 sections",
+      "binary_kind": "exe",
+      "architecture": "x64-pe",
+      "size_bytes": 287248,
+      "sha256": "0731609a22f0f7b430cf78c58afca9e17653b9461c16330d88cdd5f8b549c8ab",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity"
+      ],
+      "ghidra_internal_functions": 932,
+      "glaurung_functions": 981,
+      "missing_entries": 2,
+      "extra_entries": 51
+    },
+    {
+      "file": "sqfs-intel-DptfDevGen.sys",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfDevGen.sys",
+      "suite": "fast_baseline",
+      "source_label": "windows_drivers_sqfs",
+      "source_path": "/mnt/windows-drivers-sqfs/drivers/Intel/FORCED/DPTF/81x64/603.9600.2568.54640/DptfDevGen.sys",
+      "file_description": "PE32+ executable for MS Windows 6.02 (native), x86-64, 8 sections",
+      "binary_kind": "sys",
+      "architecture": "x64-pe",
+      "size_bytes": 80312,
+      "sha256": "074be1b90deb21897538a6b093af9826e62610ffd878c92289af31c5ca3f724b",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity"
+      ],
+      "ghidra_internal_functions": 140,
+      "glaurung_functions": 146,
+      "missing_entries": 1,
+      "extra_entries": 7
+    },
+    {
+      "file": "sqfs-intel-DptfParticipantDisplayService.exe",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfParticipantDisplayService.exe",
+      "suite": "fast_baseline",
+      "source_label": "windows_drivers_sqfs",
+      "source_path": "/mnt/windows-drivers-sqfs/drivers/Intel/FORCED/DPTF/8x64/7.0.0.2023/Services/x32/DptfParticipantDisplayService.exe",
+      "file_description": "PE32+ executable for MS Windows 6.00 (console), x86-64, 6 sections",
+      "binary_kind": "exe",
+      "architecture": "x64-pe",
+      "size_bytes": 120184,
+      "sha256": "4909415e9851fd07c4dee69fe4371bfc86eb3984784724829259233239802d64",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity"
+      ],
+      "ghidra_internal_functions": 342,
+      "glaurung_functions": 354,
+      "missing_entries": 0,
+      "extra_entries": 12
+    },
+    {
+      "file": "win10-audmigplugin.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win10-audmigplugin.dll",
+      "suite": "fast_baseline",
+      "source_label": "win10",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/audmigplugin.dll",
+      "file_description": "PE32+ executable for MS Windows 10.00 (DLL), x86-64, 7 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 72016,
+      "sha256": "7513c43e6b708809de9592d6e4d4f0b05c29954d80641c92df8063c4db7cf3b0",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity"
+      ],
+      "ghidra_internal_functions": 224,
+      "glaurung_functions": 224,
+      "missing_entries": 0,
+      "extra_entries": 0
+    },
+    {
+      "file": "win10-dismapi.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win10-dismapi.dll",
+      "suite": "stress",
+      "source_label": "win10",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/dismapi.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 1065272,
+      "sha256": "010aab43238edabd7457b30e7bf3221049f40e080ddee4b8053f53b7431dd9ea",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "deployment_dll_tiny_thunk_recall",
+        "address_missing_tiny_function_gap"
+      ],
+      "ghidra_internal_functions": 4975,
+      "glaurung_functions": 4973,
+      "missing_entries": 26,
+      "extra_entries": 24
+    },
+    {
+      "file": "win10-dismcore.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win10-dismcore.dll",
+      "suite": "stress",
+      "source_label": "win10",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/dismcore.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 405304,
+      "sha256": "0cd4f9fc244734016843940368c5d1037829b3eb08b0db01e8df73c88ad84109",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "deployment_dll_tiny_thunk_recall"
+      ],
+      "ghidra_internal_functions": 953,
+      "glaurung_functions": 970,
+      "missing_entries": 2,
+      "extra_entries": 19
+    },
+    {
+      "file": "win10-netsetupapi.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win10-netsetupapi.dll",
+      "suite": "stress",
+      "source_label": "win10",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/netsetupapi.dll",
+      "file_description": "PE32+ executable for MS Windows 6.01 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 146448,
+      "sha256": "e30d048369935cf09d90dfc6b5cd2e606c73e3f82aab991cf9854af5344e8a21",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "deployment_dll_tiny_thunk_recall"
+      ],
+      "ghidra_internal_functions": 549,
+      "glaurung_functions": 579,
+      "missing_entries": 0,
+      "extra_entries": 30
+    },
+    {
+      "file": "win10-vwififlt.sys",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys",
+      "suite": "fast_baseline",
+      "source_label": "win10",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/vwififlt.sys",
+      "file_description": "PE32+ executable for MS Windows 10.00 (native), x86-64, 11 sections",
+      "binary_kind": "sys",
+      "architecture": "x64-pe",
+      "size_bytes": 77824,
+      "sha256": "13c3b69a5d0179ed3cc2c999ff97edbaedd63da55ddb74427251c360706a3820",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity"
+      ],
+      "ghidra_internal_functions": 141,
+      "glaurung_functions": 141,
+      "missing_entries": 0,
+      "extra_entries": 0
+    },
+    {
+      "file": "win10-wdscore.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win10-wdscore.dll",
+      "suite": "stress",
+      "source_label": "win10",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/wdscore.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 258880,
+      "sha256": "bdfdda6dd69a4b9ba510a0e42b84abcba9d8720e009805dc6fb7ac7267b66ff4",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "deployment_dll_tiny_thunk_recall"
+      ],
+      "ghidra_internal_functions": 996,
+      "glaurung_functions": 1009,
+      "missing_entries": 2,
+      "extra_entries": 15
+    },
+    {
+      "file": "win10-webservices.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win10-webservices.dll",
+      "suite": "stress",
+      "source_label": "win10",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-10-x64/webservices.dll",
+      "file_description": "PE32+ executable for MS Windows 10.00 (DLL), x86-64, 7 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 1389352,
+      "sha256": "5716dfc8451c4d800f74d397a0f1944e5c6e4ab70c11a0a83e9a35e89b6e6d58",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "body_split_overmerge",
+        "address_missing_tiny_function_gap"
+      ],
+      "ghidra_internal_functions": 4518,
+      "glaurung_functions": 4398,
+      "missing_entries": 145,
+      "extra_entries": 25
+    },
+    {
+      "file": "win11-SyncInfrastructureps.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win11-SyncInfrastructureps.dll",
+      "suite": "fast_baseline",
+      "source_label": "win11",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-11-x64/SyncInfrastructureps.dll",
+      "file_description": "PE32+ executable for MS Windows 6.01 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 57344,
+      "sha256": "8f091ebbd8b34b7d3c1253974667e664f6fb89ef879ffe0876b39d6765865284",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity"
+      ],
+      "ghidra_internal_functions": 77,
+      "glaurung_functions": 78,
+      "missing_entries": 0,
+      "extra_entries": 1
+    },
+    {
+      "file": "win11-acledit.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win11-acledit.dll",
+      "suite": "fast_baseline",
+      "source_label": "win11",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-11-x64/acledit.dll",
+      "file_description": "PE32+ executable for MS Windows 10.00 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 28672,
+      "sha256": "d58b5a9e31ed72963dac5f5ddf6da5c536d88d816ab1da877c55e3b6ac8e4ae8",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity"
+      ],
+      "ghidra_internal_functions": 39,
+      "glaurung_functions": 40,
+      "missing_entries": 0,
+      "extra_entries": 1
+    },
+    {
+      "file": "win11-dismapi.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win11-dismapi.dll",
+      "suite": "stress",
+      "source_label": "win11",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-11-x64/dismapi.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 1209688,
+      "sha256": "5f399379c478739adc08dd1fab60d38839d71e8a2a2bbf7aa44741b959e4d627",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "deployment_dll_tiny_thunk_recall",
+        "address_missing_tiny_function_gap"
+      ],
+      "ghidra_internal_functions": 5606,
+      "glaurung_functions": 5574,
+      "missing_entries": 57,
+      "extra_entries": 25
+    },
+    {
+      "file": "win11-netsetupapi.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win11-netsetupapi.dll",
+      "suite": "stress",
+      "source_label": "win11",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-11-x64/netsetupapi.dll",
+      "file_description": "PE32+ executable for MS Windows 6.01 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 177488,
+      "sha256": "1349fe73ca9f5ee8365b45a54e91a2ebaab809f0d4f9b2988f59175cb21d4cf5",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "deployment_dll_tiny_thunk_recall"
+      ],
+      "ghidra_internal_functions": 578,
+      "glaurung_functions": 601,
+      "missing_entries": 7,
+      "extra_entries": 30
+    },
+    {
+      "file": "win11-wdscore.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win11-wdscore.dll",
+      "suite": "stress",
+      "source_label": "win11",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-11-x64/wdscore.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 283984,
+      "sha256": "d63e3e64001167088ec8ff58ca3a36b2d6bd91e913cdad6e76211f977166b806",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "deployment_dll_tiny_thunk_recall"
+      ],
+      "ghidra_internal_functions": 1023,
+      "glaurung_functions": 1035,
+      "missing_entries": 9,
+      "extra_entries": 21
+    },
+    {
+      "file": "win11-webservices.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win11-webservices.dll",
+      "suite": "stress",
+      "source_label": "win11",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-11-x64/webservices.dll",
+      "file_description": "PE32+ executable for MS Windows 10.00 (DLL), x86-64, 7 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 1468248,
+      "sha256": "7889375fb4523120583e272914159a6c75540b5f4254c34e51ba93e44641fb5b",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "body_split_overmerge",
+        "thunk_classification_gap"
+      ],
+      "ghidra_internal_functions": 5097,
+      "glaurung_functions": 4955,
+      "missing_entries": 191,
+      "extra_entries": 49
+    },
+    {
+      "file": "win8-pciidex.sys",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win8-pciidex.sys",
+      "suite": "fast_baseline",
+      "source_label": "win8",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-8-pro-x64/pciidex.sys",
+      "file_description": "PE32+ executable for MS Windows 6.02 (native), x86-64, 9 sections",
+      "binary_kind": "sys",
+      "architecture": "x64-pe",
+      "size_bytes": 49904,
+      "sha256": "46eef9139c0f79ea66a43231442b1e76c434ee54cef8690fcb31a6717256d672",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity"
+      ],
+      "ghidra_internal_functions": 174,
+      "glaurung_functions": 176,
+      "missing_entries": 1,
+      "extra_entries": 3
+    },
+    {
+      "file": "windows-update-SurfacePenBleLcAddrAdaptationDriver.sys",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys",
+      "suite": "fast_baseline",
+      "source_label": "windows_update",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/07dc771fc822ee1351dbb003017ae89e0638036f84d4a9a4110e076449c5363c/SurfacePenBleLcAddrAdaptationDriver.sys",
+      "file_description": "PE32+ executable for MS Windows 10.00 (native), x86-64, 8 sections",
+      "binary_kind": "sys",
+      "architecture": "x64-pe",
+      "size_bytes": 320728,
+      "sha256": "3c062dc57832caab776bec99656798474af7ffb59ef751c9a004a95c0ae74405",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity",
+        "callback_table_data_ref_recall"
+      ],
+      "ghidra_internal_functions": 775,
+      "glaurung_functions": 775,
+      "missing_entries": 0,
+      "extra_entries": 0
+    },
+    {
+      "file": "windows-update-amd-xilinx-xrt_core.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-amd-xilinx-xrt_core.dll",
+      "suite": "stress",
+      "source_label": "windows_update_amd_xilinx",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/4f7dddb77f5261c0c835f4347745d021004d6df0e48e404ef69811fe52e46965/xrt_core.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 7 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 960312,
+      "sha256": "ae7c27bc74686daafdd3bb0de4f1be230d5e05b1837ae2029f25578b3889a776",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "vendor_tiny_stub_precision"
+      ],
+      "ghidra_internal_functions": 3155,
+      "glaurung_functions": 3711,
+      "missing_entries": 16,
+      "extra_entries": 572
+    },
+    {
+      "file": "windows-update-amd-xilinx-xrt_coreutil.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-amd-xilinx-xrt_coreutil.dll",
+      "suite": "stress",
+      "source_label": "windows_update_amd_xilinx",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/4f7dddb77f5261c0c835f4347745d021004d6df0e48e404ef69811fe52e46965/xrt_coreutil.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 7 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 2682672,
+      "sha256": "ab04222bf2186bee9e89dd093abfb1c4fc4a3222c93dbcdee3353f4d269b9397",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "vendor_tiny_stub_precision"
+      ],
+      "ghidra_internal_functions": 7735,
+      "glaurung_functions": 8690,
+      "missing_entries": 8,
+      "extra_entries": 963
+    },
+    {
+      "file": "windows-update-intel-audio-IntcSST.sys",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-audio-IntcSST.sys",
+      "suite": "stress",
+      "source_label": "windows_update_intel_audio",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/d2810fa6a6744daa2005206c23b2f03d6531e1034952949c37bfb3ab2752bb25/IntcSST.sys",
+      "file_description": "PE32+ executable for MS Windows 10.00 (native), x86-64, 9 sections",
+      "binary_kind": "sys",
+      "architecture": "x64-pe",
+      "size_bytes": 748760,
+      "sha256": "f7c8e4f106baa5b2a1a18e60731ad42a6f734aee1d049576eaf6d123d5629750",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "general_windows_pe_coverage"
+      ],
+      "ghidra_internal_functions": 1822,
+      "glaurung_functions": 1828,
+      "missing_entries": 0,
+      "extra_entries": 6
+    },
+    {
+      "file": "windows-update-intel-audio-MultiChannelWoV.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-audio-MultiChannelWoV.dll",
+      "suite": "stress",
+      "source_label": "windows_update_intel_audio",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/d2810fa6a6744daa2005206c23b2f03d6531e1034952949c37bfb3ab2752bb25/MultiChannelWoV.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 1724120,
+      "sha256": "81b9fcb91c8b4d5691da900d364d01ac518aac7e66b9b1a7033b81f4a9c877bd",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "address_missing_tiny_function_gap"
+      ],
+      "ghidra_internal_functions": 2722,
+      "glaurung_functions": 2719,
+      "missing_entries": 43,
+      "extra_entries": 40
+    },
+    {
+      "file": "windows-update-intel-ipf-ipfcore.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-ipf-ipfcore.dll",
+      "suite": "stress",
+      "source_label": "windows_update_intel_ipf",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/04ee9e850e9832ae13559e2e84bd76bed494c5355af7780eb9063dbe1be48ef8/ipfcore.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 7 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 723544,
+      "sha256": "ee4b0aefe05496ae538538ca1dbe56e01a24f78bbe0f4237a4d40edf57d74ae4",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "general_windows_pe_coverage"
+      ],
+      "ghidra_internal_functions": 2322,
+      "glaurung_functions": 2859,
+      "missing_entries": 8,
+      "extra_entries": 545
+    },
+    {
+      "file": "windows-update-intel-npu-npu_d3d12_umd.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-npu-npu_d3d12_umd.dll",
+      "suite": "stress",
+      "source_label": "windows_update_intel_npu",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/4031c6b4b15d82cbbefc44c0e7d26af4e21c74065666faf1d636b12f7eba24d3/npu_d3d12_umd.dll",
+      "file_description": "PE32+ executable for MS Windows 10.00 (DLL), x86-64, 7 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 2428136,
+      "sha256": "ff13f170ab0f455381e69ea51d999461b883843377a576460cc4596a2e3f3e34",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "vendor_tiny_stub_precision"
+      ],
+      "ghidra_internal_functions": 2911,
+      "glaurung_functions": 2986,
+      "missing_entries": 32,
+      "extra_entries": 107
+    },
+    {
+      "file": "windows-update-intel-npu-npu_level_zero_umd.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-npu-npu_level_zero_umd.dll",
+      "suite": "stress",
+      "source_label": "windows_update_intel_npu",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/4031c6b4b15d82cbbefc44c0e7d26af4e21c74065666faf1d636b12f7eba24d3/npu_level_zero_umd.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 7 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 1584872,
+      "sha256": "59d1186b60e253a0b8166d9d8ecacc683f8ee8a4f6e1c66cb93ca2f1c4064d3b",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "vendor_tiny_stub_precision"
+      ],
+      "ghidra_internal_functions": 3985,
+      "glaurung_functions": 4012,
+      "missing_entries": 112,
+      "extra_entries": 139
+    },
+    {
+      "file": "windows-update-intel-npu-ze_loader.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-npu-ze_loader.dll",
+      "suite": "stress",
+      "source_label": "windows_update_intel_npu",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/4031c6b4b15d82cbbefc44c0e7d26af4e21c74065666faf1d636b12f7eba24d3/ze_loader.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 7 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 790272,
+      "sha256": "b9179290ce61b147168facd6e585ba520c5dcaafdc45e6be9b341f9ff9a948f6",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "vendor_tiny_stub_precision",
+        "address_missing_tiny_function_gap"
+      ],
+      "ghidra_internal_functions": 2658,
+      "glaurung_functions": 2514,
+      "missing_entries": 240,
+      "extra_entries": 96
+    },
+    {
+      "file": "windows-update-intel-wifi-NETwtw10.sys",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-wifi-NETwtw10.sys",
+      "suite": "stress",
+      "source_label": "windows_update_intel_wifi",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/9a7d3e547b0331a80cb2cc1fc886d34405f70d325f3e6f0d2ae198e442b5ca67/NETwtw10.sys",
+      "file_description": "PE32+ executable for MS Windows 10.00 (native), x86-64, 34 sections",
+      "binary_kind": "sys",
+      "architecture": "x64-pe",
+      "size_bytes": 4874856,
+      "sha256": "785a3c05981303b5856f3d86d7ca186843322407ae31f6bb33659cf61cd4e6f1",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "large_driver_data_ref_padding"
+      ],
+      "ghidra_internal_functions": 12017,
+      "glaurung_functions": 12264,
+      "missing_entries": 27,
+      "extra_entries": 274
+    },
+    {
+      "file": "windows-update-keysink.exe",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-keysink.exe",
+      "suite": "fast_baseline",
+      "source_label": "windows_update",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/776aa026217d85fa1797d437b97888501d793ba03e4b92f5a00a34c35ef58e90/keysink.exe",
+      "file_description": "PE32+ executable for MS Windows 6.00 (console), x86-64, 6 sections",
+      "binary_kind": "exe",
+      "architecture": "x64-pe",
+      "size_bytes": 161696,
+      "sha256": "ead5c6e15b0d7e2e696eab41a6f62ce9775490a37f1a16342b96a5e7ba4932a9",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "fast_baseline_parity"
+      ],
+      "ghidra_internal_functions": 490,
+      "glaurung_functions": 500,
+      "missing_entries": 2,
+      "extra_entries": 12
+    },
+    {
+      "file": "windows-update-realtek-RtkApi64U.dll",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-realtek-RtkApi64U.dll",
+      "suite": "stress",
+      "source_label": "windows_update_realtek_audio",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/5a78a50bdbdc22aa76510c82c50edcaf02898e52c4045d8cca5c6d2e9329ce32/RtkApi64U.dll",
+      "file_description": "PE32+ executable for MS Windows 6.00 (DLL), x86-64, 6 sections",
+      "binary_kind": "dll",
+      "architecture": "x64-pe",
+      "size_bytes": 895120,
+      "sha256": "d77b98915fe48e3b5571d0ad42fb0f94337e6881b5598ba8dbbc0313f3126a94",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "general_windows_pe_coverage"
+      ],
+      "ghidra_internal_functions": 2114,
+      "glaurung_functions": 2139,
+      "missing_entries": 9,
+      "extra_entries": 34
+    },
+    {
+      "file": "windows-update-realtek-RtkAudUService64.exe",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-realtek-RtkAudUService64.exe",
+      "suite": "stress",
+      "source_label": "windows_update_realtek_audio",
+      "source_path": "/nas4/data/binary-analysis/glaurung/binaries/windows-update/5a78a50bdbdc22aa76510c82c50edcaf02898e52c4045d8cca5c6d2e9329ce32/RtkAudUService64.exe",
+      "file_description": "PE32+ executable for MS Windows 6.00 (GUI), x86-64, 6 sections",
+      "binary_kind": "exe",
+      "architecture": "x64-pe",
+      "size_bytes": 835960,
+      "sha256": "77ff9f321a2eb7b45c36cc0411ace7ce000bd338bbba28a8f6a6423719d6e1e5",
+      "pdb_status": "unknown",
+      "stress_purpose": [
+        "body_split_overmerge",
+        "address_missing_tiny_function_gap"
+      ],
+      "ghidra_internal_functions": 2435,
+      "glaurung_functions": 2349,
+      "missing_entries": 101,
+      "extra_entries": 15
+    }
+  ]
+}

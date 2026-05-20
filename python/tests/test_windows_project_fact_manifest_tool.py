@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import glaurung as g
 
+from glaurung.cli.main import GlaurungCLI
 from glaurung.llm.context import MemoryContext
 from glaurung.llm.kb.adapters import import_triage
 from glaurung.llm.kb.models import NodeKind
@@ -133,6 +135,35 @@ def test_windows_project_fact_manifest_filters_available_capabilities(
     assert result.records[0].counts.cfg_dominance_count == 30
     assert result.records[0].counts.cfg_branch_fact_count == 12
     assert result.records[0].counts.data_label_count == 2
+
+
+def test_windows_cli_project_fact_manifest_json(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    manifest = _write_project_facts(tmp_path)
+
+    rc = GlaurungCLI().run(
+        [
+            "windows",
+            "project-fact-manifest",
+            "--project-facts-path",
+            str(manifest),
+            "--requires-fact",
+            "call_xrefs",
+            "--min-call-xrefs",
+            "1",
+            "--format",
+            "json",
+        ]
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["project_facts_path"] == str(manifest)
+    assert output["record_count_total"] == 2
+    assert [record["id"] for record in output["records"]] == ["ntoskrnl_project"]
+    assert output["records"][0]["counts"]["call_xref_count"] == 7
 
 
 def test_memory_agent_registers_windows_project_fact_manifest() -> None:

@@ -14,6 +14,9 @@ from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 _HELLO = Path(
     "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug"
 )
+_PE_HELLO = Path(
+    "samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe"
+)
 _DATA_DIR = Path("data/types")
 
 
@@ -79,7 +82,8 @@ def test_manual_entries_survive_stdlib_import(tmp_path: Path) -> None:
 
     # Analyst pre-defines `timeval` differently.
     type_db.add_struct(
-        kb, "timeval",
+        kb,
+        "timeval",
         [type_db.StructField(0, "manual_field", "void *", 8)],
         set_by="manual",
     )
@@ -106,15 +110,44 @@ def test_selective_bundle_loading(tmp_path: Path) -> None:
 
 def test_auto_load_flag_imports_stdlib_on_fresh_kb(tmp_path: Path) -> None:
     """When `auto_load_stdlib=True` is passed at KB creation, stdlib
-    types are automatically present without an explicit import call."""
+    types are automatically present without an explicit import call.
+
+    Loading is format-aware: ELF gets libc, but not WinAPI.
+    """
     binary = _need(_HELLO)
     db = tmp_path / "auto.glaurung"
     kb = PersistentKnowledgeBase.open(
-        db, binary_path=binary, auto_load_stdlib=True,
+        db,
+        binary_path=binary,
+        auto_load_stdlib=True,
     )
-    # Sample one type from each bundle.
+    assert type_db.get_type(kb, "size_t") is not None
+    assert type_db.get_type(kb, "HANDLE") is None
+    loaded = {
+        (row["bundle_kind"], row["bundle_name"])
+        for row in PersistentKnowledgeBase.list_stdlib_bundle_loads(kb)
+    }
+    assert ("type", "stdlib-libc") in loaded
+    assert ("type", "stdlib-winapi") not in loaded
+    kb.close()
+
+
+def test_auto_load_flag_imports_winapi_for_pe(tmp_path: Path) -> None:
+    binary = _need(_PE_HELLO)
+    db = tmp_path / "auto-pe.glaurung"
+    kb = PersistentKnowledgeBase.open(
+        db,
+        binary_path=binary,
+        auto_load_stdlib=True,
+    )
     assert type_db.get_type(kb, "size_t") is not None
     assert type_db.get_type(kb, "HANDLE") is not None
+    loaded = {
+        (row["bundle_kind"], row["bundle_name"])
+        for row in PersistentKnowledgeBase.list_stdlib_bundle_loads(kb)
+    }
+    assert ("type", "stdlib-libc") in loaded
+    assert ("type", "stdlib-winapi") in loaded
     kb.close()
 
 
@@ -134,7 +167,8 @@ def test_missing_bundle_reports_cleanly(tmp_path: Path) -> None:
     db = tmp_path / "types.glaurung"
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
     summary = type_db.import_stdlib_types(
-        kb, bundles=["definitely-not-a-real-bundle"],
+        kb,
+        bundles=["definitely-not-a-real-bundle"],
     )
     assert "definitely-not-a-real-bundle" in summary
     assert summary["definitely-not-a-real-bundle"].get("error") == "bundle_missing"

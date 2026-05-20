@@ -15,10 +15,14 @@ function names and PE code-to-data xrefs now persist into the
 for direct `.rdata` references. UTF-16 strings reach Python triage
 on the real `ntoskrnl.exe` fixture, and register-held string/table
 bases plus known-index pointer loads now recover selected
-comparison-05 KB refs above 90%. The remaining windows-port work is
-PARAM/table-entry string-reference coverage, broader PDB follow-up
-surface, BSim-style similarity, and the Windows-specific atomic
-tools.
+comparison-05 KB refs above 90%. The Windows regression corpus now
+also has a Ghidra parity dashboard, a conservative PE code-pointer
+scanner for VA/RVA callback tables, function-start confidence
+taxonomy, code-label facts, `glaurung windows diff-ghidra`, and
+Python helpers under `glaurung.windows_analysis`. The remaining
+windows-port work is PARAM/table-entry string-reference coverage,
+broader PDB follow-up surface, BSim-style similarity, and deeper
+Windows-specific atomic tools.
 
 ## Why this exists in Glaurung (not in asb)
 
@@ -48,6 +52,16 @@ forking; the contract is asb ADR 0023 (mirrored here as
   the Rust `pdb` crate, with the llvm-pdbutil JSON fallback.
 - Read `pe-hardening-design.md` for the four PE directories
   `#199` lights up, each with a CVE-class rationale.
+- Read `windows-api-type-sync.md` for the generated Win32/WDK
+  prototype bundle, NuGet source lock, manifest, and curated
+  semantic overlay workflow.
+- Read `glaurung_vs_ghidra_vendor_windows.md` and
+  `glaurung-vs-ghidra-regression-review.md` for the current
+  10-file Ghidra parity dashboard and debug notes.
+- Read `glaurung-vs-ghidra-full-debug-review.md` and
+  `agentic-ai-functionality-roadmap.md` for the 30-file
+  Ghidra stress-suite review and the agentic AI functionality
+  roadmap derived from it.
 - Read `bsim-similarity-design.md` for the Patch-Tuesday-diff
   use case and three competing approaches (4-gram-LSH,
   CodeT5+ embeddings, hybrid).
@@ -83,6 +97,8 @@ forking; the contract is asb ADR 0023 (mirrored here as
 | #179  | PDB ingestion (`src/symbols/pdb.rs`)       | every kg-pe rule that needs PDB-derived types | `pdb-ingestion-design.md` | type path + public function-name binding shipped; alias summaries remain |
 | #199  | PE hardening: delay-import / manifest / VersionInfo / TLS callbacks | grounded malware triage, driver TLS-callback bug class | `pe-hardening-design.md` | shipped |
 | xrefs | PE direct code-to-data refs                | strings-xrefs and data-use queries over Windows binaries | `IDA_GHIDRA_PARITY.md` #154/#222 | selected KB-ref coverage exceeds 90%; UTF-16 raw strings fixed; residual PARAM/table-entry refs remain |
+| parity | Ghidra regression corpus and debug report | Windows function-start confidence and callback-table discovery | `glaurung_vs_ghidra_vendor_windows.md`, `glaurung-vs-ghidra-regression-review.md`, `glaurung-vs-ghidra-full-debug-review.md` | 30-file stress dashboard; SurfacePen callback-table gap closed; adjustor tiny-stub gate reduced Glaurung-only starts from 27,637 to 3,116 |
+| agents | IDA/Ghidra-like agentic analyst workflows | pydantic-ai Windows review agents over deterministic low-level evidence tools | `agentic-ai-functionality-roadmap.md`, `atomic-tools.md` | roadmap added; low-level function-start explanation and boundary-diff tools remain next |
 | #186  | BSim-equivalent function similarity         | Patch Tuesday cross-build diff for n-day | `bsim-similarity-design.md` | not started |
 | tools | 12-15 Windows-specific `llm/tools/` files   | rule-as-tool encoding for tier-1 bug classes | `atomic-tools.md` | not started |
 

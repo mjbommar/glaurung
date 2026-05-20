@@ -10,6 +10,13 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .windows_agent_evidence_bundle import (
+    WindowsEvidenceBundle,
+    WindowsEvidenceCoverage,
+    WindowsEvidenceSubject,
+    evidence_ref,
+    make_windows_evidence_bundle,
+)
 from .windows_emit_vm_validation_plan import WindowsVmValidationPlan
 
 
@@ -115,6 +122,7 @@ class WindowsValidationArtifactBundle(BaseModel):
 
 class WindowsRecordValidationArtifactBundleResult(BaseModel):
     bundle: WindowsValidationArtifactBundle
+    evidence_bundle: WindowsEvidenceBundle
     hashed_count: int
     evidence_node_id: str | None = None
     notes: list[str] = Field(default_factory=list)
@@ -160,7 +168,9 @@ class WindowsRecordValidationArtifactBundleTool(
         bundle = WindowsValidationArtifactBundle(
             candidate_id=args.candidate_id,
             validation_id=(
-                args.validation_plan.validation_id if args.validation_plan is not None else None
+                args.validation_plan.validation_id
+                if args.validation_plan is not None
+                else None
             ),
             execution_status=args.execution_status,
             artifact_count=len(artifacts),
@@ -196,12 +206,52 @@ class WindowsRecordValidationArtifactBundleTool(
 
         return WindowsRecordValidationArtifactBundleResult(
             bundle=bundle,
+            evidence_bundle=_runtime_evidence_bundle(bundle),
             hashed_count=hashed_count,
             evidence_node_id=evidence_node_id,
             notes=[
                 "artifact bundle only; human review and promotion gates still decide finding status"
             ],
         )
+
+
+def _runtime_evidence_bundle(
+    bundle: WindowsValidationArtifactBundle,
+) -> WindowsEvidenceBundle:
+    refs = [
+        evidence_ref(
+            kind="artifact",
+            source="windows_record_validation_artifact_bundle",
+            summary=(
+                f"{artifact.kind}: {artifact.summary or artifact.path} "
+                f"sha256={artifact.sha256 or 'missing'}"
+            ),
+            provenance=[artifact.path],
+        )
+        for artifact in bundle.artifacts[:12]
+    ]
+    return make_windows_evidence_bundle(
+        claim_level="runtime_artifact_bundle_not_finding",
+        subject=WindowsEvidenceSubject(
+            kind="runtime_artifacts",
+            candidate_id=bundle.candidate_id,
+            validation_id=bundle.validation_id,
+            attributes={
+                "execution_status": bundle.execution_status,
+                "ready_for_review": bundle.ready_for_review,
+            },
+        ),
+        source_tools=["windows_record_validation_artifact_bundle"],
+        evidence_refs=refs,
+        coverage=WindowsEvidenceCoverage(
+            validation_status=bundle.execution_status,
+            validation_ready=bundle.ready_for_review,
+            runtime_artifact_count=bundle.artifact_count,
+            missing_facts=bundle.missing_required_artifacts,
+        ),
+        blockers=bundle.runtime_blockers,
+        notes=bundle.operator_notes,
+    )
 
 
 def _normalize_artifacts(
@@ -271,12 +321,17 @@ def _runtime_blockers(
     missing_required_artifacts: list[str],
 ) -> list[str]:
     blockers: list[str] = []
-    if args.validation_plan is not None and args.validation_plan.candidate_id != args.candidate_id:
+    if (
+        args.validation_plan is not None
+        and args.validation_plan.candidate_id != args.candidate_id
+    ):
         blockers.append(
             "validation plan candidate_id does not match artifact bundle candidate_id"
         )
     if args.execution_status in {"not_run", "partial", "inconclusive"}:
-        blockers.append(f"validation execution is not complete: {args.execution_status}")
+        blockers.append(
+            f"validation execution is not complete: {args.execution_status}"
+        )
     if missing_required_artifacts:
         blockers.append(
             "required runtime artifacts are incomplete: "

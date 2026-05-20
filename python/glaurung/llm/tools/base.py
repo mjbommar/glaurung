@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Generic, Type, TypeVar
+from typing import TYPE_CHECKING, Generic, Type, TypeVar
 
 from pydantic import BaseModel
-from pydantic_ai import Tool, RunContext
 
 from ..context import MemoryContext
 from ..kb.store import KnowledgeBase
+
+if TYPE_CHECKING:
+    from pydantic_ai import Tool
 
 
 InputModelT = TypeVar("InputModelT", bound=BaseModel)
@@ -50,7 +52,7 @@ def tool_to_pyd_ai(
     *,
     strict: bool | None = True,
     include_return_schema: bool | None = False,
-) -> Tool[MemoryContext]:
+) -> "Tool[MemoryContext]":
     """Wrap a MemoryTool into a pydantic-ai Tool.
 
     Side effects on every call:
@@ -71,8 +73,11 @@ def tool_to_pyd_ai(
     to models and problematic for providers with strict schema transforms.
     """
 
-    # Build a function taking RunContext
-    def _impl(run_ctx: RunContext[MemoryContext], **kwargs) -> OutputModelT:
+    from pydantic_ai import Tool
+
+    # Build a function taking a pydantic-ai RunContext. Keep the parameter
+    # unannotated so importing deterministic tools does not import pydantic_ai.
+    def _impl(run_ctx, **kwargs) -> OutputModelT:
         args_model = tool.input_model(**kwargs)
         ctx = run_ctx.deps
         result_model: OutputModelT | None = None

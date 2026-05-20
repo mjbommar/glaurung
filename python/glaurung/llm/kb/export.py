@@ -23,9 +23,6 @@ when their `list_*` API exists.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
-from pathlib import Path
-from typing import Optional
 
 from . import type_db as _type_db
 from . import xref_db as _xref_db
@@ -52,22 +49,31 @@ def export_kb(kb: PersistentKnowledgeBase) -> dict:
         {
             "function_name": p.function_name,
             "return_type": p.return_type,
-            "params": [{"name": pp.name, "c_type": pp.c_type} for pp in p.params],
+            "params": [pp.as_dict() for pp in p.params],
             "is_variadic": p.is_variadic,
+            "module": p.module,
+            "calling_convention": p.calling_convention,
+            "source": p.source,
+            "source_kind": p.source_kind,
+            "source_package": p.source_package,
+            "source_version": p.source_version,
+            "confidence": p.confidence,
+            "provenance": p.provenance,
+            "semantics": p.semantics,
+            "semantic_provenance": p.semantic_provenance,
             "set_by": p.set_by,
         }
         for p in _xref_db.list_function_prototypes(kb)
     ]
 
-    comments = [
-        {"va": va, "body": body}
-        for (va, body) in _xref_db.list_comments(kb)
-    ]
+    comments = [{"va": va, "body": body} for (va, body) in _xref_db.list_comments(kb)]
 
     data_labels = [
         {
-            "va": d.va, "name": d.name,
-            "c_type": d.c_type, "size": d.size,
+            "va": d.va,
+            "name": d.name,
+            "c_type": d.c_type,
+            "size": d.size,
             "set_by": d.set_by,
         }
         for d in _xref_db.list_data_labels(kb)
@@ -98,9 +104,12 @@ def export_kb(kb: PersistentKnowledgeBase) -> dict:
 
     evidence = [
         {
-            "cite_id": e.cite_id, "tool": e.tool,
-            "args": e.args, "summary": e.summary,
-            "va_start": e.va_start, "va_end": e.va_end,
+            "cite_id": e.cite_id,
+            "tool": e.tool,
+            "args": e.args,
+            "summary": e.summary,
+            "va_start": e.va_start,
+            "va_end": e.va_end,
             "file_offset": e.file_offset,
             "output": e.output,
             "created_at": e.created_at,
@@ -184,10 +193,10 @@ def export_to_markdown(kb: PersistentKnowledgeBase) -> str:
         lines.append("")
         sample = data["function_prototypes"][:8]
         for p in sample:
-            params = ", ".join(
-                f"{pp['c_type']} {pp['name']}".strip()
-                for pp in p["params"]
-            ) or "void"
+            params = (
+                ", ".join(f"{pp['c_type']} {pp['name']}".strip() for pp in p["params"])
+                or "void"
+            )
             lines.append(f"- `{p['return_type']} {p['function_name']}({params})`")
         if summary["prototypes"] > 8:
             lines.append(f"_… {summary['prototypes'] - 8} more_")
@@ -229,7 +238,7 @@ def export_to_binja_script(kb: PersistentKnowledgeBase) -> str:
     lines: list[str] = []
     lines.append("# Glaurung → Binary Ninja export (#190)")
     lines.append("# Run via the BN scripting console (bv is in scope) or:")
-    lines.append("#   binaryninja.load(\"<binary>\").execute_script(\"<this.py>\")")
+    lines.append('#   binaryninja.load("<binary>").execute_script("<this.py>")')
     lines.append("")
     lines.append("def _apply(bv):")
     lines.append("    summary = {")
@@ -240,7 +249,9 @@ def export_to_binja_script(kb: PersistentKnowledgeBase) -> str:
     lines.append("")
 
     if function_names:
-        lines.append("    # Function renames — uses bv.get_function_at(va).set_user_symbol")
+        lines.append(
+            "    # Function renames — uses bv.get_function_at(va).set_user_symbol"
+        )
         lines.append("    from binaryninja import Symbol, SymbolType")
         for fn in function_names:
             ident = fn.canonical.replace("'", "\\'")
@@ -258,9 +269,7 @@ def export_to_binja_script(kb: PersistentKnowledgeBase) -> str:
         lines.append("    # Per-VA comments — bv.set_comment_at")
         for va, body in comments:
             body_q = body.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
-            lines.append(
-                f"    bv.set_comment_at({va:#x}, '{body_q}')"
-            )
+            lines.append(f"    bv.set_comment_at({va:#x}, '{body_q}')")
             lines.append('    summary["comments_set"] += 1')
         lines.append("")
 
@@ -277,13 +286,14 @@ def export_to_binja_script(kb: PersistentKnowledgeBase) -> str:
         lines.append("")
 
     if types:
-        c_header = _type_db.render_all_as_header(kb).replace(
-            "\\", "\\\\"
-        ).replace("'", "\\'").replace("\n", "\\n")
-        lines.append("    # Bulk-import structs / typedefs via parse_types_from_source")
-        lines.append(
-            f"    parsed, _errors = bv.parse_types_from_source('{c_header}')"
+        c_header = (
+            _type_db.render_all_as_header(kb)
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace("\n", "\\n")
         )
+        lines.append("    # Bulk-import structs / typedefs via parse_types_from_source")
+        lines.append(f"    parsed, _errors = bv.parse_types_from_source('{c_header}')")
         lines.append("    for n, t in parsed.types.items():")
         lines.append("        bv.define_user_type(n, t)")
         lines.append("")
@@ -321,7 +331,9 @@ def export_to_ghidra_script(kb: PersistentKnowledgeBase) -> str:
     lines.append("from ghidra.program.model.symbol import SourceType")
     lines.append("")
     lines.append("def _apply():")
-    lines.append("    summary = {'renamed_functions': 0, 'comments_set': 0, 'data_labels_set': 0}")
+    lines.append(
+        "    summary = {'renamed_functions': 0, 'comments_set': 0, 'data_labels_set': 0}"
+    )
     lines.append("    fm = currentProgram.getFunctionManager()")
     lines.append("    st = currentProgram.getSymbolTable()")
     lines.append("    af = currentProgram.getAddressFactory().getDefaultAddressSpace()")
@@ -333,27 +345,21 @@ def export_to_ghidra_script(kb: PersistentKnowledgeBase) -> str:
             ident = fn.canonical.replace('"', '\\"')
             lines.append(f"    fn = fm.getFunctionAt(addr({fn.entry_va:#x}))")
             lines.append("    if fn is not None:")
-            lines.append(
-                f'        fn.setName("{ident}", SourceType.USER_DEFINED)'
-            )
+            lines.append(f'        fn.setName("{ident}", SourceType.USER_DEFINED)')
             lines.append("        summary['renamed_functions'] += 1")
         lines.append("")
 
     if comments:
         for va, body in comments:
             body_q = body.replace('"', '\\"').replace("\n", "\\n")
-            lines.append(
-                f'    setEOLComment(addr({va:#x}), "{body_q}")'
-            )
+            lines.append(f'    setEOLComment(addr({va:#x}), "{body_q}")')
             lines.append("    summary['comments_set'] += 1")
         lines.append("")
 
     if data_labels:
         for d in data_labels:
             ident = d.name.replace('"', '\\"')
-            lines.append(
-                f'    createLabel(addr({d.va:#x}), "{ident}", True)'
-            )
+            lines.append(f'    createLabel(addr({d.va:#x}), "{ident}", True)')
             lines.append("    summary['data_labels_set'] += 1")
         lines.append("")
 
@@ -409,7 +415,6 @@ def export_to_ida_script(kb: PersistentKnowledgeBase) -> str:
     if function_names:
         lines.append("    # Function renames (preferring demangled when present).")
         for fn in function_names:
-            pretty = fn.demangled or fn.canonical
             # Quote names defensively — IDA accepts most identifier-shaped
             # strings, but pretty-print demangled forms can have spaces /
             # parens that need to round-trip. Use the canonical (mangled
@@ -423,10 +428,7 @@ def export_to_ida_script(kb: PersistentKnowledgeBase) -> str:
             lines.append('        summary["renamed_functions"] += 1')
             if fn.demangled and fn.demangled != fn.canonical:
                 pretty_q = fn.demangled.replace('"', '\\"')
-                lines.append(
-                    f'    idc.set_func_cmt({fn.entry_va:#x}, '
-                    f'"{pretty_q}", 1)'
-                )
+                lines.append(f'    idc.set_func_cmt({fn.entry_va:#x}, "{pretty_q}", 1)')
         lines.append("")
 
     if comments:
@@ -444,17 +446,14 @@ def export_to_ida_script(kb: PersistentKnowledgeBase) -> str:
         for d in data_labels:
             ident = d.name.replace('"', '\\"')
             lines.append(
-                f'    if ida_name.set_name({d.va:#x}, "{ident}", '
-                "ida_name.SN_FORCE):"
+                f'    if ida_name.set_name({d.va:#x}, "{ident}", ida_name.SN_FORCE):'
             )
             lines.append('        summary["data_labels_set"] += 1')
             if d.c_type:
                 # IDA's apply-tinfo path is more involved; emit as a
                 # repeatable comment for v0 so the type info survives.
                 ct_q = d.c_type.replace('"', '\\"')
-                lines.append(
-                    f'    idc.set_cmt({d.va:#x}, "type: {ct_q}", 1)'
-                )
+                lines.append(f'    idc.set_cmt({d.va:#x}, "type: {ct_q}", 1)')
         lines.append("")
 
     if stack_vars:
@@ -468,11 +467,11 @@ def export_to_ida_script(kb: PersistentKnowledgeBase) -> str:
                 continue  # default placeholder, no need to push
             ident = s.name.replace('"', '\\"')
             lines.append(
-                f'    f_{s.function_va:x} = ida_funcs.get_func({s.function_va:#x})'
+                f"    f_{s.function_va:x} = ida_funcs.get_func({s.function_va:#x})"
             )
             lines.append(
-                f'    if f_{s.function_va:x} is not None: '
-                f'idaapi.set_member_name(f_{s.function_va:x}.frame, '
+                f"    if f_{s.function_va:x} is not None: "
+                f"idaapi.set_member_name(f_{s.function_va:x}.frame, "
                 f'{s.offset}, "{ident}") and '
                 'summary["stack_vars_set"].__iadd__(1)'
             )
@@ -481,9 +480,9 @@ def export_to_ida_script(kb: PersistentKnowledgeBase) -> str:
     if protos:
         lines.append("    # Function prototypes (apply via IDA's parse_decl).")
         for p in protos[:200]:  # cap to keep script size manageable
-            params = ", ".join(
-                f"{pp.c_type} {pp.name}".strip() for pp in p.params
-            ) or "void"
+            params = (
+                ", ".join(f"{pp.c_type} {pp.name}".strip() for pp in p.params) or "void"
+            )
             decl = f"{p.return_type or 'void'} {p.function_name}({params}{', ...' if p.is_variadic else ''});"
             decl_q = decl.replace('"', '\\"')
             lines.append(
@@ -494,9 +493,9 @@ def export_to_ida_script(kb: PersistentKnowledgeBase) -> str:
 
     if types:
         lines.append("    # Struct / typedef definitions: apply via parse_decls.")
-        c_header = _type_db.render_all_as_header(kb).replace(
-            '"', '\\"'
-        ).replace("\n", "\\n")
+        c_header = (
+            _type_db.render_all_as_header(kb).replace('"', '\\"').replace("\n", "\\n")
+        )
         lines.append(f'    idc.parse_decls("{c_header}", 0)')
         lines.append("")
 
@@ -504,7 +503,7 @@ def export_to_ida_script(kb: PersistentKnowledgeBase) -> str:
     lines.append("")
     lines.append('if __name__ == "__main__":')
     lines.append('    print("[glaurung] applying KB to IDB...")')
-    lines.append('    _r = _apply()')
+    lines.append("    _r = _apply()")
     lines.append('    print(f"[glaurung] applied: {_r}")')
     lines.append("")
     return "\n".join(lines)

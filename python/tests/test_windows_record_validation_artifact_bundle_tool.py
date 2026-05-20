@@ -77,10 +77,19 @@ def test_windows_record_validation_artifact_bundle_blocks_missing_required_hash(
     bundle = result.bundle
     assert bundle.claim_level == "runtime_artifact_bundle_not_finding"
     assert bundle.validation_id == "win11_ltsc_v4_cold_postlogon"
+    assert result.evidence_bundle.claim_level == "runtime_artifact_bundle_not_finding"
+    assert result.evidence_bundle.subject.candidate_id == "candidate-1"
+    assert result.evidence_bundle.coverage.validation_status == "partial"
+    assert result.evidence_bundle.coverage.runtime_artifact_count == 1
     assert bundle.ready_for_review is False
     assert "kdnet_attach_log: missing sha256" in bundle.missing_required_artifacts
-    assert any("validation execution is not complete" in blocker for blocker in bundle.runtime_blockers)
-    assert any("required runtime artifacts" in blocker for blocker in bundle.runtime_blockers)
+    assert any(
+        "validation execution is not complete" in blocker
+        for blocker in bundle.runtime_blockers
+    )
+    assert any(
+        "required runtime artifacts" in blocker for blocker in bundle.runtime_blockers
+    )
 
 
 def test_windows_record_validation_artifact_bundle_hashes_existing_artifact_and_adds_kb(
@@ -155,7 +164,10 @@ def test_windows_record_validation_artifact_bundle_blocks_plan_candidate_mismatc
     )
 
     assert result.bundle.ready_for_review is False
-    assert any("candidate_id does not match" in blocker for blocker in result.bundle.runtime_blockers)
+    assert any(
+        "candidate_id does not match" in blocker
+        for blocker in result.bundle.runtime_blockers
+    )
 
 
 def test_memory_agent_registers_windows_record_validation_artifact_bundle() -> None:

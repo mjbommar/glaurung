@@ -18,7 +18,7 @@ class CFGCommand(BaseCommand):
 
     def get_help(self) -> str:
         """Return the command help text."""
-        return "Discover functions and build a bounded CFG"
+        return "Discover functions and build a CFG"
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         """Add command-specific arguments."""
@@ -30,7 +30,10 @@ class CFGCommand(BaseCommand):
             "--max-file-size", type=int, default=104_857_600, help="Max file size"
         )
         parser.add_argument(
-            "--max-functions", type=int, default=16, help="Max functions to analyze"
+            "--max-functions",
+            type=int,
+            default=0,
+            help="Max functions to analyze; 0 means unlimited",
         )
         parser.add_argument(
             "--max-blocks", type=int, default=2048, help="Max basic blocks"
@@ -94,7 +97,10 @@ class CFGCommand(BaseCommand):
         if args.annotate or args.annotate_json:
             from glaurung.llm.evidence import annotate_functions_path, AnnotateBudgets
 
-            budgets = AnnotateBudgets(max_functions=min(args.max_functions, 16))
+            annotate_max_functions = (
+                min(args.max_functions, 16) if args.max_functions else 16
+            )
+            budgets = AnnotateBudgets(max_functions=annotate_max_functions)
             ev = annotate_functions_path(str(path), budgets)
             if args.annotate_json or formatter.format_type == OutputFormat.JSON:
                 formatter.output_json(ev.model_dump())

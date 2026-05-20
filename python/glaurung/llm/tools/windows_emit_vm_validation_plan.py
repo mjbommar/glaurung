@@ -9,6 +9,13 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .windows_agent_evidence_bundle import (
+    WindowsEvidenceBundle,
+    WindowsEvidenceCoverage,
+    WindowsEvidenceSubject,
+    evidence_ref,
+    make_windows_evidence_bundle,
+)
 from .windows_emit_review_packet import WindowsReviewPacket
 from .windows_surface_metadata import _resolve_metadata_path
 
@@ -97,6 +104,7 @@ class WindowsEmitVmValidationPlanResult(BaseModel):
     inventory_path: str
     selected_by: str
     plan: WindowsVmValidationPlan
+    evidence_bundle: WindowsEvidenceBundle
     evidence_node_id: str | None = None
 
 
@@ -160,8 +168,53 @@ class WindowsEmitVmValidationPlanTool(
             inventory_path=str(inventory_path),
             selected_by=selected_by,
             plan=plan,
+            evidence_bundle=_plan_evidence_bundle(plan),
             evidence_node_id=evidence_node_id,
         )
+
+
+def _plan_evidence_bundle(plan: WindowsVmValidationPlan) -> WindowsEvidenceBundle:
+    refs = [
+        evidence_ref(
+            kind="validation",
+            source="windows_emit_vm_validation_plan",
+            summary=f"validation substrate {plan.validation_id} selected",
+            provenance=[plan.snapshot_name, plan.image_path],
+        )
+    ]
+    refs.extend(
+        evidence_ref(
+            kind="artifact",
+            source="windows_emit_vm_validation_plan",
+            summary=f"expected artifact: {artifact}",
+        )
+        for artifact in plan.expected_artifacts[:8]
+    )
+    return make_windows_evidence_bundle(
+        claim_level="validation_plan_not_reproduction",
+        subject=WindowsEvidenceSubject(
+            kind="validation_plan",
+            binary=plan.binary,
+            build=plan.build,
+            candidate_id=plan.candidate_id,
+            validation_id=plan.validation_id,
+            attributes={
+                "build_label": plan.build_label,
+                "snapshot_name": plan.snapshot_name,
+                "kdnet_status": plan.kdnet_status,
+                "debugger_status": plan.debugger_status,
+            },
+        ),
+        source_tools=["windows_emit_vm_validation_plan"],
+        evidence_refs=refs,
+        coverage=WindowsEvidenceCoverage(
+            validation_status=plan.kdnet_status,
+            validation_ready=plan.ready_for_validation,
+        ),
+        blockers=plan.blockers,
+        next_actions=plan.operator_steps,
+        notes=plan.notes,
+    )
 
 
 def _load_inventory(path: Path) -> list[WindowsValidationSubstrate]:
@@ -171,7 +224,9 @@ def _load_inventory(path: Path) -> list[WindowsValidationSubstrate]:
     out: list[WindowsValidationSubstrate] = []
     for idx, entry in enumerate(raw):
         if not isinstance(entry, dict):
-            raise ValueError(f"{path}: validation inventory entry {idx} is not a mapping")
+            raise ValueError(
+                f"{path}: validation inventory entry {idx} is not a mapping"
+            )
         out.append(WindowsValidationSubstrate(**entry))
     if not out:
         raise ValueError(f"{path}: validation inventory is empty")
@@ -270,12 +325,17 @@ def _plan_from_packet(
 
 
 def _harness_strategy(packet: WindowsReviewPacket) -> list[str]:
-    if packet.component_profile is not None and packet.component_profile.harness_strategy:
+    if (
+        packet.component_profile is not None
+        and packet.component_profile.harness_strategy
+    ):
         return [packet.component_profile.harness_strategy]
     return [
         step
         for step in packet.next_validation
-        if any(token in step.lower() for token in ("harness", "vm", "snapshot", "kdnet"))
+        if any(
+            token in step.lower() for token in ("harness", "vm", "snapshot", "kdnet")
+        )
     ]
 
 
@@ -324,9 +384,13 @@ def _blockers(
     if require_kdnet_attach and substrate.kdnet_status != "attach_validated":
         blockers.append(f"KDNET attach is not validated: {substrate.kdnet_status}")
     if substrate.kdnet_status == "guest_configured_host_forward_missing":
-        blockers.append("KDNET host UDP forward is missing for the selected boot script")
+        blockers.append(
+            "KDNET host UDP forward is missing for the selected boot script"
+        )
     if substrate.debugger_status != "attached_once":
-        blockers.append(f"debugger attach proof is missing: {substrate.debugger_status}")
+        blockers.append(
+            f"debugger attach proof is missing: {substrate.debugger_status}"
+        )
     if require_kdnet_attach and not substrate.kdnet_attach_proof:
         blockers.append("KDNET attach proof artifact is missing")
     if not harness_strategy:

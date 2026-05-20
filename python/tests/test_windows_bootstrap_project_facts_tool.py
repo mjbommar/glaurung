@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import glaurung as g
+import yaml
 
+from glaurung.cli.main import GlaurungCLI
 from glaurung.llm.context import MemoryContext
 from glaurung.llm.kb.adapters import import_triage
 from glaurung.llm.kb.models import NodeKind
 from glaurung.llm.tools.windows_bootstrap_project_facts import build_tool
+from glaurung.llm.tools.windows_project_fact_manifest import (
+    build_tool as build_manifest_tool,
+)
 
 
 def _ctx(tmp_path: Path) -> MemoryContext:
@@ -136,6 +142,121 @@ def test_windows_bootstrap_project_facts_can_skip_steps(tmp_path: Path) -> None:
     ]
     assert result.fact_coverage == []
     assert result.missing_capabilities == []
+
+
+def test_windows_bootstrap_project_facts_writes_project_fact_manifest(
+    tmp_path: Path,
+) -> None:
+    pe = tmp_path / "driver.sys"
+    project = tmp_path / "driver.glaurung"
+    manifest = tmp_path / "pe-project-facts.yaml"
+    pe.write_bytes(b"MZ")
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pe_path=str(pe),
+            project_path=str(project),
+            project_facts_output_path=str(manifest),
+            project_fact_id="driver_project",
+            target_id="driver",
+            build_label="win11-ltsc-v4",
+            build_number="26100.1742",
+            architecture="x64",
+            binary_filename="driver.sys",
+            manifest_note="unit manifest row",
+            index_callgraph=False,
+            index_data_xrefs=False,
+            index_cfg=False,
+            index_cfg_dominance=False,
+            index_branch_conditions=False,
+            import_pdb_facts=False,
+        ),
+    )
+
+    assert result.project_facts_output_path == str(manifest)
+    assert result.project_fact_record_id == "driver_project"
+    rows = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "driver_project"
+    assert row["target_id"] == "driver"
+    assert row["build_label"] == "win11-ltsc-v4"
+    assert row["build_number"] == "26100.1742"
+    assert row["binary_filename"] == "driver.sys"
+    assert row["project_path"] == str(project)
+    assert len(row["project_sha256"]) == 64
+    assert row["project_size_bytes"] > 0
+    assert row["fact_sources"] == ["windows_bootstrap_project_facts"]
+    assert "function_names" in row["missing_facts"]
+    assert row["counts"]["function_name_count"] == 0
+    assert row["notes"] == "unit manifest row"
+    manifest_result = build_manifest_tool().run(
+        ctx,
+        ctx.kb,
+        build_manifest_tool().input_model(project_facts_path=str(manifest)),
+    )
+    assert [record.id for record in manifest_result.records] == ["driver_project"]
+
+
+def test_windows_cli_bootstrap_project_facts_json_skips_steps(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pe = tmp_path / "driver.sys"
+    project = tmp_path / "driver.glaurung"
+    manifest = tmp_path / "pe-project-facts.yaml"
+    pe.write_bytes(b"MZ")
+
+    rc = GlaurungCLI().run(
+        [
+            "windows",
+            "bootstrap-project-facts",
+            "--pe-path",
+            str(pe),
+            "--project-path",
+            str(project),
+            "--project-facts-output-path",
+            str(manifest),
+            "--project-fact-id",
+            "driver_project",
+            "--target-id",
+            "driver",
+            "--build-label",
+            "win11-ltsc-v4",
+            "--no-index-callgraph",
+            "--no-index-data-xrefs",
+            "--no-index-cfg",
+            "--no-index-cfg-dominance",
+            "--no-index-branch-conditions",
+            "--no-import-pdb-facts",
+            "--format",
+            "json",
+        ]
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["pe_path"] == str(pe)
+    assert output["project_path"] == str(project)
+    assert output["project_facts_output_path"] == str(manifest)
+    assert output["project_fact_record_id"] == "driver_project"
+    assert output["fact_coverage"] == []
+    assert output["missing_capabilities"] == []
+    assert yaml.safe_load(manifest.read_text(encoding="utf-8"))[0]["id"] == (
+        "driver_project"
+    )
+    assert [(step["name"], step["ran"], step["ok"]) for step in output["steps"]] == [
+        ("index_callgraph", False, True),
+        ("index_data_xrefs", False, True),
+        ("index_cfg", False, True),
+        ("index_cfg_dominance", False, True),
+        ("index_branch_conditions", False, True),
+        ("import_pdb_facts", False, True),
+    ]
 
 
 def test_windows_bootstrap_project_facts_zero_count_is_missing(

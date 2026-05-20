@@ -9,6 +9,15 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
+from .windows_agent_evidence_bundle import (
+    WindowsEvidenceBundle,
+    WindowsEvidenceCoverage,
+    WindowsEvidenceReference,
+    WindowsEvidenceSubject,
+    evidence_ref,
+    make_windows_evidence_bundle,
+)
+from .windows_analyst_notebook import WindowsNotebookDecision
 from .windows_ghidra_delta_manifest import (
     WindowsGhidraDeltaManifestArgs,
     WindowsGhidraDeltaManifestTool,
@@ -213,6 +222,14 @@ class WindowsEmitReviewPacketArgs(BaseModel):
         None,
         description="Optional Ghidra-parity gap context for this target.",
     )
+    notebook_decisions: list[WindowsNotebookDecision] = Field(
+        default_factory=list,
+        description=(
+            "Optional analyst notebook decisions to carry with the packet, "
+            "such as comments, names, demotions, or suppressions relevant to "
+            "the candidate."
+        ),
+    )
     auto_join_manifest_context: bool = Field(
         False,
         description=(
@@ -275,6 +292,7 @@ class WindowsReviewPacket(BaseModel):
     project_facts: WindowsProjectFactContext | None = None
     required_project_facts: list[str] = Field(default_factory=list)
     ghidra_delta: WindowsGhidraDeltaContext | None = None
+    notebook_decisions: list[WindowsNotebookDecision] = Field(default_factory=list)
     promotion_preconditions_met: bool
     promotion_blockers: list[str] = Field(default_factory=list)
     priority: CandidatePriority
@@ -287,6 +305,7 @@ class WindowsReviewPacket(BaseModel):
 
 class WindowsEmitReviewPacketResult(BaseModel):
     packet: WindowsReviewPacket
+    evidence_bundle: WindowsEvidenceBundle
     evidence_node_id: str | None = None
 
 
@@ -317,7 +336,11 @@ class WindowsEmitReviewPacketTool(
         required_gates = _dedupe(
             [
                 *args.required_gates,
-                *(args.component_profile.required_gates if args.component_profile else []),
+                *(
+                    args.component_profile.required_gates
+                    if args.component_profile
+                    else []
+                ),
             ]
         )
         proven_gates = _proven_gates(args, required_gates)
@@ -372,6 +395,7 @@ class WindowsEmitReviewPacketTool(
             project_facts=args.project_facts,
             required_project_facts=required_project_facts,
             ghidra_delta=args.ghidra_delta,
+            notebook_decisions=list(args.notebook_decisions),
             promotion_preconditions_met=not promotion_blockers,
             promotion_blockers=promotion_blockers,
             priority=priority,
@@ -408,6 +432,7 @@ class WindowsEmitReviewPacketTool(
 
         return WindowsEmitReviewPacketResult(
             packet=packet,
+            evidence_bundle=_packet_evidence_bundle(packet),
             evidence_node_id=evidence_node_id,
         )
 
@@ -423,6 +448,96 @@ def _candidate_id(args: WindowsEmitReviewPacketArgs) -> str:
         ]
     )
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-").lower()
+
+
+def _packet_evidence_bundle(packet: WindowsReviewPacket) -> WindowsEvidenceBundle:
+    refs = [
+        evidence_ref(
+            kind="tool_result",
+            source=item.source,
+            summary=item.summary,
+            provenance=item.provenance,
+        )
+        for item in packet.evidence[:12]
+    ]
+    refs.extend(
+        evidence_ref(
+            kind="project_fact",
+            source="windows_review_path",
+            summary=(
+                f"{step.function}"
+                + (f" -> {step.symbol}" if step.symbol else "")
+                + (f" arg{step.arg_index}" if step.arg_index is not None else "")
+                + (f" role={step.role}" if step.role else "")
+            ),
+            provenance=[step.evidence] if step.evidence else [],
+        )
+        for step in packet.path[:8]
+    )
+    fact_coverage: list[str] = []
+    missing_facts: list[str] = []
+    current_capabilities: list[str] = []
+    missing_capabilities: list[str] = []
+    stale_or_blocking: list[str] = []
+    if packet.project_facts is not None:
+        fact_coverage = list(packet.project_facts.fact_coverage)
+        missing_facts = list(packet.project_facts.missing_facts)
+    if packet.ghidra_delta is not None:
+        current_capabilities = list(packet.ghidra_delta.current_capabilities)
+        missing_capabilities = list(packet.ghidra_delta.missing_capabilities)
+        stale_or_blocking = list(packet.ghidra_delta.blocking_fact_classes)
+    if packet.notebook_decisions:
+        refs.extend(_notebook_decision_refs(packet.notebook_decisions))
+        fact_coverage = _dedupe([*fact_coverage, "analyst_notebook_decisions"])
+    return make_windows_evidence_bundle(
+        claim_level=packet.claim_level,
+        subject=WindowsEvidenceSubject(
+            kind="candidate",
+            binary=packet.binary,
+            build=packet.build,
+            entrypoint=packet.entrypoint,
+            candidate_id=packet.candidate_id,
+            target_id=(
+                packet.project_facts.target_id
+                if packet.project_facts is not None
+                else None
+            ),
+            component=(
+                packet.component_profile.component
+                if packet.component_profile is not None
+                else None
+            ),
+            attributes={
+                "attacker_class": packet.attacker_class,
+                "source_role": packet.source_role,
+                "sink_symbol": packet.sink_symbol,
+                "sink_kind": packet.sink_kind,
+                "gate_status": packet.gate_status,
+                "priority": packet.priority,
+                "notebook_decision_count": len(packet.notebook_decisions),
+            },
+        ),
+        source_tools=["windows_emit_review_packet"],
+        evidence_refs=refs,
+        coverage=WindowsEvidenceCoverage(
+            fact_coverage=fact_coverage,
+            missing_facts=missing_facts,
+            current_capabilities=current_capabilities,
+            missing_capabilities=missing_capabilities,
+            stale_or_blocking_facts=stale_or_blocking,
+        ),
+        confidence=packet.confidence,
+        confidence_reason=packet.confidence_reason,
+        reason_codes=[
+            packet.gate_status,
+            packet.source_refinement_status,
+            *packet.required_gates,
+            *packet.missing_required_gates,
+        ],
+        blockers=packet.promotion_blockers,
+        next_actions=packet.next_validation,
+        notes=packet.notes,
+    )
 
 
 def _evidence_provenance(evidence: list[WindowsReviewEvidence]) -> list[str]:
@@ -448,6 +563,8 @@ def _context_provenance(args: WindowsEmitReviewPacketArgs) -> list[str]:
         provenance.append("asb_pe_project_facts_manifest")
     if args.ghidra_delta is not None:
         provenance.append("asb_pe_ghidra_delta_manifest")
+    if args.notebook_decisions:
+        provenance.append("windows_analyst_notebook")
     return provenance
 
 
@@ -609,7 +726,10 @@ def _priority(
 ) -> CandidatePriority:
     score = 0
     attacker = args.attacker_class.lower()
-    if any(token in attacker for token in ("remote", "network", "unpriv", "low", "appcontainer")):
+    if any(
+        token in attacker
+        for token in ("remote", "network", "unpriv", "low", "appcontainer")
+    ):
         score += 2
     if args.sink_kind.lower() in {
         "copy",
@@ -650,7 +770,9 @@ def _confidence(
     if any(token in provenance_text for token in ("pdb", "symbol", "prototype")):
         score += 0.15
         reasons.append("symbol/type provenance present")
-    if any(token in provenance_text for token in ("ir", "cfg", "decompiler", "pseudocode")):
+    if any(
+        token in provenance_text for token in ("ir", "cfg", "decompiler", "pseudocode")
+    ):
         score += 0.15
         reasons.append("code-path evidence present")
     if "asb" in provenance_text or "metadata" in provenance_text:
@@ -760,8 +882,7 @@ def _promotion_blockers(
         ]
         if zero_counts:
             blockers.append(
-                "required project fact count is zero: "
-                + ", ".join(zero_counts[:6])
+                "required project fact count is zero: " + ", ".join(zero_counts[:6])
             )
 
     if args.ghidra_delta is not None and args.ghidra_delta.blocking_fact_classes:
@@ -782,6 +903,7 @@ def _promotion_blockers(
                 else ""
             )
         )
+    blockers.extend(_notebook_promotion_blockers(args.notebook_decisions))
 
     return blockers
 
@@ -867,7 +989,9 @@ def _next_validation(
         "replace line-order or pseudocode evidence with CFG dominance/path facts",
     ]
     if args.gate_status in {"missing", "gate_after_sink", "not_dominated"}:
-        steps.append("trace whether any equivalent gate exists on all paths to the sink")
+        steps.append(
+            "trace whether any equivalent gate exists on all paths to the sink"
+        )
     elif args.gate_status in {"gate_before_sink", "gate_same_line", "unknown"}:
         steps.append("prove or reject that the observed gate dominates the sink")
     if priority == "high":
@@ -896,6 +1020,11 @@ def _next_validation(
     if args.ghidra_delta is not None and args.ghidra_delta.blocking_fact_classes:
         gaps = ", ".join(args.ghidra_delta.blocking_fact_classes[:4])
         steps.append(f"close or explicitly caveat blocking Ghidra-parity gaps: {gaps}")
+    if args.notebook_decisions:
+        steps.append(
+            "review attached analyst notebook decisions before promotion: "
+            + "; ".join(_notebook_decision_summaries(args.notebook_decisions[:4]))
+        )
     if promotion_blockers:
         steps.append(
             "clear promotion blockers before treating this packet as more than a seed: "
@@ -915,25 +1044,100 @@ def _false_positive_questions(
         "Do all feasible paths reach the sink, or only an unreachable/error path?",
     ]
     if required_gates:
-        questions.append("Does an equivalent gate exist under a different wrapper or helper name?")
+        questions.append(
+            "Does an equivalent gate exist under a different wrapper or helper name?"
+        )
     if args.pdb_identity is not None:
         if (args.pdb_identity.cache_status or "").lower() != "cached":
-            questions.append("Is the PDB identity incomplete or stale for this exact binary build?")
+            questions.append(
+                "Is the PDB identity incomplete or stale for this exact binary build?"
+            )
         if args.pdb_identity.missing_facts:
-            questions.append("Could missing PDB type/prototype facts change the source or sink roles?")
+            questions.append(
+                "Could missing PDB type/prototype facts change the source or sink roles?"
+            )
     if args.component_profile is not None and args.component_profile.required_gates:
-        questions.append("Did the component profile add a gate expectation that this path cannot reach?")
+        questions.append(
+            "Did the component profile add a gate expectation that this path cannot reach?"
+        )
     if args.diff_context is not None and args.diff_context.missing_functions:
-        questions.append("Are seed functions absent because of renaming, inlining, or build mismatch?")
+        questions.append(
+            "Are seed functions absent because of renaming, inlining, or build mismatch?"
+        )
     if args.project_facts is not None and args.project_facts.missing_facts:
-        questions.append("Could missing project facts hide an alternate caller, data target, or path?")
+        questions.append(
+            "Could missing project facts hide an alternate caller, data target, or path?"
+        )
     if args.ghidra_delta is not None and args.ghidra_delta.blocking_fact_classes:
-        questions.append("Does a blocking Ghidra-parity gap invalidate the packet evidence?")
+        questions.append(
+            "Does a blocking Ghidra-parity gap invalidate the packet evidence?"
+        )
+    if args.notebook_decisions:
+        questions.append(
+            "Do attached notebook comments, demotions, or suppressions contradict the packet?"
+        )
     if args.sink_kind.lower() in {"copy", "write"}:
-        questions.append("Are size/count units consistent between source, checks, and sink?")
+        questions.append(
+            "Are size/count units consistent between source, checks, and sink?"
+        )
     if args.sink_kind.lower() in {"free", "refcount", "completion"}:
-        questions.append("Does ownership transfer or reference lifetime invalidate the apparent path?")
+        questions.append(
+            "Does ownership transfer or reference lifetime invalidate the apparent path?"
+        )
     return questions
+
+
+def _notebook_decision_refs(
+    decisions: list[WindowsNotebookDecision],
+) -> list[WindowsEvidenceReference]:
+    return [
+        evidence_ref(
+            kind="project_fact",
+            source="windows_analyst_notebook",
+            summary=_notebook_decision_summary(decision),
+            address=decision.va,
+            reason_codes=_notebook_decision_reason_codes(decision),
+            provenance=decision.provenance,
+        )
+        for decision in decisions[:12]
+    ]
+
+
+def _notebook_promotion_blockers(
+    decisions: list[WindowsNotebookDecision],
+) -> list[str]:
+    blockers = []
+    for decision in decisions:
+        state = decision.state or ""
+        if decision.kind in {"demotion", "suppression"} or state in {
+            "rejected_start",
+            "suppressed_false_start",
+        }:
+            blockers.append(
+                "attached notebook decision blocks promotion: "
+                + _notebook_decision_summary(decision)
+            )
+    return blockers
+
+
+def _notebook_decision_summaries(
+    decisions: list[WindowsNotebookDecision],
+) -> list[str]:
+    return [_notebook_decision_summary(decision) for decision in decisions]
+
+
+def _notebook_decision_summary(decision: WindowsNotebookDecision) -> str:
+    value = decision.name or decision.state or decision.comment or decision.reason or "-"
+    return f"{decision.kind}@0x{decision.va:x}:{value}"
+
+
+def _notebook_decision_reason_codes(
+    decision: WindowsNotebookDecision,
+) -> list[str]:
+    codes: list[str] = [f"notebook:{decision.kind}"]
+    if decision.state:
+        codes.append(f"notebook_state:{decision.state}")
+    return codes
 
 
 def _dedupe(values: list[str]) -> list[str]:

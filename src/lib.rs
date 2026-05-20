@@ -46,6 +46,9 @@ pub mod ir;
 /// Binary format parsers
 pub mod formats;
 
+/// Windows metadata extraction
+pub mod winmd;
+
 /// Python bindings module
 #[cfg(feature = "python-ext")]
 pub mod python_bindings;

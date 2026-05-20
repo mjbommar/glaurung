@@ -1,0 +1,48 @@
+name: Windows Corpus Guard
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-corpus-guard.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "docs/windows-port/**"
+      - "pyproject.toml"
+      - "python/glaurung/cli/commands/windows.py"
+      - "python/glaurung/llm/agents/windows_corpus_curator.py"
+      - "python/glaurung/llm/tools/windows_build_corpus.py"
+      - "python/glaurung/llm/tools/windows_regression_fixture_catalog.py"
+      - "samples/binaries/platforms/windows/vendor/realworld/**"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus-guard:
+    name: Check Windows corpus manifest drift
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - name: Run Windows corpus guard
+        run: |
+          mkdir -p artifacts/windows-corpus
+          uv run glaurung windows corpus-guard \
+            --format json \
+            --review-notes-path artifacts/windows-corpus/corpus-review.md \
+            > artifacts/windows-corpus/corpus-guard.json
+      - name: Upload scheduled corpus review artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-corpus-review
+          path: artifacts/windows-corpus/
+          if-no-files-found: error
