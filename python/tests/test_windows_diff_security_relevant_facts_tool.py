@@ -72,6 +72,9 @@ NTSTATUS Handler(void *out, void *src, ULONG len) {
 """,
             after_pseudocode="""
 NTSTATUS Handler(void *out, void *src, ULONG len) {
+    if (len > 64) {
+        return STATUS_BUFFER_OVERFLOW;
+    }
     ProbeForWrite(out, len, 1);
     RtlCopyMemory(out, src, 256);
     return STATUS_BUFFER_OVERFLOW;
@@ -107,6 +110,13 @@ NTSTATUS Handler(void *out, void *src, ULONG len) {
         and delta.item_id == "128"
         for delta in result.deltas
     )
+    assert any(
+        delta.direction == "added"
+        and delta.fact_kind == "path_condition"
+        and delta.item_id.endswith("len > 64")
+        for delta in result.deltas
+    )
+    assert result.after.path_conditions
     assert result.similarity < 1.0
     assert "security fact diff uses pseudocode" in result.notes[-1]
     assert result.evidence_node_id is not None

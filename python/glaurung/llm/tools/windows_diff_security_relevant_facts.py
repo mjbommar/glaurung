@@ -23,10 +23,11 @@ from .windows_check_gate_to_sink import (
     _operation_record,
     _sink_sites,
 )
+from .windows_function_pretty_lift import PathConditionFact, build_lift_packet
 from .windows_surface_metadata import _resolve_metadata_path
 
 
-FactKind = Literal["gate", "sink", "helper_call", "constant"]
+FactKind = Literal["gate", "sink", "helper_call", "constant", "path_condition"]
 DiffDirection = Literal["added", "removed"]
 
 
@@ -44,6 +45,7 @@ class SecurityFactSnapshot(BaseModel):
     sinks: list[SinkSite]
     helper_calls: list[str]
     constants: list[str]
+    path_conditions: list[PathConditionFact] = Field(default_factory=list)
     line_count: int
 
 
@@ -130,9 +132,12 @@ class WindowsDiffSecurityRelevantFactsTool(
     ) -> WindowsDiffSecurityRelevantFactsResult:
         gates_path = _resolve_metadata_path(args.gates_path, "data/kg/pe-gates.yaml")
         sinks_path = _resolve_metadata_path(args.sinks_path, "data/kg/pe-sinks.yaml")
-        gates = [_gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)]
+        gates = [
+            _gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)
+        ]
         operations = [
-            _operation_record(entry, sinks_path) for entry in _load_yaml_list(sinks_path)
+            _operation_record(entry, sinks_path)
+            for entry in _load_yaml_list(sinks_path)
         ]
         before_text, before_source, before_notes = _text_for(
             ctx,
@@ -158,8 +163,12 @@ class WindowsDiffSecurityRelevantFactsTool(
             gate_kind=args.gate_kind,
             sink_kind=args.sink_kind,
         )
-        before = _snapshot("before", before_text, before_source, gates, operations, tool_args)
-        after = _snapshot("after", after_text, after_source, gates, operations, tool_args)
+        before = _snapshot(
+            "before", before_text, before_source, gates, operations, tool_args
+        )
+        after = _snapshot(
+            "after", after_text, after_source, gates, operations, tool_args
+        )
         deltas = _deltas(before, after)
         similarity = difflib.SequenceMatcher(
             None,
@@ -218,7 +227,8 @@ def _text_for(
         return "", "none", notes
     binary_path = path or str(ctx.file_path)
     try:
-        text = g.ir.decompile_at(
+        ir = getattr(g, "ir")
+        text = ir.decompile_at(
             binary_path,
             int(function_va),
             timeout_ms=max(200, int(timeout_ms)),
@@ -243,20 +253,10 @@ def _snapshot(
     gates_found = _gate_sites(calls, gates, tool_args)
     sinks_found = _sink_sites(calls, operations, tool_args)
     known_symbols = {
-        call.symbol.lower()
-        for gate in gates_found
-        for call in [gate.call]
-    } | {
-        call.symbol.lower()
-        for sink in sinks_found
-        for call in [sink.call]
-    }
+        call.symbol.lower() for gate in gates_found for call in [gate.call]
+    } | {call.symbol.lower() for sink in sinks_found for call in [sink.call]}
     helper_calls = sorted(
-        {
-            call.symbol
-            for call in calls
-            if call.symbol.lower() not in known_symbols
-        }
+        {call.symbol for call in calls if call.symbol.lower() not in known_symbols}
     )
     return SecurityFactSnapshot(
         label=label,
@@ -265,6 +265,7 @@ def _snapshot(
         sinks=sinks_found,
         helper_calls=helper_calls,
         constants=sorted(_constants(text)),
+        path_conditions=_path_conditions(text, label=label, source=source),
         line_count=len(text.splitlines()),
     )
 
@@ -310,7 +311,48 @@ def _deltas(
             {constant: constant for constant in after.constants},
         )
     )
-    return sorted(deltas, key=lambda delta: (delta.fact_kind, delta.item_id, delta.direction))
+    deltas.extend(
+        _set_deltas(
+            "path_condition",
+            _path_condition_map(before.path_conditions),
+            _path_condition_map(after.path_conditions),
+        )
+    )
+    return sorted(
+        deltas, key=lambda delta: (delta.fact_kind, delta.item_id, delta.direction)
+    )
+
+
+def _path_conditions(
+    text: str,
+    *,
+    label: str,
+    source: str,
+) -> list[PathConditionFact]:
+    if not text.strip():
+        return []
+    try:
+        packet = build_lift_packet(
+            text,
+            function_name=f"{label}_diff_function",
+            source=source,
+        )
+    except Exception:
+        return []
+    return packet.path_conditions
+
+
+def _path_condition_map(
+    conditions: list[PathConditionFact],
+) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for condition in conditions:
+        item_id = f"{condition.role}:{condition.expression}"
+        detail = condition.condition_kind
+        if condition.target_label:
+            detail = f"{detail}->{condition.target_label}"
+        out.setdefault(item_id, detail)
+    return out
 
 
 def _set_deltas(
