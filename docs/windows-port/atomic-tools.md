@@ -349,6 +349,13 @@ sit below full IR/CFG bug-class scanners:
 - `windows_seed_binary_diff_triage` composes prior-public seed
   metadata with a pre/post binary diff and reports whether seed-named
   functions changed, stayed unchanged, or are absent from the pair.
+- `windows_project_prototype_diff` compares persisted
+  `function_prototypes` across two `.glaurung` projects and reports
+  added, removed, changed, and unchanged signatures. It highlights
+  return-type, parameter name/type/role, variadic, calling-convention,
+  module, and risk-tag deltas, with security-relevance hints for
+  buffer, pointer, length, and role changes. The Windows CLI exposes it
+  as `glaurung windows project-prototype-diff`.
 - `windows_cfg_dominance` checks whether a gate basic block dominates
   a sink basic block using persisted `.glaurung` CFG tables, native PE
   function CFG recovery, or supplied fixture CFG rows. It reports

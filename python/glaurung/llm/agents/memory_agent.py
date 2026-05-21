@@ -152,6 +152,9 @@ from ..tools.windows_project_data_label_facts import (
 from ..tools.windows_project_xref_query import (
     build_tool as build_windows_project_xref_query,
 )
+from ..tools.windows_project_prototype_diff import (
+    build_tool as build_windows_project_prototype_diff,
+)
 from ..tools.windows_project_onehop_sink_chains import (
     build_tool as build_windows_project_onehop_sink_chains,
 )
@@ -1197,6 +1200,9 @@ def register_analysis_tools(
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_patch_function_identity_extract())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_prototype_diff())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_patch_diff_packets()))
     agent._function_toolset.add_tool(

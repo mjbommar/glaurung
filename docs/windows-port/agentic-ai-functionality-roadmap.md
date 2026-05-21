@@ -424,6 +424,16 @@ receives the external algorithm provenance. The remaining gap is
 automating real Windows BSim/symbol-server extraction, not consuming its
 output.
 
+Update: `windows_project_prototype_diff` now compares persisted
+`function_prototypes` across two `.glaurung` projects. It reports
+added, removed, changed, and unchanged signatures, changed return
+types, parameter names/types/roles, variadic state, calling convention,
+module, and risk tags. Deltas carry Patch Tuesday relevance hints for
+role, buffer/pointer, length/count, and return-contract changes and are
+also exposed through `glaurung windows project-prototype-diff`. This is
+patch-triage metadata for routing changed functions into source/sink
+review, not standalone vulnerability evidence.
+
 Update: `windows_symbol_similarity_extraction_plan` now creates the
 runner-facing bridge for that gap. Given a Windows patch pair,
 target/component labels, optional PDB identity metadata, symbol-cache
@@ -1791,6 +1801,15 @@ Validated high-level replay scope:
   cached PDB identity record, writing the review-compatible YAML
   manifest, registering the tool with `memory_agent`, and feeding the
   emitted manifest back into patch-diff review.
+- Latest project-prototype diff validation: scoped `uvx ruff check`,
+  `uvx ty check`, and focused `uv run pytest` passed for
+  `windows_project_prototype_diff.py`, the Windows CLI registration,
+  `memory_agent.py`, `test_windows_project_prototype_diff_tool.py`,
+  `test_windows_patch_diff_review_agent.py`, and
+  `test_windows_patch_diff_packets_tool.py`; tests cover added,
+  removed, and changed prototype rows, security-relevant buffer/length
+  and role deltas, KB evidence-node creation, CLI JSON output, and
+  `memory_agent` registration.
 
 Not A+ yet:
 

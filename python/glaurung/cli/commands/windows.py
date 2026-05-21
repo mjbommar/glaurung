@@ -57,6 +57,11 @@ from glaurung.llm.tools.windows_project_function_chunk_facts import (
     WindowsProjectFunctionChunkFactsResult,
     build_tool as build_windows_project_function_chunk_facts,
 )
+from glaurung.llm.tools.windows_project_prototype_diff import (
+    WindowsProjectPrototypeDiffArgs,
+    WindowsProjectPrototypeDiffResult,
+    build_tool as build_windows_project_prototype_diff,
+)
 from glaurung.llm.tools.windows_project_xref_query import (
     WindowsProjectXrefQueryArgs,
     WindowsProjectXrefQueryResult,
@@ -468,6 +473,29 @@ class WindowsCommand(BaseCommand):
             "--add-to-kb",
             action="store_true",
             help="Record the chunk query in the transient memory KB.",
+        )
+
+        project_proto_diff = subparsers.add_parser(
+            "project-prototype-diff",
+            help=(
+                "Compare function prototypes across two .glaurung projects for "
+                "patch/build diff triage"
+            ),
+        )
+        self._add_common_child_arguments(project_proto_diff)
+        project_proto_diff.add_argument("--before-project-path", required=True)
+        project_proto_diff.add_argument("--after-project-path", required=True)
+        project_proto_diff.add_argument(
+            "--include-unchanged",
+            action="store_true",
+            help="Include unchanged prototype rows in the output.",
+        )
+        project_proto_diff.add_argument("--function-name-contains")
+        project_proto_diff.add_argument("--max-rows", type=int, default=128)
+        project_proto_diff.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the prototype diff in the transient memory KB.",
         )
 
         bootstrap_project = subparsers.add_parser(
@@ -893,6 +921,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_xref_query(args, formatter)
         if args.windows_action == "project-function-chunks":
             return _execute_project_function_chunks(args, formatter)
+        if args.windows_action == "project-prototype-diff":
+            return _execute_project_prototype_diff(args, formatter)
         if args.windows_action == "bootstrap-project-facts":
             return _execute_bootstrap_project_facts(args, formatter)
         if args.windows_action == "blocker-task-plan":
@@ -1467,6 +1497,54 @@ def _execute_project_function_chunks(
         )
     else:
         formatter.output_plain(_format_project_function_chunks_human(result))
+    return 0
+
+
+def _execute_project_prototype_diff(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_prototype_diff()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.after_project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectPrototypeDiffArgs(
+            before_project_path=args.before_project_path,
+            after_project_path=args.after_project_path,
+            include_unchanged=args.include_unchanged,
+            function_name_contains=args.function_name_contains,
+            max_rows=args.max_rows,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "before_project_path": result.before_project_path,
+                        "after_project_path": result.after_project_path,
+                        "added_count": result.added_count,
+                        "removed_count": result.removed_count,
+                        "changed_count": result.changed_count,
+                        "returned_count": result.returned_count,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "prototype_delta", "data": item.model_dump(mode="json")}
+                    for item in result.deltas
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_prototype_diff_human(result))
     return 0
 
 
@@ -2241,6 +2319,40 @@ def _format_project_function_chunks_human(
         )
     if len(result.chunks) > 20:
         lines.append(f"  ... {len(result.chunks) - 20} more")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_prototype_diff_human(
+    result: WindowsProjectPrototypeDiffResult,
+) -> str:
+    lines = [
+        "Windows project prototype diff",
+        f"  before={result.before_project_path}",
+        f"  after={result.after_project_path}",
+        (
+            f"  prototypes={result.before_prototype_count}->"
+            f"{result.after_prototype_count} changed={result.changed_count} "
+            f"added={result.added_count} removed={result.removed_count} "
+            f"returned={result.returned_count}"
+        ),
+        f"  coverage={','.join(result.coverage) or '-'}",
+    ]
+    for delta in result.deltas[:20]:
+        before = "-" if delta.before is None else delta.before.signature
+        after = "-" if delta.after is None else delta.after.signature
+        relevance = ",".join(delta.security_relevance) or "-"
+        lines.append(
+            f"  {delta.status:<8} {delta.function_name} "
+            f"fields={','.join(delta.changed_fields) or '-'} relevance={relevance}"
+        )
+        if before != after:
+            lines.append(f"    before: {before}")
+            lines.append(f"    after:  {after}")
+    if len(result.deltas) > 20:
+        lines.append(f"  ... {len(result.deltas) - 20} more")
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)
