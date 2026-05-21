@@ -791,6 +791,205 @@ DELETE FROM callsite_path_conditions;
         after_conn.close()
 
 
+def _seed_project_memory_accesses(before: Path, after: Path) -> None:
+    for path in (before, after):
+        conn = sqlite3.connect(path)
+        try:
+            conn.executescript(
+                """
+CREATE TABLE IF NOT EXISTS function_names (
+    binary_id INTEGER NOT NULL,
+    entry_va INTEGER NOT NULL,
+    canonical TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    set_by TEXT,
+    set_at INTEGER,
+    demangled TEXT,
+    flavor TEXT,
+    PRIMARY KEY (binary_id, entry_va)
+);
+CREATE TABLE IF NOT EXISTS memory_operand_facts (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    function_name TEXT,
+    instruction_va INTEGER NOT NULL,
+    instruction_text TEXT NOT NULL,
+    mnemonic TEXT NOT NULL,
+    operand_index INTEGER NOT NULL,
+    operand_text TEXT NOT NULL,
+    access_kind TEXT NOT NULL,
+    width_bytes INTEGER,
+    address_expression TEXT NOT NULL,
+    base_register TEXT,
+    index_register TEXT,
+    scale INTEGER,
+    displacement INTEGER NOT NULL DEFAULT 0,
+    role_hint TEXT NOT NULL,
+    base_object TEXT,
+    base_object_kind TEXT,
+    base_object_type TEXT,
+    base_object_role TEXT,
+    field_offset INTEGER NOT NULL DEFAULT 0,
+    likely_field_name TEXT,
+    likely_type_name TEXT,
+    data_target_va INTEGER,
+    data_target_kind TEXT,
+    data_target_name TEXT,
+    data_target_type TEXT,
+    data_target_size INTEGER,
+    confidence REAL NOT NULL,
+    set_by TEXT NOT NULL,
+    set_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, function_va, instruction_va, operand_index)
+);
+DELETE FROM function_names;
+DELETE FROM memory_operand_facts;
+"""
+            )
+            conn.execute(
+                "INSERT INTO function_names VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (1, 0x140001000, "Dispatch", "[]", "pdb", 0, None, None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    before_conn = sqlite3.connect(before)
+    try:
+        before_conn.executemany(
+            "INSERT INTO memory_operand_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                _memory_row(
+                    0x140001020,
+                    "mov [rcx+18h], rdx",
+                    "write",
+                    8,
+                    "Irp",
+                    "user_pointer",
+                    "UserBuffer",
+                    "IRP",
+                    None,
+                    None,
+                    None,
+                ),
+                _memory_row(
+                    0x140001030,
+                    "mov eax, [rcx+30h]",
+                    "read",
+                    4,
+                    "IoStack",
+                    "stack_local",
+                    "InputBufferLength",
+                    "IO_STACK_LOCATION",
+                    None,
+                    None,
+                    None,
+                ),
+            ],
+        )
+        before_conn.commit()
+    finally:
+        before_conn.close()
+
+    after_conn = sqlite3.connect(after)
+    try:
+        after_conn.executemany(
+            "INSERT INTO memory_operand_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                _memory_row(
+                    0x140001028,
+                    "mov [rcx+18h], r8",
+                    "write",
+                    8,
+                    "Irp",
+                    "user_pointer",
+                    "UserBuffer",
+                    "IRP",
+                    None,
+                    None,
+                    None,
+                ),
+                _memory_row(
+                    0x140001038,
+                    "mov rax, [rcx+30h]",
+                    "read",
+                    8,
+                    "IoStack",
+                    "stack_local",
+                    "InputBufferLength",
+                    "IO_STACK_LOCATION",
+                    None,
+                    None,
+                    None,
+                ),
+                _memory_row(
+                    0x140001050,
+                    "mov [rip+3000h], rax",
+                    "write",
+                    8,
+                    "driver!CallbackTable",
+                    "global",
+                    "CallbackTable",
+                    "PDRIVER_DISPATCH",
+                    0x140030000,
+                    "driver!CallbackTable",
+                    "PDRIVER_DISPATCH[4]",
+                ),
+            ],
+        )
+        after_conn.commit()
+    finally:
+        after_conn.close()
+
+
+def _memory_row(
+    instruction_va: int,
+    instruction_text: str,
+    access_kind: str,
+    width_bytes: int,
+    base_object: str,
+    base_object_kind: str,
+    likely_field_name: str,
+    likely_type_name: str,
+    data_target_va: int | None,
+    data_target_name: str | None,
+    data_target_type: str | None,
+) -> tuple[object, ...]:
+    return (
+        1,
+        0x140001000,
+        "Dispatch",
+        instruction_va,
+        instruction_text,
+        "mov",
+        0,
+        instruction_text.split(" ", 2)[1].rstrip(","),
+        access_kind,
+        width_bytes,
+        "rcx+0x18" if likely_field_name == "UserBuffer" else "rcx+0x30",
+        None,
+        None,
+        None,
+        0x18 if likely_field_name == "UserBuffer" else 0x30,
+        "memory",
+        base_object,
+        base_object_kind,
+        likely_type_name,
+        "irp" if likely_field_name == "UserBuffer" else "field",
+        0x18 if likely_field_name == "UserBuffer" else 0x30,
+        likely_field_name,
+        likely_type_name,
+        data_target_va,
+        "global" if data_target_va is not None else None,
+        data_target_name,
+        data_target_type,
+        None,
+        0.86,
+        "test",
+        0,
+    )
+
+
 def test_windows_patch_diff_review_ranks_seed_changed_function(
     tmp_path: Path,
 ) -> None:
@@ -1084,6 +1283,46 @@ def test_windows_patch_diff_review_ranks_project_guard_deltas(
     )
     assert any("bounds_guard_delta" in item.reason_codes for item in guard_items)
     assert any("guard_removed" in item.reason_codes for item in guard_items)
+
+
+def test_windows_patch_diff_review_ranks_project_memory_access_deltas(
+    tmp_path: Path,
+) -> None:
+    a = _need(_SWITCHY_V1)
+    b = _need(_SWITCHY_V2)
+    before_project = _project(tmp_path, "before")
+    after_project = _project(tmp_path, "after")
+    _seed_project_memory_accesses(before_project, after_project)
+
+    result = run_windows_patch_diff_review(
+        WindowsPatchDiffReviewConfig(
+            binary_a=str(a),
+            binary_b=str(b),
+            before_project_path=str(before_project),
+            after_project_path=str(after_project),
+            max_items=20,
+        )
+    )
+
+    assert result.memory_access_diff is not None
+    assert result.memory_access_diff.changed_count == 2
+    assert result.memory_access_diff.added_count == 1
+    assert "windows_project_memory_access_diff" in result.tool_sequence
+    assert (
+        "project_memory_access_deltas" in result.evidence_bundle.coverage.fact_coverage
+    )
+    assert result.evidence_bundle.subject.attributes["memory_access_delta_count"] == 3
+    memory_items = [
+        item for item in result.review_items if item.kind == "memory_access_delta"
+    ]
+    assert memory_items
+    assert any(
+        "project_memory_access_diff" in item.match_basis for item in memory_items
+    )
+    assert any("memory_write_delta" in item.reason_codes for item in memory_items)
+    assert any(
+        "user_or_request_memory_delta" in item.reason_codes for item in memory_items
+    )
 
 
 def test_windows_patch_diff_review_loads_function_identity_manifest(

@@ -112,6 +112,7 @@ class WindowsPatchDiffPacketsTool(
             data_table_diff=review.data_table_diff,
             callgraph_diff=review.callgraph_diff,
             guard_condition_diff=review.guard_condition_diff,
+            memory_access_diff=review.memory_access_diff,
             review_items=review.review_items,
             function_identity_count=review.function_identity_count,
             pdb_identity_record_count=review.pdb_identity_record_count,

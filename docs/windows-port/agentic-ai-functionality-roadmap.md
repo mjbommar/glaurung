@@ -173,6 +173,18 @@ object kind, role hint, field, and data target. This closes the first
 query loop from low-level memory normalization to IDA/Ghidra-style
 "who reads/writes this field or global?" review.
 
+Update: `windows_project_memory_access_diff` now compares persisted
+`memory_operand_facts` across two `.glaurung` projects. It groups
+stable memory accesses by function, access kind, role, base object,
+field offset, and data target, then reports added/removed/changed rows
+for field/global/buffer reads and writes. Deltas attach width,
+instruction-location, base-object, field-identity, data-target,
+user/requestor, length/bounds, status, and function-pointer relevance
+hints. Patch-diff review invokes it when before/after project paths are
+available, ranks changes as `memory_access_delta` items, records
+`project_memory_access_deltas` in evidence bundles, and preserves those
+deltas in validation packets.
+
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class
 table candidates. It classifies dispatch tables, callback arrays,
@@ -2067,7 +2079,10 @@ Not A+ yet:
   runner. Patch-diff review now also ranks persisted guard/path-condition
   drift from project branch and callsite-path facts, so removed or moved
   bounds/status/mode/user-pointer guards can become packetized validation
-  seeds. The next step is executing that plan on the real runner and
+  seeds. It now also ranks memory-access drift from persisted
+  `memory_operand_facts`, so changed field/global/buffer reads and
+  writes can feed the same packetized validation flow. The next step is
+  executing that plan on the real runner and
   promoting successful BSim/symbol-cache outputs back into patch-diff
   review artifacts.
 - Validation planning now records candidate grounding, batch-runs

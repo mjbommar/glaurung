@@ -102,6 +102,11 @@ from glaurung.llm.tools.windows_project_memory_access_query import (
     WindowsProjectMemoryAccessQueryResult,
     build_tool as build_windows_project_memory_access_query,
 )
+from glaurung.llm.tools.windows_project_memory_access_diff import (
+    WindowsProjectMemoryAccessDiffArgs,
+    WindowsProjectMemoryAccessDiffResult,
+    build_tool as build_windows_project_memory_access_diff,
+)
 from glaurung.llm.tools.windows_project_prototype_diff import (
     WindowsProjectPrototypeDiffArgs,
     WindowsProjectPrototypeDiffResult,
@@ -720,6 +725,42 @@ class WindowsCommand(BaseCommand):
             help="Record the memory-access query in the transient memory KB.",
         )
 
+        memory_access_diff = subparsers.add_parser(
+            "project-memory-access-diff",
+            help=(
+                "Compare persisted memory_operand_facts across two .glaurung "
+                "projects for field/global/buffer read/write drift"
+            ),
+        )
+        self._add_common_child_arguments(memory_access_diff)
+        memory_access_diff.add_argument("--before-project-path", required=True)
+        memory_access_diff.add_argument("--after-project-path", required=True)
+        memory_access_diff.add_argument("--before-binary-id", type=int)
+        memory_access_diff.add_argument("--after-binary-id", type=int)
+        memory_access_diff.add_argument(
+            "--query",
+            choices=["all", "reads", "writes", "read_write"],
+            default="all",
+        )
+        memory_access_diff.add_argument("--function-name-contains")
+        memory_access_diff.add_argument("--base-object-kind")
+        memory_access_diff.add_argument("--base-object-contains")
+        memory_access_diff.add_argument("--role-hint")
+        memory_access_diff.add_argument("--likely-type-name")
+        memory_access_diff.add_argument("--likely-field-name")
+        memory_access_diff.add_argument(
+            "--field-offset", type=lambda value: int(value, 0)
+        )
+        memory_access_diff.add_argument("--data-target-name-contains")
+        memory_access_diff.add_argument("--include-unchanged", action="store_true")
+        memory_access_diff.add_argument("--min-confidence", type=float, default=0.0)
+        memory_access_diff.add_argument("--max-rows", type=int, default=128)
+        memory_access_diff.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the memory-access diff in the transient memory KB.",
+        )
+
         data_tables = subparsers.add_parser(
             "project-data-tables",
             help=(
@@ -1278,6 +1319,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_symbol_range_facts(args, formatter)
         if args.windows_action == "project-memory-access-query":
             return _execute_project_memory_access_query(args, formatter)
+        if args.windows_action == "project-memory-access-diff":
+            return _execute_project_memory_access_diff(args, formatter)
         if args.windows_action == "project-data-tables":
             return _execute_project_data_table_facts(args, formatter)
         if args.windows_action == "project-data-table-diff":
@@ -2265,6 +2308,70 @@ def _execute_project_memory_access_query(
         )
     else:
         formatter.output_plain(_format_project_memory_access_query_human(result))
+    return 0
+
+
+def _execute_project_memory_access_diff(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_memory_access_diff()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.after_project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectMemoryAccessDiffArgs(
+            before_project_path=args.before_project_path,
+            after_project_path=args.after_project_path,
+            before_binary_id=args.before_binary_id,
+            after_binary_id=args.after_binary_id,
+            query=args.query,
+            function_name_contains=args.function_name_contains,
+            base_object_kind=args.base_object_kind,
+            base_object_contains=args.base_object_contains,
+            role_hint=args.role_hint,
+            likely_type_name=args.likely_type_name,
+            likely_field_name=args.likely_field_name,
+            field_offset=args.field_offset,
+            data_target_name_contains=args.data_target_name_contains,
+            include_unchanged=args.include_unchanged,
+            min_confidence=args.min_confidence,
+            max_rows=args.max_rows,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "before_project_path": result.before_project_path,
+                        "after_project_path": result.after_project_path,
+                        "before_access_count": result.before_access_count,
+                        "after_access_count": result.after_access_count,
+                        "changed_count": result.changed_count,
+                        "added_count": result.added_count,
+                        "removed_count": result.removed_count,
+                        "returned_count": result.returned_count,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {
+                        "type": "memory_access_delta",
+                        "data": item.model_dump(mode="json"),
+                    }
+                    for item in result.deltas
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_memory_access_diff_human(result))
     return 0
 
 
@@ -3454,6 +3561,42 @@ def _format_project_memory_access_query_human(
         )
     if len(result.rows) > 20:
         lines.append(f"  ... {len(result.rows) - 20} more")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_memory_access_diff_human(
+    result: WindowsProjectMemoryAccessDiffResult,
+) -> str:
+    lines = [
+        "Windows project memory-access diff",
+        f"  before={result.before_project_path}",
+        f"  after={result.after_project_path}",
+        (
+            f"  accesses={result.before_access_count}->{result.after_access_count} "
+            f"changed={result.changed_count} added={result.added_count} "
+            f"removed={result.removed_count} returned={result.returned_count}"
+        ),
+        f"  coverage={','.join(result.coverage) or '-'}",
+    ]
+    for delta in result.deltas[:20]:
+        function = delta.function_name or "-"
+        field = (
+            f"{delta.likely_type_name}.{delta.likely_field_name}"
+            if delta.likely_type_name and delta.likely_field_name
+            else delta.likely_field_name or delta.data_target_name or delta.access_key
+        )
+        lines.append(
+            f"  {delta.access_kind:<10} {delta.status:<8} {function} "
+            f"field={field} base={delta.base_object_kind or '-'} "
+            f"fields={','.join(delta.changed_fields) or 'access'} "
+            f"priority={delta.review_priority} "
+            f"relevance={','.join(delta.security_relevance) or '-'}"
+        )
+    if len(result.deltas) > 20:
+        lines.append(f"  ... {len(result.deltas) - 20} more deltas")
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)

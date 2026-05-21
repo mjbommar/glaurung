@@ -59,6 +59,12 @@ from ..tools.windows_project_guard_condition_diff import (
     WindowsProjectGuardConditionDiffResult,
     WindowsProjectGuardConditionDiffTool,
 )
+from ..tools.windows_project_memory_access_diff import (
+    ProjectMemoryAccessDelta,
+    WindowsProjectMemoryAccessDiffArgs,
+    WindowsProjectMemoryAccessDiffResult,
+    WindowsProjectMemoryAccessDiffTool,
+)
 from ..tools.windows_project_prototype_diff import (
     ProjectPrototypeDelta,
     WindowsProjectPrototypeDiffArgs,
@@ -83,6 +89,7 @@ PatchDiffItemKind = Literal[
     "table_delta",
     "callgraph_delta",
     "guard_delta",
+    "memory_access_delta",
 ]
 PatchFunctionMatchBasis = Literal[
     "name_based",
@@ -127,14 +134,14 @@ class WindowsPatchDiffReviewConfig(BaseModel):
         None,
         description=(
             "Optional pre-change .glaurung project for prototype, boundary, "
-            "data-table, callgraph, and guard-condition diffing."
+            "data-table, callgraph, guard-condition, and memory-access diffing."
         ),
     )
     after_project_path: str | None = Field(
         None,
         description=(
             "Optional post-change .glaurung project for prototype, boundary, "
-            "data-table, callgraph, and guard-condition diffing."
+            "data-table, callgraph, guard-condition, and memory-access diffing."
         ),
     )
     pdb_backed: bool = Field(
@@ -174,6 +181,7 @@ class WindowsPatchDiffReviewConfig(BaseModel):
     max_table_delta_rows: int = Field(128, ge=0, le=512)
     max_callgraph_delta_rows: int = Field(128, ge=0, le=512)
     max_guard_delta_rows: int = Field(128, ge=0, le=512)
+    max_memory_access_delta_rows: int = Field(128, ge=0, le=512)
     max_items: int = Field(20, ge=1, le=128)
 
 
@@ -201,6 +209,7 @@ class WindowsPatchDiffReviewResult(BaseModel):
     data_table_diff: WindowsProjectDataTableDiffResult | None = None
     callgraph_diff: WindowsProjectCallgraphDiffResult | None = None
     guard_condition_diff: WindowsProjectGuardConditionDiffResult | None = None
+    memory_access_diff: WindowsProjectMemoryAccessDiffResult | None = None
     review_items: list[WindowsPatchDiffReviewItem]
     function_identity_count: int = 0
     pdb_identity_record_count: int = 0
@@ -240,6 +249,7 @@ def run_windows_patch_diff_review(
     data_table_diff = _data_table_diff(ctx, effective_config)
     callgraph_diff = _callgraph_diff(ctx, effective_config)
     guard_condition_diff = _guard_condition_diff(ctx, effective_config)
+    memory_access_diff = _memory_access_diff(ctx, effective_config)
     items = _rank_items(
         config=effective_config,
         binary_diff=binary_diff,
@@ -250,6 +260,7 @@ def run_windows_patch_diff_review(
         data_table_diff=data_table_diff,
         callgraph_diff=callgraph_diff,
         guard_condition_diff=guard_condition_diff,
+        memory_access_diff=memory_access_diff,
     )
     tool_sequence = ["windows_binary_diff_summary"]
     if seed_triage is not None:
@@ -266,6 +277,8 @@ def run_windows_patch_diff_review(
         tool_sequence.append("windows_project_callgraph_diff")
     if guard_condition_diff is not None:
         tool_sequence.append("windows_project_guard_condition_diff")
+    if memory_access_diff is not None:
+        tool_sequence.append("windows_project_memory_access_diff")
     if config.function_identities:
         tool_sequence.append("provided_windows_patch_function_identity")
     if config.function_identity_path:
@@ -285,6 +298,7 @@ def run_windows_patch_diff_review(
         data_table_diff=data_table_diff,
         callgraph_diff=callgraph_diff,
         guard_condition_diff=guard_condition_diff,
+        memory_access_diff=memory_access_diff,
         review_items=items,
         function_identity_count=len(identity_load.identities),
         pdb_identity_record_count=identity_load.pdb_identity_record_count,
@@ -300,6 +314,7 @@ def run_windows_patch_diff_review(
             data_table_diff=data_table_diff,
             callgraph_diff=callgraph_diff,
             guard_condition_diff=guard_condition_diff,
+            memory_access_diff=memory_access_diff,
         ),
         notes=notes,
     )
@@ -538,6 +553,28 @@ def _guard_condition_diff(
     )
 
 
+def _memory_access_diff(
+    ctx: MemoryContext,
+    config: WindowsPatchDiffReviewConfig,
+) -> WindowsProjectMemoryAccessDiffResult | None:
+    if not config.before_project_path and not config.after_project_path:
+        return None
+    if not config.before_project_path or not config.after_project_path:
+        raise ValueError(
+            "before_project_path and after_project_path are required together"
+        )
+    return WindowsProjectMemoryAccessDiffTool().run(
+        ctx,
+        ctx.kb,
+        WindowsProjectMemoryAccessDiffArgs(
+            before_project_path=config.before_project_path,
+            after_project_path=config.after_project_path,
+            include_unchanged=False,
+            max_rows=config.max_memory_access_delta_rows,
+        ),
+    )
+
+
 def _rank_items(
     *,
     config: WindowsPatchDiffReviewConfig,
@@ -549,6 +586,7 @@ def _rank_items(
     data_table_diff: WindowsProjectDataTableDiffResult | None,
     callgraph_diff: WindowsProjectCallgraphDiffResult | None,
     guard_condition_diff: WindowsProjectGuardConditionDiffResult | None,
+    memory_access_diff: WindowsProjectMemoryAccessDiffResult | None,
 ) -> list[WindowsPatchDiffReviewItem]:
     items: list[WindowsPatchDiffReviewItem] = []
     items.extend(_binary_items(config, binary_diff.rows))
@@ -567,6 +605,8 @@ def _rank_items(
         items.extend(_callgraph_items(config, callgraph_diff.deltas))
     if guard_condition_diff is not None:
         items.extend(_guard_items(config, guard_condition_diff.deltas))
+    if memory_access_diff is not None:
+        items.extend(_memory_access_items(config, memory_access_diff.deltas))
     items.sort(
         key=lambda item: (
             -item.priority,
@@ -1019,6 +1059,72 @@ def _guard_items(
     return out
 
 
+def _memory_access_items(
+    config: WindowsPatchDiffReviewConfig,
+    deltas: list[ProjectMemoryAccessDelta],
+) -> list[WindowsPatchDiffReviewItem]:
+    out: list[WindowsPatchDiffReviewItem] = []
+    for delta in deltas:
+        if delta.status == "unchanged":
+            continue
+        basis = ["project_memory_access_diff"]
+        if delta.security_relevance:
+            basis.append("security_relevant_memory_access_delta")
+        snapshot = delta.after or delta.before
+        function = delta.function_name
+        field = (
+            f"{delta.likely_type_name}.{delta.likely_field_name}"
+            if delta.likely_type_name and delta.likely_field_name
+            else delta.likely_field_name or delta.data_target_name or delta.access_key
+        )
+        next_args: dict[str, str | int] = {"query": _memory_access_query(delta)}
+        if snapshot is not None:
+            project_path = (
+                config.before_project_path
+                if delta.status == "removed"
+                else config.after_project_path
+            )
+            if project_path:
+                next_args["project_path"] = project_path
+            next_args["function_va"] = snapshot.function_va
+            if snapshot.base_object_kind:
+                next_args["base_object_kind"] = snapshot.base_object_kind
+            if snapshot.likely_field_name:
+                next_args["likely_field_name"] = snapshot.likely_field_name
+            if snapshot.field_offset:
+                next_args["field_offset"] = snapshot.field_offset
+        out.append(
+            WindowsPatchDiffReviewItem(
+                rank=0,
+                kind="memory_access_delta",
+                priority=_memory_access_priority(delta),
+                function=function,
+                status=delta.status,
+                summary=(
+                    f"{delta.access_kind} {delta.status}: "
+                    f"{function or '-'} {field}: "
+                    f"{', '.join(delta.changed_fields) or 'access'}"
+                ),
+                match_basis=basis,
+                confidence=_confidence(
+                    config,
+                    0.58 if delta.security_relevance else 0.46,
+                ),
+                reason_codes=_reason_codes(
+                    config,
+                    [
+                        f"memory_access_{delta.status}",
+                        *delta.reason_codes,
+                        *delta.security_relevance,
+                    ],
+                ),
+                next_tool="windows_project_memory_access_query",
+                next_args=next_args,
+            )
+        )
+    return out
+
+
 def _prototype_priority(delta: ProjectPrototypeDelta) -> int:
     priority = 54
     if delta.status == "changed":
@@ -1125,6 +1231,42 @@ def _guard_priority(delta: ProjectGuardConditionDelta) -> int:
     return priority
 
 
+def _memory_access_priority(delta: ProjectMemoryAccessDelta) -> int:
+    priority = 42 + min(32, delta.review_priority // 2)
+    if delta.status == "removed":
+        priority += 8
+    if delta.status == "added":
+        priority += 6
+    if delta.status == "changed":
+        priority += 8
+    if "memory_write_delta" in delta.security_relevance:
+        priority += 12
+    if any(
+        relevance in delta.security_relevance
+        for relevance in {
+            "user_or_request_memory_delta",
+            "length_or_bounds_memory_delta",
+            "function_pointer_memory_delta",
+            "memory_width_delta",
+            "data_target_identity_delta",
+        }
+    ):
+        priority += 18
+    if "memory_location_delta" in delta.security_relevance:
+        priority += 8
+    return priority
+
+
+def _memory_access_query(delta: ProjectMemoryAccessDelta) -> str:
+    if delta.access_kind == "write":
+        return "writes"
+    if delta.access_kind == "read":
+        return "reads"
+    if delta.access_kind == "read_write":
+        return "read_write"
+    return "all"
+
+
 def _security_priority(delta: SecurityFactDelta) -> int:
     if delta.fact_kind == "gate" and delta.direction == "added":
         return 82
@@ -1219,6 +1361,7 @@ def _evidence_bundle(
     data_table_diff: WindowsProjectDataTableDiffResult | None,
     callgraph_diff: WindowsProjectCallgraphDiffResult | None,
     guard_condition_diff: WindowsProjectGuardConditionDiffResult | None,
+    memory_access_diff: WindowsProjectMemoryAccessDiffResult | None,
 ) -> WindowsEvidenceBundle:
     return make_windows_evidence_bundle(
         claim_level="triage_evidence_bundle_not_finding",
@@ -1244,6 +1387,11 @@ def _evidence_bundle(
                 "guard_delta_count": (
                     len(guard_condition_diff.deltas)
                     if guard_condition_diff is not None
+                    else 0
+                ),
+                "memory_access_delta_count": (
+                    len(memory_access_diff.deltas)
+                    if memory_access_diff is not None
                     else 0
                 ),
             },
@@ -1276,6 +1424,11 @@ def _evidence_bundle(
                 *(
                     ["project_guard_condition_deltas"]
                     if guard_condition_diff is not None
+                    else []
+                ),
+                *(
+                    ["project_memory_access_deltas"]
+                    if memory_access_diff is not None
                     else []
                 ),
             ],

@@ -158,6 +158,9 @@ from ..tools.windows_project_memory_operand_facts import (
 from ..tools.windows_project_memory_access_query import (
     build_tool as build_windows_project_memory_access_query,
 )
+from ..tools.windows_project_memory_access_diff import (
+    build_tool as build_windows_project_memory_access_diff,
+)
 from ..tools.windows_project_return_value_use_snapshot import (
     build_tool as build_windows_project_return_value_use_snapshot,
 )
@@ -1214,6 +1217,9 @@ def register_analysis_tools(
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_memory_access_query())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_memory_access_diff())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_return_value_use_snapshot())

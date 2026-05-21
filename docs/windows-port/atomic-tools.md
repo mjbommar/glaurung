@@ -347,6 +347,15 @@ sit below full IR/CFG bug-class scanners:
   object kind, role hint, field, and data target. This gives analysts
   IDA/Ghidra-style "who reads/writes this field or global?" navigation
   over the structured memory substrate.
+- `windows_project_memory_access_diff` compares persisted
+  `memory_operand_facts` across two `.glaurung` projects. It groups
+  stable memory accesses by function, access kind, role, base object,
+  field offset, and data target, then reports added, removed, changed,
+  and unchanged read/write rows with width, location, base-object,
+  field-identity, and data-target drift. Patch-diff review ranks these
+  rows as `memory_access_delta` items, so changed writes to user
+  pointers, length fields, globals, callback tables, and dispatch-like
+  data become packetized validation seeds.
 - `windows_project_data_table_facts` groups persisted `data_labels`,
   data xrefs, and `function_chunk_facts` into first-class table
   candidates: dispatch tables, callback arrays, vtables, jump tables,
