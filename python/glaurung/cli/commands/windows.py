@@ -47,6 +47,11 @@ from glaurung.llm.tools.windows_project_fact_manifest import (
     WindowsProjectFactManifestResult,
     build_tool as build_windows_project_fact_manifest,
 )
+from glaurung.llm.tools.windows_project_xref_query import (
+    WindowsProjectXrefQueryArgs,
+    WindowsProjectXrefQueryResult,
+    build_tool as build_windows_project_xref_query,
+)
 from glaurung.llm.tools.windows_pipeline_blocker_task_plan import (
     WindowsPipelineBlockerTaskPlanArgs,
     WindowsPipelineBlockerTaskPlanResult,
@@ -350,6 +355,39 @@ class WindowsCommand(BaseCommand):
             "--add-to-kb",
             action="store_true",
             help="Record the manifest query in the transient memory KB",
+        )
+
+        project_xrefs = subparsers.add_parser(
+            "project-xrefs",
+            help=(
+                "Run IDA/Ghidra-style callers, callees, reads, writes, "
+                "refs-to, or refs-from queries over a .glaurung project"
+            ),
+        )
+        self._add_common_child_arguments(project_xrefs)
+        project_xrefs.add_argument("--project-path", required=True)
+        project_xrefs.add_argument("--binary-id", type=int)
+        project_xrefs.add_argument(
+            "--query",
+            choices=[
+                "refs_to",
+                "refs_from",
+                "callers",
+                "callees",
+                "reads_from",
+                "writes_to",
+                "all",
+            ],
+            default="all",
+        )
+        project_xrefs.add_argument("--va", type=lambda value: int(value, 0))
+        project_xrefs.add_argument("--symbol")
+        project_xrefs.add_argument("--kind")
+        project_xrefs.add_argument("--max-rows", type=int, default=128)
+        project_xrefs.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the xref query in the transient memory KB",
         )
 
         bootstrap_project = subparsers.add_parser(
@@ -758,6 +796,8 @@ class WindowsCommand(BaseCommand):
             return _execute_high_volume_preflight(args, formatter)
         if args.windows_action == "project-fact-manifest":
             return _execute_project_fact_manifest(args, formatter)
+        if args.windows_action == "project-xrefs":
+            return _execute_project_xref_query(args, formatter)
         if args.windows_action == "bootstrap-project-facts":
             return _execute_bootstrap_project_facts(args, formatter)
         if args.windows_action == "blocker-task-plan":
@@ -1188,6 +1228,54 @@ def _execute_project_fact_manifest(
         )
     else:
         formatter.output_plain(_format_project_fact_manifest_human(result))
+    return 0
+
+
+def _execute_project_xref_query(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_xref_query()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectXrefQueryArgs(
+            project_path=args.project_path,
+            binary_id=args.binary_id,
+            query=args.query,
+            va=args.va,
+            symbol=args.symbol,
+            kind=args.kind,
+            max_rows=args.max_rows,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "project_path": result.project_path,
+                        "query": result.query,
+                        "target": result.target.model_dump(mode="json"),
+                        "total_count": result.total_count,
+                        "returned_count": result.returned_count,
+                    },
+                },
+                *(
+                    {"type": "xref", "data": item.model_dump(mode="json")}
+                    for item in result.rows
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_xref_query_human(result))
     return 0
 
 
@@ -1864,6 +1952,43 @@ def _format_project_fact_manifest_human(
     if len(result.records) > 20:
         lines.append(f"  ... {len(result.records) - 20} more")
     return "\n".join(lines)
+
+
+def _format_project_xref_query_human(result: WindowsProjectXrefQueryResult) -> str:
+    target_name = result.target.name or result.target.demangled or "-"
+    lines = [
+        "Windows project xrefs",
+        (
+            f"  query={result.query} target={target_name} "
+            f"va={_format_optional_va(result.target.va)} "
+            f"kind={result.target.target_kind}"
+        ),
+        (
+            f"  returned={result.returned_count}/{result.total_count} "
+            f"coverage={','.join(result.coverage) or '-'}"
+        ),
+    ]
+    for row in result.rows[:20]:
+        src_name = row.src_function_name or _format_optional_va(row.src_function_va)
+        dst_name = (
+            row.dst_function_name
+            or row.dst_data_label
+            or _format_optional_va(row.dst_va)
+        )
+        lines.append(
+            f"  {row.relation:<8} {row.kind:<12} "
+            f"{_format_optional_va(row.src_va)} {src_name} -> {dst_name}"
+        )
+    if len(result.rows) > 20:
+        lines.append(f"  ... {len(result.rows) - 20} more")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_optional_va(va: int | None) -> str:
+    return "-" if va is None else f"0x{va:x}"
 
 
 def _format_blocker_task_plan_human(
