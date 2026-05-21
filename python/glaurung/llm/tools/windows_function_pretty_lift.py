@@ -176,6 +176,14 @@ class PathConditionFact(BaseModel):
     lhs_expression: str | None = None
     operator: str | None = None
     rhs_expression: str | None = None
+    lhs_value_role: str | None = None
+    lhs_value_class: str | None = None
+    lhs_field_name: str | None = None
+    lhs_base_object: str | None = None
+    rhs_value_role: str | None = None
+    rhs_value_class: str | None = None
+    rhs_field_name: str | None = None
+    rhs_base_object: str | None = None
     condition_kind: str
     flag_name: str | None = None
     target_label: str | None = None
@@ -543,6 +551,7 @@ def build_lift_packet(
         argument_roles=argument_roles,
         output_size=output_size,
         selector_table=selector_table,
+        memory_accesses=memory_accesses,
     )
     loop_summaries = _loop_summary_facts(pseudocode)
     return_statuses = _return_statuses(
@@ -3492,16 +3501,47 @@ _CONDITION_RE = re.compile(
 )
 
 
+def _path_condition_value_sources(
+    memory_accesses: list[MemoryAccessFact],
+) -> dict[str, MemoryAccessFact]:
+    sources: dict[str, MemoryAccessFact] = {}
+    for access in memory_accesses:
+        if access.kind != "read":
+            continue
+        if access.value_role is None and access.value_class is None:
+            continue
+        lhs, _rhs = _assignment_sides(access.snippet)
+        if lhs is None:
+            continue
+        name = _strip_outer_parens(lhs)
+        if not re.fullmatch(_WINDOWS_SYMBOL_RE, name):
+            continue
+        sources.setdefault(name, access)
+    return sources
+
+
+def _path_condition_value_source(
+    expression: str,
+    sources: dict[str, MemoryAccessFact],
+) -> MemoryAccessFact | None:
+    name = _strip_outer_parens(expression.strip())
+    if re.fullmatch(_WINDOWS_SYMBOL_RE, name):
+        return sources.get(name)
+    return None
+
+
 def _path_condition_facts(
     text: str,
     *,
     argument_roles: dict[str, LiftArgumentRole],
     output_size: int | None,
     selector_table: SelectorTableFact | None,
+    memory_accesses: list[MemoryAccessFact],
 ) -> list[PathConditionFact]:
     facts: list[PathConditionFact] = []
     seen: set[tuple[str, int, int | None]] = set()
     flag_facts: dict[str, PathConditionFact] = {}
+    value_sources = _path_condition_value_sources(memory_accesses)
     lines = text.splitlines()
 
     def add(fact: PathConditionFact) -> None:
@@ -3525,6 +3565,7 @@ def _path_condition_facts(
                 argument_roles=argument_roles,
                 output_size=output_size,
                 selector_table=selector_table,
+                value_sources=value_sources,
             )
             if fact is not None:
                 flag_facts[flag_match.group("flag")] = fact
@@ -3554,6 +3595,7 @@ def _path_condition_facts(
             argument_roles=argument_roles,
             output_size=output_size,
             selector_table=selector_table,
+            value_sources=value_sources,
         )
         if fact is not None:
             add(
@@ -3571,6 +3613,7 @@ def _path_condition_from_expression(
     argument_roles: dict[str, LiftArgumentRole],
     output_size: int | None,
     selector_table: SelectorTableFact | None,
+    value_sources: dict[str, MemoryAccessFact],
 ) -> PathConditionFact | None:
     normalized = _strip_outer_parens(expression.strip())
     match = _CONDITION_RE.fullmatch(normalized)
@@ -3581,11 +3624,14 @@ def _path_condition_from_expression(
             snippet=snippet,
             flag_name=flag_name,
             argument_roles=argument_roles,
+            value_sources=value_sources,
         )
     lhs = _strip_outer_parens(match.group("lhs").strip())
     rhs = _strip_outer_parens(match.group("rhs").strip())
     operator = match.group("operator")
     condition_kind = _condition_kind(operator)
+    lhs_source = _path_condition_value_source(lhs, value_sources)
+    rhs_source = _path_condition_value_source(rhs, value_sources)
     role, confidence = _path_condition_role(
         lhs=lhs,
         operator=operator,
@@ -3594,6 +3640,8 @@ def _path_condition_from_expression(
         argument_roles=argument_roles,
         output_size=output_size,
         selector_table=selector_table,
+        lhs_source=lhs_source,
+        rhs_source=rhs_source,
     )
     return PathConditionFact(
         role=role,
@@ -3601,6 +3649,14 @@ def _path_condition_from_expression(
         lhs_expression=lhs,
         operator=operator,
         rhs_expression=rhs,
+        lhs_value_role=lhs_source.value_role if lhs_source is not None else None,
+        lhs_value_class=lhs_source.value_class if lhs_source is not None else None,
+        lhs_field_name=lhs_source.field_name if lhs_source is not None else None,
+        lhs_base_object=lhs_source.base_object if lhs_source is not None else None,
+        rhs_value_role=rhs_source.value_role if rhs_source is not None else None,
+        rhs_value_class=rhs_source.value_class if rhs_source is not None else None,
+        rhs_field_name=rhs_source.field_name if rhs_source is not None else None,
+        rhs_base_object=rhs_source.base_object if rhs_source is not None else None,
         condition_kind=condition_kind,
         flag_name=flag_name,
         line=line_no,
@@ -3616,10 +3672,12 @@ def _path_condition_from_boolean_expression(
     snippet: str,
     flag_name: str | None,
     argument_roles: dict[str, LiftArgumentRole],
+    value_sources: dict[str, MemoryAccessFact],
 ) -> PathConditionFact | None:
     normalized = _strip_outer_parens(expression.strip())
     negated = normalized.startswith("!")
     probe = _strip_outer_parens(normalized.removeprefix("!").strip())
+    probe_source = _path_condition_value_source(probe, value_sources)
     status_macro = _status_macro_condition(
         probe,
         normalized=normalized,
@@ -3674,6 +3732,18 @@ def _path_condition_from_boolean_expression(
             lhs_expression=probe,
             operator="!" if negated else "truthy",
             rhs_expression=None,
+            lhs_value_role=probe_source.value_role
+            if probe_source is not None
+            else None,
+            lhs_value_class=probe_source.value_class
+            if probe_source is not None
+            else None,
+            lhs_field_name=probe_source.field_name
+            if probe_source is not None
+            else None,
+            lhs_base_object=probe_source.base_object
+            if probe_source is not None
+            else None,
             condition_kind="negated_status_value" if negated else "status_value",
             flag_name=flag_name,
             line=line_no,
@@ -3692,6 +3762,8 @@ def _path_condition_role(
     argument_roles: dict[str, LiftArgumentRole],
     output_size: int | None,
     selector_table: SelectorTableFact | None,
+    lhs_source: MemoryAccessFact | None,
+    rhs_source: MemoryAccessFact | None,
 ) -> tuple[str, float]:
     normalized = f"{lhs} {rhs}".lower()
     role_text = _path_condition_role_text(
@@ -3704,6 +3776,12 @@ def _path_condition_role(
         return "mode_gate", 0.78
     if _looks_like_status_condition(lhs, rhs):
         return "status_gate", 0.78
+    semantic_role = _path_condition_role_from_memory_value(
+        lhs_source,
+        rhs_source,
+    )
+    if semantic_role is not None:
+        return semantic_role
     if _looks_like_bounds_condition(
         lhs=lhs,
         operator=operator,
@@ -3735,6 +3813,31 @@ def _path_condition_role(
     if operator in {"<", "<=", ">", ">="}:
         return "range_gate", 0.60
     return "compare_gate", 0.54
+
+
+def _path_condition_role_from_memory_value(
+    lhs_source: MemoryAccessFact | None,
+    rhs_source: MemoryAccessFact | None,
+) -> tuple[str, float] | None:
+    for source in (lhs_source, rhs_source):
+        if source is None:
+            continue
+        confidence = min(max(source.value_confidence, 0.78) + 0.04, 0.95)
+        if source.value_role == "requestor_mode" or source.value_class == "access_mode":
+            return "mode_gate", confidence
+        if source.value_role == "ioctl_code" or source.value_class == "selector":
+            return "selector_gate", confidence
+        if (
+            source.value_role
+            in {
+                "input_length",
+                "output_length",
+                "return_length_value",
+            }
+            or source.value_class == "length"
+        ):
+            return "length_gate", confidence
+    return None
 
 
 def _condition_kind(operator: str) -> str:
@@ -3910,6 +4013,35 @@ def _path_condition_key(fact: PathConditionFact) -> str:
     op = fact.operator or "?"
     rhs = fact.rhs_expression or "unknown"
     return f"{fact.role}:{lhs}:{op}:{rhs}"
+
+
+def _path_condition_fact_value(condition: PathConditionFact) -> str:
+    parts = [condition.expression]
+    for prefix, value_role, value_class, field_name, base_object in (
+        (
+            "lhs",
+            condition.lhs_value_role,
+            condition.lhs_value_class,
+            condition.lhs_field_name,
+            condition.lhs_base_object,
+        ),
+        (
+            "rhs",
+            condition.rhs_value_role,
+            condition.rhs_value_class,
+            condition.rhs_field_name,
+            condition.rhs_base_object,
+        ),
+    ):
+        if value_role is not None:
+            parts.append(f"{prefix}_value_role={value_role}")
+        if value_class is not None:
+            parts.append(f"{prefix}_value_class={value_class}")
+        if field_name is not None:
+            parts.append(f"{prefix}_field={field_name}")
+        if base_object is not None:
+            parts.append(f"{prefix}_base={base_object}")
+    return ";".join(parts)
 
 
 def _is_required_path_condition(condition: PathConditionFact) -> bool:
@@ -4527,7 +4659,7 @@ def _facts(
             LiftFact(
                 kind="path_condition",
                 key=_path_condition_key(condition),
-                value=condition.expression,
+                value=_path_condition_fact_value(condition),
                 line=condition.line,
                 snippet=condition.snippet,
                 confidence=condition.confidence,
@@ -5165,8 +5297,27 @@ def _render_path_conditions(conditions: list[PathConditionFact]) -> list[str]:
     rendered: list[str] = []
     for condition in conditions[:12]:
         target = f" -> {condition.target_label}" if condition.target_label else ""
-        rendered.append(f"     * - {condition.role}: {condition.expression}{target}")
+        details = _render_path_condition_value_details(condition)
+        detail_suffix = f" [{'; '.join(details)}]" if details else ""
+        rendered.append(
+            f"     * - {condition.role}: {condition.expression}{target}{detail_suffix}"
+        )
     return rendered
+
+
+def _render_path_condition_value_details(condition: PathConditionFact) -> list[str]:
+    details: list[str] = []
+    for prefix, value_role, value_class in (
+        ("lhs", condition.lhs_value_role, condition.lhs_value_class),
+        ("rhs", condition.rhs_value_role, condition.rhs_value_class),
+    ):
+        if value_role is None and value_class is None:
+            continue
+        value = value_role or "value"
+        if value_class is not None:
+            value = f"{value}/{value_class}"
+        details.append(f"{prefix}={value}")
+    return details
 
 
 def _render_data_references(refs: list[DataReferenceFact]) -> list[str]:

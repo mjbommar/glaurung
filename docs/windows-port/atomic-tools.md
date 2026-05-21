@@ -127,7 +127,10 @@ sit below full IR/CFG bug-class scanners:
   `InputBufferLength`, `IoControlCode`, and `Type3InputBuffer`.
   Known fields also expose value roles/classes such as `ioctl_code`,
   `output_length`, `type3_input_buffer`, `user_buffer`, and
-  `requestor_mode`.
+  `requestor_mode`. Pretty-lift path-condition facts propagate those
+  roles/classes through local assignments, so later guards over the
+  loaded value carry selector, length, and access-mode meaning instead
+  of degrading to generic comparisons.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

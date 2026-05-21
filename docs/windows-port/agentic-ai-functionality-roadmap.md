@@ -225,7 +225,11 @@ fields `OutputBufferLength`, `InputBufferLength`, `IoControlCode`, and
 roles and value classes, for example `ioctl_code`, `output_length`,
 `input_length`, `type3_input_buffer`, `user_buffer`, and
 `requestor_mode`, so rules can reason about what a memory access
-produces rather than only where it reads.
+produces rather than only where it reads. Path-condition facts now also
+inherit those roles/classes from local variables assigned from semantic
+loads, so guards such as `if (code == ...)` and `if (out_len < ...)`
+remain visible as `ioctl_code` selector gates and `output_length`
+length gates.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

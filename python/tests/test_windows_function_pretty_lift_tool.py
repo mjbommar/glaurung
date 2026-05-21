@@ -1809,6 +1809,75 @@ fn sub_18009fac0 {
     assert "value=type3_input_buffer" in pretty
 
 
+def test_windows_function_pretty_lift_propagates_memory_value_roles_to_guards(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    project = tmp_path / "sample.glaurung"
+    kb = PersistentKnowledgeBase.open(project, binary_path=ctx.file_path)
+    try:
+        xref_db.set_function_prototype(
+            kb,
+            "IoctlGuard",
+            "NTSTATUS",
+            [
+                xref_db.FunctionParam("IrpSp", "IO_STACK_LOCATION *"),
+            ],
+            set_by="manual",
+            confidence=0.95,
+        )
+    finally:
+        kb.close()
+
+    tool = build_tool()
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pseudocode="""
+fn sub_18009fb20 {
+    code = *&[arg0+0x10];
+    out_len = *&[arg0+0x8];
+    if (code == 0x222003) { goto L_ioctl; }
+    if (out_len u< 0x20) { goto L_small; }
+    return;
+}
+""",
+            project_path=str(project),
+            function_va=0x18009FB20,
+            function_name="IoctlGuard",
+        ),
+    )
+
+    assert any(
+        condition.role == "selector_gate"
+        and condition.lhs_expression == "code"
+        and condition.lhs_value_role == "ioctl_code"
+        and condition.lhs_value_class == "selector"
+        and condition.lhs_field_name == "Parameters.DeviceIoControl.IoControlCode"
+        for condition in result.packet.path_conditions
+    )
+    assert any(
+        condition.role == "length_gate"
+        and condition.lhs_expression == "out_len"
+        and condition.lhs_value_role == "output_length"
+        and condition.lhs_value_class == "length"
+        and condition.lhs_field_name == "Parameters.DeviceIoControl.OutputBufferLength"
+        for condition in result.packet.path_conditions
+    )
+    assert any(
+        fact.kind == "path_condition"
+        and fact.key == "selector_gate:code:==:0x222003"
+        and "lhs_value_role=ioctl_code" in fact.value
+        for fact in result.packet.facts
+    )
+    pretty = result.pretty_lift.pseudocode
+    assert "selector_gate: code == 0x222003" in pretty
+    assert "lhs=ioctl_code/selector" in pretty
+    assert "length_gate: out_len u< 0x20" in pretty
+    assert "lhs=output_length/length" in pretty
+
+
 def test_pretty_lift_validation_rejects_missing_copy_sink(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     tool = build_tool()
