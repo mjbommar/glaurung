@@ -154,8 +154,9 @@ body-split candidates, vector-block labels, or rejects. Priority 9 is
 implemented as `windows_decompile_context_packet`, a bounded function
 packet that joins decompiler text, disassembly, CFG shape, calls,
 optional `.glaurung` names/comments/data labels, project-backed
-function prototypes, callee prototypes, persisted memory-access rows,
-missing-capability flags, and the shared evidence-bundle schema.
+call xrefs, resolved callee names, function prototypes, callee
+prototypes, persisted memory-access rows, missing-capability flags, and
+the shared evidence-bundle schema.
 
 Several adjacent primitives already exist and should be reused rather
 than replaced: project fact summaries, callgraph slices, CFG path
@@ -189,13 +190,15 @@ deltas in validation packets.
 Update: `windows_decompile_context_packet` now carries more of that
 project substrate into the single-function review packet. When a
 `.glaurung` project is supplied, the packet includes the selected
-function prototype, matched callee prototypes for resolved call targets,
-and persisted `memory_operand_facts` rows for the function alongside the
-existing decompile text, disassembly, CFG summary, names, comments, and
-data labels. This is a concrete step toward type propagation into
-agent-readable lift packets: arguments and memory accesses can be
-reviewed as `Irp`, `OutputBufferLength`, `UserBuffer`, and similar
-typed facts rather than only as registers and raw operands.
+function prototype, persisted call xrefs with resolved callee names,
+matched callee prototypes for resolved call targets, and persisted
+`memory_operand_facts` rows for the function alongside the existing
+decompile text, disassembly, CFG summary, names, comments, and data
+labels. This is a concrete step toward type propagation into
+agent-readable lift packets: arguments, calls, and memory accesses can
+be reviewed as `Irp`, `ProbeForRead`, `OutputBufferLength`,
+`UserBuffer`, and similar typed facts rather than only as registers and
+raw operands.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

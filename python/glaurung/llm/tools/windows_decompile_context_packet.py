@@ -71,7 +71,9 @@ class WindowsContextCall(BaseModel):
     address: str
     target_va: int | None = None
     target: str | None = None
+    target_name: str | None = None
     text: str
+    sources: list[str] = Field(default_factory=list)
 
 
 class WindowsContextPrototypeParam(BaseModel):
@@ -118,6 +120,7 @@ class WindowsContextProjectFacts(BaseModel):
     project_path: str
     function_name: str | None = None
     function_prototype: WindowsContextPrototype | None = None
+    project_calls: list[WindowsContextCall] = Field(default_factory=list)
     call_prototypes: list[WindowsContextPrototype] = Field(default_factory=list)
     memory_accesses: list[WindowsContextMemoryAccess] = Field(default_factory=list)
     entry_comment: str | None = None
@@ -188,7 +191,7 @@ class WindowsDecompileContextPacketTool(
         instructions = _instructions(binary_path, args)
         calls = _calls(instructions)
         decompile_text, truncated, decompile_missing = _decompile(binary_path, args)
-        project_facts = _project_facts(
+        project_facts, calls = _project_facts(
             args.project_path, args.function_va, instructions, calls
         )
         coverage, missing = _coverage(
@@ -309,6 +312,7 @@ def _calls(instructions: list[WindowsContextInstruction]) -> list[WindowsContext
                 target_va=target_va,
                 target=f"0x{target_va:x}" if target_va is not None else None,
                 text=instruction.text,
+                sources=["disassembly"],
             )
         )
     return calls
@@ -340,14 +344,17 @@ def _project_facts(
     function_va: int,
     instructions: list[WindowsContextInstruction],
     calls: list[WindowsContextCall],
-) -> WindowsContextProjectFacts | None:
+) -> tuple[WindowsContextProjectFacts | None, list[WindowsContextCall]]:
     if not project_path:
-        return None
+        return None, calls
     path = Path(project_path).expanduser()
     if not path.exists():
-        return WindowsContextProjectFacts(
-            project_path=str(path),
-            missing_capabilities=["project_path_missing"],
+        return (
+            WindowsContextProjectFacts(
+                project_path=str(path),
+                missing_capabilities=["project_path_missing"],
+            ),
+            calls,
         )
     kb = PersistentKnowledgeBase.open(path)
     try:
@@ -360,6 +367,8 @@ def _project_facts(
             prototypes,
             function_name.display if function_name is not None else None,
         )
+        project_calls = _project_call_xrefs(kb, function_va, names)
+        calls = _merge_calls(calls, project_calls)
         call_prototypes = _call_prototypes(calls, names, prototypes)
         memory_accesses = _memory_accesses_for_function(kb, function_va)
         comments = dict(xref_db.list_comments(kb))
@@ -387,6 +396,10 @@ def _project_facts(
         coverage.append("function_prototype")
     else:
         missing.append("function_prototype")
+    if project_calls:
+        coverage.append("project_call_xrefs")
+    else:
+        missing.append("project_call_xrefs")
     if call_prototypes:
         coverage.append("call_prototypes")
     else:
@@ -403,17 +416,21 @@ def _project_facts(
         coverage.append("data_labels")
     else:
         missing.append("nearby_data_labels")
-    return WindowsContextProjectFacts(
-        project_path=str(path),
-        function_name=function_name.display if function_name is not None else None,
-        function_prototype=function_prototype,
-        call_prototypes=call_prototypes,
-        memory_accesses=memory_accesses,
-        entry_comment=comments.get(function_va),
-        inline_comments=inline_comments,
-        data_labels=data_labels,
-        coverage=coverage,
-        missing_capabilities=missing,
+    return (
+        WindowsContextProjectFacts(
+            project_path=str(path),
+            function_name=function_name.display if function_name is not None else None,
+            function_prototype=function_prototype,
+            project_calls=project_calls,
+            call_prototypes=call_prototypes,
+            memory_accesses=memory_accesses,
+            entry_comment=comments.get(function_va),
+            inline_comments=inline_comments,
+            data_labels=data_labels,
+            coverage=coverage,
+            missing_capabilities=missing,
+        ),
+        calls,
     )
 
 
@@ -460,6 +477,11 @@ def _evidence_bundle(packet: WindowsDecompileContextPacket) -> WindowsEvidenceBu
                 "call_count": len(packet.calls),
                 "memory_access_count": (
                     len(packet.project_facts.memory_accesses)
+                    if packet.project_facts is not None
+                    else 0
+                ),
+                "project_call_count": (
+                    len(packet.project_facts.project_calls)
                     if packet.project_facts is not None
                     else 0
                 ),
@@ -535,6 +557,81 @@ def _prototype_for_name(
     return None
 
 
+def _project_call_xrefs(
+    kb: PersistentKnowledgeBase,
+    function_va: int,
+    names: dict[int, str],
+) -> list[WindowsContextCall]:
+    out: list[WindowsContextCall] = []
+    for row in xref_db.list_xrefs_in_function(
+        kb,
+        function_va,
+        kinds=("call", "jump"),
+        limit=128,
+    ):
+        src_va = int(row.src_va)
+        dst_va = int(row.dst_va)
+        target_name = names.get(dst_va)
+        target = f"0x{dst_va:x}"
+        out.append(
+            WindowsContextCall(
+                va=src_va,
+                address=f"0x{src_va:x}",
+                target_va=dst_va,
+                target=target,
+                target_name=target_name,
+                text=f"{row.kind} {target_name or target}",
+                sources=["project_xrefs"],
+            )
+        )
+    return out
+
+
+def _merge_calls(
+    disassembly_calls: list[WindowsContextCall],
+    project_calls: list[WindowsContextCall],
+) -> list[WindowsContextCall]:
+    out = list(disassembly_calls)
+    for project_call in project_calls:
+        merge_index = _compatible_call_index(out, project_call)
+        if merge_index is None:
+            out.append(project_call)
+            continue
+        existing = out[merge_index]
+        target_va = (
+            existing.target_va
+            if existing.target_va is not None
+            else project_call.target_va
+        )
+        target = existing.target if existing.target is not None else project_call.target
+        out[merge_index] = WindowsContextCall(
+            va=existing.va,
+            address=existing.address,
+            target_va=target_va,
+            target=target,
+            target_name=existing.target_name or project_call.target_name,
+            text=existing.text or project_call.text,
+            sources=_dedupe([*existing.sources, *project_call.sources]),
+        )
+    return sorted(out, key=lambda call: call.va)
+
+
+def _compatible_call_index(
+    calls: list[WindowsContextCall],
+    candidate: WindowsContextCall,
+) -> int | None:
+    for index, call in enumerate(calls):
+        if call.va != candidate.va:
+            continue
+        if (
+            call.target_va is None
+            or candidate.target_va is None
+            or call.target_va == candidate.target_va
+        ):
+            return index
+    return None
+
+
 def _call_prototypes(
     calls: list[WindowsContextCall],
     names: dict[int, str],
@@ -543,9 +640,10 @@ def _call_prototypes(
     out: list[WindowsContextPrototype] = []
     seen: set[str] = set()
     for call in calls:
-        if call.target_va is None:
-            continue
-        rendered = _prototype_for_name(prototypes, names.get(call.target_va))
+        target_name = call.target_name
+        if target_name is None and call.target_va is not None:
+            target_name = names.get(call.target_va)
+        rendered = _prototype_for_name(prototypes, target_name)
         if rendered is None:
             continue
         key = rendered.function_name.lower()
