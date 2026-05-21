@@ -229,7 +229,11 @@ produces rather than only where it reads. Path-condition facts now also
 inherit those roles/classes from local variables assigned from semantic
 loads, so guards such as `if (code == ...)` and `if (out_len < ...)`
 remain visible as `ioctl_code` selector gates and `output_length`
-length gates.
+length gates. C-style decompiler field accesses such as
+`IrpSp->Parameters.DeviceIoControl.IoControlCode` and
+`Irp->RequestorMode` now normalize into the same structured
+memory-access and path-condition facts, covering the field syntax
+analysts see in IDA/Ghidra output.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

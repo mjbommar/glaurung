@@ -1878,6 +1878,106 @@ fn sub_18009fb20 {
     assert "lhs=output_length/length" in pretty
 
 
+def test_windows_function_pretty_lift_normalizes_c_field_access_memory_facts(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    project = tmp_path / "sample.glaurung"
+    kb = PersistentKnowledgeBase.open(project, binary_path=ctx.file_path)
+    try:
+        xref_db.set_function_prototype(
+            kb,
+            "FieldAccessGuard",
+            "NTSTATUS",
+            [
+                xref_db.FunctionParam("IrpSp", "IO_STACK_LOCATION *"),
+                xref_db.FunctionParam("Irp", "IRP *"),
+            ],
+            set_by="manual",
+            confidence=0.95,
+        )
+    finally:
+        kb.close()
+
+    tool = build_tool()
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pseudocode="""
+fn sub_18009fb80 {
+    code = IrpSp->Parameters.DeviceIoControl.IoControlCode;
+    out_len = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
+    mode = Irp->RequestorMode;
+    if (code == 0x222003) { goto L_ioctl; }
+    if (out_len u< 0x20) { goto L_small; }
+    if (mode != KernelMode) { goto L_user; }
+    if (IrpSp->Parameters.DeviceIoControl.InputBufferLength u> 0x1000) {
+        goto L_large;
+    }
+    return;
+}
+""",
+            project_path=str(project),
+            function_va=0x18009FB80,
+            function_name="FieldAccessGuard",
+        ),
+    )
+
+    accesses = result.packet.memory_accesses
+    assert any(
+        access.kind == "read"
+        and access.expression == "IrpSp->Parameters.DeviceIoControl.IoControlCode"
+        and access.base == "IrpSp"
+        and access.base_object == "IrpSp"
+        and access.base_object_kind == "argument"
+        and access.pointer_class == "kernel_pointer_candidate"
+        and access.field_offset == 0x10
+        and access.field_name == "Parameters.DeviceIoControl.IoControlCode"
+        and access.width_bits == 32
+        and access.value_role == "ioctl_code"
+        and access.value_class == "selector"
+        for access in accesses
+    )
+    assert any(
+        access.kind == "read"
+        and access.expression == "Irp->RequestorMode"
+        and access.base == "Irp"
+        and access.field_offset == 0x40
+        and access.field_name == "RequestorMode"
+        and access.width_bits == 8
+        and access.value_role == "requestor_mode"
+        and access.value_class == "access_mode"
+        for access in accesses
+    )
+    assert any(
+        condition.role == "selector_gate"
+        and condition.lhs_expression == "code"
+        and condition.lhs_value_role == "ioctl_code"
+        for condition in result.packet.path_conditions
+    )
+    assert any(
+        condition.role == "length_gate"
+        and condition.lhs_expression
+        == "IrpSp->Parameters.DeviceIoControl.InputBufferLength"
+        and condition.lhs_value_role == "input_length"
+        and condition.lhs_value_class == "length"
+        for condition in result.packet.path_conditions
+    )
+    assert any(
+        fact.kind == "path_condition"
+        and fact.key.startswith(
+            "length_gate:IrpSp->Parameters.DeviceIoControl.InputBufferLength"
+        )
+        and "lhs_value_role=input_length" in fact.value
+        for fact in result.packet.facts
+    )
+    pretty = result.pretty_lift.pseudocode
+    assert "IrpSp.Parameters.DeviceIoControl.IoControlCode" in pretty
+    assert "Irp.RequestorMode" in pretty
+    assert "lhs=input_length/length" in pretty
+
+
 def test_pretty_lift_validation_rejects_missing_copy_sink(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     tool = build_tool()

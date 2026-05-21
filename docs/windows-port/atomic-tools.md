@@ -130,7 +130,11 @@ sit below full IR/CFG bug-class scanners:
   `requestor_mode`. Pretty-lift path-condition facts propagate those
   roles/classes through local assignments, so later guards over the
   loaded value carry selector, length, and access-mode meaning instead
-  of degrading to generic comparisons.
+  of degrading to generic comparisons. The same normalization now
+  handles C decompiler field syntax (`base->field` and `base.field`)
+  for known Windows fields, so IDA/Ghidra-style output feeds the
+  structured memory and guard substrate without requiring offset-form
+  Glaurung IR.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

@@ -2310,6 +2310,12 @@ _C_TYPED_DEREF_RE = re.compile(
     r"\*\s*\(\s*(?P<c_type>[^()]+?)\s*\*\s*\)\s*"
     r"\(?\s*(?P<body>[^;)=]+)\s*\)?"
 )
+_C_FIELD_IDENTIFIER_RE = r"[A-Za-z_][A-Za-z0-9_]*"
+_C_FIELD_ACCESS_RE = re.compile(
+    rf"\b(?P<base>{_C_FIELD_IDENTIFIER_RE})\s*"
+    rf"(?P<op>->|\.)\s*"
+    rf"(?P<field>{_C_FIELD_IDENTIFIER_RE}(?:\s*\.\s*{_C_FIELD_IDENTIFIER_RE})*)"
+)
 _STACK_SLOT_RE = re.compile(r"\bstack_\d+\b")
 
 
@@ -2335,9 +2341,18 @@ def _memory_access_facts(
         name: (role.semantic_name, role.role, role.confidence)
         for name, role in argument_roles.items()
     }
+    for role in argument_roles.values():
+        semantic_roles.setdefault(
+            role.semantic_name,
+            (role.semantic_name, role.role, role.confidence),
+        )
     for argument in entry_abi_arguments:
         semantic_roles.setdefault(
             argument.original_name,
+            (argument.semantic_name, argument.role, argument.confidence),
+        )
+        semantic_roles.setdefault(
+            argument.semantic_name,
             (argument.semantic_name, argument.role, argument.confidence),
         )
 
@@ -2357,6 +2372,40 @@ def _memory_access_facts(
         if not line or line.startswith("fn ") or line in {"{", "}"}:
             continue
         lhs, rhs = _assignment_sides(line)
+        if lhs is not None:
+            for access in _c_field_access_memory_accesses(
+                lhs,
+                line=line,
+                line_no=line_no,
+                kind="write",
+                output_var=output_var,
+                selector_table=selector_table,
+                semantic_roles=semantic_roles,
+            ):
+                add(access)
+        if rhs is not None:
+            for access in _c_field_access_memory_accesses(
+                rhs,
+                line=line,
+                line_no=line_no,
+                kind="read",
+                output_var=output_var,
+                selector_table=selector_table,
+                semantic_roles=semantic_roles,
+            ):
+                add(access)
+        condition_expression = _condition_expression_from_line(line)
+        if condition_expression is not None:
+            for access in _c_field_access_memory_accesses(
+                condition_expression,
+                line=line,
+                line_no=line_no,
+                kind="read",
+                output_var=output_var,
+                selector_table=selector_table,
+                semantic_roles=semantic_roles,
+            ):
+                add(access)
         for match in _MEMORY_EXPR_RE.finditer(line):
             expression = match.group(0)
             if lhs is not None and match.start() < line.find("="):
@@ -2469,6 +2518,78 @@ def _memory_access_facts(
     return facts
 
 
+def _c_field_access_memory_accesses(
+    expression_text: str,
+    *,
+    line: str,
+    line_no: int,
+    kind: Literal["read", "write"],
+    output_var: str | None,
+    selector_table: SelectorTableFact | None,
+    semantic_roles: dict[str, tuple[str, str | None, float]],
+) -> list[MemoryAccessFact]:
+    accesses: list[MemoryAccessFact] = []
+    for match in _C_FIELD_ACCESS_RE.finditer(expression_text):
+        if expression_text[match.end() :].lstrip().startswith("("):
+            continue
+        base = match.group("base")
+        field_name = _normalize_c_field_path(match.group("field"))
+        if not _is_known_c_field_access(
+            base,
+            field_name,
+            semantic_roles=semantic_roles,
+        ):
+            continue
+        field_offset = _field_offset_for_name(field_name)
+        role = (
+            "argument_memory"
+            if base in semantic_roles
+            else _memory_access_role(
+                base=base,
+                absolute_address=None,
+                index=None,
+                scale=None,
+                output_var=output_var,
+                selector_table=selector_table,
+            )
+        )
+        confidence = 0.84 if field_offset is not None else 0.76
+        accesses.append(
+            MemoryAccessFact(
+                kind=kind,
+                expression=f"{base}{match.group('op')}{field_name}",
+                base=base,
+                offset=field_offset,
+                field_offset=field_offset,
+                field_name=field_name,
+                width_bits=_width_bits_for_field_name(field_name),
+                role=role,
+                line=line_no,
+                snippet=line,
+                confidence=confidence,
+            )
+        )
+    return accesses
+
+
+def _normalize_c_field_path(field_path: str) -> str:
+    return ".".join(part.strip() for part in field_path.split(".") if part.strip())
+
+
+def _is_known_c_field_access(
+    base: str,
+    field_name: str,
+    *,
+    semantic_roles: dict[str, tuple[str, str | None, float]],
+) -> bool:
+    if base in semantic_roles:
+        return True
+    if _field_offset_for_name(field_name) is not None:
+        return True
+    value_role, _value_class, _confidence = _semantic_value_for_field(field_name)
+    return value_role is not None
+
+
 def _classified_memory_access(
     access: MemoryAccessFact,
     *,
@@ -2541,12 +2662,18 @@ def _classified_memory_access(
             reason = "synthetic local temporary memory base"
             confidence = 0.55
 
-    field_offset = access.offset
-    field_name = _semantic_field_name_for_access(
-        base_object=base_object,
-        semantic_role=semantic_role,
-        offset=field_offset,
-    ) or _field_name_for_offset(field_offset)
+    field_offset = (
+        access.field_offset if access.field_offset is not None else access.offset
+    )
+    field_name = (
+        access.field_name
+        or _semantic_field_name_for_access(
+            base_object=base_object,
+            semantic_role=semantic_role,
+            offset=field_offset,
+        )
+        or _field_name_for_offset(field_offset)
+    )
     value_role, value_class, value_confidence = _semantic_value_for_field(field_name)
     return access.model_copy(
         update={
@@ -2613,6 +2740,32 @@ _IO_STACK_LOCATION_DEVICE_IOCTL_FIELD_NAMES_BY_OFFSET = {
 }
 
 
+_FIELD_OFFSETS_BY_NAME = {
+    **{field_name: offset for offset, field_name in _IRP_FIELD_NAMES_BY_OFFSET.items()},
+    **{
+        field_name: offset
+        for offset, field_name in (
+            _IO_STACK_LOCATION_DEVICE_IOCTL_FIELD_NAMES_BY_OFFSET.items()
+        )
+    },
+    "value": 0,
+}
+
+_FIELD_WIDTH_BITS_BY_NAME = {
+    "AssociatedIrp.SystemBuffer": 64,
+    "IoStatus": 64,
+    "MdlAddress": 64,
+    "Parameters.DeviceIoControl.InputBufferLength": 32,
+    "Parameters.DeviceIoControl.IoControlCode": 32,
+    "Parameters.DeviceIoControl.OutputBufferLength": 32,
+    "Parameters.DeviceIoControl.Type3InputBuffer": 64,
+    "RequestorMode": 8,
+    "Tail.Overlay.CurrentStackLocation": 64,
+    "UserBuffer": 64,
+    "value": 32,
+}
+
+
 _FIELD_VALUE_SEMANTICS = {
     "AssociatedIrp.SystemBuffer": (
         "system_buffer",
@@ -2650,6 +2803,18 @@ _FIELD_VALUE_SEMANTICS = {
     "UserBuffer": ("user_buffer", "user_pointer_candidate", 0.88),
     "value": ("return_length_value", "length", 0.86),
 }
+
+
+def _field_offset_for_name(field_name: str | None) -> int | None:
+    if field_name is None:
+        return None
+    return _FIELD_OFFSETS_BY_NAME.get(field_name)
+
+
+def _width_bits_for_field_name(field_name: str | None) -> int | None:
+    if field_name is None:
+        return None
+    return _FIELD_WIDTH_BITS_BY_NAME.get(field_name)
 
 
 def _semantic_field_name_for_access(
@@ -2693,9 +2858,11 @@ def _field_name_for_offset(offset: int | None) -> str | None:
 
 
 def _assignment_sides(line: str) -> tuple[str | None, str | None]:
-    if "=" not in line:
+    assignment = re.search(r"(?<![!<>=])=(?!=)", line)
+    if assignment is None:
         return None, None
-    lhs, rhs = line.split("=", 1)
+    lhs = line[: assignment.start()]
+    rhs = line[assignment.end() :]
     lhs = lhs.strip()
     rhs = rhs.rsplit(";", 1)[0].strip()
     return lhs, rhs
@@ -3497,7 +3664,9 @@ _FLAG_ASSIGNMENT_RE = re.compile(
 )
 _IF_RE = re.compile(r"\s*if\s*\(\s*(?P<condition>.*)\)\s*\{(?P<body>[^}]*)")
 _CONDITION_RE = re.compile(
-    r"(?P<lhs>.+?)\s*(?P<operator>u<=|u>=|u<|u>|==|!=|<=|>=|<|>)\s*(?P<rhs>.+)"
+    r"(?P<lhs>.+?)\s*"
+    r"(?P<operator>u<=|u>=|u<|u>|==|!=|<=|>=|(?<!-)<|(?<!-)>)"
+    r"\s*(?P<rhs>.+)"
 )
 
 
@@ -3510,6 +3679,7 @@ def _path_condition_value_sources(
             continue
         if access.value_role is None and access.value_class is None:
             continue
+        sources.setdefault(access.expression, access)
         lhs, _rhs = _assignment_sides(access.snippet)
         if lhs is None:
             continue
@@ -3525,6 +3695,9 @@ def _path_condition_value_source(
     sources: dict[str, MemoryAccessFact],
 ) -> MemoryAccessFact | None:
     name = _strip_outer_parens(expression.strip())
+    direct = sources.get(name)
+    if direct is not None:
+        return direct
     if re.fullmatch(_WINDOWS_SYMBOL_RE, name):
         return sources.get(name)
     return None
