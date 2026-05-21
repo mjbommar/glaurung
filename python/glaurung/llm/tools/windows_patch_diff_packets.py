@@ -110,6 +110,7 @@ class WindowsPatchDiffPacketsTool(
             prototype_diff=review.prototype_diff,
             boundary_diff=review.boundary_diff,
             data_table_diff=review.data_table_diff,
+            callgraph_diff=review.callgraph_diff,
             review_items=review.review_items,
             function_identity_count=review.function_identity_count,
             pdb_identity_record_count=review.pdb_identity_record_count,

@@ -518,6 +518,82 @@ DELETE FROM function_chunk_facts;
         after_conn.close()
 
 
+def _seed_project_callgraphs(before: Path, after: Path) -> None:
+    for path in (before, after):
+        conn = sqlite3.connect(path)
+        try:
+            conn.executescript(
+                """
+CREATE TABLE IF NOT EXISTS function_names (
+    binary_id INTEGER NOT NULL,
+    entry_va INTEGER NOT NULL,
+    canonical TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    set_by TEXT,
+    set_at INTEGER,
+    demangled TEXT,
+    flavor TEXT,
+    PRIMARY KEY (binary_id, entry_va)
+);
+CREATE TABLE IF NOT EXISTS xrefs (
+    xref_id INTEGER PRIMARY KEY,
+    binary_id INTEGER NOT NULL,
+    src_va INTEGER NOT NULL,
+    dst_va INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    src_function_va INTEGER,
+    indexed_at INTEGER
+);
+DELETE FROM function_names;
+DELETE FROM xrefs;
+"""
+            )
+            conn.executemany(
+                "INSERT INTO function_names VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (1, 0x140001000, "Dispatch", "[]", "pdb", 0, None, None),
+                    (1, 0x140002000, "Helper", "[]", "pdb", 0, None, None),
+                    (1, 0x140002800, "NewCaller", "[]", "pdb", 0, None, None),
+                    (1, 0x140003000, "nt!ProbeForRead", "[]", "pdb", 0, None, None),
+                    (1, 0x140003100, "nt!ProbeForWrite", "[]", "pdb", 0, None, None),
+                    (1, 0x140003200, "nt!RtlCopyMemory", "[]", "pdb", 0, None, None),
+                    (1, 0x140003300, "nt!ZwOpenProcess", "[]", "pdb", 0, None, None),
+                    (1, 0x140004000, "OldHelper", "[]", "pdb", 0, None, None),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    before_conn = sqlite3.connect(before)
+    try:
+        before_conn.executemany(
+            "INSERT INTO xrefs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, 1, 0x140001010, 0x140003000, "call", 0x140001000, 0),
+                (2, 1, 0x140001020, 0x140003200, "call", 0x140001000, 0),
+                (3, 1, 0x140002010, 0x140004000, "call", 0x140002000, 0),
+            ],
+        )
+        before_conn.commit()
+    finally:
+        before_conn.close()
+
+    after_conn = sqlite3.connect(after)
+    try:
+        after_conn.executemany(
+            "INSERT INTO xrefs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, 1, 0x140001018, 0x140003100, "call", 0x140001000, 0),
+                (2, 1, 0x140001028, 0x140003200, "call", 0x140001000, 0),
+                (3, 1, 0x140002820, 0x140003300, "call", 0x140002800, 0),
+            ],
+        )
+        after_conn.commit()
+    finally:
+        after_conn.close()
+
+
 def test_windows_patch_diff_review_ranks_seed_changed_function(
     tmp_path: Path,
 ) -> None:
@@ -737,6 +813,42 @@ def test_windows_patch_diff_review_ranks_project_data_table_deltas(
     assert any("project_data_table_diff" in item.match_basis for item in table_items)
     assert any("table_target_delta" in item.reason_codes for item in table_items)
     assert any("dispatch_table" in item.reason_codes for item in table_items)
+
+
+def test_windows_patch_diff_review_ranks_project_callgraph_deltas(
+    tmp_path: Path,
+) -> None:
+    a = _need(_SWITCHY_V1)
+    b = _need(_SWITCHY_V2)
+    before_project = _project(tmp_path, "before")
+    after_project = _project(tmp_path, "after")
+    _seed_project_callgraphs(before_project, after_project)
+
+    result = run_windows_patch_diff_review(
+        WindowsPatchDiffReviewConfig(
+            binary_a=str(a),
+            binary_b=str(b),
+            before_project_path=str(before_project),
+            after_project_path=str(after_project),
+            max_items=20,
+        )
+    )
+
+    assert result.callgraph_diff is not None
+    assert result.callgraph_diff.changed_count == 1
+    assert result.callgraph_diff.added_count == 2
+    assert result.callgraph_diff.removed_count == 2
+    assert "windows_project_callgraph_diff" in result.tool_sequence
+    assert "project_callgraph_deltas" in result.evidence_bundle.coverage.fact_coverage
+    assert result.evidence_bundle.subject.attributes["callgraph_delta_count"] == 5
+    callgraph_items = [
+        item for item in result.review_items if item.kind == "callgraph_delta"
+    ]
+    assert callgraph_items
+    assert any("project_callgraph_diff" in item.match_basis for item in callgraph_items)
+    assert any(
+        "sink_or_api_call_delta" in item.reason_codes for item in callgraph_items
+    )
 
 
 def test_windows_patch_diff_review_loads_function_identity_manifest(

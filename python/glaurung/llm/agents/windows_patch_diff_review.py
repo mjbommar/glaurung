@@ -47,6 +47,12 @@ from ..tools.windows_project_data_table_diff import (
     WindowsProjectDataTableDiffResult,
     WindowsProjectDataTableDiffTool,
 )
+from ..tools.windows_project_callgraph_diff import (
+    ProjectCallgraphDelta,
+    WindowsProjectCallgraphDiffArgs,
+    WindowsProjectCallgraphDiffResult,
+    WindowsProjectCallgraphDiffTool,
+)
 from ..tools.windows_project_prototype_diff import (
     ProjectPrototypeDelta,
     WindowsProjectPrototypeDiffArgs,
@@ -69,6 +75,7 @@ PatchDiffItemKind = Literal[
     "security_fact_delta",
     "boundary_delta",
     "table_delta",
+    "callgraph_delta",
 ]
 PatchFunctionMatchBasis = Literal[
     "name_based",
@@ -113,14 +120,14 @@ class WindowsPatchDiffReviewConfig(BaseModel):
         None,
         description=(
             "Optional pre-change .glaurung project for prototype, boundary, "
-            "and data-table diffing."
+            "data-table, and callgraph diffing."
         ),
     )
     after_project_path: str | None = Field(
         None,
         description=(
             "Optional post-change .glaurung project for prototype, boundary, "
-            "and data-table diffing."
+            "data-table, and callgraph diffing."
         ),
     )
     pdb_backed: bool = Field(
@@ -158,6 +165,7 @@ class WindowsPatchDiffReviewConfig(BaseModel):
     max_prototype_delta_rows: int = Field(128, ge=0, le=512)
     max_boundary_delta_rows: int = Field(128, ge=0, le=512)
     max_table_delta_rows: int = Field(128, ge=0, le=512)
+    max_callgraph_delta_rows: int = Field(128, ge=0, le=512)
     max_items: int = Field(20, ge=1, le=128)
 
 
@@ -183,6 +191,7 @@ class WindowsPatchDiffReviewResult(BaseModel):
     prototype_diff: WindowsProjectPrototypeDiffResult | None = None
     boundary_diff: WindowsProjectFunctionBoundaryDiffResult | None = None
     data_table_diff: WindowsProjectDataTableDiffResult | None = None
+    callgraph_diff: WindowsProjectCallgraphDiffResult | None = None
     review_items: list[WindowsPatchDiffReviewItem]
     function_identity_count: int = 0
     pdb_identity_record_count: int = 0
@@ -220,6 +229,7 @@ def run_windows_patch_diff_review(
     prototype_diff = _prototype_diff(ctx, effective_config)
     boundary_diff = _boundary_diff(ctx, effective_config)
     data_table_diff = _data_table_diff(ctx, effective_config)
+    callgraph_diff = _callgraph_diff(ctx, effective_config)
     items = _rank_items(
         config=effective_config,
         binary_diff=binary_diff,
@@ -228,6 +238,7 @@ def run_windows_patch_diff_review(
         prototype_diff=prototype_diff,
         boundary_diff=boundary_diff,
         data_table_diff=data_table_diff,
+        callgraph_diff=callgraph_diff,
     )
     tool_sequence = ["windows_binary_diff_summary"]
     if seed_triage is not None:
@@ -240,6 +251,8 @@ def run_windows_patch_diff_review(
         tool_sequence.append("windows_project_function_boundary_diff")
     if data_table_diff is not None:
         tool_sequence.append("windows_project_data_table_diff")
+    if callgraph_diff is not None:
+        tool_sequence.append("windows_project_callgraph_diff")
     if config.function_identities:
         tool_sequence.append("provided_windows_patch_function_identity")
     if config.function_identity_path:
@@ -257,6 +270,7 @@ def run_windows_patch_diff_review(
         prototype_diff=prototype_diff,
         boundary_diff=boundary_diff,
         data_table_diff=data_table_diff,
+        callgraph_diff=callgraph_diff,
         review_items=items,
         function_identity_count=len(identity_load.identities),
         pdb_identity_record_count=identity_load.pdb_identity_record_count,
@@ -270,6 +284,7 @@ def run_windows_patch_diff_review(
             prototype_diff=prototype_diff,
             boundary_diff=boundary_diff,
             data_table_diff=data_table_diff,
+            callgraph_diff=callgraph_diff,
         ),
         notes=notes,
     )
@@ -464,6 +479,28 @@ def _data_table_diff(
     )
 
 
+def _callgraph_diff(
+    ctx: MemoryContext,
+    config: WindowsPatchDiffReviewConfig,
+) -> WindowsProjectCallgraphDiffResult | None:
+    if not config.before_project_path and not config.after_project_path:
+        return None
+    if not config.before_project_path or not config.after_project_path:
+        raise ValueError(
+            "before_project_path and after_project_path are required together"
+        )
+    return WindowsProjectCallgraphDiffTool().run(
+        ctx,
+        ctx.kb,
+        WindowsProjectCallgraphDiffArgs(
+            before_project_path=config.before_project_path,
+            after_project_path=config.after_project_path,
+            include_unchanged=False,
+            max_rows=config.max_callgraph_delta_rows,
+        ),
+    )
+
+
 def _rank_items(
     *,
     config: WindowsPatchDiffReviewConfig,
@@ -473,6 +510,7 @@ def _rank_items(
     prototype_diff: WindowsProjectPrototypeDiffResult | None,
     boundary_diff: WindowsProjectFunctionBoundaryDiffResult | None,
     data_table_diff: WindowsProjectDataTableDiffResult | None,
+    callgraph_diff: WindowsProjectCallgraphDiffResult | None,
 ) -> list[WindowsPatchDiffReviewItem]:
     items: list[WindowsPatchDiffReviewItem] = []
     items.extend(_binary_items(config, binary_diff.rows))
@@ -487,6 +525,8 @@ def _rank_items(
         items.extend(_boundary_items(config, boundary_diff.deltas))
     if data_table_diff is not None:
         items.extend(_table_items(config, data_table_diff.deltas))
+    if callgraph_diff is not None:
+        items.extend(_callgraph_items(config, callgraph_diff.deltas))
     items.sort(
         key=lambda item: (
             -item.priority,
@@ -830,6 +870,55 @@ def _table_items(
     return out
 
 
+def _callgraph_items(
+    config: WindowsPatchDiffReviewConfig,
+    deltas: list[ProjectCallgraphDelta],
+) -> list[WindowsPatchDiffReviewItem]:
+    out: list[WindowsPatchDiffReviewItem] = []
+    for delta in deltas:
+        if delta.status == "unchanged":
+            continue
+        basis = ["project_callgraph_diff"]
+        if delta.security_relevance:
+            basis.append("security_relevant_callgraph_delta")
+        function = delta.caller_name or delta.callee_name
+        next_args: dict[str, str | int] = {}
+        if delta.caller_name:
+            next_args["function_name"] = delta.caller_name
+        elif delta.callee_name:
+            next_args["target_function_name"] = delta.callee_name
+        out.append(
+            WindowsPatchDiffReviewItem(
+                rank=0,
+                kind="callgraph_delta",
+                priority=_callgraph_priority(delta),
+                function=function,
+                status=delta.status,
+                summary=(
+                    f"{delta.kind} {delta.status}: "
+                    f"{delta.caller_name or '-'} -> {delta.callee_name or '-'}: "
+                    f"{', '.join(delta.changed_fields) or 'edge'}"
+                ),
+                match_basis=basis,
+                confidence=_confidence(
+                    config,
+                    0.58 if delta.security_relevance else 0.48,
+                ),
+                reason_codes=_reason_codes(
+                    config,
+                    [
+                        f"callgraph_{delta.status}",
+                        *delta.reason_codes,
+                        *delta.security_relevance,
+                    ],
+                ),
+                next_tool="windows_project_callgraph_slice",
+                next_args=next_args,
+            )
+        )
+    return out
+
+
 def _prototype_priority(delta: ProjectPrototypeDelta) -> int:
     priority = 54
     if delta.status == "changed":
@@ -892,6 +981,21 @@ def _table_priority(delta: ProjectDataTableDelta) -> int:
         }
     ):
         priority += 10
+    return priority
+
+
+def _callgraph_priority(delta: ProjectCallgraphDelta) -> int:
+    priority = 42 + min(32, delta.review_priority // 2)
+    if delta.status == "added":
+        priority += 8
+    if delta.status == "removed":
+        priority += 5
+    if "sink_or_api_call_delta" in delta.security_relevance:
+        priority += 16
+    if "callsite_delta" in delta.security_relevance:
+        priority += 8
+    if "jump_edge_delta" in delta.security_relevance:
+        priority += 6
     return priority
 
 
@@ -987,6 +1091,7 @@ def _evidence_bundle(
     prototype_diff: WindowsProjectPrototypeDiffResult | None,
     boundary_diff: WindowsProjectFunctionBoundaryDiffResult | None,
     data_table_diff: WindowsProjectDataTableDiffResult | None,
+    callgraph_diff: WindowsProjectCallgraphDiffResult | None,
 ) -> WindowsEvidenceBundle:
     return make_windows_evidence_bundle(
         claim_level="triage_evidence_bundle_not_finding",
@@ -1005,6 +1110,9 @@ def _evidence_bundle(
                 ),
                 "table_delta_count": (
                     len(data_table_diff.deltas) if data_table_diff is not None else 0
+                ),
+                "callgraph_delta_count": (
+                    len(callgraph_diff.deltas) if callgraph_diff is not None else 0
                 ),
             },
         ),
@@ -1032,6 +1140,7 @@ def _evidence_bundle(
                 *(["project_prototype_deltas"] if prototype_diff is not None else []),
                 *(["project_boundary_deltas"] if boundary_diff is not None else []),
                 *(["project_data_table_deltas"] if data_table_diff is not None else []),
+                *(["project_callgraph_deltas"] if callgraph_diff is not None else []),
             ],
             stale_or_blocking_facts=[
                 *config.functionization_blockers,

@@ -52,6 +52,11 @@ from glaurung.llm.tools.windows_project_callgraph_reachability import (
     WindowsProjectCallgraphReachabilityResult,
     build_tool as build_windows_project_callgraph_reachability,
 )
+from glaurung.llm.tools.windows_project_callgraph_diff import (
+    WindowsProjectCallgraphDiffArgs,
+    WindowsProjectCallgraphDiffResult,
+    build_tool as build_windows_project_callgraph_diff,
+)
 from glaurung.llm.tools.windows_project_data_table_facts import (
     WindowsProjectDataTableFactsArgs,
     WindowsProjectDataTableFactsResult,
@@ -497,6 +502,34 @@ class WindowsCommand(BaseCommand):
             "--add-to-kb",
             action="store_true",
             help="Record the reachability query in the transient memory KB.",
+        )
+
+        project_callgraph_diff = subparsers.add_parser(
+            "project-callgraph-diff",
+            help=(
+                "Compare persisted call/jump xrefs across two .glaurung "
+                "projects for patch/build diff triage"
+            ),
+        )
+        self._add_common_child_arguments(project_callgraph_diff)
+        project_callgraph_diff.add_argument("--before-project-path", required=True)
+        project_callgraph_diff.add_argument("--after-project-path", required=True)
+        project_callgraph_diff.add_argument("--before-binary-id", type=int)
+        project_callgraph_diff.add_argument("--after-binary-id", type=int)
+        project_callgraph_diff.add_argument(
+            "--kind",
+            choices=["all", "call", "jump"],
+            default="all",
+            help="Compare call edges, jump edges, or both.",
+        )
+        project_callgraph_diff.add_argument("--function-name-contains")
+        project_callgraph_diff.add_argument("--target-name-contains")
+        project_callgraph_diff.add_argument("--include-unchanged", action="store_true")
+        project_callgraph_diff.add_argument("--max-rows", type=int, default=128)
+        project_callgraph_diff.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the project callgraph diff in the transient memory KB.",
         )
 
         project_chunks = subparsers.add_parser(
@@ -1197,6 +1230,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_xref_query(args, formatter)
         if args.windows_action == "project-callgraph-reachability":
             return _execute_project_callgraph_reachability(args, formatter)
+        if args.windows_action == "project-callgraph-diff":
+            return _execute_project_callgraph_diff(args, formatter)
         if args.windows_action == "project-function-chunks":
             return _execute_project_function_chunks(args, formatter)
         if args.windows_action == "project-function-boundary-diff":
@@ -1803,6 +1838,60 @@ def _execute_project_callgraph_reachability(
         )
     else:
         formatter.output_plain(_format_project_callgraph_reachability_human(result))
+    return 0
+
+
+def _execute_project_callgraph_diff(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_callgraph_diff()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.after_project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectCallgraphDiffArgs(
+            before_project_path=args.before_project_path,
+            after_project_path=args.after_project_path,
+            before_binary_id=args.before_binary_id,
+            after_binary_id=args.after_binary_id,
+            kind=args.kind,
+            function_name_contains=args.function_name_contains,
+            target_name_contains=args.target_name_contains,
+            include_unchanged=args.include_unchanged,
+            max_rows=args.max_rows,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "before_project_path": result.before_project_path,
+                        "after_project_path": result.after_project_path,
+                        "before_edge_count": result.before_edge_count,
+                        "after_edge_count": result.after_edge_count,
+                        "changed_count": result.changed_count,
+                        "added_count": result.added_count,
+                        "removed_count": result.removed_count,
+                        "returned_count": result.returned_count,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "callgraph_delta", "data": item.model_dump(mode="json")}
+                    for item in result.deltas
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_callgraph_diff_human(result))
     return 0
 
 
@@ -2990,6 +3079,37 @@ def _format_project_callgraph_reachability_human(
             )
         if len(path.edges) > 8:
             lines.append(f"    ... {len(path.edges) - 8} more edges")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_callgraph_diff_human(
+    result: WindowsProjectCallgraphDiffResult,
+) -> str:
+    lines = [
+        "Windows project callgraph diff",
+        f"  before={result.before_project_path}",
+        f"  after={result.after_project_path}",
+        (
+            f"  edges={result.before_edge_count}->{result.after_edge_count} "
+            f"changed={result.changed_count} added={result.added_count} "
+            f"removed={result.removed_count} returned={result.returned_count}"
+        ),
+        f"  coverage={','.join(result.coverage) or '-'}",
+    ]
+    for delta in result.deltas[:20]:
+        caller = delta.caller_name or "-"
+        callee = delta.callee_name or "-"
+        fields = ",".join(delta.changed_fields) or "edge"
+        lines.append(
+            f"  {delta.kind:<5} {delta.status:<8} {caller} -> {callee} "
+            f"fields={fields} priority={delta.review_priority} "
+            f"relevance={','.join(delta.security_relevance) or '-'}"
+        )
+    if len(result.deltas) > 20:
+        lines.append(f"  ... {len(result.deltas) - 20} more deltas")
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)

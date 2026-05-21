@@ -208,6 +208,14 @@ sit below full IR/CFG bug-class scanners:
   when only a target is supplied. The result is callgraph topology
   evidence only; argument value flow, attacker source reachability, and
   CFG feasibility remain separate facts.
+- `windows_project_callgraph_diff` compares persisted call/jump xrefs
+  across two `.glaurung` projects. It groups edges by stable
+  caller/callee names when available, falls back to VAs otherwise, and
+  reports added, removed, changed, and unchanged caller-to-callee edges
+  with callsite movement, sink/API-call hints, jump-edge hints, review
+  priority, and security relevance metadata. Patch-diff review ranks
+  those rows as `callgraph_delta` items so added or removed helper/sink
+  calls are visible before decompile, argument, or gate review.
 - `windows_project_function_chunk_facts` returns persisted first-class
   function chunk, thunk, tailcall, shared-tail, and funclet facts. It
   can filter by owner, chunk kind, relation kind, target VA, or an

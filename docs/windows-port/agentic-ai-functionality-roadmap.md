@@ -197,6 +197,16 @@ connects project table recovery to the Patch Tuesday style workflow
 where high-risk dispatch/callback/table drift needs to be visible
 before decompilation.
 
+Update: `windows_project_callgraph_diff` now compares persisted
+call/jump xrefs across two `.glaurung` projects. It groups edges by
+stable caller/callee names when available, falls back to VAs otherwise,
+and reports added, removed, changed, and unchanged caller-to-callee
+edges, including callsite movement, sink/API-call hints, jump-edge
+hints, review priority, and security relevance metadata. Patch-diff
+review invokes it when before/after project paths are available and
+ranks those changes as `callgraph_delta` items, making added or removed
+helper/sink calls visible before decompile, argument, or gate review.
+
 Update: `windows_function_start_explain` and
 `windows_candidate_start_worklist` now consume native per-address
 `scan_rejections` from the comparison stats. A function-start answer can
@@ -1985,6 +1995,20 @@ Validated high-level replay scope:
   `table_delta` ranking, evidence-bundle coverage, and table-delta
   counts. The full `uv run pytest python/tests/test_windows_*.py -q`
   sweep also passed with one skip.
+- Latest project callgraph-diff validation: scoped `uvx ruff check`,
+  `uvx ty check`, `git diff --check`, and focused `uv run pytest`
+  passed for `windows_project_callgraph_diff.py`, Windows CLI
+  registration, `memory_agent.py`, `windows_patch_diff_review.py`,
+  `windows_patch_diff_packets.py`,
+  `test_windows_project_callgraph_diff_tool.py`,
+  `test_windows_patch_diff_review_agent.py`, and
+  `test_windows_patch_diff_packets_tool.py`. Tests cover added,
+  removed, and changed callgraph edges, moved callsites, sink/API-call
+  deltas, CLI JSON filtering, KB evidence-node creation,
+  `memory_agent` registration, patch-diff review `callgraph_delta`
+  ranking, evidence-bundle coverage, and callgraph-delta counts. The
+  full `uv run pytest python/tests/test_windows_*.py -q` sweep also
+  passed with one skip.
 
 Not A+ yet:
 
