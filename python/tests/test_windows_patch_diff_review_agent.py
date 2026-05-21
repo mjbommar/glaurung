@@ -12,6 +12,8 @@ from glaurung.llm.agents.windows_patch_diff_review import (
 from glaurung.llm.tools.windows_pdb_identity_manifest import (
     WindowsPdbIdentityManifestArgs,
 )
+from glaurung.llm.kb import xref_db
+from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 
 
 _SWITCHY_V1 = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
@@ -107,6 +109,58 @@ def _write_pdb_identity_manifest(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return manifest
+
+
+def _project(tmp_path: Path, name: str) -> Path:
+    binary = tmp_path / f"{name}.sys"
+    binary.write_bytes(b"MZ" + b"\0" * 512)
+    project = tmp_path / f"{name}.glaurung"
+    kb = PersistentKnowledgeBase.open(project, binary_path=binary)
+    kb.close()
+    return project
+
+
+def _seed_project_prototypes(before: Path, after: Path) -> None:
+    before_kb = PersistentKnowledgeBase.open(before)
+    try:
+        xref_db.set_function_prototype(
+            before_kb,
+            "dispatch",
+            "NTSTATUS",
+            [
+                xref_db.FunctionParam("Irp", "PIRP", role="irp"),
+                xref_db.FunctionParam("Length", "ULONG", role="length"),
+            ],
+            calling_convention="NTAPI",
+            set_by="manual",
+            semantics={"risk_tags": ["ioctl"], "roles": {"Length": "length"}},
+        )
+    finally:
+        before_kb.close()
+
+    after_kb = PersistentKnowledgeBase.open(after)
+    try:
+        xref_db.set_function_prototype(
+            after_kb,
+            "dispatch",
+            "NTSTATUS",
+            [
+                xref_db.FunctionParam("Irp", "PIRP", role="irp"),
+                xref_db.FunctionParam("OutputBuffer", "PVOID", role="out_buffer"),
+                xref_db.FunctionParam("OutputBufferLength", "ULONG", role="length"),
+            ],
+            calling_convention="NTAPI",
+            set_by="manual",
+            semantics={
+                "risk_tags": ["ioctl", "user_buffer"],
+                "roles": {
+                    "OutputBuffer": "out_buffer",
+                    "OutputBufferLength": "length",
+                },
+            },
+        )
+    finally:
+        after_kb.close()
 
 
 def test_windows_patch_diff_review_ranks_seed_changed_function(
@@ -222,6 +276,44 @@ def test_windows_patch_diff_review_uses_per_function_identity_facts() -> None:
     assert "per_function_patch_identity" in (
         result.evidence_bundle.coverage.fact_coverage
     )
+
+
+def test_windows_patch_diff_review_ranks_project_prototype_deltas(
+    tmp_path: Path,
+) -> None:
+    a = _need(_SWITCHY_V1)
+    b = _need(_SWITCHY_V2)
+    before_project = _project(tmp_path, "before")
+    after_project = _project(tmp_path, "after")
+    _seed_project_prototypes(before_project, after_project)
+
+    result = run_windows_patch_diff_review(
+        WindowsPatchDiffReviewConfig(
+            binary_a=str(a),
+            binary_b=str(b),
+            before_project_path=str(before_project),
+            after_project_path=str(after_project),
+            max_items=20,
+        )
+    )
+
+    assert result.prototype_diff is not None
+    assert result.prototype_diff.changed_count == 1
+    assert "windows_project_prototype_diff" in result.tool_sequence
+    assert "project_prototype_deltas" in result.evidence_bundle.coverage.fact_coverage
+    assert result.evidence_bundle.subject.attributes["prototype_delta_count"] == 1
+    proto_items = [
+        item
+        for item in result.review_items
+        if item.kind == "prototype_delta" and item.function == "dispatch"
+    ]
+    assert proto_items
+    item = proto_items[0]
+    assert "project_prototype_diff" in item.match_basis
+    assert "security_relevant_prototype_delta" in item.match_basis
+    assert "parameter_role_delta" in item.reason_codes
+    assert "pointer_or_buffer_parameter_delta" in item.reason_codes
+    assert item.next_tool == "windows_sink_to_gate_review"
 
 
 def test_windows_patch_diff_review_loads_function_identity_manifest(

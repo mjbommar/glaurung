@@ -355,7 +355,9 @@ sit below full IR/CFG bug-class scanners:
   return-type, parameter name/type/role, variadic, calling-convention,
   module, and risk-tag deltas, with security-relevance hints for
   buffer, pointer, length, and role changes. The Windows CLI exposes it
-  as `glaurung windows project-prototype-diff`.
+  as `glaurung windows project-prototype-diff`, and patch-diff review
+  can consume the same project pair to rank prototype deltas and carry
+  them into emitted validation packets.
 - `windows_cfg_dominance` checks whether a gate basic block dominates
   a sink basic block using persisted `.glaurung` CFG tables, native PE
   function CFG recovery, or supplied fixture CFG rows. It reports

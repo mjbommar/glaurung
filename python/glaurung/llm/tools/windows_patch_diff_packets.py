@@ -107,6 +107,7 @@ class WindowsPatchDiffPacketsTool(
             binary_diff=review.binary_diff,
             seed_triage=review.seed_triage,
             security_facts=review.security_facts,
+            prototype_diff=review.prototype_diff,
             review_items=review.review_items,
             function_identity_count=review.function_identity_count,
             pdb_identity_record_count=review.pdb_identity_record_count,

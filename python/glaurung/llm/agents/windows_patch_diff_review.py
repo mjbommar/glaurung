@@ -35,6 +35,12 @@ from ..tools.windows_pdb_identity_manifest import (
     WindowsPdbIdentityManifestArgs,
     WindowsPdbIdentityManifestTool,
 )
+from ..tools.windows_project_prototype_diff import (
+    ProjectPrototypeDelta,
+    WindowsProjectPrototypeDiffArgs,
+    WindowsProjectPrototypeDiffResult,
+    WindowsProjectPrototypeDiffTool,
+)
 from ..tools.windows_seed_binary_diff_triage import (
     SeedBinaryDiffTriageRecord,
     WindowsSeedBinaryDiffTriageArgs,
@@ -45,6 +51,7 @@ from ..tools.windows_seed_binary_diff_triage import (
 
 PatchDiffItemKind = Literal[
     "changed_function",
+    "prototype_delta",
     "seed_function_change",
     "seed_function_missing",
     "security_fact_delta",
@@ -88,6 +95,14 @@ class WindowsPatchDiffReviewConfig(BaseModel):
     after_pseudocode: str | None = None
     before_function_va: int | None = None
     after_function_va: int | None = None
+    before_project_path: str | None = Field(
+        None,
+        description="Optional pre-change .glaurung project for prototype diffing.",
+    )
+    after_project_path: str | None = Field(
+        None,
+        description="Optional post-change .glaurung project for prototype diffing.",
+    )
     pdb_backed: bool = Field(
         False,
         description="Set when the changed function identity is backed by PDB facts.",
@@ -120,6 +135,7 @@ class WindowsPatchDiffReviewConfig(BaseModel):
         ),
     )
     max_diff_rows: int = Field(32, ge=0, le=512)
+    max_prototype_delta_rows: int = Field(128, ge=0, le=512)
     max_items: int = Field(20, ge=1, le=128)
 
 
@@ -142,6 +158,7 @@ class WindowsPatchDiffReviewResult(BaseModel):
     binary_diff: WindowsBinaryDiffSummaryResult
     seed_triage: WindowsSeedBinaryDiffTriageResult | None = None
     security_facts: WindowsDiffSecurityRelevantFactsResult | None = None
+    prototype_diff: WindowsProjectPrototypeDiffResult | None = None
     review_items: list[WindowsPatchDiffReviewItem]
     function_identity_count: int = 0
     pdb_identity_record_count: int = 0
@@ -176,17 +193,21 @@ def run_windows_patch_diff_review(
     )
     seed_triage = _seed_triage(ctx, effective_config)
     security_facts = _security_facts(ctx, effective_config)
+    prototype_diff = _prototype_diff(ctx, effective_config)
     items = _rank_items(
         config=effective_config,
         binary_diff=binary_diff,
         seed_triage=seed_triage,
         security_facts=security_facts,
+        prototype_diff=prototype_diff,
     )
     tool_sequence = ["windows_binary_diff_summary"]
     if seed_triage is not None:
         tool_sequence.append("windows_seed_binary_diff_triage")
     if security_facts is not None:
         tool_sequence.append("windows_diff_security_relevant_facts")
+    if prototype_diff is not None:
+        tool_sequence.append("windows_project_prototype_diff")
     if config.function_identities:
         tool_sequence.append("provided_windows_patch_function_identity")
     if config.function_identity_path:
@@ -201,12 +222,19 @@ def run_windows_patch_diff_review(
         binary_diff=binary_diff,
         seed_triage=seed_triage,
         security_facts=security_facts,
+        prototype_diff=prototype_diff,
         review_items=items,
         function_identity_count=len(identity_load.identities),
         pdb_identity_record_count=identity_load.pdb_identity_record_count,
         pdb_identity_manifest_path=identity_load.pdb_identity_manifest_path,
         tool_sequence=tool_sequence,
-        evidence_bundle=_evidence_bundle(effective_config, items, tool_sequence, notes),
+        evidence_bundle=_evidence_bundle(
+            effective_config,
+            items,
+            tool_sequence,
+            notes,
+            prototype_diff=prototype_diff,
+        ),
         notes=notes,
     )
 
@@ -331,12 +359,35 @@ def _security_facts(
     )
 
 
+def _prototype_diff(
+    ctx: MemoryContext,
+    config: WindowsPatchDiffReviewConfig,
+) -> WindowsProjectPrototypeDiffResult | None:
+    if not config.before_project_path and not config.after_project_path:
+        return None
+    if not config.before_project_path or not config.after_project_path:
+        raise ValueError(
+            "before_project_path and after_project_path are required together"
+        )
+    return WindowsProjectPrototypeDiffTool().run(
+        ctx,
+        ctx.kb,
+        WindowsProjectPrototypeDiffArgs(
+            before_project_path=config.before_project_path,
+            after_project_path=config.after_project_path,
+            include_unchanged=False,
+            max_rows=config.max_prototype_delta_rows,
+        ),
+    )
+
+
 def _rank_items(
     *,
     config: WindowsPatchDiffReviewConfig,
     binary_diff: WindowsBinaryDiffSummaryResult,
     seed_triage: WindowsSeedBinaryDiffTriageResult | None,
     security_facts: WindowsDiffSecurityRelevantFactsResult | None,
+    prototype_diff: WindowsProjectPrototypeDiffResult | None,
 ) -> list[WindowsPatchDiffReviewItem]:
     items: list[WindowsPatchDiffReviewItem] = []
     items.extend(_binary_items(config, binary_diff.rows))
@@ -345,6 +396,8 @@ def _rank_items(
         items.extend(_seed_items(config, seed_triage.records))
     if security_facts is not None:
         items.extend(_security_items(config, security_facts.deltas))
+    if prototype_diff is not None:
+        items.extend(_prototype_items(config, prototype_diff.deltas))
     items.sort(
         key=lambda item: (
             -item.priority,
@@ -546,6 +599,69 @@ def _security_items(
     return out
 
 
+def _prototype_items(
+    config: WindowsPatchDiffReviewConfig,
+    deltas: list[ProjectPrototypeDelta],
+) -> list[WindowsPatchDiffReviewItem]:
+    out: list[WindowsPatchDiffReviewItem] = []
+    for delta in deltas:
+        if delta.status == "unchanged":
+            continue
+        basis = ["project_prototype_diff"]
+        if delta.security_relevance:
+            basis.append("security_relevant_prototype_delta")
+        next_tool = (
+            "windows_sink_to_gate_review"
+            if delta.security_relevance
+            else "windows_decompile_context_packet"
+        )
+        out.append(
+            WindowsPatchDiffReviewItem(
+                rank=0,
+                kind="prototype_delta",
+                priority=_prototype_priority(delta),
+                function=delta.function_name,
+                status=delta.status,
+                summary=(
+                    f"{delta.function_name} prototype {delta.status}: "
+                    f"{', '.join(delta.changed_fields) or 'signature'}"
+                ),
+                match_basis=basis,
+                confidence=_confidence(
+                    config,
+                    0.66 if delta.security_relevance else 0.52,
+                ),
+                reason_codes=_reason_codes(
+                    config,
+                    [
+                        f"prototype_{delta.status}",
+                        *delta.reason_codes,
+                        *delta.security_relevance,
+                    ],
+                ),
+                next_tool=next_tool,
+                next_args={"function": delta.function_name},
+            )
+        )
+    return out
+
+
+def _prototype_priority(delta: ProjectPrototypeDelta) -> int:
+    priority = 54
+    if delta.status == "changed":
+        priority += 10
+    if delta.status in {"added", "removed"}:
+        priority += 6
+    if delta.security_relevance:
+        priority += 18
+    if any(
+        "buffer" in relevance or "length" in relevance
+        for relevance in delta.security_relevance
+    ):
+        priority += 8
+    return priority
+
+
 def _security_priority(delta: SecurityFactDelta) -> int:
     if delta.fact_kind == "gate" and delta.direction == "added":
         return 82
@@ -634,6 +750,8 @@ def _evidence_bundle(
     items: list[WindowsPatchDiffReviewItem],
     tool_sequence: list[str],
     notes: list[str],
+    *,
+    prototype_diff: WindowsProjectPrototypeDiffResult | None,
 ) -> WindowsEvidenceBundle:
     return make_windows_evidence_bundle(
         claim_level="triage_evidence_bundle_not_finding",
@@ -644,6 +762,9 @@ def _evidence_bundle(
                 "binary_b": config.binary_b,
                 "item_count": len(items),
                 "function_identity_count": len(config.function_identities),
+                "prototype_delta_count": (
+                    len(prototype_diff.deltas) if prototype_diff is not None else 0
+                ),
             },
         ),
         source_tools=tool_sequence,
@@ -667,6 +788,7 @@ def _evidence_bundle(
                     if config.function_identities
                     else []
                 ),
+                *(["project_prototype_deltas"] if prototype_diff is not None else []),
             ],
             stale_or_blocking_facts=[
                 *config.functionization_blockers,

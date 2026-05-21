@@ -434,6 +434,14 @@ also exposed through `glaurung windows project-prototype-diff`. This is
 patch-triage metadata for routing changed functions into source/sink
 review, not standalone vulnerability evidence.
 
+Update: patch-diff review now accepts optional before/after
+`.glaurung` project paths and invokes `windows_project_prototype_diff`
+as part of the deterministic review. Changed prototypes become
+first-class `prototype_delta` review items with match-basis and
+reason-code evidence, security-relevant prototype changes route to
+`windows_sink_to_gate_review`, and `windows_patch_diff_packets`
+preserves those items as validation packets.
+
 Update: `windows_symbol_similarity_extraction_plan` now creates the
 runner-facing bridge for that gap. Given a Windows patch pair,
 target/component labels, optional PDB identity metadata, symbol-cache
@@ -1810,6 +1818,18 @@ Validated high-level replay scope:
   removed, and changed prototype rows, security-relevant buffer/length
   and role deltas, KB evidence-node creation, CLI JSON output, and
   `memory_agent` registration.
+- Latest patch-diff prototype integration validation: scoped `uvx ruff
+  check`, `uvx ty check`, `git diff --check`, and focused
+  `uv run pytest` passed for `windows_patch_diff_review.py`,
+  `windows_patch_diff_packets.py`,
+  `test_windows_patch_diff_review_agent.py`,
+  `test_windows_patch_diff_packets_tool.py`, and
+  `test_windows_project_prototype_diff_tool.py`; the full
+  `uv run pytest python/tests/test_windows_*.py -q` sweep also passed
+  with one skip. Tests cover project-prototype deltas becoming
+  `prototype_delta` review items, evidence-bundle prototype-delta
+  coverage, sink/gate routing for security-relevant signature changes,
+  and preservation into emitted patch-diff validation packets.
 
 Not A+ yet:
 
