@@ -745,6 +745,8 @@ def _state(
         & {
             "split_body_candidate",
             "exception_funclet_candidate",
+            "chained_unwind_chunk",
+            "exception_handler_chunk",
             "tail_jump_target",
             "shared_tail_candidate",
         }

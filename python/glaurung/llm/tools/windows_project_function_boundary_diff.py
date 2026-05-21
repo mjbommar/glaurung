@@ -530,6 +530,8 @@ def _chunk_relevance(
         relevance.append("tailcall_or_shared_tail_delta")
     if "funclet" in kind or "exception" in kind:
         relevance.append("exception_funclet_delta")
+    if "unwind" in kind or "unwind" in relation:
+        relevance.append("unwind_chunk_delta")
     if "split" in kind or "body" in kind:
         relevance.append("split_body_delta")
     if {"owner_entry_va", "target_va", "target_name", "chunk_kind"} & set(changed):

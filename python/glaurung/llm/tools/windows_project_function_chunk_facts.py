@@ -184,8 +184,15 @@ def _coverage(chunks: list[ProjectFunctionChunkFact]) -> list[str]:
         coverage.append("thunk_facts")
     if kinds & {"tail_jump_target", "shared_tail_candidate"}:
         coverage.append("tailcall_chunk_facts")
-    if kinds & {"split_body_candidate", "exception_funclet_candidate"}:
+    if kinds & {
+        "split_body_candidate",
+        "exception_funclet_candidate",
+        "chained_unwind_chunk",
+        "exception_handler_chunk",
+    }:
         coverage.append("split_body_or_funclet_facts")
+    if kinds & {"chained_unwind_chunk", "exception_handler_chunk"}:
+        coverage.append("unwind_chunk_facts")
     if kinds & {"pdata_body", "public_symbol_range"}:
         coverage.append("range_backed_chunk_facts")
     return coverage

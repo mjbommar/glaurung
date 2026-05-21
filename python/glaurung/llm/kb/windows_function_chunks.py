@@ -25,6 +25,8 @@ FunctionChunkKind = Literal[
     "entry_candidate",
     "split_body_candidate",
     "exception_funclet_candidate",
+    "chained_unwind_chunk",
+    "exception_handler_chunk",
     "tail_jump_target",
     "shared_tail_candidate",
     "jump_thunk",
@@ -37,6 +39,8 @@ FunctionChunkRelation = Literal[
     "candidate_start",
     "split_candidate",
     "exception_child",
+    "unwind_child",
+    "exception_handler",
     "tailcall_to",
     "shared_tail_from",
     "thunk_to",
@@ -268,6 +272,7 @@ def _boundary_chunk_facts(
                     detail=detail,
                 )
             )
+            out.extend(_pdata_unwind_chunk_facts(item, detail))
             continue
         if (
             item.source
@@ -333,6 +338,49 @@ def _boundary_chunk_facts(
                     detail=detail,
                 )
             )
+    return out
+
+
+def _pdata_unwind_chunk_facts(
+    item: windows_boundaries.FunctionBoundaryCandidate,
+    detail: dict[str, Any],
+) -> list[FunctionChunkFact]:
+    unwind = detail.get("unwind")
+    if not isinstance(unwind, dict):
+        return []
+    out: list[FunctionChunkFact] = []
+    chained_begin = _hex_value(unwind.get("chained_begin_va"))
+    if chained_begin is not None:
+        out.append(
+            FunctionChunkFact(
+                owner_entry_va=chained_begin,
+                chunk_start_va=item.entry_va,
+                chunk_end_va=item.end_va,
+                chunk_kind="chained_unwind_chunk",
+                relation_kind="unwind_child",
+                target_va=chained_begin,
+                source="pdata_unwind_chain",
+                confidence=0.84,
+                name=item.name,
+                detail=detail,
+            )
+        )
+    handler_va = _hex_value(unwind.get("handler_va"))
+    if handler_va is not None and unwind.get("handler_executable") is not False:
+        out.append(
+            FunctionChunkFact(
+                owner_entry_va=item.entry_va,
+                chunk_start_va=handler_va,
+                chunk_end_va=None,
+                chunk_kind="exception_handler_chunk",
+                relation_kind="exception_handler",
+                target_va=handler_va,
+                source="pdata_unwind_handler",
+                confidence=0.76,
+                name=item.name,
+                detail=detail,
+            )
+        )
     return out
 
 

@@ -237,7 +237,11 @@ sit below full IR/CFG bug-class scanners:
   function chunk, thunk, tailcall, shared-tail, and funclet facts. It
   can filter by owner, chunk kind, relation kind, target VA, or an
   arbitrary VA that matches a chunk start, containing range, owner, or
-  target. The same query is exposed through
+  target. `.pdata` indexing now also parses unwind metadata for
+  exception-handler targets and chained unwind fragments, surfacing
+  `exception_handler_chunk` and `chained_unwind_chunk` rows instead of
+  hiding that evidence in raw runtime-function records. The same query
+  is exposed through
   `glaurung windows project-function-chunks` for IDA/Ghidra-style
   boundary explanation during interactive review. These facts explain
   function layout decisions; they are not vulnerability evidence by

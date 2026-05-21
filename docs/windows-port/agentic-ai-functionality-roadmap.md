@@ -1980,6 +1980,13 @@ Validated high-level replay scope:
   with one skip. Tests cover strict `.pdata` functions, import thunks,
   exception funclet chunks, incoming call xrefs, comments, CLI JSON
   output, KB evidence-node creation, and `memory_agent` registration.
+- Latest project function-chunk update: `.pdata` boundary indexing now
+  parses x64 unwind metadata and carries unwind flags, chained-runtime
+  function records, and exception-handler RVAs into project facts.
+  `windows_project_function_chunk_facts` exposes chained unwind
+  fragments as `chained_unwind_chunk` / `unwind_child` rows and
+  executable handler RVAs as `exception_handler_chunk` /
+  `exception_handler` rows, with `unwind_chunk_facts` coverage.
 - Latest project symbol-range validation: focused `uv run pytest`
   passed for `test_windows_project_symbol_range_facts_tool.py`. Tests
   cover exact `.pdata` range classification, inside-`.pdata` funclet

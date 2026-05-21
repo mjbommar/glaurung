@@ -56,10 +56,19 @@ def _write_pe64_with_pdata_and_thunks(tmp_path: Path) -> Path:
     pdata_off = 0x1800
     data[pdata_off : pdata_off + 4] = TEXT_RVA.to_bytes(4, "little")
     data[pdata_off + 4 : pdata_off + 8] = (TEXT_RVA + 0x60).to_bytes(4, "little")
-    data[pdata_off + 8 : pdata_off + 12] = (0).to_bytes(4, "little")
+    data[pdata_off + 8 : pdata_off + 12] = (TEXT_RVA + 0x800).to_bytes(4, "little")
     data[pdata_off + 12 : pdata_off + 16] = (TEXT_RVA + 0x200).to_bytes(4, "little")
     data[pdata_off + 16 : pdata_off + 20] = (TEXT_RVA + 0x220).to_bytes(4, "little")
-    data[pdata_off + 20 : pdata_off + 24] = (0).to_bytes(4, "little")
+    data[pdata_off + 20 : pdata_off + 24] = (TEXT_RVA + 0x820).to_bytes(4, "little")
+
+    unwind_off = 0x400 + 0x800
+    data[unwind_off : unwind_off + 4] = bytes([0x09, 0x00, 0x00, 0x00])
+    data[unwind_off + 4 : unwind_off + 8] = (TEXT_RVA + 0x700).to_bytes(4, "little")
+    chained_off = 0x400 + 0x820
+    data[chained_off : chained_off + 4] = bytes([0x21, 0x00, 0x00, 0x00])
+    data[chained_off + 4 : chained_off + 8] = TEXT_RVA.to_bytes(4, "little")
+    data[chained_off + 8 : chained_off + 12] = (TEXT_RVA + 0x60).to_bytes(4, "little")
+    data[chained_off + 12 : chained_off + 16] = (TEXT_RVA + 0x800).to_bytes(4, "little")
 
     adjustor_off = 0x400 + 0x300
     data[adjustor_off : adjustor_off + 9] = bytes.fromhex("48 83 c1 08 e9 00 02 00 00")
@@ -95,6 +104,7 @@ def test_windows_function_chunks_index_boundaries_thunks_and_shared_tails(
         jump_thunk = dispatch + 0x400
         adjustor_target = dispatch + 0x500
         jump_target = dispatch + 0x600
+        handler = dispatch + 0x700
 
         xref_db.set_function_name(kb, dispatch, "driver!Dispatch", set_by="pdb")
         xref_db.set_function_name(
@@ -107,6 +117,9 @@ def test_windows_function_chunks_index_boundaries_thunks_and_shared_tails(
         xref_db.set_function_name(kb, other_owner, "driver!Other", set_by="pdb")
         xref_db.set_function_name(kb, adjustor, "driver!adjustor_thunk", set_by="pdb")
         xref_db.set_function_name(kb, jump_thunk, "driver!jump_thunk", set_by="pdb")
+        xref_db.set_function_name(
+            kb, handler, "driver!__C_specific_handler", set_by="pdb"
+        )
 
         xref_db.add_xref(kb, dispatch + 0x50, shared_tail, "jump", dispatch)
         xref_db.add_xref(kb, other_owner + 0x10, shared_tail, "jump", other_owner)
@@ -122,6 +135,8 @@ def test_windows_function_chunks_index_boundaries_thunks_and_shared_tails(
         assert "pdata_body" in kinds
         assert "public_symbol_range" in kinds
         assert "exception_funclet_candidate" in kinds
+        assert "exception_handler_chunk" in kinds
+        assert "chained_unwind_chunk" in kinds
         assert "import_thunk" in kinds
         assert "shared_tail_candidate" in kinds
         assert "tail_jump_target" in kinds
@@ -137,6 +152,20 @@ def test_windows_function_chunks_index_boundaries_thunks_and_shared_tails(
             and fact.chunk_start_va == shared_tail
         ]
         assert {fact.owner_entry_va for fact in shared} == {dispatch, other_owner}
+        handler_chunks = [
+            fact for fact in facts if fact.chunk_kind == "exception_handler_chunk"
+        ]
+        assert handler_chunks[0].owner_entry_va == dispatch
+        assert handler_chunks[0].target_va == handler
+        handler_detail = handler_chunks[0].detail
+        assert handler_detail is not None
+        handler_unwind = handler_detail["unwind"]
+        assert isinstance(handler_unwind, dict)
+        assert handler_unwind["handler_kind"] == "exception_handler"
+        chained = [fact for fact in facts if fact.chunk_kind == "chained_unwind_chunk"]
+        assert chained[0].owner_entry_va == dispatch
+        assert chained[0].chunk_start_va == other_owner
+        assert chained[0].relation_kind == "unwind_child"
     finally:
         kb.close()
 
@@ -174,6 +203,17 @@ def test_windows_project_function_chunk_facts_filters_and_adds_evidence(
     assert "function_chunk_facts" in result.coverage
     assert "tailcall_chunk_facts" in result.coverage
     assert result.evidence_node_id is not None
+
+    unwind_result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(project_path),
+            chunk_kind="exception_handler_chunk",
+        ),
+    )
+    assert unwind_result.chunk_count == 1
+    assert "unwind_chunk_facts" in unwind_result.coverage
 
 
 def test_windows_project_function_chunk_facts_filters_by_contained_va(

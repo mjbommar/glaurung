@@ -364,6 +364,7 @@ def _pdata_boundaries(
     for off in range(start, max(start, end - 11), 12):
         begin = int.from_bytes(data[off : off + 4], "little")
         finish = int.from_bytes(data[off + 4 : off + 8], "little")
+        unwind_rva = int.from_bytes(data[off + 8 : off + 12], "little")
         if begin == 0 or finish <= begin:
             continue
         entry_va = layout.image_base + begin
@@ -375,16 +376,99 @@ def _pdata_boundaries(
             or not section.contains_va(end_va - 1)
         ):
             continue
+        detail: dict[str, object] = {
+            "section": section.name,
+            "unwind_rva": hex(unwind_rva),
+            "unwind_va": hex(layout.image_base + unwind_rva),
+        }
+        unwind = _parse_unwind_info(data, layout, unwind_rva)
+        if unwind:
+            detail["unwind"] = unwind
         out.append(
             FunctionBoundaryCandidate(
                 entry_va=entry_va,
                 end_va=end_va,
                 source="pdata",
                 confidence=0.90,
-                detail={"section": section.name},
+                detail=detail,
             )
         )
     return out
+
+
+def _parse_unwind_info(
+    data: bytes,
+    layout: _PeLayout,
+    unwind_rva: int,
+) -> dict[str, object] | None:
+    if unwind_rva == 0:
+        return None
+    off = layout.rva_to_offset(unwind_rva)
+    if off is None or off + 4 > len(data):
+        return None
+    first = data[off]
+    version = first & 0x7
+    flags = first >> 3
+    count_of_codes = data[off + 2]
+    extra_off = off + 4 + count_of_codes * 2
+    if count_of_codes % 2:
+        extra_off += 2
+    out: dict[str, object] = {
+        "version": version,
+        "flags": flags,
+        "flag_names": _unwind_flag_names(flags),
+        "size_of_prolog": data[off + 1],
+        "count_of_codes": count_of_codes,
+        "frame_register": data[off + 3] & 0x0F,
+        "frame_offset": data[off + 3] >> 4,
+    }
+    if flags & 0x3:
+        handler_rva = _u32(data, extra_off)
+        if handler_rva is not None:
+            handler_va = layout.image_base + handler_rva
+            section = layout.section_for_va(handler_va)
+            out.update(
+                {
+                    "handler_rva": hex(handler_rva),
+                    "handler_va": hex(handler_va),
+                    "handler_kind": (
+                        "termination_handler" if flags & 0x2 else "exception_handler"
+                    ),
+                    "handler_section": section.name if section else None,
+                    "handler_executable": bool(section and section.executable),
+                }
+            )
+    elif flags & 0x4 and extra_off + 12 <= len(data):
+        chained_begin = _u32(data, extra_off)
+        chained_end = _u32(data, extra_off + 4)
+        chained_unwind = _u32(data, extra_off + 8)
+        if (
+            chained_begin is not None
+            and chained_end is not None
+            and chained_unwind is not None
+        ):
+            out.update(
+                {
+                    "chained_begin_rva": hex(chained_begin),
+                    "chained_begin_va": hex(layout.image_base + chained_begin),
+                    "chained_end_rva": hex(chained_end),
+                    "chained_end_va": hex(layout.image_base + chained_end),
+                    "chained_unwind_rva": hex(chained_unwind),
+                    "chained_unwind_va": hex(layout.image_base + chained_unwind),
+                }
+            )
+    return out
+
+
+def _unwind_flag_names(flags: int) -> list[str]:
+    names: list[str] = []
+    if flags & 0x1:
+        names.append("ehandler")
+    if flags & 0x2:
+        names.append("uhandler")
+    if flags & 0x4:
+        names.append("chaininfo")
+    return names
 
 
 def _dedupe_candidates(
