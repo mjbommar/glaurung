@@ -89,6 +89,26 @@ def test_windows_live_kernel_snapshot_normalizes_live_facts(
                 },
             }
         ],
+        "etw_providers": [
+            {
+                "provider_name": "AcmeTraceProvider",
+                "provider_guid": "{11111111-2222-3333-4444-555555555555}",
+                "kind": "wpp",
+                "callback": "0xfffff80510005000",
+                "enabled": True,
+            }
+        ],
+        "object_manager": [
+            {
+                "path": "\\\\Device\\\\Acme",
+                "type": "Device",
+                "object": "0xffffb00100008000",
+                "body": "0xffffb00100008030",
+                "handle_count": 3,
+                "pointer_count": 9,
+                "security_descriptor": "0xffffb00100009000",
+            }
+        ],
     }
 
     result = tool.run(
@@ -104,6 +124,8 @@ def test_windows_live_kernel_snapshot_normalizes_live_facts(
     assert result.callback_count == 1
     assert result.driver_object_count == 1
     assert result.driver_dispatch_count == 2
+    assert result.etw_provider_count == 1
+    assert result.object_manager_entry_count == 1
     assert {
         "kernel_identity",
         "loaded_modules",
@@ -111,6 +133,8 @@ def test_windows_live_kernel_snapshot_normalizes_live_facts(
         "kernel_callbacks",
         "driver_objects",
         "driver_dispatch_table",
+        "etw_wpp_providers",
+        "object_manager_state",
     } <= set(result.coverage)
     assert "syscall_unexpected_module" in result.coverage
     by_symbol = {row.symbol: row for row in result.syscalls}
@@ -126,6 +150,10 @@ def test_windows_live_kernel_snapshot_normalizes_live_facts(
         and row.module_name == "acme.sys"
         for row in result.driver_dispatches
     )
+    assert result.etw_providers[0].module_name == "acme.sys"
+    assert result.etw_providers[0].kind == "wpp"
+    assert result.object_manager_entries[0].object_path == "\\\\Device\\\\Acme"
+    assert result.object_manager_entries[0].handle_count == 3
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence and node.label == "windows_live_kernel_snapshot"
@@ -152,6 +180,8 @@ def test_windows_live_kernel_snapshot_reports_missing_sections(
     assert "loaded_modules" in result.missing_capabilities
     assert "live_syscall_table" in result.missing_capabilities
     assert "driver_dispatch_table" in result.missing_capabilities
+    assert "etw_wpp_providers" in result.missing_capabilities
+    assert "object_manager_state" in result.missing_capabilities
 
 
 def test_windows_live_kernel_snapshot_joins_expected_handler_map(

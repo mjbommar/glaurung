@@ -107,6 +107,37 @@ class WindowsDriverObjectFact(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class WindowsEtwProviderFact(BaseModel):
+    provider_name: str | None = None
+    provider_guid: str | None = None
+    kind: str
+    registration_va: int | None = None
+    registration_hex: str | None = None
+    callback_va: int | None = None
+    callback_hex: str | None = None
+    module_name: str | None = None
+    module_status: ModuleAddressStatus
+    enabled: bool | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: list[str] = Field(default_factory=list)
+
+
+class WindowsObjectManagerFact(BaseModel):
+    object_path: str
+    object_type: str | None = None
+    object_va: int | None = None
+    object_hex: str | None = None
+    body_va: int | None = None
+    body_hex: str | None = None
+    handle_count: int | None = None
+    pointer_count: int | None = None
+    granted_access: str | None = None
+    security_descriptor_va: int | None = None
+    security_descriptor_hex: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: list[str] = Field(default_factory=list)
+
+
 class WindowsLiveKernelSnapshotArgs(BaseModel):
     snapshot_json: str | None = Field(
         None,
@@ -145,6 +176,16 @@ class WindowsLiveKernelSnapshotArgs(BaseModel):
         ge=0,
         description="Maximum driver dispatch entries to return.",
     )
+    max_etw_providers: int = Field(
+        1024,
+        ge=0,
+        description="Maximum ETW/WPP provider rows to return.",
+    )
+    max_object_manager_entries: int = Field(
+        2048,
+        ge=0,
+        description="Maximum object-manager rows to return.",
+    )
     add_to_kb: bool = Field(
         False,
         description="If true, add a compact live-kernel snapshot evidence node.",
@@ -158,11 +199,15 @@ class WindowsLiveKernelSnapshotResult(BaseModel):
     callback_count: int
     driver_object_count: int
     driver_dispatch_count: int
+    etw_provider_count: int
+    object_manager_entry_count: int
     modules: list[WindowsLoadedModuleFact]
     syscalls: list[WindowsLiveSyscallFact]
     callbacks: list[WindowsLiveCallbackFact]
     driver_objects: list[WindowsDriverObjectFact]
     driver_dispatches: list[WindowsDriverDispatchFact]
+    etw_providers: list[WindowsEtwProviderFact]
+    object_manager_entries: list[WindowsObjectManagerFact]
     coverage: list[str] = Field(default_factory=list)
     missing_capabilities: list[str] = Field(default_factory=list)
     evidence_node_id: str | None = None
@@ -219,6 +264,10 @@ class WindowsLiveKernelSnapshotTool(
             max_driver_objects=args.max_driver_objects,
             max_dispatches=args.max_dispatches,
         )
+        etw_providers = _etw_provider_facts(snapshot, modules)[: args.max_etw_providers]
+        object_manager_entries = _object_manager_facts(snapshot)[
+            : args.max_object_manager_entries
+        ]
         coverage = _coverage(
             kernel_identity=kernel_identity,
             modules=modules,
@@ -226,6 +275,8 @@ class WindowsLiveKernelSnapshotTool(
             callbacks=callbacks,
             driver_objects=driver_objects,
             driver_dispatches=driver_dispatches,
+            etw_providers=etw_providers,
+            object_manager_entries=object_manager_entries,
         )
         missing = _missing_capabilities(coverage)
 
@@ -241,6 +292,8 @@ class WindowsLiveKernelSnapshotTool(
                         "callback_count": len(callbacks),
                         "driver_object_count": len(driver_objects),
                         "driver_dispatch_count": len(driver_dispatches),
+                        "etw_provider_count": len(etw_providers),
+                        "object_manager_entry_count": len(object_manager_entries),
                     },
                 )
             )
@@ -256,11 +309,15 @@ class WindowsLiveKernelSnapshotTool(
             callback_count=len(callbacks),
             driver_object_count=len(driver_objects),
             driver_dispatch_count=len(driver_dispatches),
+            etw_provider_count=len(etw_providers),
+            object_manager_entry_count=len(object_manager_entries),
             modules=modules,
             syscalls=syscalls,
             callbacks=callbacks,
             driver_objects=driver_objects,
             driver_dispatches=driver_dispatches,
+            etw_providers=etw_providers,
+            object_manager_entries=object_manager_entries,
             coverage=coverage,
             missing_capabilities=missing,
             evidence_node_id=evidence_node_id,
@@ -623,6 +680,104 @@ def _dispatch_rows(value: Any) -> list[tuple[str, dict[str, Any]]]:
     return rows
 
 
+def _etw_provider_facts(
+    snapshot: dict[str, Any],
+    modules: list[WindowsLoadedModuleFact],
+) -> list[WindowsEtwProviderFact]:
+    facts: list[WindowsEtwProviderFact] = []
+    for row in _list_section(
+        snapshot,
+        "etw_providers",
+        "wpp_providers",
+        "trace_providers",
+        "providers",
+    ):
+        name = _str_or_none(
+            row.get("provider_name") or row.get("name") or row.get("symbol")
+        )
+        guid = _str_or_none(row.get("provider_guid") or row.get("guid"))
+        registration_va = _int_or_none(
+            row.get("registration_va") or row.get("registration")
+        )
+        callback_va = _int_or_none(
+            row.get("callback_va") or row.get("callback") or row.get("enable_callback")
+        )
+        attribution_va = callback_va if callback_va is not None else registration_va
+        module = _find_module(modules, attribution_va)
+        if not name and not guid and attribution_va is None:
+            continue
+        facts.append(
+            WindowsEtwProviderFact(
+                provider_name=name,
+                provider_guid=guid,
+                kind=_str_or_none(row.get("kind") or row.get("type")) or "etw",
+                registration_va=registration_va,
+                registration_hex=_hex_or_none(registration_va),
+                callback_va=callback_va,
+                callback_hex=_hex_or_none(callback_va),
+                module_name=module.name if module else None,
+                module_status=_module_status(module, attribution_va, None),
+                enabled=_bool_or_none(row.get("enabled") or row.get("active")),
+                confidence=0.82 if attribution_va is not None else 0.68,
+                evidence=[
+                    "etw_wpp_provider",
+                    *_module_evidence(module, attribution_va),
+                ],
+            )
+        )
+    return facts
+
+
+def _object_manager_facts(
+    snapshot: dict[str, Any],
+) -> list[WindowsObjectManagerFact]:
+    facts: list[WindowsObjectManagerFact] = []
+    for row in _list_section(
+        snapshot,
+        "object_manager",
+        "object_manager_entries",
+        "objects",
+        "object_namespace",
+    ):
+        path = _str_or_none(
+            row.get("object_path")
+            or row.get("path")
+            or row.get("full_name")
+            or row.get("name")
+        )
+        if not path:
+            continue
+        object_va = _int_or_none(row.get("object_va") or row.get("object"))
+        body_va = _int_or_none(row.get("body_va") or row.get("body"))
+        sd_va = _int_or_none(
+            row.get("security_descriptor_va") or row.get("security_descriptor")
+        )
+        facts.append(
+            WindowsObjectManagerFact(
+                object_path=path,
+                object_type=_str_or_none(row.get("object_type") or row.get("type")),
+                object_va=object_va,
+                object_hex=_hex_or_none(object_va),
+                body_va=body_va,
+                body_hex=_hex_or_none(body_va),
+                handle_count=_int_or_none(
+                    row.get("handle_count") or row.get("handles")
+                ),
+                pointer_count=_int_or_none(
+                    row.get("pointer_count") or row.get("pointers")
+                ),
+                granted_access=_str_or_none(
+                    row.get("granted_access") or row.get("access")
+                ),
+                security_descriptor_va=sd_va,
+                security_descriptor_hex=_hex_or_none(sd_va),
+                confidence=0.78,
+                evidence=["object_manager_state"],
+            )
+        )
+    return facts
+
+
 def _coverage(
     *,
     kernel_identity: WindowsKernelIdentityFact | None,
@@ -631,6 +786,8 @@ def _coverage(
     callbacks: list[WindowsLiveCallbackFact],
     driver_objects: list[WindowsDriverObjectFact],
     driver_dispatches: list[WindowsDriverDispatchFact],
+    etw_providers: list[WindowsEtwProviderFact],
+    object_manager_entries: list[WindowsObjectManagerFact],
 ) -> list[str]:
     coverage: list[str] = []
     if kernel_identity is not None:
@@ -645,6 +802,10 @@ def _coverage(
         coverage.append("driver_objects")
     if driver_dispatches:
         coverage.append("driver_dispatch_table")
+    if etw_providers:
+        coverage.append("etw_wpp_providers")
+    if object_manager_entries:
+        coverage.append("object_manager_state")
     if any(row.module_status == "outside_loaded_modules" for row in syscalls):
         coverage.append("syscall_handler_outside_loaded_modules")
     if any(row.module_status == "unexpected_module" for row in syscalls):
@@ -662,6 +823,8 @@ def _missing_capabilities(coverage: list[str]) -> list[str]:
         "kernel_callbacks",
         "driver_objects",
         "driver_dispatch_table",
+        "etw_wpp_providers",
+        "object_manager_state",
     ]
     seen = set(coverage)
     return [item for item in expected if item not in seen]
