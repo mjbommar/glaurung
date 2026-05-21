@@ -701,6 +701,75 @@ fn sub_140010000 {
     )
 
 
+def test_windows_function_pretty_lift_normalizes_thunk_project_call_prototypes(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    project = tmp_path / "sample.glaurung"
+    kb = PersistentKnowledgeBase.open(project, binary_path=ctx.file_path)
+    try:
+        xref_db.set_function_prototype(
+            kb,
+            "CustomHelper",
+            "NTSTATUS",
+            [
+                xref_db.FunctionParam("Buffer", "void *", "output_buffer"),
+                xref_db.FunctionParam("Length", "ULONG", "length"),
+                xref_db.FunctionParam("InputBuffer", "const void *", "input_buffer"),
+                xref_db.FunctionParam("OutputLength", "ULONG", "output_length"),
+                xref_db.FunctionParam("ReturnLength", "ULONG *", "return_length"),
+            ],
+            set_by="manual",
+            confidence=0.95,
+        )
+    finally:
+        kb.close()
+
+    tool = build_tool()
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pseudocode="""
+fn sub_140010100 {
+    nt!__imp_CustomHelper(arg0, arg1, arg2, arg3, stack_1);
+    j_CustomHelper(arg0, arg1, arg2, arg3, stack_1);
+    return;
+}
+""",
+            project_path=str(project),
+            function_va=0x140010100,
+            function_name="ThunkProjectPrototypeCaller",
+        ),
+    )
+
+    assert [
+        (site.call_name, site.original_name) for site in result.packet.call_sites
+    ] == [
+        ("CustomHelper", "nt!__imp_CustomHelper"),
+        ("CustomHelper", "j_CustomHelper"),
+    ]
+    assert [prototype.symbol for prototype in result.packet.call_prototypes] == [
+        "CustomHelper"
+    ]
+    assert all(site.prototype is not None for site in result.packet.call_sites)
+    assert all(
+        site.argument_facts[0].parameter_name == "Buffer"
+        and site.argument_facts[0].role == "output_buffer"
+        and site.argument_facts[4].parameter_name == "ReturnLength"
+        and site.argument_facts[4].role == "return_length"
+        for site in result.packet.call_sites
+    )
+    assert (
+        result.pretty_lift.pseudocode.count(
+            "CustomHelper(Buffer, Length, InputBuffer, OutputLength, ReturnLength)"
+        )
+        == 2
+    )
+    assert "nt___imp_CustomHelper" not in result.pretty_lift.pseudocode
+    assert "j_CustomHelper" not in result.pretty_lift.pseudocode
+
+
 def test_windows_function_pretty_lift_uses_project_entry_prototype(
     tmp_path: Path,
 ) -> None:

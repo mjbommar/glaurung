@@ -106,6 +106,10 @@ sit below full IR/CFG bug-class scanners:
   agent one local context object that contains both readable code
   context and the low-level type/memory/xref facts needed to interpret
   registers, field accesses, and calls.
+- `windows_function_pretty_lift` also normalizes import/thunk spellings
+  during prototype lookup and call rendering, so project and stdlib
+  prototypes can flow through `nt!__imp_Foo`, `j_Foo`, `thunk_Foo`, and
+  `Foo$thunk` callsites into named Win64 arguments in the pretty lift.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

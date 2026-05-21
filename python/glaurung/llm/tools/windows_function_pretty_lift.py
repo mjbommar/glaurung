@@ -1508,9 +1508,11 @@ def _call_site_facts(
     import_thunk_aliases: dict[str, str],
 ) -> list[CallSiteFact]:
     facts: list[CallSiteFact] = []
-    prototype_by_name = {
-        prototype.symbol.lower(): prototype for prototype in call_prototypes
-    }
+    prototype_by_name: dict[str, PrototypeFact] = {}
+    for prototype in call_prototypes:
+        prototype_by_name[prototype.symbol.lower()] = prototype
+        for candidate in _prototype_name_candidates(prototype.symbol):
+            prototype_by_name.setdefault(candidate.lower(), prototype)
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
         if not line or line.startswith("fn "):
@@ -1523,7 +1525,12 @@ def _call_site_facts(
                 continue
             call_index = line.find(name)
             call_name = _clean_symbol_name(name)
-            resolved_call_name = import_thunk_aliases.get(call_name, call_name)
+            normalized_thunk_name = _import_thunk_symbol(name) or _import_thunk_symbol(
+                call_name
+            )
+            resolved_call_name = normalized_thunk_name or import_thunk_aliases.get(
+                call_name, call_name
+            )
             prototype = (
                 prototype_by_name.get(resolved_call_name.lower())
                 or prototype_by_name.get(call_name.lower())
@@ -1911,7 +1918,7 @@ def _prototype_fact_for_symbol(
         if project is not None:
             return project.model_copy(
                 update={
-                    "symbol": _clean_symbol_name(symbol),
+                    "symbol": _clean_symbol_name(candidate),
                     "provenance": [*project.provenance, f"{kind}_project_lookup"],
                 }
             )
@@ -1926,7 +1933,7 @@ def _prototype_fact_for_symbol(
         if prototype is not None:
             return prototype.model_copy(
                 update={
-                    "symbol": _clean_symbol_name(symbol),
+                    "symbol": _clean_symbol_name(candidate),
                     "provenance": [*prototype.provenance, f"{kind}_stdlib_lookup"],
                 }
             )
@@ -1934,15 +1941,32 @@ def _prototype_fact_for_symbol(
 
 
 def _prototype_name_candidates(symbol: str) -> list[str]:
+    return _symbol_name_variants(symbol)
+
+
+def _symbol_name_variants(symbol: str | None) -> list[str]:
+    if not symbol:
+        return []
     cleaned = _clean_symbol_name(symbol)
-    candidates = [symbol, cleaned]
-    for value in (symbol, cleaned):
-        if "!" in value:
-            candidates.append(value.rsplit("!", 1)[1])
-        for prefix in ("__imp_", "_imp_", "imp_"):
-            if value.startswith(prefix):
-                candidates.append(value[len(prefix) :])
-    return _dedupe([candidate for candidate in candidates if candidate])
+    base_values = [symbol.strip(), cleaned]
+    if "!" in symbol:
+        base_values.append(symbol.rsplit("!", 1)[-1].strip())
+    out: list[str] = []
+    for value in base_values:
+        if not value:
+            continue
+        out.append(value)
+        suffix = value.rsplit("!", 1)[-1].rsplit("::", 1)[-1].strip()
+        if suffix:
+            out.append(suffix)
+        for prefix in ("__imp__", "__imp_", "_imp_", "imp_", "j_", "thunk_"):
+            if suffix.startswith(prefix) and len(suffix) > len(prefix):
+                out.append(suffix.removeprefix(prefix))
+        if suffix.endswith("$thunk") and len(suffix) > len("$thunk"):
+            out.append(suffix.removesuffix("$thunk"))
+        if suffix.startswith("__imp_") and "@@" in suffix:
+            out.append(suffix.removeprefix("__imp_").split("@@", 1)[0])
+    return _dedupe(out)
 
 
 @lru_cache(maxsize=1)
@@ -2920,9 +2944,16 @@ def _is_import_thunk_access(access: MemoryAccessFact) -> bool:
 
 
 def _import_thunk_symbol(base: str) -> str | None:
-    for prefix in ("__imp_", "_imp_", "imp_"):
-        if base.startswith(prefix) and len(base) > len(prefix):
-            return base[len(prefix) :]
+    suffix = base.rsplit("!", 1)[-1].rsplit("::", 1)[-1].strip()
+    if not suffix:
+        return None
+    for prefix in ("__imp__", "__imp_", "_imp_", "imp_", "j_", "thunk_"):
+        if suffix.startswith(prefix) and len(suffix) > len(prefix):
+            return _clean_symbol_name(suffix.removeprefix(prefix))
+    if suffix.endswith("$thunk") and len(suffix) > len("$thunk"):
+        return _clean_symbol_name(suffix.removesuffix("$thunk"))
+    if suffix.startswith("__imp_") and "@@" in suffix:
+        return _clean_symbol_name(suffix.removeprefix("__imp_").split("@@", 1)[0])
     return None
 
 

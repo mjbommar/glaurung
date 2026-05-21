@@ -200,6 +200,14 @@ calls, and memory accesses can be reviewed as `Irp`, `ProbeForRead`,
 `OutputBufferLength`, `UserBuffer`, and similar typed facts rather than
 only as registers and raw operands.
 
+Update: `windows_function_pretty_lift` now applies the same
+import/thunk callee-name normalization during prototype lookup and
+rendering. Direct calls through spellings such as `nt!__imp_Foo`,
+`j_Foo`, `thunk_Foo`, and `Foo$thunk` can resolve to project or
+stdlib prototypes, attach Win64 callsite argument names/roles, and
+render as the underlying callee instead of leaking thunk labels into the
+agent-facing lift.
+
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class
 table candidates. It classifies dispatch tables, callback arrays,
