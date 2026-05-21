@@ -344,6 +344,9 @@ from ..tools.windows_syscall_atlas_diff import (
 from ..tools.windows_syscall_handler_correlate import (
     build_tool as build_windows_syscall_handler_correlate,
 )
+from ..tools.windows_live_kernel_snapshot import (
+    build_tool as build_windows_live_kernel_snapshot,
+)
 from ..tools.windows_diff_security_relevant_facts import (
     build_tool as build_windows_diff_security_relevant_facts,
 )
@@ -1332,6 +1335,9 @@ def register_analysis_tools(
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_syscall_atlas_diff()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_syscall_handler_correlate())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_live_kernel_snapshot())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_diff_security_relevant_facts())
