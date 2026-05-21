@@ -233,6 +233,16 @@ sit below full IR/CFG bug-class scanners:
   xref candidate, symbol-only, or no evidence, with reason codes and a
   recommended next action. The Windows CLI exposes it as
   `glaurung windows project-function-start-explain`.
+- `windows_project_symbol_range_facts` audits PDB/public symbol ranges
+  across a `.glaurung` project. It joins `function_names` with
+  `function_boundaries` and `function_chunk_facts` to classify each
+  symbol as exact `.pdata`, symbol-adjacency range, inside-`.pdata`
+  split/funclet candidate, contained label, call-target-only,
+  unbounded symbol, or missing boundary. Rows include previous/next
+  symbol neighbors, range source, confidence, boundary source conflicts,
+  chunk hints, review priority, and security relevance hints. The
+  Windows CLI exposes it as `glaurung windows project-symbol-ranges` for
+  IDA/Ghidra-style public-symbol range review.
 - `windows_analyst_notebook` imports and exports analyst decisions for
   `.glaurung` Windows projects. It round-trips function names, comments,
   data labels, function prototypes, stack-variable type overrides,

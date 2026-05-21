@@ -82,6 +82,11 @@ from glaurung.llm.tools.windows_project_function_start_explain import (
     WindowsProjectFunctionStartExplainResult,
     build_tool as build_windows_project_function_start_explain,
 )
+from glaurung.llm.tools.windows_project_symbol_range_facts import (
+    WindowsProjectSymbolRangeFactsArgs,
+    WindowsProjectSymbolRangeFactsResult,
+    build_tool as build_windows_project_symbol_range_facts,
+)
 from glaurung.llm.tools.windows_project_memory_access_query import (
     WindowsProjectMemoryAccessQueryArgs,
     WindowsProjectMemoryAccessQueryResult,
@@ -573,6 +578,46 @@ class WindowsCommand(BaseCommand):
             "--add-to-kb",
             action="store_true",
             help="Record the function-start explanation in the transient memory KB.",
+        )
+
+        symbol_ranges = subparsers.add_parser(
+            "project-symbol-ranges",
+            help=(
+                "Audit PDB/public symbol ranges against .pdata, symbol "
+                "adjacency, containing ranges, and chunk facts"
+            ),
+        )
+        self._add_common_child_arguments(symbol_ranges)
+        symbol_ranges.add_argument("--project-path", required=True)
+        symbol_ranges.add_argument("--binary-id", type=int)
+        symbol_ranges.add_argument("--name-contains")
+        symbol_ranges.add_argument(
+            "--range-status",
+            choices=[
+                "all",
+                "pdata_exact",
+                "symbol_adjacency",
+                "inside_pdata",
+                "contained_label",
+                "unbounded_symbol",
+                "call_target_only",
+                "no_boundary",
+            ],
+            default="all",
+        )
+        symbol_ranges.add_argument(
+            "--bounded-only",
+            action="store_false",
+            dest="include_unbounded",
+            default=True,
+            help="Omit symbols that do not currently have an end VA.",
+        )
+        symbol_ranges.add_argument("--min-confidence", type=float, default=0.0)
+        symbol_ranges.add_argument("--max-rows", type=int, default=128)
+        symbol_ranges.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the symbol-range query in the transient memory KB.",
         )
 
         memory_access = subparsers.add_parser(
@@ -1158,6 +1203,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_function_boundary_diff(args, formatter)
         if args.windows_action == "project-function-start-explain":
             return _execute_project_function_start_explain(args, formatter)
+        if args.windows_action == "project-symbol-ranges":
+            return _execute_project_symbol_range_facts(args, formatter)
         if args.windows_action == "project-memory-access-query":
             return _execute_project_memory_access_query(args, formatter)
         if args.windows_action == "project-data-tables":
@@ -1926,6 +1973,61 @@ def _execute_project_function_start_explain(
         )
     else:
         formatter.output_plain(_format_project_function_start_explain_human(result))
+    return 0
+
+
+def _execute_project_symbol_range_facts(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_symbol_range_facts()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectSymbolRangeFactsArgs(
+            project_path=args.project_path,
+            binary_id=args.binary_id,
+            name_contains=args.name_contains,
+            range_status=args.range_status,
+            include_unbounded=args.include_unbounded,
+            min_confidence=args.min_confidence,
+            max_rows=args.max_rows,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "project_path": result.project_path,
+                        "binary_id": result.binary_id,
+                        "symbol_count": result.symbol_count,
+                        "filtered_count": result.filtered_count,
+                        "returned_count": result.returned_count,
+                        "ranged_count": result.ranged_count,
+                        "unbounded_count": result.unbounded_count,
+                        "exact_pdata_count": result.exact_pdata_count,
+                        "inside_pdata_count": result.inside_pdata_count,
+                        "adjacency_count": result.adjacency_count,
+                        "conflict_count": result.conflict_count,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "symbol_range", "data": item.model_dump(mode="json")}
+                    for item in result.facts
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_symbol_range_facts_human(result))
     return 0
 
 
@@ -3036,6 +3138,34 @@ def _format_project_function_start_explain_human(
             f"  ref_to {ref.kind} {ref.src} "
             f"{ref.src_function_name or ref.src_function or '-'} -> {ref.dst}"
         )
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_symbol_range_facts_human(
+    result: WindowsProjectSymbolRangeFactsResult,
+) -> str:
+    lines = [
+        "Windows project symbol ranges",
+        f"  project={result.project_path}",
+        (
+            f"  returned={result.returned_count}/{result.filtered_count} "
+            f"symbols={result.symbol_count} ranged={result.ranged_count} "
+            f"unbounded={result.unbounded_count} conflicts={result.conflict_count}"
+        ),
+        f"  coverage={','.join(result.coverage) or '-'}",
+    ]
+    for fact in result.facts[:20]:
+        lines.append(
+            f"  {fact.entry:<14} {fact.range_status:<17} "
+            f"end={fact.end or '-'} source={fact.range_source or '-'} "
+            f"name={fact.name} conf={fact.confidence:.2f} "
+            f"relevance={','.join(fact.security_relevance) or '-'}"
+        )
+    if len(result.facts) > 20:
+        lines.append(f"  ... {len(result.facts) - 20} more symbols")
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)

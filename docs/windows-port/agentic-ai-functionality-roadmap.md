@@ -486,6 +486,18 @@ invokes it when before/after project paths are available and ranks
 those changes as `boundary_delta` items, making low-level
 functionization drift visible before decompilation or sink review.
 
+Update: `windows_project_symbol_range_facts` now audits PDB/public
+symbol ranges in a `.glaurung` project by joining `function_names`,
+`function_boundaries`, and `function_chunk_facts`. It classifies
+symbols as exact `.pdata`, symbol-adjacency ranges, inside-`.pdata`
+split/funclet candidates, contained labels, call-target-only,
+unbounded symbols, or missing-boundary rows, and includes previous/next
+symbol neighbors, boundary source conflicts, chunk hints, confidence,
+review priority, and security relevance hints. This gives analysts and
+agents a project-level view of where public symbols safely define
+ranges and where IDA/Ghidra-style functionization review is still
+needed.
+
 Update: `windows_symbol_similarity_extraction_plan` now creates the
 runner-facing bridge for that gap. Given a Windows patch pair,
 target/component labels, optional PDB identity metadata, symbol-cache
@@ -1920,6 +1932,14 @@ Validated high-level replay scope:
   with one skip. Tests cover strict `.pdata` functions, import thunks,
   exception funclet chunks, incoming call xrefs, comments, CLI JSON
   output, KB evidence-node creation, and `memory_agent` registration.
+- Latest project symbol-range validation: focused `uv run pytest`
+  passed for `test_windows_project_symbol_range_facts_tool.py`. Tests
+  cover exact `.pdata` range classification, inside-`.pdata` funclet
+  candidates, symbol-adjacency ranges, unbounded symbols, thunk chunk
+  hints, CLI JSON filtering, KB evidence-node creation, and
+  `memory_agent` registration. The full
+  `uv run pytest python/tests/test_windows_*.py -q` sweep also passed
+  with one skip.
 - Latest project callgraph reachability validation: scoped `uvx ruff
   check`, `uvx ty check`, `git diff --check`, and focused
   `uv run pytest` passed for
