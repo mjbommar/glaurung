@@ -715,6 +715,17 @@ symbol-only row, or no-evidence target. The result includes reason
 codes, confidence, and a recommended next action, and the CLI exposes it
 as `glaurung windows project-function-start-explain`.
 
+Update: `windows_project_callgraph_reachability` now provides a
+project-workspace answer to "does this function reach that sink?" and
+"who reaches this sink?" It reads persisted call xrefs from a
+`.glaurung` project, resolves source and target functions by VA or name,
+returns bounded source-to-target paths when both endpoints are supplied,
+and returns upstream-to-target path samples when only the target is
+supplied. The CLI exposes it as
+`glaurung windows project-callgraph-reachability`; results explicitly
+remain topology evidence, not argument-flow or attacker-reachability
+proof.
+
 Update: the native positive/negative replay cases are now part of the
 checked-in `functionization_rule_fixtures.yaml`, so the default replay
 path covers 5 fixture groups and 11 cases rather than keeping native
@@ -1852,6 +1863,18 @@ Validated high-level replay scope:
   with one skip. Tests cover strict `.pdata` functions, import thunks,
   exception funclet chunks, incoming call xrefs, comments, CLI JSON
   output, KB evidence-node creation, and `memory_agent` registration.
+- Latest project callgraph reachability validation: scoped `uvx ruff
+  check`, `uvx ty check`, `git diff --check`, and focused
+  `uv run pytest` passed for
+  `windows_project_callgraph_reachability.py`, Windows CLI registration,
+  `memory_agent.py`,
+  `test_windows_project_callgraph_reachability_tool.py`,
+  `test_windows_project_callgraph_slice_tool.py`, and
+  `test_windows_project_onehop_sink_chains_tool.py`; the full
+  `uv run pytest python/tests/test_windows_*.py -q` sweep also passed
+  with one skip. Tests cover source-to-sink path recovery,
+  upstream-to-sink path sampling, unreachable targets, CLI JSON output,
+  KB evidence-node creation, and `memory_agent` registration.
 
 Not A+ yet:
 

@@ -201,6 +201,13 @@ sit below full IR/CFG bug-class scanners:
 - `windows_project_callgraph_slice` returns incoming callers and
   outgoing callees around one project function, with exact callsite VAs
   and caller/callee names from persisted `.glaurung` call xrefs.
+- `windows_project_callgraph_reachability` answers bounded "does this
+  function reach that sink?" and "who reaches this sink?" questions from
+  persisted `.glaurung` call xrefs. It returns source-to-target paths
+  when both endpoints are supplied, or upstream-to-target path samples
+  when only a target is supplied. The result is callgraph topology
+  evidence only; argument value flow, attacker source reachability, and
+  CFG feasibility remain separate facts.
 - `windows_project_function_chunk_facts` returns persisted first-class
   function chunk, thunk, tailcall, shared-tail, and funclet facts. It
   can filter by owner, chunk kind, relation kind, target VA, or an

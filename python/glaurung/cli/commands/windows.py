@@ -47,6 +47,11 @@ from glaurung.llm.tools.windows_high_volume_preflight import (
     WindowsHighVolumePreflightResult,
     build_tool as build_windows_high_volume_preflight,
 )
+from glaurung.llm.tools.windows_project_callgraph_reachability import (
+    WindowsProjectCallgraphReachabilityArgs,
+    WindowsProjectCallgraphReachabilityResult,
+    build_tool as build_windows_project_callgraph_reachability,
+)
 from glaurung.llm.tools.windows_project_fact_manifest import (
     WindowsProjectFactManifestArgs,
     WindowsProjectFactManifestResult,
@@ -439,6 +444,34 @@ class WindowsCommand(BaseCommand):
             "--add-to-kb",
             action="store_true",
             help="Record the xref query in the transient memory KB",
+        )
+
+        project_reachability = subparsers.add_parser(
+            "project-callgraph-reachability",
+            help=(
+                "Find bounded source-to-target or upstream-to-target callgraph "
+                "paths in a .glaurung project"
+            ),
+        )
+        self._add_common_child_arguments(project_reachability)
+        project_reachability.add_argument("--project-path", required=True)
+        project_reachability.add_argument("--binary-id", type=int)
+        project_reachability.add_argument(
+            "--source-function-va", type=lambda value: int(value, 0)
+        )
+        project_reachability.add_argument("--source-function-name")
+        project_reachability.add_argument(
+            "--target-function-va", type=lambda value: int(value, 0)
+        )
+        project_reachability.add_argument("--target-function-name")
+        project_reachability.add_argument("--include-jumps", action="store_true")
+        project_reachability.add_argument("--max-depth", type=int, default=6)
+        project_reachability.add_argument("--max-edges", type=int, default=50_000)
+        project_reachability.add_argument("--max-paths", type=int, default=8)
+        project_reachability.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the reachability query in the transient memory KB.",
         )
 
         project_chunks = subparsers.add_parser(
@@ -944,6 +977,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_fact_manifest(args, formatter)
         if args.windows_action == "project-xrefs":
             return _execute_project_xref_query(args, formatter)
+        if args.windows_action == "project-callgraph-reachability":
+            return _execute_project_callgraph_reachability(args, formatter)
         if args.windows_action == "project-function-chunks":
             return _execute_project_function_chunks(args, formatter)
         if args.windows_action == "project-function-start-explain":
@@ -1477,6 +1512,69 @@ def _execute_project_xref_query(
         )
     else:
         formatter.output_plain(_format_project_xref_query_human(result))
+    return 0
+
+
+def _execute_project_callgraph_reachability(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_callgraph_reachability()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectCallgraphReachabilityArgs(
+            project_path=args.project_path,
+            binary_id=args.binary_id,
+            source_function_va=args.source_function_va,
+            source_function_name=args.source_function_name,
+            target_function_va=args.target_function_va,
+            target_function_name=args.target_function_name,
+            include_jumps=args.include_jumps,
+            max_depth=args.max_depth,
+            max_edges=args.max_edges,
+            max_paths=args.max_paths,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "project_path": result.project_path,
+                        "binary_id": result.binary_id,
+                        "mode": result.mode,
+                        "source": (
+                            result.source.model_dump(mode="json")
+                            if result.source
+                            else None
+                        ),
+                        "target": (
+                            result.target.model_dump(mode="json")
+                            if result.target
+                            else None
+                        ),
+                        "reachable": result.reachable,
+                        "path_count": result.path_count,
+                        "truncated": result.truncated,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "path", "data": item.model_dump(mode="json")}
+                    for item in result.paths
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_callgraph_reachability_human(result))
     return 0
 
 
@@ -2351,6 +2449,45 @@ def _format_project_xref_query_human(result: WindowsProjectXrefQueryResult) -> s
         )
     if len(result.rows) > 20:
         lines.append(f"  ... {len(result.rows) - 20} more")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_callgraph_reachability_human(
+    result: WindowsProjectCallgraphReachabilityResult,
+) -> str:
+    source = result.source.name if result.source else "-"
+    target = result.target.name if result.target else "-"
+    lines = [
+        "Windows project callgraph reachability",
+        f"  project={result.project_path}",
+        (
+            f"  mode={result.mode} reachable={result.reachable} "
+            f"paths={result.path_count} truncated={result.truncated}"
+        ),
+        f"  source={source or '-'} target={target or '-'}",
+        (
+            f"  visited={result.visited_function_count} "
+            f"explored_edges={result.explored_edge_count}"
+        ),
+        f"  coverage={','.join(result.coverage) or '-'}",
+        f"  stop={','.join(result.stop_reasons) or '-'}",
+    ]
+    for path in result.paths[:8]:
+        names = [item.name or item.address for item in path.function_sequence]
+        lines.append(
+            f"  path depth={path.depth} stop={path.stop_reason}: " + " -> ".join(names)
+        )
+        for edge in path.edges[:8]:
+            lines.append(
+                f"    {edge.kind} {edge.callsite} "
+                f"{edge.caller_name or edge.caller} -> "
+                f"{edge.callee_name or edge.callee}"
+            )
+        if len(path.edges) > 8:
+            lines.append(f"    ... {len(path.edges) - 8} more edges")
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)
