@@ -97,6 +97,13 @@ sit below full IR/CFG bug-class scanners:
   `.glaurung` project, returning explicit import counts and remaining
   gaps so agents can promote a project from cached-PDB state to
   queryable type/name facts.
+- `windows_decompile_context_packet` builds a bounded function review
+  packet with decompile text, disassembly, CFG shape, calls, optional
+  `.glaurung` names/comments/data labels, and now project-backed
+  function prototypes, callee prototypes, and persisted memory-access
+  rows for the selected function. This gives an agent one local context
+  object that contains both readable code context and the low-level
+  type/memory facts needed to interpret registers and field accesses.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

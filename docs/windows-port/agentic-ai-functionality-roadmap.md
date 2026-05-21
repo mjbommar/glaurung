@@ -153,8 +153,9 @@ strict functions, provenance-backed starts, boundary-review candidates,
 body-split candidates, vector-block labels, or rejects. Priority 9 is
 implemented as `windows_decompile_context_packet`, a bounded function
 packet that joins decompiler text, disassembly, CFG shape, calls,
-optional `.glaurung` names/comments/data labels, missing-capability
-flags, and the shared evidence-bundle schema.
+optional `.glaurung` names/comments/data labels, project-backed
+function prototypes, callee prototypes, persisted memory-access rows,
+missing-capability flags, and the shared evidence-bundle schema.
 
 Several adjacent primitives already exist and should be reused rather
 than replaced: project fact summaries, callgraph slices, CFG path
@@ -184,6 +185,17 @@ hints. Patch-diff review invokes it when before/after project paths are
 available, ranks changes as `memory_access_delta` items, records
 `project_memory_access_deltas` in evidence bundles, and preserves those
 deltas in validation packets.
+
+Update: `windows_decompile_context_packet` now carries more of that
+project substrate into the single-function review packet. When a
+`.glaurung` project is supplied, the packet includes the selected
+function prototype, matched callee prototypes for resolved call targets,
+and persisted `memory_operand_facts` rows for the function alongside the
+existing decompile text, disassembly, CFG summary, names, comments, and
+data labels. This is a concrete step toward type propagation into
+agent-readable lift packets: arguments and memory accesses can be
+reviewed as `Irp`, `OutputBufferLength`, `UserBuffer`, and similar
+typed facts rather than only as registers and raw operands.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

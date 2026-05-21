@@ -85,6 +85,105 @@ def test_windows_decompile_context_packet_joins_project_notebook_facts(
     xref_db.set_function_name(kb, FUNCTION_VA, "ReviewedStartup", set_by="manual")
     xref_db.set_comment(kb, FUNCTION_VA, "manual startup review note", set_by="manual")
     xref_db.set_data_label(kb, 0x140010000, "g_NearbyTable", set_by="manual")
+    xref_db.set_function_prototype(
+        kb,
+        "ReviewedStartup",
+        "NTSTATUS",
+        [
+            xref_db.FunctionParam("Irp", "PIRP", role="irp"),
+            xref_db.FunctionParam("OutputBufferLength", "ULONG", role="length"),
+        ],
+        calling_convention="NTAPI",
+        confidence=0.91,
+        set_by="manual",
+        semantics={"risk_tags": ["ioctl", "user_buffer"]},
+    )
+    kb._conn.executescript(  # noqa: SLF001
+        """
+CREATE TABLE IF NOT EXISTS memory_operand_facts (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    function_name TEXT,
+    instruction_va INTEGER NOT NULL,
+    instruction_text TEXT NOT NULL,
+    mnemonic TEXT NOT NULL,
+    operand_index INTEGER NOT NULL,
+    operand_text TEXT NOT NULL,
+    access_kind TEXT NOT NULL,
+    width_bytes INTEGER,
+    address_expression TEXT NOT NULL,
+    base_register TEXT,
+    index_register TEXT,
+    scale INTEGER,
+    displacement INTEGER NOT NULL DEFAULT 0,
+    role_hint TEXT NOT NULL,
+    base_object TEXT,
+    base_object_kind TEXT,
+    base_object_type TEXT,
+    base_object_role TEXT,
+    field_offset INTEGER NOT NULL DEFAULT 0,
+    likely_field_name TEXT,
+    likely_type_name TEXT,
+    data_target_va INTEGER,
+    data_target_kind TEXT,
+    data_target_name TEXT,
+    data_target_type TEXT,
+    data_target_size INTEGER,
+    confidence REAL NOT NULL,
+    set_by TEXT NOT NULL,
+    set_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, function_va, instruction_va, operand_index)
+);
+"""
+    )
+    kb._conn.execute(  # noqa: SLF001
+        """
+INSERT INTO memory_operand_facts
+(binary_id, function_va, function_name, instruction_va, instruction_text,
+ mnemonic, operand_index, operand_text, access_kind, width_bytes,
+ address_expression, base_register, index_register, scale, displacement,
+ role_hint, base_object, base_object_kind, base_object_type, base_object_role,
+ field_offset, likely_field_name, likely_type_name, data_target_va,
+ data_target_kind, data_target_name, data_target_type, data_target_size,
+ confidence, set_by, set_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?)
+""",
+        (
+            kb.binary_id,
+            FUNCTION_VA,
+            "ReviewedStartup",
+            FUNCTION_VA + 0x10,
+            "mov rax, qword ptr [rcx + 0x18]",
+            "mov",
+            1,
+            "qword ptr [rcx + 0x18]",
+            "read",
+            8,
+            "[rcx + 0x18]",
+            "rcx",
+            None,
+            None,
+            0x18,
+            "user_pointer",
+            "Irp",
+            "user_pointer",
+            "PIRP",
+            "irp",
+            0x18,
+            "UserBuffer",
+            "IRP",
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.93,
+            "unit",
+            0,
+        ),
+    )
+    kb._conn.commit()  # noqa: SLF001
     kb.close()
 
     tool = build_tool()
@@ -103,10 +202,22 @@ def test_windows_decompile_context_packet_joins_project_notebook_facts(
     facts = result.packet.project_facts
     assert facts is not None
     assert facts.function_name == "ReviewedStartup"
+    assert facts.function_prototype is not None
+    assert facts.function_prototype.rendered.startswith("NTSTATUS ReviewedStartup")
+    assert facts.function_prototype.params[0].name == "Irp"
+    assert facts.function_prototype.params[0].role == "irp"
+    assert "ioctl" in facts.function_prototype.risk_tags
+    assert len(facts.memory_accesses) == 1
+    assert facts.memory_accesses[0].likely_field_name == "UserBuffer"
+    assert facts.memory_accesses[0].base_object_kind == "user_pointer"
     assert facts.entry_comment == "manual startup review note"
     assert "function_names" in facts.coverage
+    assert "function_prototype" in facts.coverage
+    assert "memory_accesses" in facts.coverage
     assert "comments" in facts.coverage
     assert "data_labels" in facts.coverage
+    assert "function_prototype" in result.packet.coverage
+    assert "memory_accesses" in result.packet.coverage
     assert "project_facts" not in result.packet.missing_capabilities
 
 

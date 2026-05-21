@@ -74,9 +74,52 @@ class WindowsContextCall(BaseModel):
     text: str
 
 
+class WindowsContextPrototypeParam(BaseModel):
+    name: str
+    c_type: str
+    role: str | None = None
+
+
+class WindowsContextPrototype(BaseModel):
+    function_name: str
+    rendered: str
+    return_type: str | None = None
+    calling_convention: str | None = None
+    params: list[WindowsContextPrototypeParam] = Field(default_factory=list)
+    risk_tags: list[str] = Field(default_factory=list)
+    confidence: float | None = None
+    source: str | None = None
+    set_by: str | None = None
+
+
+class WindowsContextMemoryAccess(BaseModel):
+    instruction_va: int
+    instruction: str
+    instruction_text: str
+    access_kind: str
+    width_bytes: int | None = None
+    operand_text: str
+    address_expression: str
+    role_hint: str
+    base_object: str | None = None
+    base_object_kind: str | None = None
+    base_object_type: str | None = None
+    base_object_role: str | None = None
+    field_offset: int
+    likely_field_name: str | None = None
+    likely_type_name: str | None = None
+    data_target_va: int | None = None
+    data_target: str | None = None
+    data_target_name: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class WindowsContextProjectFacts(BaseModel):
     project_path: str
     function_name: str | None = None
+    function_prototype: WindowsContextPrototype | None = None
+    call_prototypes: list[WindowsContextPrototype] = Field(default_factory=list)
+    memory_accesses: list[WindowsContextMemoryAccess] = Field(default_factory=list)
     entry_comment: str | None = None
     inline_comments: dict[str, str] = Field(default_factory=dict)
     data_labels: dict[str, str] = Field(default_factory=dict)
@@ -146,7 +189,7 @@ class WindowsDecompileContextPacketTool(
         calls = _calls(instructions)
         decompile_text, truncated, decompile_missing = _decompile(binary_path, args)
         project_facts = _project_facts(
-            args.project_path, args.function_va, instructions
+            args.project_path, args.function_va, instructions, calls
         )
         coverage, missing = _coverage(
             cfg=cfg,
@@ -296,6 +339,7 @@ def _project_facts(
     project_path: str | None,
     function_va: int,
     instructions: list[WindowsContextInstruction],
+    calls: list[WindowsContextCall],
 ) -> WindowsContextProjectFacts | None:
     if not project_path:
         return None
@@ -308,6 +352,16 @@ def _project_facts(
     kb = PersistentKnowledgeBase.open(path)
     try:
         function_name = xref_db.get_function_name(kb, function_va)
+        names = {
+            item.entry_va: item.display for item in xref_db.list_function_names(kb)
+        }
+        prototypes = _prototype_index(xref_db.list_function_prototypes(kb))
+        function_prototype = _prototype_for_name(
+            prototypes,
+            function_name.display if function_name is not None else None,
+        )
+        call_prototypes = _call_prototypes(calls, names, prototypes)
+        memory_accesses = _memory_accesses_for_function(kb, function_va)
         comments = dict(xref_db.list_comments(kb))
         labels = {label.va: label for label in xref_db.list_data_labels(kb)}
         instruction_vas = {item.va for item in instructions}
@@ -329,6 +383,18 @@ def _project_facts(
         coverage.append("function_names")
     else:
         missing.append("function_name_for_entry")
+    if function_prototype is not None:
+        coverage.append("function_prototype")
+    else:
+        missing.append("function_prototype")
+    if call_prototypes:
+        coverage.append("call_prototypes")
+    else:
+        missing.append("call_prototypes")
+    if memory_accesses:
+        coverage.append("memory_accesses")
+    else:
+        missing.append("memory_accesses")
     if inline_comments:
         coverage.append("comments")
     else:
@@ -340,6 +406,9 @@ def _project_facts(
     return WindowsContextProjectFacts(
         project_path=str(path),
         function_name=function_name.display if function_name is not None else None,
+        function_prototype=function_prototype,
+        call_prototypes=call_prototypes,
+        memory_accesses=memory_accesses,
         entry_comment=comments.get(function_va),
         inline_comments=inline_comments,
         data_labels=data_labels,
@@ -389,6 +458,11 @@ def _evidence_bundle(packet: WindowsDecompileContextPacket) -> WindowsEvidenceBu
                 "function_name": packet.cfg.function_name,
                 "instruction_count": len(packet.instructions),
                 "call_count": len(packet.calls),
+                "memory_access_count": (
+                    len(packet.project_facts.memory_accesses)
+                    if packet.project_facts is not None
+                    else 0
+                ),
             },
         ),
         source_tools=["windows_decompile_context_packet"],
@@ -436,6 +510,136 @@ def _first_hex(text: str) -> int | None:
         return int(match.group(0), 16)
     except ValueError:
         return None
+
+
+def _prototype_index(
+    prototypes: list[xref_db.FunctionPrototype],
+) -> dict[str, xref_db.FunctionPrototype]:
+    out: dict[str, xref_db.FunctionPrototype] = {}
+    for prototype in prototypes:
+        for candidate in _name_candidates(prototype.function_name):
+            out.setdefault(candidate, prototype)
+    return out
+
+
+def _prototype_for_name(
+    prototypes: dict[str, xref_db.FunctionPrototype],
+    name: str | None,
+) -> WindowsContextPrototype | None:
+    if not name:
+        return None
+    for candidate in _name_candidates(name):
+        prototype = prototypes.get(candidate)
+        if prototype is not None:
+            return _render_prototype(prototype)
+    return None
+
+
+def _call_prototypes(
+    calls: list[WindowsContextCall],
+    names: dict[int, str],
+    prototypes: dict[str, xref_db.FunctionPrototype],
+) -> list[WindowsContextPrototype]:
+    out: list[WindowsContextPrototype] = []
+    seen: set[str] = set()
+    for call in calls:
+        if call.target_va is None:
+            continue
+        rendered = _prototype_for_name(prototypes, names.get(call.target_va))
+        if rendered is None:
+            continue
+        key = rendered.function_name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(rendered)
+    return out[:32]
+
+
+def _render_prototype(
+    prototype: xref_db.FunctionPrototype,
+) -> WindowsContextPrototype:
+    return WindowsContextPrototype(
+        function_name=prototype.function_name,
+        rendered=prototype.render(),
+        return_type=prototype.return_type,
+        calling_convention=prototype.calling_convention,
+        params=[
+            WindowsContextPrototypeParam(
+                name=param.name,
+                c_type=param.c_type,
+                role=param.role,
+            )
+            for param in prototype.params
+        ],
+        risk_tags=prototype.risk_tags,
+        confidence=prototype.confidence,
+        source=prototype.source,
+        set_by=prototype.set_by,
+    )
+
+
+def _memory_accesses_for_function(
+    kb: PersistentKnowledgeBase,
+    function_va: int,
+) -> list[WindowsContextMemoryAccess]:
+    present = {
+        str(row[0])
+        for row in kb._conn.execute(  # noqa: SLF001
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    if "memory_operand_facts" not in present:
+        return []
+    rows = kb._conn.execute(  # noqa: SLF001
+        """
+SELECT instruction_va, instruction_text, access_kind, width_bytes, operand_text,
+       address_expression, role_hint, base_object, base_object_kind,
+       base_object_type, base_object_role, field_offset, likely_field_name,
+       likely_type_name, data_target_va, data_target_name, confidence
+FROM memory_operand_facts
+WHERE binary_id = ? AND function_va = ?
+ORDER BY instruction_va, operand_index
+LIMIT 64
+""",
+        (kb.binary_id, int(function_va)),
+    ).fetchall()
+    out: list[WindowsContextMemoryAccess] = []
+    for row in rows:
+        data_target_va = int(row[14]) if row[14] is not None else None
+        out.append(
+            WindowsContextMemoryAccess(
+                instruction_va=int(row[0]),
+                instruction=f"0x{int(row[0]):x}",
+                instruction_text=str(row[1]),
+                access_kind=str(row[2]),
+                width_bytes=int(row[3]) if row[3] is not None else None,
+                operand_text=str(row[4]),
+                address_expression=str(row[5]),
+                role_hint=str(row[6]),
+                base_object=str(row[7]) if row[7] is not None else None,
+                base_object_kind=str(row[8]) if row[8] is not None else None,
+                base_object_type=str(row[9]) if row[9] is not None else None,
+                base_object_role=str(row[10]) if row[10] is not None else None,
+                field_offset=int(row[11] or 0),
+                likely_field_name=str(row[12]) if row[12] is not None else None,
+                likely_type_name=str(row[13]) if row[13] is not None else None,
+                data_target_va=data_target_va,
+                data_target=f"0x{data_target_va:x}"
+                if data_target_va is not None
+                else None,
+                data_target_name=str(row[15]) if row[15] is not None else None,
+                confidence=float(row[16]),
+            )
+        )
+    return out
+
+
+def _name_candidates(name: str) -> list[str]:
+    out = [name.lower()]
+    if "!" in name:
+        out.append(name.rsplit("!", 1)[-1].lower())
+    return _dedupe(out)
 
 
 def _dedupe(values: list[str]) -> list[str]:
