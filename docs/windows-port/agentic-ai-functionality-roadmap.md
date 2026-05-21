@@ -560,8 +560,9 @@ packets.
 ### 6. Analyst Notebook Agent
 
 Purpose: persist analyst decisions as project facts: names, comments,
-labels, demotions, suppressions, and rationale. It should be able to
-export IDA/Ghidra scripts and re-import known names/comments.
+labels, prototype and stack-variable type overrides, demotions,
+suppressions, and rationale. It should be able to export IDA/Ghidra
+scripts and re-import known names/comments/types.
 
 Exit criteria:
 
@@ -601,6 +602,15 @@ recorded as `analyst_notebook_decisions` coverage. Suppressions and
 demotions become explicit functionization-review blockers, preventing
 scanner or baseline promotion from ignoring an analyst's prior
 false-start decision.
+
+Update: analyst notebook round trip now includes prototype and
+stack-variable type override decisions. Export mode emits project
+`function_prototypes` and `stack_frame_vars` as typed notebook
+decisions alongside names, comments, labels, and function-start
+decisions. Import mode applies prototype and stack-variable decisions
+back into the project, and manual prototype writes now participate in
+the undo log. The same workflow is exposed as
+`glaurung windows analyst-notebook` for command-line import/export.
 
 ### 7. Rule Authoring Agent
 
@@ -1345,15 +1355,18 @@ The test suite should prove both low-level facts and agent behavior.
    schema with claim level, subject, source tools, evidence refs,
    coverage, blockers, next actions, and notes.
 10. Add IDA/Ghidra notebook import/export loops for names, comments,
-    labels, demotions, and function-start decisions.
+    labels, type overrides, demotions, and function-start decisions.
     Status: initial agent-facing notebook loop implemented as
-    `windows_analyst_notebook` and registered with `memory_agent`.
+    `windows_analyst_notebook`, registered with `memory_agent`, and
+    exposed through `glaurung windows analyst-notebook`.
     Export mode emits typed notebook JSON plus IDAPython/Ghidra scripts
-    from `.glaurung` project names, comments, data labels, and visible
-    function-start decisions. Import mode applies supported names,
-    comments, data labels, demotions, suppressions, and function-start
-    decisions back into the project, preserving demotions as comments
-    and bookmarks instead of silent deletions.
+    from `.glaurung` project names, comments, data labels, function
+    prototypes, stack-frame variables, and visible function-start
+    decisions. Import mode applies supported names, comments, data
+    labels, prototype and stack-variable type overrides, demotions,
+    suppressions, and function-start decisions back into the project,
+    preserving demotions as comments and bookmarks instead of silent
+    deletions.
 
 ## Non-Goals For The Next Sprint
 
@@ -1484,6 +1497,14 @@ Validated high-level replay scope:
   `windows_analyst_notebook` provenance and evidence refs, recording
   `analyst_notebook_decisions` coverage, and blocking promotion when an
   attached suppression contradicts the candidate.
+- Latest notebook type-override validation: scoped `uvx ruff check`,
+  scoped `uvx ty check`, and focused `uv run pytest` passed for
+  `windows_analyst_notebook`, `test_windows_analyst_notebook_tool.py`,
+  `test_function_prototypes.py`, `test_stack_frame_vars.py`, and
+  `test_undo_redo.py`; tests cover exporting and importing
+  `function_prototype` and `stack_var` notebook decisions, IDA/Ghidra
+  script handoff content, CLI JSON export, and manual prototype undo
+  participation.
 - Latest functionization notebook-attachment validation: scoped `uvx
   ruff check`, `uvx ty check`, and focused `uv run pytest` passed for
   `windows_functionization_review.py`,

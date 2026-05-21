@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,8 @@ NotebookDecisionKind = Literal[
     "function_name",
     "comment",
     "data_label",
+    "function_prototype",
+    "stack_var",
     "function_start_decision",
     "demotion",
     "suppression",
@@ -42,14 +44,22 @@ FunctionStartDecisionState = Literal[
 
 class WindowsNotebookDecision(BaseModel):
     kind: NotebookDecisionKind
-    va: int
+    va: int = 0
     va_hex: str | None = None
+    function_va: int | None = None
+    function_name: str | None = None
+    offset: int | None = None
     name: str | None = None
     comment: str | None = None
     state: FunctionStartDecisionState | None = None
     reason: str | None = None
     c_type: str | None = None
     size: int | None = None
+    return_type: str | None = None
+    params: list[dict[str, Any]] = Field(default_factory=list)
+    is_variadic: bool = False
+    module: str | None = None
+    calling_convention: str | None = None
     confidence: float | None = Field(None, ge=0.0, le=1.0)
     set_by: str = "manual"
     provenance: list[str] = Field(default_factory=list)
@@ -164,8 +174,10 @@ def _export_notebook(
     try:
         decisions = [
             *_export_function_names(kb),
+            *_export_function_prototypes(kb),
             *_export_comments(kb),
             *_export_data_labels(kb),
+            *_export_stack_vars(kb),
             *_export_bookmark_decisions(kb),
             *[_normalize_decision(decision) for decision in args.decisions],
         ]
@@ -293,6 +305,32 @@ def _export_comments(kb: PersistentKnowledgeBase) -> list[WindowsNotebookDecisio
     ]
 
 
+def _export_function_prototypes(
+    kb: PersistentKnowledgeBase,
+) -> list[WindowsNotebookDecision]:
+    va_by_name = _function_va_by_name(kb)
+    return [
+        _normalize_decision(
+            WindowsNotebookDecision(
+                kind="function_prototype",
+                va=va_by_name.get(item.function_name, 0),
+                function_va=va_by_name.get(item.function_name),
+                function_name=item.function_name,
+                name=item.function_name,
+                return_type=item.return_type,
+                params=[param.as_dict() for param in item.params],
+                is_variadic=item.is_variadic,
+                module=item.module,
+                calling_convention=item.calling_convention,
+                confidence=item.confidence,
+                set_by=item.set_by or "unknown",
+                provenance=["glaurung:function_prototypes"],
+            )
+        )
+        for item in xref_db.list_function_prototypes(kb)
+    ]
+
+
 def _export_data_labels(kb: PersistentKnowledgeBase) -> list[WindowsNotebookDecision]:
     return [
         _normalize_decision(
@@ -307,6 +345,24 @@ def _export_data_labels(kb: PersistentKnowledgeBase) -> list[WindowsNotebookDeci
             )
         )
         for item in xref_db.list_data_labels(kb)
+    ]
+
+
+def _export_stack_vars(kb: PersistentKnowledgeBase) -> list[WindowsNotebookDecision]:
+    return [
+        _normalize_decision(
+            WindowsNotebookDecision(
+                kind="stack_var",
+                va=item.function_va,
+                function_va=item.function_va,
+                offset=item.offset,
+                name=item.name,
+                c_type=item.c_type,
+                set_by=item.set_by or "unknown",
+                provenance=["glaurung:stack_frame_vars"],
+            )
+        )
+        for item in xref_db.list_stack_vars(kb)
     ]
 
 
@@ -377,6 +433,37 @@ def _apply_decision(
             set_by=decision.set_by,
         )
         return True
+    if decision.kind == "function_prototype":
+        function_name = decision.function_name or decision.name
+        if not function_name:
+            return False
+        xref_db.set_function_prototype(
+            kb,
+            function_name,
+            decision.return_type,
+            _decision_params(decision),
+            is_variadic=decision.is_variadic,
+            set_by=decision.set_by,
+            module=decision.module,
+            calling_convention=decision.calling_convention,
+            confidence=decision.confidence,
+        )
+        return True
+    if decision.kind == "stack_var":
+        function_va = (
+            decision.function_va if decision.function_va is not None else decision.va
+        )
+        if function_va == 0 or decision.offset is None or not decision.name:
+            return False
+        xref_db.set_stack_var(
+            kb,
+            function_va=function_va,
+            offset=decision.offset,
+            name=decision.name,
+            c_type=decision.c_type,
+            set_by=decision.set_by,
+        )
+        return True
     if decision.kind in {
         "function_start_decision",
         "demotion",
@@ -387,6 +474,24 @@ def _apply_decision(
         xref_db.set_comment(kb, decision.va, note, set_by=decision.set_by)
         return True
     return False
+
+
+def _decision_params(decision: WindowsNotebookDecision) -> list[xref_db.FunctionParam]:
+    params: list[xref_db.FunctionParam] = []
+    for raw in decision.params:
+        name = raw.get("name")
+        c_type = raw.get("c_type")
+        if not name or not c_type:
+            continue
+        role = raw.get("role")
+        params.append(
+            xref_db.FunctionParam(
+                name=str(name),
+                c_type=str(c_type),
+                role=str(role) if role else None,
+            )
+        )
+    return params
 
 
 def _evidence_bundle(
@@ -401,7 +506,7 @@ def _evidence_bundle(
             kind="project_fact",
             source="windows_analyst_notebook",
             summary=f"{decision.kind} at {decision.va_hex}",
-            address=decision.va,
+            address=decision.va if decision.va else None,
             confidence=decision.confidence,
             reason_codes=[decision.kind, decision.state or ""],
             provenance=decision.provenance,
@@ -422,7 +527,7 @@ def _evidence_bundle(
         source_tools=["windows_analyst_notebook"],
         evidence_refs=refs,
         coverage=WindowsEvidenceCoverage(
-            fact_coverage=["function_names", "comments", "data_labels", "bookmarks"],
+            fact_coverage=_fact_coverage(notebook.decisions),
             missing_facts=[],
         ),
         blockers=(
@@ -439,10 +544,30 @@ def _evidence_bundle(
     )
 
 
+def _fact_coverage(decisions: list[WindowsNotebookDecision]) -> list[str]:
+    kinds = {decision.kind for decision in decisions}
+    coverage = []
+    if "function_name" in kinds:
+        coverage.append("function_names")
+    if "function_prototype" in kinds:
+        coverage.append("function_prototypes")
+    if "comment" in kinds:
+        coverage.append("comments")
+    if "data_label" in kinds:
+        coverage.append("data_labels")
+    if "stack_var" in kinds:
+        coverage.append("stack_frame_vars")
+    if kinds & {"function_start_decision", "demotion", "suppression"}:
+        coverage.append("bookmarks")
+    return coverage
+
+
 def _normalize_decision(decision: WindowsNotebookDecision) -> WindowsNotebookDecision:
     if decision.va_hex:
         return decision
-    return decision.model_copy(update={"va_hex": f"0x{decision.va:x}"})
+    if decision.va:
+        return decision.model_copy(update={"va_hex": f"0x{decision.va:x}"})
+    return decision
 
 
 def _state_from_note(note: str) -> FunctionStartDecisionState | None:
@@ -473,13 +598,24 @@ def _decision_note(decision: WindowsNotebookDecision) -> str:
 def _transcript(decisions: list[WindowsNotebookDecision]) -> list[str]:
     return [
         f"{decision.kind} {decision.va_hex or f'0x{decision.va:x}'} "
-        f"{decision.name or decision.state or decision.comment or ''}".rstrip()
+        f"{decision.function_name or decision.name or decision.state or decision.comment or ''}".rstrip()
         for decision in decisions[:64]
     ]
 
 
 def _notebook_json(notebook: WindowsAnalystNotebook) -> str:
     return json.dumps(notebook.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+
+
+def _function_va_by_name(kb: PersistentKnowledgeBase) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for item in xref_db.list_function_names(kb):
+        out[item.canonical] = item.entry_va
+        if item.demangled:
+            out[item.demangled] = item.entry_va
+        short = item.canonical.rsplit("!", 1)[-1].rsplit("::", 1)[-1]
+        out.setdefault(short, item.entry_va)
+    return out
 
 
 def build_tool() -> WindowsAnalystNotebookTool:

@@ -24,22 +24,45 @@ def _need(p: Path) -> Path:
 def _open(tmp_path: Path) -> PersistentKnowledgeBase:
     binary = _need(_HELLO)
     return PersistentKnowledgeBase.open(
-        tmp_path / "undo.glaurung", binary_path=binary,
+        tmp_path / "undo.glaurung",
+        binary_path=binary,
     )
+
+
+def _function_name(kb: PersistentKnowledgeBase, va: int) -> xref_db.FunctionName:
+    name = xref_db.get_function_name(kb, va)
+    assert name is not None
+    return name
+
+
+def _data_label(kb: PersistentKnowledgeBase, va: int) -> xref_db.DataLabel:
+    label = xref_db.get_data_label(kb, va)
+    assert label is not None
+    return label
+
+
+def _stack_var(
+    kb: PersistentKnowledgeBase,
+    function_va: int,
+    offset: int,
+) -> xref_db.StackVar:
+    var = xref_db.get_stack_var(kb, function_va, offset)
+    assert var is not None
+    return var
 
 
 def test_undo_reverts_function_rename(tmp_path: Path) -> None:
     kb = _open(tmp_path)
     xref_db.set_function_name(kb, 0x1000, "my_func", set_by="manual")
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "my_func"
+    assert _function_name(kb, 0x1000).canonical == "my_func"
 
     xref_db.set_function_name(kb, 0x1000, "renamed_func", set_by="manual")
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "renamed_func"
+    assert _function_name(kb, 0x1000).canonical == "renamed_func"
 
     applied = xref_db.undo(kb)
     assert len(applied) == 1
     assert applied[0].table_name == "function_names"
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "my_func"
+    assert _function_name(kb, 0x1000).canonical == "my_func"
 
     # One more undo deletes the row entirely (was a fresh insert).
     applied = xref_db.undo(kb)
@@ -53,11 +76,11 @@ def test_redo_reapplies_undone_rename(tmp_path: Path) -> None:
     xref_db.set_function_name(kb, 0x1000, "first", set_by="manual")
     xref_db.set_function_name(kb, 0x1000, "second", set_by="manual")
     xref_db.undo(kb)
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "first"
+    assert _function_name(kb, 0x1000).canonical == "first"
 
     redone = xref_db.redo(kb)
     assert len(redone) == 1
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "second"
+    assert _function_name(kb, 0x1000).canonical == "second"
     kb.close()
 
 
@@ -97,36 +120,86 @@ def test_undo_reverts_comment(tmp_path: Path) -> None:
 def test_undo_reverts_data_label(tmp_path: Path) -> None:
     kb = _open(tmp_path)
     xref_db.set_data_label(
-        kb, 0x4000, "g_buffer", c_type="char[256]", set_by="manual",
+        kb,
+        0x4000,
+        "g_buffer",
+        c_type="char[256]",
+        set_by="manual",
     )
     xref_db.set_data_label(
-        kb, 0x4000, "g_renamed", c_type="char[256]", set_by="manual",
+        kb,
+        0x4000,
+        "g_renamed",
+        c_type="char[256]",
+        set_by="manual",
     )
-    assert xref_db.get_data_label(kb, 0x4000).name == "g_renamed"
+    assert _data_label(kb, 0x4000).name == "g_renamed"
 
     xref_db.undo(kb)
-    assert xref_db.get_data_label(kb, 0x4000).name == "g_buffer"
+    assert _data_label(kb, 0x4000).name == "g_buffer"
     kb.close()
 
 
 def test_undo_reverts_stack_var(tmp_path: Path) -> None:
     kb = _open(tmp_path)
     xref_db.set_stack_var(
-        kb, function_va=0x1000, offset=-0x10, name="local_a",
-        c_type="int", set_by="manual",
+        kb,
+        function_va=0x1000,
+        offset=-0x10,
+        name="local_a",
+        c_type="int",
+        set_by="manual",
     )
     xref_db.set_stack_var(
-        kb, function_va=0x1000, offset=-0x10, name="local_renamed",
-        c_type="long", set_by="manual",
+        kb,
+        function_va=0x1000,
+        offset=-0x10,
+        name="local_renamed",
+        c_type="long",
+        set_by="manual",
     )
-    cur = xref_db.get_stack_var(kb, 0x1000, -0x10)
+    cur = _stack_var(kb, 0x1000, -0x10)
     assert cur.name == "local_renamed"
     assert cur.c_type == "long"
 
     xref_db.undo(kb)
-    cur = xref_db.get_stack_var(kb, 0x1000, -0x10)
+    cur = _stack_var(kb, 0x1000, -0x10)
     assert cur.name == "local_a"
     assert cur.c_type == "int"
+    kb.close()
+
+
+def test_undo_reverts_function_prototype(tmp_path: Path) -> None:
+    kb = _open(tmp_path)
+    xref_db.set_function_prototype(
+        kb,
+        "NtExample",
+        "NTSTATUS",
+        [xref_db.FunctionParam("Length", "ULONG", role="length")],
+        calling_convention="NTAPI",
+        set_by="manual",
+    )
+    xref_db.set_function_prototype(
+        kb,
+        "NtExample",
+        "BOOLEAN",
+        [xref_db.FunctionParam("OutputBuffer", "PVOID", role="out_buffer")],
+        calling_convention="NTAPI",
+        set_by="manual",
+    )
+    current = xref_db.get_function_prototype(kb, "NtExample")
+    assert current is not None
+    assert current.return_type == "BOOLEAN"
+    assert current.params[0].name == "OutputBuffer"
+
+    applied = xref_db.undo(kb)
+    assert len(applied) == 1
+    assert applied[0].table_name == "function_prototypes"
+    current = xref_db.get_function_prototype(kb, "NtExample")
+    assert current is not None
+    assert current.return_type == "NTSTATUS"
+    assert current.params[0].name == "Length"
+    assert current.params[0].role == "length"
     kb.close()
 
 
@@ -134,15 +207,15 @@ def test_undo_n_walks_history_in_order(tmp_path: Path) -> None:
     kb = _open(tmp_path)
     for i, name in enumerate(["a", "b", "c", "d"]):
         xref_db.set_function_name(kb, 0x1000, name, set_by="manual")
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "d"
+    assert _function_name(kb, 0x1000).canonical == "d"
 
     applied = xref_db.undo(kb, n=3)
     assert len(applied) == 3
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "a"
+    assert _function_name(kb, 0x1000).canonical == "a"
 
     redone = xref_db.redo(kb, n=2)
     assert len(redone) == 2
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "c"
+    assert _function_name(kb, 0x1000).canonical == "c"
     kb.close()
 
 
@@ -178,7 +251,6 @@ def test_undo_redo_cli_smoke(tmp_path: Path) -> None:
     from glaurung.cli.main import GlaurungCLI
 
     kb = _open(tmp_path)
-    db = kb._conn_path if hasattr(kb, "_conn_path") else None
     db_path = tmp_path / "undo.glaurung"
     xref_db.set_function_name(kb, 0x1000, "first", set_by="manual")
     xref_db.set_function_name(kb, 0x1000, "second", set_by="manual")
@@ -203,8 +275,9 @@ def test_undo_redo_cli_smoke(tmp_path: Path) -> None:
     assert "undo" in buf.getvalue()
 
     from glaurung.llm.kb.persistent import PersistentKnowledgeBase
+
     kb2 = PersistentKnowledgeBase.open(db_path)
-    assert xref_db.get_function_name(kb2, 0x1000).canonical == "first"
+    assert _function_name(kb2, 0x1000).canonical == "first"
     kb2.close()
 
     # `redo` re-applies first→second.
@@ -215,5 +288,5 @@ def test_undo_redo_cli_smoke(tmp_path: Path) -> None:
     assert "redo" in buf.getvalue()
 
     kb3 = PersistentKnowledgeBase.open(db_path)
-    assert xref_db.get_function_name(kb3, 0x1000).canonical == "second"
+    assert _function_name(kb3, 0x1000).canonical == "second"
     kb3.close()

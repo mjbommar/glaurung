@@ -210,6 +210,13 @@ sit below full IR/CFG bug-class scanners:
   boundary explanation during interactive review. These facts explain
   function layout decisions; they are not vulnerability evidence by
   themselves.
+- `windows_analyst_notebook` imports and exports analyst decisions for
+  `.glaurung` Windows projects. It round-trips function names, comments,
+  data labels, function prototypes, stack-variable type overrides,
+  function-start decisions, demotions, and suppressions as typed
+  notebook JSON, and can emit IDAPython/Ghidra script handoffs. The
+  same path is exposed as `glaurung windows analyst-notebook` for
+  command-line workspace use.
 - `windows_project_onehop_sink_chains` finds caller -> helper -> ASB
   sink call chains from persisted project call xrefs. It returns exact
   helper callsite VAs, helper function VAs/names, helper-local sink

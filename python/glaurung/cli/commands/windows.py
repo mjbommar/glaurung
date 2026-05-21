@@ -31,6 +31,11 @@ from glaurung.llm.agents.windows_target_pipeline import (
     run_windows_target_pipeline,
 )
 from glaurung.llm.tools.windows_build_corpus import WindowsBuildCorpusArgs
+from glaurung.llm.tools.windows_analyst_notebook import (
+    WindowsAnalystNotebookArgs,
+    WindowsAnalystNotebookResult,
+    build_tool as build_windows_analyst_notebook,
+)
 from glaurung.llm.tools.windows_bootstrap_project_facts import (
     WindowsBootstrapProjectFactsArgs,
     WindowsBootstrapProjectFactsResult,
@@ -272,6 +277,37 @@ class WindowsCommand(BaseCommand):
             "--write-state",
             action="store_true",
             help="Write updated analyst session state back to --state-path",
+        )
+
+        analyst_notebook = subparsers.add_parser(
+            "analyst-notebook",
+            help=(
+                "Import or export analyst notebook decisions for a .glaurung "
+                "Windows project"
+            ),
+        )
+        self._add_common_child_arguments(analyst_notebook)
+        analyst_notebook.add_argument(
+            "--mode",
+            choices=["export", "import"],
+            default="export",
+        )
+        analyst_notebook.add_argument("--project-path", required=True)
+        analyst_notebook.add_argument(
+            "--notebook-path",
+            help="Notebook JSON path to write in export mode or read/apply in import mode.",
+        )
+        analyst_notebook.add_argument(
+            "--no-include-scripts",
+            action="store_false",
+            dest="include_scripts",
+            default=True,
+            help="Omit embedded IDAPython and Ghidra script exports.",
+        )
+        analyst_notebook.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the notebook operation in the transient memory KB.",
         )
 
         corpus_guard = subparsers.add_parser(
@@ -845,6 +881,8 @@ class WindowsCommand(BaseCommand):
             return _execute_analyst(args, formatter)
         if args.windows_action == "analyst-loop":
             return _execute_analyst_loop(args, formatter)
+        if args.windows_action == "analyst-notebook":
+            return _execute_analyst_notebook(args, formatter)
         if args.windows_action == "corpus-guard":
             return _execute_corpus_guard(args, formatter)
         if args.windows_action == "high-volume-preflight":
@@ -1078,6 +1116,55 @@ def _load_candidate_packet(path_text: str | None) -> WindowsReviewPacket | None:
     if isinstance(raw, dict) and isinstance(raw.get("packet"), dict):
         raw = raw["packet"]
     return WindowsReviewPacket.model_validate(raw)
+
+
+def _execute_analyst_notebook(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_analyst_notebook()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsAnalystNotebookArgs(
+            mode=args.mode,
+            project_path=args.project_path,
+            notebook_path=args.notebook_path,
+            include_scripts=args.include_scripts,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "mode": args.mode,
+                        "project_path": result.notebook.project_path,
+                        "decision_count": len(result.notebook.decisions),
+                        "applied_count": result.applied_count,
+                        "unsupported_count": result.unsupported_count,
+                        "coverage": result.evidence_bundle.coverage.fact_coverage,
+                    },
+                },
+                *(
+                    {
+                        "type": "decision",
+                        "data": decision.model_dump(mode="json"),
+                    }
+                    for decision in result.notebook.decisions
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_analyst_notebook_human(result))
+    return 1 if result.unsupported_count else 0
 
 
 def _resolve_analyst_state_path(args: argparse.Namespace) -> str | None:
@@ -2090,6 +2177,43 @@ def _format_project_xref_query_human(result: WindowsProjectXrefQueryResult) -> s
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_analyst_notebook_human(result: WindowsAnalystNotebookResult) -> str:
+    lines = [
+        "Windows analyst notebook",
+        f"  project={result.notebook.project_path}",
+        (
+            f"  decisions={len(result.notebook.decisions)} "
+            f"applied={result.applied_count} unsupported={result.unsupported_count}"
+        ),
+        (
+            "  coverage="
+            f"{','.join(result.evidence_bundle.coverage.fact_coverage) or '-'}"
+        ),
+        (
+            f"  ida_script={'yes' if result.ida_script is not None else 'no'} "
+            f"ghidra_script={'yes' if result.ghidra_script is not None else 'no'}"
+        ),
+    ]
+    for decision in result.notebook.decisions[:20]:
+        target = (
+            decision.function_name
+            or decision.name
+            or decision.state
+            or decision.comment
+            or "-"
+        )
+        lines.append(
+            f"  {decision.kind:<24} "
+            f"{decision.va_hex or _format_optional_va(decision.va)} {target}"
+        )
+    if len(result.notebook.decisions) > 20:
+        lines.append(f"  ... {len(result.notebook.decisions) - 20} more")
+    if result.notes:
+        lines.append("Notes:")
+        lines.extend(f"  {item}" for item in result.notes[:8])
     return "\n".join(lines)
 
 

@@ -184,7 +184,7 @@ CREATE INDEX IF NOT EXISTS idx_stack_vars_func
 CREATE TABLE IF NOT EXISTS undo_log (
     undo_id INTEGER PRIMARY KEY AUTOINCREMENT,
     binary_id INTEGER NOT NULL,
-    table_name TEXT NOT NULL,    -- function_names | comments | data_labels | stack_frame_vars
+    table_name TEXT NOT NULL,    -- function_names | comments | data_labels | function_prototypes | stack_frame_vars
     key_json TEXT NOT NULL,      -- JSON-encoded primary key dict
     old_value_json TEXT,          -- prior row state (NULL = row didn't exist)
     new_value_json TEXT,          -- new state (NULL = deletion)
@@ -322,6 +322,26 @@ _UNDO_TABLES = {
     "data_labels": (
         ("va",),
         ("va", "name", "c_type", "size", "set_by"),
+    ),
+    "function_prototypes": (
+        ("function_name",),
+        (
+            "function_name",
+            "return_type",
+            "params_json",
+            "is_variadic",
+            "module",
+            "calling_convention",
+            "source",
+            "source_kind",
+            "source_package",
+            "source_version",
+            "confidence",
+            "provenance_json",
+            "semantics_json",
+            "semantic_provenance_json",
+            "set_by",
+        ),
     ),
     "stack_frame_vars": (
         ("function_va", "offset"),
@@ -1344,6 +1364,8 @@ def set_function_prototype(
     row = cur.fetchone()
     if row is not None and row[0] == "manual" and set_by != "manual":
         return
+    key = {"function_name": function_name}
+    old = _snapshot_row(kb, "function_prototypes", key) if set_by == "manual" else None
     params_json = json.dumps([p.as_dict() for p in params], sort_keys=True)
     cur.execute(
         "INSERT OR REPLACE INTO function_prototypes "
@@ -1374,6 +1396,9 @@ def set_function_prototype(
             int(time.time()),
         ),
     )
+    if set_by == "manual":
+        new = _snapshot_row(kb, "function_prototypes", key)
+        _record_undo(kb, "function_prototypes", key, old, new, set_by)
     kb._conn.commit()
 
 
