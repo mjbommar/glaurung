@@ -57,6 +57,11 @@ from glaurung.llm.tools.windows_project_function_chunk_facts import (
     WindowsProjectFunctionChunkFactsResult,
     build_tool as build_windows_project_function_chunk_facts,
 )
+from glaurung.llm.tools.windows_project_function_start_explain import (
+    WindowsProjectFunctionStartExplainArgs,
+    WindowsProjectFunctionStartExplainResult,
+    build_tool as build_windows_project_function_start_explain,
+)
 from glaurung.llm.tools.windows_project_prototype_diff import (
     WindowsProjectPrototypeDiffArgs,
     WindowsProjectPrototypeDiffResult,
@@ -473,6 +478,26 @@ class WindowsCommand(BaseCommand):
             "--add-to-kb",
             action="store_true",
             help="Record the chunk query in the transient memory KB.",
+        )
+
+        project_start = subparsers.add_parser(
+            "project-function-start-explain",
+            help=(
+                "Explain why a VA or symbol is a function, thunk, chunk, "
+                "or candidate in a .glaurung project"
+            ),
+        )
+        self._add_common_child_arguments(project_start)
+        project_start.add_argument("--project-path", required=True)
+        project_start.add_argument("--binary-id", type=int)
+        project_start.add_argument("--va", type=lambda value: int(value, 0))
+        project_start.add_argument("--address")
+        project_start.add_argument("--symbol")
+        project_start.add_argument("--max-rows", type=int, default=16)
+        project_start.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the function-start explanation in the transient memory KB.",
         )
 
         project_proto_diff = subparsers.add_parser(
@@ -921,6 +946,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_xref_query(args, formatter)
         if args.windows_action == "project-function-chunks":
             return _execute_project_function_chunks(args, formatter)
+        if args.windows_action == "project-function-start-explain":
+            return _execute_project_function_start_explain(args, formatter)
         if args.windows_action == "project-prototype-diff":
             return _execute_project_prototype_diff(args, formatter)
         if args.windows_action == "bootstrap-project-facts":
@@ -1497,6 +1524,78 @@ def _execute_project_function_chunks(
         )
     else:
         formatter.output_plain(_format_project_function_chunks_human(result))
+    return 0
+
+
+def _execute_project_function_start_explain(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_function_start_explain()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectFunctionStartExplainArgs(
+            project_path=args.project_path,
+            binary_id=args.binary_id,
+            va=args.va,
+            address=args.address,
+            symbol=args.symbol,
+            max_rows=args.max_rows,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "project_path": result.project_path,
+                        "binary_id": result.binary_id,
+                        "target": result.target.model_dump(mode="json"),
+                        "final_state": result.final_state,
+                        "confidence": result.confidence,
+                        "recommended_action": result.recommended_action,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "name", "data": item.model_dump(mode="json")}
+                    for item in result.names
+                ),
+                *(
+                    {"type": "boundary", "data": item.model_dump(mode="json")}
+                    for item in result.exact_boundaries
+                ),
+                *(
+                    {
+                        "type": "containing_boundary",
+                        "data": item.model_dump(mode="json"),
+                    }
+                    for item in result.containing_boundaries
+                ),
+                *(
+                    {"type": "chunk", "data": item.model_dump(mode="json")}
+                    for item in result.chunks
+                ),
+                *(
+                    {"type": "xref_to", "data": item.model_dump(mode="json")}
+                    for item in result.refs_to
+                ),
+                *(
+                    {"type": "xref_from", "data": item.model_dump(mode="json")}
+                    for item in result.refs_from
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_function_start_explain_human(result))
     return 0
 
 
@@ -2319,6 +2418,54 @@ def _format_project_function_chunks_human(
         )
     if len(result.chunks) > 20:
         lines.append(f"  ... {len(result.chunks) - 20} more")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_function_start_explain_human(
+    result: WindowsProjectFunctionStartExplainResult,
+) -> str:
+    target = result.target.symbol or result.target.address or "-"
+    lines = [
+        "Windows project function-start explanation",
+        f"  project={result.project_path}",
+        (
+            f"  target={target} va={result.target.address or '-'} "
+            f"state={result.final_state} confidence={result.confidence}"
+        ),
+        f"  action={result.recommended_action}",
+        f"  reasons={','.join(result.reason_codes) or '-'}",
+        f"  coverage={','.join(result.coverage) or '-'}",
+    ]
+    for name in result.names[:8]:
+        lines.append(
+            f"  name {name.address} {name.canonical} set_by={name.set_by or '-'}"
+        )
+    for boundary in result.exact_boundaries[:8]:
+        lines.append(
+            f"  boundary {boundary.source} {boundary.address}.."
+            f"{boundary.end or '-'} conf={boundary.confidence:.2f} "
+            f"name={boundary.name or '-'}"
+        )
+    for boundary in result.containing_boundaries[:4]:
+        lines.append(
+            f"  contained_by {boundary.source} {boundary.address}.."
+            f"{boundary.end or '-'} conf={boundary.confidence:.2f}"
+        )
+    for chunk in result.chunks[:8]:
+        target_text = chunk.target_name or chunk.target or "-"
+        lines.append(
+            f"  chunk {chunk.chunk_kind} {chunk.relation_kind} "
+            f"owner={chunk.owner_entry or '-'} start={chunk.chunk_start} "
+            f"target={target_text} conf={chunk.confidence:.2f}"
+        )
+    for ref in result.refs_to[:8]:
+        lines.append(
+            f"  ref_to {ref.kind} {ref.src} "
+            f"{ref.src_function_name or ref.src_function or '-'} -> {ref.dst}"
+        )
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)

@@ -210,6 +210,14 @@ sit below full IR/CFG bug-class scanners:
   boundary explanation during interactive review. These facts explain
   function layout decisions; they are not vulnerability evidence by
   themselves.
+- `windows_project_function_start_explain` answers the analyst question
+  "why is this a function?" for a persisted `.glaurung` project VA or
+  symbol. It joins `function_names`, `function_boundaries`,
+  `function_chunk_facts`, incoming/outgoing xrefs, and comments into a
+  state such as strict function, thunk, chunk/funclet, contained label,
+  xref candidate, symbol-only, or no evidence, with reason codes and a
+  recommended next action. The Windows CLI exposes it as
+  `glaurung windows project-function-start-explain`.
 - `windows_analyst_notebook` imports and exports analyst decisions for
   `.glaurung` Windows projects. It round-trips function names, comments,
   data labels, function prototypes, stack-variable type overrides,

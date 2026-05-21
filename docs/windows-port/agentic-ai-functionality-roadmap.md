@@ -705,6 +705,16 @@ SIMD-headed Ghidra-only address that must remain `candidate_or_label`
 with `seed_kind:none`. This gives the rule replay harness regression
 coverage for scanner promotion and scanner demotion behavior.
 
+Update: `windows_project_function_start_explain` now provides the
+project-workspace version of "why is this a function?" It resolves a VA
+or symbol inside a `.glaurung` project, joins persisted
+`function_names`, `function_boundaries`, `function_chunk_facts`,
+incoming/outgoing xrefs, and comments, then classifies the target as a
+strict function, thunk, chunk/funclet, contained label, xref candidate,
+symbol-only row, or no-evidence target. The result includes reason
+codes, confidence, and a recommended next action, and the CLI exposes it
+as `glaurung windows project-function-start-explain`.
+
 Update: the native positive/negative replay cases are now part of the
 checked-in `functionization_rule_fixtures.yaml`, so the default replay
 path covers 5 fixture groups and 11 cases rather than keeping native
@@ -1830,6 +1840,18 @@ Validated high-level replay scope:
   `prototype_delta` review items, evidence-bundle prototype-delta
   coverage, sink/gate routing for security-relevant signature changes,
   and preservation into emitted patch-diff validation packets.
+- Latest project function-start explanation validation: scoped
+  `uvx ruff check`, `uvx ty check`, `git diff --check`, and focused
+  `uv run pytest` passed for
+  `windows_project_function_start_explain.py`, Windows CLI registration,
+  `memory_agent.py`, `test_windows_project_function_start_explain_tool.py`,
+  `test_windows_function_start_explain_tool.py`,
+  `test_windows_function_chunks.py`, and
+  `test_windows_project_xref_query_tool.py`; the full
+  `uv run pytest python/tests/test_windows_*.py -q` sweep also passed
+  with one skip. Tests cover strict `.pdata` functions, import thunks,
+  exception funclet chunks, incoming call xrefs, comments, CLI JSON
+  output, KB evidence-node creation, and `memory_agent` registration.
 
 Not A+ yet:
 

@@ -152,6 +152,9 @@ from ..tools.windows_project_data_label_facts import (
 from ..tools.windows_project_xref_query import (
     build_tool as build_windows_project_xref_query,
 )
+from ..tools.windows_project_function_start_explain import (
+    build_tool as build_windows_project_function_start_explain,
+)
 from ..tools.windows_project_prototype_diff import (
     build_tool as build_windows_project_prototype_diff,
 )
@@ -1180,6 +1183,9 @@ def register_analysis_tools(
         tool_to_pyd_ai(build_windows_project_data_label_facts())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_project_xref_query()))
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_function_start_explain())
+    )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_onehop_sink_chains())
     )
