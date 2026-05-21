@@ -1486,12 +1486,17 @@ fn sub_18009faa0 {
         access.kind == "read"
         and access.absolute_address == 0x7FFE0308
         and access.role == "global"
+        and access.base_object == "0x7ffe0308"
+        and access.base_object_kind == "global"
+        and access.pointer_class == "global_pointer"
         for access in accesses
     )
     assert any(
         access.kind == "write"
         and access.base == "stack_1"
         and access.role == "stack_slot"
+        and access.base_object_kind == "stack"
+        and access.pointer_class == "stack_pointer"
         for access in accesses
     )
     assert any(
@@ -1505,6 +1510,11 @@ fn sub_18009faa0 {
         and access.base == "arg1"
         and access.offset == 0x18
         and access.role == "argument_memory"
+        and access.base_object == "arg1"
+        and access.base_object_kind == "argument"
+        and access.pointer_class == "argument_pointer"
+        and access.field_offset == 0x18
+        and access.field_name == "field_0x18"
         for access in accesses
     )
     assert any(
@@ -1581,8 +1591,92 @@ NTSTATUS MemoryShape(void *arg0, void *arg1, void *table, ULONG index) {
     assert any(
         fact.kind == "memory_access"
         and fact.key == "read:table+index*8+0x20"
-        and fact.value == "selector_table;width_bits=64"
+        and "selector_table" in fact.value
+        and "width_bits=64" in fact.value
+        and "base_kind=table" in fact.value
+        and "pointer_class=table_pointer" in fact.value
+        and "field=field_0x20" in fact.value
         for fact in result.packet.facts
+    )
+
+
+def test_windows_function_pretty_lift_classifies_typed_entry_memory_bases(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    project = tmp_path / "sample.glaurung"
+    kb = PersistentKnowledgeBase.open(project, binary_path=ctx.file_path)
+    try:
+        xref_db.set_function_prototype(
+            kb,
+            "TypedMemoryShape",
+            "NTSTATUS",
+            [
+                xref_db.FunctionParam("InputBuffer", "const void *", "input_buffer"),
+                xref_db.FunctionParam("OutputBuffer", "void *", "output_buffer"),
+                xref_db.FunctionParam("ReturnLength", "ULONG *", "return_length"),
+                xref_db.FunctionParam("Irp", "void *", "irp"),
+            ],
+            set_by="manual",
+            confidence=0.95,
+        )
+    finally:
+        kb.close()
+
+    tool = build_tool()
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pseudocode="""
+fn sub_18009fab0 {
+    value = *&[arg0+0x10];
+    &[arg1+0x18] = value;
+    &[arg2] = value;
+    major = *&[arg3+0xb8];
+    return;
+}
+""",
+            project_path=str(project),
+            function_va=0x18009FAB0,
+            function_name="TypedMemoryShape",
+        ),
+    )
+
+    accesses = result.packet.memory_accesses
+    assert any(
+        access.kind == "read"
+        and access.base == "arg0"
+        and access.base_object == "InputBuffer"
+        and access.base_object_kind == "argument"
+        and access.pointer_class == "user_pointer_candidate"
+        and access.field_offset == 0x10
+        and access.field_name == "field_0x10"
+        for access in accesses
+    )
+    assert any(
+        access.kind == "write"
+        and access.base == "arg1"
+        and access.base_object == "OutputBuffer"
+        and access.pointer_class == "user_pointer_candidate"
+        and access.field_offset == 0x18
+        for access in accesses
+    )
+    assert any(
+        access.kind == "write"
+        and access.base == "arg2"
+        and access.base_object == "ReturnLength"
+        and access.pointer_class == "user_pointer_candidate"
+        and access.field_offset == 0
+        for access in accesses
+    )
+    assert any(
+        access.kind == "read"
+        and access.base == "arg3"
+        and access.base_object == "Irp"
+        and access.pointer_class == "kernel_pointer_candidate"
+        and access.field_offset == 0xB8
+        for access in accesses
     )
 
 

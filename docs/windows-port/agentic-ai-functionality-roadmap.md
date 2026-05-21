@@ -207,7 +207,11 @@ rendering. Direct calls through spellings such as `nt!__imp_Foo`,
 stdlib prototypes, attach Win64 callsite argument names/roles, and
 render as the underlying callee instead of leaking thunk labels into the
 agent-facing lift. Module-qualified/decorated import-thunk memory loads
-also produce normalized import-thunk data-reference facts.
+also produce normalized import-thunk data-reference facts. Pretty-lift
+memory-access facts now carry explicit base object, base-object kind,
+pointer class, field offset/name, and classification confidence derived
+from globals, stack slots, import thunks, selector tables, heap/pool
+name hints, argument roles, and project prototypes.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

@@ -89,6 +89,40 @@ class MemoryAccessFact(BaseModel):
     scale: int | None = None
     absolute_address: int | None = None
     width_bits: int | None = None
+    base_object: str | None = None
+    base_object_kind: (
+        Literal[
+            "argument",
+            "global",
+            "heap",
+            "import_thunk",
+            "local",
+            "stack",
+            "table",
+            "unknown",
+        ]
+        | None
+    ) = None
+    pointer_class: (
+        Literal[
+            "argument_pointer",
+            "global_pointer",
+            "heap_pointer",
+            "import_thunk_pointer",
+            "kernel_pointer_candidate",
+            "local_pointer",
+            "output_buffer_pointer",
+            "stack_pointer",
+            "table_pointer",
+            "user_pointer_candidate",
+            "unknown",
+        ]
+        | None
+    ) = None
+    field_offset: int | None = None
+    field_name: str | None = None
+    classification_reason: str | None = None
+    classification_confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     role: str
     line: int
     snippet: str
@@ -492,6 +526,8 @@ def build_lift_packet(
         pseudocode,
         output_var=output_var,
         selector_table=selector_table,
+        argument_roles=argument_roles,
+        entry_abi_arguments=entry_abi_arguments,
     )
     field_offset_groups = _field_offset_group_facts(memory_accesses)
     data_references = _data_reference_facts(
@@ -2271,11 +2307,26 @@ def _memory_access_facts(
     *,
     output_var: str | None,
     selector_table: SelectorTableFact | None,
+    argument_roles: dict[str, LiftArgumentRole],
+    entry_abi_arguments: list[EntryAbiArgumentFact],
 ) -> list[MemoryAccessFact]:
     facts: list[MemoryAccessFact] = []
     seen: set[tuple[str, int, str]] = set()
+    semantic_roles: dict[str, tuple[str, str | None, float]] = {
+        name: (role.semantic_name, role.role, role.confidence)
+        for name, role in argument_roles.items()
+    }
+    for argument in entry_abi_arguments:
+        semantic_roles.setdefault(
+            argument.original_name,
+            (argument.semantic_name, argument.role, argument.confidence),
+        )
 
     def add(access: MemoryAccessFact) -> None:
+        access = _classified_memory_access(
+            access,
+            semantic_roles=semantic_roles,
+        )
         key = (_memory_access_key(access), access.line, access.snippet)
         if key in seen:
             return
@@ -2397,6 +2448,126 @@ def _memory_access_facts(
                     )
                 )
     return facts
+
+
+def _classified_memory_access(
+    access: MemoryAccessFact,
+    *,
+    semantic_roles: dict[str, tuple[str, str | None, float]],
+) -> MemoryAccessFact:
+    base_object = access.base
+    base_object_kind: str | None = "unknown"
+    pointer_class: str | None = "unknown"
+    reason = "no stronger base classification was available"
+    confidence = 0.45
+
+    if access.absolute_address is not None:
+        base_object = _hex(access.absolute_address)
+        base_object_kind = "global"
+        pointer_class = "global_pointer"
+        reason = "absolute memory address"
+        confidence = 0.78
+    elif access.base is not None and _import_thunk_symbol(access.base) is not None:
+        base_object = _import_thunk_symbol(access.base)
+        base_object_kind = "import_thunk"
+        pointer_class = "import_thunk_pointer"
+        reason = "base symbol has an import/thunk spelling"
+        confidence = 0.86
+    elif access.role == "selector_table":
+        base_object = access.base
+        base_object_kind = "table"
+        pointer_class = "table_pointer"
+        reason = "indexed memory access has selector/table shape"
+        confidence = 0.76
+    elif access.role == "output_buffer":
+        base_object, role, role_confidence = _semantic_memory_base(
+            access.base,
+            semantic_roles,
+        )
+        base_object_kind = "argument" if role == "output_buffer" else "local"
+        pointer_class = "output_buffer_pointer"
+        reason = "memory base is the recovered output buffer"
+        confidence = max(0.74, role_confidence)
+    elif access.base is not None and access.base.startswith("stack_"):
+        base_object = access.base
+        base_object_kind = "stack"
+        pointer_class = "stack_pointer"
+        reason = "synthetic stack-slot base"
+        confidence = 0.74
+    elif access.base is not None:
+        semantic_name, semantic_role, role_confidence = _semantic_memory_base(
+            access.base,
+            semantic_roles,
+        )
+        base_object = semantic_name
+        if access.base.startswith("arg") or access.base in semantic_roles:
+            base_object_kind = "argument"
+            pointer_class = _pointer_class_for_semantic_role(semantic_role)
+            reason = (
+                f"entry argument role {semantic_role}"
+                if semantic_role
+                else "ABI argument memory base"
+            )
+            confidence = max(0.68, role_confidence)
+        elif _looks_heap_or_pool_pointer(access.base):
+            base_object_kind = "heap"
+            pointer_class = "heap_pointer"
+            reason = "base name carries heap/pool allocation hint"
+            confidence = 0.62
+        elif access.base.startswith("var") or access.base.startswith("ret"):
+            base_object_kind = "local"
+            pointer_class = "local_pointer"
+            reason = "synthetic local temporary memory base"
+            confidence = 0.55
+
+    field_offset = access.offset
+    field_name = _field_name_for_offset(field_offset)
+    return access.model_copy(
+        update={
+            "base_object": base_object,
+            "base_object_kind": base_object_kind,
+            "pointer_class": pointer_class,
+            "field_offset": field_offset,
+            "field_name": field_name,
+            "classification_reason": reason,
+            "classification_confidence": confidence,
+        }
+    )
+
+
+def _semantic_memory_base(
+    base: str | None,
+    semantic_roles: dict[str, tuple[str, str | None, float]],
+) -> tuple[str | None, str | None, float]:
+    if base is None:
+        return None, None, 0.0
+    semantic = semantic_roles.get(base)
+    if semantic is None:
+        return base, None, 0.0
+    return semantic
+
+
+def _pointer_class_for_semantic_role(role: str | None) -> str:
+    if role in {"input_buffer", "output_buffer", "return_length", "user_pointer"}:
+        return "user_pointer_candidate"
+    if role in {"irp", "mdl", "object", "token"}:
+        return "kernel_pointer_candidate"
+    if role == "selector_input_pointer":
+        return "user_pointer_candidate"
+    return "argument_pointer"
+
+
+def _looks_heap_or_pool_pointer(base: str) -> bool:
+    lowered = base.lower()
+    return any(token in lowered for token in ("heap", "pool", "alloc"))
+
+
+def _field_name_for_offset(offset: int | None) -> str | None:
+    if offset is None:
+        return None
+    if offset < 0:
+        return f"field_minus_{_hex(abs(offset))}"
+    return f"field_{_hex(offset)}"
 
 
 def _assignment_sides(line: str) -> tuple[str | None, str | None]:
@@ -4187,14 +4358,22 @@ def _facts(
             )
         )
     for access in memory_accesses:
-        value = access.role
+        value_parts = [access.role]
         if access.width_bits is not None:
-            value = f"{value};width_bits={access.width_bits}"
+            value_parts.append(f"width_bits={access.width_bits}")
+        if access.base_object is not None:
+            value_parts.append(f"base_object={access.base_object}")
+        if access.base_object_kind is not None:
+            value_parts.append(f"base_kind={access.base_object_kind}")
+        if access.pointer_class is not None:
+            value_parts.append(f"pointer_class={access.pointer_class}")
+        if access.field_name is not None:
+            value_parts.append(f"field={access.field_name}")
         facts.append(
             LiftFact(
                 kind="memory_access",
                 key=_memory_access_key(access),
-                value=value,
+                value=";".join(value_parts),
                 line=access.line,
                 snippet=access.snippet,
                 confidence=access.confidence,

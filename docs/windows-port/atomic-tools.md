@@ -111,7 +111,11 @@ sit below full IR/CFG bug-class scanners:
   prototypes can flow through `nt!__imp_Foo`, `j_Foo`, `thunk_Foo`, and
   `Foo$thunk` callsites into named Win64 arguments in the pretty lift.
   The same symbol spelling support applies to import-thunk memory loads
-  when producing data-reference facts.
+  when producing data-reference facts. Pretty-lift memory-access rows
+  now expose base object, base-object kind, pointer class, field
+  offset/name, and classification confidence so agents can distinguish
+  stack/global/argument/table/import-thunk and prototype-derived
+  user-pointer or kernel-pointer candidates without reparsing the text.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM
