@@ -371,6 +371,9 @@ from ..tools.windows_pipeline_blocker_task_plan import (
 from ..tools.windows_symbol_similarity_extraction_plan import (
     build_tool as build_windows_symbol_similarity_extraction_plan,
 )
+from ..tools.windows_function_similarity_manifest import (
+    build_tool as build_windows_function_similarity_manifest,
+)
 from ..tools.windows_runner_artifact_review import (
     build_tool as build_windows_runner_artifact_review,
 )
@@ -1362,6 +1365,9 @@ def register_analysis_tools(
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_symbol_similarity_extraction_plan())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_function_similarity_manifest())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_runner_artifact_review())

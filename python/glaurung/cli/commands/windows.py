@@ -57,6 +57,11 @@ from glaurung.llm.tools.windows_symbol_similarity_extraction_plan import (
     WindowsSymbolSimilarityExtractionPlanResult,
     build_tool as build_windows_symbol_similarity_extraction_plan,
 )
+from glaurung.llm.tools.windows_function_similarity_manifest import (
+    WindowsFunctionSimilarityManifestArgs,
+    WindowsFunctionSimilarityManifestResult,
+    build_tool as build_windows_function_similarity_manifest,
+)
 from glaurung.llm.tools.windows_runner_artifact_review import (
     WindowsRunnerArtifactReviewArgs,
     WindowsRunnerArtifactReviewResult,
@@ -519,6 +524,44 @@ class WindowsCommand(BaseCommand):
             help="Record the generated extraction plan in the transient memory KB",
         )
 
+        function_similarity = subparsers.add_parser(
+            "function-similarity-manifest",
+            help=(
+                "Generate a deterministic Glaurung opcode/body similarity "
+                "manifest for a patch pair"
+            ),
+        )
+        self._add_common_child_arguments(function_similarity)
+        function_similarity.add_argument("--binary-a", required=True)
+        function_similarity.add_argument("--binary-b", required=True)
+        function_similarity.add_argument("--output-path")
+        function_similarity.add_argument("--ngram-size", type=int, default=3)
+        function_similarity.add_argument(
+            "--min-similarity-score",
+            type=float,
+            default=0.55,
+        )
+        function_similarity.add_argument("--max-functions", type=int, default=2048)
+        function_similarity.add_argument("--max-rows", type=int, default=128)
+        function_similarity.add_argument("--include-same", action="store_true")
+        function_similarity.add_argument(
+            "--no-match-added-removed",
+            action="store_false",
+            dest="match_added_removed",
+            default=True,
+        )
+        function_similarity.add_argument(
+            "--include-anonymous",
+            action="store_false",
+            dest="skip_anonymous",
+            default=True,
+        )
+        function_similarity.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the similarity manifest in the transient memory KB",
+        )
+
         runner_review = subparsers.add_parser(
             "runner-artifact-review",
             help=(
@@ -721,6 +764,8 @@ class WindowsCommand(BaseCommand):
             return _execute_blocker_task_plan(args, formatter)
         if args.windows_action == "symbol-similarity-plan":
             return _execute_symbol_similarity_plan(args, formatter)
+        if args.windows_action == "function-similarity-manifest":
+            return _execute_function_similarity_manifest(args, formatter)
         if args.windows_action == "runner-artifact-review":
             return _execute_runner_artifact_review(args, formatter)
         if args.windows_action == "runner-artifact-promotion-plan":
@@ -1330,6 +1375,55 @@ def _execute_symbol_similarity_plan(
     return 0 if result.ready_to_execute else 1
 
 
+def _execute_function_similarity_manifest(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_function_similarity_manifest()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.binary_b), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsFunctionSimilarityManifestArgs(
+            binary_a=args.binary_a,
+            binary_b=args.binary_b,
+            output_path=args.output_path,
+            ngram_size=args.ngram_size,
+            min_similarity_score=args.min_similarity_score,
+            max_functions=args.max_functions,
+            max_rows=args.max_rows,
+            include_same=args.include_same,
+            match_added_removed=args.match_added_removed,
+            skip_anonymous=args.skip_anonymous,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "similarity_record_count": result.similarity_record_count,
+                        "output_path": result.output_path,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "similarity", "data": item.model_dump(mode="json")}
+                    for item in result.similarities
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_function_similarity_manifest_human(result))
+    return 0 if result.similarity_record_count else 1
+
+
 def _execute_runner_artifact_review(
     args: argparse.Namespace,
     formatter: BaseFormatter,
@@ -1678,6 +1772,30 @@ def _format_symbol_similarity_plan_human(
     if result.warnings:
         lines.append("Warnings:")
         lines.extend(f"  {warning}" for warning in result.warnings[:20])
+    return "\n".join(lines)
+
+
+def _format_function_similarity_manifest_human(
+    result: WindowsFunctionSimilarityManifestResult,
+) -> str:
+    lines = [
+        "Windows function similarity manifest",
+        (
+            f"  records={result.similarity_record_count} "
+            f"functions_a={result.functions_a} functions_b={result.functions_b}"
+        ),
+    ]
+    if result.output_path:
+        lines.append(f"  output={result.output_path}")
+    for item in result.similarities[:20]:
+        lines.append(
+            f"  {item.status} {item.function} -> "
+            f"{item.matched_function or '-'} score={item.similarity_score:.4f} "
+            f"algo={item.similarity_algorithm}"
+        )
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
     return "\n".join(lines)
 
 
