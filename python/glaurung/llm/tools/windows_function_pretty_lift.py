@@ -1158,6 +1158,7 @@ def _resolve_function_name(args: WindowsFunctionPrettyLiftArgs, text: str) -> st
 
 
 _CONTROL_CALLS = {"if", "switch", "sizeof", "return", "push", "pop", "unknown"}
+_WINDOWS_SYMBOL_RE = r"[?A-Za-z_][?A-Za-z0-9_!:.$@]*"
 
 
 def _call_counts(text: str) -> Counter[str]:
@@ -1187,8 +1188,8 @@ def _import_thunk_call_aliases(text: str) -> dict[str, str]:
     aliases: dict[str, str] = {}
     for raw_line in text.splitlines():
         match = re.match(
-            r"\s*(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*\*&\[\s*"
-            r"(?P<thunk>[_A-Za-z][_A-Za-z0-9]*)\s*\]\s*;",
+            rf"\s*(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*\*&\[\s*"
+            rf"(?P<thunk>{_WINDOWS_SYMBOL_RE})\s*\]\s*;",
             raw_line,
         )
         if not match:
@@ -2420,8 +2421,8 @@ def _parse_memory_expression_body(body: str) -> _MemoryExpressionShape | None:
             "absolute_address": absolute,
         }
     indexed_offset = re.fullmatch(
-        r"(?P<base>[A-Za-z_][A-Za-z0-9_]*)\+"
-        r"(?P<index>[A-Za-z_][A-Za-z0-9_]*)\*"
+        rf"(?P<base>{_WINDOWS_SYMBOL_RE})\+"
+        rf"(?P<index>{_WINDOWS_SYMBOL_RE})\*"
         r"(?P<scale>0x[0-9A-Fa-f]+|\d+)"
         r"(?P<offset>[+-](?:0x[0-9A-Fa-f]+|\d+))?",
         expr,
@@ -2437,9 +2438,9 @@ def _parse_memory_expression_body(body: str) -> _MemoryExpressionShape | None:
             "absolute_address": None,
         }
     offset_indexed = re.fullmatch(
-        r"(?P<base>[A-Za-z_][A-Za-z0-9_]*)"
+        rf"(?P<base>{_WINDOWS_SYMBOL_RE})"
         r"(?P<offset>[+-](?:0x[0-9A-Fa-f]+|\d+))\+"
-        r"(?P<index>[A-Za-z_][A-Za-z0-9_]*)\*"
+        rf"(?P<index>{_WINDOWS_SYMBOL_RE})\*"
         r"(?P<scale>0x[0-9A-Fa-f]+|\d+)",
         expr,
     )
@@ -2454,7 +2455,7 @@ def _parse_memory_expression_body(body: str) -> _MemoryExpressionShape | None:
             "absolute_address": None,
         }
     indexed = re.fullmatch(
-        r"(?P<base>[A-Za-z_][A-Za-z0-9_]*)\+(?P<index>[A-Za-z_][A-Za-z0-9_]*)\*(?P<scale>0x[0-9A-Fa-f]+|\d+)",
+        rf"(?P<base>{_WINDOWS_SYMBOL_RE})\+(?P<index>{_WINDOWS_SYMBOL_RE})\*(?P<scale>0x[0-9A-Fa-f]+|\d+)",
         expr,
     )
     if indexed:
@@ -2467,7 +2468,7 @@ def _parse_memory_expression_body(body: str) -> _MemoryExpressionShape | None:
             "absolute_address": None,
         }
     plus = re.fullmatch(
-        r"(?P<base>[A-Za-z_][A-Za-z0-9_]*)(?P<offset>[+-](?:0x[0-9A-Fa-f]+|\d+))",
+        rf"(?P<base>{_WINDOWS_SYMBOL_RE})(?P<offset>[+-](?:0x[0-9A-Fa-f]+|\d+))",
         expr,
     )
     if plus:
@@ -2479,7 +2480,7 @@ def _parse_memory_expression_body(body: str) -> _MemoryExpressionShape | None:
             "scale": None,
             "absolute_address": None,
         }
-    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", expr):
+    if re.fullmatch(_WINDOWS_SYMBOL_RE, expr):
         return {
             "base": expr,
             "offset": 0,

@@ -1234,6 +1234,48 @@ fn sub_180050080 {
     )
 
 
+def test_windows_function_pretty_lift_recovers_module_qualified_import_thunk_dispatch(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pseudocode="""
+fn sub_180050180 {
+    ret = *&[nt!__imp_?ZwClose@@YAXXZ];
+    ret(arg0);
+    return;
+}
+""",
+            function_va=0x180050180,
+            function_name="ModuleQualifiedImportThunkCaller",
+        ),
+    )
+
+    assert any(
+        access.kind == "read"
+        and access.base == "nt!__imp_?ZwClose@@YAXXZ"
+        and access.offset == 0
+        for access in result.packet.memory_accesses
+    )
+    assert any(
+        ref.kind == "import_thunk"
+        and ref.base == "nt!__imp_?ZwClose@@YAXXZ"
+        and ref.target_symbol == "ZwClose"
+        and ref.role == "import_thunk_call"
+        for ref in result.packet.data_references
+    )
+    site = result.packet.call_sites[0]
+    assert site.call_name == "ZwClose"
+    assert site.original_name == "ret"
+    assert site.prototype is not None
+    assert "return ZwClose(Handle);" in result.pretty_lift.pseudocode
+
+
 def test_windows_function_pretty_lift_recovers_vtable_dispatch(
     tmp_path: Path,
 ) -> None:

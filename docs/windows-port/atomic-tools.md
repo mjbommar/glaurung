@@ -110,6 +110,8 @@ sit below full IR/CFG bug-class scanners:
   during prototype lookup and call rendering, so project and stdlib
   prototypes can flow through `nt!__imp_Foo`, `j_Foo`, `thunk_Foo`, and
   `Foo$thunk` callsites into named Win64 arguments in the pretty lift.
+  The same symbol spelling support applies to import-thunk memory loads
+  when producing data-reference facts.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

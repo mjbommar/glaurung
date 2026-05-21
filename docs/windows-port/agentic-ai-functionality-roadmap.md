@@ -206,7 +206,8 @@ rendering. Direct calls through spellings such as `nt!__imp_Foo`,
 `j_Foo`, `thunk_Foo`, and `Foo$thunk` can resolve to project or
 stdlib prototypes, attach Win64 callsite argument names/roles, and
 render as the underlying callee instead of leaking thunk labels into the
-agent-facing lift.
+agent-facing lift. Module-qualified/decorated import-thunk memory loads
+also produce normalized import-thunk data-reference facts.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class
