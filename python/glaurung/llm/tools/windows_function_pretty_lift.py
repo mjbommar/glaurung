@@ -2368,6 +2368,11 @@ def _memory_access_facts(
             (argument.semantic_name, argument.role, argument.confidence),
         )
     semantic_roles.update(call_return_roles)
+    _propagate_semantic_assignment_aliases(
+        text,
+        semantic_roles=semantic_roles,
+        local_semantic_bases=local_semantic_bases,
+    )
 
     def add(access: MemoryAccessFact) -> None:
         access = _classified_memory_access(
@@ -2530,6 +2535,41 @@ def _memory_access_facts(
                     )
                 )
     return facts
+
+
+def _propagate_semantic_assignment_aliases(
+    text: str,
+    *,
+    semantic_roles: dict[str, tuple[str, str | None, float]],
+    local_semantic_bases: set[str],
+) -> None:
+    assignments: list[tuple[str, str]] = []
+    for raw_line in text.splitlines():
+        lhs, rhs = _assignment_sides(raw_line.strip())
+        if lhs is None or rhs is None:
+            continue
+        lhs_name = _strip_outer_parens(lhs)
+        rhs_name = _identifier_from_expression(rhs)
+        if rhs_name is None:
+            continue
+        if not re.fullmatch(_WINDOWS_SYMBOL_RE, lhs_name):
+            continue
+        assignments.append((lhs_name, rhs_name))
+
+    changed = True
+    while changed:
+        changed = False
+        for lhs_name, rhs_name in assignments:
+            if lhs_name in semantic_roles or rhs_name not in semantic_roles:
+                continue
+            _semantic_name, role, confidence = semantic_roles[rhs_name]
+            semantic_roles[lhs_name] = (
+                lhs_name,
+                role,
+                max(confidence - 0.03, 0.0),
+            )
+            local_semantic_bases.add(lhs_name)
+            changed = True
 
 
 def _call_return_semantic_roles(

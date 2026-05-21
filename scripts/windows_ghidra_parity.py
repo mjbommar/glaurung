@@ -110,11 +110,17 @@ def load_targets(corpus: Path) -> list[dict[str, object]]:
     return manifest["fixtures"]
 
 
-def run_glaurung(path: Path, max_functions: int) -> dict[str, object]:
+def run_glaurung(path: Path, max_functions: int,
+                 max_blocks: int = 2048,
+                 max_instructions: int = 50_000,
+                 timeout_ms: int = 100) -> dict[str, object]:
     start = time.perf_counter()
     funcs, cg, stats = g.analysis.analyze_functions_path_with_stats(
         str(path),
         max_functions=max_functions,
+        max_blocks=max_blocks,
+        max_instructions=max_instructions,
+        timeout_ms=timeout_ms,
     )
     elapsed = time.perf_counter() - start
     return {
@@ -417,6 +423,18 @@ def main() -> int:
         default=0,
         help="Glaurung function-count cap; 0 means unlimited.",
     )
+    parser.add_argument(
+        "--max-blocks", type=int, default=2048,
+        help="Per-function CFG block budget; raise for ntoskrnl-class binaries.",
+    )
+    parser.add_argument(
+        "--max-instructions", type=int, default=50_000,
+        help="Per-function instruction budget; raise for ntoskrnl-class binaries.",
+    )
+    parser.add_argument(
+        "--per-fn-timeout-ms", type=int, default=100,
+        help="Per-function CFG walk timeout (ms); raise for ntoskrnl-class binaries.",
+    )
     parser.add_argument("--analysis-timeout-s", type=int, default=75)
     parser.add_argument("--timeout-s", type=int, default=130)
     parser.add_argument("--output-json", type=Path, default=Path("/tmp/windows-ghidra-parity.json"))
@@ -451,7 +469,12 @@ def main() -> int:
                 "size_bytes": path.stat().st_size,
                 "sha256_16": sha256_16(path),
             }
-            row["glaurung"] = run_glaurung(path, args.max_functions)
+            row["glaurung"] = run_glaurung(
+                path, args.max_functions,
+                max_blocks=args.max_blocks,
+                max_instructions=args.max_instructions,
+                timeout_ms=args.per_fn_timeout_ms,
+            )
             row["ghidra"] = run_ghidra(
                 args.ghidra,
                 script_dir,

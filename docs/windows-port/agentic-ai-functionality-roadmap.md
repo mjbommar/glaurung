@@ -237,7 +237,10 @@ analysts see in IDA/Ghidra output. Curated WDK helper prototypes now
 also let return targets from helpers such as
 `IoGetCurrentIrpStackLocation(Irp)` become typed local bases, so later
 `IrpSp->...` accesses retain `IO_STACK_LOCATION *` semantics even when
-the current function signature does not expose `IrpSp` directly.
+the current function signature does not expose `IrpSp` directly. A
+conservative simple-assignment pass carries those typed local roles
+across straight-line aliases such as `IrpSp = stack` before field and
+guard classification.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

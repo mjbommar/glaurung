@@ -136,7 +136,8 @@ sit below full IR/CFG bug-class scanners:
   structured memory and guard substrate without requiring offset-form
   Glaurung IR. Curated helper prototypes also propagate typed return
   targets from `IoGetCurrentIrpStackLocation(Irp)` into local
-  `IO_STACK_LOCATION *` bases before memory and guard classification.
+  `IO_STACK_LOCATION *` bases before memory and guard classification,
+  including simple straight-line local aliases of those typed values.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

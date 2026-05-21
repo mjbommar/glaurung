@@ -2041,6 +2041,53 @@ fn sub_18009fbe0 {
     assert "lhs=ioctl_code/selector" in pretty
 
 
+def test_windows_function_pretty_lift_propagates_typed_local_aliases(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pseudocode="""
+fn sub_18009fc20 {
+    stack = IoGetCurrentIrpStackLocation(Irp);
+    IrpSp = stack;
+    code = IrpSp->Parameters.DeviceIoControl.IoControlCode;
+    if (code == 0x222003) { goto L_ioctl; }
+    return;
+}
+""",
+            function_va=0x18009FC20,
+            function_name="HelperReturnAliasGuard",
+        ),
+    )
+
+    assert any(
+        access.kind == "read"
+        and access.base == "IrpSp"
+        and access.base_object == "IrpSp"
+        and access.base_object_kind == "local"
+        and access.pointer_class == "kernel_pointer_candidate"
+        and access.classification_reason
+        == "local value inherits typed call-return role io_stack_location"
+        and access.field_name == "Parameters.DeviceIoControl.IoControlCode"
+        and access.value_role == "ioctl_code"
+        for access in result.packet.memory_accesses
+    )
+    assert any(
+        condition.role == "selector_gate"
+        and condition.lhs_expression == "code"
+        and condition.lhs_value_role == "ioctl_code"
+        for condition in result.packet.path_conditions
+    )
+    pretty = result.pretty_lift.pseudocode
+    assert "IrpSp.Parameters.DeviceIoControl.IoControlCode" in pretty
+    assert "lhs=ioctl_code/selector" in pretty
+
+
 def test_pretty_lift_validation_rejects_missing_copy_sink(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     tool = build_tool()
