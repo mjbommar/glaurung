@@ -1633,6 +1633,8 @@ fn sub_18009fab0 {
     value = *&[arg0+0x10];
     &[arg1+0x18] = value;
     &[arg2] = value;
+    mode = *&[arg3+0x40];
+    user = *&[arg3+0x70];
     major = *&[arg3+0xb8];
     return;
 }
@@ -1668,6 +1670,25 @@ fn sub_18009fab0 {
         and access.base_object == "ReturnLength"
         and access.pointer_class == "user_pointer_candidate"
         and access.field_offset == 0
+        and access.field_name == "value"
+        for access in accesses
+    )
+    assert any(
+        access.kind == "read"
+        and access.base == "arg3"
+        and access.base_object == "Irp"
+        and access.pointer_class == "kernel_pointer_candidate"
+        and access.field_offset == 0x40
+        and access.field_name == "RequestorMode"
+        for access in accesses
+    )
+    assert any(
+        access.kind == "read"
+        and access.base == "arg3"
+        and access.base_object == "Irp"
+        and access.pointer_class == "kernel_pointer_candidate"
+        and access.field_offset == 0x70
+        and access.field_name == "UserBuffer"
         for access in accesses
     )
     assert any(
@@ -1676,6 +1697,7 @@ fn sub_18009fab0 {
         and access.base_object == "Irp"
         and access.pointer_class == "kernel_pointer_candidate"
         and access.field_offset == 0xB8
+        and access.field_name == "Tail.Overlay.CurrentStackLocation"
         for access in accesses
     )
     pretty = result.pretty_lift.pseudocode
@@ -1684,8 +1706,13 @@ fn sub_18009fab0 {
     assert (
         "OutputBuffer + field_0x18: write, argument, user_pointer_candidate" in pretty
     )
-    assert "ReturnLength + field_0x0: write, argument, user_pointer_candidate" in pretty
-    assert "Irp + field_0xb8: read, argument, kernel_pointer_candidate" in pretty
+    assert "ReturnLength.value: write, argument, user_pointer_candidate" in pretty
+    assert "Irp.RequestorMode: read, argument, kernel_pointer_candidate" in pretty
+    assert "Irp.UserBuffer: read, argument, kernel_pointer_candidate" in pretty
+    assert (
+        "Irp.Tail.Overlay.CurrentStackLocation: read, argument, "
+        "kernel_pointer_candidate"
+    ) in pretty
 
 
 def test_pretty_lift_validation_rejects_missing_copy_sink(tmp_path: Path) -> None:

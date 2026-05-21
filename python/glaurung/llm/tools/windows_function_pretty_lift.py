@@ -2458,6 +2458,7 @@ def _classified_memory_access(
     base_object = access.base
     base_object_kind: str | None = "unknown"
     pointer_class: str | None = "unknown"
+    semantic_role: str | None = None
     reason = "no stronger base classification was available"
     confidence = 0.45
 
@@ -2484,6 +2485,7 @@ def _classified_memory_access(
             access.base,
             semantic_roles,
         )
+        semantic_role = role
         base_object_kind = "argument" if role == "output_buffer" else "local"
         pointer_class = "output_buffer_pointer"
         reason = "memory base is the recovered output buffer"
@@ -2521,7 +2523,11 @@ def _classified_memory_access(
             confidence = 0.55
 
     field_offset = access.offset
-    field_name = _field_name_for_offset(field_offset)
+    field_name = _semantic_field_name_for_access(
+        base_object=base_object,
+        semantic_role=semantic_role,
+        offset=field_offset,
+    ) or _field_name_for_offset(field_offset)
     return access.model_copy(
         update={
             "base_object": base_object,
@@ -2560,6 +2566,37 @@ def _pointer_class_for_semantic_role(role: str | None) -> str:
 def _looks_heap_or_pool_pointer(base: str) -> bool:
     lowered = base.lower()
     return any(token in lowered for token in ("heap", "pool", "alloc"))
+
+
+_IRP_FIELD_NAMES_BY_OFFSET = {
+    0x08: "MdlAddress",
+    0x10: "Flags",
+    0x18: "AssociatedIrp.SystemBuffer",
+    0x30: "IoStatus",
+    0x40: "RequestorMode",
+    0x48: "UserIosb",
+    0x50: "UserEvent",
+    0x68: "CancelRoutine",
+    0x70: "UserBuffer",
+    0xB8: "Tail.Overlay.CurrentStackLocation",
+}
+
+
+def _semantic_field_name_for_access(
+    *,
+    base_object: str | None,
+    semantic_role: str | None,
+    offset: int | None,
+) -> str | None:
+    if offset is None:
+        return None
+    role = (semantic_role or "").lower()
+    object_name = (base_object or "").lower()
+    if role == "return_length" and offset == 0:
+        return "value"
+    if role == "irp" or object_name == "irp":
+        return _IRP_FIELD_NAMES_BY_OFFSET.get(offset)
+    return None
 
 
 def _field_name_for_offset(offset: int | None) -> str | None:
@@ -5121,11 +5158,17 @@ def _memory_access_target_expr(access: MemoryAccessFact) -> str:
     if base is None:
         base = access.expression
     if access.field_name is not None:
+        if _is_semantic_field_name(access.field_name):
+            return f"{base}.{access.field_name}"
         return f"{base} + {access.field_name}"
     if access.field_offset is not None and access.field_offset != 0:
         sign = "+" if access.field_offset >= 0 else "-"
         return f"{base} {sign} {_hex(abs(access.field_offset))}"
     return str(base)
+
+
+def _is_semantic_field_name(name: str) -> bool:
+    return not name.startswith(("field_", "field_minus_"))
 
 
 def _render_unknown_sections(sections: list[UnknownSectionFact]) -> list[str]:
