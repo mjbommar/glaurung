@@ -154,6 +154,59 @@ def test_windows_live_kernel_snapshot_reports_missing_sections(
     assert "driver_dispatch_table" in result.missing_capabilities
 
 
+def test_windows_live_kernel_snapshot_joins_expected_handler_map(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+    snapshot = {
+        "modules": [
+            {
+                "name": "ntoskrnl.exe",
+                "base": "0xfffff80000000000",
+                "size": "0x2000000",
+            },
+            {
+                "name": "acme.sys",
+                "base": "0xfffff80510000000",
+                "size": "0x30000",
+            },
+        ],
+        "syscalls": [
+            {
+                "service_table": "native",
+                "number": "0x36",
+                "symbol": "NtQuerySystemInformation",
+                "handler": "0xfffff80510001000",
+            }
+        ],
+    }
+    expected = {
+        "NtQuerySystemInformation": {
+            "handler_va": "0xfffff80000123450",
+            "handler_module": "ntoskrnl.exe",
+        }
+    }
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            snapshot_json=json.dumps(snapshot),
+            expected_handler_map_json=json.dumps(expected),
+        ),
+    )
+
+    row = result.syscalls[0]
+    assert row.expected_handler_va == 0xFFFFF80000123450
+    assert row.expected_module == "ntoskrnl.exe"
+    assert row.handler_module == "acme.sys"
+    assert row.module_status == "unexpected_module"
+    assert row.matches_expected_handler is False
+    assert "expected_handler_map" in row.evidence
+    assert "syscall_expected_handler_mismatch" in result.coverage
+
+
 def test_memory_agent_registers_windows_live_kernel_snapshot() -> None:
     agent = create_memory_agent(model="test")
 

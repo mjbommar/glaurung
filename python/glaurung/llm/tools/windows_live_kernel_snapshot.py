@@ -120,6 +120,14 @@ class WindowsLiveKernelSnapshotArgs(BaseModel):
         None,
         description="Optional path to a live-kernel snapshot JSON file.",
     )
+    expected_handler_map_json: str | None = Field(
+        None,
+        description=(
+            "Optional static expected syscall-handler map. Accepts a dict keyed "
+            "by symbol or syscall number, or a list of rows with symbol/number, "
+            "handler_va, and handler_module fields."
+        ),
+    )
     max_modules: int = Field(512, ge=0, description="Maximum modules to return.")
     max_syscalls: int = Field(4096, ge=0, description="Maximum syscalls to return.")
     max_callbacks: int = Field(
@@ -161,6 +169,18 @@ class WindowsLiveKernelSnapshotResult(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class _ExpectedHandlerRecord(BaseModel):
+    handler_va: int | None = None
+    handler_module: str | None = None
+    handler_name: str | None = None
+    evidence: list[str] = Field(default_factory=list)
+
+
+class _ExpectedHandlerMaps(BaseModel):
+    by_symbol: dict[str, _ExpectedHandlerRecord] = Field(default_factory=dict)
+    by_number: dict[int, _ExpectedHandlerRecord] = Field(default_factory=dict)
+
+
 class WindowsLiveKernelSnapshotTool(
     MemoryTool[WindowsLiveKernelSnapshotArgs, WindowsLiveKernelSnapshotResult]
 ):
@@ -186,9 +206,12 @@ class WindowsLiveKernelSnapshotTool(
         args: WindowsLiveKernelSnapshotArgs,
     ) -> WindowsLiveKernelSnapshotResult:
         snapshot = _load_snapshot(args)
+        expected_handlers = _expected_handler_maps(args.expected_handler_map_json)
         kernel_identity = _kernel_identity(snapshot)
         modules = _loaded_modules(snapshot)[: args.max_modules]
-        syscalls = _live_syscalls(snapshot, modules)[: args.max_syscalls]
+        syscalls = _live_syscalls(snapshot, modules, expected_handlers)[
+            : args.max_syscalls
+        ]
         callbacks = _live_callbacks(snapshot, modules)[: args.max_callbacks]
         driver_objects, driver_dispatches = _driver_objects_and_dispatches(
             snapshot,
@@ -260,6 +283,69 @@ def _load_snapshot(args: WindowsLiveKernelSnapshotArgs) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("live kernel snapshot must be a JSON object")
     return data
+
+
+def _expected_handler_maps(value: str | None) -> _ExpectedHandlerMaps:
+    maps = _ExpectedHandlerMaps()
+    if not value:
+        return maps
+    raw = json.loads(value)
+    if isinstance(raw, dict):
+        for key, item in raw.items():
+            if isinstance(item, dict):
+                _add_expected_handler_record(maps, key, item)
+            else:
+                _add_expected_handler_record(maps, key, {"handler_va": item})
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                _add_expected_handler_record(maps, None, item)
+    else:
+        raise ValueError("expected_handler_map_json must be a JSON object or list")
+    return maps
+
+
+def _add_expected_handler_record(
+    maps: _ExpectedHandlerMaps,
+    key: str | None,
+    item: dict[str, Any],
+) -> None:
+    record = _ExpectedHandlerRecord(
+        handler_va=_int_or_none(
+            item.get("expected_handler_va")
+            or item.get("handler_va")
+            or item.get("handler")
+            or item.get("va")
+        ),
+        handler_module=_str_or_none(
+            item.get("expected_module")
+            or item.get("handler_module")
+            or item.get("module")
+        ),
+        handler_name=_str_or_none(
+            item.get("handler_name") or item.get("name") or item.get("symbol")
+        ),
+        evidence=["expected_handler_map"],
+    )
+    symbol = _str_or_none(
+        item.get("symbol") or item.get("user_stub_symbol") or item.get("syscall_name")
+    )
+    if symbol:
+        maps.by_symbol[symbol] = record
+    number = _int_or_none(
+        item.get("syscall_number")
+        or item.get("number")
+        or item.get("service_number")
+        or item.get("index")
+    )
+    if number is not None:
+        maps.by_number[number] = record
+    if key:
+        keyed_number = _int_or_none(key)
+        if keyed_number is None:
+            maps.by_symbol[key] = record
+        else:
+            maps.by_number[keyed_number] = record
 
 
 def _kernel_identity(snapshot: dict[str, Any]) -> WindowsKernelIdentityFact | None:
@@ -337,6 +423,7 @@ def _loaded_modules(snapshot: dict[str, Any]) -> list[WindowsLoadedModuleFact]:
 def _live_syscalls(
     snapshot: dict[str, Any],
     modules: list[WindowsLoadedModuleFact],
+    expected_handlers: _ExpectedHandlerMaps,
 ) -> list[WindowsLiveSyscallFact]:
     facts: list[WindowsLiveSyscallFact] = []
     for row in _list_section(snapshot, "syscalls", "ssdt", "syscall_table"):
@@ -348,6 +435,8 @@ def _live_syscalls(
         )
         if number is None:
             continue
+        symbol = _str_or_none(row.get("symbol") or row.get("name"))
+        expected = _expected_handler_for_syscall(expected_handlers, symbol, number)
         handler_va = _int_or_none(
             row.get("handler_va")
             or row.get("handler")
@@ -357,9 +446,13 @@ def _live_syscalls(
         expected_handler_va = _int_or_none(
             row.get("expected_handler_va") or row.get("expected_handler")
         )
+        if expected_handler_va is None and expected is not None:
+            expected_handler_va = expected.handler_va
         expected_module = _str_or_none(
             row.get("expected_module") or row.get("expected_handler_module")
         )
+        if expected_module is None and expected is not None:
+            expected_module = expected.handler_module
         module = _find_module(modules, handler_va)
         module_status = _module_status(module, handler_va, expected_module)
         facts.append(
@@ -369,7 +462,7 @@ def _live_syscalls(
                 ),
                 syscall_number=number,
                 syscall_hex=_hex(number),
-                symbol=_str_or_none(row.get("symbol") or row.get("name")),
+                symbol=symbol or (expected.handler_name if expected else None),
                 handler_va=handler_va,
                 handler_hex=_hex_or_none(handler_va),
                 handler_module=module.name if module else None,
@@ -381,11 +474,25 @@ def _live_syscalls(
                 if expected_handler_va is None or handler_va is None
                 else expected_handler_va == handler_va,
                 confidence=0.84 if handler_va is not None else 0.55,
-                evidence=["live_syscall_table", *_module_evidence(module, handler_va)],
+                evidence=[
+                    "live_syscall_table",
+                    *_module_evidence(module, handler_va),
+                    *((expected.evidence if expected else [])[:2]),
+                ],
             )
         )
     facts.sort(key=lambda item: (str(item.service_table), item.syscall_number))
     return facts
+
+
+def _expected_handler_for_syscall(
+    expected_handlers: _ExpectedHandlerMaps,
+    symbol: str | None,
+    number: int,
+) -> _ExpectedHandlerRecord | None:
+    if symbol is not None and symbol in expected_handlers.by_symbol:
+        return expected_handlers.by_symbol[symbol]
+    return expected_handlers.by_number.get(number)
 
 
 def _live_callbacks(
