@@ -62,6 +62,11 @@ from glaurung.llm.tools.windows_project_function_chunk_facts import (
     WindowsProjectFunctionChunkFactsResult,
     build_tool as build_windows_project_function_chunk_facts,
 )
+from glaurung.llm.tools.windows_project_function_boundary_diff import (
+    WindowsProjectFunctionBoundaryDiffArgs,
+    WindowsProjectFunctionBoundaryDiffResult,
+    build_tool as build_windows_project_function_boundary_diff,
+)
 from glaurung.llm.tools.windows_project_function_start_explain import (
     WindowsProjectFunctionStartExplainArgs,
     WindowsProjectFunctionStartExplainResult,
@@ -516,6 +521,28 @@ class WindowsCommand(BaseCommand):
             "--add-to-kb",
             action="store_true",
             help="Record the chunk query in the transient memory KB.",
+        )
+
+        project_boundary_diff = subparsers.add_parser(
+            "project-function-boundary-diff",
+            help=(
+                "Compare function boundaries, chunks, thunks, tailcalls, and "
+                "funclets across two .glaurung projects"
+            ),
+        )
+        self._add_common_child_arguments(project_boundary_diff)
+        project_boundary_diff.add_argument("--before-project-path", required=True)
+        project_boundary_diff.add_argument("--after-project-path", required=True)
+        project_boundary_diff.add_argument("--before-binary-id", type=int)
+        project_boundary_diff.add_argument("--after-binary-id", type=int)
+        project_boundary_diff.add_argument("--include-unchanged", action="store_true")
+        project_boundary_diff.add_argument("--function-name-contains")
+        project_boundary_diff.add_argument("--min-confidence", type=float, default=0.0)
+        project_boundary_diff.add_argument("--max-rows", type=int, default=128)
+        project_boundary_diff.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the project boundary diff in the transient memory KB.",
         )
 
         project_start = subparsers.add_parser(
@@ -1019,6 +1046,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_callgraph_reachability(args, formatter)
         if args.windows_action == "project-function-chunks":
             return _execute_project_function_chunks(args, formatter)
+        if args.windows_action == "project-function-boundary-diff":
+            return _execute_project_function_boundary_diff(args, formatter)
         if args.windows_action == "project-function-start-explain":
             return _execute_project_function_start_explain(args, formatter)
         if args.windows_action == "project-memory-access-query":
@@ -1662,6 +1691,57 @@ def _execute_project_function_chunks(
         )
     else:
         formatter.output_plain(_format_project_function_chunks_human(result))
+    return 0
+
+
+def _execute_project_function_boundary_diff(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_function_boundary_diff()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.before_project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectFunctionBoundaryDiffArgs(
+            before_project_path=args.before_project_path,
+            after_project_path=args.after_project_path,
+            before_binary_id=args.before_binary_id,
+            after_binary_id=args.after_binary_id,
+            include_unchanged=args.include_unchanged,
+            function_name_contains=args.function_name_contains,
+            min_confidence=args.min_confidence,
+            max_rows=args.max_rows,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "before_project_path": result.before_project_path,
+                        "after_project_path": result.after_project_path,
+                        "added_count": result.added_count,
+                        "removed_count": result.removed_count,
+                        "changed_count": result.changed_count,
+                        "returned_count": result.returned_count,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "boundary_delta", "data": item.model_dump(mode="json")}
+                    for item in result.deltas
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_function_boundary_diff_human(result))
     return 0
 
 
@@ -2652,6 +2732,39 @@ def _format_project_function_chunks_human(
         )
     if len(result.chunks) > 20:
         lines.append(f"  ... {len(result.chunks) - 20} more")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_function_boundary_diff_human(
+    result: WindowsProjectFunctionBoundaryDiffResult,
+) -> str:
+    lines = [
+        "Windows project function boundary diff",
+        f"  before={result.before_project_path}",
+        f"  after={result.after_project_path}",
+        (
+            f"  boundaries={result.before_boundary_count}->"
+            f"{result.after_boundary_count} chunks={result.before_chunk_count}->"
+            f"{result.after_chunk_count}"
+        ),
+        (
+            f"  added={result.added_count} removed={result.removed_count} "
+            f"changed={result.changed_count} returned={result.returned_count}"
+        ),
+        f"  coverage={','.join(result.coverage) or '-'}",
+    ]
+    for delta in result.deltas[:20]:
+        lines.append(
+            f"  {delta.record_kind:<17} {delta.status:<8} {delta.address} "
+            f"priority={delta.review_priority} name={delta.name or '-'} "
+            f"fields={','.join(delta.changed_fields) or '-'} "
+            f"relevance={','.join(delta.security_relevance) or '-'}"
+        )
+    if len(result.deltas) > 20:
+        lines.append(f"  ... {len(result.deltas) - 20} more")
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)

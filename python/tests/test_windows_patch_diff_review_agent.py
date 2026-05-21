@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -163,6 +164,132 @@ def _seed_project_prototypes(before: Path, after: Path) -> None:
         after_kb.close()
 
 
+def _seed_project_boundaries(before: Path, after: Path) -> None:
+    for path in (before, after):
+        conn = sqlite3.connect(path)
+        try:
+            conn.executescript(
+                """
+CREATE TABLE IF NOT EXISTS function_boundaries (
+    boundary_id INTEGER PRIMARY KEY,
+    binary_id INTEGER,
+    entry_va INTEGER,
+    end_va INTEGER,
+    size INTEGER,
+    source TEXT,
+    confidence REAL,
+    name TEXT,
+    detail_json TEXT
+);
+CREATE TABLE IF NOT EXISTS function_chunk_facts (
+    chunk_id INTEGER PRIMARY KEY,
+    binary_id INTEGER,
+    identity_key TEXT,
+    owner_entry_va INTEGER,
+    chunk_start_va INTEGER,
+    chunk_end_va INTEGER,
+    chunk_size INTEGER,
+    chunk_kind TEXT,
+    relation_kind TEXT,
+    target_va INTEGER,
+    target_name TEXT,
+    source TEXT,
+    confidence REAL,
+    name TEXT,
+    detail_json TEXT,
+    indexed_at INTEGER
+);
+"""
+            )
+            conn.execute("DELETE FROM function_boundaries")
+            conn.execute("DELETE FROM function_chunk_facts")
+            conn.commit()
+        finally:
+            conn.close()
+
+    before_conn = sqlite3.connect(before)
+    try:
+        before_conn.execute(
+            "INSERT INTO function_boundaries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                1,
+                0x140001000,
+                0x140001100,
+                0x100,
+                "pdata",
+                0.90,
+                "dispatch",
+                "{}",
+            ),
+        )
+        before_conn.execute(
+            "INSERT INTO function_chunk_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                1,
+                "dispatch-thunk",
+                0x140001000,
+                0x140001080,
+                0x140001086,
+                6,
+                "import_thunk",
+                "import_thunk",
+                0x180001000,
+                "ZwClose",
+                "function_name",
+                0.74,
+                "dispatch$thunk",
+                "{}",
+                0,
+            ),
+        )
+        before_conn.commit()
+    finally:
+        before_conn.close()
+
+    after_conn = sqlite3.connect(after)
+    try:
+        after_conn.execute(
+            "INSERT INTO function_boundaries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                1,
+                0x140001000,
+                0x140001140,
+                0x140,
+                "pdata",
+                0.88,
+                "dispatch",
+                "{}",
+            ),
+        )
+        after_conn.execute(
+            "INSERT INTO function_chunk_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                1,
+                "dispatch-thunk",
+                0x140001000,
+                0x140001080,
+                0x140001086,
+                6,
+                "import_thunk",
+                "import_thunk",
+                0x180002000,
+                "ZwQueryInformationProcess",
+                "function_name",
+                0.76,
+                "dispatch$thunk",
+                "{}",
+                0,
+            ),
+        )
+        after_conn.commit()
+    finally:
+        after_conn.close()
+
+
 def test_windows_patch_diff_review_ranks_seed_changed_function(
     tmp_path: Path,
 ) -> None:
@@ -314,6 +441,41 @@ def test_windows_patch_diff_review_ranks_project_prototype_deltas(
     assert "parameter_role_delta" in item.reason_codes
     assert "pointer_or_buffer_parameter_delta" in item.reason_codes
     assert item.next_tool == "windows_sink_to_gate_review"
+
+
+def test_windows_patch_diff_review_ranks_project_boundary_deltas(
+    tmp_path: Path,
+) -> None:
+    a = _need(_SWITCHY_V1)
+    b = _need(_SWITCHY_V2)
+    before_project = _project(tmp_path, "before")
+    after_project = _project(tmp_path, "after")
+    _seed_project_boundaries(before_project, after_project)
+
+    result = run_windows_patch_diff_review(
+        WindowsPatchDiffReviewConfig(
+            binary_a=str(a),
+            binary_b=str(b),
+            before_project_path=str(before_project),
+            after_project_path=str(after_project),
+            max_items=20,
+        )
+    )
+
+    assert result.boundary_diff is not None
+    assert result.boundary_diff.changed_count == 2
+    assert "windows_project_function_boundary_diff" in result.tool_sequence
+    assert "project_boundary_deltas" in result.evidence_bundle.coverage.fact_coverage
+    assert result.evidence_bundle.subject.attributes["boundary_delta_count"] == 2
+    boundary_items = [
+        item for item in result.review_items if item.kind == "boundary_delta"
+    ]
+    assert boundary_items
+    assert any(
+        "project_function_boundary_diff" in item.match_basis for item in boundary_items
+    )
+    assert any("function_range_delta" in item.reason_codes for item in boundary_items)
+    assert any("thunk_delta" in item.reason_codes for item in boundary_items)
 
 
 def test_windows_patch_diff_review_loads_function_identity_manifest(

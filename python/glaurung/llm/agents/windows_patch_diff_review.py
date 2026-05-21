@@ -35,6 +35,12 @@ from ..tools.windows_pdb_identity_manifest import (
     WindowsPdbIdentityManifestArgs,
     WindowsPdbIdentityManifestTool,
 )
+from ..tools.windows_project_function_boundary_diff import (
+    ProjectFunctionBoundaryDelta,
+    WindowsProjectFunctionBoundaryDiffArgs,
+    WindowsProjectFunctionBoundaryDiffResult,
+    WindowsProjectFunctionBoundaryDiffTool,
+)
 from ..tools.windows_project_prototype_diff import (
     ProjectPrototypeDelta,
     WindowsProjectPrototypeDiffArgs,
@@ -55,6 +61,7 @@ PatchDiffItemKind = Literal[
     "seed_function_change",
     "seed_function_missing",
     "security_fact_delta",
+    "boundary_delta",
 ]
 PatchFunctionMatchBasis = Literal[
     "name_based",
@@ -97,11 +104,15 @@ class WindowsPatchDiffReviewConfig(BaseModel):
     after_function_va: int | None = None
     before_project_path: str | None = Field(
         None,
-        description="Optional pre-change .glaurung project for prototype diffing.",
+        description=(
+            "Optional pre-change .glaurung project for prototype and boundary diffing."
+        ),
     )
     after_project_path: str | None = Field(
         None,
-        description="Optional post-change .glaurung project for prototype diffing.",
+        description=(
+            "Optional post-change .glaurung project for prototype and boundary diffing."
+        ),
     )
     pdb_backed: bool = Field(
         False,
@@ -136,6 +147,7 @@ class WindowsPatchDiffReviewConfig(BaseModel):
     )
     max_diff_rows: int = Field(32, ge=0, le=512)
     max_prototype_delta_rows: int = Field(128, ge=0, le=512)
+    max_boundary_delta_rows: int = Field(128, ge=0, le=512)
     max_items: int = Field(20, ge=1, le=128)
 
 
@@ -159,6 +171,7 @@ class WindowsPatchDiffReviewResult(BaseModel):
     seed_triage: WindowsSeedBinaryDiffTriageResult | None = None
     security_facts: WindowsDiffSecurityRelevantFactsResult | None = None
     prototype_diff: WindowsProjectPrototypeDiffResult | None = None
+    boundary_diff: WindowsProjectFunctionBoundaryDiffResult | None = None
     review_items: list[WindowsPatchDiffReviewItem]
     function_identity_count: int = 0
     pdb_identity_record_count: int = 0
@@ -194,12 +207,14 @@ def run_windows_patch_diff_review(
     seed_triage = _seed_triage(ctx, effective_config)
     security_facts = _security_facts(ctx, effective_config)
     prototype_diff = _prototype_diff(ctx, effective_config)
+    boundary_diff = _boundary_diff(ctx, effective_config)
     items = _rank_items(
         config=effective_config,
         binary_diff=binary_diff,
         seed_triage=seed_triage,
         security_facts=security_facts,
         prototype_diff=prototype_diff,
+        boundary_diff=boundary_diff,
     )
     tool_sequence = ["windows_binary_diff_summary"]
     if seed_triage is not None:
@@ -208,6 +223,8 @@ def run_windows_patch_diff_review(
         tool_sequence.append("windows_diff_security_relevant_facts")
     if prototype_diff is not None:
         tool_sequence.append("windows_project_prototype_diff")
+    if boundary_diff is not None:
+        tool_sequence.append("windows_project_function_boundary_diff")
     if config.function_identities:
         tool_sequence.append("provided_windows_patch_function_identity")
     if config.function_identity_path:
@@ -223,6 +240,7 @@ def run_windows_patch_diff_review(
         seed_triage=seed_triage,
         security_facts=security_facts,
         prototype_diff=prototype_diff,
+        boundary_diff=boundary_diff,
         review_items=items,
         function_identity_count=len(identity_load.identities),
         pdb_identity_record_count=identity_load.pdb_identity_record_count,
@@ -234,6 +252,7 @@ def run_windows_patch_diff_review(
             tool_sequence,
             notes,
             prototype_diff=prototype_diff,
+            boundary_diff=boundary_diff,
         ),
         notes=notes,
     )
@@ -381,6 +400,28 @@ def _prototype_diff(
     )
 
 
+def _boundary_diff(
+    ctx: MemoryContext,
+    config: WindowsPatchDiffReviewConfig,
+) -> WindowsProjectFunctionBoundaryDiffResult | None:
+    if not config.before_project_path and not config.after_project_path:
+        return None
+    if not config.before_project_path or not config.after_project_path:
+        raise ValueError(
+            "before_project_path and after_project_path are required together"
+        )
+    return WindowsProjectFunctionBoundaryDiffTool().run(
+        ctx,
+        ctx.kb,
+        WindowsProjectFunctionBoundaryDiffArgs(
+            before_project_path=config.before_project_path,
+            after_project_path=config.after_project_path,
+            include_unchanged=False,
+            max_rows=config.max_boundary_delta_rows,
+        ),
+    )
+
+
 def _rank_items(
     *,
     config: WindowsPatchDiffReviewConfig,
@@ -388,6 +429,7 @@ def _rank_items(
     seed_triage: WindowsSeedBinaryDiffTriageResult | None,
     security_facts: WindowsDiffSecurityRelevantFactsResult | None,
     prototype_diff: WindowsProjectPrototypeDiffResult | None,
+    boundary_diff: WindowsProjectFunctionBoundaryDiffResult | None,
 ) -> list[WindowsPatchDiffReviewItem]:
     items: list[WindowsPatchDiffReviewItem] = []
     items.extend(_binary_items(config, binary_diff.rows))
@@ -398,6 +440,8 @@ def _rank_items(
         items.extend(_security_items(config, security_facts.deltas))
     if prototype_diff is not None:
         items.extend(_prototype_items(config, prototype_diff.deltas))
+    if boundary_diff is not None:
+        items.extend(_boundary_items(config, boundary_diff.deltas))
     items.sort(
         key=lambda item: (
             -item.priority,
@@ -646,6 +690,55 @@ def _prototype_items(
     return out
 
 
+def _boundary_items(
+    config: WindowsPatchDiffReviewConfig,
+    deltas: list[ProjectFunctionBoundaryDelta],
+) -> list[WindowsPatchDiffReviewItem]:
+    out: list[WindowsPatchDiffReviewItem] = []
+    for delta in deltas:
+        if delta.status == "unchanged":
+            continue
+        basis = ["project_function_boundary_diff"]
+        if delta.record_kind == "function_chunk":
+            basis.append("project_function_chunk_delta")
+        if delta.security_relevance:
+            basis.append("functionization_delta")
+        next_tool = (
+            "windows_project_function_chunk_facts"
+            if delta.record_kind == "function_chunk"
+            else "windows_project_function_start_explain"
+        )
+        out.append(
+            WindowsPatchDiffReviewItem(
+                rank=0,
+                kind="boundary_delta",
+                priority=_boundary_priority(delta),
+                function=delta.name,
+                status=delta.status,
+                summary=(
+                    f"{delta.record_kind} {delta.status} at {delta.address}: "
+                    f"{', '.join(delta.changed_fields) or 'record'}"
+                ),
+                match_basis=basis,
+                confidence=_confidence(
+                    config,
+                    0.58 if delta.security_relevance else 0.46,
+                ),
+                reason_codes=_reason_codes(
+                    config,
+                    [
+                        f"{delta.record_kind}_{delta.status}",
+                        *delta.reason_codes,
+                        *delta.security_relevance,
+                    ],
+                ),
+                next_tool=next_tool,
+                next_args={"va": delta.address_va},
+            )
+        )
+    return out
+
+
 def _prototype_priority(delta: ProjectPrototypeDelta) -> int:
     priority = 54
     if delta.status == "changed":
@@ -659,6 +752,26 @@ def _prototype_priority(delta: ProjectPrototypeDelta) -> int:
         for relevance in delta.security_relevance
     ):
         priority += 8
+    return priority
+
+
+def _boundary_priority(delta: ProjectFunctionBoundaryDelta) -> int:
+    priority = 46 + min(24, delta.review_priority // 3)
+    if delta.status == "changed":
+        priority += 8
+    if delta.status in {"added", "removed"}:
+        priority += 5
+    if any(
+        relevance in delta.security_relevance
+        for relevance in {
+            "function_range_delta",
+            "thunk_delta",
+            "tailcall_or_shared_tail_delta",
+            "exception_funclet_delta",
+            "split_body_delta",
+        }
+    ):
+        priority += 12
     return priority
 
 
@@ -752,6 +865,7 @@ def _evidence_bundle(
     notes: list[str],
     *,
     prototype_diff: WindowsProjectPrototypeDiffResult | None,
+    boundary_diff: WindowsProjectFunctionBoundaryDiffResult | None,
 ) -> WindowsEvidenceBundle:
     return make_windows_evidence_bundle(
         claim_level="triage_evidence_bundle_not_finding",
@@ -764,6 +878,9 @@ def _evidence_bundle(
                 "function_identity_count": len(config.function_identities),
                 "prototype_delta_count": (
                     len(prototype_diff.deltas) if prototype_diff is not None else 0
+                ),
+                "boundary_delta_count": (
+                    len(boundary_diff.deltas) if boundary_diff is not None else 0
                 ),
             },
         ),
@@ -789,6 +906,7 @@ def _evidence_bundle(
                     else []
                 ),
                 *(["project_prototype_deltas"] if prototype_diff is not None else []),
+                *(["project_boundary_deltas"] if boundary_diff is not None else []),
             ],
             stale_or_blocking_facts=[
                 *config.functionization_blockers,

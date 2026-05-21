@@ -217,6 +217,14 @@ sit below full IR/CFG bug-class scanners:
   boundary explanation during interactive review. These facts explain
   function layout decisions; they are not vulnerability evidence by
   themselves.
+- `windows_project_function_boundary_diff` compares persisted
+  `function_boundaries` and `function_chunk_facts` across two
+  `.glaurung` projects. It reports added, removed, changed, and
+  unchanged function ranges, thunks, tailcalls, shared tails, split-body
+  candidates, and exception funclets, with changed fields, reason codes,
+  review priority, and security relevance hints. Patch-diff review can
+  rank those deltas as `boundary_delta` items so boundary drift becomes
+  visible before decompilation or sink review.
 - `windows_project_function_start_explain` answers the analyst question
   "why is this a function?" for a persisted `.glaurung` project VA or
   symbol. It joins `function_names`, `function_boundaries`,

@@ -452,6 +452,16 @@ reason-code evidence, security-relevant prototype changes route to
 `windows_sink_to_gate_review`, and `windows_patch_diff_packets`
 preserves those items as validation packets.
 
+Update: `windows_project_function_boundary_diff` now compares persisted
+`function_boundaries` and `function_chunk_facts` across two
+`.glaurung` projects. It reports added, removed, changed, and unchanged
+function ranges, chunks, thunks, tailcalls, shared tails, split-body
+candidates, and exception funclets, with changed fields, reason codes,
+review priority, and security relevance hints. Patch-diff review
+invokes it when before/after project paths are available and ranks
+those changes as `boundary_delta` items, making low-level
+functionization drift visible before decompilation or sink review.
+
 Update: `windows_symbol_similarity_extraction_plan` now creates the
 runner-facing bridge for that gap. Given a Windows patch pair,
 target/component labels, optional PDB identity metadata, symbol-cache
@@ -1861,6 +1871,19 @@ Validated high-level replay scope:
   `prototype_delta` review items, evidence-bundle prototype-delta
   coverage, sink/gate routing for security-relevant signature changes,
   and preservation into emitted patch-diff validation packets.
+- Latest project boundary-diff validation: scoped `uvx ruff check`,
+  `uvx ty check`, `git diff --check`, and focused `uv run pytest`
+  passed for `windows_project_function_boundary_diff.py`,
+  `windows_patch_diff_review.py`, Windows CLI registration,
+  `memory_agent.py`,
+  `test_windows_project_function_boundary_diff_tool.py`,
+  `test_windows_patch_diff_review_agent.py`, and
+  `test_windows_patch_diff_packets_tool.py`. Tests cover range deltas,
+  thunk-target deltas, added funclets, removed shared tails, CLI JSON
+  output, KB evidence-node creation, `memory_agent` registration, and
+  patch-diff review ranking of project boundary/chunk deltas. The full
+  `uv run pytest python/tests/test_windows_*.py -q` sweep also passed
+  with one skip.
 - Latest project function-start explanation validation: scoped
   `uvx ruff check`, `uvx ty check`, `git diff --check`, and focused
   `uv run pytest` passed for
