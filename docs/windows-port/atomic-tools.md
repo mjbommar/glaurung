@@ -262,11 +262,15 @@ sit below full IR/CFG bug-class scanners:
   one project function to extract conservative memory operand facts:
   instruction VA/text, read/write/read-write access kind, width from
   pointer-size prefixes, normalized address expression, base/index/scale
-  and displacement, stack/global/field-like role hints, and project
-  data-xref/data-label joins when available. This is the first
-  instruction-level memory read/write inventory for Windows rules; it
-  does not recover PDB field names, full aliasing, path-sensitive memory
-  state, or a persisted project-wide memory operand table.
+  and displacement, stack/global/field-like role hints, first-class base
+  object classification, field offset, confidence, project
+  data-xref/data-label joins, type-field-use joins, and
+  prototype-derived Windows x64 parameter object classifications such as
+  `user_pointer` and `heap_pointer` when function prototypes are present.
+  This is the first instruction-level memory read/write inventory for
+  Windows rules; it does not recover complete PDB field names, full
+  aliasing, path-sensitive memory state, or a persisted project-wide
+  memory operand table.
 - `windows_project_return_value_use_snapshot` uses a project callsite
   VA plus nearby post-call disassembly to recover a conservative local
   Windows x64 `RAX` return-value use snapshot. It classifies immediate

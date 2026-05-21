@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+import json
+from typing import Any, cast
 
 import glaurung as g
 
@@ -77,6 +79,23 @@ CREATE TABLE data_labels (
     set_at INTEGER,
     PRIMARY KEY (binary_id, va)
 );
+CREATE TABLE type_field_uses (
+    binary_id INTEGER NOT NULL,
+    type_name TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    use_va INTEGER NOT NULL,
+    function_va INTEGER,
+    PRIMARY KEY (binary_id, use_va, type_name, field_name)
+);
+CREATE TABLE function_prototypes (
+    binary_id INTEGER NOT NULL,
+    function_name TEXT NOT NULL,
+    return_type TEXT,
+    params_json TEXT NOT NULL DEFAULT '[]',
+    semantics_json TEXT,
+    confidence REAL,
+    PRIMARY KEY (binary_id, function_name)
+);
 """
     )
     conn.execute(
@@ -93,6 +112,34 @@ CREATE TABLE data_labels (
     conn.execute(
         "INSERT INTO data_labels VALUES (?, ?, ?, ?, ?, ?, 0)",
         (1, 0x3000, "cldflt!g_Table", "ULONG[]", 32, "unit_test"),
+    )
+    conn.execute(
+        "INSERT INTO type_field_uses VALUES (?, ?, ?, ?, ?)",
+        (1, "USER_REQUEST", "OutputBuffer", 0x1000, 0x1000),
+    )
+    conn.execute(
+        "INSERT INTO function_prototypes VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            1,
+            "MemoryUser",
+            "NTSTATUS",
+            json.dumps(
+                [
+                    {
+                        "name": "InputUserBuffer",
+                        "c_type": "void *",
+                        "role": "user_pointer",
+                    },
+                    {
+                        "name": "PoolBuffer",
+                        "c_type": "PVOID",
+                        "role": "pool_allocation",
+                    },
+                ]
+            ),
+            "{}",
+            0.87,
+        ),
     )
     conn.commit()
     conn.close()
@@ -113,9 +160,13 @@ def test_windows_project_memory_operand_facts_extracts_widths_and_roles(
             _Insn(0x1004, "mov", ["dword ptr [rbp - 0x10]", "eax"]),
             _Insn(0x1008, "cmp", ["byte ptr [rip + 0x1234]", "0"]),
             _Insn(0x100C, "add", ["qword ptr [rsp + 0x20]", "1"]),
+            _Insn(0x1010, "mov", ["rax", "qword ptr [rdx + 0x8]"]),
         ]
 
-    monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
+    g_mod = cast(Any, g)
+    monkeypatch.setattr(
+        g_mod.disasm, "disassemble_window_at", fake_disassemble_window_at
+    )
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -131,12 +182,20 @@ def test_windows_project_memory_operand_facts_extracts_widths_and_roles(
     )
 
     assert result.function_name == "cldflt!MemoryUser"
-    assert result.returned_fact_count == 4
+    assert result.returned_fact_count == 5
     by_va = {fact.instruction_va: fact for fact in result.facts}
     assert by_va[0x1000].access_kind == "read"
     assert by_va[0x1000].width_bytes == 8
     assert by_va[0x1000].address_expression == "[rcx + 0x20]"
-    assert by_va[0x1000].role_hint == "field_access"
+    assert by_va[0x1000].role_hint == "user_pointer"
+    assert by_va[0x1000].base_object == "InputUserBuffer"
+    assert by_va[0x1000].base_object_kind == "user_pointer"
+    assert by_va[0x1000].base_object_type == "void *"
+    assert by_va[0x1000].base_object_role == "user_pointer"
+    assert by_va[0x1000].field_offset == 0x20
+    assert by_va[0x1000].likely_type_name == "USER_REQUEST"
+    assert by_va[0x1000].likely_field_name == "OutputBuffer"
+    assert by_va[0x1000].confidence > 0.9
     assert by_va[0x1004].access_kind == "write"
     assert by_va[0x1004].role_hint == "stack_local"
     assert by_va[0x1008].access_kind == "read"
@@ -145,13 +204,21 @@ def test_windows_project_memory_operand_facts_extracts_widths_and_roles(
     assert by_va[0x1008].data_target_name == "cldflt!g_Table"
     assert by_va[0x100C].access_kind == "read_write"
     assert by_va[0x100C].role_hint == "stack_argument"
+    assert by_va[0x1010].base_object == "PoolBuffer"
+    assert by_va[0x1010].base_object_kind == "heap_pointer"
+    assert by_va[0x1010].role_hint == "heap_pointer"
     assert "native_memory_operand_facts" in result.coverage
     assert "memory_operand_widths" in result.coverage
     assert "memory_read_operands" in result.coverage
     assert "memory_write_operands" in result.coverage
     assert "memory_read_write_operands" in result.coverage
     assert "project_data_label_targets" in result.coverage
-    assert "type_layout_field_names" in result.missing_capabilities
+    assert "base_object_classification" in result.coverage
+    assert "user_pointer_memory_operands" in result.coverage
+    assert "heap_pointer_memory_operands" in result.coverage
+    assert "type_field_use_joins" in result.coverage
+    assert "type_layout_field_names" not in result.missing_capabilities
+    assert "user_pointer_classification" not in result.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence
