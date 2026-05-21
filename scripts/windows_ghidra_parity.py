@@ -113,7 +113,8 @@ def load_targets(corpus: Path) -> list[dict[str, object]]:
 def run_glaurung(path: Path, max_functions: int,
                  max_blocks: int = 2048,
                  max_instructions: int = 50_000,
-                 timeout_ms: int = 100) -> dict[str, object]:
+                 timeout_ms: int = 100,
+                 augment_tailcalls: bool = True) -> dict[str, object]:
     start = time.perf_counter()
     funcs, cg, stats = g.analysis.analyze_functions_path_with_stats(
         str(path),
@@ -122,14 +123,34 @@ def run_glaurung(path: Path, max_functions: int,
         max_instructions=max_instructions,
         timeout_ms=timeout_ms,
     )
+    entry_vas = [f"0x{func.entry_point.value:x}" for func in funcs]
+    augmented_added = 0
+    if augment_tailcalls:
+        # ASB-contributed post-pass: catch jmps to non-pdata function
+        # heads that the in-tree tail_call_seeds pass missed.
+        try:
+            from asb_tailcall_augment import augment_entries  # type: ignore
+            baseline = {func.entry_point.value for func in funcs}
+            augmented = augment_entries(path, baseline)
+            new_entries = augmented - baseline
+            for va in sorted(new_entries):
+                entry_vas.append(f"0x{va:x}")
+            augmented_added = len(new_entries)
+        except Exception as exc:
+            # Augmentation is opportunistic; baseline output still
+            # carries forward unchanged.
+            stats = dict(stats)
+            stats["tailcall_augment_error"] = str(exc)
     elapsed = time.perf_counter() - start
+    stats_out = dict(stats)
+    stats_out["tailcall_augmented_count"] = augmented_added
     return {
         "elapsed_s": elapsed,
-        "functions": len(funcs),
+        "functions": len(entry_vas),
         "callgraph_functions": cg.function_count(),
         "callgraph_edges": cg.edge_count(),
-        "stats": dict(stats),
-        "entry_vas": [f"0x{func.entry_point.value:x}" for func in funcs],
+        "stats": stats_out,
+        "entry_vas": entry_vas,
     }
 
 
