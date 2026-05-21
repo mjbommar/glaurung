@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 import glaurung as g
 
 from ..context import MemoryContext
+from ..kb import windows_memory_operands
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
@@ -47,6 +48,12 @@ class WindowsProjectMemoryOperandFactsArgs(BaseModel):
     add_to_kb: bool = Field(
         False,
         description="If true, add a compact memory-operand evidence node to the KB.",
+    )
+    persist_to_project: bool = Field(
+        False,
+        description=(
+            "If true, persist returned memory operand rows into the project DB."
+        ),
     )
 
 
@@ -89,6 +96,7 @@ class WindowsProjectMemoryOperandFactsResult(BaseModel):
     function_name: str | None = None
     scanned_instruction_count: int
     returned_fact_count: int
+    persisted_fact_count: int = 0
     facts: list[ProjectMemoryOperandFact]
     coverage: list[str] = Field(default_factory=list)
     missing_capabilities: list[str] = Field(default_factory=list)
@@ -192,8 +200,23 @@ class WindowsProjectMemoryOperandFactsTool(
             field_uses,
             parameter_objects,
         )[: args.max_facts]
+        persisted_fact_count = 0
+        if args.persist_to_project and binary_id is not None:
+            conn = sqlite3.connect(str(project_path))
+            try:
+                persisted_fact_count = (
+                    windows_memory_operands.persist_memory_operand_facts(
+                        conn,
+                        binary_id=binary_id,
+                        facts=facts,
+                    )
+                )
+            finally:
+                conn.close()
         coverage = _coverage(facts)
-        missing = _missing_capabilities(facts)
+        if persisted_fact_count:
+            coverage.append("persisted_project_memory_operand_table")
+        missing = _missing_capabilities(facts, persisted=bool(persisted_fact_count))
 
         evidence_node_id = None
         if args.add_to_kb:
@@ -207,6 +230,7 @@ class WindowsProjectMemoryOperandFactsTool(
                         "function_va": args.function_va,
                         "function_name": function_name,
                         "fact_count": len(facts),
+                        "persisted_fact_count": persisted_fact_count,
                     },
                 )
             )
@@ -223,6 +247,7 @@ class WindowsProjectMemoryOperandFactsTool(
             function_name=function_name,
             scanned_instruction_count=len(instructions),
             returned_fact_count=len(facts),
+            persisted_fact_count=persisted_fact_count,
             facts=facts,
             coverage=coverage,
             missing_capabilities=missing,
@@ -777,12 +802,17 @@ def _coverage(facts: list[ProjectMemoryOperandFact]) -> list[str]:
     return coverage
 
 
-def _missing_capabilities(facts: list[ProjectMemoryOperandFact]) -> list[str]:
+def _missing_capabilities(
+    facts: list[ProjectMemoryOperandFact],
+    *,
+    persisted: bool = False,
+) -> list[str]:
     missing = [
         "full_memory_alias_tracking",
         "path_sensitive_memory_state",
-        "persisted_project_memory_operand_table",
     ]
+    if not persisted:
+        missing.append("persisted_project_memory_operand_table")
     if not facts:
         missing.append("native_memory_operand_facts")
     if any(fact.width_bytes is None for fact in facts):
@@ -795,6 +825,115 @@ def _missing_capabilities(facts: list[ProjectMemoryOperandFact]) -> list[str]:
     if not any(fact.base_object_kind == "user_pointer" for fact in facts):
         missing.append("user_pointer_classification")
     return missing
+
+
+def index_project_memory_operand_facts(
+    *,
+    binary_path: str | Path,
+    project_path: str | Path,
+    binary_id: int | None = None,
+    max_functions: int = 512,
+    max_window_bytes: int = 4096,
+    max_instructions: int = 512,
+    force: bool = False,
+) -> int:
+    """Persist memory operand facts for project functions.
+
+    This is intentionally conservative: it indexes known function entries from
+    ``function_names`` first and falls back to distinct xref source functions.
+    """
+
+    binary = Path(binary_path)
+    project = Path(project_path)
+    if not binary.exists() or not project.exists():
+        return 0
+    conn = sqlite3.connect(str(project))
+    try:
+        present = _present_tables(conn)
+        effective_binary_id = binary_id or _first_binary_id(conn, present)
+        if effective_binary_id is None:
+            return 0
+        windows_memory_operands.ensure_schema(conn)
+        if force:
+            windows_memory_operands.delete_memory_operand_facts(
+                conn,
+                binary_id=effective_binary_id,
+            )
+        entries = _function_entries(
+            conn,
+            present,
+            effective_binary_id,
+            max_functions=max_functions,
+        )
+        for function_va, function_name in entries:
+            data_targets = _data_xref_targets(
+                conn,
+                present,
+                effective_binary_id,
+                function_va,
+            )
+            field_uses = _field_uses(conn, present, effective_binary_id, function_va)
+            parameter_objects = _parameter_objects(
+                conn,
+                present,
+                effective_binary_id,
+                function_name,
+            )
+            args = WindowsProjectMemoryOperandFactsArgs(
+                binary_path=str(binary),
+                project_path=str(project),
+                function_va=function_va,
+                binary_id=effective_binary_id,
+                max_window_bytes=max_window_bytes,
+                max_instructions=max_instructions,
+            )
+            facts = _memory_operand_facts(
+                _disassemble_function(binary, args),
+                function_va,
+                function_name,
+                data_targets,
+                field_uses,
+                parameter_objects,
+            )
+            windows_memory_operands.persist_memory_operand_facts(
+                conn,
+                binary_id=effective_binary_id,
+                facts=facts,
+                set_by="windows_project_memory_operand_index",
+            )
+        return windows_memory_operands.row_count(conn, binary_id=effective_binary_id)
+    finally:
+        conn.close()
+
+
+def _function_entries(
+    conn: sqlite3.Connection,
+    present: set[str],
+    binary_id: int,
+    *,
+    max_functions: int,
+) -> list[tuple[int, str | None]]:
+    params: list[object] = [binary_id]
+    limit = ""
+    if max_functions > 0:
+        limit = " LIMIT ?"
+        params.append(max_functions)
+    if "function_names" in present:
+        rows = conn.execute(
+            "SELECT entry_va, canonical FROM function_names "
+            "WHERE binary_id = ? ORDER BY entry_va" + limit,
+            params,
+        ).fetchall()
+        return [(int(row[0]), str(row[1])) for row in rows]
+    if "xrefs" not in present:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT src_function_va FROM xrefs "
+        "WHERE binary_id = ? AND src_function_va IS NOT NULL "
+        "ORDER BY src_function_va" + limit,
+        params,
+    ).fetchall()
+    return [(int(row[0]), None) for row in rows]
 
 
 def build_tool() -> WindowsProjectMemoryOperandFactsTool:

@@ -492,6 +492,17 @@ class WindowsCommand(BaseCommand):
             default=True,
         )
         bootstrap_project.add_argument(
+            "--no-index-memory-operands",
+            action="store_false",
+            dest="index_memory_operands",
+            default=True,
+        )
+        bootstrap_project.add_argument(
+            "--max-memory-operand-functions",
+            type=int,
+            default=512,
+        )
+        bootstrap_project.add_argument(
             "--no-import-pdb-facts",
             action="store_false",
             dest="import_pdb_facts",
@@ -1311,6 +1322,8 @@ def _execute_bootstrap_project_facts(
             index_branch_conditions=args.index_branch_conditions,
             index_sysinfo_dispatch=args.index_sysinfo_dispatch,
             index_callsite_path_conditions=args.index_callsite_path_conditions,
+            index_memory_operands=args.index_memory_operands,
+            max_memory_operand_functions=args.max_memory_operand_functions,
             import_pdb_facts=args.import_pdb_facts,
             max_pdb_prototypes=args.max_pdb_prototypes,
             force_reindex=args.force_reindex,

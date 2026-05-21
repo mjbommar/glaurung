@@ -68,6 +68,7 @@ class ProjectFactCounts(BaseModel):
     cfg_branch_fact_count: int = 0
     function_boundary_count: int = 0
     function_chunk_fact_count: int = 0
+    memory_operand_fact_count: int = 0
     sysinfo_dispatch_count: int = 0
     callsite_argument_fact_count: int = 0
     callsite_path_condition_count: int = 0
@@ -221,6 +222,9 @@ def _record(entry: dict[str, Any], path: Path) -> ProjectFactRecord:
             function_boundary_count=int(counts_raw.get("function_boundary_count") or 0),
             function_chunk_fact_count=int(
                 counts_raw.get("function_chunk_fact_count") or 0
+            ),
+            memory_operand_fact_count=int(
+                counts_raw.get("memory_operand_fact_count") or 0
             ),
             sysinfo_dispatch_count=int(counts_raw.get("sysinfo_dispatch_count") or 0),
             callsite_argument_fact_count=int(

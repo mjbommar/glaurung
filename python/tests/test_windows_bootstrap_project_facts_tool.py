@@ -39,6 +39,7 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
         windows_sysinfo,
         xref_db,
     )
+    from glaurung.llm.tools import windows_project_memory_operand_facts
 
     def fake_index_callgraph(*_args, **_kwargs) -> int:
         return 7
@@ -69,6 +70,9 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
 
     def fake_index_callsite_path_conditions(*_args, **_kwargs) -> int:
         return 37
+
+    def fake_index_project_memory_operand_facts(*_args, **_kwargs) -> int:
+        return 43
 
     def fake_import_pe_pdb_types(*_args, **_kwargs) -> dict:
         return {
@@ -110,6 +114,11 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
         "index_callsite_path_conditions",
         fake_index_callsite_path_conditions,
     )
+    monkeypatch.setattr(
+        windows_project_memory_operand_facts,
+        "index_project_memory_operand_facts",
+        fake_index_project_memory_operand_facts,
+    )
     monkeypatch.setattr(type_db, "import_pe_pdb_types", fake_import_pe_pdb_types)
 
     pe = tmp_path / "driver.sys"
@@ -143,6 +152,7 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
         ("index_branch_conditions", True, 19),
         ("index_sysinfo_dispatch", True, 31),
         ("index_callsite_path_conditions", True, 37),
+        ("index_memory_operands", True, 43),
     ]
     assert result.pdb_counts is not None
     assert result.pdb_counts.imported_function_name == 5
@@ -156,6 +166,7 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
     assert "branch_conditions" in result.fact_coverage
     assert "sysinfo_dispatch" in result.fact_coverage
     assert "callsite_path_conditions" in result.fact_coverage
+    assert "memory_operand_facts" in result.fact_coverage
     assert "pdb_type_layouts" in result.fact_coverage
     assert "pdb_function_prototypes" in result.fact_coverage
     assert "requested_type_layouts" in result.missing_capabilities
@@ -189,6 +200,7 @@ def test_windows_bootstrap_project_facts_can_skip_steps(tmp_path: Path) -> None:
             index_branch_conditions=False,
             index_sysinfo_dispatch=False,
             index_callsite_path_conditions=False,
+            index_memory_operands=False,
             import_pdb_facts=False,
         ),
     )
@@ -205,6 +217,7 @@ def test_windows_bootstrap_project_facts_can_skip_steps(tmp_path: Path) -> None:
         ("index_branch_conditions", False, True),
         ("index_sysinfo_dispatch", False, True),
         ("index_callsite_path_conditions", False, True),
+        ("index_memory_operands", False, True),
     ]
     assert result.fact_coverage == []
     assert result.missing_capabilities == []
@@ -244,6 +257,7 @@ def test_windows_bootstrap_project_facts_writes_project_fact_manifest(
             index_branch_conditions=False,
             index_sysinfo_dispatch=False,
             index_callsite_path_conditions=False,
+            index_memory_operands=False,
             import_pdb_facts=False,
         ),
     )
@@ -310,6 +324,7 @@ def test_windows_cli_bootstrap_project_facts_json_skips_steps(
             "--no-index-branch-conditions",
             "--no-index-sysinfo-dispatch",
             "--no-index-callsite-path-conditions",
+            "--no-index-memory-operands",
             "--no-import-pdb-facts",
             "--format",
             "json",
@@ -339,6 +354,7 @@ def test_windows_cli_bootstrap_project_facts_json_skips_steps(
         ("index_branch_conditions", False, True),
         ("index_sysinfo_dispatch", False, True),
         ("index_callsite_path_conditions", False, True),
+        ("index_memory_operands", False, True),
     ]
 
 
@@ -355,6 +371,7 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
         windows_sysinfo,
         xref_db,
     )
+    from glaurung.llm.tools import windows_project_memory_operand_facts
 
     def fake_index_callgraph(*_args, **_kwargs) -> int:
         return 0
@@ -386,6 +403,9 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
     def fake_index_callsite_path_conditions(*_args, **_kwargs) -> int:
         return 0
 
+    def fake_index_project_memory_operand_facts(*_args, **_kwargs) -> int:
+        return 0
+
     monkeypatch.setattr(xref_db, "index_callgraph", fake_index_callgraph)
     monkeypatch.setattr(
         pe_direct_calls, "index_pe_direct_calls", fake_index_pe_direct_calls
@@ -413,6 +433,11 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
         windows_callsite_facts,
         "index_callsite_path_conditions",
         fake_index_callsite_path_conditions,
+    )
+    monkeypatch.setattr(
+        windows_project_memory_operand_facts,
+        "index_project_memory_operand_facts",
+        fake_index_project_memory_operand_facts,
     )
 
     pe = tmp_path / "driver.sys"
@@ -442,6 +467,7 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
         ("index_branch_conditions", True, 0),
         ("index_sysinfo_dispatch", True, 0),
         ("index_callsite_path_conditions", True, 0),
+        ("index_memory_operands", True, 0),
     ]
     assert "call_xrefs" not in result.fact_coverage
     assert "data_xrefs" in result.fact_coverage
@@ -454,6 +480,7 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
     assert "branch_conditions" in result.missing_capabilities
     assert "sysinfo_dispatch" in result.missing_capabilities
     assert "callsite_path_conditions" in result.missing_capabilities
+    assert "memory_operand_facts" in result.missing_capabilities
 
 
 def test_memory_agent_registers_windows_bootstrap_project_facts() -> None:

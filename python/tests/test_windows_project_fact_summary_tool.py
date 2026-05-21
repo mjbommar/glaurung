@@ -8,6 +8,7 @@ import glaurung as g
 from glaurung.llm.context import MemoryContext
 from glaurung.llm.kb.adapters import import_triage
 from glaurung.llm.kb.models import NodeKind
+from glaurung.llm.kb import windows_memory_operands
 from glaurung.llm.tools.windows_project_fact_summary import build_tool
 
 
@@ -246,6 +247,35 @@ CREATE TABLE function_chunk_facts (
         "'public_symbol_range', 'owns', NULL, NULL, 'pdb', 0.95, "
         "'nt!Entry', '{}', 0)"
     )
+    windows_memory_operands.persist_memory_operand_facts(
+        conn,
+        binary_id=1,
+        facts=[
+            {
+                "function_va": 0x1000,
+                "function_name": "nt!Entry",
+                "instruction_va": 0x1004,
+                "instruction_text": "mov rax, qword ptr [rcx + 0x20]",
+                "mnemonic": "mov",
+                "operand_index": 1,
+                "operand_text": "qword ptr [rcx + 0x20]",
+                "access_kind": "read",
+                "width_bytes": 8,
+                "address_expression": "[rcx + 0x20]",
+                "base_register": "rcx",
+                "displacement": 0x20,
+                "role_hint": "user_pointer",
+                "base_object": "InputUserBuffer",
+                "base_object_kind": "user_pointer",
+                "base_object_type": "void *",
+                "base_object_role": "user_pointer",
+                "field_offset": 0x20,
+                "likely_type_name": "USER_REQUEST",
+                "likely_field_name": "OutputBuffer",
+                "confidence": 0.94,
+            }
+        ],
+    )
     conn.commit()
     conn.close()
     return project
@@ -276,6 +306,7 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert result.counts.cfg_branch_fact_count == 1
     assert result.counts.function_boundary_count == 1
     assert result.counts.function_chunk_fact_count == 1
+    assert result.counts.memory_operand_fact_count == 1
     assert result.functions[0].canonical == "nt!Entry"
     assert result.functions[0].call_out_count == 1
     assert result.functions[0].stack_var_count == 1
@@ -288,9 +319,11 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert "branch_conditions" in result.coverage
     assert "function_boundaries" in result.coverage
     assert "function_chunks" in result.coverage
+    assert "memory_operand_facts" in result.coverage
     assert "persisted_cfg" not in result.missing_capabilities
     assert "cfg_dominance" not in result.missing_capabilities
     assert "branch_conditions" not in result.missing_capabilities
+    assert "memory_operand_facts" not in result.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence and node.label == "windows_project_fact_summary"

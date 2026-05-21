@@ -59,7 +59,7 @@ def _write_project_facts(tmp_path: Path) -> Path:
   project_sha256: def456
   project_size_bytes: 123456
   fact_sources: [unit_test]
-  fact_coverage: [function_names, call_xrefs, persisted_cfg]
+  fact_coverage: [function_names, call_xrefs, persisted_cfg, memory_operand_facts]
   missing_facts: []
   counts:
     function_name_count: 10
@@ -72,6 +72,7 @@ def _write_project_facts(tmp_path: Path) -> Path:
     cfg_edge_count: 40
     cfg_dominance_count: 30
     cfg_branch_fact_count: 12
+    memory_operand_fact_count: 99
 """,
         encoding="utf-8",
     )
@@ -108,8 +109,7 @@ def test_windows_project_fact_manifest_filters_missing_call_xrefs(
     assert "persisted_cfg" in cldflt.missing_facts
     assert result.evidence_node_id is not None
     assert any(
-        node.kind == NodeKind.evidence
-        and node.label == "windows_project_fact_manifest"
+        node.kind == NodeKind.evidence and node.label == "windows_project_fact_manifest"
         for node in ctx.kb.nodes()
     )
 
@@ -135,6 +135,7 @@ def test_windows_project_fact_manifest_filters_available_capabilities(
     assert result.records[0].counts.cfg_dominance_count == 30
     assert result.records[0].counts.cfg_branch_fact_count == 12
     assert result.records[0].counts.data_label_count == 2
+    assert result.records[0].counts.memory_operand_fact_count == 99
 
 
 def test_windows_cli_project_fact_manifest_json(

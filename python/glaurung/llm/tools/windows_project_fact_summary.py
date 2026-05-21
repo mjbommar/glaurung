@@ -30,6 +30,7 @@ CORE_TABLES = (
     "cfg_branch_index_state",
     "function_boundaries",
     "function_chunk_facts",
+    "memory_operand_facts",
     "windows_sysinfo_dispatch",
     "callsite_argument_facts",
     "callsite_path_conditions",
@@ -78,6 +79,7 @@ class ProjectFactCounts(BaseModel):
     cfg_branch_fact_count: int = 0
     function_boundary_count: int = 0
     function_chunk_fact_count: int = 0
+    memory_operand_fact_count: int = 0
     sysinfo_dispatch_count: int = 0
     callsite_argument_fact_count: int = 0
     callsite_path_condition_count: int = 0
@@ -266,6 +268,13 @@ def _counts(
             conn,
             present,
             "function_chunk_facts",
+            binary_id,
+            None,
+        ),
+        memory_operand_fact_count=_count(
+            conn,
+            present,
+            "memory_operand_facts",
             binary_id,
             None,
         ),
@@ -495,6 +504,8 @@ def _coverage(counts: ProjectFactCounts, present: set[str]) -> list[str]:
         coverage.append("function_boundaries")
     if counts.function_chunk_fact_count:
         coverage.append("function_chunks")
+    if counts.memory_operand_fact_count:
+        coverage.append("memory_operand_facts")
     if counts.sysinfo_dispatch_count:
         coverage.append("sysinfo_dispatch")
     if counts.callsite_argument_fact_count:
@@ -520,6 +531,8 @@ def _missing_capabilities(counts: ProjectFactCounts, present: set[str]) -> list[
         missing.append("function_boundaries")
     if not counts.function_chunk_fact_count:
         missing.append("function_chunks")
+    if not counts.memory_operand_fact_count:
+        missing.append("memory_operand_facts")
     if not (counts.basic_block_count or counts.cfg_edge_count):
         missing.append("persisted_cfg")
     elif not counts.cfg_dominance_count:

@@ -25,6 +25,7 @@ from ..kb.persistent import PersistentKnowledgeBase
 from ..kb.store import KnowledgeBase
 from glaurung.windows_config import WindowsAnalysisConfig, load_windows_analysis_config
 from .base import MemoryTool, ToolMeta
+from . import windows_project_memory_operand_facts
 from .windows_import_pdb_facts import PdbFactImportCounts
 from .windows_project_fact_summary import (
     WindowsProjectFactSummaryArgs,
@@ -136,6 +137,17 @@ class WindowsBootstrapProjectFactsArgs(BaseModel):
         description=(
             "If true, attach nearby persisted branch-condition facts to callsites."
         ),
+    )
+    index_memory_operands: bool = Field(
+        True,
+        description=(
+            "If true, persist normalized native memory operand facts for known functions."
+        ),
+    )
+    max_memory_operand_functions: int = Field(
+        512,
+        ge=0,
+        description="Maximum functions to scan for persisted memory operand facts; 0 means unlimited.",
     )
     import_pdb_facts: bool = Field(
         True,
@@ -444,6 +456,32 @@ class WindowsBootstrapProjectFactsTool(
                     )
                 )
 
+            if args.index_memory_operands:
+                steps.append(
+                    _run_count_step(
+                        "index_memory_operands",
+                        lambda: (
+                            windows_project_memory_operand_facts.index_project_memory_operand_facts(
+                                binary_path=pe_path,
+                                project_path=project_path,
+                                binary_id=project.binary_id,
+                                max_functions=args.max_memory_operand_functions,
+                                max_window_bytes=4096,
+                                max_instructions=512,
+                                force=args.force_reindex,
+                            )
+                        ),
+                    )
+                )
+            else:
+                steps.append(
+                    ProjectBootstrapStep(
+                        name="index_memory_operands",
+                        ran=False,
+                        ok=True,
+                    )
+                )
+
         finally:
             project.close()
 
@@ -616,6 +654,8 @@ def _fact_coverage(
         coverage.append("sysinfo_dispatch")
     if _step_has_facts(by_name.get("index_callsite_path_conditions")):
         coverage.append("callsite_path_conditions")
+    if _step_has_facts(by_name.get("index_memory_operands")):
+        coverage.append("memory_operand_facts")
     if pdb_counts:
         if pdb_counts.cache_hit:
             coverage.append("cached_pdb")
@@ -668,6 +708,10 @@ def _missing_capabilities(
         by_name.get("index_callsite_path_conditions")
     ):
         missing.append("callsite_path_conditions")
+    if args.index_memory_operands and not _step_has_facts(
+        by_name.get("index_memory_operands")
+    ):
+        missing.append("memory_operand_facts")
     if args.import_pdb_facts and not pdb_counts:
         missing.append("pdb_import")
     if pdb_counts:
@@ -780,6 +824,8 @@ def _fact_sources(
         sources.append("windows_sysinfo_dispatch")
     if summary.counts.callsite_path_condition_count:
         sources.append("callsite_path_conditions")
+    if summary.counts.memory_operand_fact_count:
+        sources.append("memory_operand_facts")
     return _dedupe(sources)
 
 
@@ -799,6 +845,7 @@ def _manifest_counts(summary: WindowsProjectFactSummaryResult) -> dict[str, int]
         "cfg_branch_fact_count": counts.cfg_branch_fact_count,
         "function_boundary_count": counts.function_boundary_count,
         "function_chunk_fact_count": counts.function_chunk_fact_count,
+        "memory_operand_fact_count": counts.memory_operand_fact_count,
         "sysinfo_dispatch_count": counts.sysinfo_dispatch_count,
         "callsite_argument_fact_count": counts.callsite_argument_fact_count,
         "callsite_path_condition_count": counts.callsite_path_condition_count,

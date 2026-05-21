@@ -10,6 +10,7 @@ import glaurung as g
 from glaurung.llm.context import MemoryContext
 from glaurung.llm.kb.adapters import import_triage
 from glaurung.llm.kb.models import NodeKind
+from glaurung.llm.kb import windows_memory_operands
 from glaurung.llm.tools.windows_project_memory_operand_facts import build_tool
 
 
@@ -178,11 +179,13 @@ def test_windows_project_memory_operand_facts_extracts_widths_and_roles(
             project_path=str(project),
             function_va=0x1000,
             add_to_kb=True,
+            persist_to_project=True,
         ),
     )
 
     assert result.function_name == "cldflt!MemoryUser"
     assert result.returned_fact_count == 5
+    assert result.persisted_fact_count == 5
     by_va = {fact.instruction_va: fact for fact in result.facts}
     assert by_va[0x1000].access_kind == "read"
     assert by_va[0x1000].width_bytes == 8
@@ -217,14 +220,27 @@ def test_windows_project_memory_operand_facts_extracts_widths_and_roles(
     assert "user_pointer_memory_operands" in result.coverage
     assert "heap_pointer_memory_operands" in result.coverage
     assert "type_field_use_joins" in result.coverage
+    assert "persisted_project_memory_operand_table" in result.coverage
     assert "type_layout_field_names" not in result.missing_capabilities
     assert "user_pointer_classification" not in result.missing_capabilities
+    assert "persisted_project_memory_operand_table" not in result.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence
         and node.label == "windows_project_memory_operand_facts"
         for node in ctx.kb.nodes()
     )
+    conn = sqlite3.connect(project)
+    try:
+        rows = windows_memory_operands.list_memory_operand_facts(
+            conn,
+            binary_id=1,
+            base_object_kind="user_pointer",
+        )
+    finally:
+        conn.close()
+    assert len(rows) == 1
+    assert rows[0].likely_field_name == "OutputBuffer"
 
 
 def test_memory_agent_registers_windows_project_memory_operand_facts() -> None:

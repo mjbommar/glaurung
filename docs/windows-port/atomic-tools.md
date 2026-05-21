@@ -267,10 +267,12 @@ sit below full IR/CFG bug-class scanners:
   data-xref/data-label joins, type-field-use joins, and
   prototype-derived Windows x64 parameter object classifications such as
   `user_pointer` and `heap_pointer` when function prototypes are present.
-  This is the first instruction-level memory read/write inventory for
-  Windows rules; it does not recover complete PDB field names, full
-  aliasing, path-sensitive memory state, or a persisted project-wide
-  memory operand table.
+  The tool can persist those rows into `memory_operand_facts`, and
+  `windows_bootstrap_project_facts` can materialize that table
+  project-wide for known function entries. This is the first
+  instruction-level memory read/write inventory for Windows rules; it
+  does not recover complete PDB field names, full aliasing, or
+  path-sensitive memory state.
 - `windows_project_return_value_use_snapshot` uses a project callsite
   VA plus nearby post-call disassembly to recover a conservative local
   Windows x64 `RAX` return-value use snapshot. It classifies immediate
