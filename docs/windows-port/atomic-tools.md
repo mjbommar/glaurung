@@ -122,6 +122,9 @@ sit below full IR/CFG bug-class scanners:
   `_IRP` offsets such as `RequestorMode`, `UserBuffer`, and
   `Tail.Overlay.CurrentStackLocation`; generic buffers stay offset
   labeled unless stronger type information is available.
+  Prototype-backed `IO_STACK_LOCATION *` bases also label the
+  DeviceIoControl union fields `OutputBufferLength`,
+  `InputBufferLength`, `IoControlCode`, and `Type3InputBuffer`.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

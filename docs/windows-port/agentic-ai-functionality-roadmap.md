@@ -218,7 +218,10 @@ not pollute the analyst view. The first conservative semantic field
 labels cover `ReturnLength.value` and common `_IRP` offsets such as
 `AssociatedIrp.SystemBuffer`, `RequestorMode`, `UserBuffer`, and
 `Tail.Overlay.CurrentStackLocation`; generic buffers remain offset
-labeled until backed by stronger type information.
+labeled until backed by stronger type information. Prototype-backed
+`IO_STACK_LOCATION *` bases now also label the DeviceIoControl union
+fields `OutputBufferLength`, `InputBufferLength`, `IoControlCode`, and
+`Type3InputBuffer`.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

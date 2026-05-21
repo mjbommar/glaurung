@@ -1715,6 +1715,82 @@ fn sub_18009fab0 {
     ) in pretty
 
 
+def test_windows_function_pretty_lift_names_io_stack_device_ioctl_fields(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    project = tmp_path / "sample.glaurung"
+    kb = PersistentKnowledgeBase.open(project, binary_path=ctx.file_path)
+    try:
+        xref_db.set_function_prototype(
+            kb,
+            "IoctlHandler",
+            "NTSTATUS",
+            [
+                xref_db.FunctionParam("IrpSp", "IO_STACK_LOCATION *"),
+            ],
+            set_by="manual",
+            confidence=0.95,
+        )
+    finally:
+        kb.close()
+
+    tool = build_tool()
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pseudocode="""
+fn sub_18009fac0 {
+    out_len = *&[arg0+0x8];
+    in_len = *&[arg0+0xc];
+    code = *&[arg0+0x10];
+    type3 = *&[arg0+0x18];
+    return;
+}
+""",
+            project_path=str(project),
+            function_va=0x18009FAC0,
+            function_name="IoctlHandler",
+        ),
+    )
+
+    assert result.packet.entry_abi_arguments[0].role == "io_stack_location"
+    accesses = result.packet.memory_accesses
+    assert any(
+        access.base_object == "IrpSp"
+        and access.field_offset == 0x8
+        and access.field_name == "Parameters.DeviceIoControl.OutputBufferLength"
+        and access.pointer_class == "kernel_pointer_candidate"
+        for access in accesses
+    )
+    assert any(
+        access.base_object == "IrpSp"
+        and access.field_offset == 0xC
+        and access.field_name == "Parameters.DeviceIoControl.InputBufferLength"
+        for access in accesses
+    )
+    assert any(
+        access.base_object == "IrpSp"
+        and access.field_offset == 0x10
+        and access.field_name == "Parameters.DeviceIoControl.IoControlCode"
+        for access in accesses
+    )
+    assert any(
+        access.base_object == "IrpSp"
+        and access.field_offset == 0x18
+        and access.field_name == "Parameters.DeviceIoControl.Type3InputBuffer"
+        for access in accesses
+    )
+    pretty = result.pretty_lift.pseudocode
+    assert (
+        "IrpSp.Parameters.DeviceIoControl.OutputBufferLength: read, argument, "
+        "kernel_pointer_candidate"
+    ) in pretty
+    assert "IrpSp.Parameters.DeviceIoControl.IoControlCode" in pretty
+    assert "IrpSp.Parameters.DeviceIoControl.Type3InputBuffer" in pretty
+
+
 def test_pretty_lift_validation_rejects_missing_copy_sink(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     tool = build_tool()

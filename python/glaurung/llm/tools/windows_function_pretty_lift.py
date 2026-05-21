@@ -1688,6 +1688,8 @@ def _inferred_call_argument_role(expression: str) -> str | None:
         return "return_length"
     if "ioctl" in normalized or "controlcode" in normalized:
         return "ioctl_code"
+    if "iostacklocation" in normalized or "irpstack" in normalized:
+        return "io_stack_location"
     if re.search(r"(?:length|len|size|bytes|count)$", normalized):
         return "length"
     if "output" in normalized or normalized in {"out", "dst", "dest", "destination"}:
@@ -1722,6 +1724,7 @@ def _inferred_call_parameter_name(
     by_role = {
         "return_length": "ReturnLength",
         "ioctl_code": "IoControlCode",
+        "io_stack_location": "IrpSp",
         "length": "Length",
         "output_buffer": "OutputBuffer",
         "input_buffer": "InputBuffer",
@@ -1758,6 +1761,8 @@ def _inferred_call_parameter_type(
         return "HANDLE"
     if role == "irp":
         return "PIRP"
+    if role == "io_stack_location":
+        return "IO_STACK_LOCATION *"
     if role == "mdl":
         return "PMDL"
     if role == "access_mode":
@@ -2067,6 +2072,8 @@ def _inferred_prototype_param_role(param: xref_db.FunctionParam) -> str | None:
         return "input_buffer"
     if "ioctl" in name or "controlcode" in name:
         return "ioctl_code"
+    if "io_stack_location" in combined or "iostacklocation" in combined:
+        return "io_stack_location"
     if "handle" in combined or c_type.strip() == "handle":
         return "handle"
     if "irp" in combined:
@@ -2556,7 +2563,7 @@ def _semantic_memory_base(
 def _pointer_class_for_semantic_role(role: str | None) -> str:
     if role in {"input_buffer", "output_buffer", "return_length", "user_pointer"}:
         return "user_pointer_candidate"
-    if role in {"irp", "mdl", "object", "token"}:
+    if role in {"io_stack_location", "irp", "mdl", "object", "token"}:
         return "kernel_pointer_candidate"
     if role == "selector_input_pointer":
         return "user_pointer_candidate"
@@ -2582,6 +2589,14 @@ _IRP_FIELD_NAMES_BY_OFFSET = {
 }
 
 
+_IO_STACK_LOCATION_DEVICE_IOCTL_FIELD_NAMES_BY_OFFSET = {
+    0x08: "Parameters.DeviceIoControl.OutputBufferLength",
+    0x0C: "Parameters.DeviceIoControl.InputBufferLength",
+    0x10: "Parameters.DeviceIoControl.IoControlCode",
+    0x18: "Parameters.DeviceIoControl.Type3InputBuffer",
+}
+
+
 def _semantic_field_name_for_access(
     *,
     base_object: str | None,
@@ -2596,6 +2611,13 @@ def _semantic_field_name_for_access(
         return "value"
     if role == "irp" or object_name == "irp":
         return _IRP_FIELD_NAMES_BY_OFFSET.get(offset)
+    if role == "io_stack_location" or object_name in {
+        "iostack",
+        "iostacklocation",
+        "irpsp",
+        "stacklocation",
+    }:
+        return _IO_STACK_LOCATION_DEVICE_IOCTL_FIELD_NAMES_BY_OFFSET.get(offset)
     return None
 
 
