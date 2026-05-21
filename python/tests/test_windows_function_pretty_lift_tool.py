@@ -1678,6 +1678,14 @@ fn sub_18009fab0 {
         and access.field_offset == 0xB8
         for access in accesses
     )
+    pretty = result.pretty_lift.pseudocode
+    assert "/* Memory accesses:" in pretty
+    assert "InputBuffer + field_0x10: read, argument, user_pointer_candidate" in pretty
+    assert (
+        "OutputBuffer + field_0x18: write, argument, user_pointer_candidate" in pretty
+    )
+    assert "ReturnLength + field_0x0: write, argument, user_pointer_candidate" in pretty
+    assert "Irp + field_0xb8: read, argument, kernel_pointer_candidate" in pretty
 
 
 def test_pretty_lift_validation_rejects_missing_copy_sink(tmp_path: Path) -> None:

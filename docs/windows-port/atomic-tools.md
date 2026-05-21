@@ -116,6 +116,8 @@ sit below full IR/CFG bug-class scanners:
   offset/name, and classification confidence so agents can distinguish
   stack/global/argument/table/import-thunk and prototype-derived
   user-pointer or kernel-pointer candidates without reparsing the text.
+  Rendered lifts include a bounded memory-access summary, but only use
+  semantic object names when the classification is high-confidence.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

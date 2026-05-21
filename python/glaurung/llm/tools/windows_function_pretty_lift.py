@@ -4806,6 +4806,16 @@ def _render_simple_forwarder(packet: WindowsFunctionLiftPacket) -> PrettyLift:
                 "",
             ]
         )
+    memory_refs = _renderable_memory_accesses(packet)
+    if memory_refs:
+        lines.extend(
+            [
+                "    /* Memory accesses:",
+                *_render_memory_accesses(memory_refs),
+                "     */",
+                "",
+            ]
+        )
     lines.extend(
         [
             f"    return {callee}({call_arguments});",
@@ -4934,6 +4944,16 @@ def _render_call_sequence(packet: WindowsFunctionLiftPacket) -> PrettyLift:
                 "",
             ]
         )
+    memory_refs = _renderable_memory_accesses(packet)
+    if memory_refs:
+        lines.extend(
+            [
+                "    /* Memory accesses:",
+                *_render_memory_accesses(memory_refs),
+                "     */",
+                "",
+            ]
+        )
     for offset, call in enumerate(calls[:12]):
         site = sites[offset] if offset < len(sites) else None
         arguments = (
@@ -4981,6 +5001,15 @@ def _render_generic_lift(packet: WindowsFunctionLiftPacket) -> PrettyLift:
             [
                 "    /* Path conditions:",
                 *_render_path_conditions(packet.path_conditions),
+                "     */",
+            ]
+        )
+    memory_refs = _renderable_memory_accesses(packet)
+    if memory_refs:
+        lines.extend(
+            [
+                "    /* Memory accesses:",
+                *_render_memory_accesses(memory_refs),
                 "     */",
             ]
         )
@@ -5033,6 +5062,70 @@ def _render_data_references(refs: list[DataReferenceFact]) -> list[str]:
             continue
         rendered.append(f"     * - {ref.kind}: {ref.expression}")
     return rendered
+
+
+def _renderable_memory_accesses(
+    packet: WindowsFunctionLiftPacket,
+) -> list[MemoryAccessFact]:
+    out: list[MemoryAccessFact] = []
+    seen: set[str] = set()
+    for access in packet.memory_accesses:
+        if not _should_render_memory_access(access):
+            continue
+        key = _memory_access_key(access)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(access)
+        if len(out) >= 12:
+            break
+    return out
+
+
+def _should_render_memory_access(access: MemoryAccessFact) -> bool:
+    if _is_required_memory_access(access):
+        return True
+    if access.pointer_class in {
+        "global_pointer",
+        "import_thunk_pointer",
+        "kernel_pointer_candidate",
+        "table_pointer",
+        "user_pointer_candidate",
+    }:
+        return True
+    return bool(access.width_bits is not None and access.field_offset is not None)
+
+
+def _render_memory_accesses(accesses: list[MemoryAccessFact]) -> list[str]:
+    rendered: list[str] = []
+    for access in accesses[:12]:
+        target = _memory_access_target_expr(access)
+        details: list[str] = [
+            access.kind,
+            access.base_object_kind or "unknown",
+            access.pointer_class or "unknown",
+        ]
+        if access.width_bits is not None:
+            details.append(f"width={access.width_bits}")
+        details.append(f"conf={access.classification_confidence:.2f}")
+        rendered.append(f"     * - {target}: {', '.join(details)}")
+    return rendered
+
+
+def _memory_access_target_expr(access: MemoryAccessFact) -> str:
+    base = access.base
+    if access.base_object and access.classification_confidence >= 0.88:
+        base = access.base_object
+    if base is None and access.absolute_address is not None:
+        base = _hex(access.absolute_address)
+    if base is None:
+        base = access.expression
+    if access.field_name is not None:
+        return f"{base} + {access.field_name}"
+    if access.field_offset is not None and access.field_offset != 0:
+        sign = "+" if access.field_offset >= 0 else "-"
+        return f"{base} {sign} {_hex(abs(access.field_offset))}"
+    return str(base)
 
 
 def _render_unknown_sections(sections: list[UnknownSectionFact]) -> list[str]:

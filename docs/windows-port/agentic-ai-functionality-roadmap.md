@@ -211,7 +211,10 @@ also produce normalized import-thunk data-reference facts. Pretty-lift
 memory-access facts now carry explicit base object, base-object kind,
 pointer class, field offset/name, and classification confidence derived
 from globals, stack slots, import thunks, selector tables, heap/pool
-name hints, argument roles, and project prototypes.
+name hints, argument roles, and project prototypes. Rendered pretty
+lifts now include a bounded memory-access summary, using semantic object
+names only for high-confidence classifications so weak inferred names do
+not pollute the analyst view.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class
