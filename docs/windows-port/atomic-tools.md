@@ -101,10 +101,11 @@ sit below full IR/CFG bug-class scanners:
   packet with decompile text, disassembly, CFG shape, calls, optional
   `.glaurung` names/comments/data labels, and now project-backed
   call xrefs, resolved callee names, function prototypes, callee
-  prototypes, and persisted memory-access rows for the selected
-  function. This gives an agent one local context object that contains
-  both readable code context and the low-level type/memory/xref facts
-  needed to interpret registers, field accesses, and calls.
+  prototypes, normalized import/thunk callee-name variants, and
+  persisted memory-access rows for the selected function. This gives an
+  agent one local context object that contains both readable code
+  context and the low-level type/memory/xref facts needed to interpret
+  registers, field accesses, and calls.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

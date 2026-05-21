@@ -72,6 +72,7 @@ class WindowsContextCall(BaseModel):
     target_va: int | None = None
     target: str | None = None
     target_name: str | None = None
+    target_normalized_names: list[str] = Field(default_factory=list)
     text: str
     sources: list[str] = Field(default_factory=list)
 
@@ -580,6 +581,7 @@ def _project_call_xrefs(
                 target_va=dst_va,
                 target=target,
                 target_name=target_name,
+                target_normalized_names=_symbol_name_variants(target_name),
                 text=f"{row.kind} {target_name or target}",
                 sources=["project_xrefs"],
             )
@@ -610,6 +612,12 @@ def _merge_calls(
             target_va=target_va,
             target=target,
             target_name=existing.target_name or project_call.target_name,
+            target_normalized_names=_dedupe(
+                [
+                    *existing.target_normalized_names,
+                    *project_call.target_normalized_names,
+                ]
+            ),
             text=existing.text or project_call.text,
             sources=_dedupe([*existing.sources, *project_call.sources]),
         )
@@ -734,9 +742,30 @@ LIMIT 64
 
 
 def _name_candidates(name: str) -> list[str]:
-    out = [name.lower()]
+    return _dedupe([candidate.lower() for candidate in _symbol_name_variants(name)])
+
+
+def _symbol_name_variants(name: str | None) -> list[str]:
+    if not name:
+        return []
+    out: list[str] = []
+    base_values = [name.strip()]
     if "!" in name:
-        out.append(name.rsplit("!", 1)[-1].lower())
+        base_values.append(name.rsplit("!", 1)[-1].strip())
+    for value in base_values:
+        if not value:
+            continue
+        out.append(value)
+        suffix = value.rsplit("!", 1)[-1].rsplit("::", 1)[-1].strip()
+        if suffix:
+            out.append(suffix)
+        for prefix in ("__imp__", "__imp_", "_imp_", "imp_", "j_", "thunk_"):
+            if suffix.startswith(prefix) and len(suffix) > len(prefix):
+                out.append(suffix.removeprefix(prefix))
+        if suffix.endswith("$thunk") and len(suffix) > len("$thunk"):
+            out.append(suffix.removesuffix("$thunk"))
+        if suffix.startswith("__imp_") and "@@" in suffix:
+            out.append(suffix.removeprefix("__imp_").split("@@", 1)[0])
     return _dedupe(out)
 
 

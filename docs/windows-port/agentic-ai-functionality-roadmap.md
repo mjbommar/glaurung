@@ -191,14 +191,14 @@ Update: `windows_decompile_context_packet` now carries more of that
 project substrate into the single-function review packet. When a
 `.glaurung` project is supplied, the packet includes the selected
 function prototype, persisted call xrefs with resolved callee names,
-matched callee prototypes for resolved call targets, and persisted
-`memory_operand_facts` rows for the function alongside the existing
-decompile text, disassembly, CFG summary, names, comments, and data
-labels. This is a concrete step toward type propagation into
-agent-readable lift packets: arguments, calls, and memory accesses can
-be reviewed as `Irp`, `ProbeForRead`, `OutputBufferLength`,
-`UserBuffer`, and similar typed facts rather than only as registers and
-raw operands.
+normalized import/thunk callee-name variants, matched callee prototypes
+for resolved call targets, and persisted `memory_operand_facts` rows for
+the function alongside the existing decompile text, disassembly, CFG
+summary, names, comments, and data labels. This is a concrete step
+toward type propagation into agent-readable lift packets: arguments,
+calls, and memory accesses can be reviewed as `Irp`, `ProbeForRead`,
+`OutputBufferLength`, `UserBuffer`, and similar typed facts rather than
+only as registers and raw operands.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

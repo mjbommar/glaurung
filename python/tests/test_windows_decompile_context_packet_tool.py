@@ -84,7 +84,7 @@ def test_windows_decompile_context_packet_joins_project_notebook_facts(
     project = tmp_path / "sample.glaurung"
     kb = PersistentKnowledgeBase.open(project, binary_path=WIN64_SAMPLE)
     xref_db.set_function_name(kb, FUNCTION_VA, "ReviewedStartup", set_by="manual")
-    xref_db.set_function_name(kb, CALLEE_VA, "nt!ProbeForRead", set_by="pdb")
+    xref_db.set_function_name(kb, CALLEE_VA, "nt!__imp_ProbeForRead", set_by="pdb")
     xref_db.set_comment(kb, FUNCTION_VA, "manual startup review note", set_by="manual")
     xref_db.set_data_label(kb, 0x140010000, "g_NearbyTable", set_by="manual")
     xref_db.set_function_prototype(
@@ -232,9 +232,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     assert "ioctl" in facts.function_prototype.risk_tags
     assert len(facts.project_calls) == 1
     assert facts.project_calls[0].target_va == CALLEE_VA
-    assert facts.project_calls[0].target_name == "nt!ProbeForRead"
+    assert facts.project_calls[0].target_name == "nt!__imp_ProbeForRead"
+    assert "ProbeForRead" in facts.project_calls[0].target_normalized_names
     assert facts.project_calls[0].sources == ["project_xrefs"]
-    assert any(call.target_name == "nt!ProbeForRead" for call in result.packet.calls)
+    assert any(
+        call.target_name == "nt!__imp_ProbeForRead" for call in result.packet.calls
+    )
     probe_proto = next(
         proto
         for proto in facts.call_prototypes
