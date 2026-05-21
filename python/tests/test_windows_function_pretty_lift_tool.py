@@ -1671,6 +1671,8 @@ fn sub_18009fab0 {
         and access.pointer_class == "user_pointer_candidate"
         and access.field_offset == 0
         and access.field_name == "value"
+        and access.value_role == "return_length_value"
+        and access.value_class == "length"
         for access in accesses
     )
     assert any(
@@ -1680,6 +1682,8 @@ fn sub_18009fab0 {
         and access.pointer_class == "kernel_pointer_candidate"
         and access.field_offset == 0x40
         and access.field_name == "RequestorMode"
+        and access.value_role == "requestor_mode"
+        and access.value_class == "access_mode"
         for access in accesses
     )
     assert any(
@@ -1689,6 +1693,8 @@ fn sub_18009fab0 {
         and access.pointer_class == "kernel_pointer_candidate"
         and access.field_offset == 0x70
         and access.field_name == "UserBuffer"
+        and access.value_role == "user_buffer"
+        and access.value_class == "user_pointer_candidate"
         for access in accesses
     )
     assert any(
@@ -1709,6 +1715,8 @@ fn sub_18009fab0 {
     assert "ReturnLength.value: write, argument, user_pointer_candidate" in pretty
     assert "Irp.RequestorMode: read, argument, kernel_pointer_candidate" in pretty
     assert "Irp.UserBuffer: read, argument, kernel_pointer_candidate" in pretty
+    assert "value=requestor_mode" in pretty
+    assert "value=user_buffer" in pretty
     assert (
         "Irp.Tail.Overlay.CurrentStackLocation: read, argument, "
         "kernel_pointer_candidate"
@@ -1761,6 +1769,8 @@ fn sub_18009fac0 {
         access.base_object == "IrpSp"
         and access.field_offset == 0x8
         and access.field_name == "Parameters.DeviceIoControl.OutputBufferLength"
+        and access.value_role == "output_length"
+        and access.value_class == "length"
         and access.pointer_class == "kernel_pointer_candidate"
         for access in accesses
     )
@@ -1768,18 +1778,24 @@ fn sub_18009fac0 {
         access.base_object == "IrpSp"
         and access.field_offset == 0xC
         and access.field_name == "Parameters.DeviceIoControl.InputBufferLength"
+        and access.value_role == "input_length"
+        and access.value_class == "length"
         for access in accesses
     )
     assert any(
         access.base_object == "IrpSp"
         and access.field_offset == 0x10
         and access.field_name == "Parameters.DeviceIoControl.IoControlCode"
+        and access.value_role == "ioctl_code"
+        and access.value_class == "selector"
         for access in accesses
     )
     assert any(
         access.base_object == "IrpSp"
         and access.field_offset == 0x18
         and access.field_name == "Parameters.DeviceIoControl.Type3InputBuffer"
+        and access.value_role == "type3_input_buffer"
+        and access.value_class == "user_pointer_candidate"
         for access in accesses
     )
     pretty = result.pretty_lift.pseudocode
@@ -1789,6 +1805,8 @@ fn sub_18009fac0 {
     ) in pretty
     assert "IrpSp.Parameters.DeviceIoControl.IoControlCode" in pretty
     assert "IrpSp.Parameters.DeviceIoControl.Type3InputBuffer" in pretty
+    assert "value=ioctl_code" in pretty
+    assert "value=type3_input_buffer" in pretty
 
 
 def test_pretty_lift_validation_rejects_missing_copy_sink(tmp_path: Path) -> None:

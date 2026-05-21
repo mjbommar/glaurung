@@ -221,7 +221,11 @@ labels cover `ReturnLength.value` and common `_IRP` offsets such as
 labeled until backed by stronger type information. Prototype-backed
 `IO_STACK_LOCATION *` bases now also label the DeviceIoControl union
 fields `OutputBufferLength`, `InputBufferLength`, `IoControlCode`, and
-`Type3InputBuffer`.
+`Type3InputBuffer`. Known fields now also carry loaded/stored value
+roles and value classes, for example `ioctl_code`, `output_length`,
+`input_length`, `type3_input_buffer`, `user_buffer`, and
+`requestor_mode`, so rules can reason about what a memory access
+produces rather than only where it reads.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

@@ -125,6 +125,9 @@ sit below full IR/CFG bug-class scanners:
   Prototype-backed `IO_STACK_LOCATION *` bases also label the
   DeviceIoControl union fields `OutputBufferLength`,
   `InputBufferLength`, `IoControlCode`, and `Type3InputBuffer`.
+  Known fields also expose value roles/classes such as `ioctl_code`,
+  `output_length`, `type3_input_buffer`, `user_buffer`, and
+  `requestor_mode`.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

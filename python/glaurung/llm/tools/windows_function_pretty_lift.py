@@ -121,6 +121,9 @@ class MemoryAccessFact(BaseModel):
     ) = None
     field_offset: int | None = None
     field_name: str | None = None
+    value_role: str | None = None
+    value_class: str | None = None
+    value_confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     classification_reason: str | None = None
     classification_confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     role: str
@@ -2535,6 +2538,7 @@ def _classified_memory_access(
         semantic_role=semantic_role,
         offset=field_offset,
     ) or _field_name_for_offset(field_offset)
+    value_role, value_class, value_confidence = _semantic_value_for_field(field_name)
     return access.model_copy(
         update={
             "base_object": base_object,
@@ -2542,6 +2546,9 @@ def _classified_memory_access(
             "pointer_class": pointer_class,
             "field_offset": field_offset,
             "field_name": field_name,
+            "value_role": value_role,
+            "value_class": value_class,
+            "value_confidence": value_confidence,
             "classification_reason": reason,
             "classification_confidence": confidence,
         }
@@ -2597,6 +2604,45 @@ _IO_STACK_LOCATION_DEVICE_IOCTL_FIELD_NAMES_BY_OFFSET = {
 }
 
 
+_FIELD_VALUE_SEMANTICS = {
+    "AssociatedIrp.SystemBuffer": (
+        "system_buffer",
+        "kernel_buffer_pointer",
+        0.82,
+    ),
+    "IoStatus": ("io_status", "status_block", 0.82),
+    "MdlAddress": ("mdl", "kernel_pointer", 0.82),
+    "Parameters.DeviceIoControl.InputBufferLength": (
+        "input_length",
+        "length",
+        0.90,
+    ),
+    "Parameters.DeviceIoControl.IoControlCode": (
+        "ioctl_code",
+        "selector",
+        0.92,
+    ),
+    "Parameters.DeviceIoControl.OutputBufferLength": (
+        "output_length",
+        "length",
+        0.90,
+    ),
+    "Parameters.DeviceIoControl.Type3InputBuffer": (
+        "type3_input_buffer",
+        "user_pointer_candidate",
+        0.86,
+    ),
+    "RequestorMode": ("requestor_mode", "access_mode", 0.88),
+    "Tail.Overlay.CurrentStackLocation": (
+        "current_stack_location",
+        "kernel_pointer",
+        0.86,
+    ),
+    "UserBuffer": ("user_buffer", "user_pointer_candidate", 0.88),
+    "value": ("return_length_value", "length", 0.86),
+}
+
+
 def _semantic_field_name_for_access(
     *,
     base_object: str | None,
@@ -2619,6 +2665,14 @@ def _semantic_field_name_for_access(
     }:
         return _IO_STACK_LOCATION_DEVICE_IOCTL_FIELD_NAMES_BY_OFFSET.get(offset)
     return None
+
+
+def _semantic_value_for_field(
+    field_name: str | None,
+) -> tuple[str | None, str | None, float]:
+    if field_name is None:
+        return None, None, 0.0
+    return _FIELD_VALUE_SEMANTICS.get(field_name, (None, None, 0.0))
 
 
 def _field_name_for_offset(offset: int | None) -> str | None:
@@ -4428,6 +4482,10 @@ def _facts(
             value_parts.append(f"pointer_class={access.pointer_class}")
         if access.field_name is not None:
             value_parts.append(f"field={access.field_name}")
+        if access.value_role is not None:
+            value_parts.append(f"value_role={access.value_role}")
+        if access.value_class is not None:
+            value_parts.append(f"value_class={access.value_class}")
         facts.append(
             LiftFact(
                 kind="memory_access",
@@ -5166,6 +5224,10 @@ def _render_memory_accesses(accesses: list[MemoryAccessFact]) -> list[str]:
         ]
         if access.width_bits is not None:
             details.append(f"width={access.width_bits}")
+        if access.value_role is not None:
+            details.append(f"value={access.value_role}")
+        if access.value_class is not None:
+            details.append(f"value_class={access.value_class}")
         details.append(f"conf={access.classification_confidence:.2f}")
         rendered.append(f"     * - {target}: {', '.join(details)}")
     return rendered
