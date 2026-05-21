@@ -242,8 +242,10 @@ sit below full IR/CFG bug-class scanners:
   `exception_handler_chunk` and `chained_unwind_chunk` rows instead of
   hiding that evidence in raw runtime-function records. Import-thunk
   rows now decode RIP-relative `jmp [slot]` forms and carry the
-  resolved IAT/global slot VA and data-label name when available. The
-  same query is exposed through
+  resolved IAT/global slot VA and data-label name when available; the
+  indexer also persists a normal `data_read` xref from the thunk entry
+  to the slot so `project-xrefs reads_from` can answer who reads a
+  given import slot. The same query is exposed through
   `glaurung windows project-function-chunks` for IDA/Ghidra-style
   boundary explanation during interactive review. These facts explain
   function layout decisions; they are not vulnerability evidence by

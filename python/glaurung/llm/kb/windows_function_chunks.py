@@ -137,8 +137,11 @@ def index_function_chunks(
     facts.extend(_name_based_thunk_facts(kb, boundaries, data, layout))
 
     now = int(time.time())
+    facts = _dedupe_facts(facts)
+    _persist_import_thunk_slot_xrefs(kb, facts, now)
+
     rows = []
-    for item in _dedupe_facts(facts):
+    for item in facts:
         rows.append(
             (
                 kb.binary_id,
@@ -168,6 +171,38 @@ def index_function_chunks(
     )
     kb._conn.commit()
     return row_count(kb)
+
+
+def _persist_import_thunk_slot_xrefs(
+    kb: PersistentKnowledgeBase,
+    facts: Iterable[FunctionChunkFact],
+    indexed_at: int,
+) -> None:
+    rows = []
+    for fact in facts:
+        if fact.chunk_kind != "import_thunk" or fact.target_va is None:
+            continue
+        detail = fact.detail or {}
+        if detail.get("thunk_slot_source") != "rip_relative_indirect_jump":
+            continue
+        rows.append(
+            (
+                kb.binary_id,
+                fact.chunk_start_va,
+                fact.target_va,
+                "data_read",
+                fact.owner_entry_va or fact.chunk_start_va,
+                indexed_at,
+            )
+        )
+    if not rows:
+        return
+    kb._conn.executemany(
+        "INSERT OR IGNORE INTO xrefs "
+        "(binary_id, src_va, dst_va, kind, src_function_va, indexed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
 
 
 def list_function_chunks(

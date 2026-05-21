@@ -176,6 +176,10 @@ def test_windows_function_chunks_index_boundaries_thunks_and_shared_tails(
         assert import_detail is not None
         assert import_detail["thunk_slot_va"] == hex(iat_slot)
         assert import_detail["thunk_slot_name"] == "__imp_ZwClose"
+        slot_refs = xref_db.list_xrefs_to(kb, iat_slot, kinds=("data_read",))
+        assert len(slot_refs) == 1
+        assert slot_refs[0].src_va == import_thunk
+        assert slot_refs[0].src_function_va == import_thunk
         shared = [
             fact
             for fact in facts

@@ -1991,8 +1991,11 @@ Validated high-level replay scope:
   RIP-relative `ff 25` / `48 ff 25` import-jump slots, joins matching
   `data_labels`, and exposes the IAT/global slot VA and label through
   `windows_project_function_chunk_facts` and the
-  `project-function-chunks` CLI. This gives agents a concrete slot to
-  inspect when a thunk boundary depends on import-table provenance.
+  `project-function-chunks` CLI. It also persists a `data_read` xref
+  from the thunk entry to the slot, so existing project xref queries can
+  answer which thunk reads an import slot. This gives agents a concrete
+  slot to inspect when a thunk boundary depends on import-table
+  provenance.
 - Latest project symbol-range validation: focused `uv run pytest`
   passed for `test_windows_project_symbol_range_facts_tool.py`. Tests
   cover exact `.pdata` range classification, inside-`.pdata` funclet
