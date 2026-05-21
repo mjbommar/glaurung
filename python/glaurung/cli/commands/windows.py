@@ -57,6 +57,11 @@ from glaurung.llm.tools.windows_project_callgraph_diff import (
     WindowsProjectCallgraphDiffResult,
     build_tool as build_windows_project_callgraph_diff,
 )
+from glaurung.llm.tools.windows_project_guard_condition_diff import (
+    WindowsProjectGuardConditionDiffArgs,
+    WindowsProjectGuardConditionDiffResult,
+    build_tool as build_windows_project_guard_condition_diff,
+)
 from glaurung.llm.tools.windows_project_data_table_facts import (
     WindowsProjectDataTableFactsArgs,
     WindowsProjectDataTableFactsResult,
@@ -530,6 +535,35 @@ class WindowsCommand(BaseCommand):
             "--add-to-kb",
             action="store_true",
             help="Record the project callgraph diff in the transient memory KB.",
+        )
+
+        project_guard_diff = subparsers.add_parser(
+            "project-guard-condition-diff",
+            help=(
+                "Compare persisted branch guards and callsite path conditions "
+                "across two .glaurung projects for patch/build diff triage"
+            ),
+        )
+        self._add_common_child_arguments(project_guard_diff)
+        project_guard_diff.add_argument("--before-project-path", required=True)
+        project_guard_diff.add_argument("--after-project-path", required=True)
+        project_guard_diff.add_argument("--before-binary-id", type=int)
+        project_guard_diff.add_argument("--after-binary-id", type=int)
+        project_guard_diff.add_argument(
+            "--record-kind",
+            choices=["all", "branch_condition", "callsite_path_condition"],
+            default="all",
+            help="Compare branch guards, callsite path conditions, or both.",
+        )
+        project_guard_diff.add_argument("--function-name-contains")
+        project_guard_diff.add_argument("--condition-role-contains")
+        project_guard_diff.add_argument("--condition-kind")
+        project_guard_diff.add_argument("--include-unchanged", action="store_true")
+        project_guard_diff.add_argument("--max-rows", type=int, default=128)
+        project_guard_diff.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the project guard-condition diff in the transient memory KB.",
         )
 
         project_chunks = subparsers.add_parser(
@@ -1232,6 +1266,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_callgraph_reachability(args, formatter)
         if args.windows_action == "project-callgraph-diff":
             return _execute_project_callgraph_diff(args, formatter)
+        if args.windows_action == "project-guard-condition-diff":
+            return _execute_project_guard_condition_diff(args, formatter)
         if args.windows_action == "project-function-chunks":
             return _execute_project_function_chunks(args, formatter)
         if args.windows_action == "project-function-boundary-diff":
@@ -1892,6 +1928,61 @@ def _execute_project_callgraph_diff(
         )
     else:
         formatter.output_plain(_format_project_callgraph_diff_human(result))
+    return 0
+
+
+def _execute_project_guard_condition_diff(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_guard_condition_diff()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.after_project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectGuardConditionDiffArgs(
+            before_project_path=args.before_project_path,
+            after_project_path=args.after_project_path,
+            before_binary_id=args.before_binary_id,
+            after_binary_id=args.after_binary_id,
+            record_kind=args.record_kind,
+            function_name_contains=args.function_name_contains,
+            condition_role_contains=args.condition_role_contains,
+            condition_kind=args.condition_kind,
+            include_unchanged=args.include_unchanged,
+            max_rows=args.max_rows,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "before_project_path": result.before_project_path,
+                        "after_project_path": result.after_project_path,
+                        "before_guard_count": result.before_guard_count,
+                        "after_guard_count": result.after_guard_count,
+                        "changed_count": result.changed_count,
+                        "added_count": result.added_count,
+                        "removed_count": result.removed_count,
+                        "returned_count": result.returned_count,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "guard_delta", "data": item.model_dump(mode="json")}
+                    for item in result.deltas
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_guard_condition_diff_human(result))
     return 0
 
 
@@ -3106,6 +3197,37 @@ def _format_project_callgraph_diff_human(
         lines.append(
             f"  {delta.kind:<5} {delta.status:<8} {caller} -> {callee} "
             f"fields={fields} priority={delta.review_priority} "
+            f"relevance={','.join(delta.security_relevance) or '-'}"
+        )
+    if len(result.deltas) > 20:
+        lines.append(f"  ... {len(result.deltas) - 20} more deltas")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_guard_condition_diff_human(
+    result: WindowsProjectGuardConditionDiffResult,
+) -> str:
+    lines = [
+        "Windows project guard-condition diff",
+        f"  before={result.before_project_path}",
+        f"  after={result.after_project_path}",
+        (
+            f"  guards={result.before_guard_count}->{result.after_guard_count} "
+            f"changed={result.changed_count} added={result.added_count} "
+            f"removed={result.removed_count} returned={result.returned_count}"
+        ),
+        f"  coverage={','.join(result.coverage) or '-'}",
+    ]
+    for delta in result.deltas[:20]:
+        function = delta.function_name or "-"
+        role = delta.condition_role or delta.condition_kind
+        fields = ",".join(delta.changed_fields) or "guard"
+        lines.append(
+            f"  {delta.record_kind:<23} {delta.status:<8} {function} "
+            f"role={role} fields={fields} priority={delta.review_priority} "
             f"relevance={','.join(delta.security_relevance) or '-'}"
         )
     if len(result.deltas) > 20:

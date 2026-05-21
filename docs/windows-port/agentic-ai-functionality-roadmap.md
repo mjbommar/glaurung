@@ -207,6 +207,17 @@ review invokes it when before/after project paths are available and
 ranks those changes as `callgraph_delta` items, making added or removed
 helper/sink calls visible before decompile, argument, or gate review.
 
+Update: `windows_project_guard_condition_diff` now compares persisted
+branch guards and callsite path conditions across two `.glaurung`
+projects. It reads `cfg_branch_facts` and `callsite_path_conditions`,
+groups guards by stable function names where possible, reports
+added/removed/changed/unchanged guard rows, and attaches relevance hints
+for bounds, status, mode/user-pointer, privilege, NULL/zero, and moved
+guard locations. Patch-diff review invokes it when before/after project
+paths are available, ranks changes as `guard_delta` items, records
+`project_guard_condition_deltas` in the evidence bundle, and preserves
+those deltas in emitted validation packets.
+
 Update: `windows_function_start_explain` and
 `windows_candidate_start_worklist` now consume native per-address
 `scan_rejections` from the comparison stats. A function-start answer can
@@ -2053,7 +2064,10 @@ Not A+ yet:
   symbol/similarity extraction-plan tool now emits the runner commands,
   output paths, and identity-extractor handoff needed to produce those
   manifests from real Windows patch pairs on a prepared Ghidra/BSim
-  runner. The next step is executing that plan on the real runner and
+  runner. Patch-diff review now also ranks persisted guard/path-condition
+  drift from project branch and callsite-path facts, so removed or moved
+  bounds/status/mode/user-pointer guards can become packetized validation
+  seeds. The next step is executing that plan on the real runner and
   promoting successful BSim/symbol-cache outputs back into patch-diff
   review artifacts.
 - Validation planning now records candidate grounding, batch-runs

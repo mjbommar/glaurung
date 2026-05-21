@@ -216,6 +216,15 @@ sit below full IR/CFG bug-class scanners:
   priority, and security relevance metadata. Patch-diff review ranks
   those rows as `callgraph_delta` items so added or removed helper/sink
   calls are visible before decompile, argument, or gate review.
+- `windows_project_guard_condition_diff` compares persisted
+  `cfg_branch_facts` and `callsite_path_conditions` across two
+  `.glaurung` projects. It groups branch guards and path-condition
+  guards by stable function names where available, reports added,
+  removed, changed, and unchanged guards, and attaches bounds, status,
+  mode/user-pointer, privilege, NULL/zero, and guard-location relevance
+  hints. Patch-diff review ranks these rows as `guard_delta` items and
+  preserves them in patch-diff validation packets, making changed guard
+  placement visible before manual decompilation.
 - `windows_project_function_chunk_facts` returns persisted first-class
   function chunk, thunk, tailcall, shared-tail, and funclet facts. It
   can filter by owner, chunk kind, relation kind, target VA, or an

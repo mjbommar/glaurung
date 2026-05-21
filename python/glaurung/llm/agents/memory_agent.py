@@ -143,6 +143,9 @@ from ..tools.windows_project_callgraph_reachability import (
 from ..tools.windows_project_callgraph_diff import (
     build_tool as build_windows_project_callgraph_diff,
 )
+from ..tools.windows_project_guard_condition_diff import (
+    build_tool as build_windows_project_guard_condition_diff,
+)
 from ..tools.windows_project_function_boundary_diff import (
     build_tool as build_windows_project_function_boundary_diff,
 )
@@ -1196,6 +1199,9 @@ def register_analysis_tools(
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_callgraph_diff())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_guard_condition_diff())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_function_boundary_diff())

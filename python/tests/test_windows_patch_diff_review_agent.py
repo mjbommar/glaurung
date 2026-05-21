@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -594,6 +595,202 @@ DELETE FROM xrefs;
         after_conn.close()
 
 
+def _seed_project_guards(before: Path, after: Path) -> None:
+    for path in (before, after):
+        conn = sqlite3.connect(path)
+        try:
+            conn.executescript(
+                """
+CREATE TABLE IF NOT EXISTS function_names (
+    binary_id INTEGER NOT NULL,
+    entry_va INTEGER NOT NULL,
+    canonical TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    set_by TEXT,
+    set_at INTEGER,
+    demangled TEXT,
+    flavor TEXT,
+    PRIMARY KEY (binary_id, entry_va)
+);
+CREATE TABLE IF NOT EXISTS cfg_branch_facts (
+    binary_id INTEGER NOT NULL,
+    function_va INTEGER NOT NULL,
+    block_id TEXT NOT NULL,
+    branch_va INTEGER NOT NULL,
+    branch_mnemonic TEXT NOT NULL,
+    branch_operands_json TEXT NOT NULL DEFAULT '[]',
+    compare_va INTEGER,
+    compare_mnemonic TEXT,
+    compare_operands_json TEXT NOT NULL DEFAULT '[]',
+    condition_kind TEXT NOT NULL,
+    target_block_id TEXT,
+    fallthrough_block_id TEXT,
+    indexed_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, function_va, block_id, branch_va)
+);
+CREATE TABLE IF NOT EXISTS callsite_path_conditions (
+    binary_id INTEGER NOT NULL,
+    callsite_va INTEGER NOT NULL,
+    caller_va INTEGER,
+    block_id TEXT NOT NULL,
+    branch_va INTEGER NOT NULL,
+    branch_mnemonic TEXT NOT NULL,
+    branch_operands_json TEXT NOT NULL DEFAULT '[]',
+    compare_va INTEGER,
+    compare_mnemonic TEXT,
+    compare_operands_json TEXT NOT NULL DEFAULT '[]',
+    condition_kind TEXT NOT NULL,
+    condition_role TEXT NOT NULL,
+    target_block_id TEXT,
+    fallthrough_block_id TEXT,
+    distance_bytes INTEGER,
+    confidence REAL NOT NULL,
+    provenance_json TEXT NOT NULL DEFAULT '[]',
+    indexed_at INTEGER NOT NULL,
+    PRIMARY KEY (binary_id, callsite_va, branch_va)
+);
+DELETE FROM function_names;
+DELETE FROM cfg_branch_facts;
+DELETE FROM callsite_path_conditions;
+"""
+            )
+            conn.execute(
+                "INSERT INTO function_names VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (1, 0x140001000, "Dispatch", "[]", "pdb", 0, None, None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    before_conn = sqlite3.connect(before)
+    try:
+        before_conn.executemany(
+            "INSERT INTO cfg_branch_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    1,
+                    0x140001000,
+                    "bb0",
+                    0x140001010,
+                    "jb",
+                    json.dumps(["0x140001080"]),
+                    0x14000100C,
+                    "cmp",
+                    json.dumps(["Length", "OutputBufferLength"]),
+                    "unsigned_less",
+                    "bb_ok",
+                    "bb_fail",
+                    0,
+                ),
+                (
+                    1,
+                    0x140001000,
+                    "bb1",
+                    0x140001020,
+                    "je",
+                    json.dumps(["0x140001090"]),
+                    0x14000101A,
+                    "cmp",
+                    json.dumps(["RequestorMode", "KernelMode"]),
+                    "equal",
+                    "bb_kernel",
+                    "bb_user",
+                    0,
+                ),
+            ],
+        )
+        before_conn.execute(
+            "INSERT INTO callsite_path_conditions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                0x140001060,
+                0x140001000,
+                "bb0",
+                0x140001010,
+                "jb",
+                json.dumps(["0x140001080"]),
+                0x14000100C,
+                "cmp",
+                json.dumps(["Length", "OutputBufferLength"]),
+                "unsigned_less",
+                "length_bound",
+                "bb_ok",
+                "bb_fail",
+                80,
+                0.82,
+                json.dumps(["cfg_branch_facts"]),
+                0,
+            ),
+        )
+        before_conn.commit()
+    finally:
+        before_conn.close()
+
+    after_conn = sqlite3.connect(after)
+    try:
+        after_conn.executemany(
+            "INSERT INTO cfg_branch_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    1,
+                    0x140001000,
+                    "bb0",
+                    0x140001012,
+                    "jbe",
+                    json.dumps(["0x140001080"]),
+                    0x14000100C,
+                    "cmp",
+                    json.dumps(["Length", "OutputBufferLength"]),
+                    "unsigned_less_equal",
+                    "bb_ok",
+                    "bb_fail",
+                    0,
+                ),
+                (
+                    1,
+                    0x140001000,
+                    "bb1",
+                    0x140001030,
+                    "je",
+                    json.dumps(["0x140001090"]),
+                    0x14000102A,
+                    "cmp",
+                    json.dumps(["RequestorMode", "KernelMode"]),
+                    "equal",
+                    "bb_kernel",
+                    "bb_user",
+                    0,
+                ),
+            ],
+        )
+        after_conn.execute(
+            "INSERT INTO callsite_path_conditions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                0x140001068,
+                0x140001000,
+                "bb0",
+                0x140001012,
+                "jbe",
+                json.dumps(["0x140001080"]),
+                0x14000100C,
+                "cmp",
+                json.dumps(["Length", "OutputBufferLength"]),
+                "unsigned_less_equal",
+                "length_bound",
+                "bb_ok",
+                "bb_fail",
+                86,
+                0.82,
+                json.dumps(["cfg_branch_facts"]),
+                0,
+            ),
+        )
+        after_conn.commit()
+    finally:
+        after_conn.close()
+
+
 def test_windows_patch_diff_review_ranks_seed_changed_function(
     tmp_path: Path,
 ) -> None:
@@ -849,6 +1046,44 @@ def test_windows_patch_diff_review_ranks_project_callgraph_deltas(
     assert any(
         "sink_or_api_call_delta" in item.reason_codes for item in callgraph_items
     )
+
+
+def test_windows_patch_diff_review_ranks_project_guard_deltas(
+    tmp_path: Path,
+) -> None:
+    a = _need(_SWITCHY_V1)
+    b = _need(_SWITCHY_V2)
+    before_project = _project(tmp_path, "before")
+    after_project = _project(tmp_path, "after")
+    _seed_project_guards(before_project, after_project)
+
+    result = run_windows_patch_diff_review(
+        WindowsPatchDiffReviewConfig(
+            binary_a=str(a),
+            binary_b=str(b),
+            before_project_path=str(before_project),
+            after_project_path=str(after_project),
+            max_items=20,
+        )
+    )
+
+    assert result.guard_condition_diff is not None
+    assert result.guard_condition_diff.changed_count == 1
+    assert result.guard_condition_diff.added_count == 2
+    assert result.guard_condition_diff.removed_count == 2
+    assert "windows_project_guard_condition_diff" in result.tool_sequence
+    assert (
+        "project_guard_condition_deltas"
+        in result.evidence_bundle.coverage.fact_coverage
+    )
+    assert result.evidence_bundle.subject.attributes["guard_delta_count"] == 5
+    guard_items = [item for item in result.review_items if item.kind == "guard_delta"]
+    assert guard_items
+    assert any(
+        "project_guard_condition_diff" in item.match_basis for item in guard_items
+    )
+    assert any("bounds_guard_delta" in item.reason_codes for item in guard_items)
+    assert any("guard_removed" in item.reason_codes for item in guard_items)
 
 
 def test_windows_patch_diff_review_loads_function_identity_manifest(
