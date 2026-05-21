@@ -218,7 +218,7 @@ def run_windows_target_pipeline(
                 config,
                 ready_fanouts,
             ),
-            patch_diff_packets=_patch_diff_packet_config(config),
+            patch_diff_packets=_patch_diff_packet_config(config, ready_fanouts[0]),
             max_candidates=config.max_candidates,
         )
     )
@@ -449,6 +449,7 @@ def _operation_backlog_packet_configs(
 
 def _patch_diff_packet_config(
     config: WindowsTargetPipelineConfig,
+    fanout: WindowsTriageTargetFanoutBatch,
 ) -> WindowsPatchDiffPacketsArgs | None:
     if not config.patch_diff_binary_a and not config.patch_diff_binary_b:
         return None
@@ -461,12 +462,14 @@ def _patch_diff_packet_config(
         binary_a=config.patch_diff_binary_a,
         binary_b=config.patch_diff_binary_b,
         seeds_path=config.patch_diff_seeds_path,
-        target_id=config.build_corpus.target_id,
-        component=config.build_corpus.filename,
+        target_id=config.build_corpus.target_id or fanout.target_id,
+        component=config.build_corpus.filename or fanout.binary,
         sinks_path=config.sinks_path,
         gates_path=config.gates_path,
         pdb_backed=config.patch_diff_pdb_backed,
         function_identity_path=config.patch_diff_function_identity_path,
+        build_label=config.build_label,
+        project_facts_path=config.project_facts_path,
         attacker_class=config.attacker_class,
         max_diff_rows=config.patch_diff_max_diff_rows,
         max_items=config.patch_diff_max_items,

@@ -26,6 +26,14 @@ from .windows_emit_review_packet import (
 
 
 class WindowsPatchDiffPacketsArgs(WindowsPatchDiffReviewConfig):
+    build_label: str | None = Field(
+        None,
+        description="Optional ASB build label used for project-fact manifest joins.",
+    )
+    project_facts_path: str | None = Field(
+        None,
+        description="Optional path to ASB data/kg/pe-project-facts.yaml for auto-join.",
+    )
     attacker_class: str = Field(
         "unknown",
         description="Attacker class to attach to emitted patch-diff packets.",
@@ -179,7 +187,7 @@ def _packet_args(
     return WindowsEmitReviewPacketArgs(
         candidate_id=f"patchdiff-{_slug(item.kind)}-{_slug(function)}",
         binary=binary,
-        build=None,
+        build=args.build_label,
         entrypoint=function,
         attacker_class=args.attacker_class,
         source_role="unknown_patch_diff_source",
@@ -217,6 +225,11 @@ def _packet_args(
             ],
         ),
         required_project_facts=list(args.required_project_facts),
+        auto_join_manifest_context=True,
+        project_facts_path=args.project_facts_path,
+        manifest_target_id=args.target_id,
+        manifest_build_label=args.build_label,
+        manifest_component=args.component or binary,
         notes=[
             "emitted from patch-diff review",
             "source, gate, and runtime evidence are required before promotion",

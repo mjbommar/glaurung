@@ -468,10 +468,15 @@ def test_windows_target_pipeline_includes_patch_diff_packets(
     assert result.sink_review_count == 2
     assert result.evidence_review_count == 2
     assert "windows_patch_diff_packets" in result.tool_sequence
-    assert any(
-        packet.candidate_id.startswith("patchdiff-")
+    patch_packets = [
+        packet
         for packet in result.validation.candidate_packets
-    )
+        if packet.candidate_id.startswith("patchdiff-")
+    ]
+    assert patch_packets
+    assert patch_packets[0].build == "win11-ltsc-v4"
+    assert patch_packets[0].project_facts is not None
+    assert patch_packets[0].project_facts.project_path == str(project)
     assert (
         result.validation.evidence_bundle.subject.attributes["patch_diff_packet_count"]
         == 1
