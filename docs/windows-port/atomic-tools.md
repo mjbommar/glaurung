@@ -304,6 +304,14 @@ sit below full IR/CFG bug-class scanners:
   instruction-level memory read/write inventory for Windows rules; it
   does not recover complete PDB field names, full aliasing, or
   path-sensitive memory state.
+- `windows_project_memory_access_query` queries persisted
+  `memory_operand_facts` across a `.glaurung` project. It filters by
+  read/write/read-write direction, function, base object kind, role
+  hint, type/field, field offset, data target VA/name, and confidence,
+  then returns per-instruction rows plus summaries by access kind, base
+  object kind, role hint, field, and data target. This gives analysts
+  IDA/Ghidra-style "who reads/writes this field or global?" navigation
+  over the structured memory substrate.
 - `windows_project_return_value_use_snapshot` uses a project callsite
   VA plus nearby post-call disassembly to recover a conservative local
   Windows x64 `RAX` return-value use snapshot. It classifies immediate

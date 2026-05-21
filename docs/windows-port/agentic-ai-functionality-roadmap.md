@@ -163,6 +163,16 @@ use snapshots, branch-condition facts, data-label facts, operation risk
 summaries, candidate packet composition, VM validation plans, and
 runtime artifact bundle import.
 
+Update: `windows_project_memory_access_query` now turns persisted
+`memory_operand_facts` into a project-wide navigation surface for
+structured memory access. Analysts and agents can filter reads, writes,
+read/write operands, functions, base object kinds, role hints, inferred
+type/field names, field offsets, data-target globals, and confidence,
+then get per-instruction rows plus summaries by access kind, base
+object kind, role hint, field, and data target. This closes the first
+query loop from low-level memory normalization to IDA/Ghidra-style
+"who reads/writes this field or global?" review.
+
 Update: `windows_function_start_explain` and
 `windows_candidate_start_worklist` now consume native per-address
 `scan_rejections` from the comparison stats. A function-start answer can
@@ -1875,6 +1885,18 @@ Validated high-level replay scope:
   with one skip. Tests cover source-to-sink path recovery,
   upstream-to-sink path sampling, unreachable targets, CLI JSON output,
   KB evidence-node creation, and `memory_agent` registration.
+- Latest project memory-access query validation: scoped `uvx ruff
+  check`, `uvx ty check`, `git diff --check`, and focused
+  `uv run pytest` passed for
+  `windows_project_memory_access_query.py`, Windows CLI registration,
+  `memory_agent.py`, `test_windows_project_memory_access_query_tool.py`,
+  `test_windows_project_memory_operand_facts_tool.py`, and
+  `test_windows_project_fact_summary_tool.py`. Tests cover field-read
+  queries, write/read-write filtering, global data-target lookup,
+  summaries, CLI JSON output, KB evidence-node creation, and
+  `memory_agent` registration. The full
+  `uv run pytest python/tests/test_windows_*.py -q` sweep also passed
+  with one skip.
 
 Not A+ yet:
 
