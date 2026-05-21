@@ -252,7 +252,16 @@ def _boundary_chunk_facts(
                 )
             )
             continue
-        if item.source in {"pdb", "function_name"} and item.end_va is not None:
+        if (
+            item.source
+            in {
+                "pdb",
+                "function_name",
+                "pdb_symbol_adjacency",
+                "function_name_symbol_adjacency",
+            }
+            and item.end_va is not None
+        ):
             out.append(
                 FunctionChunkFact(
                     owner_entry_va=item.entry_va,

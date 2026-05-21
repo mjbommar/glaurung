@@ -176,6 +176,37 @@ LIMIT 1
     return _row_to_candidate(row)
 
 
+def boundary_for_entry(
+    kb: PersistentKnowledgeBase,
+    entry_va: int,
+) -> FunctionBoundaryCandidate | None:
+    """Return the best exact-entry boundary candidate.
+
+    This differs from :func:`best_boundary_for_va`: a VA inside a larger
+    ``.pdata`` body should usually resolve to the owner for "containing
+    function" questions, but exact-entry decompile or review workflows need the
+    best row whose entry is exactly the requested public/candidate start.
+    """
+
+    ensure_schema(kb)
+    row = kb._conn.execute(
+        """
+SELECT entry_va, end_va, source, confidence, name, detail_json
+FROM function_boundaries
+WHERE binary_id = ? AND entry_va = ?
+ORDER BY
+  CASE WHEN end_va IS NULL THEN 1 ELSE 0 END,
+  confidence DESC,
+  source
+LIMIT 1
+""",
+        (kb.binary_id, entry_va),
+    ).fetchone()
+    if row is None:
+        return None
+    return _row_to_candidate(row)
+
+
 def list_boundaries(
     kb: PersistentKnowledgeBase,
     *,
@@ -249,11 +280,25 @@ def _function_name_boundaries(
             end_va = same_pdata.end_va
             detail["range_source"] = "pdata"
         elif containing_pdata is not None:
-            end_va = None
+            next_entry = _next_entry_in_range(
+                entries,
+                idx,
+                section=section,
+                limit_end_va=containing_pdata.end_va,
+            )
+            end_va = next_entry or containing_pdata.end_va
             source = (
                 "pdb_public_inside_pdata" if set_by == "pdb" else "label_inside_pdata"
             )
             confidence = 0.58
+            if end_va is not None:
+                detail["range_source"] = (
+                    "symbol_adjacency_inside_pdata"
+                    if next_entry is not None
+                    else "containing_pdata_end"
+                )
+                if next_entry is not None:
+                    detail["next_symbol_va"] = hex(next_entry)
             detail["containing_pdata_start"] = hex(containing_pdata.entry_va)
             detail["containing_pdata_end"] = (
                 hex(containing_pdata.end_va)
@@ -261,11 +306,16 @@ def _function_name_boundaries(
                 else None
             )
         else:
-            end_va = None
-            for next_entry, _next_name, _next_set_by in entries[idx + 1 :]:
-                if section is None or section.contains_va(next_entry):
-                    end_va = next_entry
-                    break
+            end_va = _next_entry_in_range(entries, idx, section=section)
+            if end_va is not None:
+                source = (
+                    "pdb_symbol_adjacency"
+                    if set_by == "pdb"
+                    else "function_name_symbol_adjacency"
+                )
+                confidence = 0.82 if set_by == "pdb" else 0.62
+                detail["range_source"] = "symbol_adjacency"
+                detail["next_symbol_va"] = hex(end_va)
         yield FunctionBoundaryCandidate(
             entry_va=entry,
             end_va=end_va,
@@ -363,6 +413,22 @@ def _containing_boundary(
         ),
         None,
     )
+
+
+def _next_entry_in_range(
+    entries: list[tuple[int, str, str]],
+    idx: int,
+    *,
+    section: _PeSection | None,
+    limit_end_va: int | None = None,
+) -> int | None:
+    for next_entry, _next_name, _next_set_by in entries[idx + 1 :]:
+        if section is not None and not section.contains_va(next_entry):
+            continue
+        if limit_end_va is not None and next_entry >= limit_end_va:
+            continue
+        return next_entry
+    return None
 
 
 def _parse_pe_layout(data: bytes) -> _PeLayout | None:

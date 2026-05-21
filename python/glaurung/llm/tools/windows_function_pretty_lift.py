@@ -14,7 +14,7 @@ from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.persistent import PersistentKnowledgeBase
 from ..kb.store import KnowledgeBase
-from ..kb import xref_db
+from ..kb import windows_boundaries, xref_db
 from .base import MemoryTool, ToolMeta
 from .windows_api_contract_primitives import (
     ApiContractPrimitive,
@@ -1005,6 +1005,13 @@ def _scan_text(
             style="c",
             pdb_cache=args.pdb_cache,
         )
+        if not text.strip() and args.project_path:
+            fallback = _decompile_project_boundary_range(binary_path, args)
+            if fallback is not None:
+                notes.append(
+                    "decompile_at returned empty; used project function-boundary range fallback"
+                )
+                return fallback, "glaurung_decompiler_project_boundary_range", notes
         if not text.strip() and args.pdb_cache:
             fallback = _decompile_pdb_public_range(binary_path, args)
             if fallback is not None:
@@ -1015,6 +1022,13 @@ def _scan_text(
         return text, "glaurung_decompiler", notes
     except Exception as exc:
         notes.append(f"decompile failed: {exc}")
+        if args.project_path:
+            fallback = _decompile_project_boundary_range(binary_path, args)
+            if fallback is not None and fallback.strip():
+                notes.append(
+                    "decompile_at failed; used project function-boundary range fallback"
+                )
+                return fallback, "glaurung_decompiler_project_boundary_range", notes
         if args.pdb_cache:
             fallback = _decompile_pdb_public_range(binary_path, args)
             if fallback is not None and fallback.strip():
@@ -1023,6 +1037,46 @@ def _scan_text(
                 )
                 return fallback, "glaurung_decompiler_pdb_public_range", notes
         return "", "glaurung_decompiler_failed", notes
+
+
+def _decompile_project_boundary_range(
+    binary_path: Path,
+    args: WindowsFunctionPrettyLiftArgs,
+) -> str | None:
+    if args.function_va is None or not args.project_path:
+        return None
+    project_path = Path(args.project_path).expanduser()
+    if not project_path.exists():
+        return None
+    try:
+        kb = PersistentKnowledgeBase.open(project_path)
+        try:
+            boundary = windows_boundaries.boundary_for_entry(kb, int(args.function_va))
+        finally:
+            kb.close()
+    except Exception:
+        return None
+    if boundary is None or boundary.end_va is None:
+        return None
+    current = int(args.function_va)
+    range_end = int(boundary.end_va)
+    if range_end <= current or range_end - current > 0x20000:
+        return None
+    try:
+        ir = getattr(g, "ir")
+        return ir.decompile_range_at(
+            str(binary_path),
+            current,
+            current,
+            range_end,
+            max_blocks=int(args.max_blocks),
+            max_instructions=int(args.max_instructions),
+            timeout_ms=int(args.timeout_ms),
+            style="c",
+            pdb_cache=args.pdb_cache,
+        )
+    except Exception:
+        return None
 
 
 def _decompile_pdb_public_range(

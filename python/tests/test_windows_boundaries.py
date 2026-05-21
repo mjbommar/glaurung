@@ -66,15 +66,25 @@ def test_windows_boundaries_index_pdata_pdb_and_call_targets(tmp_path: Path) -> 
     try:
         caller = IMAGE_BASE + TEXT_RVA
         callee = IMAGE_BASE + TEXT_RVA + 0x20
+        public_a = IMAGE_BASE + TEXT_RVA + 0x50
+        public_b = IMAGE_BASE + TEXT_RVA + 0x70
         xref_db.set_function_name(kb, caller, "driver!Caller", set_by="pdb")
         xref_db.set_function_name(kb, callee, "driver!Callee", set_by="pdb")
+        xref_db.set_function_name(kb, public_a, "driver!PublicA", set_by="pdb")
+        xref_db.set_function_name(kb, public_b, "driver!PublicB", set_by="pdb")
         assert pe_direct_calls.index_pe_direct_calls(kb, binary) == 1
 
         count = windows_boundaries.index_function_boundaries(kb, binary)
 
         assert count >= 4
         sources = {item.source for item in windows_boundaries.list_boundaries(kb)}
-        assert {"pdata", "pdb", "pdb_public_inside_pdata", "call_target"} <= sources
+        assert {
+            "pdata",
+            "pdb",
+            "pdb_public_inside_pdata",
+            "pdb_symbol_adjacency",
+            "call_target",
+        } <= sources
         best = windows_boundaries.best_boundary_for_va(kb, caller + 4)
         assert best is not None
         assert best.entry_va == caller
@@ -87,6 +97,27 @@ def test_windows_boundaries_index_pdata_pdb_and_call_targets(tmp_path: Path) -> 
         assert interior is not None
         assert interior.entry_va == caller
         assert interior.source == "pdb"
+
+        exact_interior = windows_boundaries.boundary_for_entry(kb, callee)
+        assert exact_interior is not None
+        assert exact_interior.entry_va == callee
+        assert exact_interior.source == "pdb_public_inside_pdata"
+        assert exact_interior.end_va == caller + 0x30
+        assert exact_interior.detail is not None
+        assert exact_interior.detail["range_source"] == "containing_pdata_end"
+
+        adjacent = windows_boundaries.boundary_for_entry(kb, public_a)
+        assert adjacent is not None
+        assert adjacent.source == "pdb_symbol_adjacency"
+        assert adjacent.end_va == public_b
+        assert adjacent.detail is not None
+        assert adjacent.detail["range_source"] == "symbol_adjacency"
+        assert adjacent.detail["next_symbol_va"] == hex(public_b)
+
+        containing_adjacent = windows_boundaries.best_boundary_for_va(kb, public_a + 4)
+        assert containing_adjacent is not None
+        assert containing_adjacent.entry_va == public_a
+        assert containing_adjacent.source == "pdb_symbol_adjacency"
     finally:
         kb.close()
 

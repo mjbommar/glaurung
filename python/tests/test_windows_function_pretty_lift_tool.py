@@ -15,7 +15,7 @@ from glaurung.llm.agents.windows_pretty_lift_agent import (
 )
 from glaurung.llm.context import MemoryContext
 from glaurung.llm.kb.adapters import import_triage
-from glaurung.llm.kb import xref_db
+from glaurung.llm.kb import windows_boundaries, xref_db
 from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 from glaurung.llm.tools.windows_function_pretty_lift import (
     PrettyLift,
@@ -1676,6 +1676,75 @@ def test_windows_function_pretty_lift_uses_pdb_public_range_fallback(
     )
 
     assert result.packet.pseudocode_source == "glaurung_decompiler_pdb_public_range"
+    assert "raw_pseudocode" in result.packet.coverage
+
+
+def test_windows_function_pretty_lift_uses_project_boundary_range_fallback(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    binary = tmp_path / "sample.sys"
+    binary.write_bytes(b"MZ")
+    project = tmp_path / "sample.glaurung"
+    kb = PersistentKnowledgeBase.open(project, binary_path=binary)
+    try:
+        xref_db.set_function_name(kb, 0x1000, "driver!Target", set_by="pdb")
+        windows_boundaries.ensure_schema(kb)
+        kb._conn.execute(
+            "INSERT INTO function_boundaries "
+            "(binary_id, entry_va, end_va, size, source, confidence, name, detail_json, indexed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                kb.binary_id,
+                0x1000,
+                0x1030,
+                0x30,
+                "pdb_symbol_adjacency",
+                0.82,
+                "driver!Target",
+                '{"range_source":"symbol_adjacency"}',
+                0,
+            ),
+        )
+        kb._conn.commit()
+    finally:
+        kb.close()
+
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    def fake_decompile_at(*_args, **_kwargs):
+        return ""
+
+    def fake_decompile_range_at(
+        _path,
+        func_va,
+        range_start,
+        range_end,
+        **_kwargs,
+    ):
+        assert func_va == 0x1000
+        assert range_start == 0x1000
+        assert range_end == 0x1030
+        return "fn driver!Target { ret = 0; return; }"
+
+    ir = getattr(g, "ir")
+    monkeypatch.setattr(ir, "decompile_at", fake_decompile_at)
+    monkeypatch.setattr(ir, "decompile_range_at", fake_decompile_range_at)
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            binary_path=str(binary),
+            project_path=str(project),
+            function_va=0x1000,
+        ),
+    )
+
+    assert result.packet.pseudocode_source == (
+        "glaurung_decompiler_project_boundary_range"
+    )
     assert "raw_pseudocode" in result.packet.coverage
 
 
