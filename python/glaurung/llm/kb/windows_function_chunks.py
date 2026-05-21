@@ -492,6 +492,7 @@ def _name_based_thunk_facts(
         (kb.binary_id,),
     ).fetchall()
     boundary_by_entry = _best_boundary_by_entry(boundaries)
+    data_labels = {label.va: label for label in xref_db.list_data_labels(kb)}
     out: list[FunctionChunkFact] = []
     for entry_raw, name_raw, set_by_raw in rows:
         entry = int(entry_raw)
@@ -499,12 +500,25 @@ def _name_based_thunk_facts(
         set_by = str(set_by_raw or "")
         boundary = boundary_by_entry.get(entry)
         end_va = None if boundary is None else boundary.end_va
+        head = _head_bytes(data, layout, entry) or b""
+        thunk_slot_va = _indirect_jump_slot_va(head, entry)
+        thunk_slot_label = (
+            data_labels.get(thunk_slot_va) if thunk_slot_va is not None else None
+        )
         detail = {
             "set_by": set_by,
             "boundary_source": None if boundary is None else boundary.source,
-            "head_hex": (_head_bytes(data, layout, entry) or b"").hex(" ") or None,
+            "head_hex": head.hex(" ") or None,
         }
+        if thunk_slot_va is not None:
+            detail["thunk_slot_va"] = hex(thunk_slot_va)
+            detail["thunk_slot_source"] = "rip_relative_indirect_jump"
+            if thunk_slot_label is not None:
+                detail["thunk_slot_name"] = thunk_slot_label.name
+                detail["thunk_slot_type"] = thunk_slot_label.c_type
         target_name = _import_thunk_target_name(name)
+        if target_name is None and thunk_slot_label is not None:
+            target_name = _import_thunk_target_name(thunk_slot_label.name)
         if target_name is not None:
             out.append(
                 FunctionChunkFact(
@@ -513,8 +527,9 @@ def _name_based_thunk_facts(
                     chunk_end_va=end_va,
                     chunk_kind="import_thunk",
                     relation_kind="import_thunk",
+                    target_va=thunk_slot_va,
                     source="function_name",
-                    confidence=0.74,
+                    confidence=0.82 if thunk_slot_label is not None else 0.74,
                     target_name=target_name,
                     name=name,
                     detail=detail,
@@ -619,6 +634,16 @@ def _head_bytes(
     if off is None or off >= len(data):
         return None
     return data[off : min(len(data), off + size)]
+
+
+def _indirect_jump_slot_va(head: bytes, va: int) -> int | None:
+    if len(head) >= 6 and head.startswith(b"\xff\x25"):
+        disp = int.from_bytes(head[2:6], "little", signed=True)
+        return va + 6 + disp
+    if len(head) >= 7 and head.startswith(b"\x48\xff\x25"):
+        disp = int.from_bytes(head[3:7], "little", signed=True)
+        return va + 7 + disp
+    return None
 
 
 def _thunk_kind_from_head(head: bytes | None) -> str | None:

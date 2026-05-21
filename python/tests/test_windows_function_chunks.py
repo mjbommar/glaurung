@@ -16,6 +16,7 @@ from glaurung.llm.tools.windows_project_function_chunk_facts import build_tool
 IMAGE_BASE = 0x140000000
 TEXT_RVA = 0x1000
 PDATA_RVA = 0x3000
+IDATA_RVA = 0x4000
 
 
 def _write_pe64_with_pdata_and_thunks(tmp_path: Path) -> Path:
@@ -27,7 +28,7 @@ def _write_pe64_with_pdata_and_thunks(tmp_path: Path) -> Path:
 
     coff = 0x84
     data[coff : coff + 2] = (0x8664).to_bytes(2, "little")
-    data[coff + 2 : coff + 4] = (2).to_bytes(2, "little")
+    data[coff + 2 : coff + 4] = (3).to_bytes(2, "little")
     data[coff + 16 : coff + 18] = (0xF0).to_bytes(2, "little")
 
     opt = coff + 20
@@ -53,6 +54,14 @@ def _write_pe64_with_pdata_and_thunks(tmp_path: Path) -> Path:
     data[pdata_section + 20 : pdata_section + 24] = (0x1800).to_bytes(4, "little")
     data[pdata_section + 36 : pdata_section + 40] = (0x40000040).to_bytes(4, "little")
 
+    idata_section = pdata_section + 40
+    data[idata_section : idata_section + 8] = b".idata\x00\x00"
+    data[idata_section + 8 : idata_section + 12] = (0x100).to_bytes(4, "little")
+    data[idata_section + 12 : idata_section + 16] = IDATA_RVA.to_bytes(4, "little")
+    data[idata_section + 16 : idata_section + 20] = (0x200).to_bytes(4, "little")
+    data[idata_section + 20 : idata_section + 24] = (0x2000).to_bytes(4, "little")
+    data[idata_section + 36 : idata_section + 40] = (0xC0000040).to_bytes(4, "little")
+
     pdata_off = 0x1800
     data[pdata_off : pdata_off + 4] = TEXT_RVA.to_bytes(4, "little")
     data[pdata_off + 4 : pdata_off + 8] = (TEXT_RVA + 0x60).to_bytes(4, "little")
@@ -69,6 +78,14 @@ def _write_pe64_with_pdata_and_thunks(tmp_path: Path) -> Path:
     data[chained_off + 4 : chained_off + 8] = TEXT_RVA.to_bytes(4, "little")
     data[chained_off + 8 : chained_off + 12] = (TEXT_RVA + 0x60).to_bytes(4, "little")
     data[chained_off + 12 : chained_off + 16] = (TEXT_RVA + 0x800).to_bytes(4, "little")
+
+    import_thunk_va = IMAGE_BASE + TEXT_RVA + 0x40
+    iat_slot_va = IMAGE_BASE + IDATA_RVA
+    import_thunk_off = 0x400 + 0x40
+    disp = iat_slot_va - (import_thunk_va + 7)
+    data[import_thunk_off : import_thunk_off + 7] = bytes.fromhex(
+        "48 ff 25"
+    ) + disp.to_bytes(4, "little", signed=True)
 
     adjustor_off = 0x400 + 0x300
     data[adjustor_off : adjustor_off + 9] = bytes.fromhex("48 83 c1 08 e9 00 02 00 00")
@@ -98,6 +115,7 @@ def test_windows_function_chunks_index_boundaries_thunks_and_shared_tails(
         dispatch = IMAGE_BASE + TEXT_RVA
         catch_funclet = dispatch + 0x20
         import_thunk = dispatch + 0x40
+        iat_slot = IMAGE_BASE + IDATA_RVA
         shared_tail = dispatch + 0x80
         other_owner = dispatch + 0x200
         adjustor = dispatch + 0x300
@@ -112,6 +130,14 @@ def test_windows_function_chunks_index_boundaries_thunks_and_shared_tails(
         )
         xref_db.set_function_name(
             kb, import_thunk, "driver!__imp_ZwClose", set_by="pdb"
+        )
+        xref_db.set_data_label(
+            kb,
+            iat_slot,
+            "__imp_ZwClose",
+            c_type="void *",
+            size=8,
+            set_by="pdb",
         )
         xref_db.set_function_name(kb, shared_tail, "driver!SharedTail", set_by="pdb")
         xref_db.set_function_name(kb, other_owner, "driver!Other", set_by="pdb")
@@ -145,6 +171,11 @@ def test_windows_function_chunks_index_boundaries_thunks_and_shared_tails(
 
         imports = [fact for fact in facts if fact.chunk_kind == "import_thunk"]
         assert imports[0].target_name == "ZwClose"
+        assert imports[0].target_va == iat_slot
+        import_detail = imports[0].detail
+        assert import_detail is not None
+        assert import_detail["thunk_slot_va"] == hex(iat_slot)
+        assert import_detail["thunk_slot_name"] == "__imp_ZwClose"
         shared = [
             fact
             for fact in facts
@@ -181,6 +212,17 @@ def test_windows_project_function_chunk_facts_filters_and_adds_evidence(
         target = owner + 0x80
         xref_db.set_function_name(kb, owner, "driver!Dispatch", set_by="pdb")
         xref_db.set_function_name(kb, target, "driver!SharedTail", set_by="pdb")
+        xref_db.set_function_name(
+            kb, owner + 0x40, "driver!__imp_ZwClose", set_by="pdb"
+        )
+        xref_db.set_data_label(
+            kb,
+            IMAGE_BASE + IDATA_RVA,
+            "__imp_ZwClose",
+            c_type="void *",
+            size=8,
+            set_by="pdb",
+        )
         xref_db.add_xref(kb, owner + 0x50, target, "jump", owner)
         xref_db.add_xref(kb, owner + 0x200, target, "jump", owner + 0x200)
         windows_function_chunks.index_function_chunks(kb, binary)
@@ -214,6 +256,18 @@ def test_windows_project_function_chunk_facts_filters_and_adds_evidence(
     )
     assert unwind_result.chunk_count == 1
     assert "unwind_chunk_facts" in unwind_result.coverage
+
+    import_result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(project_path),
+            chunk_kind="import_thunk",
+        ),
+    )
+    assert import_result.chunk_count == 1
+    assert import_result.chunks[0].thunk_slot_va == IMAGE_BASE + IDATA_RVA
+    assert import_result.chunks[0].thunk_slot_name == "__imp_ZwClose"
 
 
 def test_windows_project_function_chunk_facts_filters_by_contained_va(

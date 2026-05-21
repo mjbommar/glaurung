@@ -25,6 +25,8 @@ class ProjectFunctionChunkFact(BaseModel):
     source: str
     confidence: float = Field(ge=0.0, le=1.0)
     name: str | None = None
+    thunk_slot_va: int | None = None
+    thunk_slot_name: str | None = None
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -134,6 +136,8 @@ class WindowsProjectFunctionChunkFactsTool(
                 source=row.source,
                 confidence=row.confidence,
                 name=row.name,
+                thunk_slot_va=_detail_hex_value(row.detail, "thunk_slot_va"),
+                thunk_slot_name=_detail_text(row.detail, "thunk_slot_name"),
                 detail=dict(row.detail or {}),
             )
             for row in rows
@@ -196,6 +200,23 @@ def _coverage(chunks: list[ProjectFunctionChunkFact]) -> list[str]:
     if kinds & {"pdata_body", "public_symbol_range"}:
         coverage.append("range_backed_chunk_facts")
     return coverage
+
+
+def _detail_hex_value(detail: dict[str, Any] | None, key: str) -> int | None:
+    value = (detail or {}).get(key)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value, 16 if value.lower().startswith("0x") else 10)
+        except ValueError:
+            return None
+    return None
+
+
+def _detail_text(detail: dict[str, Any] | None, key: str) -> str | None:
+    value = (detail or {}).get(key)
+    return str(value) if value is not None else None
 
 
 def build_tool() -> WindowsProjectFunctionChunkFactsTool:

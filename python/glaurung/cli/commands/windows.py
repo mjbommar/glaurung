@@ -3398,10 +3398,14 @@ def _format_project_function_chunks_human(
         start = _format_optional_va(chunk.chunk_start_va)
         end = _format_optional_va(chunk.chunk_end_va)
         target = chunk.target_name or _format_optional_va(chunk.target_va)
+        slot = ""
+        if chunk.thunk_slot_va is not None:
+            slot_name = f":{chunk.thunk_slot_name}" if chunk.thunk_slot_name else ""
+            slot = f" slot={_format_optional_va(chunk.thunk_slot_va)}{slot_name}"
         name = chunk.name or "-"
         lines.append(
             f"  {chunk.chunk_kind:<28} {chunk.relation_kind:<16} "
-            f"owner={owner} range={start}..{end} target={target} "
+            f"owner={owner} range={start}..{end} target={target}{slot} "
             f"conf={chunk.confidence:.2f} source={chunk.source} name={name}"
         )
     if len(result.chunks) > 20:

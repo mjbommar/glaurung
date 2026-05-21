@@ -240,8 +240,10 @@ sit below full IR/CFG bug-class scanners:
   target. `.pdata` indexing now also parses unwind metadata for
   exception-handler targets and chained unwind fragments, surfacing
   `exception_handler_chunk` and `chained_unwind_chunk` rows instead of
-  hiding that evidence in raw runtime-function records. The same query
-  is exposed through
+  hiding that evidence in raw runtime-function records. Import-thunk
+  rows now decode RIP-relative `jmp [slot]` forms and carry the
+  resolved IAT/global slot VA and data-label name when available. The
+  same query is exposed through
   `glaurung windows project-function-chunks` for IDA/Ghidra-style
   boundary explanation during interactive review. These facts explain
   function layout decisions; they are not vulnerability evidence by

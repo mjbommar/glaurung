@@ -1987,6 +1987,12 @@ Validated high-level replay scope:
   fragments as `chained_unwind_chunk` / `unwind_child` rows and
   executable handler RVAs as `exception_handler_chunk` /
   `exception_handler` rows, with `unwind_chunk_facts` coverage.
+- Latest import-thunk refinement: function chunk indexing now decodes
+  RIP-relative `ff 25` / `48 ff 25` import-jump slots, joins matching
+  `data_labels`, and exposes the IAT/global slot VA and label through
+  `windows_project_function_chunk_facts` and the
+  `project-function-chunks` CLI. This gives agents a concrete slot to
+  inspect when a thunk boundary depends on import-table provenance.
 - Latest project symbol-range validation: focused `uv run pytest`
   passed for `test_windows_project_symbol_range_facts_tool.py`. Tests
   cover exact `.pdata` range classification, inside-`.pdata` funclet
