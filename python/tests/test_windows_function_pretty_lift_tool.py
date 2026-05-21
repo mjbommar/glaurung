@@ -1978,6 +1978,69 @@ fn sub_18009fb80 {
     assert "lhs=input_length/length" in pretty
 
 
+def test_windows_function_pretty_lift_types_io_stack_location_helper_returns(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            pseudocode="""
+fn sub_18009fbe0 {
+    IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    code = IrpSp->Parameters.DeviceIoControl.IoControlCode;
+    out_len = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
+    if (code == 0x222003) { goto L_ioctl; }
+    if (out_len u< 0x20) { goto L_small; }
+    return;
+}
+""",
+            function_va=0x18009FBE0,
+            function_name="HelperReturnGuard",
+        ),
+    )
+
+    assert any(
+        prototype.symbol == "IoGetCurrentIrpStackLocation"
+        and prototype.return_type == "IO_STACK_LOCATION *"
+        for prototype in result.packet.call_prototypes
+    )
+    assert any(
+        site.call_name == "IoGetCurrentIrpStackLocation"
+        and site.return_target == "IrpSp"
+        and site.prototype is not None
+        and site.prototype.return_type == "IO_STACK_LOCATION *"
+        and site.argument_facts[0].role == "irp"
+        for site in result.packet.call_sites
+    )
+    assert any(
+        access.kind == "read"
+        and access.base == "IrpSp"
+        and access.base_object == "IrpSp"
+        and access.base_object_kind == "local"
+        and access.pointer_class == "kernel_pointer_candidate"
+        and access.classification_reason
+        == "local value inherits typed call-return role io_stack_location"
+        and access.field_name == "Parameters.DeviceIoControl.IoControlCode"
+        and access.value_role == "ioctl_code"
+        and access.value_class == "selector"
+        for access in result.packet.memory_accesses
+    )
+    assert any(
+        condition.role == "selector_gate"
+        and condition.lhs_expression == "code"
+        and condition.lhs_value_role == "ioctl_code"
+        for condition in result.packet.path_conditions
+    )
+    pretty = result.pretty_lift.pseudocode
+    assert "IO_STACK_LOCATION * IoGetCurrentIrpStackLocation" in pretty
+    assert "IrpSp.Parameters.DeviceIoControl.IoControlCode" in pretty
+    assert "lhs=ioctl_code/selector" in pretty
+
+
 def test_pretty_lift_validation_rejects_missing_copy_sink(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     tool = build_tool()

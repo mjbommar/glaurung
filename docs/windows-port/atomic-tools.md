@@ -134,7 +134,9 @@ sit below full IR/CFG bug-class scanners:
   handles C decompiler field syntax (`base->field` and `base.field`)
   for known Windows fields, so IDA/Ghidra-style output feeds the
   structured memory and guard substrate without requiring offset-form
-  Glaurung IR.
+  Glaurung IR. Curated helper prototypes also propagate typed return
+  targets from `IoGetCurrentIrpStackLocation(Irp)` into local
+  `IO_STACK_LOCATION *` bases before memory and guard classification.
 - `windows_component_profile` exposes ASB's high-risk component
   profiles: entrypoint families, expected gates, validation
   requirements, initial rule families, evidence-packet fields, and VM

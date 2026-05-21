@@ -233,7 +233,11 @@ length gates. C-style decompiler field accesses such as
 `IrpSp->Parameters.DeviceIoControl.IoControlCode` and
 `Irp->RequestorMode` now normalize into the same structured
 memory-access and path-condition facts, covering the field syntax
-analysts see in IDA/Ghidra output.
+analysts see in IDA/Ghidra output. Curated WDK helper prototypes now
+also let return targets from helpers such as
+`IoGetCurrentIrpStackLocation(Irp)` become typed local bases, so later
+`IrpSp->...` accesses retain `IO_STACK_LOCATION *` semantics even when
+the current function signature does not expose `IrpSp` directly.
 
 Update: `windows_project_data_table_facts` now groups persisted
 `data_labels`, data xrefs, and `function_chunk_facts` into first-class

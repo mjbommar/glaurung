@@ -539,6 +539,7 @@ def build_lift_packet(
         selector_table=selector_table,
         argument_roles=argument_roles,
         entry_abi_arguments=entry_abi_arguments,
+        call_sites=call_sites,
     )
     field_offset_groups = _field_offset_group_facts(memory_accesses)
     data_references = _data_reference_facts(
@@ -2130,6 +2131,15 @@ def _manual_prototype_fact(symbol: str) -> PrototypeFact | None:
             confidence=0.72,
             provenance=["windows_string_conversion_wrapper"],
         )
+    if name == "IoGetCurrentIrpStackLocation":
+        return _prototype_fact_from_parts(
+            symbol=name,
+            return_type="IO_STACK_LOCATION *",
+            params=[("Irp", "IRP *", "irp")],
+            source="curated",
+            confidence=0.90,
+            provenance=["wdk_irp_stack_location_helper"],
+        )
     if name == "RtlSetLastWin32Error":
         return _prototype_fact_from_parts(
             symbol=name,
@@ -2334,9 +2344,11 @@ def _memory_access_facts(
     selector_table: SelectorTableFact | None,
     argument_roles: dict[str, LiftArgumentRole],
     entry_abi_arguments: list[EntryAbiArgumentFact],
+    call_sites: list[CallSiteFact],
 ) -> list[MemoryAccessFact]:
     facts: list[MemoryAccessFact] = []
     seen: set[tuple[str, int, str]] = set()
+    call_return_roles, local_semantic_bases = _call_return_semantic_roles(call_sites)
     semantic_roles: dict[str, tuple[str, str | None, float]] = {
         name: (role.semantic_name, role.role, role.confidence)
         for name, role in argument_roles.items()
@@ -2355,11 +2367,13 @@ def _memory_access_facts(
             argument.semantic_name,
             (argument.semantic_name, argument.role, argument.confidence),
         )
+    semantic_roles.update(call_return_roles)
 
     def add(access: MemoryAccessFact) -> None:
         access = _classified_memory_access(
             access,
             semantic_roles=semantic_roles,
+            local_semantic_bases=local_semantic_bases,
         )
         key = (_memory_access_key(access), access.line, access.snippet)
         if key in seen:
@@ -2518,6 +2532,50 @@ def _memory_access_facts(
     return facts
 
 
+def _call_return_semantic_roles(
+    call_sites: list[CallSiteFact],
+) -> tuple[dict[str, tuple[str, str | None, float]], set[str]]:
+    roles: dict[str, tuple[str, str | None, float]] = {}
+    local_bases: set[str] = set()
+    for site in call_sites:
+        if not site.return_value_used or site.return_target is None:
+            continue
+        target = site.return_target.strip()
+        if not re.fullmatch(_WINDOWS_SYMBOL_RE, target):
+            continue
+        return_type = site.prototype.return_type if site.prototype else None
+        role, confidence = _call_return_role(
+            site.call_name,
+            return_type=return_type,
+        )
+        if role is None:
+            continue
+        prototype_confidence = site.prototype.confidence if site.prototype else 0.0
+        roles[target] = (
+            target,
+            role,
+            min(max(confidence, prototype_confidence, site.confidence), 0.95),
+        )
+        local_bases.add(target)
+    return roles, local_bases
+
+
+def _call_return_role(
+    call_name: str,
+    *,
+    return_type: str | None,
+) -> tuple[str | None, float]:
+    combined = f"{call_name} {return_type or ''}"
+    normalized = re.sub(r"[^a-z0-9]", "", combined.lower())
+    if "iogetcurrentirpstacklocation" in normalized:
+        return "io_stack_location", 0.92
+    if "iostacklocation" in normalized:
+        return "io_stack_location", 0.88
+    if return_type is not None and re.search(r"\b(?:PIRP|IRP\s*\*)\b", return_type):
+        return "irp", 0.84
+    return None, 0.0
+
+
 def _c_field_access_memory_accesses(
     expression_text: str,
     *,
@@ -2594,6 +2652,7 @@ def _classified_memory_access(
     access: MemoryAccessFact,
     *,
     semantic_roles: dict[str, tuple[str, str | None, float]],
+    local_semantic_bases: set[str],
 ) -> MemoryAccessFact:
     base_object = access.base
     base_object_kind: str | None = "unknown"
@@ -2643,13 +2702,21 @@ def _classified_memory_access(
         )
         base_object = semantic_name
         if access.base.startswith("arg") or access.base in semantic_roles:
-            base_object_kind = "argument"
+            if access.base in local_semantic_bases:
+                base_object_kind = "local"
+                reason = (
+                    f"local value inherits typed call-return role {semantic_role}"
+                    if semantic_role
+                    else "local value inherits typed call-return role"
+                )
+            else:
+                base_object_kind = "argument"
+                reason = (
+                    f"entry argument role {semantic_role}"
+                    if semantic_role
+                    else "ABI argument memory base"
+                )
             pointer_class = _pointer_class_for_semantic_role(semantic_role)
-            reason = (
-                f"entry argument role {semantic_role}"
-                if semantic_role
-                else "ABI argument memory base"
-            )
             confidence = max(0.68, role_confidence)
         elif _looks_heap_or_pool_pointer(access.base):
             base_object_kind = "heap"
@@ -5207,6 +5274,15 @@ def _render_simple_forwarder(packet: WindowsFunctionLiftPacket) -> PrettyLift:
         prototype,
         "{",
     ]
+    if packet.call_prototypes:
+        lines.extend(
+            [
+                "    /* Call prototypes:",
+                *_render_call_prototypes(packet.call_prototypes),
+                "     */",
+                "",
+            ]
+        )
     if packet.path_conditions:
         lines.extend(
             [
@@ -5464,6 +5540,10 @@ def _render_loop_summaries(loops: list[LoopSummaryFact]) -> list[str]:
             f"backedge=line {loop.backedge_line}; calls={calls}"
         )
     return rendered
+
+
+def _render_call_prototypes(prototypes: list[PrototypeFact]) -> list[str]:
+    return [f"     * - {prototype.prototype}" for prototype in prototypes[:12]]
 
 
 def _render_path_conditions(conditions: list[PathConditionFact]) -> list[str]:
