@@ -57,6 +57,11 @@ from glaurung.llm.tools.windows_project_data_table_facts import (
     WindowsProjectDataTableFactsResult,
     build_tool as build_windows_project_data_table_facts,
 )
+from glaurung.llm.tools.windows_project_data_table_diff import (
+    WindowsProjectDataTableDiffArgs,
+    WindowsProjectDataTableDiffResult,
+    build_tool as build_windows_project_data_table_diff,
+)
 from glaurung.llm.tools.windows_project_fact_manifest import (
     WindowsProjectFactManifestArgs,
     WindowsProjectFactManifestResult,
@@ -648,6 +653,59 @@ class WindowsCommand(BaseCommand):
             help="Record the data-table recovery query in the transient memory KB.",
         )
 
+        data_table_diff = subparsers.add_parser(
+            "project-data-table-diff",
+            help=(
+                "Compare recovered dispatch tables, callback arrays, vtables, "
+                "jump tables, import thunk tables, and code-pointer tables across "
+                "two .glaurung projects"
+            ),
+        )
+        self._add_common_child_arguments(data_table_diff)
+        data_table_diff.add_argument("--before-project-path", required=True)
+        data_table_diff.add_argument("--after-project-path", required=True)
+        data_table_diff.add_argument("--before-binary-id", type=int)
+        data_table_diff.add_argument("--after-binary-id", type=int)
+        data_table_diff.add_argument("--before-binary-path")
+        data_table_diff.add_argument("--after-binary-path")
+        data_table_diff.add_argument(
+            "--table-kind",
+            choices=[
+                "all",
+                "dispatch_table",
+                "callback_array",
+                "vtable",
+                "jump_table",
+                "selector_table",
+                "import_thunk_table",
+                "code_pointer_table",
+                "global_array",
+                "unknown_table",
+            ],
+            default="all",
+        )
+        data_table_diff.add_argument("--name-contains")
+        data_table_diff.add_argument("--include-unchanged", action="store_true")
+        data_table_diff.add_argument("--min-entries", type=int, default=2)
+        data_table_diff.add_argument("--min-confidence", type=float, default=0.0)
+        data_table_diff.add_argument(
+            "--no-native-code-pointers",
+            action="store_false",
+            dest="include_native_code_pointers",
+            default=True,
+            help=(
+                "Do not run the native PE code-pointer scan even if binary paths "
+                "are set."
+            ),
+        )
+        data_table_diff.add_argument("--max-rows", type=int, default=128)
+        data_table_diff.add_argument("--max-entries-per-table", type=int, default=32)
+        data_table_diff.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the project data-table diff in the transient memory KB.",
+        )
+
         project_proto_diff = subparsers.add_parser(
             "project-prototype-diff",
             help=(
@@ -1104,6 +1162,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_memory_access_query(args, formatter)
         if args.windows_action == "project-data-tables":
             return _execute_project_data_table_facts(args, formatter)
+        if args.windows_action == "project-data-table-diff":
+            return _execute_project_data_table_diff(args, formatter)
         if args.windows_action == "project-prototype-diff":
             return _execute_project_prototype_diff(args, formatter)
         if args.windows_action == "bootstrap-project-facts":
@@ -1975,6 +2035,65 @@ def _execute_project_data_table_facts(
         )
     else:
         formatter.output_plain(_format_project_data_table_facts_human(result))
+    return 0
+
+
+def _execute_project_data_table_diff(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_data_table_diff()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.after_project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectDataTableDiffArgs(
+            before_project_path=args.before_project_path,
+            after_project_path=args.after_project_path,
+            before_binary_id=args.before_binary_id,
+            after_binary_id=args.after_binary_id,
+            before_binary_path=args.before_binary_path,
+            after_binary_path=args.after_binary_path,
+            table_kind=args.table_kind,
+            name_contains=args.name_contains,
+            include_unchanged=args.include_unchanged,
+            min_entries=args.min_entries,
+            min_confidence=args.min_confidence,
+            include_native_code_pointers=args.include_native_code_pointers,
+            max_rows=args.max_rows,
+            max_entries_per_table=args.max_entries_per_table,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "before_project_path": result.before_project_path,
+                        "after_project_path": result.after_project_path,
+                        "before_table_count": result.before_table_count,
+                        "after_table_count": result.after_table_count,
+                        "changed_count": result.changed_count,
+                        "added_count": result.added_count,
+                        "removed_count": result.removed_count,
+                        "returned_count": result.returned_count,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "data_table_delta", "data": item.model_dump(mode="json")}
+                    for item in result.deltas
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_data_table_diff_human(result))
     return 0
 
 
@@ -3001,6 +3120,36 @@ def _format_project_data_table_facts_human(
             lines.append(f"    ... {len(table.entries) - 4} more entries")
     if len(result.tables) > 20:
         lines.append(f"  ... {len(result.tables) - 20} more tables")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_data_table_diff_human(
+    result: WindowsProjectDataTableDiffResult,
+) -> str:
+    lines = [
+        "Windows project data-table diff",
+        f"  before={result.before_project_path}",
+        f"  after={result.after_project_path}",
+        (
+            f"  tables={result.before_table_count}->{result.after_table_count} "
+            f"changed={result.changed_count} added={result.added_count} "
+            f"removed={result.removed_count} returned={result.returned_count}"
+        ),
+        f"  coverage={','.join(result.coverage) or '-'}",
+    ]
+    for delta in result.deltas[:20]:
+        fields = ",".join(delta.changed_fields) or "table"
+        lines.append(
+            f"  {delta.table_kind:<20} {delta.status:<8} "
+            f"name={delta.name or '-'} fields={fields} "
+            f"priority={delta.review_priority} "
+            f"relevance={','.join(delta.security_relevance) or '-'}"
+        )
+    if len(result.deltas) > 20:
+        lines.append(f"  ... {len(result.deltas) - 20} more deltas")
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)

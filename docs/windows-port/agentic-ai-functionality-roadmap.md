@@ -185,6 +185,18 @@ code-pointer table scan rows. This is the first table-object layer
 above raw refs and labels, and it gives rules a stable target for
 dispatch/callback/table bug classes.
 
+Update: `windows_project_data_table_diff` now compares those recovered
+table candidates across two `.glaurung` projects and reports added,
+removed, changed, and unchanged dispatch tables, callback arrays,
+vtables, jump tables, selector-indexed globals, import-thunk runs,
+code-pointer tables, and global arrays. Deltas track entry-count,
+target, layout, source-function, and xref-count changes, attach
+security relevance hints, and now feed patch-diff review as ranked
+`table_delta` items alongside prototype and boundary deltas. This
+connects project table recovery to the Patch Tuesday style workflow
+where high-risk dispatch/callback/table drift needs to be visible
+before decompilation.
+
 Update: `windows_function_start_explain` and
 `windows_candidate_start_worklist` now consume native per-address
 `scan_rejections` from the comparison stats. A function-start answer can
@@ -1944,6 +1956,15 @@ Validated high-level replay scope:
   registration. The full
   `uv run pytest python/tests/test_windows_*.py -q` sweep also passed
   with one skip.
+- Latest project data-table diff validation: focused `uv run pytest`
+  passed for `test_windows_project_data_table_diff_tool.py` and
+  `test_windows_patch_diff_review_agent.py`. Tests cover table
+  add/remove/change detection, dispatch-table layout and target
+  deltas, import-thunk target deltas, CLI JSON output, KB evidence-node
+  creation, `memory_agent` registration, patch-diff review
+  `table_delta` ranking, evidence-bundle coverage, and table-delta
+  counts. The full `uv run pytest python/tests/test_windows_*.py -q`
+  sweep also passed with one skip.
 
 Not A+ yet:
 

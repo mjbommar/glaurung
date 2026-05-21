@@ -329,6 +329,15 @@ sit below full IR/CFG bug-class scanners:
   kind, VA, declared type/size, slot size, entry count, xref counts,
   source functions, sampled entries, confidence, reason codes, and
   security relevance hints for rules and analyst navigation.
+- `windows_project_data_table_diff` compares those recovered table
+  candidates across two `.glaurung` projects. It reports added,
+  removed, changed, and unchanged dispatch tables, callback arrays,
+  vtables, jump tables, selector globals, import-thunk runs,
+  code-pointer tables, and global arrays, including entry-count,
+  target, layout, source-function, and xref-count deltas. Patch-diff
+  review ranks those rows as `table_delta` items so callback, dispatch,
+  vtable, selector, and thunk-table drift becomes visible before
+  decompilation or sink review.
 - `windows_project_return_value_use_snapshot` uses a project callsite
   VA plus nearby post-call disassembly to recover a conservative local
   Windows x64 `RAX` return-value use snapshot. It classifies immediate

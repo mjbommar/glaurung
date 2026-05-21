@@ -63,7 +63,7 @@ class WindowsProjectDataTableFactsArgs(BaseModel):
         True,
         description="If true and binary_path is set, run the native PE code-pointer scan.",
     )
-    max_tables: int = Field(64, ge=0, le=1024)
+    max_tables: int = Field(64, ge=0, le=4096)
     max_entries_per_table: int = Field(32, ge=0, le=512)
     add_to_kb: bool = Field(
         False,

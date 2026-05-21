@@ -290,6 +290,234 @@ CREATE TABLE IF NOT EXISTS function_chunk_facts (
         after_conn.close()
 
 
+def _seed_project_tables(before: Path, after: Path) -> None:
+    for path in (before, after):
+        conn = sqlite3.connect(path)
+        try:
+            conn.executescript(
+                """
+CREATE TABLE IF NOT EXISTS function_names (
+    binary_id INTEGER NOT NULL,
+    entry_va INTEGER NOT NULL,
+    canonical TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    set_by TEXT,
+    set_at INTEGER,
+    demangled TEXT,
+    flavor TEXT,
+    PRIMARY KEY (binary_id, entry_va)
+);
+CREATE TABLE IF NOT EXISTS data_labels (
+    binary_id INTEGER NOT NULL,
+    va INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    c_type TEXT,
+    size INTEGER,
+    set_by TEXT,
+    set_at INTEGER,
+    PRIMARY KEY (binary_id, va)
+);
+CREATE TABLE IF NOT EXISTS xrefs (
+    xref_id INTEGER PRIMARY KEY,
+    binary_id INTEGER NOT NULL,
+    src_va INTEGER NOT NULL,
+    dst_va INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    src_function_va INTEGER,
+    indexed_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS function_chunk_facts (
+    chunk_id INTEGER PRIMARY KEY,
+    binary_id INTEGER NOT NULL,
+    identity_key TEXT NOT NULL,
+    owner_entry_va INTEGER,
+    chunk_start_va INTEGER NOT NULL,
+    chunk_end_va INTEGER,
+    chunk_size INTEGER,
+    chunk_kind TEXT NOT NULL,
+    relation_kind TEXT NOT NULL,
+    target_va INTEGER,
+    target_name TEXT,
+    source TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    name TEXT,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    indexed_at INTEGER NOT NULL
+);
+DELETE FROM function_names;
+DELETE FROM data_labels;
+DELETE FROM xrefs;
+DELETE FROM function_chunk_facts;
+"""
+            )
+            conn.executemany(
+                "INSERT INTO function_names VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (1, 0x140001000, "DriverEntry", "[]", "pdb", 0, None, None),
+                    (1, 0x140002000, "Dispatch", "[]", "pdb", 0, None, None),
+                    (1, 0x140003000, "TableUser", "[]", "pdb", 0, None, None),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    before_conn = sqlite3.connect(before)
+    try:
+        before_conn.executemany(
+            "INSERT INTO data_labels VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    1,
+                    0x140020000,
+                    "DriverObject.MajorFunction",
+                    "PDRIVER_DISPATCH[28]",
+                    28 * 8,
+                    "pdb",
+                    0,
+                ),
+                (
+                    1,
+                    0x140021000,
+                    "SelectorTable",
+                    "ULONG[8]",
+                    8 * 4,
+                    "manual",
+                    0,
+                ),
+            ],
+        )
+        before_conn.executemany(
+            "INSERT INTO xrefs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, 1, 0x140001020, 0x140020000, "data_write", 0x140001000, 0),
+                (2, 1, 0x140002030, 0x140020030, "data_read", 0x140002000, 0),
+            ],
+        )
+        before_conn.executemany(
+            "INSERT INTO function_chunk_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    1,
+                    1,
+                    "iat-close",
+                    0x140010000,
+                    0x140010000,
+                    0x140010006,
+                    6,
+                    "import_thunk",
+                    "import_thunk",
+                    0x180001000,
+                    "nt!ZwClose",
+                    "function_name",
+                    0.76,
+                    "driver!IatRun",
+                    "{}",
+                    0,
+                ),
+                (
+                    2,
+                    1,
+                    "iat-create",
+                    0x140010006,
+                    0x140010006,
+                    0x14001000C,
+                    6,
+                    "import_thunk",
+                    "import_thunk",
+                    0x180003000,
+                    "nt!ZwCreateFile",
+                    "function_name",
+                    0.76,
+                    "driver!IatRun",
+                    "{}",
+                    0,
+                ),
+            ],
+        )
+        before_conn.commit()
+    finally:
+        before_conn.close()
+
+    after_conn = sqlite3.connect(after)
+    try:
+        after_conn.executemany(
+            "INSERT INTO data_labels VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    1,
+                    0x140020000,
+                    "DriverObject.MajorFunction",
+                    "PDRIVER_DISPATCH[32]",
+                    32 * 8,
+                    "pdb",
+                    0,
+                ),
+                (
+                    1,
+                    0x140022000,
+                    "DeviceVtable",
+                    "void *[3]",
+                    3 * 8,
+                    "pdb",
+                    0,
+                ),
+            ],
+        )
+        after_conn.executemany(
+            "INSERT INTO xrefs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, 1, 0x140001020, 0x140020000, "data_write", 0x140001000, 0),
+                (2, 1, 0x140002030, 0x140020038, "data_read", 0x140002000, 0),
+                (3, 1, 0x140003010, 0x140020040, "data_read", 0x140003000, 0),
+            ],
+        )
+        after_conn.executemany(
+            "INSERT INTO function_chunk_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    1,
+                    1,
+                    "iat-close",
+                    0x140010000,
+                    0x140010000,
+                    0x140010006,
+                    6,
+                    "import_thunk",
+                    "import_thunk",
+                    0x180002000,
+                    "nt!ZwOpenProcess",
+                    "function_name",
+                    0.76,
+                    "driver!IatRun",
+                    "{}",
+                    0,
+                ),
+                (
+                    2,
+                    1,
+                    "iat-create",
+                    0x140010006,
+                    0x140010006,
+                    0x14001000C,
+                    6,
+                    "import_thunk",
+                    "import_thunk",
+                    0x180003000,
+                    "nt!ZwCreateFile",
+                    "function_name",
+                    0.76,
+                    "driver!IatRun",
+                    "{}",
+                    0,
+                ),
+            ],
+        )
+        after_conn.commit()
+    finally:
+        after_conn.close()
+
+
 def test_windows_patch_diff_review_ranks_seed_changed_function(
     tmp_path: Path,
 ) -> None:
@@ -476,6 +704,39 @@ def test_windows_patch_diff_review_ranks_project_boundary_deltas(
     )
     assert any("function_range_delta" in item.reason_codes for item in boundary_items)
     assert any("thunk_delta" in item.reason_codes for item in boundary_items)
+
+
+def test_windows_patch_diff_review_ranks_project_data_table_deltas(
+    tmp_path: Path,
+) -> None:
+    a = _need(_SWITCHY_V1)
+    b = _need(_SWITCHY_V2)
+    before_project = _project(tmp_path, "before")
+    after_project = _project(tmp_path, "after")
+    _seed_project_tables(before_project, after_project)
+
+    result = run_windows_patch_diff_review(
+        WindowsPatchDiffReviewConfig(
+            binary_a=str(a),
+            binary_b=str(b),
+            before_project_path=str(before_project),
+            after_project_path=str(after_project),
+            max_items=20,
+        )
+    )
+
+    assert result.data_table_diff is not None
+    assert result.data_table_diff.changed_count == 2
+    assert result.data_table_diff.added_count == 1
+    assert result.data_table_diff.removed_count == 1
+    assert "windows_project_data_table_diff" in result.tool_sequence
+    assert "project_data_table_deltas" in result.evidence_bundle.coverage.fact_coverage
+    assert result.evidence_bundle.subject.attributes["table_delta_count"] == 4
+    table_items = [item for item in result.review_items if item.kind == "table_delta"]
+    assert table_items
+    assert any("project_data_table_diff" in item.match_basis for item in table_items)
+    assert any("table_target_delta" in item.reason_codes for item in table_items)
+    assert any("dispatch_table" in item.reason_codes for item in table_items)
 
 
 def test_windows_patch_diff_review_loads_function_identity_manifest(
