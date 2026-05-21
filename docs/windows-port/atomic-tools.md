@@ -320,6 +320,15 @@ sit below full IR/CFG bug-class scanners:
   object kind, role hint, field, and data target. This gives analysts
   IDA/Ghidra-style "who reads/writes this field or global?" navigation
   over the structured memory substrate.
+- `windows_project_data_table_facts` groups persisted `data_labels`,
+  data xrefs, and `function_chunk_facts` into first-class table
+  candidates: dispatch tables, callback arrays, vtables, jump tables,
+  selector-indexed globals, import-thunk tables, code-pointer tables,
+  and generic global arrays. With `--binary-path`, it can also attach
+  native PE code-pointer table scan rows. Each candidate carries table
+  kind, VA, declared type/size, slot size, entry count, xref counts,
+  source functions, sampled entries, confidence, reason codes, and
+  security relevance hints for rules and analyst navigation.
 - `windows_project_return_value_use_snapshot` uses a project callsite
   VA plus nearby post-call disassembly to recover a conservative local
   Windows x64 `RAX` return-value use snapshot. It classifies immediate

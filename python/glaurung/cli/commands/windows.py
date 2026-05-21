@@ -52,6 +52,11 @@ from glaurung.llm.tools.windows_project_callgraph_reachability import (
     WindowsProjectCallgraphReachabilityResult,
     build_tool as build_windows_project_callgraph_reachability,
 )
+from glaurung.llm.tools.windows_project_data_table_facts import (
+    WindowsProjectDataTableFactsArgs,
+    WindowsProjectDataTableFactsResult,
+    build_tool as build_windows_project_data_table_facts,
+)
 from glaurung.llm.tools.windows_project_fact_manifest import (
     WindowsProjectFactManifestArgs,
     WindowsProjectFactManifestResult,
@@ -598,6 +603,51 @@ class WindowsCommand(BaseCommand):
             help="Record the memory-access query in the transient memory KB.",
         )
 
+        data_tables = subparsers.add_parser(
+            "project-data-tables",
+            help=(
+                "Recover project dispatch tables, callback arrays, vtables, "
+                "jump tables, import thunk tables, and code-pointer tables"
+            ),
+        )
+        self._add_common_child_arguments(data_tables)
+        data_tables.add_argument("--project-path", required=True)
+        data_tables.add_argument("--binary-id", type=int)
+        data_tables.add_argument("--binary-path")
+        data_tables.add_argument(
+            "--table-kind",
+            choices=[
+                "all",
+                "dispatch_table",
+                "callback_array",
+                "vtable",
+                "jump_table",
+                "selector_table",
+                "import_thunk_table",
+                "code_pointer_table",
+                "global_array",
+                "unknown_table",
+            ],
+            default="all",
+        )
+        data_tables.add_argument("--name-contains")
+        data_tables.add_argument("--min-entries", type=int, default=2)
+        data_tables.add_argument("--min-confidence", type=float, default=0.0)
+        data_tables.add_argument(
+            "--no-native-code-pointers",
+            action="store_false",
+            dest="include_native_code_pointers",
+            default=True,
+            help="Do not run the native PE code-pointer scan even if --binary-path is set.",
+        )
+        data_tables.add_argument("--max-tables", type=int, default=64)
+        data_tables.add_argument("--max-entries-per-table", type=int, default=32)
+        data_tables.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the data-table recovery query in the transient memory KB.",
+        )
+
         project_proto_diff = subparsers.add_parser(
             "project-prototype-diff",
             help=(
@@ -1052,6 +1102,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_function_start_explain(args, formatter)
         if args.windows_action == "project-memory-access-query":
             return _execute_project_memory_access_query(args, formatter)
+        if args.windows_action == "project-data-tables":
+            return _execute_project_data_table_facts(args, formatter)
         if args.windows_action == "project-prototype-diff":
             return _execute_project_prototype_diff(args, formatter)
         if args.windows_action == "bootstrap-project-facts":
@@ -1871,6 +1923,58 @@ def _execute_project_memory_access_query(
         )
     else:
         formatter.output_plain(_format_project_memory_access_query_human(result))
+    return 0
+
+
+def _execute_project_data_table_facts(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_data_table_facts()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectDataTableFactsArgs(
+            project_path=args.project_path,
+            binary_id=args.binary_id,
+            binary_path=args.binary_path,
+            table_kind=args.table_kind,
+            name_contains=args.name_contains,
+            min_entries=args.min_entries,
+            min_confidence=args.min_confidence,
+            include_native_code_pointers=args.include_native_code_pointers,
+            max_tables=args.max_tables,
+            max_entries_per_table=args.max_entries_per_table,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "project_path": result.project_path,
+                        "binary_id": result.binary_id,
+                        "total_candidate_count": result.total_candidate_count,
+                        "returned_count": result.returned_count,
+                        "summary_by_kind": result.summary_by_kind,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "data_table", "data": item.model_dump(mode="json")}
+                    for item in result.tables
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_data_table_facts_human(result))
     return 0
 
 
@@ -2859,6 +2963,44 @@ def _format_project_memory_access_query_human(
         )
     if len(result.rows) > 20:
         lines.append(f"  ... {len(result.rows) - 20} more")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_data_table_facts_human(
+    result: WindowsProjectDataTableFactsResult,
+) -> str:
+    lines = [
+        "Windows project data tables",
+        f"  project={result.project_path}",
+        (f"  returned={result.returned_count}/{result.total_candidate_count}"),
+        f"  coverage={','.join(result.coverage) or '-'}",
+    ]
+    if result.summary_by_kind:
+        summary = ", ".join(
+            f"{key}:{value}" for key, value in result.summary_by_kind.items()
+        )
+        lines.append(f"  kinds={summary}")
+    for table in result.tables[:20]:
+        lines.append(
+            f"  {table.table_kind:<20} {table.table or '-'} "
+            f"entries={table.entry_count} source={table.source} "
+            f"name={table.name or '-'} conf={table.confidence:.2f} "
+            f"relevance={','.join(table.security_relevance) or '-'}"
+        )
+        for entry in table.entries[:4]:
+            target = entry.target_name or entry.target or entry.slot or "-"
+            source = entry.src_function_name or entry.src_function or entry.src or "-"
+            lines.append(
+                f"    [{entry.index if entry.index is not None else '-'}] "
+                f"{target} from={source} evidence={entry.evidence}"
+            )
+        if len(table.entries) > 4:
+            lines.append(f"    ... {len(table.entries) - 4} more entries")
+    if len(result.tables) > 20:
+        lines.append(f"  ... {len(result.tables) - 20} more tables")
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)

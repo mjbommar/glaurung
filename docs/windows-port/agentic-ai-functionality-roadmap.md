@@ -173,6 +173,18 @@ object kind, role hint, field, and data target. This closes the first
 query loop from low-level memory normalization to IDA/Ghidra-style
 "who reads/writes this field or global?" review.
 
+Update: `windows_project_data_table_facts` now groups persisted
+`data_labels`, data xrefs, and `function_chunk_facts` into first-class
+table candidates. It classifies dispatch tables, callback arrays,
+vtables, jump tables, selector-indexed globals, import-thunk tables,
+code-pointer tables, and generic global arrays, and returns table VA,
+type/size, slot size, entry count, xref counts, source functions,
+sampled entries, confidence, reason codes, and security relevance
+hints. When a binary path is provided, it can also attach native PE
+code-pointer table scan rows. This is the first table-object layer
+above raw refs and labels, and it gives rules a stable target for
+dispatch/callback/table bug classes.
+
 Update: `windows_function_start_explain` and
 `windows_candidate_start_worklist` now consume native per-address
 `scan_rejections` from the comparison stats. A function-start answer can
@@ -1918,6 +1930,18 @@ Validated high-level replay scope:
   queries, write/read-write filtering, global data-target lookup,
   summaries, CLI JSON output, KB evidence-node creation, and
   `memory_agent` registration. The full
+  `uv run pytest python/tests/test_windows_*.py -q` sweep also passed
+  with one skip.
+- Latest project data-table validation: scoped `uvx ruff check`, `uvx
+  ty check`, `git diff --check`, and focused `uv run pytest` passed for
+  `windows_project_data_table_facts.py`, Windows CLI registration,
+  `memory_agent.py`, `test_windows_project_data_table_facts_tool.py`,
+  `test_windows_project_data_label_facts_tool.py`, and
+  `test_windows_project_xref_query_tool.py`. Tests cover dispatch-table
+  recovery from data labels/xrefs, callback-array filtering, vtable
+  classification, import-thunk table grouping from function chunks, CLI
+  JSON output, KB evidence-node creation, and `memory_agent`
+  registration. The full
   `uv run pytest python/tests/test_windows_*.py -q` sweep also passed
   with one skip.
 
