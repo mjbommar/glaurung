@@ -47,6 +47,11 @@ from glaurung.llm.tools.windows_project_fact_manifest import (
     WindowsProjectFactManifestResult,
     build_tool as build_windows_project_fact_manifest,
 )
+from glaurung.llm.tools.windows_project_function_chunk_facts import (
+    WindowsProjectFunctionChunkFactsArgs,
+    WindowsProjectFunctionChunkFactsResult,
+    build_tool as build_windows_project_function_chunk_facts,
+)
 from glaurung.llm.tools.windows_project_xref_query import (
     WindowsProjectXrefQueryArgs,
     WindowsProjectXrefQueryResult,
@@ -388,6 +393,45 @@ class WindowsCommand(BaseCommand):
             "--add-to-kb",
             action="store_true",
             help="Record the xref query in the transient memory KB",
+        )
+
+        project_chunks = subparsers.add_parser(
+            "project-function-chunks",
+            help=(
+                "Query function chunk, thunk, tailcall, and shared-tail facts "
+                "from a .glaurung project"
+            ),
+        )
+        self._add_common_child_arguments(project_chunks)
+        project_chunks.add_argument("--project-path", required=True)
+        project_chunks.add_argument("--va", type=lambda value: int(value, 0))
+        project_chunks.add_argument(
+            "--owner-entry-va",
+            type=lambda value: int(value, 0),
+            help="Filter by owning function entry VA.",
+        )
+        project_chunks.add_argument(
+            "--chunk-kind",
+            help=(
+                "Filter by chunk kind, for example import_thunk, jump_thunk, "
+                "shared_tail_candidate, split_body_candidate, or pdata_body."
+            ),
+        )
+        project_chunks.add_argument(
+            "--relation-kind",
+            help="Filter by relation kind, for example owns, thunk_to, or tailcall_to.",
+        )
+        project_chunks.add_argument(
+            "--target-va",
+            type=lambda value: int(value, 0),
+            help="Filter by thunk/tail target VA.",
+        )
+        project_chunks.add_argument("--min-confidence", type=float, default=0.0)
+        project_chunks.add_argument("--max-rows", type=int, default=64)
+        project_chunks.add_argument(
+            "--add-to-kb",
+            action="store_true",
+            help="Record the chunk query in the transient memory KB.",
         )
 
         bootstrap_project = subparsers.add_parser(
@@ -809,6 +853,8 @@ class WindowsCommand(BaseCommand):
             return _execute_project_fact_manifest(args, formatter)
         if args.windows_action == "project-xrefs":
             return _execute_project_xref_query(args, formatter)
+        if args.windows_action == "project-function-chunks":
+            return _execute_project_function_chunks(args, formatter)
         if args.windows_action == "bootstrap-project-facts":
             return _execute_bootstrap_project_facts(args, formatter)
         if args.windows_action == "blocker-task-plan":
@@ -1287,6 +1333,53 @@ def _execute_project_xref_query(
         )
     else:
         formatter.output_plain(_format_project_xref_query_human(result))
+    return 0
+
+
+def _execute_project_function_chunks(
+    args: argparse.Namespace,
+    formatter: BaseFormatter,
+) -> int:
+    tool = build_windows_project_function_chunk_facts()
+    artifact = g.triage.analyze_bytes(b"MZ")
+    ctx = MemoryContext(file_path=str(args.project_path), artifact=artifact)
+    result = tool.run(
+        ctx=ctx,
+        kb=ctx.kb,
+        args=WindowsProjectFunctionChunkFactsArgs(
+            project_path=args.project_path,
+            va=args.va,
+            owner_entry_va=args.owner_entry_va,
+            chunk_kind=args.chunk_kind,
+            relation_kind=args.relation_kind,
+            target_va=args.target_va,
+            min_confidence=args.min_confidence,
+            max_rows=args.max_rows,
+            add_to_kb=args.add_to_kb,
+        ),
+    )
+    payload = result.model_dump(mode="json")
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+    elif formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl(
+            [
+                {
+                    "type": "summary",
+                    "data": {
+                        "project_path": result.project_path,
+                        "chunk_count": result.chunk_count,
+                        "coverage": result.coverage,
+                    },
+                },
+                *(
+                    {"type": "chunk", "data": item.model_dump(mode="json")}
+                    for item in result.chunks
+                ),
+            ]
+        )
+    else:
+        formatter.output_plain(_format_project_function_chunks_human(result))
     return 0
 
 
@@ -1994,6 +2087,36 @@ def _format_project_xref_query_human(result: WindowsProjectXrefQueryResult) -> s
         )
     if len(result.rows) > 20:
         lines.append(f"  ... {len(result.rows) - 20} more")
+    if result.missing_capabilities:
+        lines.append("Missing:")
+        lines.extend(f"  {item}" for item in result.missing_capabilities)
+    return "\n".join(lines)
+
+
+def _format_project_function_chunks_human(
+    result: WindowsProjectFunctionChunkFactsResult,
+) -> str:
+    lines = [
+        "Windows project function chunks",
+        (
+            f"  returned={result.chunk_count} "
+            f"coverage={','.join(result.coverage) or '-'}"
+        ),
+        f"  project={result.project_path}",
+    ]
+    for chunk in result.chunks[:20]:
+        owner = _format_optional_va(chunk.owner_entry_va)
+        start = _format_optional_va(chunk.chunk_start_va)
+        end = _format_optional_va(chunk.chunk_end_va)
+        target = chunk.target_name or _format_optional_va(chunk.target_va)
+        name = chunk.name or "-"
+        lines.append(
+            f"  {chunk.chunk_kind:<28} {chunk.relation_kind:<16} "
+            f"owner={owner} range={start}..{end} target={target} "
+            f"conf={chunk.confidence:.2f} source={chunk.source} name={name}"
+        )
+    if len(result.chunks) > 20:
+        lines.append(f"  ... {len(result.chunks) - 20} more")
     if result.missing_capabilities:
         lines.append("Missing:")
         lines.extend(f"  {item}" for item in result.missing_capabilities)

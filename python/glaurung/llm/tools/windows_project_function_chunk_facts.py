@@ -30,6 +30,13 @@ class ProjectFunctionChunkFact(BaseModel):
 
 class WindowsProjectFunctionChunkFactsArgs(BaseModel):
     project_path: str = Field(..., description="Path to a .glaurung SQLite project.")
+    va: int | None = Field(
+        None,
+        description=(
+            "Optional VA filter. Matches chunk starts, containing ranges, "
+            "owners, or targets."
+        ),
+    )
     owner_entry_va: int | None = Field(
         None,
         description="Optional owner function VA filter.",
@@ -103,6 +110,7 @@ class WindowsProjectFunctionChunkFactsTool(
         try:
             rows = windows_function_chunks.list_function_chunks(
                 project,
+                va=args.va,
                 owner_entry_va=args.owner_entry_va,
                 chunk_kind=args.chunk_kind,
                 relation_kind=args.relation_kind,
@@ -141,6 +149,7 @@ class WindowsProjectFunctionChunkFactsTool(
                     label="windows_project_function_chunk_facts",
                     props={
                         "project_path": str(project_path),
+                        "va": args.va,
                         "owner_entry_va": args.owner_entry_va,
                         "chunk_kind": args.chunk_kind,
                         "relation_kind": args.relation_kind,

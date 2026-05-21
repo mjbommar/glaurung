@@ -169,6 +169,7 @@ def index_function_chunks(
 def list_function_chunks(
     kb: PersistentKnowledgeBase,
     *,
+    va: int | None = None,
     owner_entry_va: int | None = None,
     chunk_kind: str | None = None,
     relation_kind: str | None = None,
@@ -179,6 +180,22 @@ def list_function_chunks(
     ensure_schema(kb)
     clauses = ["binary_id = ?", "confidence >= ?"]
     params: list[object] = [kb.binary_id, min_confidence]
+    if va is not None:
+        clauses.append(
+            """
+            (
+                owner_entry_va = ?
+                OR chunk_start_va = ?
+                OR target_va = ?
+                OR (
+                    chunk_end_va IS NOT NULL
+                    AND chunk_start_va <= ?
+                    AND chunk_end_va > ?
+                )
+            )
+            """
+        )
+        params.extend([va, va, va, va, va])
     if owner_entry_va is not None:
         clauses.append("owner_entry_va = ?")
         params.append(owner_entry_va)

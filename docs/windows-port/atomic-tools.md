@@ -201,6 +201,15 @@ sit below full IR/CFG bug-class scanners:
 - `windows_project_callgraph_slice` returns incoming callers and
   outgoing callees around one project function, with exact callsite VAs
   and caller/callee names from persisted `.glaurung` call xrefs.
+- `windows_project_function_chunk_facts` returns persisted first-class
+  function chunk, thunk, tailcall, shared-tail, and funclet facts. It
+  can filter by owner, chunk kind, relation kind, target VA, or an
+  arbitrary VA that matches a chunk start, containing range, owner, or
+  target. The same query is exposed through
+  `glaurung windows project-function-chunks` for IDA/Ghidra-style
+  boundary explanation during interactive review. These facts explain
+  function layout decisions; they are not vulnerability evidence by
+  themselves.
 - `windows_project_onehop_sink_chains` finds caller -> helper -> ASB
   sink call chains from persisted project call xrefs. It returns exact
   helper callsite VAs, helper function VAs/names, helper-local sink

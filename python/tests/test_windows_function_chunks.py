@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import glaurung as g
 
+from glaurung.cli.main import GlaurungCLI
 from glaurung.llm.kb import windows_boundaries, windows_function_chunks, xref_db
 from glaurung.llm.kb.adapters import import_triage
 from glaurung.llm.kb.persistent import PersistentKnowledgeBase
@@ -172,6 +174,74 @@ def test_windows_project_function_chunk_facts_filters_and_adds_evidence(
     assert "function_chunk_facts" in result.coverage
     assert "tailcall_chunk_facts" in result.coverage
     assert result.evidence_node_id is not None
+
+
+def test_windows_project_function_chunk_facts_filters_by_contained_va(
+    tmp_path: Path,
+) -> None:
+    binary = _write_pe64_with_pdata_and_thunks(tmp_path)
+    project_path = tmp_path / "driver.glaurung"
+    kb = PersistentKnowledgeBase.open(project_path, binary_path=binary)
+    try:
+        owner = IMAGE_BASE + TEXT_RVA
+        xref_db.set_function_name(kb, owner, "driver!Dispatch", set_by="pdb")
+        windows_function_chunks.index_function_chunks(kb, binary)
+    finally:
+        kb.close()
+
+    ctx = _ctx(tmp_path)
+    tool = build_tool()
+    result = tool.run(
+        ctx,
+        ctx.kb,
+        tool.input_model(
+            project_path=str(project_path),
+            va=IMAGE_BASE + TEXT_RVA + 0x10,
+            chunk_kind="pdata_body",
+        ),
+    )
+
+    assert result.chunk_count == 1
+    assert result.chunks[0].owner_entry_va == IMAGE_BASE + TEXT_RVA
+    assert result.chunks[0].chunk_end_va == IMAGE_BASE + TEXT_RVA + 0x60
+    assert "range_backed_chunk_facts" in result.coverage
+
+
+def test_windows_project_function_chunk_facts_cli_json(tmp_path: Path, capsys) -> None:
+    binary = _write_pe64_with_pdata_and_thunks(tmp_path)
+    project_path = tmp_path / "driver.glaurung"
+    kb = PersistentKnowledgeBase.open(project_path, binary_path=binary)
+    try:
+        owner = IMAGE_BASE + TEXT_RVA
+        target = owner + 0x80
+        xref_db.set_function_name(kb, owner, "driver!Dispatch", set_by="pdb")
+        xref_db.set_function_name(kb, target, "driver!SharedTail", set_by="pdb")
+        xref_db.add_xref(kb, owner + 0x50, target, "jump", owner)
+        xref_db.add_xref(kb, owner + 0x200, target, "jump", owner + 0x200)
+        windows_function_chunks.index_function_chunks(kb, binary)
+    finally:
+        kb.close()
+
+    rc = GlaurungCLI().run(
+        [
+            "windows",
+            "project-function-chunks",
+            "--project-path",
+            str(project_path),
+            "--chunk-kind",
+            "shared_tail_candidate",
+            "--va",
+            hex(target),
+            "--format",
+            "json",
+        ]
+    )
+
+    assert rc == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["chunk_count"] == 2
+    assert output["chunks"][0]["chunk_kind"] == "shared_tail_candidate"
+    assert output["chunks"][0]["chunk_start_va"] == target
 
 
 def test_memory_agent_registers_windows_project_function_chunk_facts() -> None:
