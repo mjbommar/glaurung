@@ -165,6 +165,24 @@ CREATE TABLE function_boundaries (
     detail_json TEXT NOT NULL DEFAULT '{}',
     indexed_at INTEGER NOT NULL
 );
+CREATE TABLE function_chunk_facts (
+    chunk_id INTEGER PRIMARY KEY,
+    binary_id INTEGER NOT NULL,
+    identity_key TEXT NOT NULL,
+    owner_entry_va INTEGER,
+    chunk_start_va INTEGER NOT NULL,
+    chunk_end_va INTEGER,
+    chunk_size INTEGER,
+    chunk_kind TEXT NOT NULL,
+    relation_kind TEXT NOT NULL,
+    target_va INTEGER,
+    target_name TEXT,
+    source TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    name TEXT,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    indexed_at INTEGER NOT NULL
+);
 """
     )
     conn.execute(
@@ -193,7 +211,9 @@ CREATE TABLE function_boundaries (
     conn.execute(
         "INSERT INTO stack_frame_vars VALUES (1, 0x1000, -8, 'var_8', 'ULONG', 1, 'auto', 0)"
     )
-    conn.execute("INSERT INTO comments VALUES (1, 0x1000, 'entry comment', 'manual', 0)")
+    conn.execute(
+        "INSERT INTO comments VALUES (1, 0x1000, 'entry comment', 'manual', 0)"
+    )
     conn.executemany(
         "INSERT INTO basic_blocks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
@@ -201,9 +221,7 @@ CREATE TABLE function_boundaries (
             (1, 0x1000, "sink", 0x1010, 0x1020, 2, 0, 0),
         ],
     )
-    conn.execute(
-        "INSERT INTO cfg_edges VALUES (1, 0x1000, 'entry', 'sink', 'cfg', 0)"
-    )
+    conn.execute("INSERT INTO cfg_edges VALUES (1, 0x1000, 'entry', 'sink', 'cfg', 0)")
     conn.executemany(
         "INSERT INTO cfg_dominance VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
@@ -221,6 +239,12 @@ CREATE TABLE function_boundaries (
     conn.execute(
         "INSERT INTO function_boundaries VALUES "
         "(1, 1, 0x1000, 0x1020, 0x20, 'pdb', 0.95, 'nt!Entry', '{}', 0)"
+    )
+    conn.execute(
+        "INSERT INTO function_chunk_facts VALUES "
+        "(1, 1, 'chunk-1', 0x1000, 0x1000, 0x1020, 0x20, "
+        "'public_symbol_range', 'owns', NULL, NULL, 'pdb', 0.95, "
+        "'nt!Entry', '{}', 0)"
     )
     conn.commit()
     conn.close()
@@ -251,6 +275,7 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert result.counts.cfg_dominance_count == 2
     assert result.counts.cfg_branch_fact_count == 1
     assert result.counts.function_boundary_count == 1
+    assert result.counts.function_chunk_fact_count == 1
     assert result.functions[0].canonical == "nt!Entry"
     assert result.functions[0].call_out_count == 1
     assert result.functions[0].stack_var_count == 1
@@ -262,13 +287,13 @@ def test_windows_project_fact_summary_counts_project_facts(tmp_path: Path) -> No
     assert "cfg_dominance" in result.coverage
     assert "branch_conditions" in result.coverage
     assert "function_boundaries" in result.coverage
+    assert "function_chunks" in result.coverage
     assert "persisted_cfg" not in result.missing_capabilities
     assert "cfg_dominance" not in result.missing_capabilities
     assert "branch_conditions" not in result.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
-        node.kind == NodeKind.evidence
-        and node.label == "windows_project_fact_summary"
+        node.kind == NodeKind.evidence and node.label == "windows_project_fact_summary"
         for node in ctx.kb.nodes()
     )
 

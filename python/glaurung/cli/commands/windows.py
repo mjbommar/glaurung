@@ -407,6 +407,12 @@ class WindowsCommand(BaseCommand):
             default=True,
         )
         bootstrap_project.add_argument(
+            "--no-index-function-chunks",
+            action="store_false",
+            dest="index_function_chunks",
+            default=True,
+        )
+        bootstrap_project.add_argument(
             "--no-index-data-xrefs",
             action="store_false",
             dest="index_data_xrefs",
@@ -1165,6 +1171,7 @@ def _execute_bootstrap_project_facts(
             index_callgraph=args.index_callgraph,
             index_pe_direct_calls=args.index_pe_direct_calls,
             index_function_boundaries=args.index_function_boundaries,
+            index_function_chunks=args.index_function_chunks,
             index_data_xrefs=args.index_data_xrefs,
             index_cfg=args.index_cfg,
             index_cfg_dominance=args.index_cfg_dominance,

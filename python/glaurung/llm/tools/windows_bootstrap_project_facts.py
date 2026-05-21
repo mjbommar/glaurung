@@ -16,6 +16,7 @@ from ..kb import (
     type_db,
     windows_boundaries,
     windows_callsite_facts,
+    windows_function_chunks,
     windows_sysinfo,
     xref_db,
 )
@@ -98,6 +99,13 @@ class WindowsBootstrapProjectFactsArgs(BaseModel):
         description=(
             "If true, persist confidence-ranked function-boundary candidates "
             "from PDB/public names, .pdata, and call-target facts."
+        ),
+    )
+    index_function_chunks: bool = Field(
+        True,
+        description=(
+            "If true, persist first-class function chunk, thunk, tailcall, "
+            "shared-tail, and funclet facts."
         ),
     )
     index_data_xrefs: bool = Field(
@@ -304,6 +312,26 @@ class WindowsBootstrapProjectFactsTool(
             else:
                 steps.append(
                     ProjectBootstrapStep(name="index_callgraph", ran=False, ok=True)
+                )
+
+            if args.index_function_chunks:
+                steps.append(
+                    _run_count_step(
+                        "index_function_chunks",
+                        lambda: windows_function_chunks.index_function_chunks(
+                            project,
+                            pe_path,
+                            force=args.force_reindex,
+                        ),
+                    )
+                )
+            else:
+                steps.append(
+                    ProjectBootstrapStep(
+                        name="index_function_chunks",
+                        ran=False,
+                        ok=True,
+                    )
                 )
 
             if args.index_data_xrefs:
@@ -578,6 +606,8 @@ def _fact_coverage(
         coverage.append("persisted_cfg")
     if _step_has_facts(by_name.get("index_function_boundaries")):
         coverage.append("function_boundaries")
+    if _step_has_facts(by_name.get("index_function_chunks")):
+        coverage.append("function_chunks")
     if _step_has_facts(by_name.get("index_cfg_dominance")):
         coverage.append("cfg_dominance")
     if _step_has_facts(by_name.get("index_branch_conditions")):
@@ -618,6 +648,10 @@ def _missing_capabilities(
         by_name.get("index_function_boundaries")
     ):
         missing.append("function_boundaries")
+    if args.index_function_chunks and not _step_has_facts(
+        by_name.get("index_function_chunks")
+    ):
+        missing.append("function_chunks")
     if args.index_cfg_dominance and not _step_has_facts(
         by_name.get("index_cfg_dominance")
     ):
@@ -740,6 +774,8 @@ def _fact_sources(
         sources.append("cfg_branch_facts")
     if summary.counts.function_boundary_count:
         sources.append("function_boundaries")
+    if summary.counts.function_chunk_fact_count:
+        sources.append("function_chunk_facts")
     if summary.counts.sysinfo_dispatch_count:
         sources.append("windows_sysinfo_dispatch")
     if summary.counts.callsite_path_condition_count:
@@ -762,6 +798,7 @@ def _manifest_counts(summary: WindowsProjectFactSummaryResult) -> dict[str, int]
         "cfg_dominance_count": counts.cfg_dominance_count,
         "cfg_branch_fact_count": counts.cfg_branch_fact_count,
         "function_boundary_count": counts.function_boundary_count,
+        "function_chunk_fact_count": counts.function_chunk_fact_count,
         "sysinfo_dispatch_count": counts.sysinfo_dispatch_count,
         "callsite_argument_fact_count": counts.callsite_argument_fact_count,
         "callsite_path_condition_count": counts.callsite_path_condition_count,

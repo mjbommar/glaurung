@@ -278,6 +278,9 @@ from ..tools.windows_project_cfg_path_query import (
 from ..tools.windows_project_branch_condition_facts import (
     build_tool as build_windows_project_branch_condition_facts,
 )
+from ..tools.windows_project_function_chunk_facts import (
+    build_tool as build_windows_project_function_chunk_facts,
+)
 from ..tools.windows_project_sysinfo_dispatch_facts import (
     build_tool as build_windows_project_sysinfo_dispatch_facts,
 )
@@ -1269,6 +1272,9 @@ def register_analysis_tools(
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_branch_condition_facts())
+    )
+    agent._function_toolset.add_tool(
+        tool_to_pyd_ai(build_windows_project_function_chunk_facts())
     )
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_project_sysinfo_dispatch_facts())

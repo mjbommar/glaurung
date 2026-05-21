@@ -35,6 +35,7 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
         type_db,
         windows_boundaries,
         windows_callsite_facts,
+        windows_function_chunks,
         windows_sysinfo,
         xref_db,
     )
@@ -47,6 +48,9 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
 
     def fake_index_function_boundaries(*_args, **_kwargs) -> int:
         return 29
+
+    def fake_index_function_chunks(*_args, **_kwargs) -> int:
+        return 41
 
     def fake_index_data_xrefs(*_args, **_kwargs) -> int:
         return 11
@@ -86,6 +90,11 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
         windows_boundaries,
         "index_function_boundaries",
         fake_index_function_boundaries,
+    )
+    monkeypatch.setattr(
+        windows_function_chunks,
+        "index_function_chunks",
+        fake_index_function_chunks,
     )
     monkeypatch.setattr(xref_db, "index_data_xrefs", fake_index_data_xrefs)
     monkeypatch.setattr(cfg_db, "index_cfg", fake_index_cfg)
@@ -127,6 +136,7 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
         ("index_pe_direct_calls", True, 23),
         ("index_function_boundaries", True, 29),
         ("index_callgraph", True, 7),
+        ("index_function_chunks", True, 41),
         ("index_data_xrefs", True, 11),
         ("index_cfg", True, 13),
         ("index_cfg_dominance", True, 17),
@@ -139,6 +149,7 @@ def test_windows_bootstrap_project_facts_composes_project_steps(
     assert result.pdb_counts.missing_layouts == ["_MISSING"]
     assert "call_xrefs" in result.fact_coverage
     assert "function_boundaries" in result.fact_coverage
+    assert "function_chunks" in result.fact_coverage
     assert "data_xrefs" in result.fact_coverage
     assert "persisted_cfg" in result.fact_coverage
     assert "cfg_dominance" in result.fact_coverage
@@ -171,6 +182,7 @@ def test_windows_bootstrap_project_facts_can_skip_steps(tmp_path: Path) -> None:
             index_callgraph=False,
             index_pe_direct_calls=False,
             index_function_boundaries=False,
+            index_function_chunks=False,
             index_data_xrefs=False,
             index_cfg=False,
             index_cfg_dominance=False,
@@ -186,6 +198,7 @@ def test_windows_bootstrap_project_facts_can_skip_steps(tmp_path: Path) -> None:
         ("index_pe_direct_calls", False, True),
         ("index_function_boundaries", False, True),
         ("index_callgraph", False, True),
+        ("index_function_chunks", False, True),
         ("index_data_xrefs", False, True),
         ("index_cfg", False, True),
         ("index_cfg_dominance", False, True),
@@ -224,6 +237,7 @@ def test_windows_bootstrap_project_facts_writes_project_fact_manifest(
             index_callgraph=False,
             index_pe_direct_calls=False,
             index_function_boundaries=False,
+            index_function_chunks=False,
             index_data_xrefs=False,
             index_cfg=False,
             index_cfg_dominance=False,
@@ -258,6 +272,7 @@ def test_windows_bootstrap_project_facts_writes_project_fact_manifest(
     )
     assert [record.id for record in manifest_result.records] == ["driver_project"]
     assert manifest_result.records[0].counts.function_boundary_count == 0
+    assert manifest_result.records[0].counts.function_chunk_fact_count == 0
 
 
 def test_windows_cli_bootstrap_project_facts_json_skips_steps(
@@ -288,6 +303,7 @@ def test_windows_cli_bootstrap_project_facts_json_skips_steps(
             "--no-index-callgraph",
             "--no-index-pe-direct-calls",
             "--no-index-function-boundaries",
+            "--no-index-function-chunks",
             "--no-index-data-xrefs",
             "--no-index-cfg",
             "--no-index-cfg-dominance",
@@ -316,6 +332,7 @@ def test_windows_cli_bootstrap_project_facts_json_skips_steps(
         ("index_pe_direct_calls", False, True),
         ("index_function_boundaries", False, True),
         ("index_callgraph", False, True),
+        ("index_function_chunks", False, True),
         ("index_data_xrefs", False, True),
         ("index_cfg", False, True),
         ("index_cfg_dominance", False, True),
@@ -334,6 +351,7 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
         pe_direct_calls,
         windows_boundaries,
         windows_callsite_facts,
+        windows_function_chunks,
         windows_sysinfo,
         xref_db,
     )
@@ -345,6 +363,9 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
         return 0
 
     def fake_index_function_boundaries(*_args, **_kwargs) -> int:
+        return 0
+
+    def fake_index_function_chunks(*_args, **_kwargs) -> int:
         return 0
 
     def fake_index_data_xrefs(*_args, **_kwargs) -> int:
@@ -373,6 +394,11 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
         windows_boundaries,
         "index_function_boundaries",
         fake_index_function_boundaries,
+    )
+    monkeypatch.setattr(
+        windows_function_chunks,
+        "index_function_chunks",
+        fake_index_function_chunks,
     )
     monkeypatch.setattr(xref_db, "index_data_xrefs", fake_index_data_xrefs)
     monkeypatch.setattr(cfg_db, "index_cfg", fake_index_cfg)
@@ -409,6 +435,7 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
         ("index_pe_direct_calls", True, 0),
         ("index_function_boundaries", True, 0),
         ("index_callgraph", True, 0),
+        ("index_function_chunks", True, 0),
         ("index_data_xrefs", True, 3),
         ("index_cfg", True, 0),
         ("index_cfg_dominance", True, 0),
@@ -422,6 +449,7 @@ def test_windows_bootstrap_project_facts_zero_count_is_missing(
     assert "data_xrefs" not in result.missing_capabilities
     assert "persisted_cfg" in result.missing_capabilities
     assert "function_boundaries" in result.missing_capabilities
+    assert "function_chunks" in result.missing_capabilities
     assert "cfg_dominance" in result.missing_capabilities
     assert "branch_conditions" in result.missing_capabilities
     assert "sysinfo_dispatch" in result.missing_capabilities
