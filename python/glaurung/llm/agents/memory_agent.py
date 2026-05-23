@@ -576,6 +576,9 @@ StringEncoding = Literal["ascii", "utf16le", "utf16be"]
 
 def register_analysis_tools(
     agent: Agent[MemoryContext, AgentOutputT],
+    *,
+    model_name: str | None = None,
+    tool_filter: set[str] | None = None,
 ) -> Agent[MemoryContext, AgentOutputT]:
     """Register glaurung's memory/analysis tools onto an existing Agent.
 
@@ -583,7 +586,80 @@ def register_analysis_tools(
     (FunctionExplainAgent, VulnerabilityHuntAgent, …) can reuse the
     exact same tool surface while supplying their own system prompt
     and output schema.
+
+    Passing ``model_name`` lets the tool wrapper pick a provider-safe
+    default for pydantic-ai's ``strict`` flag. Anthropic caps strict-tool
+    count at 20; without this hint, registering the ~163-tool memory
+    surface against an Anthropic model fails with "Too many strict tools".
+    When ``model_name`` is omitted the legacy default (env-controlled)
+    is preserved for back-compat.
+
+    Passing ``tool_filter={'name1', 'name2', ...}`` (L5) restricts
+    registration to the named tools only. Names that don't match any
+    tool are silently ignored (so future renames don't break callers).
+    Pass ``None`` (the default) to register everything.
     """
+    from ..tools.base import (
+        default_tool_strict_for,
+        default_tool_strict_for_model,
+    )
+
+    target_strict = (
+        default_tool_strict_for_model(model_name)
+        if model_name is not None
+        else None  # legacy: env GLAURUNG_TOOL_STRICT or default-True
+    )
+    with default_tool_strict_for(target_strict):
+        agent = _register_analysis_tools_inner(agent)
+
+    # L5: if a filter is set, remove tools whose name is not in the
+    # filter from the agent's function toolset. The toolset's
+    # remove_tool() API isn't universally available, so we filter the
+    # underlying tool dict directly when possible.
+    if tool_filter is not None:
+        _apply_tool_filter(agent, tool_filter)
+    return agent
+
+
+def _apply_tool_filter(agent, tool_filter: set[str]) -> None:
+    """Best-effort prune of agent tools to names in ``tool_filter``.
+
+    pydantic-ai's Tool registry is exposed via ``agent._function_toolset``
+    in 1.x; the internal API isn't stable but the shape ('_tools' dict
+    keyed by tool name) has held across versions. We treat any failure
+    as a soft warning: the agent runs with extra tools rather than
+    refusing to start.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    toolset = getattr(agent, "_function_toolset", None)
+    if toolset is None:
+        log.warning("agent has no _function_toolset; tool filter not applied")
+        return
+    tools = getattr(toolset, "_tools", None) or getattr(toolset, "tools", None)
+    if tools is None:
+        log.warning("agent toolset has no _tools / tools attr; filter skipped")
+        return
+    if isinstance(tools, dict):
+        keep_names = {n for n in tool_filter}
+        drop = [n for n in list(tools.keys()) if n not in keep_names]
+        for n in drop:
+            tools.pop(n, None)
+        log.debug(
+            "tool_filter retained %d/%d tools (dropped %d)",
+            len(tools), len(tools) + len(drop), len(drop),
+        )
+        return
+    log.warning("tool registry has unexpected shape (%s); filter skipped",
+                type(tools).__name__)
+
+
+def _register_analysis_tools_inner(
+    agent: Agent[MemoryContext, AgentOutputT],
+) -> Agent[MemoryContext, AgentOutputT]:
+    """Implementation body: 164 tool_to_pyd_ai calls. Always called inside
+    a default_tool_strict_for(...) context so the per-model strict choice
+    propagates without touching individual registrations."""
     # Wrapper functions expose clear schemas and call atomic tools
 
     async def hash_file(
@@ -1746,7 +1822,18 @@ def register_analysis_tools(
     return agent
 
 
-def create_memory_agent(model: str | None = None) -> Agent[MemoryContext, str]:
-    """Foundation string-output agent with every analysis tool registered."""
+def create_memory_agent(
+    model: str | None = None,
+    *,
+    tool_filter: set[str] | None = None,
+) -> Agent[MemoryContext, str]:
+    """Foundation string-output agent with analysis tools registered.
+
+    When ``tool_filter`` is supplied (L5), only the named tools survive;
+    use :func:`glaurung.llm.tool_routing.select_tools_for_question` to
+    derive the filter from a free-text question.
+    """
     agent = create_foundation_agent(model=model)
-    return register_analysis_tools(agent)
+    return register_analysis_tools(
+        agent, model_name=model, tool_filter=tool_filter,
+    )

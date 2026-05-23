@@ -171,14 +171,17 @@ def prime_java_agent_context(
 
 
 def _default_tool_strict_for_model(model_name: str) -> bool:
-    """Choose pydantic-ai tool strictness for provider compatibility."""
+    """Choose pydantic-ai tool strictness for provider compatibility.
 
-    # Anthropic strict tool schemas are useful for small/simple toolsets, but
-    # Java analysis tools have many optional parameters. Keeping the typed
-    # schemas while disabling strict grammar compilation avoids Anthropic's
-    # optional-parameter and strict-tool-count limits. OpenAI/test keep strict
-    # mode by default.
-    return not model_name.startswith("anthropic:")
+    Thin compatibility shim: delegates to the canonical helper in
+    :mod:`glaurung.llm.tools.base` so memory + Java agents share one
+    source of truth. Anthropic caps strict-tool count at 20 and rejects
+    schemas with many optional parameters, so we default strict=False
+    there; OpenAI and test backends keep strict on.
+    """
+    from ..tools.base import default_tool_strict_for_model as _canonical
+
+    return _canonical(model_name)
 
 
 def build_java_triage_agent(model: str | None = None) -> Any:

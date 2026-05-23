@@ -48,9 +48,13 @@ class ModelHyperparameters(BaseModel):
         default=None, description="Random seed for deterministic output"
     )
 
-    def to_model_kwargs(self) -> Dict[str, Any]:
-        """Convert to kwargs for pydantic-ai model calls."""
-        kwargs = {}
+    def to_model_kwargs(self, *, model_name: str | None = None) -> Dict[str, Any]:
+        """Convert to kwargs for pydantic-ai ModelSettings.
+
+        When ``model_name`` indicates an OpenAI model, the project default
+        ``service_tier`` (typically 'flex') is added via ``extra_body``.
+        """
+        kwargs: Dict[str, Any] = {}
         if self.temperature is not None:
             kwargs["temperature"] = self.temperature
         if self.top_p is not None:
@@ -58,13 +62,22 @@ class ModelHyperparameters(BaseModel):
         if self.top_k is not None:
             kwargs["top_k"] = self.top_k
         if self.max_tokens is not None:
-            kwargs["max_output_tokens"] = self.max_tokens
+            kwargs["max_tokens"] = self.max_tokens
         if self.presence_penalty is not None:
             kwargs["presence_penalty"] = self.presence_penalty
         if self.frequency_penalty is not None:
             kwargs["frequency_penalty"] = self.frequency_penalty
         if self.seed is not None:
             kwargs["seed"] = self.seed
+        # OpenAI service_tier handoff. pydantic-ai 1.x forwards
+        # ModelSettings.extra_body verbatim to the provider's request.
+        if model_name and model_name.startswith("openai:"):
+            from ..config import get_config
+            tier = get_config().openai_service_tier
+            if tier and tier != "default":
+                existing = kwargs.get("extra_body") or {}
+                existing["service_tier"] = tier
+                kwargs["extra_body"] = existing
         return kwargs
 
 

@@ -1,6 +1,6 @@
 # CLAUDE.md - Project Context
-Generated: 2026-05-15T00:13:01.144314
-Modules: 13
+Generated: 2026-05-22T17:57:50.708687
+Modules: 14
 
 ## 📝 This file is auto-generated from .claude/modules/
 To update: Edit modules in `.claude/modules/` then run `python cm.py compile`
@@ -18,7 +18,7 @@ This is a **REAL** project that will be used by **REAL** people who depend on it
 
 ### NEVER:
 - ❌ Mock or fake test data without explicit permission
-- ❌ Skip validation or testing to save time  
+- ❌ Skip validation or testing to save time
 - ❌ Make assumptions about data structures
 - ❌ Guess API responses or behaviors
 - ❌ Say "done" without testing
@@ -85,7 +85,7 @@ This is a **REAL** project that will be used by **REAL** people who depend on it
 
 ### NEVER:
 - ❌ Mock or fake test data without explicit permission
-- ❌ Skip validation or testing to save time
+- ❌ Skip validation or testing to save time  
 - ❌ Make assumptions about data structures
 - ❌ Guess API responses or behaviors
 - ❌ Say "done" without testing
@@ -563,6 +563,110 @@ Good task decomposition:
 
 | Task | ❌ WRONG | ✅ RIGHT | Why |
 |------|----------|----------|-----|
+| Explore package | `dir(package)` | `uvx pyenvsearch toc package` | pyenvsearch gives structured view |
+| Find class/method | Manual search | `uvx pyenvsearch class ClassName` | Semantic search is faster |
+| Install library | `pip install requests` | `uv add requests` | It's a dependency |
+| Install dev tool | `uv add --group dev ruff` | `uvx ruff` | It's a tool |
+| Type check | `uvx mypy` | `uvx ty check` | Use ty, not mypy! |
+| Format code | `uvx black .` | `uvx ruff format .` | Use ruff, not black! |
+| Lint code | `uvx pylint` | `uvx ruff check .` | Use ruff, not pylint! |
+| Run tests | `python -m pytest` | `uvx pytest` | Tool execution |
+
+## Python Version Selection
+```bash
+uv python list          # See all available Python versions
+uv python pin 3.13      # Pin to Python 3.13 (recommended - latest stable)
+```
+
+## Package Discovery & Exploration
+
+### 🔍 Use pyenvsearch - Essential Tool for Package Navigation
+```bash
+uvx pyenvsearch find httpx          # Find where package is installed
+uvx pyenvsearch toc fastapi         # Generate table of contents
+uvx pyenvsearch summarize requests  # Get AI-powered overview
+uvx pyenvsearch list-classes pandas # List all classes in package
+uvx pyenvsearch search "async def" --package httpx
+uvx pyenvsearch class HttpClient
+uvx pyenvsearch method get --class HttpClient
+```
+
+## Package Management
+
+**FOR DEPENDENCIES** (packages your code imports):
+```bash
+uv add requests pandas fastapi  # ✅ These go in pyproject.toml
+```
+
+**FOR TOOLS** (linters, formatters, type checkers, explorers):
+```bash
+uvx ty check       # ✅ Type checking with ty
+uvx ruff check .   # ✅ Linting with ruff
+uvx pytest         # ✅ Testing
+uvx pyenvsearch    # ✅ Package exploration
+```
+
+**NEVER DO THIS:**
+```bash
+uv add --group dev mypy  # ❌ NEVER use mypy - use ty instead
+uv add --group dev black # ❌ NEVER use black - use ruff format instead
+pip install anything     # ❌ NEVER use pip at all
+```
+
+## Code Quality
+
+**USE MODERN TOOLS ONLY:**
+- **Type checking**: `ty` (NOT mypy, NOT pyright)
+- **Formatting**: `ruff format` (NOT black)
+- **Linting**: `ruff check` (NOT pylint, NOT flake8)
+
+### Commands to use:
+```bash
+uvx ty check                    # Check all files
+uvx ruff format .               # Format all Python files
+uvx ruff check .                # Lint all files
+uvx ruff check --fix .          # Auto-fix issues
+```
+
+## Project Setup
+```bash
+uv init                 # Create new project
+uv python pin 3.13      # Use latest Python
+uv venv                 # Create virtual environment
+```
+
+## Testing
+- Use `pytest` for testing
+- Create real integration tests
+- Never mock external dependencies without explicit approval
+- Run: `uv run pytest`
+
+## Best Practices
+- **Explore before coding**: Use pyenvsearch to understand packages
+- **Type hints for all functions**: Use `ty` to verify
+- **Docstrings for public APIs**: Clear and concise
+- **Follow PEP 8 style guide**: Use `ruff` for enforcement
+- **Use pathlib for file operations**: Modern path handling
+- **Prefer dataclasses/pydantic for data models**: Type-safe data
+
+---
+
+# Modern Python Development
+
+## 🚨 ABSOLUTE RULES - USE MODERN TOOLS ONLY
+
+1. **USE `pyenvsearch` for package exploration - Essential for understanding code**
+2. **USE `ty` for type checking - NEVER mypy or pyright**
+3. **USE `ruff` for formatting and linting - NEVER black or pylint**
+4. **NEVER install development tools as dependencies**
+5. **ALWAYS use uvx for ephemeral tool execution**
+
+## ⚠️ CRITICAL: Command Rules
+
+### The Golden Rule: uvx for tools, uv add for dependencies
+
+| Task | ❌ WRONG | ✅ RIGHT | Why |
+|------|----------|----------|-----|
 | Explore package | `dir(package)` or browsing GitHub | `uvx pyenvsearch toc package` | pyenvsearch gives structured view |
 | Find class/method | Manual search or grep | `uvx pyenvsearch class ClassName` | Semantic search is faster |
 | Understand package | Read docs only | `uvx pyenvsearch summarize package` | AI-powered insights |
@@ -746,107 +850,66 @@ uvx pyenvsearch api-guide <package>
 
 ---
 
-# Modern Python Development
+# LLM Model Defaults
 
-## 🚨 ABSOLUTE RULES - USE MODERN TOOLS ONLY
+## REQUIRED default for Glaurung LLM calls
 
-1. **USE `pyenvsearch` for package exploration - Essential for understanding code**
-2. **USE `ty` for type checking - NEVER mypy or pyright**
-3. **USE `ruff` for formatting and linting - NEVER black or pylint**
-4. **NEVER install development tools as dependencies**
-5. **ALWAYS use uvx for ephemeral tool execution**
+**Model:** `openai:gpt-5.4-mini`
+**OpenAI service tier:** `flex`
 
-## ⚠️ CRITICAL: Command Rules
+This applies to every code path that calls an LLM in this repo:
+`glaurung ask`, `glaurung name-func`, `glaurung windows analyst`,
+the L2 critic, the L3 CWE sweep, and the L1 structured-output runner.
 
-### The Golden Rule: uvx for tools, uv add for dependencies
+Wired into `python/glaurung/llm/config.py`:
 
-| Task | ❌ WRONG | ✅ RIGHT | Why |
-|------|----------|----------|-----|
-| Explore package | `dir(package)` | `uvx pyenvsearch toc package` | pyenvsearch gives structured view |
-| Find class/method | Manual search | `uvx pyenvsearch class ClassName` | Semantic search is faster |
-| Install library | `pip install requests` | `uv add requests` | It's a dependency |
-| Install dev tool | `uv add --group dev ruff` | `uvx ruff` | It's a tool |
-| Type check | `uvx mypy` | `uvx ty check` | Use ty, not mypy! |
-| Format code | `uvx black .` | `uvx ruff format .` | Use ruff, not black! |
-| Lint code | `uvx pylint` | `uvx ruff check .` | Use ruff, not pylint! |
-| Run tests | `python -m pytest` | `uvx pytest` | Tool execution |
-
-## Python Version Selection
-```bash
-uv python list          # See all available Python versions
-uv python pin 3.13      # Pin to Python 3.13 (recommended - latest stable)
+```python
+LLMConfig.default_model       = "openai:gpt-5.4-mini"
+LLMConfig.fallback_model      = "anthropic:claude-haiku-4-5"
+LLMConfig.summarizer_model    = "openai:gpt-5.4-mini"
+LLMConfig.risk_scorer_model   = "openai:gpt-5.4-mini"
+LLMConfig.ioc_model           = "openai:gpt-5.4-mini"
+LLMConfig.openai_service_tier = "flex"
 ```
 
-## Package Discovery & Exploration
+`ModelHyperparameters.to_model_kwargs(model_name=...)` adds
+`extra_body={"service_tier": "<tier>"}` automatically when the model
+name starts with `openai:` and the tier is not `"default"`. The
+critic and findings runner both pass `model_name=` through.
 
-### 🔍 Use pyenvsearch - Essential Tool for Package Navigation
-```bash
-uvx pyenvsearch find httpx          # Find where package is installed
-uvx pyenvsearch toc fastapi         # Generate table of contents
-uvx pyenvsearch summarize requests  # Get AI-powered overview
-uvx pyenvsearch list-classes pandas # List all classes in package
-uvx pyenvsearch search "async def" --package httpx
-uvx pyenvsearch class HttpClient
-uvx pyenvsearch method get --class HttpClient
+Environment overrides:
+
+```
+GLAURUNG_LLM_MODEL=openai:gpt-5.4-mini      # also set automatically by config
+GLAURUNG_OPENAI_SERVICE_TIER=flex           # 'flex' | 'default' | 'priority'
 ```
 
-## Package Management
+## When NOT to swap models
 
-**FOR DEPENDENCIES** (packages your code imports):
-```bash
-uv add requests pandas fastapi  # ✅ These go in pyproject.toml
-```
+If a sweep hits OpenAI's 128-tool cap (`Invalid 'tools': array too
+long. Expected an array with maximum length 128, but got an array
+with length 218 instead.`), **DO NOT** fall back to Anthropic.
+That cap is exactly what L5 routing exists to solve.
 
-**FOR TOOLS** (linters, formatters, type checkers, explorers):
-```bash
-uvx ty check       # ✅ Type checking with ty
-uvx ruff check .   # ✅ Linting with ruff
-uvx pytest         # ✅ Testing
-uvx pyenvsearch    # ✅ Package exploration
-```
+Use one of:
 
-**NEVER DO THIS:**
-```bash
-uv add --group dev mypy  # ❌ NEVER use mypy - use ty instead
-uv add --group dev black # ❌ NEVER use black - use ruff format instead
-pip install anything     # ❌ NEVER use pip at all
-```
+* Pass `--route` on the CLI (deterministic intent router picks <=30
+  tools per question).
+* Pass `tool_filter={'name1', ...}` to `register_analysis_tools`
+  programmatically.
+* Set `GLAURUNG_AGENT_ROUTE=1` in the environment as a global default.
 
-## Code Quality
+If a sweep hits Anthropic's 4M-tokens-per-minute IPM ceiling, the
+right answer is to lower `max_parallel` in `sweep_binary` (default
+is 1; raising it in distributed runs is on you to coordinate),
+**not** to swap to a different model family.
 
-**USE MODERN TOOLS ONLY:**
-- **Type checking**: `ty` (NOT mypy, NOT pyright)
-- **Formatting**: `ruff format` (NOT black)
-- **Linting**: `ruff check` (NOT pylint, NOT flake8)
+## When explicit overrides are appropriate
 
-### Commands to use:
-```bash
-uvx ty check                    # Check all files
-uvx ruff format .               # Format all Python files
-uvx ruff check .                # Lint all files
-uvx ruff check --fix .          # Auto-fix issues
-```
-
-## Project Setup
-```bash
-uv init                 # Create new project
-uv python pin 3.13      # Use latest Python
-uv venv                 # Create virtual environment
-```
-
-## Testing
-- Use `pytest` for testing
-- Create real integration tests
-- Never mock external dependencies without explicit approval
-- Run: `uv run pytest`
-
-## Best Practices
-- **Explore before coding**: Use pyenvsearch to understand packages
-- **Type hints for all functions**: Use `ty` to verify
-- **Docstrings for public APIs**: Clear and concise
-- **Follow PEP 8 style guide**: Use `ruff` for enforcement
-- **Use pathlib for file operations**: Modern path handling
-- **Prefer dataclasses/pydantic for data models**: Type-safe data
+Users can pass `--model anthropic:claude-opus-4-7` (or any other
+provider:model string) for one-off interactive runs where the
+heavier model is justified. The default stays at gpt-5.4-mini for
+batched / automated work.
 
 ---
 

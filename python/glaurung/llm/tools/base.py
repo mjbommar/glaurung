@@ -47,10 +47,66 @@ class MemoryTool(ABC, Generic[InputModelT, OutputModelT]):
     ) -> OutputModelT: ...
 
 
+# Module-level default for tool_to_pyd_ai's `strict` resolution.
+# Touched by set_default_tool_strict() / default_tool_strict_for_model()
+# below; left as None so the env-var fallback path still works.
+_DEFAULT_TOOL_STRICT: bool | None = None
+
+
+def default_tool_strict_for_model(model_name: str | None) -> bool:
+    """Choose pydantic-ai tool strictness based on the target LLM provider.
+
+    Anthropic limits strict-tool counts (currently 20). Glaurung's memory
+    agent registers ~163 tools, so strict mode at the global default
+    overflows that cap. OpenAI's overall tool ceiling (currently 128) is
+    a separate concern handled by per-question tool routing.
+
+    Returns True if strict schemas are safe for the model, False if not.
+    """
+    if not model_name:
+        return True
+    if model_name.startswith("anthropic:"):
+        return False
+    return True
+
+
+def set_default_tool_strict(strict: bool | None) -> bool | None:
+    """Override the module-level strict default used by tool_to_pyd_ai when
+    callers don't pass `strict=` explicitly.
+
+    Returns the previous value so callers can restore it (typically via
+    a try/finally in :func:`register_analysis_tools`).
+    """
+    global _DEFAULT_TOOL_STRICT
+    prev = _DEFAULT_TOOL_STRICT
+    _DEFAULT_TOOL_STRICT = strict
+    return prev
+
+
+class default_tool_strict_for(  # noqa: N801 -- behaves like a ctxmgr
+    object  # ContextManager-style class so it works as `with ...:` and standalone
+):
+    """Context manager that sets the strict-default for the duration of a
+    block, then restores it. Use to apply a model-aware default to many
+    tool_to_pyd_ai calls without touching each call site.
+    """
+
+    def __init__(self, strict: bool | None) -> None:
+        self._target = strict
+        self._prev: bool | None = None
+
+    def __enter__(self) -> "default_tool_strict_for":
+        self._prev = set_default_tool_strict(self._target)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        set_default_tool_strict(self._prev)
+
+
 def tool_to_pyd_ai(
     tool: MemoryTool[InputModelT, OutputModelT],
     *,
-    strict: bool | None = True,
+    strict: bool | None = None,
     include_return_schema: bool | None = False,
 ) -> "Tool[MemoryContext]":
     """Wrap a MemoryTool into a pydantic-ai Tool.
@@ -73,7 +129,21 @@ def tool_to_pyd_ai(
     to models and problematic for providers with strict schema transforms.
     """
 
+    import os
     from pydantic_ai import Tool
+
+    # Resolve strict default in priority order:
+    #   1. Explicit kwarg passed by the caller wins.
+    #   2. Module-level default set via set_default_tool_strict() (used by
+    #      register_analysis_tools to apply a model-aware default to all
+    #      164+ tool_to_pyd_ai call sites without touching each one).
+    #   3. Env override GLAURUNG_TOOL_STRICT=0 globally relaxes; =1 forces on.
+    #   4. True for legacy back-compat.
+    if strict is None:
+        if _DEFAULT_TOOL_STRICT is not None:
+            strict = _DEFAULT_TOOL_STRICT
+        else:
+            strict = os.getenv("GLAURUNG_TOOL_STRICT", "1") != "0"
 
     # Build a function taking a pydantic-ai RunContext. Keep the parameter
     # unannotated so importing deterministic tools does not import pydantic_ai.

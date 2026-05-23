@@ -116,6 +116,8 @@ class AnalysisAgentFactory:
         model: Optional[str] = None,
         max_time_seconds: float = 120.0,
         max_tokens: int = 100_000,
+        *,
+        tool_filter: Optional[set[str]] = None,
     ) -> IterativeRefinementAgent:
         """
         Create an iterative agent with safe default settings.
@@ -124,6 +126,8 @@ class AnalysisAgentFactory:
             model: Optional model name
             max_time_seconds: Maximum execution time
             max_tokens: Maximum token budget
+            tool_filter: Optional set of tool names to restrict
+                registration to (L5 routing).
 
         Returns:
             Safely configured iterative agent
@@ -143,13 +147,15 @@ class AnalysisAgentFactory:
             no_progress_iterations=2,
         )
 
-        base_agent = create_memory_agent(model=model)
+        base_agent = create_memory_agent(model=model, tool_filter=tool_filter)
         return create_iterative_agent(base_agent, config, model)
 
     @staticmethod
     def create_fast_single_pass_agent(
         model: Optional[str] = None,
         timeout: float = 60.0,
+        *,
+        tool_filter: Optional[set[str]] = None,
     ) -> SinglePassAgent:
         """
         Create a fast single-pass agent optimized for speed.
@@ -157,6 +163,8 @@ class AnalysisAgentFactory:
         Args:
             model: Optional model name
             timeout: Execution timeout
+            tool_filter: Optional set of tool names to restrict
+                registration to (L5 routing).
 
         Returns:
             Speed-optimized single-pass agent
@@ -169,7 +177,7 @@ class AnalysisAgentFactory:
             timeout_seconds=timeout,
         )
 
-        base_agent = create_memory_agent(model=model)
+        base_agent = create_memory_agent(model=model, tool_filter=tool_filter)
         return create_single_pass_agent(base_agent, config, model)
 
     @staticmethod

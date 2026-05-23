@@ -18,6 +18,11 @@ import glaurung as g
 
 from .base import BaseCommand
 from ..formatters.base import BaseFormatter, OutputFormat
+from ..func_ref import (
+    FuncResolutionError,
+    parse_func_arg,
+    resolve_func_to_va,
+)
 
 
 class NameFuncCommand(BaseCommand):
@@ -34,10 +39,11 @@ class NameFuncCommand(BaseCommand):
         parser.add_argument(
             "--func",
             dest="func",
-            type=lambda x: int(x, 0),
+            type=parse_func_arg,
             default=None,
-            help="Function entry VA (hex or decimal). Defaults to the "
-                 "binary's detected entry point.",
+            help="Function selector: hex VA (0x140001480), decimal, or a "
+                 "function name like 'main' resolved against analysis. "
+                 "Defaults to the binary's detected entry point.",
         )
         parser.add_argument(
             "--original",
@@ -67,7 +73,24 @@ class NameFuncCommand(BaseCommand):
             )
             return 2
 
-        func_va: Optional[int] = args.func
+        func_va: Optional[int] = None
+        if isinstance(args.func, int):
+            func_va = args.func
+        elif isinstance(args.func, str):
+            try:
+                discovered = g.analysis.analyze_functions_path(
+                    str(path), max_functions=2000,
+                )[0]
+            except Exception as e:
+                formatter.output_plain(
+                    f"Error: --func name resolution failed during analysis: {e}"
+                )
+                return 2
+            try:
+                func_va = resolve_func_to_va(args.func, discovered)
+            except FuncResolutionError as e:
+                formatter.output_plain(f"Error: {e}")
+                return 2
         if func_va is None:
             got = g.analysis.detect_entry_path(str(path))
             if got is None:

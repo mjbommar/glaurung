@@ -21,17 +21,32 @@ def inject_kb_context(ctx: RunContext[MemoryContext]) -> str:
     return f"Context: file={path}, kb_nodes={node_count}, kb_edges={edge_count}"
 
 
-def create_foundation_agent(model: str | None = None) -> Agent[MemoryContext, str]:
+def create_foundation_agent(
+    model: str | None = None,
+    *,
+    output_type: type = str,
+    system_prompt: str | None = None,
+):
+    """Build a foundation Agent[MemoryContext, output_type].
+
+    By default the output is plain ``str`` (matches legacy
+    create_memory_agent behaviour). Pass ``output_type=FindingsReport``
+    (or any other Pydantic model) to get pydantic-ai's structured-output
+    validation. ``system_prompt`` overrides the default narrative prompt
+    when set -- specialised agents (vuln discovery, function-naming, …)
+    provide their own.
+    """
     from ..config import get_config
 
     cfg = get_config()
     avail = cfg.available_models()
     default_model = model or (cfg.default_model if any(avail.values()) else "test")
+    prompt = system_prompt or build_system_prompt()
     agent = Agent(
         model=default_model,
-        system_prompt=build_system_prompt(),
+        system_prompt=prompt,
         deps_type=MemoryContext,
-        output_type=str,
+        output_type=output_type,
     )
 
     @agent.system_prompt

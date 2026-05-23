@@ -18,6 +18,11 @@ from glaurung.windows_config import load_windows_analysis_config
 
 from .base import BaseCommand
 from ..formatters.base import BaseFormatter, OutputFormat
+from ..func_ref import (
+    FuncResolutionError,
+    parse_func_arg,
+    resolve_func_to_va,
+)
 
 
 class DecompileCommand(BaseCommand):
@@ -42,10 +47,12 @@ class DecompileCommand(BaseCommand):
         parser.add_argument(
             "--func",
             dest="func",
-            type=lambda x: int(x, 0),
+            type=parse_func_arg,
             default=None,
-            help="Entry VA of the function to decompile (hex or decimal). "
-                 "If omitted, the detected entry point is used.",
+            help="Function selector: hex VA (0x140001480), decimal, or a "
+                 "function name like 'main' resolved against analysis. If "
+                 "omitted, the detected entry point is used. Stripped "
+                 "binaries only have sub_<VA> names so VA is preferred.",
         )
         parser.add_argument(
             "--all",
@@ -149,8 +156,27 @@ class DecompileCommand(BaseCommand):
                 return 0
 
             # Single-function mode.
-            func_va: Optional[int] = args.func
-            if func_va is None:
+            func_va: Optional[int] = None
+            if isinstance(args.func, int):
+                func_va = args.func
+            elif isinstance(args.func, str):
+                # Name-resolution path. Run a bounded discovery pass so
+                # the lookup terminates predictably on large binaries.
+                try:
+                    discovered = g.analysis.analyze_functions_path(
+                        str(path), max_functions=2000,
+                    )[0]
+                except Exception as e:
+                    formatter.output_plain(
+                        f"Error: --func name resolution failed during analysis: {e}"
+                    )
+                    return 2
+                try:
+                    func_va = resolve_func_to_va(args.func, discovered)
+                except FuncResolutionError as e:
+                    formatter.output_plain(f"Error: {e}")
+                    return 2
+            else:
                 got = g.analysis.detect_entry_path(str(path))
                 if got is None:
                     formatter.output_plain(
