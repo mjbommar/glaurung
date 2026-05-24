@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
+from pydantic_ai.settings import ModelSettings
 
 import glaurung as g
 
+from ..config import get_config
 from ..context import MemoryContext
 from ..kb.models import Node, NodeKind, Edge
 from ..kb.store import KnowledgeBase
@@ -246,12 +248,13 @@ class SuggestFunctionNameTool(
             strings=strings,
         )
 
-        # Use the best available model — Claude Opus 4.7 preferred, GPT-5.5
-        # fallback. See llm/config.py::preferred_model().
-        agent = Agent[str, SuggestedFunctionName](
-            model=cfg.preferred_model(),
-            output_type=SuggestedFunctionName,
-            system_prompt=(
+        # Use the project-default model (openai:gpt-5.4-mini + flex)
+        # honoring LLMConfig.default_model / preferred_model().
+        model_name = cfg.preferred_model()
+        agent_kwargs = {
+            "model": model_name,
+            "output_type": SuggestedFunctionName,
+            "system_prompt": (
                 "You are a reverse engineering assistant. You will be shown "
                 "glaurung-decompiled pseudocode for one function. Your task "
                 "is to suggest a concise, descriptive name for that function "
@@ -261,7 +264,12 @@ class SuggestFunctionNameTool(
                 "Original / mangled names are unreliable — weigh them "
                 "lightly and prefer evidence from the code."
             ),
-        )
+        }
+        if model_name.startswith("openai:") and cfg.openai_service_tier:
+            agent_kwargs["model_settings"] = ModelSettings(
+                extra_body={"service_tier": cfg.openai_service_tier},
+            )
+        agent = Agent[str, SuggestedFunctionName](**agent_kwargs)
 
         try:
             result = agent.run_sync(prompt)
