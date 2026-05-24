@@ -21,6 +21,7 @@ from typing import Callable, Optional, TypeVar
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
+from pydantic_ai.settings import ModelSettings
 
 from ..config import get_config
 
@@ -71,11 +72,19 @@ def run_structured_llm(
         return fallback()
 
     cfg = get_config()
-    agent = Agent[str, output_type](
-        model=model or cfg.preferred_model(),
-        output_type=output_type,
-        system_prompt=system_prompt,
-    )
+    model_name = model or cfg.preferred_model()
+    agent_kwargs = {
+        "model": model_name,
+        "output_type": output_type,
+        "system_prompt": system_prompt,
+    }
+    # Project policy: OpenAI calls run at service_tier=flex by default.
+    # See LLMConfig.openai_service_tier and CLAUDE.md "LLM model defaults".
+    if model_name.startswith("openai:") and cfg.openai_service_tier:
+        agent_kwargs["model_settings"] = ModelSettings(
+            extra_body={"service_tier": cfg.openai_service_tier},
+        )
+    agent = Agent[str, output_type](**agent_kwargs)
     try:
         result = agent.run_sync(prompt).output
     except Exception:
