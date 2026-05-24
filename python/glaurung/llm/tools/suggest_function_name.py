@@ -353,6 +353,170 @@ class SuggestFunctionNameTool(
         )
 
 
+# ---------------------------------------------------------------------------
+# PE / CRT / WIL boilerplate filtering
+# ---------------------------------------------------------------------------
+#
+# Every Windows PE binary contains a near-identical set of strings injected by
+# the linker, the C runtime, the SEH cookie machinery, the Windows Internal
+# Library telemetry helpers (wil_details_*), and Win11 feature-flag plumbing
+# (Feature_Servicing_*). When these strings are passed to the naming LLM as
+# "evidence", the model weighs their frequency across functions as if they
+# were semantic signal, and gets pulled toward "this function parses PE
+# images / initializes PE headers / etc."
+#
+# Measured impact on the 2026-05 Patch-Tuesday corpus: 154 of 345 (45%) of
+# name proposals hallucinated parse_pe_* / pe_header_* / init_pe_* names,
+# often for functions that had nothing to do with PE parsing (e.g.
+# cldflt.sys sub_140035718, a Cloud Files Sync handler, came back named
+# initialize_pe_header_offsets at confidence 0.73).
+#
+# The filter below is case-sensitive: these are exact bytes as they appear
+# in PE images.
+
+# Exact whole-string matches to reject.
+_PE_BOILERPLATE_EXACT: frozenset[str] = frozenset({
+    # DOS stub, ubiquitous and three common variants.
+    "!This program cannot be run in DOS mode.",
+    "This program cannot be run in DOS mode.",
+    "This program cannot be run in DOS mode.\r\n$",
+    # PE section names appearing in isolation.
+    ".text",
+    ".rdata",
+    ".data",
+    ".rsrc",
+    ".reloc",
+    ".bss",
+    ".pdata",
+    ".xdata",
+    # WPP tracing globals.
+    "Microsoft.Diagnostics.Tracing.WPP",
+    "WPP_GLOBAL_Control",
+})
+
+# Prefix-based rejection for boilerplate that varies by suffix.
+_PE_BOILERPLATE_PREFIXES: tuple[str, ...] = (
+    # Rich-header signature region.
+    "<Rich",
+    # CRT / SEH / GS cookie boilerplate.
+    "__security_init_cookie",
+    "__GSHandlerCheck",
+    "__security_check_cookie",
+    "__report_gsfailure",
+    "__intrinsic_setjmpex",
+    "__isa_available",
+    "_RTC_",
+    "__chkstk",
+    # Windows Internal Library telemetry helpers and Win11 feature-flag
+    # telemetry helpers.
+    "wil_details_",
+    "Feature_Servicing_",
+    # WPP trace-provider helpers.
+    "WPP_TRACE_PROVIDER_",
+)
+
+# Microsoft kernel API name prefixes used to detect "strong call-target
+# evidence". When a function calls >= 3 distinct named APIs whose names
+# start with one of these prefixes, we drop the strings list entirely:
+# the call targets are higher-fidelity than the linker-injected strings.
+_KERNEL_CALL_PREFIXES: tuple[str, ...] = (
+    "Ke", "Rtl", "Io", "Iof", "Mm", "Ex", "Exf", "Ps", "Ob", "Cc",
+    "Cm", "Se", "Ki", "Nt", "Zw", "Hal",
+    "Cldi", "Hsm", "Hsmp", "Hsmi",
+    "Flt", "Fsrtl", "Wdf", "Wpp_", "EtwReg",
+    "Bcrypt", "Cng", "Crypt", "Adv", "Dxg", "Vid", "Net",
+)
+
+
+def _is_pe_boilerplate(s: str) -> bool:
+    """Return True if ``s`` matches a known Windows PE / CRT / WIL
+    boilerplate string. Case-sensitive: exact bytes as they appear in PEs.
+    """
+    if s in _PE_BOILERPLATE_EXACT:
+        return True
+    for prefix in _PE_BOILERPLATE_PREFIXES:
+        if s.startswith(prefix):
+            return True
+    return False
+
+
+def _strip_pe_boilerplate(strings: list[str]) -> list[str]:
+    """Filter out PE / CRT / WIL boilerplate strings from an evidence list.
+
+    The filter is case-sensitive and matches:
+      - DOS stub variants ("!This program cannot be run in DOS mode.")
+      - Rich header signatures ("<Rich...")
+      - Isolated PE section names (.text, .rdata, .data, .rsrc, .reloc,
+        .bss, .pdata, .xdata)
+      - CRT / SEH / GS cookie boilerplate (__security_init_cookie,
+        __GSHandlerCheck, __security_check_cookie, __report_gsfailure,
+        __intrinsic_setjmpex, __isa_available, _RTC_*, __chkstk*)
+      - Windows Internal Library telemetry (wil_details_*)
+      - Win11 feature-flag telemetry (Feature_Servicing_*)
+      - WPP tracing globals (Microsoft.Diagnostics.Tracing.WPP,
+        WPP_GLOBAL_Control, WPP_TRACE_PROVIDER_*)
+    """
+    return [s for s in strings if not _is_pe_boilerplate(s)]
+
+
+def _has_strong_kernel_call_evidence(calls: list[str]) -> bool:
+    """Return True when the call-target list has >= 3 distinct calls whose
+    names start with one of the known Microsoft kernel API prefixes.
+
+    Call targets are higher-fidelity than linker-injected strings for
+    Windows kernel binaries; when this threshold is met, the strings
+    list should be dropped entirely from the naming prompt.
+    """
+    distinct: set[str] = set()
+    for c in calls:
+        if not c:
+            continue
+        for prefix in _KERNEL_CALL_PREFIXES:
+            if c.startswith(prefix):
+                distinct.add(c)
+                break
+        if len(distinct) >= 3:
+            return True
+    return False
+
+
+def _strip_pe_boilerplate_lines(pseudocode: str) -> str:
+    """Line-by-line filter on decompiled pseudocode: after the first
+    occurrence of any boilerplate string, drop subsequent lines that
+    quote that same boilerplate string as a substring.
+
+    The first instance is preserved so the LLM still sees the
+    structurally-relevant constant once; carpet-bombing of duplicates
+    (which happens in constant-pool resolution output) is suppressed.
+    """
+    if not pseudocode:
+        return pseudocode
+
+    # Build the candidate match set: exact strings plus the prefixes.
+    # We match by substring containment so that quoted occurrences inside
+    # a longer line still get caught.
+    candidates: list[str] = list(_PE_BOILERPLATE_EXACT) + list(_PE_BOILERPLATE_PREFIXES)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in pseudocode.splitlines():
+        # Find any boilerplate token contained in this line.
+        hit: str | None = None
+        for token in candidates:
+            if token and token in line:
+                hit = token
+                break
+        if hit is None:
+            out.append(line)
+            continue
+        if hit in seen:
+            # Already shown one instance; skip duplicate boilerplate.
+            continue
+        seen.add(hit)
+        out.append(line)
+    return "\n".join(out)
+
+
 def build_naming_prompt(
     ctx: MemoryContext,
     va: int | None,
@@ -366,6 +530,13 @@ def build_naming_prompt(
 
     Also exposed as a module-level helper so the `glaurung ask name-func`
     CLI shim can reuse the exact same context-assembly logic.
+
+    The strings list and the pseudocode body are both scrubbed of common
+    PE / CRT / WIL boilerplate before they enter the prompt -- see
+    ``_strip_pe_boilerplate`` for the full reject list. When call-target
+    evidence is strong (>= 3 named Microsoft kernel APIs) the strings
+    list is dropped entirely: call targets are higher-fidelity than
+    linker-injected strings.
     """
     pseudocode: str | None = None
     if va is not None and getattr(ctx, "file_path", None):
@@ -378,6 +549,18 @@ def build_naming_prompt(
             )
         except Exception:
             pseudocode = None
+
+    # Scrub the pseudocode body so quoted PE/CRT/WIL boilerplate doesn't
+    # carpet-bomb the constant-pool region of the decompiled output.
+    if pseudocode:
+        pseudocode = _strip_pe_boilerplate_lines(pseudocode)
+
+    # Filter the strings evidence list -- drop boilerplate; if call-target
+    # evidence is strong, drop the strings list entirely.
+    if _has_strong_kernel_call_evidence(calls):
+        filtered_strings: list[str] = []
+    else:
+        filtered_strings = _strip_pe_boilerplate(strings)
 
     parts: list[str] = []
     parts.append(f"Original (likely unreliable): {original_name}")
@@ -395,8 +578,8 @@ def build_naming_prompt(
         # unavailable (e.g. unsupported arch, or timeout).
         if calls:
             parts.append(f"Calls (resolved): {', '.join(calls[:8])}")
-        if strings:
-            parts.append("Strings:\n" + "\n".join(f"  {s!r}" for s in strings[:5]))
+        if filtered_strings:
+            parts.append("Strings:\n" + "\n".join(f"  {s!r}" for s in filtered_strings[:5]))
         if instructions:
             parts.append(
                 "First instructions:\n" + "\n".join(instructions[:16])
