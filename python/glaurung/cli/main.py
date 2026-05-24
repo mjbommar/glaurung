@@ -12,6 +12,7 @@ from .commands.cfg import CFGCommand
 from .commands.ask import AskCommand
 from .commands.strings import StringsCommand
 from .commands.decompile import DecompileCommand
+from .commands.explain import ExplainCommand
 from .commands.name_func import NameFuncCommand
 from .commands.repl import ReplCommand
 from .commands.graph import GraphCommand
@@ -61,6 +62,7 @@ class GlaurungCLI:
             "cfg": CFGCommand(),
             "ask": AskCommand(),
             "decompile": DecompileCommand(),
+            "explain": ExplainCommand(),
             "name-func": NameFuncCommand(),
             "repl": ReplCommand(),
             "graph": GraphCommand(),
@@ -98,6 +100,11 @@ class GlaurungCLI:
             "cfg": CFGFormatter,
             "ask": AskFormatter,
             "decompile": DecompileFormatter,
+            # explain emits its rewritten C body via output_plain (with a
+            # banner comment) or a JSON payload it prints directly; the
+            # decompile formatter is a pass-through that accepts both
+            # shapes cleanly.
+            "explain": DecompileFormatter,
             "name-func": NameFuncFormatter,
             "repl": TriageFormatter,
             # graph command emits raw DOT text via output_plain, so its
