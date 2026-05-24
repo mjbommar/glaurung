@@ -1,31 +1,41 @@
 """`glaurung explain` -- rewrite one function into idiomatic source.
 
-Two-stage Layer-1 -> Layer-2 pipeline driving the previously-unreachable
-``rewrite_function_idiomatic`` tool (Tool #14):
+Multi-stage Layer-0 -> Layer-1 -> Layer-2 pipeline driving the
+previously-unreachable ``rewrite_function_idiomatic`` tool (Tool #14):
 
+  0. (optional, ``--with-layer0``) F4 atomic labelers:
+     - Tool #5 ``name_local_variable``  -> ``variable_names``
+     - Tool #3 ``name_string_literal``  -> ``string_names``
+     - Tool #2 ``classify_constant``    -> ``constant_labels``
   1. Tool #10 (``infer_function_signature``) recovers a C prototype with
      per-parameter direction / nullability / ownership annotations.
-  2. Tool #14 (``rewrite_function_idiomatic``) rewrites the raw lifter
-     pseudocode into idiomatic C (or Rust / Go) using that prototype.
+  2. Tool #13 (``classify_function_role``) labels the function with a
+     coarse role tag (``parser`` / ``network_handler`` / ...).
+  3. Tool #14 (``rewrite_function_idiomatic``) rewrites the raw lifter
+     pseudocode into idiomatic C (or Rust / Go) using prototype +
+     role + (when enabled) the Layer-0 substitution tables.
 
-For MVP the Layer-0 atomic-labeler tables (``variable_names``,
-``constant_labels``, ``string_names``, ``loop_idioms``, structs / enums
-/ error codes) are all left empty -- they are scoped to F4. The
-rewriter still benefits from the prototype + role label + auto-fetched
-pseudocode and produces noticeably cleaner C than raw decompile.
+The Layer-0 pre-pass is OFF by default because it adds 10-30 LLM
+calls per function (~$0.20-$0.50 at gpt-5.4-mini-flex). Operators
+opt in with ``--with-layer0`` once they care about the readability
+delta. Each Layer-0 call is keyed against the A7 cache via
+``--cache-dir`` / ``$GLAURUNG_CACHE_DIR`` so the same call across
+CVE months hits the cache for free.
 
 Flag matrix:
 
-  --no-types     Skip Tool #10; pass a placeholder ``int sub_<va>(void *)``
-                 prototype. Cheap-but-rough -- one fewer LLM call.
-  --no-roles     Skip Tool #13 (role classifier).
-  --no-layer0    (default behaviour for MVP -- explicit toggle for
-                 callers that want to assert it). Always passes empty
-                 Layer-0 dicts; here for symmetry with future F4.
+  --no-types       Skip Tool #10; pass a placeholder
+                   ``int sub_<va>(void *)`` prototype.
+  --no-roles       Skip Tool #13 (role classifier).
+  --with-layer0    Enable the F4 Layer-0 pre-pass. Off by default.
+  --no-layer0      Force-disable. Default behaviour; kept for symmetry.
+  --cache-dir DIR  A7 cache directory; feeds the Layer-0 prepass and
+                   (in the future) the rewrite output cache.
 
-The intended downstream consumer is agentic-security-bot's
-``diff_explain.py``, which feeds the rewritten C body to a discriminator
-LLM instead of the raw IR.
+JSON output extension: when --with-layer0 is set, the payload grows
+a ``"layer0"`` block recording every (input, output) pair the
+pre-pass resolved -- the audit log that proves which ``var0`` got
+renamed to what.
 """
 
 from __future__ import annotations
@@ -138,8 +148,11 @@ def _rewrite_idiomatic(
     role: Optional[str],
     target_language: str,
     timeout_ms: int,
+    variable_names: Optional[dict[str, str]] = None,
+    string_names: Optional[dict[str, str]] = None,
+    constant_labels: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
-    """Run Tool #14 with empty Layer-0 inputs (MVP)."""
+    """Run Tool #14. Layer-0 dicts populated by F4 prepass when enabled."""
     from glaurung.llm.context import Budgets, MemoryContext
     from glaurung.llm.tools.rewrite_function_idiomatic import (
         RewriteFunctionArgs,
@@ -159,11 +172,11 @@ def _rewrite_idiomatic(
             entry_va=int(va),
             c_prototype=c_prototype,
             role=role,
-            # Layer-0 inputs intentionally empty for F3 (MVP); F4 wires
-            # the atomic labelers and populates these tables.
-            variable_names={},
-            constant_labels={},
-            string_names={},
+            # Layer-0 tables: populated by F4 prepass when
+            # --with-layer0 is set, else empty (F3 behaviour).
+            variable_names=variable_names or {},
+            constant_labels=constant_labels or {},
+            string_names=string_names or {},
             loop_idioms=[],
             structs=[],
             enums=[],
@@ -227,12 +240,22 @@ class ExplainCommand(BaseCommand):
             "runs, just without a role hint.",
         )
         parser.add_argument(
+            "--with-layer0",
+            dest="use_layer0",
+            action="store_true",
+            default=False,
+            help="Enable the F4 Layer-0 atomic-labeler pre-pass: runs "
+            "Tools #5 / #3 / #2 to populate variable_names / "
+            "string_names / constant_labels before Tool #14. Adds "
+            "10-30 LLM calls per function (~$0.20-$0.50). Off by "
+            "default. A7 cache via --cache-dir / GLAURUNG_CACHE_DIR "
+            "amortizes cost across CVE months.",
+        )
+        parser.add_argument(
             "--no-layer0",
             dest="use_layer0",
             action="store_false",
-            default=False,
-            help="Layer-0 atomic labelers are not yet wired (F4 ticket). "
-            "Flag is accepted for forward-compat / explicit MVP toggling.",
+            help="Force-disable the F4 Layer-0 pre-pass (default).",
         )
         parser.add_argument(
             "--timeout-ms",
@@ -250,9 +273,11 @@ class ExplainCommand(BaseCommand):
         parser.add_argument(
             "--cache-dir",
             default=None,
-            help="Optional persistent cache directory. Reserved for future "
-            "use -- the explain pipeline does not yet cache its own output. "
-            "Tool #10 / Tool #14 themselves remain uncached.",
+            help="Optional A7 persistent cache directory. With "
+            "--with-layer0 each Layer-0 call (Tool #5 / #3 / #2) is "
+            "cached by (binary sha, va, kind, input). Falls back to "
+            "$GLAURUNG_CACHE_DIR when unset. Tool #10 / Tool #14 "
+            "themselves remain uncached for now.",
         )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
@@ -324,6 +349,27 @@ class ExplainCommand(BaseCommand):
                 timeout_ms=int(args.timeout_ms),
             )
 
+        # Stage 2.5: Layer-0 atomic labelers (F4, opt-in).
+        layer0_result = None
+        layer0_source = "skipped"
+        if args.use_layer0:
+            try:
+                from ._layer0_prepass import run_layer0_prepass
+
+                layer0_result = run_layer0_prepass(
+                    file_path=str(path),
+                    va=int(func_va),
+                    pseudocode=pseudocode,
+                    artifact=artifact,
+                    timeout_ms=int(args.timeout_ms),
+                    use_llm=True,
+                    cache_dir_arg=args.cache_dir,
+                )
+                layer0_source = "enabled"
+            except Exception as exc:  # pragma: no cover - surfaces as CLI warning
+                log.warning("layer0 prepass failed: %s", exc)
+                layer0_source = "error"
+
         # Stage 3: idiomatic rewrite (Tool #14).
         try:
             rewrite = _rewrite_idiomatic(
@@ -334,6 +380,15 @@ class ExplainCommand(BaseCommand):
                 role=role,
                 target_language=args.style,
                 timeout_ms=int(args.timeout_ms),
+                variable_names=(
+                    layer0_result.variable_names if layer0_result else None
+                ),
+                string_names=(
+                    layer0_result.string_names if layer0_result else None
+                ),
+                constant_labels=(
+                    layer0_result.constant_labels if layer0_result else None
+                ),
             )
         except Exception as exc:  # pragma: no cover - surfaces as CLI error
             formatter.output_plain(f"Error: rewrite failed: {exc}")
@@ -357,11 +412,16 @@ class ExplainCommand(BaseCommand):
                     "classify_function_role": {
                         "source": role_source,
                     },
+                    "layer0_prepass": {
+                        "source": layer0_source,
+                    },
                     "rewrite_function_idiomatic": {
                         "source": rewrite["rewrite_source"],
                     },
                 },
             }
+            if layer0_result is not None:
+                payload["layer0"] = layer0_result.to_json()
             print(json.dumps(payload, indent=2))
             return 0
 
@@ -371,6 +431,14 @@ class ExplainCommand(BaseCommand):
             formatter.output_plain(f"// prototype-source: {proto_source}")
             if role is not None:
                 formatter.output_plain(f"// role: {role} ({role_source})")
+            if layer0_result is not None:
+                formatter.output_plain(
+                    f"// layer0: vars={len(layer0_result.variable_names)} "
+                    f"strs={len(layer0_result.string_names)} "
+                    f"consts={len(layer0_result.constant_labels)} "
+                    f"(llm={layer0_result.llm_calls} "
+                    f"cache={layer0_result.cache_hits})"
+                )
             formatter.output_plain(
                 f"// rewrite-source: {rewrite['rewrite_source']} "
                 f"(confidence {rewrite['confidence']:.2f})"

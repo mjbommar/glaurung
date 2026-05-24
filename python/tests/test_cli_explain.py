@@ -50,6 +50,7 @@ def test_explain_help_exposes_new_flags():
         "--style",
         "--no-types",
         "--no-roles",
+        "--with-layer0",
         "--no-layer0",
         "--pdb-cache",
         "--cache-dir",
@@ -99,10 +100,14 @@ def test_explain_json_output_shape_matches_spec():
     stages = payload["stages"]
     assert stages["infer_function_signature"]["source"] == "skipped"
     assert stages["classify_function_role"]["source"] == "skipped"
+    # Layer-0 prepass is OFF by default (F4 opt-in).
+    assert stages["layer0_prepass"]["source"] == "skipped"
     # Rewrite stage always runs.
     assert stages["rewrite_function_idiomatic"]["source"] in ("llm", "heuristic")
     # Schema sanity: entry_va is the integer we asked for.
     assert payload["entry_va"] == 0x1840
+    # When --with-layer0 is NOT set, the layer0 block must be absent.
+    assert "layer0" not in payload
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="linux sample missing")
