@@ -263,6 +263,20 @@ fn collect_pe_pdb_publics(path: &str, cache_dir: &Path, out: &mut HashMap<u64, S
     }
 }
 
+/// Build a VA -> PDB public symbol map for a PE binary using a
+/// Microsoft-style symbol cache. Returns an empty map when the PE has no
+/// CodeView record, the cache misses, or the PDB has no public symbols.
+///
+/// This is the same lookup the decompile pipeline performs via
+/// `collect_address_map_with_pdb_cache`, exposed standalone for callers
+/// (e.g. binary_diff, future agents) that need VA -> name resolution
+/// without running the full decompiler.
+pub fn collect_pdb_public_symbol_map(path: &str, cache_dir: &Path) -> HashMap<u64, String> {
+    let mut out = HashMap::new();
+    collect_pe_pdb_publics(path, cache_dir, &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

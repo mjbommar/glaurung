@@ -345,17 +345,22 @@ fn decompile_at_py(
     })?;
     let ssa = compute_ssa(&lf);
     let region = recover(&lf, &ssa);
-    let mut f = lower(&lf, &region, func.name.clone());
-    reconstruct(&mut f);
-    crate::ir::const_fold::fold_constants(&mut f);
-    crate::ir::dce::prune_dead_flags(&mut f);
-    crate::ir::call_args::reconstruct_args(&mut f, cc);
+    // Build the address map first so we can apply a PDB public-symbol name
+    // to the *outer* function header before lowering. The map already
+    // includes PDB symbols when a cache is configured, plus exports / IAT
+    // names that beat the CFG-pass heuristic on stripped Windows binaries.
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
+    let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
+    let mut f = lower(&lf, &region, outer_name);
+    reconstruct(&mut f);
+    crate::ir::const_fold::fold_constants(&mut f);
+    crate::ir::dce::prune_dead_flags(&mut f);
+    crate::ir::call_args::reconstruct_args(&mut f, cc);
     crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
@@ -392,8 +397,22 @@ fn decompile_at_py(
     if let Some(field_map) = &field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
     }
+    // Emit a `// PDB: <name>` provenance comment in C-style output when the
+    // outer function name came from a PDB public symbol -- a hint that this
+    // name is Microsoft-authoritative (and not LLM-proposed / FLIRT / CFG-
+    // heuristic). The PDB name is the function's `f.name` after the
+    // outer-name resolution above; we only emit when a PDB cache was
+    // configured AND the cache map actually answered for this VA.
+    let pdb_outer_name = pdb_cache
+        .and_then(|_| addr_map.get(&func_va))
+        .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
+        .cloned();
     Ok(if style == "c" {
-        crate::ir::ast::render_c(&f)
+        let body = crate::ir::ast::render_c(&f);
+        match pdb_outer_name {
+            Some(name) => format!("// PDB: {}\n{}", name, body),
+            None => body,
+        }
     } else {
         match tm {
             Some(tm) => {
@@ -522,7 +541,9 @@ fn decompile_all_py(
         };
         let ssa = compute_ssa(&lf);
         let region = recover(&lf, &ssa);
-        let mut f = lower(&lf, &region, func.name.clone());
+        let outer_name =
+            resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
+        let mut f = lower(&lf, &region, outer_name.clone());
         reconstruct(&mut f);
         crate::ir::dce::prune_dead_flags(&mut f);
         crate::ir::const_fold::fold_constants(&mut f);
@@ -548,9 +569,33 @@ fn decompile_all_py(
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
         let text = render(&f);
-        list.append((func.name.clone(), func.entry_point.value, text))?;
+        list.append((outer_name, func.entry_point.value, text))?;
     }
     Ok(list.into())
+}
+
+/// Pick the best name for the outer function being decompiled.
+///
+/// `discovered_name` is whatever the CFG discovery pass produced
+/// (`sub_<va>` for stripped binaries, a real symbol when one was available
+/// at scan time). `addr_map` has been overlaid with PE/PDB public symbols
+/// when a `--pdb-cache` was supplied, so this gives the PDB name priority
+/// over the placeholder `sub_<va>` -- the exact scenario Phase F2 / A3
+/// targets. When `discovered_name` already looks real (anything other than
+/// `sub_<hex>`) we keep it so we don't trample a stronger DWARF / FLIRT /
+/// IAT label that the CFG pass already applied.
+fn resolve_outer_function_name(
+    discovered_name: &str,
+    func_va: u64,
+    addr_map: &std::collections::HashMap<u64, String>,
+) -> String {
+    if !discovered_name.starts_with("sub_") {
+        return discovered_name.to_string();
+    }
+    match addr_map.get(&func_va) {
+        Some(name) if !name.is_empty() && !name.starts_with("sub_") => name.clone(),
+        _ => discovered_name.to_string(),
+    }
 }
 
 /// Register LLIR-related Python bindings under the `ir` submodule.

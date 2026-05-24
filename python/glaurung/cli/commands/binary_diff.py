@@ -29,6 +29,14 @@ class BinaryDiffCommand(BaseCommand):
             "--max-rows", type=int, default=64,
             help="Cap on changed-function rows shown in Markdown output.",
         )
+        parser.add_argument(
+            "--pdb-cache",
+            default="",
+            help="Optional Microsoft-style PDB cache directory. When set, "
+                 "each row's JSON output carries `public_name_pre` / "
+                 "`public_name_post` populated from the PDB at the row's "
+                 "entry VA -- skips LLM-naming for nameable functions.",
+        )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         from glaurung.llm.kb.binary_diff import diff_binaries, render_diff_markdown, to_json
@@ -44,6 +52,7 @@ class BinaryDiffCommand(BaseCommand):
         diff = diff_binaries(
             str(a), str(b),
             skip_anonymous=not args.include_anonymous,
+            pdb_cache=(args.pdb_cache or None),
         )
 
         if formatter.format_type == OutputFormat.JSON:

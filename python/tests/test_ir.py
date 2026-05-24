@@ -380,6 +380,74 @@ def test_decompile_kernel_idioms_render_semantic_comments():
     not NTOSKRNL_SAMPLE.exists() or not (MSVC_PDB_CACHE / "ntkrnlmp.pdb").exists(),
     reason="ntoskrnl PE/PDB sample missing",
 )
+def test_decompile_pe_pdb_cache_applies_outer_function_name():
+    """Phase F2 / A3: when the PDB has a public symbol at the entry VA,
+    both the plain and C-style decompile output must render the outer
+    function with that name instead of `sub_<va>`. The C-style output
+    must additionally carry a `// PDB: <name>` provenance comment."""
+    va = 0x140A88010  # KiSystemStartup per the PDB ingestion tests.
+    # Without --pdb-cache: header stays as sub_<va>.
+    text_no_pdb = g.ir.decompile_at(str(NTOSKRNL_SAMPLE), va, timeout_ms=5000)
+    assert "sub_140a88010" in text_no_pdb.splitlines()[0]
+    assert "KiSystemStartup" not in text_no_pdb.splitlines()[0]
+    text_c_no_pdb = g.ir.decompile_at(
+        str(NTOSKRNL_SAMPLE), va, timeout_ms=5000, style="c"
+    )
+    assert text_c_no_pdb.splitlines()[0].startswith("fn sub_140a88010")
+    # With --pdb-cache: header uses the PDB name; C-style also emits the
+    # `// PDB:` provenance comment.
+    text_pdb = g.ir.decompile_at(
+        str(NTOSKRNL_SAMPLE), va, timeout_ms=5000, pdb_cache=str(MSVC_PDB_CACHE)
+    )
+    assert "KiSystemStartup" in text_pdb.splitlines()[0]
+    assert "sub_140a88010" not in text_pdb.splitlines()[0]
+    text_c_pdb = g.ir.decompile_at(
+        str(NTOSKRNL_SAMPLE), va, timeout_ms=5000,
+        style="c", pdb_cache=str(MSVC_PDB_CACHE),
+    )
+    lines_c = text_c_pdb.splitlines()
+    assert lines_c[0] == "// PDB: KiSystemStartup"
+    assert lines_c[1].startswith("fn KiSystemStartup")
+
+
+def test_pdb_symbol_for_va_lookup_round_trips():
+    """The standalone PDB lookup binding must agree with the decompile
+    pipeline's resolution: KeReleaseSpinLock at the known fixture VA."""
+    if not NTOSKRNL_SAMPLE.exists() or not (MSVC_PDB_CACHE / "ntkrnlmp.pdb").exists():
+        pytest.skip("ntoskrnl PE/PDB sample missing")
+    # Known VA from the existing ntoskrnl PDB ingestion tests.
+    name = g.symbols.pdb_symbol_for_va(
+        str(NTOSKRNL_SAMPLE), 0x140323480, str(MSVC_PDB_CACHE)
+    )
+    assert name == "KeReleaseSpinLock"
+
+
+def test_pdb_symbol_for_va_returns_none_on_miss():
+    """Missing cache / unknown VA / empty path must return None (not raise)."""
+    assert g.symbols.pdb_symbol_for_va("", 0, "") is None
+    # Non-existent cache directory.
+    assert g.symbols.pdb_symbol_for_va(
+        "/nonexistent/binary", 0x1000, "/nonexistent/cache"
+    ) is None
+
+
+def test_pdb_symbol_map_populates_for_fixture():
+    """The bulk-lookup binding returns the full VA -> name map for one
+    parse of the PDB. Should contain at least the known KeReleaseSpinLock
+    entry."""
+    if not NTOSKRNL_SAMPLE.exists() or not (MSVC_PDB_CACHE / "ntkrnlmp.pdb").exists():
+        pytest.skip("ntoskrnl PE/PDB sample missing")
+    sym_map = g.symbols.pdb_symbol_map(str(NTOSKRNL_SAMPLE), str(MSVC_PDB_CACHE))
+    assert isinstance(sym_map, dict)
+    assert sym_map.get(0x140323480) == "KeReleaseSpinLock"
+    # Sanity-check map size; ntoskrnl has thousands of public symbols.
+    assert len(sym_map) > 1000
+
+
+@pytest.mark.skipif(
+    not NTOSKRNL_SAMPLE.exists() or not (MSVC_PDB_CACHE / "ntkrnlmp.pdb").exists(),
+    reason="ntoskrnl PE/PDB sample missing",
+)
 def test_decompile_pe_pdb_cache_names_kernel_public_calls():
     text = g.ir.decompile_at(
         str(NTOSKRNL_SAMPLE),

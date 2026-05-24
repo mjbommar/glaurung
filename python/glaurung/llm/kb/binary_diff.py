@@ -52,6 +52,12 @@ class FunctionDiff:
     status: str  # "same" | "changed" | "added" | "removed"
     a: Optional[FunctionFingerprint] = None
     b: Optional[FunctionFingerprint] = None
+    # Public PDB symbol (Microsoft-authoritative) for each side's entry VA
+    # when a `--pdb-cache` resolved to a matching PDB. None when no cache
+    # was provided, the PE has no CodeView record, or the PDB has no
+    # symbol at that VA. Phase F2 / A3 extension.
+    public_name_pre: Optional[str] = None
+    public_name_post: Optional[str] = None
 
 
 @dataclass
@@ -143,6 +149,7 @@ def diff_binaries(
     binary_b: str,
     *,
     skip_anonymous: bool = True,
+    pdb_cache: Optional[str] = None,
 ) -> BinaryDiff:
     """Pair every function in `binary_a` with the same-named function
     in `binary_b` and report per-function status.
@@ -151,11 +158,23 @@ def diff_binaries(
     names from the diff — they're discovery artifacts whose VAs
     routinely shift between builds and would dominate the report
     with spurious "removed/added" entries that aren't real changes.
+
+    `pdb_cache` is an optional Microsoft-style symbol-cache directory.
+    When supplied, each row carries `public_name_pre` / `public_name_post`
+    fields populated from the PDB public-symbol table at each side's
+    entry VA. Cuts LLM-naming hallucination for nameable functions.
+    Phase F2 / A3 extension.
     """
     import glaurung as g
 
     funcs_a, _ = g.analysis.analyze_functions_path(str(binary_a))
     funcs_b, _ = g.analysis.analyze_functions_path(str(binary_b))
+
+    # Pre-resolve VA -> PDB symbol once per binary (the PDB parse is the
+    # expensive step; the lookup is cheap). Empty dict when no cache
+    # configured so the lookup below is a no-op fall-through.
+    pdb_map_a = _resolve_pdb_symbol_map(str(binary_a), pdb_cache)
+    pdb_map_b = _resolve_pdb_symbol_map(str(binary_b), pdb_cache)
 
     def _index(funcs, path: str) -> Dict[str, FunctionFingerprint]:
         out: Dict[str, FunctionFingerprint] = {}
@@ -185,20 +204,67 @@ def diff_binaries(
     for name in all_names:
         fa = idx_a.get(name)
         fb = idx_b.get(name)
+        pn_a = pdb_map_a.get(fa.entry_va) if fa else None
+        pn_b = pdb_map_b.get(fb.entry_va) if fb else None
         if fa and fb:
             if fa.body_hash == fb.body_hash:
                 diff.same += 1
-                diff.rows.append(FunctionDiff(name=name, status="same", a=fa, b=fb))
+                diff.rows.append(
+                    FunctionDiff(
+                        name=name,
+                        status="same",
+                        a=fa,
+                        b=fb,
+                        public_name_pre=pn_a,
+                        public_name_post=pn_b,
+                    )
+                )
             else:
                 diff.changed += 1
-                diff.rows.append(FunctionDiff(name=name, status="changed", a=fa, b=fb))
+                diff.rows.append(
+                    FunctionDiff(
+                        name=name,
+                        status="changed",
+                        a=fa,
+                        b=fb,
+                        public_name_pre=pn_a,
+                        public_name_post=pn_b,
+                    )
+                )
         elif fa:
             diff.removed += 1
-            diff.rows.append(FunctionDiff(name=name, status="removed", a=fa))
+            diff.rows.append(
+                FunctionDiff(
+                    name=name,
+                    status="removed",
+                    a=fa,
+                    public_name_pre=pn_a,
+                )
+            )
         else:
             diff.added += 1
-            diff.rows.append(FunctionDiff(name=name, status="added", b=fb))
+            diff.rows.append(
+                FunctionDiff(
+                    name=name,
+                    status="added",
+                    b=fb,
+                    public_name_post=pn_b,
+                )
+            )
     return diff
+
+
+def _resolve_pdb_symbol_map(binary_path: str, pdb_cache: Optional[str]) -> Dict[int, str]:
+    """Build VA -> PDB public-symbol dict for one binary. Empty when the
+    cache is missing or the binary has no matching PDB. Never raises --
+    we'd rather diff without PDB names than fail the whole diff."""
+    if not pdb_cache:
+        return {}
+    try:
+        import glaurung as g
+        return dict(g.symbols.pdb_symbol_map(str(binary_path), str(pdb_cache)))
+    except Exception:  # pragma: no cover - best-effort PDB lookup
+        return {}
 
 
 def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 64) -> str:
@@ -235,7 +301,12 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 64) -> str:
 
 
 def to_json(diff: BinaryDiff) -> str:
-    """JSON serialization. Stable schema; never remove fields."""
+    """JSON serialization. Stable schema; never remove fields.
+
+    `public_name_pre` and `public_name_post` are present on every row.
+    They are `null` when no `pdb_cache` was supplied to `diff_binaries`
+    or when the PDB has no public symbol at the row's entry VA. Added
+    in Phase F2 / A3."""
     payload = {
         "schema_version": "1",
         "binary_a": diff.binary_a,
@@ -251,6 +322,8 @@ def to_json(diff: BinaryDiff) -> str:
                 "name": r.name, "status": r.status,
                 "a": asdict(r.a) if r.a else None,
                 "b": asdict(r.b) if r.b else None,
+                "public_name_pre": r.public_name_pre,
+                "public_name_post": r.public_name_post,
             }
             for r in diff.rows
         ],
