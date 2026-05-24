@@ -180,8 +180,16 @@ class DecompileCommand(BaseCommand):
                     pdb_cache=args.pdb_cache,
                 )
                 if as_json:
+                    # Resolve VA -> PDB public symbol once per binary so JSON
+                    # output exposes a stable `public_name` field for each row.
+                    pdb_map = _resolve_pdb_symbol_map(str(path), args.pdb_cache)
                     payload = [
-                        {"name": name, "entry_va": int(va), "pseudocode": text}
+                        {
+                            "name": name,
+                            "entry_va": int(va),
+                            "pseudocode": text,
+                            "public_name": pdb_map.get(int(va)),
+                        }
                         for name, va, text in results
                     ]
                     print(json.dumps(payload, indent=2))
@@ -217,8 +225,16 @@ class DecompileCommand(BaseCommand):
                 return 2
 
             if as_json:
+                public_name = _resolve_pdb_symbol(str(path), int(func_va), args.pdb_cache)
                 print(
-                    json.dumps({"entry_va": int(func_va), "pseudocode": text}, indent=2)
+                    json.dumps(
+                        {
+                            "entry_va": int(func_va),
+                            "pseudocode": text,
+                            "public_name": public_name,
+                        },
+                        indent=2,
+                    )
                 )
             else:
                 formatter.output_plain(text)
@@ -226,3 +242,26 @@ class DecompileCommand(BaseCommand):
         except Exception as e:  # pragma: no cover - surfaces as CLI error
             formatter.output_plain(f"Error: {e}")
             return 1
+
+
+def _resolve_pdb_symbol(binary_path: str, va: int, pdb_cache: str) -> Optional[str]:
+    """Best-effort PDB public-symbol lookup for one VA. Returns None when
+    no cache is configured, the cache misses, or the binding raises (we
+    never let a missing PDB break decompile output)."""
+    if not pdb_cache:
+        return None
+    try:
+        return g.symbols.pdb_symbol_for_va(binary_path, int(va), pdb_cache)
+    except Exception:  # pragma: no cover - best-effort PDB lookup
+        return None
+
+
+def _resolve_pdb_symbol_map(binary_path: str, pdb_cache: str) -> dict:
+    """Build the full VA -> PDB public symbol map once. Empty when no
+    cache or no cache hit so callers can `.get(va)` without branching."""
+    if not pdb_cache:
+        return {}
+    try:
+        return dict(g.symbols.pdb_symbol_map(binary_path, pdb_cache))
+    except Exception:  # pragma: no cover - best-effort PDB lookup
+        return {}

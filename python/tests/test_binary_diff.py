@@ -113,3 +113,65 @@ def test_cli_diff_subcommand(tmp_path: Path) -> None:
     assert rc == 1
     assert "Binary diff" in out
     assert "dispatch" in out
+
+
+# ---------------------------------------------------------------------------
+# PDB public-symbol enrichment (Phase F2 / A3).
+#
+# The ntoskrnl fixture is the canonical PE+PDB pair already used by the
+# IR / PDB ingestion tests. Diffing it against itself with the PDB cache
+# must populate public_name_{pre,post} for every named row whose entry
+# VA the PDB has a symbol for.
+# ---------------------------------------------------------------------------
+
+_NTOSKRNL = Path("tests/fixtures/msvc-pdb/ntoskrnl.exe")
+_PDB_CACHE = Path("tests/fixtures/msvc-pdb")
+
+
+def test_diff_rows_have_public_name_fields_default_none() -> None:
+    """Without a `pdb_cache`, every row must still expose the new
+    `public_name_pre` / `public_name_post` fields as `None` so JSON
+    consumers can rely on the schema."""
+    binary = _need(_SWITCHY_V1)
+    diff = diff_binaries(str(binary), str(binary))
+    assert diff.rows, "self-diff should produce at least one row"
+    for row in diff.rows:
+        assert row.public_name_pre is None
+        assert row.public_name_post is None
+
+
+def test_to_json_emits_public_name_keys_unconditionally() -> None:
+    """The schema must always carry the public_name keys (Phase F2
+    extension) so downstream JSON readers don't branch on optional
+    field presence."""
+    binary = _need(_SWITCHY_V1)
+    diff = diff_binaries(str(binary), str(binary))
+    parsed = json.loads(to_json(diff))
+    assert parsed["rows"], "self-diff should populate rows"
+    for row in parsed["rows"]:
+        assert "public_name_pre" in row
+        assert "public_name_post" in row
+
+
+@pytest.mark.skipif(
+    not _NTOSKRNL.exists() or not (_PDB_CACHE / "ntkrnlmp.pdb").exists(),
+    reason="ntoskrnl PE/PDB sample missing",
+)
+def test_diff_with_pdb_cache_populates_public_name() -> None:
+    """Diffing ntoskrnl.exe against itself with the PDB cache must
+    yield non-empty `public_name_pre` / `public_name_post` on at least
+    one row -- proves the lookup is wired end-to-end."""
+    diff = diff_binaries(
+        str(_NTOSKRNL), str(_NTOSKRNL),
+        skip_anonymous=False,
+        pdb_cache=str(_PDB_CACHE),
+    )
+    populated_rows = [
+        r for r in diff.rows
+        if r.public_name_pre is not None or r.public_name_post is not None
+    ]
+    assert populated_rows, "expected at least one PDB-resolved row"
+    # For a self-diff, both sides must agree on the public name.
+    for r in populated_rows:
+        if r.public_name_pre is not None and r.public_name_post is not None:
+            assert r.public_name_pre == r.public_name_post

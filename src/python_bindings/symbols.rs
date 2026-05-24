@@ -22,10 +22,66 @@ pub fn register_symbols_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> Py
     sym_mod.add_function(wrap_pyfunction!(set_suspicious_imports_py, &sym_mod)?)?;
     sym_mod.add_function(wrap_pyfunction!(load_capa_apis_py, &sym_mod)?)?;
 
+    // PDB outer-function-name resolution (Phase F2 / A3).
+    sym_mod.add_function(wrap_pyfunction!(pdb_symbol_for_va_py, &sym_mod)?)?;
+    sym_mod.add_function(wrap_pyfunction!(pdb_symbol_map_py, &sym_mod)?)?;
+
     // Add symbols submodule to main module
     m.add_submodule(&sym_mod)?;
 
     Ok(())
+}
+
+/// Resolve a single VA to a PDB public symbol using a Microsoft-style
+/// symbol cache. Returns `None` when the PE has no CodeView record, the
+/// cache has no matching PDB, or the PDB has no public symbol at `va`.
+///
+/// This is the same VA -> name lookup performed inside the decompile
+/// pipeline (`collect_address_map_with_pdb_cache`) exposed to Python so
+/// other callers -- binary_diff, future agents -- can apply Microsoft-
+/// authoritative names without going through the full decompile.
+#[pyfunction]
+#[pyo3(name = "pdb_symbol_for_va")]
+fn pdb_symbol_for_va_py(
+    binary_path: String,
+    va: u64,
+    pdb_cache: String,
+) -> PyResult<Option<String>> {
+    if binary_path.is_empty() || pdb_cache.is_empty() {
+        return Ok(None);
+    }
+    let cache_dir = std::path::Path::new(&pdb_cache);
+    if !cache_dir.is_dir() {
+        return Ok(None);
+    }
+    let map = crate::ir::name_resolve::collect_pdb_public_symbol_map(&binary_path, cache_dir);
+    Ok(map.get(&va).cloned())
+}
+
+/// Build the full VA -> PDB public symbol map for a PE binary using a
+/// Microsoft-style cache. Empty when the cache misses or the PDB has no
+/// public symbols. Use this when you need to look up many VAs against
+/// the same binary -- it parses the PDB once.
+#[pyfunction]
+#[pyo3(name = "pdb_symbol_map")]
+fn pdb_symbol_map_py(
+    py: Python<'_>,
+    binary_path: String,
+    pdb_cache: String,
+) -> PyResult<Py<PyAny>> {
+    let dict = pyo3::types::PyDict::new(py);
+    if binary_path.is_empty() || pdb_cache.is_empty() {
+        return Ok(dict.into_any().unbind());
+    }
+    let cache_dir = std::path::Path::new(&pdb_cache);
+    if !cache_dir.is_dir() {
+        return Ok(dict.into_any().unbind());
+    }
+    let map = crate::ir::name_resolve::collect_pdb_public_symbol_map(&binary_path, cache_dir);
+    for (va, name) in map {
+        dict.set_item(va, name)?;
+    }
+    Ok(dict.into_any().unbind())
 }
 
 /// List symbols from a file.
