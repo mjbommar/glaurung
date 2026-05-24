@@ -11,14 +11,23 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LLMConfig:
-    # Primary default: Anthropic's Claude Opus 4.7 — strongest current model
-    # for long-context reverse-engineering tasks. Fallback: OpenAI's GPT-5.5
-    # when the Anthropic key is missing or the call fails.
-    default_model: str = field(default="anthropic:claude-opus-4-7")
-    fallback_model: str = field(default="openai:gpt-5.5")
-    summarizer_model: str = field(default="anthropic:claude-opus-4-7")
-    risk_scorer_model: str = field(default="anthropic:claude-opus-4-7")
-    ioc_model: str = field(default="openai:gpt-5.5")
+    # REQUIRED project default per CLAUDE.md: openai:gpt-5.4-mini with
+    # service_tier="flex". Do NOT silently swap to Claude when both keys
+    # are set; cost lives in this default and the project has made an
+    # explicit decision. Anthropic Claude stays available as an
+    # explicit-override target via `--model anthropic:claude-...` on
+    # the CLI, or via the GLAURUNG_LLM_MODEL env var.
+    default_model: str = field(default="openai:gpt-5.4-mini")
+    fallback_model: str = field(default="anthropic:claude-haiku-4-5")
+    summarizer_model: str = field(default="openai:gpt-5.4-mini")
+    risk_scorer_model: str = field(default="openai:gpt-5.4-mini")
+    ioc_model: str = field(default="openai:gpt-5.4-mini")
+
+    # OpenAI service tier ("flex" | "default" | "priority"). Higher-
+    # level callers (findings runner, critic, name-func) plumb this
+    # through ModelSettings.extra_body so the request gets the cheaper
+    # flex tier with its separate quota.
+    openai_service_tier: str = field(default="flex")
 
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
@@ -39,6 +48,9 @@ class LLMConfig:
         self.google_api_key = os.getenv("GOOGLE_API_KEY", self.google_api_key)
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", self.gemini_api_key)
         self.default_model = os.getenv("GLAURUNG_LLM_MODEL", self.default_model)
+        self.openai_service_tier = os.getenv(
+            "GLAURUNG_OPENAI_SERVICE_TIER", self.openai_service_tier
+        )
         if temp_env := os.getenv("GLAURUNG_LLM_TEMPERATURE"):
             try:
                 self.temperature = float(temp_env)
