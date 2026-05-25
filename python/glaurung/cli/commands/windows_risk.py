@@ -437,6 +437,12 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     risk_items = _build_risk_items(risk_imports, candidates)
     candidates.sort(key=_function_sort_key)
 
+    # Resolve PDB-public names for any function_va that risk_items / functions
+    # reference. We want the consumer to be able to triage by name without a
+    # second per-VA decompile round-trip (this used to be the standard cost
+    # of going from sub_XXX -> NetrGetJoinInformation).
+    _annotate_public_names(risk_items, candidates, path_str, args)
+
     return {
         "summary": {
             "path": path_str,
@@ -455,6 +461,39 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
         "risk_items": risk_items,
         "functions": candidates[: args.max_candidates],
     }
+
+
+def _annotate_public_names(
+    risk_items: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    path_str: str,
+    args: argparse.Namespace,
+) -> None:
+    """Decorate every risk_item and function row with `public_name` (PDB
+    public symbol) and `score`. Best-effort: missing PDB / cache misses
+    leave the field as None so consumers can still .get() safely."""
+    pdb_cache = getattr(args, "pdb_cache", None)
+    pdb_map: dict[int, str] = {}
+    if pdb_cache:
+        try:
+            pdb_map = dict(g.symbols.pdb_symbol_map(path_str, pdb_cache))
+        except Exception:  # pragma: no cover - PDB lookup is best-effort
+            pdb_map = {}
+
+    # Index candidates by VA so we can carry score across to risk_items.
+    score_by_va = {int(row["entry_va"]): int(row.get("score", 0)) for row in candidates}
+
+    for item in risk_items:
+        va = item.get("function_va")
+        if isinstance(va, int):
+            item["public_name"] = pdb_map.get(int(va))
+            item["score"] = score_by_va.get(int(va), 0)
+        else:
+            item["public_name"] = None
+            item["score"] = 0
+    for row in candidates:
+        va = int(row.get("entry_va", 0) or 0)
+        row["public_name"] = pdb_map.get(va)
 
 
 def _detect_format_arch(path: str, args: argparse.Namespace) -> tuple[str, str]:

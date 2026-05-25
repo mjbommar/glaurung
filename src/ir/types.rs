@@ -170,9 +170,15 @@ pub enum Op {
         target: u64,
     },
     /// Conditional jump on a previously-computed flag/bool value.
+    /// `inverted = true` means "take the jump when `cond` is *not* set" —
+    /// this is how JNE / JAE / JGE / etc. lift while still letting their
+    /// positive sibling (JE / JB / JL) share the same flag VReg as the
+    /// `cmp` that produced it. Downstream passes use this to render
+    /// `if (X != Y)` vs `if (X == Y)` correctly when hoisting the Cmp.
     CondJump {
         cond: VReg,
         target: u64,
+        inverted: bool,
     },
     Call {
         target: CallTarget,
@@ -277,7 +283,14 @@ impl fmt::Display for Op {
                 write!(f, "store[{} bytes] {:?} <- {}", addr.size, addr, src)
             }
             Op::Jump { target } => write!(f, "jmp 0x{:x}", target),
-            Op::CondJump { cond, target } => write!(f, "if {} jmp 0x{:x}", cond, target),
+            Op::CondJump {
+                cond,
+                target,
+                inverted,
+            } => {
+                let prefix = if *inverted { "!" } else { "" };
+                write!(f, "if {}{} jmp 0x{:x}", prefix, cond, target)
+            }
             Op::Call { target } => match target {
                 CallTarget::Direct(a) => write!(f, "call 0x{:x}", a),
                 CallTarget::Indirect(v) => write!(f, "call {}", v),

@@ -164,9 +164,14 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("kind", "jump")?;
             d.set_item("target", *target)?;
         }
-        Op::CondJump { cond, target } => {
+        Op::CondJump {
+            cond,
+            target,
+            inverted,
+        } => {
             d.set_item("kind", "cond_jump")?;
             d.set_item("cond", vreg_to_str(cond))?;
+            d.set_item("inverted", *inverted)?;
             d.set_item("target", *target)?;
         }
         Op::Call { target } => {

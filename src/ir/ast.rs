@@ -276,12 +276,30 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
         }],
         Op::Jump { target } => vec![Stmt::Goto { target: *target }],
         // A CondJump on its own (not absorbed into a structured If/While)
-        // becomes a conditional goto.
-        Op::CondJump { cond, target } => vec![Stmt::If {
-            cond: Expr::Reg(cond.clone()),
-            then_body: vec![Stmt::Goto { target: *target }],
-            else_body: None,
-        }],
+        // becomes a conditional goto. If the CondJump carries `inverted`
+        // (i.e. lifted from JNE / JAE / JGE / b.ne / b.hs / ...), wrap the
+        // flag in a Not so the printer renders "!flag" and the inline-hoist
+        // pass downstream can fold the original Cmp through the negation
+        // into an `Expr::Cmp` of the opposite kind.
+        Op::CondJump {
+            cond,
+            target,
+            inverted,
+        } => {
+            let cond_expr = if *inverted {
+                Expr::Un {
+                    op: UnOp::Not,
+                    src: Box::new(Expr::Reg(cond.clone())),
+                }
+            } else {
+                Expr::Reg(cond.clone())
+            };
+            vec![Stmt::If {
+                cond: cond_expr,
+                then_body: vec![Stmt::Goto { target: *target }],
+                else_body: None,
+            }]
+        }
         Op::Call { target } => {
             let target = match target {
                 CallTarget::Direct(a) => Expr::Addr(*a),
@@ -306,7 +324,136 @@ fn lower_block(b: &LlirBlock) -> Vec<Stmt> {
     for ins in &b.instrs {
         out.extend(lower_op(&ins.op));
     }
+    hoist_inline_flag_conds(out)
+}
+
+/// Peephole pass: for each `Stmt::If { cond: Expr::Reg(flag), .. }` whose
+/// flag was assigned by a `Stmt::Assign { dst: flag, src: Expr::Cmp(..) }`
+/// earlier in the same block (with no intervening read of the flag),
+/// fold the Cmp into the condition and drop the assignment.
+///
+/// The structurer's `extract_cond_and_strip` already does this for
+/// conditionals that end a block (recognised as `Region::IfThen` /
+/// `Region::While` / `Region::IfThenElse`). But when CFG recovery fails
+/// to recognise a structured pattern, the conditional jump is lowered as
+/// a bare mid-block `Stmt::If { cond: Expr::Reg(flag), then_body: [Goto] }`
+/// — and without this hoist the printer emits the opaque `if (%zf) goto L;`.
+/// On real PE binaries (e.g. wkssvc!WsOpenCreateConnectionSpecifyImpersonation)
+/// most conditionals fall through to this path and produce unreadable output.
+fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
+    let mut out: Vec<Stmt> = Vec::with_capacity(stmts.len());
+    for stmt in stmts {
+        // Match both `Stmt::If { cond: Reg(flag), .. }` (non-inverted
+        // CondJump) and `Stmt::If { cond: Un(Not, Reg(flag)), .. }`
+        // (inverted CondJump from JNE / JAE / ...).
+        let (flag, was_inverted, then_body, else_body) = match stmt {
+            Stmt::If {
+                cond: Expr::Reg(flag),
+                then_body,
+                else_body,
+            } => (Some(flag), false, then_body, else_body),
+            Stmt::If {
+                cond: Expr::Un { op: UnOp::Not, src },
+                then_body,
+                else_body,
+            } => match *src {
+                Expr::Reg(flag) => (Some(flag), true, then_body, else_body),
+                other => {
+                    out.push(Stmt::If {
+                        cond: Expr::Un {
+                            op: UnOp::Not,
+                            src: Box::new(other),
+                        },
+                        then_body,
+                        else_body,
+                    });
+                    continue;
+                }
+            },
+            stmt => {
+                out.push(stmt);
+                continue;
+            }
+        };
+
+        let flag = flag.expect("Some by match above");
+        let mut hoisted: Option<Expr> = None;
+        // Walk backwards through what we've already emitted, looking
+        // for an assignment to `flag` with an Expr::Cmp RHS.
+        for i in (0..out.len()).rev() {
+            match &out[i] {
+                Stmt::Assign { dst, src } if dst == &flag => {
+                    if matches!(src, Expr::Cmp { .. }) {
+                        // Make sure no intervening stmt reads the flag.
+                        let reads: usize = out[i + 1..]
+                            .iter()
+                            .map(|s| count_reg_uses_in_stmt(s, &flag))
+                            .sum();
+                        if reads == 0 {
+                            if let Stmt::Assign { src, .. } = out.remove(i) {
+                                hoisted = Some(src);
+                            }
+                        }
+                    }
+                    // Most recent assign found — stop regardless.
+                    break;
+                }
+                other => {
+                    if count_reg_uses_in_stmt(other, &flag) > 0 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let cond_expr = match (hoisted, was_inverted) {
+            (Some(expr), true) => negate_cmp_expr(expr),
+            (Some(expr), false) => expr,
+            (None, true) => Expr::Un {
+                op: UnOp::Not,
+                src: Box::new(Expr::Reg(flag)),
+            },
+            (None, false) => Expr::Reg(flag),
+        };
+        out.push(Stmt::If {
+            cond: cond_expr,
+            then_body,
+            else_body,
+        });
+    }
     out
+}
+
+/// If `expr` is an `Expr::Cmp { op, .. }`, return the Cmp with the inverted
+/// CmpOp (Eq <-> Ne, Ult <-> Uge — but Uge isn't in CmpOp so we wrap, ...).
+/// Anything else gets wrapped in `Expr::Un { Not, .. }` so semantics survive.
+fn negate_cmp_expr(expr: Expr) -> Expr {
+    if let Expr::Cmp { op, lhs, rhs } = expr {
+        let inverted = match op {
+            CmpOp::Eq => Some(CmpOp::Ne),
+            CmpOp::Ne => Some(CmpOp::Eq),
+            // The remaining CmpOps don't have direct opposites in this
+            // enum (Ult, Ule, Slt, Sle); express the negation via a
+            // wrapping Not so the printer still shows the semantics.
+            _ => None,
+        };
+        match inverted {
+            Some(new_op) => Expr::Cmp {
+                op: new_op,
+                lhs,
+                rhs,
+            },
+            None => Expr::Un {
+                op: UnOp::Not,
+                src: Box::new(Expr::Cmp { op, lhs, rhs }),
+            },
+        }
+    } else {
+        Expr::Un {
+            op: UnOp::Not,
+            src: Box::new(expr),
+        }
+    }
 }
 
 /// Given a block that ends a conditional, return the "cond" expression for
@@ -321,12 +468,46 @@ fn lower_block(b: &LlirBlock) -> Vec<Stmt> {
 /// `if (rax == 0)` rather than `if (%zf)`.
 fn extract_cond_and_strip<'a>(block: &LlirBlock, mut stmts: Vec<Stmt>) -> (Expr, Vec<Stmt>) {
     if let Some(LlirInstr {
-        op: Op::CondJump { cond, .. },
+        op: Op::CondJump { cond, inverted, .. },
         ..
     }) = block.instrs.last()
     {
-        // Pop trailing `if (cond) goto ...` we just synthesised.
-        if matches!(stmts.last(), Some(Stmt::If { .. })) {
+        let inverted = *inverted;
+        // Pop trailing `if (cond) goto ...` we just synthesised. If the
+        // inline-hoist pass has already folded a Cmp into that If's
+        // condition (because CFG recovery didn't yet recognise this
+        // block as structured), use that hoisted condition directly —
+        // the trailing-Goto body has no semantics for the structurer
+        // since we're rebuilding the whole If anyway.
+        if let Some(Stmt::If { cond, .. }) = stmts.last() {
+            // For a non-trivial cond (Cmp / negated form) the hoist
+            // already accounted for `inverted`; just adopt it.
+            if !matches!(cond, Expr::Reg(_))
+                && !matches!(
+                    cond,
+                    Expr::Un {
+                        op: UnOp::Not,
+                        src: _
+                    }
+                )
+            {
+                let cond_expr = cond.clone();
+                stmts.pop();
+                return (cond_expr, stmts);
+            }
+            // If the cond is still `!flag` (no Cmp was available to fold),
+            // keep the negation and fall through to the lookup.
+            if let Expr::Un {
+                op: UnOp::Not,
+                src,
+            } = cond
+            {
+                if matches!(src.as_ref(), Expr::Cmp { .. }) {
+                    let cond_expr = cond.clone();
+                    stmts.pop();
+                    return (cond_expr, stmts);
+                }
+            }
             stmts.pop();
         }
 
@@ -348,7 +529,12 @@ fn extract_cond_and_strip<'a>(block: &LlirBlock, mut stmts: Vec<Stmt>) -> (Expr,
                             .sum::<usize>();
                         if usages == 0 {
                             if let Stmt::Assign { src, .. } = stmts.remove(i) {
-                                return (src, stmts);
+                                let cond_expr = if inverted {
+                                    negate_cmp_expr(src)
+                                } else {
+                                    src
+                                };
+                                return (cond_expr, stmts);
                             }
                         }
                     }
@@ -356,7 +542,15 @@ fn extract_cond_and_strip<'a>(block: &LlirBlock, mut stmts: Vec<Stmt>) -> (Expr,
                 }
             }
         }
-        return (Expr::Reg(cond.clone()), stmts);
+        let fallback = if inverted {
+            Expr::Un {
+                op: UnOp::Not,
+                src: Box::new(Expr::Reg(cond.clone())),
+            }
+        } else {
+            Expr::Reg(cond.clone())
+        };
+        return (fallback, stmts);
     }
     // Fallback — no CondJump, synthesise a generic truthy condition.
     (Expr::Const(1), stmts)
@@ -1606,6 +1800,7 @@ function f @ 0x1000 {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
+                            inverted: false,
                     },
                 ],
                 vec![0x1100, 0x1200],
@@ -1624,6 +1819,106 @@ function f @ 0x1000 {
         assert!(!text.contains("if (%zf)"), "still opaque: {}", text);
         // The `%zf = ...` definition should be stripped.
         assert!(!text.contains("%zf ="), "flag assign leaked: {}", text);
+    }
+
+    #[test]
+    fn inverted_condjump_negates_cmp_op() {
+        // [cmp rax, 16; jne L_err; ret] @ L_err
+        // Without inverted-handling this rendered as `if (rax == 16) goto err`,
+        // which was the WRONG polarity and the root cause of misreading
+        // amdxe.sys AMDXE_GET_USER_INDEX size checks. With `inverted=true`
+        // the printer must render `if (rax != 16) goto err`.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("rax")),
+                        rhs: Value::Const(16),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1100,
+                        inverted: true,
+                    },
+                    Op::Return,
+                ],
+                vec![0x1100],
+            ),
+            (0x1100, vec![Op::Return], vec![]),
+        ]);
+        let text = lower_and_render(&lf, "f");
+        assert!(
+            text.contains("(%rax != 16)"),
+            "JNE-style negation lost: {}",
+            text
+        );
+        assert!(
+            !text.contains("(%rax == 16)"),
+            "wrong polarity rendered: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn cmp_is_hoisted_for_mid_block_conditional() {
+        // A single block contains [cmp; cjmp; nop; cmp; cjmp; ret] where
+        // CFG recovery cannot find a clean structured shape — neither
+        // CondJump ends the block, so they're lowered as bare mid-block
+        // Stmt::If with cond=Reg(flag). Without the inline hoist the
+        // output is the opaque `if (%zf) goto L;` pair that makes manual
+        // review of real wkssvc/srvsvc functions misleading.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("rax")),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1100,
+                            inverted: false,
+                    },
+                    Op::Nop,
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Slt,
+                        lhs: Value::Reg(VReg::phys("rbx")),
+                        rhs: Value::Const(7),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1100,
+                            inverted: false,
+                    },
+                    Op::Return,
+                ],
+                vec![0x1100],
+            ),
+            (0x1100, vec![Op::Return], vec![]),
+        ]);
+        let text = lower_and_render(&lf, "f");
+        assert!(
+            text.contains("if ((%rax == 0))"),
+            "first mid-block cmp was not hoisted: {}",
+            text
+        );
+        assert!(
+            text.contains("if ((%rbx < 7))"),
+            "second mid-block cmp was not hoisted: {}",
+            text
+        );
+        assert!(
+            !text.contains("if (%zf)"),
+            "opaque flag-based if remained: {}",
+            text
+        );
     }
 
     #[test]
@@ -1646,6 +1941,7 @@ function f @ 0x1000 {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
+                            inverted: false,
                     },
                 ],
                 vec![0x1100, 0x1200],
@@ -1699,6 +1995,7 @@ function f @ 0x1000 {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1200,
+                            inverted: false,
                     },
                 ],
                 vec![0x1200, 0x1300],

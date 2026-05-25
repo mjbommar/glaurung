@@ -229,6 +229,7 @@ mod tests {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
+                            inverted: false,
                     },
                 ],
                 vec![0x1100, 0x1200],
@@ -316,6 +317,7 @@ mod tests {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
+                            inverted: false,
                     },
                 ],
                 vec![0x1100, 0x1200],

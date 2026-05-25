@@ -1464,12 +1464,15 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         },
         _ => {
             // Conditional jumps
-            if let Some(cond) = cond_flag_for(mnem) {
+            if let Some(condition) = condition_suffix(mnem, "j")
+                .and_then(|s| condition_for_suffix(&s))
+            {
                 match instr.op_kind(0) {
                     OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
                         return vec![Op::CondJump {
-                            cond,
+                            cond: condition.flag,
                             target: instr.near_branch_target(),
+                            inverted: condition.inverted,
                         }];
                     }
                     _ => {}
@@ -1712,7 +1715,7 @@ mod tests {
         let cj = ops
             .iter()
             .find_map(|i| match &i.op {
-                Op::CondJump { cond, target } => Some((cond.clone(), *target)),
+                Op::CondJump { cond, target, .. } => Some((cond.clone(), *target)),
                 _ => None,
             })
             .expect("expected CondJump");
@@ -1741,7 +1744,7 @@ mod tests {
         let cj = ops
             .iter()
             .find_map(|i| match &i.op {
-                Op::CondJump { cond, target } => Some((cond.clone(), *target)),
+                Op::CondJump { cond, target, .. } => Some((cond.clone(), *target)),
                 _ => None,
             })
             .expect("expected a CondJump");
@@ -1758,7 +1761,7 @@ mod tests {
         let cj = ops
             .iter()
             .find_map(|i| match &i.op {
-                Op::CondJump { cond, target } => Some((cond.clone(), *target)),
+                Op::CondJump { cond, target, .. } => Some((cond.clone(), *target)),
                 _ => None,
             })
             .expect("expected CondJump");

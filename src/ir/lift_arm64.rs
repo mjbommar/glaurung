@@ -77,20 +77,27 @@ fn bin_for_mnem(m: &str) -> Option<BinOp> {
 }
 
 /// Map a `b.<cond>` mnemonic (e.g. "b.eq") onto the LLIR flag whose truth
-/// determines whether the branch is taken. The negated sibling (`b.ne` vs
-/// `b.eq`) reads the same flag and the consumer inverts the sense.
-fn cond_flag_for_bcond(suffix: &str) -> Option<VReg> {
+/// determines whether the branch is taken. Returns `(flag, inverted)`: the
+/// negated sibling (`b.ne` vs `b.eq`) reads the same flag with the inverted
+/// bit set, so a downstream consumer can render the branch as `!=` vs `==`.
+fn cond_flag_for_bcond(suffix: &str) -> Option<(VReg, bool)> {
     Some(match suffix {
-        "eq" | "ne" => VReg::Flag(Flag::Z),
+        "eq" => (VReg::Flag(Flag::Z), false),
+        "ne" => (VReg::Flag(Flag::Z), true),
         // AArch64 uses "LO" (same as CS / unsigned lower) and "HS" (HI or
         // equal) for unsigned-less-than.
-        "lo" | "cc" | "cs" | "hs" => VReg::Flag(Flag::C),
-        "lt" | "ge" => VReg::Flag(Flag::Slt),
-        "le" | "gt" => VReg::Flag(Flag::Sle),
+        "lo" | "cc" => (VReg::Flag(Flag::C), false),
+        "cs" | "hs" => (VReg::Flag(Flag::C), true),
+        "lt" => (VReg::Flag(Flag::Slt), false),
+        "ge" => (VReg::Flag(Flag::Slt), true),
+        "le" => (VReg::Flag(Flag::Sle), false),
+        "gt" => (VReg::Flag(Flag::Sle), true),
         // MI/PL read the raw sign; with cmp-driven flows this coincides with
         // signed-less-than, so we approximate similarly to x86 Js/Jns.
-        "mi" | "pl" => VReg::Flag(Flag::Slt),
-        "vs" | "vc" => VReg::Flag(Flag::O),
+        "mi" => (VReg::Flag(Flag::Slt), false),
+        "pl" => (VReg::Flag(Flag::Slt), true),
+        "vs" => (VReg::Flag(Flag::O), false),
+        "vc" => (VReg::Flag(Flag::O), true),
         _ => return None,
     })
 }
@@ -114,11 +121,12 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
 
     // b.<cond> conditional branches.
     if let Some(suffix) = mnem.strip_prefix("b.") {
-        if let Some(cond) = cond_flag_for_bcond(suffix) {
+        if let Some((cond, inverted)) = cond_flag_for_bcond(suffix) {
             if let Some(target) = ins.operands.first().and_then(|o| o.immediate) {
                 return vec![Op::CondJump {
                     cond,
                     target: target as u64,
+                    inverted,
                 }];
             }
         }
@@ -348,8 +356,10 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             vec![Op::Unknown { mnemonic: mnem }]
         }
         "cbz" | "cbnz" => {
-            // cbz <Xn>, <label>: compare <Xn> to zero, branch if (non)zero.
-            // Emit: %zf = (Xn == 0); cond_jump %zf <label>
+            // cbz <Xn>, <label>: branch if <Xn> == 0.
+            // cbnz <Xn>, <label>: branch if <Xn> != 0 (inverted).
+            // Emit: %zf = (Xn == 0); cond_jump (!)%zf <label>
+            let inverted = mnem == "cbnz";
             if ins.operands.len() == 2 {
                 let Some(reg_val) = operand_to_value(&ins.operands[0]) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
@@ -365,6 +375,7 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                         Op::CondJump {
                             cond: VReg::Flag(Flag::Z),
                             target: target as u64,
+                            inverted,
                         },
                     ];
                 }
