@@ -302,7 +302,7 @@ fn detect_arch_and_call_conv(
 /// prefixes and type annotations).
 #[pyfunction]
 #[pyo3(name = "decompile_at")]
-#[pyo3(signature = (path, func_va, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, types=true, style="", pdb_cache=""))]
+#[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=30_000usize))]
 fn decompile_at_py(
     path: String,
     func_va: u64,
@@ -312,6 +312,7 @@ fn decompile_at_py(
     types: bool,
     style: &str,
     pdb_cache: &str,
+    max_functions: usize,
 ) -> PyResult<String> {
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
@@ -324,7 +325,7 @@ fn decompile_at_py(
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
     let budgets = Budgets {
-        max_functions: 256,
+        max_functions,
         max_blocks,
         max_instructions,
         timeout_ms,

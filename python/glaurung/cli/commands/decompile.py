@@ -122,8 +122,8 @@ class DecompileCommand(BaseCommand):
         parser.add_argument(
             "--limit",
             type=int,
-            default=8,
-            help="Max number of functions to decompile with --all (default: 8).",
+            default=256,
+            help="Max number of functions to decompile with --all (default: 256).",
         )
         parser.add_argument(
             "--no-types",
@@ -135,8 +135,8 @@ class DecompileCommand(BaseCommand):
         parser.add_argument(
             "--timeout-ms",
             type=int,
-            default=500,
-            help="Per-function analysis timeout in milliseconds (default: 500).",
+            default=10_000,
+            help="Per-function analysis timeout in milliseconds (default: 10000).",
         )
         parser.add_argument(
             "--style",

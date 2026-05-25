@@ -92,7 +92,7 @@ fn detect_entry_path_py(
 /// Analyze functions from binary data.
 #[pyfunction]
 #[pyo3(name = "analyze_functions_bytes")]
-#[pyo3(signature = (data, max_functions=16usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64))]
+#[pyo3(signature = (data, max_functions=30_000usize, max_blocks=1_000_000usize, max_instructions=10_000_000usize, timeout_ms=300_000u64))]
 fn analyze_functions_bytes_py(
     data: &[u8],
     max_functions: usize,
@@ -115,7 +115,7 @@ fn analyze_functions_bytes_py(
 /// Analyze functions from file path.
 #[pyfunction]
 #[pyo3(name = "analyze_functions_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64, max_functions=16usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=1_073_741_824u64, max_functions=30_000usize, max_blocks=1_000_000usize, max_instructions=10_000_000usize, timeout_ms=300_000u64))]
 fn analyze_functions_path_py(
     path: String,
     max_read_bytes: u64,
