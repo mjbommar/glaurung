@@ -110,7 +110,10 @@ def test_to_json_emits_structural_hash_and_similarity() -> None:
     b = _need(_SWITCHY_V2)
     diff = diff_binaries(str(a), str(b))
     parsed = json.loads(to_json(diff))
-    assert parsed["schema_version"] == "2"
+    # Schema 2 added per-row similarity + structural_hash; schema 3
+    # (Phase F6) added cross_name_matched diagnostics. The structural
+    # assertions below must hold for both versions.
+    assert parsed["schema_version"] in ("2", "3")
     for row in parsed["rows"]:
         assert "similarity" in row
         if row.get("a"):

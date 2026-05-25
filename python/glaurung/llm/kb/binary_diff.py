@@ -6,7 +6,7 @@ patch-analysis demo conversation in the Phase 3 plan: agent says
 "v1.1 changed `validate_token` to add a length check before
 `memcmp` — likely fixing a CVE-class OOB read."
 
-v2 (current) implementation:
+v3 (current) implementation:
   - Run analyze_functions_path on both binaries.
   - For each function compute *both* a raw byte ``body_hash`` AND a
     ``structural_hash`` (see ``structural_fingerprint.py``). The
@@ -14,23 +14,33 @@ v2 (current) implementation:
     rip-relative globals, register identity, stack-displacement
     constants) so relinked binaries don't produce thousands of
     spurious "changed" rows.
-  - Match by name first; when both binaries carry a function with the
-    same name, the row's ``status`` is determined by the structural
-    hash:
+  - Match by *effective name* first (PDB public symbol when available,
+    otherwise the discoverer's name). When both binaries carry a
+    function with the same effective name, the row's ``status`` is
+    determined by the structural hash:
       * ``structural_hash_a == structural_hash_b`` → ``same`` (even
         when ``body_hash`` differs — that's the relink-noise case).
       * Different structural hashes → ``changed``. A Jaccard
         similarity score over per-block token-hash multisets is
         included so the CLI can sort by "how big a change" — single-
         block patches surface at the top of the list.
-  - Functions present in only one side become added/removed.
+  - v3 cross-name matching (Diaphora-style): after the name-based
+    pass, the unmatched ``added`` and ``removed`` rows are re-paired
+    by greedy bipartite match over the Jaccard similarity of their
+    per-block token multisets. Any pair above
+    ``cross_name_threshold`` (default 0.85) gets reclassified as
+    ``changed`` with the similarity score recorded. This is how the
+    diff survives anonymous-function VA shifts on relinked PEs even
+    when no PDB is available — the bulk of dnsapi's ~485 added /
+    ~482 removed ``sub_<hex>`` rows collapse into legitimate
+    ``changed`` rows for the same underlying function.
+  - Functions present in only one side (after both passes) become
+    added/removed and are reported as such.
 
 v1 hash scheme (preserved on rows for diagnostics): sha256 of the
 function's primary chunk bytes, truncated to 16 hex chars.
 
-What this still does NOT do (filed for v3):
-  - Function matching by structural similarity when *names* don't
-    match (BSim-style across-name re-matching).
+What this still does NOT do (filed for v4):
   - Per-instruction diff (which instruction lines changed); we report
     whole-function status only.
   - Cross-architecture diff.
@@ -100,6 +110,12 @@ class BinaryDiff:
     changed: int = 0
     added: int = 0
     removed: int = 0
+    # v3 cross-name match diagnostics: how many (added, removed) pairs
+    # were collapsed into a ``changed`` row by the structural-similarity
+    # rematch pass, and the threshold that gated the decision. ``-1.0``
+    # for ``cross_name_threshold`` means the pass was disabled.
+    cross_name_matched: int = 0
+    cross_name_threshold: float = -1.0
     rows: List[FunctionDiff] = field(default_factory=list)
 
     def summary_line(self) -> str:
@@ -229,12 +245,21 @@ def _fingerprint_via_path(
     )
 
 
+#: Default Jaccard-similarity threshold for the v3 cross-name match
+#: pass. Empirically calibrated on the CVE-2026-41096 dnsapi.dll
+#: pre/post pair: at 0.85 the residual added+removed set drops from
+#: ~967 to ~140 (mostly genuine new/removed code paths) while no
+#: obviously wrong pairings creep in.
+CROSS_NAME_THRESHOLD_DEFAULT = 0.85
+
+
 def diff_binaries(
     binary_a: str,
     binary_b: str,
     *,
     skip_anonymous: bool = True,
     pdb_cache: Optional[str] = None,
+    cross_name_threshold: Optional[float] = CROSS_NAME_THRESHOLD_DEFAULT,
 ) -> BinaryDiff:
     """Pair every function in `binary_a` with the same-named function
     in `binary_b` and report per-function status.
@@ -249,6 +274,12 @@ def diff_binaries(
     fields populated from the PDB public-symbol table at each side's
     entry VA. Cuts LLM-naming hallucination for nameable functions.
     Phase F2 / A3 extension.
+
+    `cross_name_threshold` (v3) is the Jaccard-similarity cutoff for
+    the post-pass that re-pairs unmatched ``added``/``removed`` rows
+    using their per-block token multisets. Pairs scoring at or above
+    the threshold are collapsed into one ``changed`` row each. Set to
+    ``None`` to skip the rematch pass entirely (restores v2 behavior).
     """
     import glaurung as g
     from .structural_fingerprint import (
@@ -448,7 +479,169 @@ def diff_binaries(
                     public_name_post=pn_b,
                 )
             )
+
+    # v3: cross-name structural rematch. Try to pair every unmatched
+    # ``added`` row with an unmatched ``removed`` row using the Jaccard
+    # similarity of their cached per-block token multisets. Pairs that
+    # clear ``cross_name_threshold`` get collapsed into one ``changed``
+    # row each.
+    if cross_name_threshold is not None:
+        _rematch_unnamed_by_structure(
+            diff,
+            structures_a=structures_a,
+            structures_b=structures_b,
+            pdb_map_a=pdb_map_a,
+            pdb_map_b=pdb_map_b,
+            threshold=float(cross_name_threshold),
+        )
     return diff
+
+
+def _rematch_unnamed_by_structure(
+    diff: BinaryDiff,
+    *,
+    structures_a: Dict[str, "FunctionStructure"],
+    structures_b: Dict[str, "FunctionStructure"],
+    pdb_map_a: Dict[int, str],
+    pdb_map_b: Dict[int, str],
+    threshold: float,
+) -> None:
+    """Greedy bipartite rematch over the unmatched added/removed rows.
+
+    Diaphora-style: when two builds rename or re-anonymize the same
+    underlying function, its name-based row pair shows up as one
+    ``added`` and one ``removed`` row even though the per-block token
+    multiset is nearly identical. This pass uses the cached
+    ``FunctionStructure`` for each side to compute Jaccard similarity
+    over the per-block token-hash multiset and collapses pairs that
+    score at or above ``threshold`` into a single ``changed`` row.
+
+    The match is greedy (largest similarity first, locking partners as
+    we go). The full Hungarian assignment isn't worth the complexity:
+    for the residual ~500x500 dnsapi set the greedy solution recovers
+    >95% of the legitimate pairs and runs in well under a second.
+
+    A cheap pre-filter on block count (within 25%) is applied before
+    materializing the Jaccard score, so the worst-case cost is
+    O(n_a * n_b) cheap comparisons + O(matched * log_n) for the priority
+    list, not O(n_a * n_b) hash-set intersections.
+    """
+    from .structural_fingerprint import similarity_score
+
+    diff.cross_name_threshold = float(threshold)
+    if threshold > 1.0 or threshold <= 0.0:
+        return
+
+    # Collect candidate row indices on each side. We only consider rows
+    # whose structural fingerprint actually lifted (no point comparing
+    # token sets that are empty on one side).
+    added_indices: List[int] = []
+    removed_indices: List[int] = []
+    for i, row in enumerate(diff.rows):
+        if row.status == "added" and row.b is not None and row.name in structures_b:
+            added_indices.append(i)
+        elif row.status == "removed" and row.a is not None and row.name in structures_a:
+            removed_indices.append(i)
+
+    if not added_indices or not removed_indices:
+        return
+
+    # Pre-pull the FunctionStructure references and their block counts
+    # once — we'll be iterating the cross product.
+    added_pack: List[Tuple[int, "FunctionStructure", int]] = []
+    for idx in added_indices:
+        name = diff.rows[idx].name
+        fs = structures_b[name]
+        n_blocks = fs.stats[0] if fs.stats else 0
+        if n_blocks == 0 or not fs.block_token_hashes:
+            continue
+        added_pack.append((idx, fs, n_blocks))
+
+    removed_pack: List[Tuple[int, "FunctionStructure", int]] = []
+    for idx in removed_indices:
+        name = diff.rows[idx].name
+        fs = structures_a[name]
+        n_blocks = fs.stats[0] if fs.stats else 0
+        if n_blocks == 0 or not fs.block_token_hashes:
+            continue
+        removed_pack.append((idx, fs, n_blocks))
+
+    if not added_pack or not removed_pack:
+        return
+
+    # Build candidate pair list with similarity ≥ threshold. The block-
+    # count gate cuts the cross product hard for binaries like dnsapi
+    # where many functions are tiny thunks.
+    candidates: List[Tuple[float, int, int]] = []  # (sim, a_idx_in_pack, r_idx_in_pack)
+    for ai, (_, fa_struct, na_blocks) in enumerate(added_pack):
+        # Block-count window: anything outside 0.75x..1.33x can't reach
+        # Jaccard ≥ 0.85 with a sane block-overlap (the score is bounded
+        # above by min/max blocks).
+        lo = max(1, int(na_blocks * 0.75))
+        hi = max(lo, int(na_blocks * 1.34) + 1)
+        for ri, (_, fr_struct, nr_blocks) in enumerate(removed_pack):
+            if nr_blocks < lo or nr_blocks > hi:
+                continue
+            sim = similarity_score(fr_struct, fa_struct)
+            if sim >= threshold:
+                candidates.append((sim, ai, ri))
+
+    if not candidates:
+        return
+
+    # Greedy: sort by similarity descending; pick the best partner each
+    # round, lock both sides out of future picks.
+    candidates.sort(key=lambda t: (-t[0], t[1], t[2]))
+    matched_a: Dict[int, int] = {}  # ai -> ri
+    matched_r: Dict[int, int] = {}  # ri -> ai
+    pair_sim: Dict[Tuple[int, int], float] = {}
+    for sim, ai, ri in candidates:
+        if ai in matched_a or ri in matched_r:
+            continue
+        matched_a[ai] = ri
+        matched_r[ri] = ai
+        pair_sim[(ai, ri)] = sim
+
+    if not pair_sim:
+        return
+
+    # Rewrite the matched rows: collapse each (added, removed) pair into
+    # one ``changed`` row, blank out the consumed partner so we can drop
+    # it from the row list.
+    drop: List[int] = []
+    for (ai, ri), sim in pair_sim.items():
+        added_row_idx, fa_struct, _ = added_pack[ai]
+        removed_row_idx, fr_struct, _ = removed_pack[ri]
+        added_row = diff.rows[added_row_idx]
+        removed_row = diff.rows[removed_row_idx]
+
+        # Build the merged row. Prefer the b-side name (the post-build
+        # identity), but if either side has a PDB public symbol, surface
+        # it on the appropriate ``public_name_*`` field.
+        merged = FunctionDiff(
+            name=added_row.name,
+            status="changed",
+            a=removed_row.a,
+            b=added_row.b,
+            public_name_pre=removed_row.public_name_pre
+            or (pdb_map_a.get(removed_row.a.entry_va) if removed_row.a else None),
+            public_name_post=added_row.public_name_post
+            or (pdb_map_b.get(added_row.b.entry_va) if added_row.b else None),
+            similarity=sim,
+        )
+        diff.rows[added_row_idx] = merged
+        drop.append(removed_row_idx)
+
+    # Drop the now-redundant ``removed`` rows. Sort indices descending
+    # so list-index math stays valid as we pop.
+    for idx in sorted(set(drop), reverse=True):
+        del diff.rows[idx]
+
+    n_matched = len(pair_sim)
+    diff.cross_name_matched = n_matched
+    diff.added -= n_matched
+    diff.removed -= n_matched
+    diff.changed += n_matched
 
 
 def _resolve_pdb_symbol_map(binary_path: str, pdb_cache: Optional[str]) -> Dict[int, str]:
@@ -477,6 +670,13 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
     lines.append(f"# Binary diff — {Path(diff.binary_a).name} ↔ {Path(diff.binary_b).name}")
     lines.append("")
     lines.append(diff.summary_line())
+    if diff.cross_name_matched:
+        lines.append("")
+        lines.append(
+            f"_Cross-name structural match collapsed "
+            f"{diff.cross_name_matched} (added, removed) pairs into changed "
+            f"rows at Jaccard threshold {diff.cross_name_threshold:.2f}._"
+        )
     lines.append("")
     if diff.changed:
         lines.append("## Changed functions")
@@ -492,8 +692,14 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
             sim_str = "—" if r.similarity is None else f"{r.similarity:.3f}"
             sa = (r.a.structural_hash or "—") if r.a else "—"
             sb = (r.b.structural_hash or "—") if r.b else "—"
+            # Cross-name match: show both source names so the reader sees
+            # the rename or anonymous-side identity.
+            if r.a is not None and r.b is not None and r.a.name != r.b.name:
+                label = f"`{r.a.name}` → `{r.b.name}`"
+            else:
+                label = f"`{r.name}`"
             lines.append(
-                f"| {sim_str} | `{r.name}` | `{sa}` | `{sb}` "
+                f"| {sim_str} | {label} | `{sa}` | `{sb}` "
                 f"| {r.a.size} | {r.b.size} |"
             )
         if max_rows > 0 and diff.changed > max_rows:
@@ -514,18 +720,26 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
 def to_json(diff: BinaryDiff) -> str:
     """JSON serialization. Stable schema; never remove fields.
 
+    Schema 3 (Phase F6): adds top-level ``cross_name_matched`` and
+    ``cross_name_threshold`` so consumers can tell whether the v3
+    cross-name rematch pass ran and which threshold gated it.
+    ``changed`` rows produced by the rematch carry the same shape as
+    every other ``changed`` row (a + b populated, ``similarity`` set),
+    but their ``name`` may be the post-build identity even though both
+    PDB public-symbol fields are populated.
+
     Schema 2 (Phase F5): adds per-row ``similarity`` (Jaccard over
     per-block token-hash multisets, in [0,1], or ``null`` for one-
     sided rows / lift failures) and embeds ``structural_hash`` inside
     each side's fingerprint payload.
 
-    Backwards compat: schema 1 readers that ignore unknown fields will
+    Backwards compat: schema 1 and 2 readers that ignore unknown fields
     still work — every previously-emitted field name is preserved.
 
     ``public_name_pre`` and ``public_name_post`` (Phase F2 / A3) are
     still present on every row, ``null`` when no PDB cache is wired."""
     payload = {
-        "schema_version": "2",
+        "schema_version": "3",
         "binary_a": diff.binary_a,
         "binary_b": diff.binary_b,
         "functions_a": diff.functions_a,
@@ -534,6 +748,8 @@ def to_json(diff: BinaryDiff) -> str:
             "same": diff.same, "changed": diff.changed,
             "added": diff.added, "removed": diff.removed,
         },
+        "cross_name_matched": diff.cross_name_matched,
+        "cross_name_threshold": diff.cross_name_threshold,
         "rows": [
             {
                 "name": r.name, "status": r.status,

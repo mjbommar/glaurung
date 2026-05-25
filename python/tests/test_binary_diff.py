@@ -77,9 +77,10 @@ def test_to_json_round_trips() -> None:
     diff = diff_binaries(str(a), str(b))
     payload = to_json(diff)
     parsed = json.loads(payload)
-    # v2 adds structural-fingerprint + similarity fields; v1 readers
-    # that ignore unknown keys still parse it. Accept both.
-    assert parsed["schema_version"] in ("1", "2")
+    # v2 adds structural-fingerprint + similarity fields; v3 adds
+    # cross_name_matched diagnostics. v1 readers that ignore unknown
+    # keys still parse it. Accept all three.
+    assert parsed["schema_version"] in ("1", "2", "3")
     assert parsed["binary_a"] == str(a)
     assert parsed["binary_b"] == str(b)
     assert "summary" in parsed

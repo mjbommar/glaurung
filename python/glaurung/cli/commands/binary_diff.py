@@ -40,9 +40,26 @@ class BinaryDiffCommand(BaseCommand):
                  "`public_name_post` populated from the PDB at the row's "
                  "entry VA -- skips LLM-naming for nameable functions.",
         )
+        parser.add_argument(
+            "--cross-name-threshold",
+            type=float,
+            default=None,
+            help=(
+                "Jaccard-similarity cutoff for the v3 cross-name rematch "
+                "pass (Diaphora-style). Pairs of unmatched added/removed "
+                "rows scoring at or above this value get collapsed into a "
+                "single `changed` row. Set to 1.01 to disable the pass. "
+                "Default: 0.85."
+            ),
+        )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
-        from glaurung.llm.kb.binary_diff import diff_binaries, render_diff_markdown, to_json
+        from glaurung.llm.kb.binary_diff import (
+            CROSS_NAME_THRESHOLD_DEFAULT,
+            diff_binaries,
+            render_diff_markdown,
+            to_json,
+        )
 
         a, b = Path(args.binary_a), Path(args.binary_b)
         if not a.exists():
@@ -52,10 +69,16 @@ class BinaryDiffCommand(BaseCommand):
             formatter.output_plain(f"Error: binary b not found: {b}")
             return 2
 
+        threshold = (
+            args.cross_name_threshold
+            if args.cross_name_threshold is not None
+            else CROSS_NAME_THRESHOLD_DEFAULT
+        )
         diff = diff_binaries(
             str(a), str(b),
             skip_anonymous=not args.include_anonymous,
             pdb_cache=(args.pdb_cache or None),
+            cross_name_threshold=threshold,
         )
 
         if formatter.format_type == OutputFormat.JSON:
