@@ -24,28 +24,34 @@ class CFGCommand(BaseCommand):
         """Add command-specific arguments."""
         parser.add_argument("path", help="Path to file")
         parser.add_argument(
-            "--max-read-bytes", type=int, default=10_485_760, help="Max bytes to read"
+            "--max-read-bytes", type=int, default=1_073_741_824, help="Max bytes to read"
         )
         parser.add_argument(
-            "--max-file-size", type=int, default=104_857_600, help="Max file size"
+            "--max-file-size", type=int, default=1_073_741_824, help="Max file size"
         )
         parser.add_argument(
-            "--max-functions", type=int, default=16, help="Max functions to analyze"
+            "--max-functions",
+            type=int,
+            default=30_000,
+            help="Max functions to analyze (pre-2026-05-25 default was 16)",
         )
         parser.add_argument(
-            "--max-blocks", type=int, default=2048, help="Max basic blocks"
+            "--max-blocks",
+            type=int,
+            default=1_000_000,
+            help="Max basic blocks (pre-2026-05-25 default was 2048)",
         )
         parser.add_argument(
             "--max-instructions",
             type=int,
-            default=50_000,
-            help="Max instructions to process",
+            default=10_000_000,
+            help="Max instructions to process (pre-2026-05-25 default was 50000)",
         )
         parser.add_argument(
             "--timeout-ms",
             type=int,
-            default=100,
-            help="Analysis timeout in milliseconds",
+            default=300_000,
+            help="Analysis timeout in milliseconds (pre-2026-05-25 default was 100)",
         )
         parser.add_argument(
             "--dot",

@@ -267,9 +267,10 @@ def _resolve_pdb_symbol_map(binary_path: str, pdb_cache: Optional[str]) -> Dict[
         return {}
 
 
-def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 64) -> str:
+def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
     """Pretty-print a BinaryDiff as Markdown — used by the CLI and
-    safe to drop into the chat UI verbatim."""
+    safe to drop into the chat UI verbatim. ``max_rows=0`` (the default)
+    emits every changed row; set a positive value to truncate."""
     lines: List[str] = []
     lines.append(f"# Binary diff — {Path(diff.binary_a).name} ↔ {Path(diff.binary_b).name}")
     lines.append("")
@@ -280,12 +281,14 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 64) -> str:
         lines.append("")
         lines.append("| function | a hash | b hash | a size | b size |")
         lines.append("|---|---|---|---:|---:|")
-        for r in diff.changed_rows()[:max_rows]:
+        rows = diff.changed_rows()
+        shown = rows if max_rows <= 0 else rows[:max_rows]
+        for r in shown:
             lines.append(
                 f"| `{r.name}` | `{r.a.body_hash}` | `{r.b.body_hash}` "
                 f"| {r.a.size} | {r.b.size} |"
             )
-        if diff.changed > max_rows:
+        if max_rows > 0 and diff.changed > max_rows:
             lines.append(f"_… {diff.changed - max_rows} more_")
         lines.append("")
     if diff.added or diff.removed:

@@ -51,16 +51,28 @@ class DisasmCommand(BaseCommand):
             help="Target architecture",
         )
         parser.add_argument(
-            "--window-bytes", type=int, default=256, help="Number of bytes to read"
+            "--window-bytes",
+            type=int,
+            default=8192,
+            help="Number of bytes to read (pre-2026-05-25 default was 256)",
         )
         parser.add_argument(
             "--max-instructions",
             type=int,
-            default=32,
-            help="Maximum instructions to disassemble",
+            default=2048,
+            help=(
+                "Maximum instructions to disassemble (pre-2026-05-25 default "
+                "was 32, way too low for real functions)"
+            ),
         )
         parser.add_argument(
-            "--max-time-ms", type=int, default=20, help="Maximum time in milliseconds"
+            "--max-time-ms",
+            type=int,
+            default=5_000,
+            help=(
+                "Maximum time in milliseconds (pre-2026-05-25 default was 20, "
+                "way too tight for any real binary)"
+            ),
         )
         parser.add_argument(
             "--addr",

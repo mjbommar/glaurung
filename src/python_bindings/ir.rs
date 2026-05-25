@@ -504,9 +504,13 @@ fn remap_type_map(
 
 /// Decompile the first `limit` discovered functions. Returns a list of
 /// `(func_name, entry_va, pseudocode)` triples.
+///
+/// Default `limit=30000` matches the function-discovery cap so the
+/// `--all` flag really does emit every function unless the user
+/// explicitly opts back into a smaller window.
 #[pyfunction]
 #[pyo3(name = "decompile_all")]
-#[pyo3(signature = (path, limit=8usize, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, pdb_cache=""))]
+#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache=""))]
 fn decompile_all_py(
     py: Python<'_>,
     path: String,

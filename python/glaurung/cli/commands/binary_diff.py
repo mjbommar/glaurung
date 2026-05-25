@@ -26,8 +26,11 @@ class BinaryDiffCommand(BaseCommand):
                  "the resulting noise dominates real changes.",
         )
         parser.add_argument(
-            "--max-rows", type=int, default=64,
-            help="Cap on changed-function rows shown in Markdown output.",
+            "--max-rows", type=int, default=0,
+            help=(
+                "Cap on changed-function rows shown in Markdown output. "
+                "0 = unlimited. JSON output is never truncated regardless."
+            ),
         )
         parser.add_argument(
             "--pdb-cache",

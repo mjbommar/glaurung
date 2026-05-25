@@ -182,26 +182,33 @@ class WindowsRiskCommand(BaseCommand):
         parser.add_argument(
             "--max-functions",
             type=int,
-            default=4096,
-            help="Max functions to discover (default: 4096)",
+            default=30_000,
+            help="Max functions to discover (default: 30000; 0 = unlimited)",
         )
         parser.add_argument(
             "--max-candidates",
             type=int,
-            default=32,
-            help="Max function summaries to keep (default: 32)",
+            default=0,
+            help=(
+                "Max function summaries to keep in JSON output (default: 0 = "
+                "unlimited; pre-2026-05-25 default was 32 which silently "
+                "truncated big binaries like dnsapi.dll)"
+            ),
         )
         parser.add_argument(
             "--max-decompile",
             type=int,
-            default=16,
-            help="Max candidate functions to decompile for API patterns (default: 16)",
+            default=256,
+            help=(
+                "Max candidate functions to decompile for API patterns "
+                "(default: 256; 0 = unlimited; pre-2026-05-25 default was 16)"
+            ),
         )
         parser.add_argument(
             "--timeout-ms",
             type=int,
-            default=1000,
-            help="Per-analysis timeout in milliseconds where supported",
+            default=30_000,
+            help="Per-analysis timeout in milliseconds (default: 30000)",
         )
         parser.add_argument(
             "--str-min-len",
@@ -429,8 +436,10 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     _join_string_xrefs(path_str, args, data_xrefs, strings, by_va)
     _annotate_string_api_hints(function_rows, imports)
 
-    candidates = _select_candidates(function_rows, args.max_candidates)
-    if not args.no_decompile and args.max_decompile > 0:
+    # 0 = unlimited; treat any non-positive cap as "keep everything".
+    cap_candidates = args.max_candidates if args.max_candidates > 0 else len(function_rows)
+    candidates = _select_candidates(function_rows, cap_candidates)
+    if not args.no_decompile:
         _annotate_decompile_hits(path_str, args, candidates, imports)
     _annotate_function_summaries(candidates)
 
@@ -443,13 +452,14 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     # of going from sub_XXX -> NetrGetJoinInformation).
     _annotate_public_names(risk_items, candidates, path_str, args)
 
+    final_functions = candidates if args.max_candidates <= 0 else candidates[: args.max_candidates]
     return {
         "summary": {
             "path": path_str,
             "format": fmt,
             "arch": arch,
             "function_count": len(function_rows),
-            "function_rows": min(len(candidates), args.max_candidates),
+            "function_rows": len(final_functions),
             "import_count": len(imports),
             "export_count": len(exports),
             "lib_count": len(libs),
@@ -459,7 +469,7 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
         "pe_metadata": pe_metadata,
         "risk_imports": risk_imports,
         "risk_items": risk_items,
-        "functions": candidates[: args.max_candidates],
+        "functions": final_functions,
     }
 
 
@@ -535,8 +545,8 @@ def _collect_pe_metadata(
     libs: list[str],
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
-        "exports": exports[:128],
-        "libs": libs[:128],
+        "exports": list(exports),
+        "libs": list(libs),
     }
     resources = _collect_resource_metadata(path, args)
     if resources:
@@ -1237,7 +1247,9 @@ def _annotate_decompile_hits(
     imports: list[str],
 ) -> None:
     risk_api_names = _risk_api_name_pool(imports)
-    for row in candidates[: args.max_decompile]:
+    # 0 = unlimited; respect explicit cap if positive.
+    targets = candidates if args.max_decompile <= 0 else candidates[: args.max_decompile]
+    for row in targets:
         try:
             pseudocode = g.ir.decompile_at(
                 path,
