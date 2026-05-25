@@ -497,18 +497,22 @@ fn discover_function(
                     // splitting puts the cold half at a separate VA
                     // that's already a function in its own right. If
                     // the target is in our `known` set, treat the
-                    // branch as a boundary — don't follow it into
-                    // this function's body. We deliberately do NOT
-                    // gate on `target_looks_like_fn_start` for the
-                    // conditional case to avoid mis-classifying real
-                    // intra-function switch arms whose first byte
-                    // happens to match a prologue pattern.
+                    // branch as a boundary. We additionally treat a
+                    // FAR conditional branch (target >= 64KB away)
+                    // with a prologue-looking destination as a hot-
+                    // cold split — those are essentially never real
+                    // intra-function jumps. This catches dnsapi's
+                    // remaining outlier `Dns_RecordListAppend` which
+                    // jne's ~666KB to its cold-path slow handler.
+                    let target_is_far_prologue = !unconditional
+                        && target_looks_like_fn_start
+                        && tgt.abs_diff(start_va) >= 0x10000;
                     let is_tail_call = if unconditional {
                         target_is_known_fn
                             || is_thunk_pattern
                             || target_looks_like_fn_start
                     } else {
-                        target_is_known_fn
+                        target_is_known_fn || target_is_far_prologue
                     };
                     if is_tail_call {
                         // Record the target as a tail-call edge but do NOT
