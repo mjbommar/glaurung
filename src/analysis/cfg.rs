@@ -367,7 +367,8 @@ fn discover_function(
     regions: &[ExecRegion],
     budgets: &Budgets,
     pe_iat_name_by_va: &std::collections::HashMap<u64, String>,
-) -> Option<(Function, Vec<FunctionCallEdge>)> {
+    known_function_starts: &std::collections::HashSet<u64>,
+) -> Option<(Function, Vec<FunctionCallEdge>, Vec<u64>)> {
     let darch: crate::core::disassembler::Architecture = arch.into();
     let backend = registry::for_arch(darch, end)?;
     let bits = darch.address_bits();
@@ -380,6 +381,10 @@ fn discover_function(
     let mut blocks: HashMap<u64, (u64, u32)> = HashMap::new(); // start_va -> (end_va, instr_count)
     let mut edges: Vec<(u64, u64, ControlFlowEdgeKind)> = Vec::new();
     let mut call_edges: Vec<FunctionCallEdge> = Vec::new();
+    // Tail-call jmp targets we detected and intentionally did NOT queue
+    // into this function's body. The orchestrator turns these into new
+    // discovery seeds so the callee gets its own Function.
+    let mut tail_call_targets: Vec<u64> = Vec::new();
 
     if let Some(r) = in_exec_regions(regions, entry.value) {
         let _ = r;
@@ -453,12 +458,78 @@ fn discover_function(
                 let unconditional = ins.mnemonic.eq_ignore_ascii_case("jmp")
                     || ins.mnemonic.eq_ignore_ascii_case("b");
                 if let Some(tgt) = immediate_target(&ins) {
-                    // Queue target if new and in region
-                    if in_exec_regions(regions, tgt).is_some() && seen.insert(tgt) {
-                        queue.push_back(tgt);
+                    // Tail-call detection. An unconditional jmp to a target
+                    // that is ALREADY a known function start (PDB symbol,
+                    // export, prior seed, prior thunk-emitted target, etc.)
+                    // is a tail call, NOT a same-function jump. Without this
+                    // gate, a 5-byte `jmp impl` thunk absorbs the callee's
+                    // entire body — Ghidra cross-validation on dnsapi.dll
+                    // showed glaurung over-merging 6.4% of functions, max
+                    // 97,907x (e.g. DnsConnectionFreeProxyInfo: Ghidra
+                    // bounded as 5 bytes, glaurung as 489,534).
+                    //
+                    // Also: an unconditional jmp out of the function's
+                    // ENTRY block (no preceding non-trivial code) IS a
+                    // thunk by definition. Treat the target as a tail
+                    // call regardless of whether it's known yet.
+                    let is_thunk_pattern = unconditional
+                        && start_va == entry.value
+                        && instrs == 1;
+                    // Stronger heuristic: an unconditional jmp whose target
+                    // disassembles to a recognised function-prologue pattern
+                    // (push rbp / sub rsp / mov rax,rsp / jmp [iat] / etc.)
+                    // is almost certainly a tail call, even when the current
+                    // function has run several instructions of epilogue-
+                    // style cleanup before the jmp. This catches the cases
+                    // the thunk_pattern test misses (e.g. dnsapi's
+                    // Dns_AllocateRecord, IsDnsRecordTypeSupported — 22-32
+                    // byte functions that end with `jmp helper`).
+                    let target_looks_like_fn_start =
+                        pe_xref_seed_looks_like_function_start(data, tgt);
+                    let target_is_known_fn =
+                        known_function_starts.contains(&tgt);
+                    // Tail-call gate. For UNCONDITIONAL jmp it fires
+                    // on the standard set of triggers (thunk, known
+                    // function start, prologue-pattern target).
+                    //
+                    // For CONDITIONAL branches (jne to a cold-path
+                    // out-of-line handler), MSVC's hot/cold function
+                    // splitting puts the cold half at a separate VA
+                    // that's already a function in its own right. If
+                    // the target is in our `known` set, treat the
+                    // branch as a boundary — don't follow it into
+                    // this function's body. We deliberately do NOT
+                    // gate on `target_looks_like_fn_start` for the
+                    // conditional case to avoid mis-classifying real
+                    // intra-function switch arms whose first byte
+                    // happens to match a prologue pattern.
+                    let is_tail_call = if unconditional {
+                        target_is_known_fn
+                            || is_thunk_pattern
+                            || target_looks_like_fn_start
+                    } else {
+                        target_is_known_fn
+                    };
+                    if is_tail_call {
+                        // Record the target as a tail-call edge but do NOT
+                        // queue it into this function's body. Surface it as
+                        // a new seed so the orchestrator can discover it
+                        // as its own function.
+                        tail_call_targets.push(tgt);
+                        call_edges.push(FunctionCallEdge {
+                            callsite_va: cur_va,
+                            target_va: Some(tgt),
+                            target_name: None,
+                            call_type: CallType::Direct,
+                        });
+                    } else {
+                        // Queue target if new and in region
+                        if in_exec_regions(regions, tgt).is_some() && seen.insert(tgt) {
+                            queue.push_back(tgt);
+                        }
+                        // Use block start as source for CFG edges
+                        edges.push((start_va, tgt, ControlFlowEdgeKind::Branch));
                     }
-                    // Use block start as source for CFG edges
-                    edges.push((start_va, tgt, ControlFlowEdgeKind::Branch));
                 }
                 if !unconditional {
                     // Fallthrough edge
@@ -559,7 +630,7 @@ fn discover_function(
         }
     }
 
-    Some((func, call_edges))
+    Some((func, call_edges, tail_call_targets))
 }
 
 /// Heuristic: does `data[file_off..]` look like the start of a real
@@ -1647,7 +1718,7 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
         {
             continue;
         }
-        if let Some((f, calls)) = discover_function(
+        if let Some((f, calls, tail_calls)) = discover_function(
             data,
             arch,
             end,
@@ -1655,7 +1726,28 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
             &regions,
             budgets,
             &pe_iat_name_by_va,
+            &known,
         ) {
+            // Every tail-call jmp target the inner discoverer found needs
+            // to become its own seed so the callee gets a separate
+            // Function. Without this, a `jmp impl` thunk would correctly
+            // stop at the jmp (per the inner gate) but the implementation
+            // would never be discovered because nothing else seeds it.
+            for tgt in tail_calls {
+                if known.contains(&tgt) {
+                    continue;
+                }
+                if in_exec_regions(&regions, tgt).is_none() {
+                    continue;
+                }
+                if is_pe_image && !pe_xref_seed_looks_like_function_start(data, tgt) {
+                    continue;
+                }
+                if let Ok(addr) = Address::new(AddressKind::VA, tgt, bits, None, None) {
+                    worklist.push_back((addr, DiscoverySeedKind::Xref));
+                    known.insert(tgt);
+                }
+            }
             for call in &calls {
                 calls_all.push(RecordedCallEdge {
                     caller_entry_va: f.entry_point.value,
