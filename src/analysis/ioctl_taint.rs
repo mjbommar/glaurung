@@ -744,7 +744,7 @@ pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult {
     // inheriting from immediately-prior OUT) loses state if any
     // single intermediate block has a clobbering call. The
     // function-meet is robust to that.
-    let stable_state: State =
+    let (stable_state, stable_nonnull): (State, NonNull) =
         choose_dispatcher_state(&lf, &block_in, &block_nonnull, &block_seeded);
 
     let mut blocks_by_va: Vec<(usize, u64)> = lf
@@ -760,6 +760,7 @@ pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult {
             continue;
         }
         block_in[i] = stable_state.clone();
+        block_nonnull[i] = stable_nonnull.clone();
         block_seeded[i] = true;
         let mut tmp: Vec<TaintFinding> = Vec::new();
         let (_out_state, _edges) = step_block(
@@ -796,13 +797,20 @@ pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult {
     }
 }
 
-/// Choose the OUT-state to seed orphan (jump-table-dispatched) case
-/// bodies with. The IOCTL switch dispatcher block has — by
-/// construction — the richest IRP-derived register state in the
-/// function: SystemBuffer, StackLoc, and IoCtlCode are all live at the
-/// indirect jmp out of it. We approximate "is this the dispatcher?"
-/// by counting how many distinct IRP-derived taints appear in the
-/// block's OUT state.
+/// Choose the OUT-state + nonnull set to seed orphan (jump-table-
+/// dispatched) case bodies with. The IOCTL switch dispatcher block
+/// has — by construction — the richest IRP-derived register state
+/// in the function: SystemBuffer, StackLoc, and IoCtlCode are all live
+/// at the indirect jmp out of it. We approximate "is this the
+/// dispatcher?" by counting how many distinct IRP-derived taints
+/// appear in the block's OUT state.
+///
+/// We also propagate the OUT nonnull set so orphan case bodies
+/// inherit any null-check that's known to have passed before the
+/// dispatch. The intuition: storage / netio dispatchers typically
+/// emit `test SystemBuffer, SystemBuffer; jz error` before the
+/// case-table jump, and we want every case body to know that
+/// SystemBuffer is non-NULL on the path that reaches it.
 ///
 /// Ties: prefer the earliest-VA candidate. Multiple-major-function
 /// handlers have one dispatcher per major function; the IOCTL one is
@@ -812,7 +820,7 @@ fn choose_dispatcher_state(
     block_in: &[State],
     block_nonnull: &[NonNull],
     block_seeded: &[bool],
-) -> State {
+) -> (State, NonNull) {
     fn ioctl_score(s: &State) -> usize {
         // Count the number of registers holding a "deep" IRP-derived
         // value. SystemBuffer / UserBuffer / Type3InputBuffer / StackLoc
@@ -834,28 +842,40 @@ fn choose_dispatcher_state(
             })
             .count()
     }
-    let mut best: Option<(usize, u64, State)> = None;
+    let mut best: Option<(usize, u64, State, NonNull)> = None;
     for (i, block) in lf.blocks.iter().enumerate() {
         if !block_seeded[i] {
             continue;
         }
         let mut tmp: Vec<TaintFinding> = Vec::new();
-        let (out_state, _edges) =
+        let (out_state, edges) =
             step_block(block, &block_in[i], &block_nonnull[i], &mut tmp);
         let score = ioctl_score(&out_state);
         if score == 0 {
             continue;
         }
+        // Best-effort nonnull union from the block's outgoing edges
+        // (intersection is safer but loses info quickly; the "any
+        // successor learned this" reading approximates "the dispatcher
+        // body checked it"). The set is small, so this is cheap.
+        let mut nn_union: NonNull = block_nonnull[i].clone();
+        for ef in &edges {
+            for r in &ef.nonnull {
+                nn_union.insert(r.clone());
+            }
+        }
         let va = block.start_va;
         let pick = match &best {
             None => true,
-            Some((bs, bv, _)) => score > *bs || (score == *bs && va < *bv),
+            Some((bs, bv, ..)) => score > *bs || (score == *bs && va < *bv),
         };
         if pick {
-            best = Some((score, va, out_state));
+            best = Some((score, va, out_state, nn_union));
         }
     }
-    best.map(|(_, _, s)| s).unwrap_or_default()
+    best
+        .map(|(_, _, s, n)| (s, n))
+        .unwrap_or_else(|| (State::new(), NonNull::new()))
 }
 
 // --- Tests ------------------------------------------------------------------
