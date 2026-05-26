@@ -640,10 +640,53 @@ fn make_finding(
     })
 }
 
+/// Quick gate: does this function LOOK like a Windows WDM
+/// IRP_MJ_DEVICE_CONTROL handler? We test the highly-specific shape
+/// of the `Irp->Tail.Overlay.CurrentStackLocation` load — a Load from
+/// `[reg + 0xB8]` where the base is a 64-bit GPR. Offset `0xB8` on a
+/// pointer-typed register is virtually exclusive to IRP code: no
+/// other Windows kernel struct accessed in this way uses that
+/// offset.
+///
+/// Conservative: we don't require the base to be Irp-aliased
+/// (that needs CFG-aware tracking which is fragile across pushes /
+/// pops). The disp + access-width combination is selective enough on
+/// its own.
+fn looks_like_irp_handler(lf: &LlirFunction) -> bool {
+    const GPR64_BASES: &[&str] = &[
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+        "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+    ];
+    for block in &lf.blocks {
+        for ins in &block.instrs {
+            if let Op::Load { addr, .. } = &ins.op {
+                if let Some(base) = &addr.base {
+                    if let Some(base_canon) = vreg_canon(base) {
+                        if GPR64_BASES.contains(&base_canon.as_str())
+                            && addr.disp == 0xB8
+                            && addr.size == 8
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Run the IOCTL abstract-interpretation pass on a single function.
 pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult {
     let n = lf.blocks.len();
     if n == 0 {
+        return IoctlTaintResult::default();
+    }
+    // Skip non-IRP-handler functions entirely. Without this gate the
+    // arg2-as-Irp baseline produces phantom SystemBuffer findings in
+    // any function that happens to pass a 2nd-arg pointer through to
+    // a Load — common in non-IRP code.
+    if !looks_like_irp_handler(lf) {
         return IoctlTaintResult::default();
     }
 
@@ -898,8 +941,9 @@ mod tests {
     }
 
     /// Synthesise the usbprint.sys SystemBuffer dispatch shape:
-    /// entry block loads SystemBuffer into rdi, then we jump to a case
-    /// body that does `[rdi + 0]`.
+    /// entry block loads StackLoc (gates `looks_like_irp_handler`),
+    /// then SystemBuffer into rdi, then we jump to a case body that
+    /// does `[rdi + 0]`.
     #[test]
     fn detects_systembuffer_deref_via_case_body() {
         let entry = block(
@@ -908,16 +952,25 @@ mod tests {
             vec![
                 // mov rsi, rdx  (rsi = Irp)
                 instr(0x1000, Op::Assign { dst: vr("rsi"), src: Value::Reg(vr("rdx")) }),
-                // mov rdi, [rsi + 0x18]  (rdi = SystemBuffer)
+                // mov rax, [rsi + 0xB8]  (rax = StackLoc; satisfies the
+                // looks_like_irp_handler gate)
                 instr(
                     0x1003,
+                    Op::Load {
+                        dst: vr("rax"),
+                        addr: MemOp::plain(Some(vr("rsi")), None, 0, 0xB8, 8),
+                    },
+                ),
+                // mov rdi, [rsi + 0x18]  (rdi = SystemBuffer)
+                instr(
+                    0x100a,
                     Op::Load {
                         dst: vr("rdi"),
                         addr: MemOp::plain(Some(vr("rsi")), None, 0, 0x18, 8),
                     },
                 ),
                 // jmp 0x2000
-                instr(0x1006, Op::Jump { target: 0x2000 }),
+                instr(0x100d, Op::Jump { target: 0x2000 }),
             ],
             vec![0x2000],
         );
@@ -990,6 +1043,14 @@ mod tests {
             0x4000,
             0x4010,
             vec![
+                // rax = [rdx + 0xB8]   (StackLoc; satisfies gate)
+                instr(
+                    0x3ffc,
+                    Op::Load {
+                        dst: vr("rax"),
+                        addr: MemOp::plain(Some(vr("rdx")), None, 0, 0xB8, 8),
+                    },
+                ),
                 // rdi = [rdx + 0x18]   (SystemBuffer)
                 instr(
                     0x4000,
@@ -1061,6 +1122,53 @@ mod tests {
         );
     }
 
+    /// Non-IRP handler shape: function takes (rcx, rdx) but never
+    /// loads `[reg + 0xB8]`. The gate must skip it entirely so no
+    /// phantom SystemBuffer findings emerge from the arg2-as-Irp
+    /// baseline.
+    #[test]
+    fn non_irp_handler_is_skipped_by_gate() {
+        let lf = LlirFunction {
+            entry_va: 0x6000,
+            blocks: vec![block(
+                0x6000,
+                0x6020,
+                vec![
+                    // rbp = rdx  (some helper that passes through arg2)
+                    instr(0x6000, Op::Assign { dst: vr("rbp"), src: Value::Reg(vr("rdx")) }),
+                    // rax = [rbp + 0x10]  (would be tagged SystemBuffer
+                    // if disp were 0x18, but here it's just 0x10)
+                    instr(
+                        0x6003,
+                        Op::Load {
+                            dst: vr("rax"),
+                            addr: MemOp::plain(Some(vr("rbp")), None, 0, 0x10, 8),
+                        },
+                    ),
+                    // mov [rax + 0x10], rcx -- if gate didn't fire, this
+                    // would be a Write with base=rax. Since rax isn't
+                    // SystemBuffer (no Irp+0x18 load happened), the
+                    // analysis must not produce a finding either way.
+                    instr(
+                        0x6007,
+                        Op::Store {
+                            addr: MemOp::plain(Some(vr("rax")), None, 0, 0x10, 4),
+                            src: Value::Reg(vr("rcx")),
+                        },
+                    ),
+                    instr(0x600a, Op::Return),
+                ],
+                vec![],
+            )],
+        };
+        let res = analyze(&lf);
+        assert!(
+            res.findings.is_empty(),
+            "non-IRP handler must produce no findings: {:?}",
+            res.findings
+        );
+    }
+
     /// MS x64 call clobbers caller-saved regs: SystemBuffer in rdx
     /// (caller-saved) is lost across a call, but if it was in rdi
     /// (callee-saved) it survives.
@@ -1072,6 +1180,14 @@ mod tests {
                 0x5000,
                 0x5020,
                 vec![
+                    // r11 = [rdx + 0xB8]  (StackLoc; satisfies gate)
+                    instr(
+                        0x4ffc,
+                        Op::Load {
+                            dst: vr("r11"),
+                            addr: MemOp::plain(Some(vr("rdx")), None, 0, 0xB8, 8),
+                        },
+                    ),
                     // rax = [rdx + 0x18]  (rax = SystemBuffer)
                     instr(
                         0x5000,
