@@ -881,6 +881,13 @@ pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult {
     // inheriting from immediately-prior OUT) loses state if any
     // single intermediate block has a clobbering call. The
     // function-meet is robust to that.
+    // Choose the function-wide dispatcher_state to seed every
+    // orphan block with. Per-orphan seeding (linear-VA-precedent
+    // only) was tested and reverted: it tagged more case bodies in
+    // storage stack dispatchers as having SystemBuffer in scope,
+    // which 3-5x'd those FP clusters even though it fixed the
+    // usbhub.NodeConnInfoExApi false positive. Function-wide seed
+    // is the better point on the precision/recall curve.
     let (stable_state, stable_nonnull): (State, NonNull) =
         choose_dispatcher_state(&lf, &block_in, &block_nonnull, &block_seeded);
 
@@ -934,51 +941,40 @@ pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult {
     }
 }
 
-/// Choose the OUT-state + nonnull set to seed orphan (jump-table-
-/// dispatched) case bodies with. The IOCTL switch dispatcher block
-/// has — by construction — the richest IRP-derived register state
-/// in the function: SystemBuffer, StackLoc, and IoCtlCode are all live
-/// at the indirect jmp out of it. We approximate "is this the
-/// dispatcher?" by counting how many distinct IRP-derived taints
-/// appear in the block's OUT state.
-///
-/// We also propagate the OUT nonnull set so orphan case bodies
-/// inherit any null-check that's known to have passed before the
-/// dispatch. The intuition: storage / netio dispatchers typically
-/// emit `test SystemBuffer, SystemBuffer; jz error` before the
-/// case-table jump, and we want every case body to know that
-/// SystemBuffer is non-NULL on the path that reaches it.
-///
-/// Ties: prefer the earliest-VA candidate. Multiple-major-function
-/// handlers have one dispatcher per major function; the IOCTL one is
-/// typically the first to reach maximum richness.
+fn ioctl_score(s: &State) -> usize {
+    // Count the number of registers holding a "deep" IRP-derived
+    // value. SystemBuffer / UserBuffer / Type3InputBuffer / StackLoc /
+    // IoCtlCode / InputLen / OutputLen all signal "we made it into the
+    // dispatcher". Irp / DeviceObject by themselves are entry-block
+    // state and not unique to a dispatcher.
+    s.values()
+        .filter(|t| {
+            matches!(
+                t,
+                Taint::SystemBuffer
+                    | Taint::UserBuffer
+                    | Taint::Type3InputBuffer
+                    | Taint::StackLoc
+                    | Taint::IoCtlCode
+                    | Taint::InputLen
+                    | Taint::OutputLen
+            )
+        })
+        .count()
+}
+
+/// Compute the function-wide IOCTL dispatcher state. Used both as the
+/// `dispatcher_state` debug output AND as the seed for every orphan
+/// (jump-table-dispatched case body) block. We pick the block with
+/// the highest IRP-richness score; ties broken by lowest start VA
+/// (multiple-major-function handlers, the IOCTL one tends to reach
+/// maximum richness first).
 fn choose_dispatcher_state(
     lf: &LlirFunction,
     block_in: &[State],
     block_nonnull: &[NonNull],
     block_seeded: &[bool],
 ) -> (State, NonNull) {
-    fn ioctl_score(s: &State) -> usize {
-        // Count the number of registers holding a "deep" IRP-derived
-        // value. SystemBuffer / UserBuffer / Type3InputBuffer / StackLoc
-        // / IoCtlCode / InputLen / OutputLen all signal "we made it
-        // into the dispatcher". Irp / DeviceObject by themselves are
-        // entry-block state and not unique to a dispatcher.
-        s.values()
-            .filter(|t| {
-                matches!(
-                    t,
-                    Taint::SystemBuffer
-                        | Taint::UserBuffer
-                        | Taint::Type3InputBuffer
-                        | Taint::StackLoc
-                        | Taint::IoCtlCode
-                        | Taint::InputLen
-                        | Taint::OutputLen
-                )
-            })
-            .count()
-    }
     let mut best: Option<(usize, u64, State, NonNull)> = None;
     for (i, block) in lf.blocks.iter().enumerate() {
         if !block_seeded[i] {
@@ -991,10 +987,6 @@ fn choose_dispatcher_state(
         if score == 0 {
             continue;
         }
-        // Best-effort nonnull union from the block's outgoing edges
-        // (intersection is safer but loses info quickly; the "any
-        // successor learned this" reading approximates "the dispatcher
-        // body checked it"). The set is small, so this is cheap.
         let mut nn_union: NonNull = block_nonnull[i].clone();
         for ef in &edges {
             for r in &ef.nonnull {
