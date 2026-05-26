@@ -21,6 +21,7 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
 
     // IOCTL handler abstract-interpretation for Windows WDM drivers.
     analysis_mod.add_function(wrap_pyfunction!(ioctl_taint_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(ioctl_taint_all_path_py, &analysis_mod)?)?;
 
     // VA to file offset mapping
     analysis_mod.add_function(wrap_pyfunction!(va_to_file_offset_path_py, &analysis_mod)?)?;
@@ -1568,4 +1569,117 @@ fn ioctl_taint_path_py(
     }
     out.set_item("block_lastop", lastop_dict)?;
     Ok(out.into())
+}
+
+/// Batched: run the IOCTL taint analysis on EVERY function in a
+/// driver, returning the list of unguarded IRP-derived findings
+/// across all functions. Doing all functions in one Rust call avoids
+/// the cost of re-running `analyze_functions_path` per function, which
+/// is the dominant per-driver cost.
+///
+/// Returns `[{function_va, function_name, findings: [...]}, ...]`
+/// where each `findings` entry has the same shape as
+/// `ioctl_taint_path` produces.
+#[pyfunction]
+#[pyo3(name = "ioctl_taint_all_path")]
+#[pyo3(signature = (path, pdb_cache=None, max_read_bytes=104_857_600u64, max_file_size=1_073_741_824u64))]
+fn ioctl_taint_all_path_py(
+    py: Python<'_>,
+    path: String,
+    pdb_cache: Option<String>,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Py<PyAny>> {
+    use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+    use crate::analysis::entry::detect_entry;
+    use crate::analysis::ioctl_taint;
+
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+
+    let arch = detect_entry(&data)
+        .map(|info| info.arch)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("could not detect architecture")
+        })?;
+
+    // PDB names (best-effort).
+    let pdb_map: std::collections::HashMap<u64, String> = match &pdb_cache {
+        Some(cache) if !cache.is_empty() && std::path::Path::new(cache).is_dir() => {
+            crate::ir::name_resolve::collect_pdb_public_symbol_map(
+                &path,
+                std::path::Path::new(cache),
+            )
+            .into_iter()
+            .collect()
+        }
+        _ => Default::default(),
+    };
+
+    let budgets = Budgets {
+        max_functions: 30_000,
+        max_blocks: 1_000_000,
+        max_instructions: 10_000_000,
+        timeout_ms: 300_000,
+    };
+    let (funcs, _) = analyze_functions_bytes(&data, &budgets);
+
+    let out_list = pyo3::types::PyList::empty(py);
+    for func in &funcs {
+        let entry_va = func.entry_point.value;
+        let Some(range) = func.range.as_ref() else { continue };
+        let start_va = range.start.value;
+        let end_va = range.start.value.saturating_add(range.size);
+        let Some(file_off) = crate::analysis::entry::va_to_file_offset(&data, start_va) else { continue };
+        let size = end_va.saturating_sub(start_va) as usize;
+        let end_off = file_off.saturating_add(size).min(data.len());
+        if file_off >= end_off { continue }
+        let window = &data[file_off..end_off];
+        let instrs = match arch {
+            crate::core::binary::Arch::X86 => crate::ir::lift_x86::lift_bytes(window, start_va, 32),
+            crate::core::binary::Arch::X86_64 => crate::ir::lift_x86::lift_bytes(window, start_va, 64),
+            _ => continue,
+        };
+        let lf = ioctl_taint::build_llir_function_linear(entry_va, instrs);
+        let res = ioctl_taint::analyze(&lf);
+        if res.findings.is_empty() { continue }
+
+        let fn_dict = pyo3::types::PyDict::new(py);
+        fn_dict.set_item("function_va", entry_va)?;
+        let fname = pdb_map
+            .get(&entry_va)
+            .cloned()
+            .or_else(|| {
+                if !func.name.is_empty() && func.name != "<unnamed>" {
+                    Some(func.name.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| format!("sub_{entry_va:x}"));
+        fn_dict.set_item("function_name", fname)?;
+        let findings_list = pyo3::types::PyList::empty(py);
+        for f in res.findings {
+            let d = pyo3::types::PyDict::new(py);
+            d.set_item("deref_va", f.deref_va)?;
+            d.set_item("block_va", f.block_va)?;
+            d.set_item("base_reg", f.base_reg)?;
+            d.set_item("base_kind", f.base_kind.as_str())?;
+            d.set_item("disp", f.disp)?;
+            d.set_item("access_width", f.access_width)?;
+            d.set_item(
+                "access",
+                match f.access {
+                    crate::analysis::ioctl_taint::Access::Read => "Read",
+                    crate::analysis::ioctl_taint::Access::Write => "Write",
+                },
+            )?;
+            d.set_item("guarded_by_nullcheck", f.guarded_by_nullcheck)?;
+            findings_list.append(d)?;
+        }
+        fn_dict.set_item("findings", &findings_list)?;
+        out_list.append(fn_dict)?;
+    }
+    Ok(out_list.into())
 }
