@@ -12,6 +12,7 @@ pub mod elf_got;
 pub mod elf_plt;
 pub mod entry;
 pub mod gopclntab;
+pub mod ioctl_taint;
 pub mod java_class;
 pub mod java_jar;
 pub mod jump_table;

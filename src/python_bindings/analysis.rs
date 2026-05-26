@@ -19,6 +19,9 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     analysis_mod.add_function(wrap_pyfunction!(analyze_functions_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(data_xrefs_path_py, &analysis_mod)?)?;
 
+    // IOCTL handler abstract-interpretation for Windows WDM drivers.
+    analysis_mod.add_function(wrap_pyfunction!(ioctl_taint_path_py, &analysis_mod)?)?;
+
     // VA to file offset mapping
     analysis_mod.add_function(wrap_pyfunction!(va_to_file_offset_path_py, &analysis_mod)?)?;
 
@@ -1390,4 +1393,179 @@ fn gopclntab_names_path_py(
             e,
         ))),
     }
+}
+
+/// IOCTL-handler abstract interpretation for Windows WDM drivers.
+///
+/// Lifts a single function (specified by entry VA) and runs the
+/// IRP-aware register taint analysis from `analysis::ioctl_taint`.
+/// Returns a dict:
+///
+/// ```text
+/// {
+///   "entry_va": int,
+///   "findings": [
+///     {
+///       "deref_va": int,
+///       "block_va": int,
+///       "base_reg": str,         # e.g. "rdi"
+///       "base_kind": str,        # "SystemBuffer" | "UserBuffer" | "Type3InputBuffer"
+///       "disp": int,
+///       "access_width": int,
+///       "access": "Read" | "Write",
+///       "guarded_by_nullcheck": bool,
+///     }, ...
+///   ],
+/// }
+/// ```
+///
+/// Returns `{"entry_va": ..., "findings": []}` when the function
+/// cannot be located, the architecture is unsupported, or no
+/// IRP-derived derefs were found.
+#[pyfunction]
+#[pyo3(name = "ioctl_taint_path")]
+#[pyo3(signature = (path, entry_va, max_read_bytes=104_857_600u64, max_file_size=1_073_741_824u64))]
+fn ioctl_taint_path_py(
+    py: Python<'_>,
+    path: String,
+    entry_va: u64,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Py<PyAny>> {
+    use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+    use crate::analysis::entry::detect_entry;
+    use crate::analysis::ioctl_taint;
+    use crate::ir::lift_function;
+
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+
+    let arch = detect_entry(&data)
+        .map(|info| info.arch)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("could not detect architecture")
+        })?;
+
+    let budgets = Budgets {
+        max_functions: 30_000,
+        max_blocks: 1_000_000,
+        max_instructions: 10_000_000,
+        timeout_ms: 300_000,
+    };
+    let (funcs, _) = analyze_functions_bytes(&data, &budgets);
+    let func = funcs
+        .iter()
+        .find(|f| f.entry_point.value == entry_va);
+    let out = pyo3::types::PyDict::new(py);
+    out.set_item("entry_va", entry_va)?;
+    let findings_list = pyo3::types::PyList::empty(py);
+    out.set_item("findings", &findings_list)?;
+    let Some(func) = func else {
+        return Ok(out.into());
+    };
+
+    // The CFG pass often misses jump-table-dispatched case bodies in
+    // Windows IOCTL switch dispatchers. Lift the function's entire
+    // byte range linearly and synthesise blocks ourselves, so case
+    // bodies always end up in the LLIR. Falls back to the CFG-shaped
+    // lift if the function has no range.
+    let lf = if let Some(range) = func.range.as_ref() {
+        let start_va = range.start.value;
+        let end_va = range.start.value.saturating_add(range.size);
+        let Some(file_off) = crate::analysis::entry::va_to_file_offset(&data, start_va) else {
+            return Ok(out.into());
+        };
+        let size = end_va.saturating_sub(start_va) as usize;
+        let end_off = file_off.saturating_add(size).min(data.len());
+        if file_off >= end_off {
+            return Ok(out.into());
+        }
+        let window = &data[file_off..end_off];
+        let instrs = match arch {
+            crate::core::binary::Arch::X86 => {
+                crate::ir::lift_x86::lift_bytes(window, start_va, 32)
+            }
+            crate::core::binary::Arch::X86_64 => {
+                crate::ir::lift_x86::lift_bytes(window, start_va, 64)
+            }
+            _ => return Ok(out.into()),
+        };
+        ioctl_taint::build_llir_function_linear(entry_va, instrs)
+    } else {
+        match lift_function::lift_function_from_bytes(&data, func, arch) {
+            Some(lf) => lf,
+            None => return Ok(out.into()),
+        }
+    };
+    let res = ioctl_taint::analyze(&lf);
+
+    for f in res.findings {
+        let d = pyo3::types::PyDict::new(py);
+        d.set_item("deref_va", f.deref_va)?;
+        d.set_item("block_va", f.block_va)?;
+        d.set_item("base_reg", f.base_reg)?;
+        d.set_item("base_kind", f.base_kind.as_str())?;
+        d.set_item("disp", f.disp)?;
+        d.set_item("access_width", f.access_width)?;
+        d.set_item(
+            "access",
+            match f.access {
+                crate::analysis::ioctl_taint::Access::Read => "Read",
+                crate::analysis::ioctl_taint::Access::Write => "Write",
+            },
+        )?;
+        d.set_item("guarded_by_nullcheck", f.guarded_by_nullcheck)?;
+        findings_list.append(d)?;
+    }
+    // Debug: dump block_in states for the function
+    let block_in_dict = pyo3::types::PyDict::new(py);
+    for (va, state) in res.block_in.iter() {
+        let s_dict = pyo3::types::PyDict::new(py);
+        for (reg, taint) in state {
+            s_dict.set_item(reg, taint.as_str())?;
+        }
+        block_in_dict.set_item(*va, s_dict)?;
+    }
+    out.set_item("block_in", block_in_dict)?;
+    out.set_item("block_count", lf.blocks.len())?;
+    let disp_dict = pyo3::types::PyDict::new(py);
+    for (reg, taint) in &res.dispatcher_state {
+        disp_dict.set_item(reg, taint.as_str())?;
+    }
+    out.set_item("dispatcher_state", disp_dict)?;
+    // Debug: per-block successor list so we can validate block
+    // construction and CFG edges.
+    let succs_dict = pyo3::types::PyDict::new(py);
+    for b in &lf.blocks {
+        succs_dict.set_item(b.start_va, b.succs.clone())?;
+    }
+    out.set_item("block_succs", succs_dict)?;
+    // Debug: per-block last-op kind, so we can see how block ends.
+    let lastop_dict = pyo3::types::PyDict::new(py);
+    for b in &lf.blocks {
+        let kind = b.instrs.last().map(|i| {
+            match &i.op {
+                crate::ir::types::Op::Jump { target } => format!("Jump({:#x})", target),
+                crate::ir::types::Op::CondJump { target, inverted, .. } => {
+                    format!("CondJump({:#x}, inv={})", target, inverted)
+                }
+                crate::ir::types::Op::Call { .. } => "Call".to_string(),
+                crate::ir::types::Op::Return => "Return".to_string(),
+                crate::ir::types::Op::Nop => "Nop".to_string(),
+                crate::ir::types::Op::Unknown { mnemonic } => format!("Unknown({})", mnemonic),
+                crate::ir::types::Op::Load { .. } => "Load".to_string(),
+                crate::ir::types::Op::Store { .. } => "Store".to_string(),
+                crate::ir::types::Op::Bin { .. } => "Bin".to_string(),
+                crate::ir::types::Op::Un { .. } => "Un".to_string(),
+                crate::ir::types::Op::Cmp { .. } => "Cmp".to_string(),
+                crate::ir::types::Op::Assign { .. } => "Assign".to_string(),
+                crate::ir::types::Op::CondAssign { .. } => "CondAssign".to_string(),
+            }
+        }).unwrap_or_else(|| "EMPTY".to_string());
+        let last_va = b.instrs.last().map(|i| i.va).unwrap_or(0);
+        lastop_dict.set_item(b.start_va, (last_va, kind))?;
+    }
+    out.set_item("block_lastop", lastop_dict)?;
+    Ok(out.into())
 }
