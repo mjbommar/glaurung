@@ -653,6 +653,14 @@ fn make_finding(
 /// pops). The disp + access-width combination is selective enough on
 /// its own.
 fn looks_like_irp_handler(lf: &LlirFunction) -> bool {
+    // Require a `[reg + 0xB8]` 8-byte load — `Irp->Tail.Overlay.CurrentStackLocation`.
+    // This offset+width is uniquely IRP-specific; other struct fields
+    // at offset 0x18 (SystemBuffer-shaped) trigger false positives in
+    // helper functions whose 2nd arg happens to be a struct with a
+    // pointer field at offset 0x18. Both primary IRP_MJ dispatchers
+    // and the secondary IOCTL helpers (e.g. UsbhIoctlGetNode*)
+    // contain a `[reg + 0xB8]` load somewhere, so the strict gate
+    // doesn't sacrifice recall.
     const GPR64_BASES: &[&str] = &[
         "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
         "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
@@ -663,8 +671,8 @@ fn looks_like_irp_handler(lf: &LlirFunction) -> bool {
                 if let Some(base) = &addr.base {
                     if let Some(base_canon) = vreg_canon(base) {
                         if GPR64_BASES.contains(&base_canon.as_str())
-                            && addr.disp == 0xB8
                             && addr.size == 8
+                            && addr.disp == 0xB8
                         {
                             return true;
                         }
