@@ -366,6 +366,23 @@ struct NullEq {
     reg: String,
 }
 
+/// A pending flag definition that says "flag = (Len < K)" or
+/// equivalent unsigned-less inequality. When a `CondJump` branches on
+/// this flag and K > 0, we know:
+///   - taken branch: Len < K, so Len could be 0
+///   - fall-through:  Len >= K > 0, so Len > 0, so SystemBuffer is
+///                    non-NULL (I/O Manager guarantee for
+///                    METHOD_BUFFERED IOCTLs).
+///
+/// The "implies SystemBuffer non-null" propagates to every register
+/// with a SystemBuffer-class taint in the OUT state.
+#[derive(Debug, Clone)]
+struct LengthCheck {
+    /// Was the comparison `Len < K` (true) or `Len <= K` (false)?
+    /// Both produce the same conclusion when K > 0.
+    _strict: bool,
+}
+
 /// Per-block view of "registers known non-null on entry to this block".
 type NonNull = BTreeSet<String>;
 
@@ -381,10 +398,22 @@ fn transfer_value(state: &State, v: &Value) -> Taint {
     }
 }
 
-/// Apply a single op to `state`. Returns an optional null-check
-/// definition the op just produced (used downstream to refine `nonnull`
-/// on branch edges).
-fn apply_op(state: &mut State, op: &Op) -> Option<NullEq> {
+/// A flag the last `Cmp` op wrote, with the inference it permits.
+#[derive(Debug, Clone)]
+enum FlagInference {
+    /// Null check: `reg == 0` -> flag Z. Pending on a CondJump
+    /// reading the flag.
+    Null(NullEq),
+    /// Length check: `len < K` (Ult flag) or `len <= K` (Ule flag),
+    /// with K > 0. Implies SystemBuffer non-null on the not-taken
+    /// branch.
+    Length(LengthCheck),
+}
+
+/// Apply a single op to `state`. Returns an optional flag-inference
+/// the op just produced (used downstream to refine `nonnull` on
+/// branch edges).
+fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
     match op {
         Op::Assign { dst, src } => {
             let v = transfer_value(state, src);
@@ -425,12 +454,17 @@ fn apply_op(state: &mut State, op: &Op) -> Option<NullEq> {
             None
         }
         Op::Cmp { dst: _, op, lhs, rhs } => {
-            // Recognise null-against-self idiom (TEST R, R) and
-            // explicit `CMP R, 0`. Both make the Z flag = (R == 0).
+            // Recognise the patterns we use downstream:
             //
-            // The lifter encodes `test r, r` as Cmp(Eq, R, R) writing
-            // Flag::Z, and `cmp r, 0` as Cmp(Eq, R, 0). Either is good
-            // enough.
+            //   1. Null check: `test R, R` (Cmp Eq, R, R) or `cmp R, 0`
+            //      (Cmp Eq, R, 0). The cond_jump on Z will be a
+            //      direct null guard.
+            //
+            //   2. Length check: `cmp Len, K` (Cmp Ult or Ule, Len, K)
+            //      where state[Len] is InputLen / OutputLen and K > 0.
+            //      The cond_jump on the unsigned-less flag means the
+            //      not-taken branch has Len >= K > 0, so SystemBuffer
+            //      is non-NULL (I/O Manager guarantee).
             let (subj, val) = (lhs, rhs);
             let subj_reg = if let Value::Reg(r) = subj {
                 vreg_canon(r)
@@ -439,10 +473,29 @@ fn apply_op(state: &mut State, op: &Op) -> Option<NullEq> {
             };
             let val_is_self = matches!((subj, val), (Value::Reg(a), Value::Reg(b)) if vreg_canon(a) == vreg_canon(b));
             let val_is_zero = matches!(val, Value::Const(0));
+            let val_const = if let Value::Const(c) = val { Some(*c) } else { None };
+
+            // Null check?
             if matches!(op, CmpOp::Eq) && subj_reg.is_some() && (val_is_self || val_is_zero) {
-                return Some(NullEq {
+                return Some(FlagInference::Null(NullEq {
                     reg: subj_reg.unwrap(),
-                });
+                }));
+            }
+
+            // Length check?
+            if let (Some(reg), Some(k)) = (&subj_reg, val_const) {
+                if k > 0 {
+                    let subj_taint = read_reg(state, reg);
+                    if matches!(subj_taint, Taint::InputLen | Taint::OutputLen) {
+                        let strict = matches!(op, CmpOp::Ult);
+                        let _is_ule = matches!(op, CmpOp::Ule);
+                        if matches!(op, CmpOp::Ult | CmpOp::Ule) {
+                            return Some(FlagInference::Length(LengthCheck {
+                                _strict: strict,
+                            }));
+                        }
+                    }
+                }
             }
             None
         }
@@ -504,7 +557,7 @@ fn step_block(
 ) -> (State, Vec<EdgeFact>) {
     let mut state = in_state.clone();
     let mut local_nonnull = in_nonnull.clone();
-    let mut pending_nulleq: Option<NullEq> = None;
+    let mut pending_flag: Option<FlagInference> = None;
 
     for (idx, ins) in block.instrs.iter().enumerate() {
         // Record any IRP-derived deref BEFORE we apply the op's
@@ -525,12 +578,12 @@ fn step_block(
         }
 
         // Apply the op to the abstract state.
-        let nulleq = apply_op(&mut state, &ins.op);
+        let flag_inf = apply_op(&mut state, &ins.op);
 
-        // If this op produced a null-eq flag, remember it; the CondJump
-        // at end-of-block will consume it.
-        if nulleq.is_some() {
-            pending_nulleq = nulleq;
+        // If this op produced a flag inference, remember it; the
+        // CondJump at end-of-block will consume it.
+        if flag_inf.is_some() {
+            pending_flag = flag_inf;
         }
 
         // Intra-block: a successful null-check (`if (R == NULL) goto X`
@@ -549,12 +602,11 @@ fn step_block(
     let last = block.instrs.last().map(|i| &i.op);
     match last {
         Some(Op::CondJump { cond: _, target, inverted }) => {
-            // Any pending NullEq from this block applies. The lifter
-            // emits cmp/test → flag write → jcc reading that flag in a
-            // contiguous sequence; the most recent NullEq within the
-            // block is what this CondJump is branching on. Flag VRegs
-            // are not physical so we don't try to match flag names.
-            let nulleq = pending_nulleq.as_ref();
+            // Any pending FlagInference from this block applies. The
+            // lifter emits cmp/test → flag write → jcc reading that
+            // flag in a contiguous sequence; the most recent inference
+            // within the block is what this CondJump is branching on.
+            let flag_inf = pending_flag.as_ref();
             // Two successors: the conditional target and (typically)
             // the fall-through.
             // Successors are recorded in block.succs; we treat the
@@ -562,18 +614,52 @@ fn step_block(
             let taken_va = *target;
             let mut taken_nonnull = local_nonnull.clone();
             let mut not_taken_nonnull = local_nonnull.clone();
-            if let Some(neq) = nulleq {
-                if *inverted {
-                    // jne / jnz: taken when flag is FALSE
-                    // → taken means (R == 0) is false → R nonnull on taken
-                    // → fallthrough means R IS zero
-                    taken_nonnull.insert(neq.reg.clone());
-                } else {
-                    // je / jz: taken when flag is TRUE
-                    // → taken means R IS zero
-                    // → fallthrough means R is nonnull
-                    not_taken_nonnull.insert(neq.reg.clone());
+            match flag_inf {
+                Some(FlagInference::Null(neq)) => {
+                    if *inverted {
+                        // jne / jnz: taken when (R == 0) is FALSE
+                        // → taken means R nonnull
+                        // → fallthrough means R IS zero
+                        taken_nonnull.insert(neq.reg.clone());
+                    } else {
+                        // je / jz: taken when R IS zero
+                        // → fallthrough means R nonnull
+                        not_taken_nonnull.insert(neq.reg.clone());
+                    }
                 }
+                Some(FlagInference::Length(_)) => {
+                    // `cmp Len, K` where K > 0. Flag is "Len < K" (or
+                    // "Len <= K"). On the branch where Len >= K > 0,
+                    // SystemBuffer is non-NULL (METHOD_BUFFERED I/O
+                    // Manager guarantee). Add every SystemBuffer-
+                    // class register in `state` to that branch's
+                    // nonnull set.
+                    let mut sb_regs: Vec<String> = Vec::new();
+                    for (reg, t) in &state {
+                        if matches!(
+                            t,
+                            Taint::SystemBuffer
+                                | Taint::UserBuffer
+                                | Taint::Type3InputBuffer
+                        ) {
+                            sb_regs.push(reg.clone());
+                        }
+                    }
+                    if *inverted {
+                        // jae / jnb: taken when (Len < K) is FALSE
+                        // → taken means Len >= K > 0 → SystemBuffer non-NULL
+                        for r in &sb_regs {
+                            taken_nonnull.insert(r.clone());
+                        }
+                    } else {
+                        // jb: taken when Len < K → error path
+                        // → fall-through means Len >= K > 0 → SystemBuffer non-NULL
+                        for r in &sb_regs {
+                            not_taken_nonnull.insert(r.clone());
+                        }
+                    }
+                }
+                None => {}
             }
             for s in &block.succs {
                 let nn = if *s == taken_va {
@@ -1127,6 +1213,101 @@ mod tests {
         assert!(
             f.guarded_by_nullcheck,
             "deref on the not-null branch should be marked guarded"
+        );
+    }
+
+    /// Length-implies-non-null: after `cmp InputLen, K > 0; jb error`,
+    /// SystemBuffer is non-NULL on the fall-through. The deref below
+    /// must come back marked `guarded_by_nullcheck`.
+    #[test]
+    fn length_check_implies_systembuffer_nonnull() {
+        let prologue = block(
+            0x7000,
+            0x7030,
+            vec![
+                // r9 = [rdx + 0xB8]  (StackLoc, satisfies gate)
+                instr(
+                    0x7000,
+                    Op::Load {
+                        dst: vr("r9"),
+                        addr: MemOp::plain(Some(vr("rdx")), None, 0, 0xB8, 8),
+                    },
+                ),
+                // r10 = [r9 + 0x10]  (InputLen)
+                instr(
+                    0x7007,
+                    Op::Load {
+                        dst: vr("r10"),
+                        addr: MemOp::plain(Some(vr("r9")), None, 0, 0x10, 8),
+                    },
+                ),
+                // rdi = [rdx + 0x18]  (SystemBuffer)
+                instr(
+                    0x700b,
+                    Op::Load {
+                        dst: vr("rdi"),
+                        addr: MemOp::plain(Some(vr("rdx")), None, 0, 0x18, 8),
+                    },
+                ),
+                // cmp r10, 0x10  ; length must be >= 16 bytes
+                instr(
+                    0x700f,
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::C),
+                        op: CmpOp::Ult,
+                        lhs: Value::Reg(vr("r10")),
+                        rhs: Value::Const(0x10),
+                    },
+                ),
+                // jb error_path  (jump to 0x7100 on Len < 16)
+                instr(
+                    0x7013,
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::C),
+                        target: 0x7100,
+                        inverted: false,
+                    },
+                ),
+            ],
+            vec![0x7100, 0x7020],
+        );
+        let success_path = block(
+            0x7020,
+            0x7028,
+            vec![
+                // mov rax, [rdi + 0x0]  (deref of SystemBuffer; should
+                // be guarded because length check passed)
+                instr(
+                    0x7020,
+                    Op::Load {
+                        dst: vr("rax"),
+                        addr: MemOp::plain(Some(vr("rdi")), None, 0, 0, 8),
+                    },
+                ),
+                instr(0x7024, Op::Return),
+            ],
+            vec![],
+        );
+        let error_path = block(
+            0x7100,
+            0x7104,
+            vec![instr(0x7100, Op::Return)],
+            vec![],
+        );
+        let lf = LlirFunction {
+            entry_va: 0x7000,
+            blocks: vec![prologue, success_path, error_path],
+        };
+        let res = analyze(&lf);
+        let f = res
+            .findings
+            .iter()
+            .find(|f| f.deref_va == 0x7020)
+            .expect("SystemBuffer deref at 0x7020 should be found");
+        assert_eq!(f.base_kind, Taint::SystemBuffer);
+        assert!(
+            f.guarded_by_nullcheck,
+            "length-check implies SystemBuffer non-null on fall-through, finding must be guarded"
         );
     }
 
