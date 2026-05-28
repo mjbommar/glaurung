@@ -27,10 +27,15 @@ def test_set_get_round_trip(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
 
     xref_db.set_function_prototype(
-        kb, "my_helper", "int",
-        [xref_db.FunctionParam("argc", "int"),
-         xref_db.FunctionParam("argv", "char **")],
-        is_variadic=False, set_by="manual",
+        kb,
+        "my_helper",
+        "int",
+        [
+            xref_db.FunctionParam("argc", "int"),
+            xref_db.FunctionParam("argv", "char **"),
+        ],
+        is_variadic=False,
+        set_by="manual",
     )
     p = xref_db.get_function_prototype(kb, "my_helper")
     assert p is not None
@@ -50,12 +55,19 @@ def test_render_handles_void_and_variadic(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
 
     xref_db.set_function_prototype(
-        kb, "noargs", "void", [], set_by="manual",
+        kb,
+        "noargs",
+        "void",
+        [],
+        set_by="manual",
     )
     xref_db.set_function_prototype(
-        kb, "logf", "int",
+        kb,
+        "logf",
+        "int",
         [xref_db.FunctionParam("fmt", "const char *")],
-        is_variadic=True, set_by="manual",
+        is_variadic=True,
+        set_by="manual",
     )
     a = xref_db.get_function_prototype(kb, "noargs")
     b = xref_db.get_function_prototype(kb, "logf")
@@ -100,7 +112,9 @@ def test_manual_entries_survive_stdlib_import(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
 
     xref_db.set_function_prototype(
-        kb, "printf", "void",  # deliberately wrong override
+        kb,
+        "printf",
+        "void",  # deliberately wrong override
         [xref_db.FunctionParam("custom", "int")],
         set_by="manual",
     )
@@ -117,10 +131,74 @@ def test_auto_load_stdlib_imports_prototypes_too(tmp_path: Path) -> None:
     binary = _need(_HELLO)
     db = tmp_path / "p.glaurung"
     kb = PersistentKnowledgeBase.open(
-        db, binary_path=binary, auto_load_stdlib=True,
+        db,
+        binary_path=binary,
+        auto_load_stdlib=True,
     )
-    # Both type bundles AND prototype bundles should land.
+    # ELF projects load libc prototypes, not the much larger Windows bundle.
     assert xref_db.get_function_prototype(kb, "printf") is not None
     assert xref_db.get_function_prototype(kb, "strlen") is not None
     assert xref_db.get_function_prototype(kb, "fopen") is not None
+    assert xref_db.get_function_prototype(kb, "CreateFileA") is None
+    loaded = {
+        (row["bundle_kind"], row["bundle_name"])
+        for row in PersistentKnowledgeBase.list_stdlib_bundle_loads(kb)
+    }
+    assert ("prototype", "stdlib-libc-protos") in loaded
+    assert ("prototype", "stdlib-winapi-protos") not in loaded
+    kb.close()
+
+
+def test_old_prototype_schema_migrates_forward(tmp_path: Path) -> None:
+    binary = _need(_HELLO)
+    db = tmp_path / "old-proto-schema.glaurung"
+    kb = PersistentKnowledgeBase.open(db, binary_path=binary)
+    cur = kb._conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE function_prototypes (
+            binary_id INTEGER NOT NULL,
+            function_name TEXT NOT NULL,
+            return_type TEXT,
+            params_json TEXT NOT NULL DEFAULT '[]',
+            is_variadic INTEGER NOT NULL DEFAULT 0,
+            set_by TEXT,
+            set_at INTEGER,
+            PRIMARY KEY (binary_id, function_name)
+        )
+        """
+    )
+    cur.execute(
+        "INSERT INTO function_prototypes "
+        "(binary_id, function_name, return_type, params_json, is_variadic, set_by, set_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            kb.binary_id,
+            "legacy_api",
+            "int",
+            '[{"name": "value", "c_type": "int"}]',
+            0,
+            "stdlib",
+            1,
+        ),
+    )
+    kb._conn.commit()
+
+    proto = xref_db.get_function_prototype(kb, "legacy_api")
+    assert proto is not None
+    assert proto.render() == "int legacy_api(int value)"
+    assert proto.module is None
+    assert proto.provenance == {}
+
+    cur.execute("PRAGMA table_info(function_prototypes)")
+    cols = {row[1] for row in cur.fetchall()}
+    assert {
+        "module",
+        "calling_convention",
+        "source",
+        "source_kind",
+        "confidence",
+        "provenance_json",
+        "semantics_json",
+    } <= cols
     kb.close()

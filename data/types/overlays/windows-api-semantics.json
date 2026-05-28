@@ -1,0 +1,305 @@
+{
+  "schema_version": "1",
+  "source": "glaurung-windows-api-overlay",
+  "source_kind": "curated_overlay",
+  "source_url": "data/types/overlays/windows-api-semantics.json",
+  "confidence": 0.9,
+  "description": "Curated prototype and semantic hints that are not reliably expressible in WinMD: CRT security sinks, kernel pool APIs, buffer/source/length roles, and decompiler risk tags.",
+  "prototype_overrides": [
+    {
+      "name": "WinHttpOpen",
+      "return_type": "HINTERNET",
+      "params": [
+        {"name": "pszAgentW", "c_type": "LPCWSTR", "role": "source"},
+        {"name": "dwAccessType", "c_type": "DWORD", "role": "flags"},
+        {"name": "pszProxyW", "c_type": "LPCWSTR", "role": "source"},
+        {"name": "pszProxyBypassW", "c_type": "LPCWSTR", "role": "source"},
+        {"name": "dwFlags", "c_type": "DWORD", "role": "flags"}
+      ],
+      "module": "winhttp.dll",
+      "calling_convention": "system",
+      "confidence": 0.92,
+      "replace": true,
+      "notes": "Preserve WinHTTP handle typedef spelling for decompiler readability."
+    },
+    {
+      "name": "strnlen",
+      "return_type": "size_t",
+      "params": [
+        {"name": "string", "c_type": "const char *", "role": "source"},
+        {"name": "numberOfElements", "c_type": "size_t", "role": "length"}
+      ],
+      "module": "ucrtbase.dll",
+      "calling_convention": "C",
+      "confidence": 0.9,
+      "notes": "CRT prototype overlay; not present in Win32 metadata."
+    },
+    {
+      "name": "strcpy_s",
+      "return_type": "errno_t",
+      "params": [
+        {"name": "destinationBuffer", "c_type": "char *", "role": "buffer"},
+        {"name": "numberOfElements", "c_type": "rsize_t", "role": "length"},
+        {"name": "source", "c_type": "const char *", "role": "source"}
+      ],
+      "module": "ucrtbase.dll",
+      "calling_convention": "C",
+      "confidence": 0.9,
+      "notes": "CRT bounded copy sink used heavily by Windows kernel/core-service research."
+    },
+    {
+      "name": "memcpy",
+      "return_type": "void *",
+      "params": [
+        {"name": "destinationBuffer", "c_type": "void *", "role": "buffer"},
+        {"name": "sourceBuffer", "c_type": "const void *", "role": "source"},
+        {"name": "numberOfBytes", "c_type": "size_t", "role": "length"}
+      ],
+      "module": "ucrtbase.dll",
+      "calling_convention": "C",
+      "confidence": 0.9
+    },
+    {
+      "name": "memcpy_s",
+      "return_type": "errno_t",
+      "params": [
+        {"name": "destinationBuffer", "c_type": "void *", "role": "buffer"},
+        {"name": "destinationSize", "c_type": "rsize_t", "role": "length"},
+        {"name": "sourceBuffer", "c_type": "const void *", "role": "source"},
+        {"name": "numberOfBytes", "c_type": "rsize_t", "role": "length"}
+      ],
+      "module": "ucrtbase.dll",
+      "calling_convention": "C",
+      "confidence": 0.9
+    },
+    {
+      "name": "RtlAllocateHeap",
+      "return_type": "PVOID",
+      "params": [
+        {"name": "HeapHandle", "c_type": "PVOID", "role": "handle"},
+        {"name": "Flags", "c_type": "ULONG", "role": "flags"},
+        {"name": "Size", "c_type": "SIZE_T", "role": "length"}
+      ],
+      "module": "ntdll.dll",
+      "calling_convention": "system",
+      "confidence": 0.9
+    },
+    {
+      "name": "RtlFreeHeap",
+      "return_type": "BOOLEAN",
+      "params": [
+        {"name": "HeapHandle", "c_type": "PVOID", "role": "handle"},
+        {"name": "Flags", "c_type": "ULONG", "role": "flags"},
+        {"name": "BaseAddress", "c_type": "PVOID", "role": "buffer"}
+      ],
+      "module": "ntdll.dll",
+      "calling_convention": "system",
+      "confidence": 0.9
+    },
+    {
+      "name": "ExAllocatePoolWithTag",
+      "return_type": "PVOID",
+      "params": [
+        {"name": "PoolType", "c_type": "POOL_TYPE", "role": "flags"},
+        {"name": "NumberOfBytes", "c_type": "SIZE_T", "role": "length"},
+        {"name": "Tag", "c_type": "ULONG", "role": "tag"}
+      ],
+      "module": "ntoskrnl.exe",
+      "calling_convention": "system",
+      "confidence": 0.86,
+      "notes": "Legacy kernel allocator retained for historical binaries and vulnerable-driver research."
+    },
+    {
+      "name": "ExAllocatePoolWithTagPriority",
+      "return_type": "PVOID",
+      "params": [
+        {"name": "PoolType", "c_type": "POOL_TYPE", "role": "flags"},
+        {"name": "NumberOfBytes", "c_type": "SIZE_T", "role": "length"},
+        {"name": "Tag", "c_type": "ULONG", "role": "tag"},
+        {"name": "Priority", "c_type": "EX_POOL_PRIORITY", "role": "flags"}
+      ],
+      "module": "ntoskrnl.exe",
+      "calling_convention": "system",
+      "confidence": 0.86
+    },
+    {
+      "name": "NtProtectVirtualMemory",
+      "return_type": "NTSTATUS",
+      "params": [
+        {"name": "ProcessHandle", "c_type": "HANDLE", "role": "handle"},
+        {"name": "BaseAddress", "c_type": "PVOID *", "role": "buffer"},
+        {"name": "RegionSize", "c_type": "PSIZE_T", "role": "length"},
+        {"name": "NewProtect", "c_type": "ULONG", "role": "flags"},
+        {"name": "OldProtect", "c_type": "PULONG", "role": "out"}
+      ],
+      "module": "ntdll.dll",
+      "calling_convention": "system",
+      "confidence": 0.86,
+      "notes": "Native API overlay for process-memory and exploit staging triage."
+    },
+    {
+      "name": "ProbeForRead",
+      "return_type": "void",
+      "params": [
+        {"name": "Address", "c_type": "const volatile void *", "role": "source"},
+        {"name": "Length", "c_type": "SIZE_T", "role": "length"},
+        {"name": "Alignment", "c_type": "ULONG", "role": "alignment"}
+      ],
+      "module": "ntoskrnl.exe",
+      "calling_convention": "system",
+      "confidence": 0.86
+    },
+    {
+      "name": "ProbeForWrite",
+      "return_type": "void",
+      "params": [
+        {"name": "Address", "c_type": "volatile void *", "role": "buffer"},
+        {"name": "Length", "c_type": "SIZE_T", "role": "length"},
+        {"name": "Alignment", "c_type": "ULONG", "role": "alignment"}
+      ],
+      "module": "ntoskrnl.exe",
+      "calling_convention": "system",
+      "confidence": 0.86
+    }
+  ],
+  "semantics": [
+    {
+      "name": "DeviceIoControl",
+      "api_class": "ioctl_boundary",
+      "roles": {
+        "hDevice": "handle",
+        "dwIoControlCode": "selector",
+        "lpInBuffer": "source",
+        "nInBufferSize": "length",
+        "lpOutBuffer": "buffer",
+        "nOutBufferSize": "length",
+        "lpBytesReturned": "out_length"
+      },
+      "risk_tags": ["attacker_input", "kernel_boundary", "ioctl"]
+    },
+    {
+      "name": "VirtualAllocEx",
+      "api_class": "process_memory_allocation",
+      "roles": {
+        "hProcess": "handle",
+        "lpAddress": "buffer",
+        "dwSize": "length",
+        "flAllocationType": "flags",
+        "flProtect": "flags"
+      },
+      "risk_tags": [
+        "process_injection",
+        "remote_process",
+        "allocation",
+        "memory_protection"
+      ]
+    },
+    {
+      "name": "VirtualProtect",
+      "api_class": "memory_protection",
+      "roles": {
+        "lpAddress": "buffer",
+        "dwSize": "length",
+        "flNewProtect": "flags",
+        "lpflOldProtect": "out"
+      },
+      "risk_tags": ["memory_protection", "executable_memory"]
+    },
+    {
+      "name": "VirtualProtectEx",
+      "api_class": "process_memory_protection",
+      "roles": {
+        "hProcess": "handle",
+        "lpAddress": "buffer",
+        "dwSize": "length",
+        "flNewProtect": "flags",
+        "lpflOldProtect": "out"
+      },
+      "risk_tags": [
+        "process_injection",
+        "remote_process",
+        "memory_protection",
+        "executable_memory"
+      ]
+    },
+    {
+      "name": "WriteProcessMemory",
+      "api_class": "process_memory_write",
+      "roles": {
+        "hProcess": "handle",
+        "lpBaseAddress": "buffer",
+        "lpBuffer": "source",
+        "nSize": "length",
+        "lpNumberOfBytesWritten": "out_length"
+      },
+      "risk_tags": [
+        "process_injection",
+        "remote_process",
+        "cross_process_write"
+      ]
+    },
+    {
+      "name": "CreateRemoteThread",
+      "api_class": "remote_thread_creation",
+      "roles": {
+        "hProcess": "handle",
+        "lpThreadAttributes": "attributes",
+        "dwStackSize": "length",
+        "lpStartAddress": "callback",
+        "lpParameter": "source",
+        "dwCreationFlags": "flags",
+        "lpThreadId": "out"
+      },
+      "risk_tags": [
+        "process_injection",
+        "remote_process",
+        "thread_creation"
+      ]
+    },
+    {
+      "name": "NtProtectVirtualMemory",
+      "api_class": "native_memory_protection",
+      "roles": {
+        "ProcessHandle": "handle",
+        "BaseAddress": "buffer",
+        "RegionSize": "length",
+        "NewProtect": "flags",
+        "OldProtect": "out"
+      },
+      "risk_tags": [
+        "memory_protection",
+        "native_api",
+        "executable_memory"
+      ]
+    },
+    {
+      "name": "strcpy_s",
+      "api_class": "bounded_copy",
+      "roles": {
+        "destinationBuffer": "buffer",
+        "numberOfElements": "length",
+        "source": "source"
+      },
+      "risk_tags": ["copy", "string", "bounds_sensitive"]
+    },
+    {
+      "name": "ExAllocatePoolWithTag",
+      "api_class": "kernel_allocator",
+      "roles": {
+        "NumberOfBytes": "length",
+        "Tag": "tag"
+      },
+      "risk_tags": ["allocation", "kernel_pool"]
+    },
+    {
+      "name": "ProbeForRead",
+      "api_class": "user_pointer_probe",
+      "roles": {
+        "Address": "source",
+        "Length": "length",
+        "Alignment": "alignment"
+      },
+      "risk_tags": ["user_pointer", "probe", "exception_boundary"]
+    }
+  ]
+}

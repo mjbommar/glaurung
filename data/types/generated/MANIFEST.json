@@ -1,0 +1,108 @@
+{
+  "analysis_network_policy": "offline by default; only `glaurung types sync` downloads metadata",
+  "bundle_sha256": "2fae1911fe1412b45c29d7fd8c5a5585bcfbd21f9a44f93c09a9b5378ec7c381",
+  "generated_at": "2026-05-18T12:58:15Z",
+  "generated_bundle_path": "/nas4/data/workspace-infosec/glaurung/data/types/stdlib-winapi-protos.json",
+  "header_results": [],
+  "manifest_path": "/nas4/data/workspace-infosec/glaurung/data/types/generated/MANIFEST.json",
+  "network_used": false,
+  "optional_sources": {
+    "headers": {
+      "documentation": "https://learn.microsoft.com/en-us/windows-hardware/drivers/install-the-wdk-using-nuget",
+      "notes": "Local SDK/WDK headers or NuGet WDK headers should be parsed with clang/castxml/WinmdGenerator when a symbol is absent from WinMD. Header extraction is opt-in and must record include roots, command line, and SHA256 in MANIFEST.json.",
+      "status": "augmentation_source"
+    },
+    "pdb_symbol_server": {
+      "documentation": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/microsoft-public-symbols",
+        "https://learn.microsoft.com/en-us/visualstudio/debugger/debug-interface-access/debug-interface-access-sdk"
+      ],
+      "notes": "Use per-binary PDB ingestion for exact build symbols/types. Public PDBs are not a complete global API prototype source.",
+      "status": "per_binary_source",
+      "url": "https://msdl.microsoft.com/download/symbols"
+    },
+    "supplemental": [
+      {
+        "confidence": 0.8,
+        "id": "phnt-system-informer",
+        "status": "manual_overlay_candidate",
+        "url": "https://docs.rs/phnt"
+      },
+      {
+        "confidence": 0.65,
+        "id": "reactos",
+        "status": "manual_overlay_candidate",
+        "url": "https://github.com/reactos/reactos"
+      },
+      {
+        "confidence": 0.65,
+        "id": "wine",
+        "status": "manual_overlay_candidate",
+        "url": "https://github.com/wine-mirror/wine"
+      },
+      {
+        "confidence": 0.7,
+        "id": "national-security-agency-ghidra-data",
+        "status": "comparison_reference",
+        "url": "https://github.com/NationalSecurityAgency/ghidra-data"
+      },
+      {
+        "confidence": 0.7,
+        "id": "winsdk-gdt",
+        "status": "comparison_reference",
+        "url": "https://github.com/T-RN-R/winsdk-gdt"
+      }
+    ]
+  },
+  "output_path": "/nas4/data/workspace-infosec/glaurung/data/types/stdlib-winapi-protos.json",
+  "overlay": {
+    "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
+    "prototype_added": 5,
+    "prototype_updated": 7,
+    "semantics_attached": 10,
+    "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f"
+  },
+  "prototype_count": 20762,
+  "schema_version": "1",
+  "source_lock": "/nas4/data/workspace-infosec/glaurung/data/types/windows-api-sources.lock.json",
+  "source_results": [
+    {
+      "confidence": 0.99,
+      "extracted_winmd_path": "/home/mjbommar/.cache/glaurung/windows-api-metadata/microsoft.windows.sdk.win32metadata/70.0.11-preview/Windows.Win32.winmd",
+      "method_count": 70599,
+      "nupkg_path": "/home/mjbommar/.cache/glaurung/windows-api-metadata/microsoft.windows.sdk.win32metadata.70.0.11-preview.nupkg",
+      "nupkg_sha256": "251713165cd5fac0df81428fb67d283a7db949d362be685b4bcfb41dc028ceef",
+      "nupkg_url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.win32metadata/70.0.11-preview/microsoft.windows.sdk.win32metadata.70.0.11-preview.nupkg",
+      "package": "Microsoft.Windows.SDK.Win32Metadata",
+      "pinvoke_count": 18315,
+      "prototype_count": 18271,
+      "source_id": "microsoft-win32metadata",
+      "source_kind": "nuget_winmd",
+      "source_url": "https://github.com/microsoft/win32metadata",
+      "status": "ok",
+      "type_count": 35119,
+      "version": "70.0.11-preview",
+      "winmd_path": "Windows.Win32.winmd",
+      "winmd_sha256": "6aec29be3359468d9eba03c3ae932591b39960f1812b6d25d33c0d9f14a6d665"
+    },
+    {
+      "confidence": 0.93,
+      "extracted_winmd_path": "/home/mjbommar/.cache/glaurung/windows-api-metadata/microsoft.windows.wdk.win32metadata/0.13.25-experimental/Windows.Wdk.winmd",
+      "method_count": 4461,
+      "nupkg_path": "/home/mjbommar/.cache/glaurung/windows-api-metadata/microsoft.windows.wdk.win32metadata.0.13.25-experimental.nupkg",
+      "nupkg_sha256": "79079a449d8f621052bcaf13039e411d1c1b77aec4a89cf04d96518d0a619617",
+      "nupkg_url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.wdk.win32metadata/0.13.25-experimental/microsoft.windows.wdk.win32metadata.0.13.25-experimental.nupkg",
+      "package": "Microsoft.Windows.WDK.Win32Metadata",
+      "pinvoke_count": 2641,
+      "prototype_count": 2641,
+      "source_id": "microsoft-wdkmetadata",
+      "source_kind": "nuget_winmd",
+      "source_url": "https://github.com/microsoft/wdkmetadata",
+      "status": "ok",
+      "type_count": 3296,
+      "version": "0.13.25-experimental",
+      "winmd_path": "Windows.Wdk.winmd",
+      "winmd_sha256": "54b8e48866b0a7e066981b63bb6f82fc6947fe8c57e2b5cb4513b1537aa836c2"
+    }
+  ]
+}

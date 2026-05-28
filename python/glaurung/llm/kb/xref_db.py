@@ -19,17 +19,17 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from dataclasses import dataclass
-from typing import Iterable, List, Literal, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Iterable, List, Literal, Optional, Tuple
 
 from .persistent import PersistentKnowledgeBase
 
 
 XrefKind = Literal[
-    "call",          # direct or indirect call control-flow edge
-    "jump",          # tail / inter-function jump
-    "data_read",     # load that targets dst_va
-    "data_write",    # store that targets dst_va
+    "call",  # direct or indirect call control-flow edge
+    "jump",  # tail / inter-function jump
+    "data_read",  # load that targets dst_va
+    "data_write",  # store that targets dst_va
     "struct_field",  # access patterned as base+offset
 ]
 
@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS function_prototypes (
     return_type TEXT,
     params_json TEXT NOT NULL DEFAULT '[]',
     is_variadic INTEGER NOT NULL DEFAULT 0,
+    module TEXT,
+    calling_convention TEXT,
+    source TEXT,
+    source_kind TEXT,
+    source_package TEXT,
+    source_version TEXT,
+    confidence REAL,
+    provenance_json TEXT,
+    semantics_json TEXT,
+    semantic_provenance_json TEXT,
     set_by TEXT,
     set_at INTEGER,
     PRIMARY KEY (binary_id, function_name)
@@ -174,7 +184,7 @@ CREATE INDEX IF NOT EXISTS idx_stack_vars_func
 CREATE TABLE IF NOT EXISTS undo_log (
     undo_id INTEGER PRIMARY KEY AUTOINCREMENT,
     binary_id INTEGER NOT NULL,
-    table_name TEXT NOT NULL,    -- function_names | comments | data_labels | stack_frame_vars
+    table_name TEXT NOT NULL,    -- function_names | comments | data_labels | function_prototypes | stack_frame_vars
     key_json TEXT NOT NULL,      -- JSON-encoded primary key dict
     old_value_json TEXT,          -- prior row state (NULL = row didn't exist)
     new_value_json TEXT,          -- new state (NULL = deletion)
@@ -220,6 +230,7 @@ CREATE INDEX IF NOT EXISTS idx_journal_binary
 @dataclass(frozen=True)
 class XrefRow:
     """A single xref returned to callers."""
+
     src_va: int
     dst_va: int
     kind: str
@@ -260,6 +271,27 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         cur.execute("ALTER TABLE function_names ADD COLUMN demangled TEXT")
     if "flavor" not in cols:
         cur.execute("ALTER TABLE function_names ADD COLUMN flavor TEXT")
+    # Migration: preserve richer prototype metadata for Windows API,
+    # PDB, and future header-derived sources. Older DBs had only the
+    # C-ish signature fields; add nullable columns so existing rows
+    # continue to read cleanly.
+    cur.execute("PRAGMA table_info(function_prototypes)")
+    proto_cols = {row[1] for row in cur.fetchall()}
+    proto_migrations = {
+        "module": "TEXT",
+        "calling_convention": "TEXT",
+        "source": "TEXT",
+        "source_kind": "TEXT",
+        "source_package": "TEXT",
+        "source_version": "TEXT",
+        "confidence": "REAL",
+        "provenance_json": "TEXT",
+        "semantics_json": "TEXT",
+        "semantic_provenance_json": "TEXT",
+    }
+    for col, sql_type in proto_migrations.items():
+        if col not in proto_cols:
+            cur.execute(f"ALTER TABLE function_prototypes ADD COLUMN {col} {sql_type}")
     conn.commit()
 
 
@@ -281,8 +313,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 _UNDO_TABLES = {
     "function_names": (
         ("entry_va",),
-        ("entry_va", "canonical", "aliases_json", "set_by",
-         "demangled", "flavor"),
+        ("entry_va", "canonical", "aliases_json", "set_by", "demangled", "flavor"),
     ),
     "comments": (
         ("va",),
@@ -292,6 +323,26 @@ _UNDO_TABLES = {
         ("va",),
         ("va", "name", "c_type", "size", "set_by"),
     ),
+    "function_prototypes": (
+        ("function_name",),
+        (
+            "function_name",
+            "return_type",
+            "params_json",
+            "is_variadic",
+            "module",
+            "calling_convention",
+            "source",
+            "source_kind",
+            "source_package",
+            "source_version",
+            "confidence",
+            "provenance_json",
+            "semantics_json",
+            "semantic_provenance_json",
+            "set_by",
+        ),
+    ),
     "stack_frame_vars": (
         ("function_va", "offset"),
         ("function_va", "offset", "name", "c_type", "use_count", "set_by"),
@@ -299,9 +350,7 @@ _UNDO_TABLES = {
 }
 
 
-def _snapshot_row(
-    kb: PersistentKnowledgeBase, table: str, key: dict
-) -> Optional[dict]:
+def _snapshot_row(kb: PersistentKnowledgeBase, table: str, key: dict) -> Optional[dict]:
     """Read the current row from ``table`` keyed by ``key``. Returns
     None if no such row exists (so an undo of a fresh insert restores
     'no row')."""
@@ -333,16 +382,20 @@ def _record_undo(
         # No-op write, nothing to undo.
         return
     import json
+
     cur = kb._conn.cursor()
     cur.execute(
         "INSERT INTO undo_log (binary_id, table_name, key_json, "
         "old_value_json, new_value_json, set_by, ts) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
-            kb.binary_id, table, json.dumps(key, sort_keys=True),
+            kb.binary_id,
+            table,
+            json.dumps(key, sort_keys=True),
             json.dumps(old) if old is not None else None,
             json.dumps(new) if new is not None else None,
-            set_by, int(time.time()),
+            set_by,
+            int(time.time()),
         ),
     )
 
@@ -367,8 +420,7 @@ def _apply_snapshot(
     placeholders = ",".join("?" * len(cols))
     values = (kb.binary_id,) + tuple(snapshot.get(c) for c in all_cols)
     cur.execute(
-        f"INSERT OR REPLACE INTO {table} ({','.join(cols)}) "
-        f"VALUES ({placeholders})",
+        f"INSERT OR REPLACE INTO {table} ({','.join(cols)}) VALUES ({placeholders})",
         values,
     )
 
@@ -386,11 +438,15 @@ class UndoEntry:
 
 
 def list_undo_log(
-    kb: PersistentKnowledgeBase, *, limit: int = 50, include_undone: bool = True,
+    kb: PersistentKnowledgeBase,
+    *,
+    limit: int = 50,
+    include_undone: bool = True,
 ) -> List[UndoEntry]:
     """Return recent undo_log entries, newest first."""
     _ensure_schema(kb._conn)
     import json
+
     cur = kb._conn.cursor()
     where = "binary_id=?"
     params: tuple = (kb.binary_id,)
@@ -404,13 +460,18 @@ def list_undo_log(
     )
     out: List[UndoEntry] = []
     for row in cur.fetchall():
-        out.append(UndoEntry(
-            undo_id=row[0], table_name=row[1],
-            key=json.loads(row[2]),
-            old_value=json.loads(row[3]) if row[3] else None,
-            new_value=json.loads(row[4]) if row[4] else None,
-            set_by=row[5], ts=row[6], undone=bool(row[7]),
-        ))
+        out.append(
+            UndoEntry(
+                undo_id=row[0],
+                table_name=row[1],
+                key=json.loads(row[2]),
+                old_value=json.loads(row[3]) if row[3] else None,
+                new_value=json.loads(row[4]) if row[4] else None,
+                set_by=row[5],
+                ts=row[6],
+                undone=bool(row[7]),
+            )
+        )
     return out
 
 
@@ -419,6 +480,7 @@ def undo(kb: PersistentKnowledgeBase, *, n: int = 1) -> List[UndoEntry]:
     list of undo_log entries that were applied."""
     _ensure_schema(kb._conn)
     import json
+
     applied: List[UndoEntry] = []
     cur = kb._conn.cursor()
     for _ in range(n):
@@ -436,13 +498,19 @@ def undo(kb: PersistentKnowledgeBase, *, n: int = 1) -> List[UndoEntry]:
         old = json.loads(old_json) if old_json else None
         new = json.loads(new_json) if new_json else None
         _apply_snapshot(kb, table, key, old)
-        cur.execute(
-            "UPDATE undo_log SET undone=1 WHERE undo_id=?", (undo_id,)
+        cur.execute("UPDATE undo_log SET undone=1 WHERE undo_id=?", (undo_id,))
+        applied.append(
+            UndoEntry(
+                undo_id=undo_id,
+                table_name=table,
+                key=key,
+                old_value=old,
+                new_value=new,
+                set_by=set_by,
+                ts=ts,
+                undone=True,
+            )
         )
-        applied.append(UndoEntry(
-            undo_id=undo_id, table_name=table, key=key,
-            old_value=old, new_value=new, set_by=set_by, ts=ts, undone=True,
-        ))
     kb._conn.commit()
     return applied
 
@@ -451,6 +519,7 @@ def redo(kb: PersistentKnowledgeBase, *, n: int = 1) -> List[UndoEntry]:
     """Re-apply the most recent N undone KB writes. Symmetric to undo()."""
     _ensure_schema(kb._conn)
     import json
+
     applied: List[UndoEntry] = []
     cur = kb._conn.cursor()
     for _ in range(n):
@@ -468,13 +537,19 @@ def redo(kb: PersistentKnowledgeBase, *, n: int = 1) -> List[UndoEntry]:
         old = json.loads(old_json) if old_json else None
         new = json.loads(new_json) if new_json else None
         _apply_snapshot(kb, table, key, new)
-        cur.execute(
-            "UPDATE undo_log SET undone=0 WHERE undo_id=?", (undo_id,)
+        cur.execute("UPDATE undo_log SET undone=0 WHERE undo_id=?", (undo_id,))
+        applied.append(
+            UndoEntry(
+                undo_id=undo_id,
+                table_name=table,
+                key=key,
+                old_value=old,
+                new_value=new,
+                set_by=set_by,
+                ts=ts,
+                undone=False,
+            )
         )
-        applied.append(UndoEntry(
-            undo_id=undo_id, table_name=table, key=key,
-            old_value=old, new_value=new, set_by=set_by, ts=ts, undone=False,
-        ))
     kb._conn.commit()
     return applied
 
@@ -487,7 +562,8 @@ def is_indexed(kb: PersistentKnowledgeBase) -> bool:
     _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
     cur.execute(
-        "SELECT 1 FROM xref_index_state WHERE binary_id = ?", (kb.binary_id,),
+        "SELECT 1 FROM xref_index_state WHERE binary_id = ?",
+        (kb.binary_id,),
     )
     return cur.fetchone() is not None
 
@@ -571,6 +647,12 @@ def index_callgraph(
     binary_path: str,
     *,
     force: bool = False,
+    max_read_bytes: int = 104_857_600,
+    max_file_size: int = 104_857_600,
+    max_functions: int = 0,
+    max_blocks: int = 1_000_000,
+    max_instructions: int = 30_000_000,
+    timeout_ms: int = 600_000,
 ) -> int:
     """Run ``analyze_functions_path`` once and persist the resulting
     callgraph as ``call`` xrefs. Skips work when the binary is already
@@ -585,7 +667,15 @@ def index_callgraph(
 
     import glaurung as g
 
-    funcs, cg = g.analysis.analyze_functions_path(binary_path)
+    funcs, cg = g.analysis.analyze_functions_path(
+        binary_path,
+        max_read_bytes,
+        max_file_size,
+        max_functions,
+        max_blocks,
+        max_instructions,
+        timeout_ms,
+    )
     # Build name → entry-VA map; the callgraph emits edges by name.
     va_by_name = {f.name: int(f.entry_point.value) for f in funcs}
     # gcc-emitted callgraph also uses ``sub_<hex>`` for unnamed funcs.
@@ -601,10 +691,7 @@ def index_callgraph(
         if src is None or dst is None:
             continue
         call_sites = list(getattr(e, "call_sites", None) or [])
-        src_vas = [
-            int(getattr(site, "value", site))
-            for site in call_sites
-        ] or [src]
+        src_vas = [int(getattr(site, "value", site)) for site in call_sites] or [src]
         for src_va in src_vas:
             key = (src_va, dst, "call")
             if key in seen:
@@ -617,7 +704,8 @@ def index_callgraph(
     try:
         if force:
             cur.execute(
-                "DELETE FROM xrefs WHERE binary_id = ?", (kb.binary_id,),
+                "DELETE FROM xrefs WHERE binary_id = ?",
+                (kb.binary_id,),
             )
         cur.executemany(
             "INSERT OR IGNORE INTO xrefs "
@@ -637,7 +725,24 @@ def index_callgraph(
         raise
 
     # Populate function_names with whatever the analyser supplied.
-    _populate_analyzer_function_names(kb, funcs)
+    name_rows = [
+        (
+            kb.binary_id,
+            int(f.entry_point.value),
+            f.name,
+            "[]",
+            "analyzer",
+            int(time.time()),
+        )
+        for f in funcs
+    ]
+    cur.executemany(
+        "INSERT OR IGNORE INTO function_names "
+        "(binary_id, entry_va, canonical, aliases_json, set_by, set_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        name_rows,
+    )
+    kb._conn.commit()
 
     # Go binaries are stripped of regular symbols but always ship a
     # `.gopclntab` section. Walk it and upgrade every `sub_<hex>` row
@@ -810,7 +915,7 @@ def _pe_image_base(binary_path: str) -> Optional[int]:
             return None
         if len(head) < 0x40:
             return None
-        pe_off = int.from_bytes(head[0x3c:0x40], "little")
+        pe_off = int.from_bytes(head[0x3C:0x40], "little")
         if pe_off + 0x18 > len(head):
             with open(binary_path, "rb") as f:
                 f.seek(pe_off)
@@ -819,14 +924,14 @@ def _pe_image_base(binary_path: str) -> Optional[int]:
             pe_head = head[pe_off:]
         if pe_head[:4] != b"PE\x00\x00":
             return None
-        magic = int.from_bytes(pe_head[0x18:0x1a], "little")
+        magic = int.from_bytes(pe_head[0x18:0x1A], "little")
         # Image base lives at offset 0x1c (PE32) or 0x18 (PE32+) of
         # the optional header. Optional header starts at PE off + 0x18.
         opt_off = 0x18
-        if magic == 0x10b:  # PE32
-            ib = int.from_bytes(pe_head[opt_off + 0x1c:opt_off + 0x20], "little")
-        elif magic == 0x20b:  # PE32+
-            ib = int.from_bytes(pe_head[opt_off + 0x18:opt_off + 0x20], "little")
+        if magic == 0x10B:  # PE32
+            ib = int.from_bytes(pe_head[opt_off + 0x1C : opt_off + 0x20], "little")
+        elif magic == 0x20B:  # PE32+
+            ib = int.from_bytes(pe_head[opt_off + 0x18 : opt_off + 0x20], "little")
         else:
             return None
         return ib
@@ -838,7 +943,8 @@ def _row_count(kb: PersistentKnowledgeBase, kind: Optional[str] = None) -> int:
     cur = kb._conn.cursor()
     if kind is None:
         cur.execute(
-            "SELECT COUNT(*) FROM xrefs WHERE binary_id = ?", (kb.binary_id,),
+            "SELECT COUNT(*) FROM xrefs WHERE binary_id = ?",
+            (kb.binary_id,),
         )
     else:
         cur.execute(
@@ -970,8 +1076,12 @@ def set_function_name(
         "(binary_id, entry_va, canonical, aliases_json, set_by, set_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (
-            kb.binary_id, entry_va, name,
-            json.dumps(aliases or []), set_by, int(time.time()),
+            kb.binary_id,
+            entry_va,
+            name,
+            json.dumps(aliases or []),
+            set_by,
+            int(time.time()),
         ),
     )
     if set_by == "manual":
@@ -997,9 +1107,12 @@ def get_function_name(
     if row is None:
         return None
     return FunctionName(
-        entry_va=row[0], canonical=row[1],
-        aliases=json.loads(row[2] or "[]"), set_by=row[3],
-        demangled=row[4], flavor=row[5],
+        entry_va=row[0],
+        canonical=row[1],
+        aliases=json.loads(row[2] or "[]"),
+        set_by=row[3],
+        demangled=row[4],
+        flavor=row[5],
     )
 
 
@@ -1034,6 +1147,7 @@ def demangle_function_names(kb: PersistentKnowledgeBase) -> dict:
     _ensure_schema(kb._conn)
     try:
         import glaurung as g
+
         demangle_text = g.strings.demangle_text
     except Exception:
         return {"error": "demangle_bridge_unavailable"}
@@ -1077,17 +1191,23 @@ def list_function_names(
     )
     return [
         FunctionName(
-            entry_va=row[0], canonical=row[1],
-            aliases=json.loads(row[2] or "[]"), set_by=row[3],
-            demangled=row[4], flavor=row[5],
+            entry_va=row[0],
+            canonical=row[1],
+            aliases=json.loads(row[2] or "[]"),
+            set_by=row[3],
+            demangled=row[4],
+            flavor=row[5],
         )
         for row in cur.fetchall()
     ]
 
 
 def set_comment(
-    kb: PersistentKnowledgeBase, va: int, body: str,
-    *, set_by: str = "manual",
+    kb: PersistentKnowledgeBase,
+    va: int,
+    body: str,
+    *,
+    set_by: str = "manual",
 ) -> None:
     _ensure_schema(kb._conn)
     key = {"va": va}
@@ -1132,9 +1252,11 @@ def list_comments(
 # Global data labels (#181)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class DataLabel:
     """Named global variable / data symbol."""
+
     va: int
     name: str
     c_type: Optional[str]
@@ -1169,8 +1291,13 @@ def set_data_label(
         "(binary_id, va, name, c_type, size, set_by, set_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
-            kb.binary_id, int(va), name, c_type, size,
-            set_by, int(time.time()),
+            kb.binary_id,
+            int(va),
+            name,
+            c_type,
+            size,
+            set_by,
+            int(time.time()),
         ),
     )
     if set_by == "manual":
@@ -1180,7 +1307,8 @@ def set_data_label(
 
 
 def get_data_label(
-    kb: PersistentKnowledgeBase, va: int,
+    kb: PersistentKnowledgeBase,
+    va: int,
 ) -> Optional[DataLabel]:
     _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
@@ -1223,10 +1351,19 @@ def remove_data_label(kb: PersistentKnowledgeBase, va: int) -> None:
 # Function prototypes (#172 v1)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class FunctionParam:
     name: str
     c_type: str
+    role: Optional[str] = None
+
+    def as_dict(self) -> dict[str, str]:
+        """Return the persisted JSON form for this parameter."""
+        out = {"name": self.name, "c_type": self.c_type}
+        if self.role:
+            out["role"] = self.role
+        return out
 
 
 @dataclass(frozen=True)
@@ -1236,6 +1373,38 @@ class FunctionPrototype:
     params: List[FunctionParam]
     is_variadic: bool
     set_by: Optional[str]
+    module: Optional[str] = None
+    calling_convention: Optional[str] = None
+    source: Optional[str] = None
+    source_kind: Optional[str] = None
+    source_package: Optional[str] = None
+    source_version: Optional[str] = None
+    confidence: Optional[float] = None
+    provenance: dict[str, Any] = field(default_factory=dict)
+    semantics: dict[str, Any] = field(default_factory=dict)
+    semantic_provenance: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def risk_tags(self) -> List[str]:
+        """Semantic risk tags attached to this prototype."""
+        raw = self.semantics.get("risk_tags", [])
+        if not isinstance(raw, list):
+            return []
+        return [str(tag) for tag in raw]
+
+    def param_by_name(self, name: str) -> FunctionParam:
+        """Return the parameter named ``name`` or raise KeyError."""
+        for param in self.params:
+            if param.name == name:
+                return param
+        raise KeyError(name)
+
+    def param_by_role(self, role: str) -> FunctionParam:
+        """Return the first parameter carrying ``role`` or raise KeyError."""
+        for param in self.params:
+            if param.role == role:
+                return param
+        raise KeyError(role)
 
     def render(self) -> str:
         """Render the prototype as a one-line C-ish declaration."""
@@ -1255,12 +1424,23 @@ def set_function_prototype(
     *,
     is_variadic: bool = False,
     set_by: str = "manual",
+    module: Optional[str] = None,
+    calling_convention: Optional[str] = None,
+    source: Optional[str] = None,
+    source_kind: Optional[str] = None,
+    source_package: Optional[str] = None,
+    source_version: Optional[str] = None,
+    confidence: Optional[float] = None,
+    provenance: Optional[dict[str, Any]] = None,
+    semantics: Optional[dict[str, Any]] = None,
+    semantic_provenance: Optional[dict[str, Any]] = None,
 ) -> None:
     """Persist a function prototype keyed by short name. Manual entries
     always win over later automated guesses (consistent with type_db /
     function_names precedence)."""
     _ensure_schema(kb._conn)
     import json
+
     cur = kb._conn.cursor()
     cur.execute(
         "SELECT set_by FROM function_prototypes "
@@ -1270,29 +1450,224 @@ def set_function_prototype(
     row = cur.fetchone()
     if row is not None and row[0] == "manual" and set_by != "manual":
         return
-    params_json = json.dumps(
-        [{"name": p.name, "c_type": p.c_type} for p in params]
-    )
+    key = {"function_name": function_name}
+    old = _snapshot_row(kb, "function_prototypes", key) if set_by == "manual" else None
+    params_json = json.dumps([p.as_dict() for p in params], sort_keys=True)
     cur.execute(
         "INSERT OR REPLACE INTO function_prototypes "
-        "(binary_id, function_name, return_type, params_json, is_variadic, set_by, set_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "(binary_id, function_name, return_type, params_json, is_variadic, "
+        "module, calling_convention, source, source_kind, source_package, "
+        "source_version, confidence, provenance_json, semantics_json, "
+        "semantic_provenance_json, set_by, set_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            kb.binary_id, function_name, return_type, params_json,
-            1 if is_variadic else 0, set_by, int(time.time()),
+            kb.binary_id,
+            function_name,
+            return_type,
+            params_json,
+            1 if is_variadic else 0,
+            module,
+            calling_convention,
+            source,
+            source_kind,
+            source_package,
+            source_version,
+            confidence,
+            json.dumps(provenance, sort_keys=True) if provenance else None,
+            json.dumps(semantics, sort_keys=True) if semantics else None,
+            json.dumps(semantic_provenance, sort_keys=True)
+            if semantic_provenance
+            else None,
+            set_by,
+            int(time.time()),
         ),
     )
+    if set_by == "manual":
+        new = _snapshot_row(kb, "function_prototypes", key)
+        _record_undo(kb, "function_prototypes", key, old, new, set_by)
     kb._conn.commit()
 
 
+def _param_from_json(
+    raw: dict[str, Any],
+    semantic_roles: Optional[dict[str, Any]] = None,
+) -> FunctionParam:
+    """Build a FunctionParam from persisted JSON, tolerating old rows."""
+    name = str(raw.get("name") or "")
+    role = raw.get("role")
+    if role is None and semantic_roles:
+        role = semantic_roles.get(name)
+    return FunctionParam(
+        name=name,
+        c_type=str(raw.get("c_type") or "void *"),
+        role=str(role) if role else None,
+    )
+
+
+def _json_obj(raw: Optional[str]) -> dict[str, Any]:
+    """Decode a nullable JSON object column defensively."""
+    if not raw:
+        return {}
+    import json
+
+    try:
+        value = json.loads(raw)
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _prototype_from_row(row: tuple) -> FunctionPrototype:
+    """Convert a SELECT row into a FunctionPrototype."""
+    import json
+
+    raw_params = json.loads(row[2] or "[]")
+    semantics = _json_obj(row[12])
+    semantic_roles = semantics.get("roles")
+    if not isinstance(semantic_roles, dict):
+        semantic_roles = {}
+    return FunctionPrototype(
+        function_name=row[0],
+        return_type=row[1],
+        params=[
+            _param_from_json(p, semantic_roles)
+            for p in raw_params
+            if isinstance(p, dict)
+        ],
+        is_variadic=bool(row[3]),
+        set_by=row[14],
+        module=row[4],
+        calling_convention=row[5],
+        source=row[6],
+        source_kind=row[7],
+        source_package=row[8],
+        source_version=row[9],
+        confidence=row[10],
+        provenance=_json_obj(row[11]),
+        semantics=semantics,
+        semantic_provenance=_json_obj(row[13]),
+    )
+
+
+def prototype_from_bundle_entry(
+    proto: dict[str, Any],
+    *,
+    set_by: str = "stdlib",
+) -> Optional[FunctionPrototype]:
+    """Build a FunctionPrototype directly from a stdlib bundle row."""
+    if not proto.get("name"):
+        return None
+    raw_provenance = proto.get("provenance")
+    provenance = raw_provenance if isinstance(raw_provenance, dict) else {}
+    raw_semantics = proto.get("semantics")
+    semantics = raw_semantics if isinstance(raw_semantics, dict) else {}
+    raw_semantic_provenance = proto.get("semantic_provenance")
+    semantic_provenance = (
+        raw_semantic_provenance if isinstance(raw_semantic_provenance, dict) else {}
+    )
+    semantic_roles = semantics.get("roles")
+    if not isinstance(semantic_roles, dict):
+        semantic_roles = {}
+    params = [
+        FunctionParam(
+            name=str(p["name"]),
+            c_type=str(p["c_type"]),
+            role=(
+                str(p["role"])
+                if p.get("role")
+                else str(semantic_roles[p["name"]])
+                if p["name"] in semantic_roles
+                else None
+            ),
+        )
+        for p in proto.get("params", [])
+        if isinstance(p, dict) and p.get("name") and p.get("c_type")
+    ]
+    return FunctionPrototype(
+        function_name=str(proto["name"]),
+        return_type=str(proto.get("return_type") or "void"),
+        params=params,
+        is_variadic=bool(proto.get("is_variadic", False)),
+        set_by=set_by,
+        module=str(proto["module"]) if proto.get("module") else None,
+        calling_convention=str(proto["calling_convention"])
+        if proto.get("calling_convention")
+        else None,
+        source=str(proto["source"]) if proto.get("source") else None,
+        source_kind=str(proto["source_kind"]) if proto.get("source_kind") else None,
+        source_package=(
+            str(proto.get("source_package"))
+            if proto.get("source_package")
+            else str(provenance.get("package"))
+            if provenance.get("package")
+            else None
+        ),
+        source_version=(
+            str(proto.get("source_version"))
+            if proto.get("source_version")
+            else str(provenance.get("version"))
+            if provenance.get("version")
+            else None
+        ),
+        confidence=float(proto["confidence"])
+        if proto.get("confidence") is not None
+        else None,
+        provenance=provenance,
+        semantics=semantics,
+        semantic_provenance=semantic_provenance,
+    )
+
+
+def load_stdlib_prototype_catalog(
+    *,
+    bundles: Optional[List[str]] = None,
+    bundle_dir=None,
+) -> dict[str, FunctionPrototype]:
+    """Load stdlib prototype bundles into a name -> prototype map.
+
+    This is the read-only sibling of ``import_stdlib_prototypes`` for
+    tools that run against the in-memory KB and only need enrichment.
+    """
+    import json
+    from pathlib import Path as _Path
+
+    from . import type_db as _type_db
+
+    if bundles is None:
+        bundles = ["stdlib-libc-protos", "stdlib-winapi-protos"]
+    if bundle_dir is None:
+        bundle_dir = _type_db._stdlib_bundle_dir()
+
+    out: dict[str, FunctionPrototype] = {}
+    for name in bundles:
+        path = _Path(bundle_dir) / f"{name}.json"
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            continue
+        set_by = str(data.get("set_by", "stdlib"))
+        for raw_proto in data.get("prototypes", []) or []:
+            if not isinstance(raw_proto, dict):
+                continue
+            proto = prototype_from_bundle_entry(raw_proto, set_by=set_by)
+            if proto is not None:
+                out[proto.function_name] = proto
+    return out
+
+
 def get_function_prototype(
-    kb: PersistentKnowledgeBase, function_name: str,
+    kb: PersistentKnowledgeBase,
+    function_name: str,
 ) -> Optional[FunctionPrototype]:
     _ensure_schema(kb._conn)
-    import json
     cur = kb._conn.cursor()
     cur.execute(
-        "SELECT function_name, return_type, params_json, is_variadic, set_by "
+        "SELECT function_name, return_type, params_json, is_variadic, "
+        "module, calling_convention, source, source_kind, source_package, "
+        "source_version, confidence, provenance_json, semantics_json, "
+        "semantic_provenance_json, set_by "
         "FROM function_prototypes "
         "WHERE binary_id = ? AND function_name = ?",
         (kb.binary_id, function_name),
@@ -1300,36 +1675,56 @@ def get_function_prototype(
     row = cur.fetchone()
     if not row:
         return None
-    raw_params = json.loads(row[2] or "[]")
-    return FunctionPrototype(
-        function_name=row[0],
-        return_type=row[1],
-        params=[FunctionParam(name=p["name"], c_type=p["c_type"]) for p in raw_params],
-        is_variadic=bool(row[3]),
-        set_by=row[4],
-    )
+    return _prototype_from_row(row)
 
 
 def list_function_prototypes(
     kb: PersistentKnowledgeBase,
 ) -> List[FunctionPrototype]:
     _ensure_schema(kb._conn)
-    import json
     cur = kb._conn.cursor()
     cur.execute(
-        "SELECT function_name, return_type, params_json, is_variadic, set_by "
+        "SELECT function_name, return_type, params_json, is_variadic, "
+        "module, calling_convention, source, source_kind, source_package, "
+        "source_version, confidence, provenance_json, semantics_json, "
+        "semantic_provenance_json, set_by "
         "FROM function_prototypes WHERE binary_id = ? ORDER BY function_name",
         (kb.binary_id,),
     )
-    out: List[FunctionPrototype] = []
-    for row in cur.fetchall():
-        raw_params = json.loads(row[2] or "[]")
-        out.append(FunctionPrototype(
-            function_name=row[0], return_type=row[1],
-            params=[FunctionParam(name=p["name"], c_type=p["c_type"]) for p in raw_params],
-            is_variadic=bool(row[3]), set_by=row[4],
-        ))
-    return out
+    return [_prototype_from_row(row) for row in cur.fetchall()]
+
+
+def get_function_semantics(
+    kb: PersistentKnowledgeBase,
+    function_name: str,
+) -> Optional[dict[str, Any]]:
+    """Return semantic metadata for ``function_name`` if present."""
+    proto = get_function_prototype(kb, function_name)
+    if proto is None or not proto.semantics:
+        return None
+    return proto.semantics
+
+
+def list_function_prototypes_by_risk_tag(
+    kb: PersistentKnowledgeBase,
+    risk_tag: str,
+) -> List[FunctionPrototype]:
+    """Return prototypes whose semantic risk_tags include ``risk_tag``."""
+    return [
+        proto for proto in list_function_prototypes(kb) if risk_tag in proto.risk_tags
+    ]
+
+
+def list_function_prototypes_by_param_role(
+    kb: PersistentKnowledgeBase,
+    role: str,
+) -> List[FunctionPrototype]:
+    """Return prototypes with at least one parameter carrying ``role``."""
+    return [
+        proto
+        for proto in list_function_prototypes(kb)
+        if any(param.role == role for param in proto.params)
+    ]
 
 
 def import_stdlib_prototypes(
@@ -1367,19 +1762,33 @@ def import_stdlib_prototypes(
             if not proto.get("name"):
                 bs["skipped"] += 1
                 continue
-            params = [
-                FunctionParam(name=str(p["name"]), c_type=str(p["c_type"]))
-                for p in proto.get("params", [])
-            ]
+            parsed = prototype_from_bundle_entry(proto, set_by=str(set_by))
+            if parsed is None:
+                bs["skipped"] += 1
+                continue
             set_function_prototype(
                 kb,
-                function_name=str(proto["name"]),
-                return_type=str(proto.get("return_type") or "void"),
-                params=params,
-                is_variadic=bool(proto.get("is_variadic", False)),
-                set_by=set_by,
+                function_name=parsed.function_name,
+                return_type=parsed.return_type,
+                params=parsed.params,
+                is_variadic=parsed.is_variadic,
+                set_by=str(set_by),
+                module=parsed.module,
+                calling_convention=parsed.calling_convention,
+                source=parsed.source,
+                source_kind=parsed.source_kind,
+                source_package=parsed.source_package,
+                source_version=parsed.source_version,
+                confidence=parsed.confidence,
+                provenance=parsed.provenance,
+                semantics=parsed.semantics,
+                semantic_provenance=parsed.semantic_provenance,
             )
             bs["prototypes"] += 1
+            if any(param.role for param in parsed.params):
+                bs["with_param_roles"] = bs.get("with_param_roles", 0) + 1
+            if parsed.semantics:
+                bs["with_semantics"] = bs.get("with_semantics", 0) + 1
         summary[name] = bs
     return summary
 
@@ -1395,29 +1804,35 @@ def import_stdlib_prototypes(
 #
 # x86_64 SysV (Linux/macOS x86_64): integer args 1-6 → rdi/rsi/rdx/rcx/r8/r9.
 _SYSV_ARG_REGS_X64: List[Tuple[str, ...]] = [
-    ("rdi", "edi", "di",  "dil"),
-    ("rsi", "esi", "si",  "sil"),
-    ("rdx", "edx", "dx",  "dl"),
-    ("rcx", "ecx", "cx",  "cl"),
-    ("r8",  "r8d", "r8w", "r8b"),
-    ("r9",  "r9d", "r9w", "r9b"),
+    ("rdi", "edi", "di", "dil"),
+    ("rsi", "esi", "si", "sil"),
+    ("rdx", "edx", "dx", "dl"),
+    ("rcx", "ecx", "cx", "cl"),
+    ("r8", "r8d", "r8w", "r8b"),
+    ("r9", "r9d", "r9w", "r9b"),
 ]
 
 # Microsoft x64 (Windows x86_64 MSVC): integer args 1-4 → rcx/rdx/r8/r9.
 # Different ordering vs SysV — rcx is arg0, not arg3 — so an MSVC binary
 # analysed with the SysV table will misattribute every parameter.
 _WIN64_ARG_REGS_X64: List[Tuple[str, ...]] = [
-    ("rcx", "ecx", "cx",  "cl"),
-    ("rdx", "edx", "dx",  "dl"),
-    ("r8",  "r8d", "r8w", "r8b"),
-    ("r9",  "r9d", "r9w", "r9b"),
+    ("rcx", "ecx", "cx", "cl"),
+    ("rdx", "edx", "dx", "dl"),
+    ("r8", "r8d", "r8w", "r8b"),
+    ("r9", "r9d", "r9w", "r9b"),
 ]
 
 # AArch64 / ARM64 AAPCS64: integer args 1-8 → x0-x7. Each x-reg has a
 # 32-bit alias w-reg sharing the same logical slot.
 _AAPCS64_ARG_REGS: List[Tuple[str, ...]] = [
-    ("x0", "w0"), ("x1", "w1"), ("x2", "w2"), ("x3", "w3"),
-    ("x4", "w4"), ("x5", "w5"), ("x6", "w6"), ("x7", "w7"),
+    ("x0", "w0"),
+    ("x1", "w1"),
+    ("x2", "w2"),
+    ("x3", "w3"),
+    ("x4", "w4"),
+    ("x5", "w5"),
+    ("x6", "w6"),
+    ("x7", "w7"),
 ]
 
 
@@ -1435,6 +1850,7 @@ def _select_arg_regs(binary_path: str) -> List[Tuple[str, ...]]:
     """
     try:
         import glaurung as g
+
         art = g.triage.analyze_path(str(binary_path), 10_000_000, 100_000_000, 1)
     except Exception:
         return _SYSV_ARG_REGS_X64
@@ -1524,9 +1940,12 @@ def propagate_types_at_callsites(
     _ensure_schema(kb._conn)
     try:
         import glaurung as g
+
         ins = g.disasm.disassemble_window_at(
-            str(binary_path), int(function_va),
-            window_bytes=window_bytes, max_instructions=max_instructions,
+            str(binary_path),
+            int(function_va),
+            window_bytes=window_bytes,
+            max_instructions=max_instructions,
         )
     except Exception:
         return 0
@@ -1544,7 +1963,9 @@ def propagate_types_at_callsites(
     # Branch instruction set: x86 uses `call`, ARM uses `bl`/`blr`.
     is_arm = arg_regs is _AAPCS64_ARG_REGS
     call_mnemonics = ("bl", "blr") if is_arm else ("call",)
-    move_mnemonics = ("mov", "lea") if not is_arm else ("mov", "ldr", "ldur", "adrp", "add")
+    move_mnemonics = (
+        ("mov", "lea") if not is_arm else ("mov", "ldr", "ldur", "adrp", "add")
+    )
 
     # Pre-build name → entry-VA map so we can resolve `call <hex>` to a
     # known function name when the operand is a literal address. Also
@@ -1555,9 +1976,14 @@ def propagate_types_at_callsites(
         n.entry_va: n.canonical for n in list_function_names(kb)
     }
     try:
-        plt_pairs = g.analysis.elf_plt_map_path(
-            str(binary_path), 100_000_000, 100_000_000,
-        ) or []
+        plt_pairs = (
+            g.analysis.elf_plt_map_path(
+                str(binary_path),
+                100_000_000,
+                100_000_000,
+            )
+            or []
+        )
         for va, name in plt_pairs:
             # Strip the @plt suffix so 'printf@plt' → 'printf' matches
             # the prototype bundle keys.
@@ -1603,7 +2029,8 @@ def propagate_types_at_callsites(
             if len(prev.operands) < 2:
                 continue
             dst_reg = _operand_destination_register(
-                str(prev.operands[0]), arg_regs=arg_regs,
+                str(prev.operands[0]),
+                arg_regs=arg_regs,
             )
             if dst_reg is None:
                 continue
@@ -1628,7 +2055,9 @@ def propagate_types_at_callsites(
                 continue
             param = params[param_idx]
             set_stack_var(
-                kb, function_va, src_off,
+                kb,
+                function_va,
+                src_off,
                 name=(existing.name if existing else _default_var_name(src_off)),
                 c_type=param.c_type,
                 use_count=(existing.use_count if existing else 1),
@@ -1647,6 +2076,7 @@ def render_decompile_with_names(
     max_instructions: int = 10_000,
     timeout_ms: int = 500,
     style: str = "c",
+    pdb_cache: str = "",
     include_locals_prelude: bool = True,
     include_call_proto_hints: bool = True,
 ) -> str:
@@ -1670,18 +2100,24 @@ def render_decompile_with_names(
     import re
 
     raw = g.ir.decompile_at(
-        str(binary_path), int(function_va),
+        str(binary_path),
+        int(function_va),
         max_blocks=max_blocks,
         max_instructions=max_instructions,
         timeout_ms=timeout_ms,
         style=style,
+        pdb_cache=pdb_cache,
     )
     slots = list_stack_vars(kb, function_va=function_va)
     name_by_offset: dict[int, str] = {s.offset: s.name for s in slots}
 
     def _resolve(off_text: str, sign: str) -> Optional[str]:
         try:
-            n = int(off_text, 16) if off_text.lower().startswith("0x") else int(off_text)
+            n = (
+                int(off_text, 16)
+                if off_text.lower().startswith("0x")
+                else int(off_text)
+            )
         except ValueError:
             return None
         offset = -n if sign == "-" else n
@@ -1752,8 +2188,7 @@ def render_decompile_with_names(
             # don't accidentally rename loose constants. Restrict the
             # match to call-shaped occurrences.
             addr_re = re.compile(
-                r"\b(" + "|".join(re.escape(k) for k in addr_map)
-                + r")(?=\s*\()"
+                r"\b(" + "|".join(re.escape(k) for k in addr_map) + r")(?=\s*\()"
             )
             out = addr_re.sub(lambda m: addr_map[m.group(1)], out)
 
@@ -1829,8 +2264,7 @@ def _format_locals_prelude(slots: List["StackVar"]) -> str:
     interesting set_by tag — no information to surface there.
     """
     interesting = [
-        s for s in slots
-        if s.c_type or s.set_by in ("manual", "propagated", "dwarf")
+        s for s in slots if s.c_type or s.set_by in ("manual", "propagated", "dwarf")
     ]
     if not interesting:
         return ""
@@ -1851,7 +2285,8 @@ def _format_locals_prelude(slots: List["StackVar"]) -> str:
 
 
 def _format_signature_comment(
-    kb: PersistentKnowledgeBase, function_va: int,
+    kb: PersistentKnowledgeBase,
+    function_va: int,
 ) -> Optional[str]:
     """When the KB has a function_prototype for the function we're
     rendering, emit a `// signature: int main(...)` line so the
@@ -1868,9 +2303,7 @@ def _format_signature_comment(
     return f"    // signature: {proto.render()};"
 
 
-def _resolve_call_target_name(
-    inst, name_by_va: dict
-) -> Optional[str]:
+def _resolve_call_target_name(inst, name_by_va: dict) -> Optional[str]:
     """Try several ways the disassembler might encode a call target.
     Operand strings can be a hex literal (`0x1180`), a register
     indirection (`rax`), or a symbolic label.
@@ -1899,9 +2332,11 @@ def _resolve_call_target_name(
 # Evidence log (#200 v0)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class Evidence:
     """One row in the evidence_log: a cited tool invocation."""
+
     cite_id: int
     tool: str
     args: dict
@@ -1935,6 +2370,7 @@ def record_evidence(
     are expected to flatten to primitives.
     """
     import json
+
     _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
     cur.execute(
@@ -1942,13 +2378,16 @@ def record_evidence(
         "(binary_id, tool, args_json, summary, va_start, va_end, file_offset, output_json, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            kb.binary_id, tool,
+            kb.binary_id,
+            tool,
             json.dumps(args, default=str, sort_keys=True),
             summary,
             int(va_start) if va_start is not None else None,
             int(va_end) if va_end is not None else None,
             int(file_offset) if file_offset is not None else None,
-            json.dumps(output, default=str, sort_keys=True) if output is not None else None,
+            json.dumps(output, default=str, sort_keys=True)
+            if output is not None
+            else None,
             int(time.time()),
         ),
     )
@@ -1958,9 +2397,11 @@ def record_evidence(
 
 
 def get_evidence(
-    kb: PersistentKnowledgeBase, cite_id: int,
+    kb: PersistentKnowledgeBase,
+    cite_id: int,
 ) -> Optional[Evidence]:
     import json
+
     _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
     cur.execute(
@@ -1995,6 +2436,7 @@ def list_evidence(
     membership. Sorted newest-first so the agent picks up its most
     recent observations on a re-prompt."""
     import json
+
     _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
     sql = (
@@ -2016,10 +2458,13 @@ def list_evidence(
     cur.execute(sql, params)
     return [
         Evidence(
-            cite_id=int(r[0]), tool=r[1],
+            cite_id=int(r[0]),
+            tool=r[1],
             args=json.loads(r[2] or "{}"),
             summary=r[3],
-            va_start=r[4], va_end=r[5], file_offset=r[6],
+            va_start=r[4],
+            va_end=r[5],
+            file_offset=r[6],
             output=json.loads(r[7]) if r[7] else None,
             created_at=int(r[8]),
         )
@@ -2041,44 +2486,156 @@ def list_evidence(
 # that reads the function's pseudocode + decides naturalistically.
 _NAME_FAMILIES: List[Tuple[str, Tuple[str, ...], Tuple[str, ...]]] = [
     # (family, name keywords, callee keywords)
-    ("memory_free",
-     ("free", "release", "destroy", "deinit", "dealloc"),
-     ("free", "delete", "release", "destroy")),
-    ("memory_alloc",
-     ("alloc", "create", "new", "init", "make"),
-     ("malloc", "calloc", "realloc", "alloc", "new")),
-    ("parse",
-     ("parse", "decode", "scan", "read", "unmarshal", "deserialize", "lex"),
-     ("strchr", "strrchr", "strtol", "strtoul", "strtod", "atoi", "atol",
-      "strtok", "strstr", "memchr", "scanf", "sscanf", "fscanf",
-      "parse", "decode")),
-    ("format",
-     ("format", "encode", "marshal", "serialize", "render", "build", "make"),
-     ("snprintf", "sprintf", "fprintf", "printf", "asprintf", "format",
-      "encode", "putchar", "fputc")),
-    ("crypto",
-     ("encrypt", "decrypt", "hash", "sign", "verify", "hmac", "kdf",
-      "checksum", "digest"),
-     ("CryptEncrypt", "CryptDecrypt", "CryptCreateHash", "CryptHashData",
-      "CryptDeriveKey", "EVP_", "AES_", "SHA", "MD5", "RC4")),
-    ("network",
-     ("send", "recv", "connect", "bind", "listen", "accept", "request",
-      "fetch", "download", "upload"),
-     ("send", "recv", "connect", "bind", "listen", "accept",
-      "WinHttp", "Internet", "socket", "WSA")),
-    ("file_io",
-     ("open", "close", "load", "save", "read", "write", "import", "export"),
-     ("fopen", "fclose", "fread", "fwrite", "fgets", "fputs",
-      "open", "close", "read", "write", "stat",
-      "CreateFile", "ReadFile", "WriteFile", "DeleteFile")),
-    ("string",
-     ("copy", "concat", "compare", "duplicate", "trim", "split"),
-     ("strcpy", "strncpy", "strcat", "strncat", "strcmp", "strncmp",
-      "strdup", "memcpy", "memmove")),
-    ("process",
-     ("fork", "exec", "spawn", "kill", "wait", "exit"),
-     ("fork", "execve", "execl", "system", "waitpid", "kill",
-      "CreateProcess", "OpenProcess", "TerminateProcess")),
+    (
+        "memory_free",
+        ("free", "release", "destroy", "deinit", "dealloc"),
+        ("free", "delete", "release", "destroy"),
+    ),
+    (
+        "memory_alloc",
+        ("alloc", "create", "new", "init", "make"),
+        ("malloc", "calloc", "realloc", "alloc", "new"),
+    ),
+    (
+        "parse",
+        ("parse", "decode", "scan", "read", "unmarshal", "deserialize", "lex"),
+        (
+            "strchr",
+            "strrchr",
+            "strtol",
+            "strtoul",
+            "strtod",
+            "atoi",
+            "atol",
+            "strtok",
+            "strstr",
+            "memchr",
+            "scanf",
+            "sscanf",
+            "fscanf",
+            "parse",
+            "decode",
+        ),
+    ),
+    (
+        "format",
+        ("format", "encode", "marshal", "serialize", "render", "build", "make"),
+        (
+            "snprintf",
+            "sprintf",
+            "fprintf",
+            "printf",
+            "asprintf",
+            "format",
+            "encode",
+            "putchar",
+            "fputc",
+        ),
+    ),
+    (
+        "crypto",
+        (
+            "encrypt",
+            "decrypt",
+            "hash",
+            "sign",
+            "verify",
+            "hmac",
+            "kdf",
+            "checksum",
+            "digest",
+        ),
+        (
+            "CryptEncrypt",
+            "CryptDecrypt",
+            "CryptCreateHash",
+            "CryptHashData",
+            "CryptDeriveKey",
+            "EVP_",
+            "AES_",
+            "SHA",
+            "MD5",
+            "RC4",
+        ),
+    ),
+    (
+        "network",
+        (
+            "send",
+            "recv",
+            "connect",
+            "bind",
+            "listen",
+            "accept",
+            "request",
+            "fetch",
+            "download",
+            "upload",
+        ),
+        (
+            "send",
+            "recv",
+            "connect",
+            "bind",
+            "listen",
+            "accept",
+            "WinHttp",
+            "Internet",
+            "socket",
+            "WSA",
+        ),
+    ),
+    (
+        "file_io",
+        ("open", "close", "load", "save", "read", "write", "import", "export"),
+        (
+            "fopen",
+            "fclose",
+            "fread",
+            "fwrite",
+            "fgets",
+            "fputs",
+            "open",
+            "close",
+            "read",
+            "write",
+            "stat",
+            "CreateFile",
+            "ReadFile",
+            "WriteFile",
+            "DeleteFile",
+        ),
+    ),
+    (
+        "string",
+        ("copy", "concat", "compare", "duplicate", "trim", "split"),
+        (
+            "strcpy",
+            "strncpy",
+            "strcat",
+            "strncat",
+            "strcmp",
+            "strncmp",
+            "strdup",
+            "memcpy",
+            "memmove",
+        ),
+    ),
+    (
+        "process",
+        ("fork", "exec", "spawn", "kill", "wait", "exit"),
+        (
+            "fork",
+            "execve",
+            "execl",
+            "system",
+            "waitpid",
+            "kill",
+            "CreateProcess",
+            "OpenProcess",
+            "TerminateProcess",
+        ),
+    ),
 ]
 
 
@@ -2087,17 +2644,20 @@ class NameVerification:
     """Result of `verify_function_name` — heuristic consistency check
     between a (potentially newly-applied) function name and the
     function's actual callee profile."""
+
     entry_va: int
     name: str
-    score: float                      # 0.0 (very inconsistent) … 1.0 (high consistency)
+    score: float  # 0.0 (very inconsistent) … 1.0 (high consistency)
     matched_family: Optional[str]
     callee_count: int
-    matching_callees: List[str]       # callees that supported the matched family
-    foreign_callees: List[str]        # callees from a *different* family
-    flags: List[str]                  # e.g. ["family-mismatch", "no-callees"]
+    matching_callees: List[str]  # callees that supported the matched family
+    foreign_callees: List[str]  # callees from a *different* family
+    flags: List[str]  # e.g. ["family-mismatch", "no-callees"]
 
 
-def _family_for_name(name: str) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+def _family_for_name(
+    name: str,
+) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
     """Map a function name to its predicted family (if any). First
     family whose name-keywords match wins; ordering above puts more
     specific families before less specific ones."""
@@ -2110,7 +2670,8 @@ def _family_for_name(name: str) -> Optional[Tuple[str, Tuple[str, ...], Tuple[st
 
 
 def verify_function_name(
-    kb: PersistentKnowledgeBase, entry_va: int,
+    kb: PersistentKnowledgeBase,
+    entry_va: int,
 ) -> Optional[NameVerification]:
     """Score whether a function's name is consistent with its callee
     profile. Returns None when the function isn't in the KB.
@@ -2223,9 +2784,7 @@ def set_function_name_audited(
     new = get_function_name(kb, entry_va)
 
     old_name = old.canonical if old else f"sub_{entry_va:x}"
-    summary = f"renamed {old_name} → {name}" + (
-        f"  ({rationale})" if rationale else ""
-    )
+    summary = f"renamed {old_name} → {name}" + (f"  ({rationale})" if rationale else "")
     # Run the consistency verifier so the evidence row carries a
     # score the chat UI can surface ("⚠️ name suggests `parse_*`
     # but callees look like `free`/`destroy`...").
@@ -2247,7 +2806,8 @@ def set_function_name_audited(
         # inconsistent so summaries surface the warning at the
         # cite-table level without needing to expand the row.
         if "family-mismatch" in verification.flags or (
-            verification.matched_family and verification.score < 0.25
+            verification.matched_family
+            and verification.score < 0.25
             and verification.callee_count >= 2
         ):
             summary = f"{summary}  ⚠ name vs. callees suggests inconsistency"
@@ -2265,7 +2825,8 @@ def set_function_name_audited(
         },
         summary=summary,
         va_start=int(entry_va),
-        va_end=int(entry_va) + 1,    # representative point; whole fn covered by 0-len range
+        va_end=int(entry_va)
+        + 1,  # representative point; whole fn covered by 0-len range
         output=output,
     )
     return cite_id, new
@@ -2300,12 +2861,12 @@ def render_evidence_markdown(evs: List[Evidence], *, max_args_chars: int = 120) 
     for e in evs:
         rng = ""
         if e.va_start is not None:
-            rng = f"`{e.va_start:#x}…{e.va_end:#x}`" if e.va_end else f"`{e.va_start:#x}`"
+            rng = (
+                f"`{e.va_start:#x}…{e.va_end:#x}`" if e.va_end else f"`{e.va_start:#x}`"
+            )
         elif e.file_offset is not None:
             rng = f"off `{e.file_offset:#x}`"
-        lines.append(
-            f"| #{e.cite_id} | `{e.tool}` | {e.summary} | {rng} |"
-        )
+        lines.append(f"| #{e.cite_id} | `{e.tool}` | {e.summary} | {rng} |")
     return "\n".join(lines) + "\n"
 
 
@@ -2349,7 +2910,10 @@ def borrow_symbols_from_donor(
     def _read_prologue(binary_path: str, va: int, raw: bytes) -> Optional[bytes]:
         try:
             off = g.analysis.va_to_file_offset_path(
-                binary_path, int(va), 100_000_000, 100_000_000,
+                binary_path,
+                int(va),
+                100_000_000,
+                100_000_000,
             )
         except Exception:
             return None
@@ -2394,7 +2958,9 @@ def borrow_symbols_from_donor(
             continue
         target_subs += 1
         proto = _read_prologue(
-            target_binary_path, int(f.entry_point.value), target_bytes,
+            target_binary_path,
+            int(f.entry_point.value),
+            target_bytes,
         )
         if proto is None:
             continue
@@ -2406,11 +2972,17 @@ def borrow_symbols_from_donor(
         # target's xref_db (DWARF / FLIRT / manual). We only set if
         # the existing row is `sub_*` or absent.
         existing = get_function_name(target_kb, int(f.entry_point.value))
-        if existing is not None and not existing.canonical.startswith("sub_") \
-                and existing.set_by != "analyzer":
+        if (
+            existing is not None
+            and not existing.canonical.startswith("sub_")
+            and existing.set_by != "analyzer"
+        ):
             continue
         set_function_name(
-            target_kb, int(f.entry_point.value), donor_name, set_by="borrowed",
+            target_kb,
+            int(f.entry_point.value),
+            donor_name,
+            set_by="borrowed",
         )
         applied += 1
 
@@ -2425,7 +2997,8 @@ def borrow_symbols_from_donor(
 
 
 def import_data_symbols_from_binary(
-    kb: PersistentKnowledgeBase, binary_path: str,
+    kb: PersistentKnowledgeBase,
+    binary_path: str,
 ) -> int:
     """Pull every defined non-text symbol out of the binary and store
     it as a data_label with set_by="analyzer". Picks up most globals,
@@ -2436,6 +3009,7 @@ def import_data_symbols_from_binary(
     """
     try:
         import glaurung as g
+
         pairs = g.symbol_address_map(binary_path)
     except Exception:
         return 0
@@ -2453,7 +3027,10 @@ def import_data_symbols_from_binary(
         if int(va) in func_vas:
             continue
         set_data_label(
-            kb, int(va), str(name), set_by="analyzer",
+            kb,
+            int(va),
+            str(name),
+            set_by="analyzer",
         )
         n += 1
     return n
@@ -2463,12 +3040,14 @@ def import_data_symbols_from_binary(
 # Stack-frame variables (#191)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class StackVar:
     """One stack-frame slot, named and (optionally) typed."""
+
     function_va: int
-    offset: int            # signed: negative = below rbp (local), positive = above
-    name: str              # e.g. "var_8", "arg_10", or analyst-renamed
+    offset: int  # signed: negative = below rbp (local), positive = above
+    name: str  # e.g. "var_8", "arg_10", or analyst-renamed
     c_type: Optional[str]  # None until type inference / DWARF / analyst sets it
     use_count: int
     set_by: Optional[str]
@@ -2506,17 +3085,20 @@ def set_stack_var(
         kb._conn.commit()
         return
     key = {"function_va": int(function_va), "offset": int(offset)}
-    old = (
-        _snapshot_row(kb, "stack_frame_vars", key) if set_by == "manual"
-        else None
-    )
+    old = _snapshot_row(kb, "stack_frame_vars", key) if set_by == "manual" else None
     cur.execute(
         "INSERT OR REPLACE INTO stack_frame_vars "
         "(binary_id, function_va, offset, name, c_type, use_count, set_by, set_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            kb.binary_id, int(function_va), int(offset),
-            name, c_type, int(use_count), set_by, int(time.time()),
+            kb.binary_id,
+            int(function_va),
+            int(offset),
+            name,
+            c_type,
+            int(use_count),
+            set_by,
+            int(time.time()),
         ),
     )
     if set_by == "manual":
@@ -2526,7 +3108,9 @@ def set_stack_var(
 
 
 def get_stack_var(
-    kb: PersistentKnowledgeBase, function_va: int, offset: int,
+    kb: PersistentKnowledgeBase,
+    function_va: int,
+    offset: int,
 ) -> Optional[StackVar]:
     _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
@@ -2540,13 +3124,18 @@ def get_stack_var(
     if not row:
         return None
     return StackVar(
-        function_va=row[0], offset=row[1], name=row[2],
-        c_type=row[3], use_count=int(row[4] or 0), set_by=row[5],
+        function_va=row[0],
+        offset=row[1],
+        name=row[2],
+        c_type=row[3],
+        use_count=int(row[4] or 0),
+        set_by=row[5],
     )
 
 
 def list_stack_vars(
-    kb: PersistentKnowledgeBase, function_va: Optional[int] = None,
+    kb: PersistentKnowledgeBase,
+    function_va: Optional[int] = None,
 ) -> List[StackVar]:
     """Return every stack-frame variable, optionally filtered to one
     function. Sorted by (function_va, offset) so locals (negative
@@ -2569,8 +3158,12 @@ def list_stack_vars(
         )
     return [
         StackVar(
-            function_va=r[0], offset=r[1], name=r[2],
-            c_type=r[3], use_count=int(r[4] or 0), set_by=r[5],
+            function_va=r[0],
+            offset=r[1],
+            name=r[2],
+            c_type=r[3],
+            use_count=int(r[4] or 0),
+            set_by=r[5],
         )
         for r in cur.fetchall()
     ]
@@ -2603,10 +3196,13 @@ def discover_stack_vars(
     output. Good enough to seed names; #172 will refine types later.
     """
     import glaurung as g
+
     try:
         ins = g.disasm.disassemble_window_at(
-            str(binary_path), int(function_va),
-            window_bytes=window_bytes, max_instructions=max_instructions,
+            str(binary_path),
+            int(function_va),
+            window_bytes=window_bytes,
+            max_instructions=max_instructions,
         )
     except Exception:
         return 0
@@ -2621,8 +3217,12 @@ def discover_stack_vars(
 
     for off, count in seen.items():
         set_stack_var(
-            kb, function_va, off, _default_var_name(off),
-            use_count=count, set_by="auto",
+            kb,
+            function_va,
+            off,
+            _default_var_name(off),
+            use_count=count,
+            set_by="auto",
         )
     return len(seen)
 
@@ -2678,6 +3278,7 @@ def _split_signed(s: str) -> Tuple[str, Optional[str], str]:
 # Bookmarks + journal (#226).
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class Bookmark:
     bookmark_id: int
@@ -2696,8 +3297,11 @@ class JournalEntry:
 
 
 def add_bookmark(
-    kb: PersistentKnowledgeBase, va: int, note: str,
-    *, set_by: str = "manual",
+    kb: PersistentKnowledgeBase,
+    va: int,
+    note: str,
+    *,
+    set_by: str = "manual",
 ) -> int:
     """Add a bookmark at ``va`` with a free-form note. Returns the
     new bookmark_id so the analyst can reference it later. Multiple
@@ -2715,7 +3319,9 @@ def add_bookmark(
 
 
 def list_bookmarks(
-    kb: PersistentKnowledgeBase, *, va: Optional[int] = None,
+    kb: PersistentKnowledgeBase,
+    *,
+    va: Optional[int] = None,
 ) -> List[Bookmark]:
     """Return all bookmarks for the binary, newest first. If ``va``
     is given, only bookmarks at that exact VA."""
@@ -2736,8 +3342,11 @@ def list_bookmarks(
         )
     return [
         Bookmark(
-            bookmark_id=r[0], va=r[1], note=r[2],
-            set_by=r[3], created_at=r[4],
+            bookmark_id=r[0],
+            va=r[1],
+            note=r[2],
+            set_by=r[3],
+            created_at=r[4],
         )
         for r in cur.fetchall()
     ]
@@ -2758,15 +3367,16 @@ def delete_bookmark(kb: PersistentKnowledgeBase, bookmark_id: int) -> bool:
 
 
 def add_journal_entry(
-    kb: PersistentKnowledgeBase, body: str,
-    *, set_by: str = "manual",
+    kb: PersistentKnowledgeBase,
+    body: str,
+    *,
+    set_by: str = "manual",
 ) -> int:
     """Append a journal entry. Returns the new entry_id."""
     _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
     cur.execute(
-        "INSERT INTO journal (binary_id, body, set_by, created_at) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT INTO journal (binary_id, body, set_by, created_at) VALUES (?, ?, ?, ?)",
         (kb.binary_id, body, set_by, int(time.time())),
     )
     entry_id = int(cur.lastrowid or 0)
@@ -2775,7 +3385,9 @@ def add_journal_entry(
 
 
 def list_journal(
-    kb: PersistentKnowledgeBase, *, limit: int = 50,
+    kb: PersistentKnowledgeBase,
+    *,
+    limit: int = 50,
 ) -> List[JournalEntry]:
     """Return the N most recent journal entries, newest first."""
     _ensure_schema(kb._conn)
@@ -2787,7 +3399,10 @@ def list_journal(
     )
     return [
         JournalEntry(
-            entry_id=r[0], body=r[1], set_by=r[2], created_at=r[3],
+            entry_id=r[0],
+            body=r[1],
+            set_by=r[2],
+            created_at=r[3],
         )
         for r in cur.fetchall()
     ]

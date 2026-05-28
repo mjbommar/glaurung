@@ -3,7 +3,7 @@ use std::fs;
 
 use glaurung::core::triage::{Budgets, TriagedArtifact};
 use glaurung::strings;
-use glaurung::triage::config::EntropyConfig;
+use glaurung::triage::config::{EntropyConfig, PackerConfig};
 use glaurung::triage::entropy::analyze_entropy;
 use glaurung::triage::headers;
 use glaurung::triage::heuristics::{architecture, endianness};
@@ -51,7 +51,7 @@ fn triage_bytes(path: &str, data: &[u8]) -> TriagedArtifact {
         }
     };
     let packers = {
-        let v = detect_packers(heur_buf);
+        let v = detect_packers(heur_buf, &PackerConfig::default());
         if v.is_empty() {
             None
         } else {
@@ -83,6 +83,7 @@ fn triage_bytes(path: &str, data: &[u8]) -> TriagedArtifact {
         packers,
         containers,
         None, // overlay
+        None, // format-specific facts
         if parser_results.is_empty() {
             None
         } else {
@@ -92,6 +93,7 @@ fn triage_bytes(path: &str, data: &[u8]) -> TriagedArtifact {
         merged_errors,
         Some((e_guess, e_conf)),
         Some(arch_guesses),
+        None, // disassembly preview
     );
     let ranked = score::score(&prelim);
     TriagedArtifact::new(
@@ -108,11 +110,13 @@ fn triage_bytes(path: &str, data: &[u8]) -> TriagedArtifact {
         prelim.packers,
         prelim.containers,
         prelim.overlay,
+        prelim.format_specific,
         prelim.parse_status,
         prelim.budgets,
         prelim.errors,
         prelim.heuristic_endianness,
         prelim.heuristic_arch,
+        prelim.disasm_preview,
     )
 }
 

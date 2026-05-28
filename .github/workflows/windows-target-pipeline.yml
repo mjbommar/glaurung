@@ -1,0 +1,299 @@
+name: Windows Target Pipeline
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-target-pipeline.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "docs/windows-port/**"
+      - "pyproject.toml"
+      - "python/glaurung/cli/commands/windows.py"
+      - "python/glaurung/llm/agents/windows_evidence_review.py"
+      - "python/glaurung/llm/agents/windows_sink_to_gate_review.py"
+      - "python/glaurung/llm/agents/windows_target_pipeline.py"
+      - "python/glaurung/llm/agents/windows_triage_worklist.py"
+      - "python/glaurung/llm/agents/windows_validation_planning.py"
+      - "python/glaurung/llm/tools/windows_build_corpus.py"
+      - "python/glaurung/llm/tools/windows_high_volume_preflight.py"
+      - "python/glaurung/llm/tools/windows_pipeline_blocker_task_plan.py"
+      - "python/glaurung/llm/tools/windows_runner_artifact_promotion_apply.py"
+      - "python/glaurung/llm/tools/windows_runner_artifact_promotion_plan.py"
+      - "python/glaurung/llm/tools/windows_runner_artifact_review.py"
+      - "python/glaurung/llm/tools/windows_symbol_similarity_extraction_plan.py"
+      - "python/glaurung/llm/tools/windows_operation_backlog_packets.py"
+      - "python/glaurung/llm/tools/windows_patch_diff_packets.py"
+      - "python/glaurung/llm/tools/windows_project_sink_call_packets.py"
+      - "python/glaurung/llm/tools/windows_vulnerability_seed_packets.py"
+      - "python/tests/test_windows_high_volume_preflight_tool.py"
+      - "python/tests/test_windows_pipeline_blocker_task_plan_tool.py"
+      - "python/tests/test_windows_runner_artifact_promotion_apply_tool.py"
+      - "python/tests/test_windows_runner_artifact_promotion_plan_tool.py"
+      - "python/tests/test_windows_runner_artifact_review_tool.py"
+      - "python/tests/test_windows_symbol_similarity_extraction_plan_tool.py"
+      - "python/tests/test_windows_target_pipeline_agent.py"
+  schedule:
+    - cron: "47 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      run-high-volume:
+        description: "Run the self-hosted high-volume target pipeline job"
+        required: false
+        default: "false"
+      build-corpus-manifest:
+        description: "Path to ASB pe-build-corpus.yaml on the runner"
+        required: false
+        default: "/nas4/data/workspace-infosec/agentic-security-bot/data/kg/pe-build-corpus.yaml"
+      corpus-root:
+        description: "Root containing Windows binary corpus directories"
+        required: false
+        default: "/nas4/data/binary-analysis/glaurung/binaries"
+      project-root:
+        description: "Root containing cached .glaurung project artifacts"
+        required: false
+        default: "/nas4/data/binary-analysis/glaurung/projects"
+      target-id:
+        description: "Optional single target id, such as ntoskrnl or win32kfull"
+        required: false
+        default: ""
+      max-targets:
+        description: "Maximum high-volume targets to fan out"
+        required: false
+        default: "4"
+      max-packets-per-target:
+        description: "Maximum candidate packets per target"
+        required: false
+        default: "16"
+      patch-diff-binary-a:
+        description: "Optional pre-change binary path for patch-diff packets"
+        required: false
+        default: ""
+      patch-diff-binary-b:
+        description: "Optional post-change binary path for patch-diff packets"
+        required: false
+        default: ""
+      patch-diff-function-identity-path:
+        description: "Optional PDB/BSim function identity YAML for patch-diff packets"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  target-pipeline:
+    name: Run Windows target-pipeline smoke tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - name: Run target-pipeline smoke tests
+        run: |
+          mkdir -p artifacts/windows-target-pipeline
+          uv run pytest \
+            python/tests/test_windows_target_pipeline_agent.py \
+            --basetemp artifacts/windows-target-pipeline/pytest-tmp \
+            -q
+      - name: Upload target-pipeline handoff artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-target-pipeline-handoffs
+          path: artifacts/windows-target-pipeline/
+          if-no-files-found: error
+
+  high-volume-target-pipeline:
+    name: Run high-volume Windows target pipeline
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs['run-high-volume'] == 'true')
+    runs-on: [self-hosted, linux, windows-corpus]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - name: Run high-volume target pipeline
+        env:
+          BUILD_CORPUS_MANIFEST: ${{ github.event_name == 'workflow_dispatch' && inputs['build-corpus-manifest'] || '/nas4/data/workspace-infosec/agentic-security-bot/data/kg/pe-build-corpus.yaml' }}
+          CORPUS_ROOT: ${{ github.event_name == 'workflow_dispatch' && inputs['corpus-root'] || '/nas4/data/binary-analysis/glaurung/binaries' }}
+          PROJECT_ROOT: ${{ github.event_name == 'workflow_dispatch' && inputs['project-root'] || '/nas4/data/binary-analysis/glaurung/projects' }}
+          TARGET_ID: ${{ github.event_name == 'workflow_dispatch' && inputs['target-id'] || '' }}
+          MAX_TARGETS: ${{ github.event_name == 'workflow_dispatch' && inputs['max-targets'] || '4' }}
+          MAX_PACKETS_PER_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs['max-packets-per-target'] || '16' }}
+          PATCH_DIFF_BINARY_A: ${{ github.event_name == 'workflow_dispatch' && inputs['patch-diff-binary-a'] || '' }}
+          PATCH_DIFF_BINARY_B: ${{ github.event_name == 'workflow_dispatch' && inputs['patch-diff-binary-b'] || '' }}
+          PATCH_DIFF_FUNCTION_IDENTITY_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs['patch-diff-function-identity-path'] || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/windows-target-pipeline/high-volume
+          test -f "$BUILD_CORPUS_MANIFEST"
+          test -d "$CORPUS_ROOT"
+          test -d "$PROJECT_ROOT"
+          if { [ -n "$PATCH_DIFF_BINARY_A" ] && [ -z "$PATCH_DIFF_BINARY_B" ]; } || \
+             { [ -z "$PATCH_DIFF_BINARY_A" ] && [ -n "$PATCH_DIFF_BINARY_B" ]; }; then
+            echo "patch-diff packets require both patch-diff-binary-a and patch-diff-binary-b"
+            exit 1
+          fi
+          if [ -n "$PATCH_DIFF_BINARY_A" ]; then
+            test -f "$PATCH_DIFF_BINARY_A"
+            test -f "$PATCH_DIFF_BINARY_B"
+          fi
+          if [ -n "$PATCH_DIFF_FUNCTION_IDENTITY_PATH" ]; then
+            test -f "$PATCH_DIFF_FUNCTION_IDENTITY_PATH"
+          fi
+          ASB_KG_ROOT="$(dirname "$BUILD_CORPUS_MANIFEST")"
+          preflight_cmd=(
+            uv run glaurung windows high-volume-preflight
+            --format json
+            --build-corpus-manifest "$BUILD_CORPUS_MANIFEST"
+            --corpus-root "$CORPUS_ROOT"
+            --project-root "$PROJECT_ROOT"
+            --metadata-root "$ASB_KG_ROOT"
+            --max-targets "$MAX_TARGETS"
+          )
+          if [ -n "$TARGET_ID" ]; then
+            preflight_cmd+=(--target-id "$TARGET_ID")
+          fi
+          preflight_cmd+=(--allow-blocked)
+          "${preflight_cmd[@]}" > artifacts/windows-target-pipeline/high-volume/preflight.json
+          uv run glaurung windows blocker-task-plan \
+            --format json \
+            --preflight-path artifacts/windows-target-pipeline/high-volume/preflight.json \
+            --build-corpus-manifest "$BUILD_CORPUS_MANIFEST" \
+            --corpus-root "$CORPUS_ROOT" \
+            --project-root "$PROJECT_ROOT" \
+            --metadata-root "$ASB_KG_ROOT" \
+            --output-path artifacts/windows-target-pipeline/high-volume/preflight-task-plan.json \
+            > artifacts/windows-target-pipeline/high-volume/preflight-task-plan.stdout.json
+          uv run glaurung windows runner-artifact-review \
+            --format json \
+            --artifact-dir artifacts/windows-target-pipeline/high-volume \
+            --output-path artifacts/windows-target-pipeline/high-volume/preflight-artifact-review.json \
+            > artifacts/windows-target-pipeline/high-volume/preflight-artifact-review.stdout.json
+          python - <<'PY'
+          import json
+          import sys
+
+          path = "artifacts/windows-target-pipeline/high-volume/preflight.json"
+          with open(path, encoding="utf-8") as f:
+              preflight = json.load(f)
+          if not preflight.get("ready"):
+              print("high-volume preflight blocked; see preflight-task-plan.json")
+              sys.exit(1)
+          PY
+
+          cmd=(
+            uv run glaurung windows target-pipeline
+            --format json
+            --build-corpus-manifest "$BUILD_CORPUS_MANIFEST"
+            --corpus-root "$CORPUS_ROOT"
+            --project-root "$PROJECT_ROOT"
+            --sinks-path "$ASB_KG_ROOT/pe-sinks.yaml"
+            --sources-path "$ASB_KG_ROOT/pe-sources.yaml"
+            --gates-path "$ASB_KG_ROOT/pe-gates.yaml"
+            --project-facts-path "$ASB_KG_ROOT/pe-project-facts.yaml"
+            --validation-inventory-path "$ASB_KG_ROOT/pe-validation-inventory.yaml"
+            --ghidra-delta-path "$ASB_KG_ROOT/pe-ghidra-delta.yaml"
+            --vulnerability-seeds-path "$ASB_KG_ROOT/pe-vulnerability-seeds.yaml"
+            --max-targets "$MAX_TARGETS"
+            --max-packets-per-target "$MAX_PACKETS_PER_TARGET"
+            --candidate-packets-export-path artifacts/windows-target-pipeline/high-volume/candidate-packets.json
+            --evidence-operator-markdown-path artifacts/windows-target-pipeline/high-volume/evidence-review.md
+            --evidence-export-manifest-path artifacts/windows-target-pipeline/high-volume/evidence-export.json
+            --evidence-candidate-packets-export-path artifacts/windows-target-pipeline/high-volume/evidence-candidate-packets.json
+            --pipeline-export-manifest-path artifacts/windows-target-pipeline/high-volume/pipeline-export.json
+            --blocker-worklist-path artifacts/windows-target-pipeline/high-volume/blocker-worklist.json
+          )
+          if [ -n "$TARGET_ID" ]; then
+            cmd+=(--target-id "$TARGET_ID")
+          fi
+          if [ -f "$ASB_KG_ROOT/pe-operation-classification-backlog.yaml" ]; then
+            cmd+=(--operation-backlog-path "$ASB_KG_ROOT/pe-operation-classification-backlog.yaml")
+          fi
+          if [ -n "$PATCH_DIFF_BINARY_A" ]; then
+            cmd+=(
+              --patch-diff-binary-a "$PATCH_DIFF_BINARY_A"
+              --patch-diff-binary-b "$PATCH_DIFF_BINARY_B"
+              --patch-diff-seeds-path "$ASB_KG_ROOT/pe-vulnerability-seeds.yaml"
+            )
+            if [ -n "$PATCH_DIFF_FUNCTION_IDENTITY_PATH" ]; then
+              cmd+=(--patch-diff-function-identity-path "$PATCH_DIFF_FUNCTION_IDENTITY_PATH")
+            fi
+          fi
+          "${cmd[@]}" > artifacts/windows-target-pipeline/high-volume/target-pipeline.json
+          uv run glaurung windows blocker-task-plan \
+            --format json \
+            --preflight-path artifacts/windows-target-pipeline/high-volume/preflight.json \
+            --blocker-worklist-path artifacts/windows-target-pipeline/high-volume/blocker-worklist.json \
+            --build-corpus-manifest "$BUILD_CORPUS_MANIFEST" \
+            --corpus-root "$CORPUS_ROOT" \
+            --project-root "$PROJECT_ROOT" \
+            --metadata-root "$ASB_KG_ROOT" \
+            --output-path artifacts/windows-target-pipeline/high-volume/blocker-task-plan.json \
+            > artifacts/windows-target-pipeline/high-volume/blocker-task-plan.stdout.json
+          uv run glaurung windows runner-artifact-review \
+            --format json \
+            --artifact-dir artifacts/windows-target-pipeline/high-volume \
+            --output-path artifacts/windows-target-pipeline/high-volume/runner-artifact-review.json \
+            > artifacts/windows-target-pipeline/high-volume/runner-artifact-review.stdout.json
+          if ! uv run glaurung windows runner-artifact-promotion-plan \
+            --format json \
+            --artifact-dir artifacts/windows-target-pipeline/high-volume \
+            --review-path artifacts/windows-target-pipeline/high-volume/runner-artifact-review.json \
+            --docs-root docs/windows-port \
+            --output-path artifacts/windows-target-pipeline/high-volume/runner-artifact-promotion-plan.json \
+            > artifacts/windows-target-pipeline/high-volume/runner-artifact-promotion-plan.stdout.json; then
+            echo "high-volume artifact promotion is blocked; see runner-artifact-promotion-plan.json"
+          fi
+          python - <<'PY'
+          import json
+          import subprocess
+
+          plan_path = "artifacts/windows-target-pipeline/high-volume/runner-artifact-promotion-plan.json"
+          with open(plan_path, encoding="utf-8") as f:
+              plan = json.load(f)
+          if not plan.get("promotion_allowed"):
+              print("skipping promotion apply dry-run because promotion is not allowed")
+              raise SystemExit(0)
+          with open(
+              "artifacts/windows-target-pipeline/high-volume/runner-artifact-promotion-apply.stdout.json",
+              "w",
+              encoding="utf-8",
+          ) as stdout:
+              subprocess.run(
+                  [
+                      "uv",
+                      "run",
+                      "glaurung",
+                      "windows",
+                      "runner-artifact-promotion-apply",
+                      "--format",
+                      "json",
+                      "--plan-path",
+                      plan_path,
+                      "--output-path",
+                      "artifacts/windows-target-pipeline/high-volume/runner-artifact-promotion-apply.json",
+                      "--review-markdown-path",
+                      "artifacts/windows-target-pipeline/high-volume/runner-artifact-promotion-apply.md",
+                  ],
+                  check=True,
+                  stdout=stdout,
+              )
+          PY
+      - name: Upload high-volume target-pipeline artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-target-pipeline-high-volume
+          path: artifacts/windows-target-pipeline/high-volume/
+          if-no-files-found: warn

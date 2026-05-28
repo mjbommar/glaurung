@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional, Any, Dict
+from typing import Optional, Any
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
@@ -188,20 +188,36 @@ class SinglePassAgent:
             context.kb.add_node = monitored_add_node
 
         try:
-            # Run the agent. pydantic-ai's Agent.run() does NOT accept
-            # `temperature` / `top_p` / `max_tokens` as direct kwargs --
-            # they must be wrapped in a ModelSettings object passed via
-            # `model_settings=`. Previously this layer spread the raw
-            # dict, which raised "AbstractAgent.run() got unexpected
-            # kwarg 'temperature'" and dropped callers into the
-            # heuristic-fallback path.
-            run_kwargs: Dict[str, Any] = {
+            # pydantic-ai >=1.x: sampling params go inside model_settings,
+            # not as top-level Agent.run() kwargs. usage_limits caps the
+            # per-run request count + input/total tokens so a confused
+            # tool-using agent fails fast instead of burning 50 round-trips.
+            from pydantic_ai.settings import ModelSettings
+            from ..usage_limits import build_usage_limits
+            model_kwargs = params.to_model_kwargs(model_name=self.model)
+            run_kwargs: dict[str, Any] = {
                 "deps": context,
-                "model_settings": params.to_model_settings(),
+                "usage_limits": build_usage_limits(model_name=self.model),
             }
             if self.model:
                 run_kwargs["model"] = self.model
-            result = await self.agent.run(question, **run_kwargs)
+            if model_kwargs:
+                run_kwargs["model_settings"] = ModelSettings(**model_kwargs)
+            result = await self.agent.run(
+                question,
+                **run_kwargs,
+            )
+
+            # F4: record usage for the session-wide cost tracker.
+            try:
+                from ..usage_tracker import get_tracker
+                get_tracker().record(
+                    result,
+                    model=self.model or "test",
+                    source="single_pass",
+                )
+            except Exception:  # pragma: no cover -- never let telemetry kill a run
+                pass
 
             # Track tools used
             for tool_name, args in self.metrics.extract_tools_with_args(result):

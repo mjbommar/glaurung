@@ -11,87 +11,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
-from pathlib import Path
 from typing import Optional
 
 import glaurung as g
+from glaurung.windows_config import load_windows_analysis_config
 
 from .base import BaseCommand
-from .. import cache as _cache
 from ..formatters.base import BaseFormatter, OutputFormat
-
-log = logging.getLogger(__name__)
-
-
-def _decompile_with_cache(
-    *,
-    path: str,
-    func_va: int,
-    style: str,
-    timeout_ms: int,
-    types: bool,
-    pdb_cache: str,
-    cache_dir_arg: Optional[str],
-) -> str:
-    """Run ``g.ir.decompile_at`` with optional persistent caching.
-
-    Cache logic is best-effort: any cache failure logs a WARNING and
-    falls through to the live decompile path. Behaviour is identical
-    to a direct ``decompile_at`` call when caching is disabled.
-    """
-
-    cache_dir = _cache.resolve_cache_dir(cache_dir_arg)
-    paths = None
-    if cache_dir is not None:
-        try:
-            binary_sha = _cache.sha256_file(Path(path))
-            flags = _cache.canonical_flag_dict(
-                [
-                    ("style", style or "plain"),
-                    ("types", bool(types)),
-                    ("timeout_ms", int(timeout_ms)),
-                    # The PDB cache *path* shouldn't be part of the key
-                    # (it's a machine-local detail), but its *presence*
-                    # changes name resolution and therefore output.
-                    ("pdb_cache_present", bool(pdb_cache)),
-                    # Reserved for future flags so existing entries
-                    # naturally invalidate when the schema grows.
-                    ("schema", 1),
-                ]
-            )
-            paths = _cache.build_paths(
-                cache_dir,
-                namespace="decomp",
-                binary_sha256=binary_sha,
-                va=func_va,
-                flags=flags,
-                suffix=f".{style or 'plain'}.c",
-            )
-            hit = _cache.read_text(paths)
-            if hit is not None:
-                log.debug("decomp cache HIT %s", paths.file)
-                return hit
-            log.debug("decomp cache MISS %s", paths.file)
-        except OSError as exc:
-            log.warning(
-                "decomp cache: setup failed (%s); falling back to live decompile",
-                exc,
-            )
-            paths = None
-
-    text = g.ir.decompile_at(
-        path,
-        int(func_va),
-        timeout_ms=timeout_ms,
-        types=types,
-        style=style,
-        pdb_cache=pdb_cache,
-    )
-
-    if paths is not None:
-        _cache.write_text(paths, text)
-    return text
+from ..func_ref import (
+    FuncResolutionError,
+    parse_func_arg,
+    resolve_func_to_va,
+)
 
 
 class DecompileCommand(BaseCommand):
@@ -106,12 +37,22 @@ class DecompileCommand(BaseCommand):
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("path", help="Path to file")
         parser.add_argument(
+            "--analysis-config",
+            help=(
+                "Optional Windows analysis config YAML/JSON. Defaults to "
+                ".glaurung/windows-analysis.yaml or "
+                "$GLAURUNG_WINDOWS_ANALYSIS_CONFIG when present."
+            ),
+        )
+        parser.add_argument(
             "--func",
             dest="func",
-            type=lambda x: int(x, 0),
+            type=parse_func_arg,
             default=None,
-            help="Entry VA of the function to decompile (hex or decimal). "
-            "If omitted, the detected entry point is used.",
+            help="Function selector: hex VA (0x140001480), decimal, or a "
+                 "function name like 'main' resolved against analysis. If "
+                 "omitted, the detected entry point is used. Stripped "
+                 "binaries only have sub_<VA> names so VA is preferred.",
         )
         parser.add_argument(
             "--all",
@@ -122,8 +63,8 @@ class DecompileCommand(BaseCommand):
         parser.add_argument(
             "--limit",
             type=int,
-            default=256,
-            help="Max number of functions to decompile with --all (default: 256).",
+            default=8,
+            help="Max number of functions to decompile with --all (default: 8).",
         )
         parser.add_argument(
             "--no-types",
@@ -135,31 +76,46 @@ class DecompileCommand(BaseCommand):
         parser.add_argument(
             "--timeout-ms",
             type=int,
-            default=10_000,
-            help="Per-function analysis timeout in milliseconds (default: 10000).",
+            default=None,
+            help="Per-function analysis timeout in milliseconds. Defaults to analysis config.",
+        )
+        parser.add_argument(
+            "--max-blocks",
+            type=int,
+            default=None,
+            help="Per-function max basic blocks. Defaults to analysis config.",
+        )
+        parser.add_argument(
+            "--max-instructions",
+            type=int,
+            default=None,
+            help="Per-function max instructions. Defaults to analysis config.",
+        )
+        parser.add_argument(
+            "--range-start",
+            type=lambda x: int(x, 0),
+            default=None,
+            help="Explicit function range start VA for range-seeded decompile.",
+        )
+        parser.add_argument(
+            "--range-end",
+            type=lambda x: int(x, 0),
+            default=None,
+            help="Explicit exclusive function range end VA for range-seeded decompile.",
         )
         parser.add_argument(
             "--style",
             choices=["plain", "c"],
             default="plain",
             help="Pseudocode style: 'plain' keeps the register-level detail "
-            "(default); 'c' strips the %% prefix and annotations for a "
-            "closer-to-C view.",
+                 "(default); 'c' strips the %% prefix and annotations for a "
+                 "closer-to-C view.",
         )
         parser.add_argument(
             "--pdb-cache",
             default="",
             help="Optional Microsoft-style PDB cache directory used to resolve "
-            "PE/PDB public function names in decompile output.",
-        )
-        parser.add_argument(
-            "--cache-dir",
-            default=None,
-            help="Optional persistent cache directory for decompile output. "
-            "Entries are keyed by (glaurung version, sha256(binary), VA, "
-            "decompile flags). Falls back to $GLAURUNG_CACHE_DIR when "
-            "unset. Append-only — clear the directory manually if disk "
-            "fills up.",
+                 "PE/PDB public function names in decompile output.",
         )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
@@ -172,24 +128,25 @@ class DecompileCommand(BaseCommand):
         as_json = formatter.format_type in (OutputFormat.JSON, OutputFormat.JSONL)
 
         try:
+            config = load_windows_analysis_config(args.analysis_config).with_overrides(
+                max_blocks=args.max_blocks,
+                max_instructions=args.max_instructions,
+                timeout_ms=args.timeout_ms,
+                pdb_cache_dir=args.pdb_cache or None,
+            )
+            timeout_ms = config.timeout_ms
+            max_blocks = config.max_blocks
+            max_instructions = config.max_instructions
             if args.all:
                 results = g.ir.decompile_all(
                     str(path),
                     args.limit,
-                    timeout_ms=args.timeout_ms,
-                    pdb_cache=args.pdb_cache,
+                    timeout_ms=timeout_ms,
+                    pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
                 )
                 if as_json:
-                    # Resolve VA -> PDB public symbol once per binary so JSON
-                    # output exposes a stable `public_name` field for each row.
-                    pdb_map = _resolve_pdb_symbol_map(str(path), args.pdb_cache)
                     payload = [
-                        {
-                            "name": name,
-                            "entry_va": int(va),
-                            "pseudocode": text,
-                            "public_name": pdb_map.get(int(va)),
-                        }
+                        {"name": name, "entry_va": int(va), "pseudocode": text}
                         for name, va, text in results
                     ]
                     print(json.dumps(payload, indent=2))
@@ -199,8 +156,27 @@ class DecompileCommand(BaseCommand):
                 return 0
 
             # Single-function mode.
-            func_va: Optional[int] = args.func
-            if func_va is None:
+            func_va: Optional[int] = None
+            if isinstance(args.func, int):
+                func_va = args.func
+            elif isinstance(args.func, str):
+                # Name-resolution path. Run a bounded discovery pass so
+                # the lookup terminates predictably on large binaries.
+                try:
+                    discovered = g.analysis.analyze_functions_path(
+                        str(path), max_functions=2000,
+                    )[0]
+                except Exception as e:
+                    formatter.output_plain(
+                        f"Error: --func name resolution failed during analysis: {e}"
+                    )
+                    return 2
+                try:
+                    func_va = resolve_func_to_va(args.func, discovered)
+                except FuncResolutionError as e:
+                    formatter.output_plain(f"Error: {e}")
+                    return 2
+            else:
                 got = g.analysis.detect_entry_path(str(path))
                 if got is None:
                     formatter.output_plain(
@@ -211,57 +187,43 @@ class DecompileCommand(BaseCommand):
 
             try:
                 style = "c" if args.style == "c" else ""
-                text = _decompile_with_cache(
-                    path=str(path),
-                    func_va=int(func_va),
-                    style=style,
-                    timeout_ms=args.timeout_ms,
-                    types=args.types,
-                    pdb_cache=args.pdb_cache,
-                    cache_dir_arg=args.cache_dir,
-                )
+                if args.range_end is not None or args.range_start is not None:
+                    range_start = args.range_start if args.range_start is not None else int(func_va)
+                    if args.range_end is None:
+                        formatter.output_plain("Error: --range-end is required with --range-start")
+                        return 2
+                    text = g.ir.decompile_range_at(
+                        str(path),
+                        int(func_va),
+                        int(range_start),
+                        int(args.range_end),
+                        max_blocks=max_blocks,
+                        max_instructions=max_instructions,
+                        timeout_ms=timeout_ms,
+                        types=args.types,
+                        style=style,
+                        pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
+                    )
+                else:
+                    text = g.ir.decompile_at(
+                        str(path),
+                        int(func_va),
+                        max_blocks=max_blocks,
+                        max_instructions=max_instructions,
+                        timeout_ms=timeout_ms,
+                        types=args.types,
+                        style=style,
+                        pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
+                    )
             except ValueError as e:
                 formatter.output_plain(f"Error: {e}")
                 return 2
 
             if as_json:
-                public_name = _resolve_pdb_symbol(str(path), int(func_va), args.pdb_cache)
-                print(
-                    json.dumps(
-                        {
-                            "entry_va": int(func_va),
-                            "pseudocode": text,
-                            "public_name": public_name,
-                        },
-                        indent=2,
-                    )
-                )
+                print(json.dumps({"entry_va": int(func_va), "pseudocode": text}, indent=2))
             else:
                 formatter.output_plain(text)
             return 0
         except Exception as e:  # pragma: no cover - surfaces as CLI error
             formatter.output_plain(f"Error: {e}")
             return 1
-
-
-def _resolve_pdb_symbol(binary_path: str, va: int, pdb_cache: str) -> Optional[str]:
-    """Best-effort PDB public-symbol lookup for one VA. Returns None when
-    no cache is configured, the cache misses, or the binding raises (we
-    never let a missing PDB break decompile output)."""
-    if not pdb_cache:
-        return None
-    try:
-        return g.symbols.pdb_symbol_for_va(binary_path, int(va), pdb_cache)
-    except Exception:  # pragma: no cover - best-effort PDB lookup
-        return None
-
-
-def _resolve_pdb_symbol_map(binary_path: str, pdb_cache: str) -> dict:
-    """Build the full VA -> PDB public symbol map once. Empty when no
-    cache or no cache hit so callers can `.get(va)` without branching."""
-    if not pdb_cache:
-        return {}
-    try:
-        return dict(g.symbols.pdb_symbol_map(binary_path, pdb_cache))
-    except Exception:  # pragma: no cover - best-effort PDB lookup
-        return {}

@@ -127,6 +127,100 @@ class AskCommand(BaseCommand):
             default=4096,
             help="Max disassembly window bytes",
         )
+        parser.add_argument(
+            "--findings-json",
+            metavar="PATH",
+            default=None,
+            help=(
+                "Run a structured-output pass that returns a FindingsReport "
+                "(list of VulnerabilityFinding) and write it to PATH as JSON. "
+                "PATH '-' writes to stdout. Independent of -a/--ask: the "
+                "structured pass uses a fixed vuln-discovery prompt. After "
+                "discovery, the L4 cite-or-discard verifier resolves cited "
+                "references and the L2 self-critique pass grades each "
+                "finding's evidence."
+            ),
+        )
+        parser.add_argument(
+            "--skip-critique",
+            action="store_true",
+            help=(
+                "Skip the L2 self-critique pass (one extra LLM call per "
+                "finding). Use when iterating cheaply; the L4 verifier "
+                "still runs."
+            ),
+        )
+        parser.add_argument(
+            "--cwe-sweep",
+            action="store_true",
+            help=(
+                "Run the L3 CWE-class sweep (one structured pass per "
+                "CWE family in the catalog) instead of a single broad "
+                "discovery pass. Implies --findings-json; pass "
+                "--findings-json PATH to choose the output location "
+                "(default: stdout). Each per-class pass still goes "
+                "through L4 verification and L2 critique."
+            ),
+        )
+        parser.add_argument(
+            "--cwe-sweep-applies",
+            choices=["any", "userland", "kernel"],
+            default="any",
+            help=(
+                "Filter the CWE sweep catalog to classes applicable to "
+                "userland or kernel code. Default 'any' runs every class."
+            ),
+        )
+        parser.add_argument(
+            "--route",
+            action="store_true",
+            help=(
+                "L5: route the question to a focused tool subset (5-30 "
+                "tools) instead of loading all 163. The router is "
+                "deterministic keyword matching; intents include "
+                "vuln_discovery, triage_summary, function_walk, "
+                "import_audit, string_audit, and a broad_discovery "
+                "fallback. Combine with --show-routing to see which "
+                "intent matched."
+            ),
+        )
+        parser.add_argument(
+            "--show-routing",
+            action="store_true",
+            help="Print the selected intent + tool subset before running.",
+        )
+        parser.add_argument(
+            "--all-tools",
+            action="store_true",
+            help=(
+                "Force the legacy behaviour: register every tool the "
+                "memory agent knows. Overrides --route."
+            ),
+        )
+        parser.add_argument(
+            "--max-cost-usd",
+            type=float,
+            default=None,
+            metavar="USD",
+            help=(
+                "F5 cost circuit breaker. Set a hard upper bound (in USD) "
+                "on the LLM spend for THIS invocation. When the running "
+                "session cost exceeds USD, the next agent call raises "
+                "CostBudgetExceeded; partial findings (per CWE class) are "
+                "still written. Use this as defense-in-depth on top of "
+                "--cwe-sweep / sweep wrappers."
+            ),
+        )
+        parser.add_argument(
+            "--usage-log",
+            default=None,
+            metavar="PATH",
+            help=(
+                "Path to write JSONL usage records (one line per LLM call). "
+                "Default: ~/.cache/glaurung/usage/<session>.jsonl. "
+                "Set to '-' to disable file logging (in-memory only)."
+            ),
+        )
 
     def _serialize_args(self, args: Any) -> Any:
         """Serialize tool arguments for display."""
@@ -193,6 +287,21 @@ class AskCommand(BaseCommand):
             formatter.format_error("No questions provided")
             return 1
 
+        # F5: hook the cost circuit breaker. Tracker is global; configure
+        # once at the start of this invocation. Re-running ask in the same
+        # process resets the budget but keeps the running cost (intentional
+        # so repeated calls compose against a single cap).
+        from pathlib import Path
+        from ...llm.usage_tracker import get_tracker
+        tracker = get_tracker()
+        if getattr(args, "max_cost_usd", None) is not None:
+            tracker.set_budget_usd(float(args.max_cost_usd))
+        usage_log = getattr(args, "usage_log", None)
+        if usage_log == "-":
+            tracker.set_jsonl_path(None)
+        elif usage_log:
+            tracker.set_jsonl_path(Path(usage_log))
+
         # Run async analysis
         try:
             results = asyncio.run(
@@ -209,6 +318,43 @@ class AskCommand(BaseCommand):
                     "show_plan": args.show_plan,
                 }
             )
+
+            # Optional structured-output side pass (L1) or full L3 sweep.
+            if getattr(args, "cwe_sweep", False):
+                from ...llm.cwe_sweep import sweep_binary
+                from ...llm.findings_runner import write_findings_report
+                # F7: derive a partial-dir alongside the final --findings-json.
+                # On clean completion sweep_binary deletes its own partials.
+                # On crash / SIGTERM / cost-budget abort the .partial.json
+                # files survive next to the (missing) final output so the
+                # operator can recover whatever finished.
+                final_out = getattr(args, "findings_json", None) or "-"
+                if final_out != "-":
+                    from pathlib import Path as _Path
+                    partial_dir = (
+                        _Path(final_out).with_suffix("").as_posix()
+                        + ".partials"
+                    )
+                else:
+                    partial_dir = "/tmp/glaurung-sweep-partials"
+                report = asyncio.run(
+                    sweep_binary(
+                        str(binary_path),
+                        args,
+                        applies_to_filter=getattr(args, "cwe_sweep_applies", "any"),
+                        partial_dir=partial_dir,
+                    )
+                )
+                write_findings_report(report, final_out)
+            elif getattr(args, "findings_json", None):
+                from ...llm.findings_runner import (
+                    run_findings_pass,
+                    write_findings_report,
+                )
+                report = asyncio.run(
+                    run_findings_pass(str(binary_path), args)
+                )
+                write_findings_report(report, args.findings_json)
 
             return 0
 
@@ -360,16 +506,37 @@ class AskCommand(BaseCommand):
         # Seed high-signal context to help the agent plan well
         self._seed_high_signal_context(context, args)
 
+        # L5: derive an optional tool filter from --route. --all-tools
+        # overrides --route. Routing fires on the first/only question.
+        tool_filter: set[str] | None = None
+        if getattr(args, "all_tools", False):
+            tool_filter = None
+        elif getattr(args, "route", False):
+            from ...llm.tool_routing import (
+                route_for_question,
+                select_tools_for_question,
+            )
+            first_q = (questions[0] if questions else "") or ""
+            tool_filter = set(select_tools_for_question(first_q))
+            if getattr(args, "show_routing", False):
+                intent = route_for_question(first_q)
+                formatter.format_progress(
+                    f"L5 routing: intent={intent.name} tools={len(intent.tools)} "
+                    f"({', '.join(sorted(intent.tools)[:6])}...)"
+                )
+
         # Create agent based on strategy
         if args.strategy == "single":
             agent = AnalysisAgentFactory.create_fast_single_pass_agent(
-                model=args.model, timeout=args.timeout
+                model=args.model, timeout=args.timeout,
+                tool_filter=tool_filter,
             )
         elif args.strategy == "iterative":
             agent = AnalysisAgentFactory.create_safe_iterative_agent(
                 model=args.model,
                 max_time_seconds=args.timeout,
                 max_tokens=200_000,  # Reasonable default
+                tool_filter=tool_filter,
             )
         else:  # auto
             # Will be handled per-question

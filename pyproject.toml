@@ -36,6 +36,7 @@ dependencies = [
     "rich>=14.1.0",
     "pydantic-ai>=1.86.0",
     "python-dotenv>=1.0.0",
+    "PyYAML>=6.0.3",
 ]
 
 [project.scripts]

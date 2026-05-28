@@ -67,7 +67,12 @@ async def summarize_binary(
     ctx = MemoryContext(file_path=file_path, artifact=artifact)
     import_triage(ctx.kb, artifact, file_path)
     agent = create_summarizer_agent(model=model)
-    res = await agent.run("Summarize this binary.", deps=ctx)
+    from ..usage_limits import build_usage_limits
+    res = await agent.run(
+        "Summarize this binary.", deps=ctx,
+        # Summary is one structured-output emission; very few tool turns.
+        usage_limits=build_usage_limits(model_name=model, request_limit=4),
+    )
     return res.output
 
 

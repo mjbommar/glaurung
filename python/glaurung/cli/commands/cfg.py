@@ -4,6 +4,7 @@ import argparse
 from typing import List, Optional
 
 import glaurung as g
+from glaurung.windows_config import load_windows_analysis_config
 from .base import BaseCommand
 from ..formatters.cfg import CFGFormatter
 from ..formatters.base import OutputFormat
@@ -18,40 +19,45 @@ class CFGCommand(BaseCommand):
 
     def get_help(self) -> str:
         """Return the command help text."""
-        return "Discover functions and build a bounded CFG"
+        return "Discover functions and build a CFG"
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         """Add command-specific arguments."""
         parser.add_argument("path", help="Path to file")
         parser.add_argument(
-            "--max-read-bytes", type=int, default=1_073_741_824, help="Max bytes to read"
+            "--analysis-config",
+            help=(
+                "Optional Windows analysis config YAML/JSON. Defaults to "
+                ".glaurung/windows-analysis.yaml or "
+                "$GLAURUNG_WINDOWS_ANALYSIS_CONFIG when present."
+            ),
         )
         parser.add_argument(
-            "--max-file-size", type=int, default=1_073_741_824, help="Max file size"
+            "--max-read-bytes", type=int, default=None, help="Max bytes to read"
+        )
+        parser.add_argument(
+            "--max-file-size", type=int, default=None, help="Max file size"
         )
         parser.add_argument(
             "--max-functions",
             type=int,
-            default=30_000,
-            help="Max functions to analyze (pre-2026-05-25 default was 16)",
+            default=None,
+            help="Max functions to analyze; 0 means unlimited",
         )
         parser.add_argument(
-            "--max-blocks",
-            type=int,
-            default=1_000_000,
-            help="Max basic blocks (pre-2026-05-25 default was 2048)",
+            "--max-blocks", type=int, default=None, help="Max basic blocks"
         )
         parser.add_argument(
             "--max-instructions",
             type=int,
-            default=10_000_000,
-            help="Max instructions to process (pre-2026-05-25 default was 50000)",
+            default=None,
+            help="Max instructions to process",
         )
         parser.add_argument(
             "--timeout-ms",
             type=int,
-            default=300_000,
-            help="Analysis timeout in milliseconds (pre-2026-05-25 default was 100)",
+            default=None,
+            help="Analysis timeout in milliseconds",
         )
         parser.add_argument(
             "--dot",
@@ -81,16 +87,29 @@ class CFGCommand(BaseCommand):
             formatter.output_plain(f"Error: {e}")
             return 2
 
+        try:
+            config = load_windows_analysis_config(args.analysis_config).with_overrides(
+                max_read_bytes=args.max_read_bytes,
+                max_file_size=args.max_file_size,
+                max_functions=args.max_functions,
+                max_blocks=args.max_blocks,
+                max_instructions=args.max_instructions,
+                timeout_ms=args.timeout_ms,
+            )
+        except Exception as e:
+            formatter.output_plain(f"Error loading analysis config: {e}")
+            return 2
+
         # Perform CFG analysis
         try:
             funcs, callgraph = g.analysis.analyze_functions_path(
                 str(path),
-                args.max_read_bytes,
-                args.max_file_size,
-                args.max_functions,
-                args.max_blocks,
-                args.max_instructions,
-                args.timeout_ms,
+                config.max_read_bytes,
+                config.max_file_size,
+                config.max_functions,
+                config.max_blocks,
+                config.max_instructions,
+                config.timeout_ms,
             )
         except Exception as e:
             formatter.output_plain(f"Error during analysis: {e}")
@@ -100,7 +119,14 @@ class CFGCommand(BaseCommand):
         if args.annotate or args.annotate_json:
             from glaurung.llm.evidence import annotate_functions_path, AnnotateBudgets
 
-            budgets = AnnotateBudgets(max_functions=min(args.max_functions, 16))
+            annotate_max_functions = (
+                min(config.max_functions, 16) if config.max_functions else 16
+            )
+            budgets = AnnotateBudgets(
+                max_read_bytes=config.max_read_bytes,
+                max_file_size=config.max_file_size,
+                max_functions=annotate_max_functions,
+            )
             ev = annotate_functions_path(str(path), budgets)
             if args.annotate_json or formatter.format_type == OutputFormat.JSON:
                 formatter.output_json(ev.model_dump())
@@ -136,9 +162,12 @@ class CFGCommand(BaseCommand):
                 "edges": [],  # Will populate if needed
             },
             "metadata": {
-                "max_functions": args.max_functions,
-                "max_blocks": args.max_blocks,
-                "max_instructions": args.max_instructions,
+                "max_read_bytes": config.max_read_bytes,
+                "max_file_size": config.max_file_size,
+                "max_functions": config.max_functions,
+                "max_blocks": config.max_blocks,
+                "max_instructions": config.max_instructions,
+                "timeout_ms": config.timeout_ms,
             },
         }
 

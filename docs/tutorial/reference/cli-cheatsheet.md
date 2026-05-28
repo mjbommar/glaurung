@@ -29,7 +29,7 @@ chapter that goes deep on it.
 | `glaurung find <db> <query>` | Substring/regex search across functions, comments, labels, types, stack vars, strings, disasm (#225) | Tier 2 §I |
 | `glaurung strings <binary>` | Standalone strings analyzer (no DB, no use sites) | Tier 2 §H |
 | `glaurung symbols <binary>` | Symbol table dump (imports / exports / debug) | Tier 1 §C |
-| `glaurung cfg <binary>` | Function discovery + bounded CFG | Tier 1 §C |
+| `glaurung cfg <binary>` | Function discovery + CFG | Tier 1 §C |
 
 ## Annotate
 

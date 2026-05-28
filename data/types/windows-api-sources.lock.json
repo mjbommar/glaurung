@@ -1,0 +1,76 @@
+{
+  "schema_version": "1",
+  "description": "Pinned sources for generated Windows API prototypes. Analysis does not download these; only `glaurung types sync` does.",
+  "package_sources": [
+    {
+      "id": "microsoft-win32metadata",
+      "source_kind": "nuget_winmd",
+      "package": "Microsoft.Windows.SDK.Win32Metadata",
+      "version": "70.0.11-preview",
+      "winmd_path": "Windows.Win32.winmd",
+      "source_url": "https://github.com/microsoft/win32metadata",
+      "nupkg_sha256": "251713165cd5fac0df81428fb67d283a7db949d362be685b4bcfb41dc028ceef",
+      "confidence": 0.99,
+      "enabled": true
+    },
+    {
+      "id": "microsoft-wdkmetadata",
+      "source_kind": "nuget_winmd",
+      "package": "Microsoft.Windows.WDK.Win32Metadata",
+      "version": "0.13.25-experimental",
+      "winmd_path": "Windows.Wdk.winmd",
+      "source_url": "https://github.com/microsoft/wdkmetadata",
+      "nupkg_sha256": "79079a449d8f621052bcaf13039e411d1c1b77aec4a89cf04d96518d0a619617",
+      "confidence": 0.93,
+      "enabled": true
+    }
+  ],
+  "optional_sources": {
+    "headers": {
+      "status": "augmentation_source",
+      "notes": "Local SDK/WDK headers or NuGet WDK headers should be parsed with clang/castxml/WinmdGenerator when a symbol is absent from WinMD. Header extraction is opt-in and must record include roots, command line, and SHA256 in MANIFEST.json.",
+      "documentation": "https://learn.microsoft.com/en-us/windows-hardware/drivers/install-the-wdk-using-nuget"
+    },
+    "pdb_symbol_server": {
+      "status": "per_binary_source",
+      "url": "https://msdl.microsoft.com/download/symbols",
+      "documentation": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/microsoft-public-symbols",
+        "https://learn.microsoft.com/en-us/visualstudio/debugger/debug-interface-access/debug-interface-access-sdk"
+      ],
+      "notes": "Use per-binary PDB ingestion for exact build symbols/types. Public PDBs are not a complete global API prototype source."
+    },
+    "supplemental": [
+      {
+        "id": "phnt-system-informer",
+        "url": "https://docs.rs/phnt",
+        "confidence": 0.8,
+        "status": "manual_overlay_candidate"
+      },
+      {
+        "id": "reactos",
+        "url": "https://github.com/reactos/reactos",
+        "confidence": 0.65,
+        "status": "manual_overlay_candidate"
+      },
+      {
+        "id": "wine",
+        "url": "https://github.com/wine-mirror/wine",
+        "confidence": 0.65,
+        "status": "manual_overlay_candidate"
+      },
+      {
+        "id": "national-security-agency-ghidra-data",
+        "url": "https://github.com/NationalSecurityAgency/ghidra-data",
+        "confidence": 0.7,
+        "status": "comparison_reference"
+      },
+      {
+        "id": "winsdk-gdt",
+        "url": "https://github.com/T-RN-R/winsdk-gdt",
+        "confidence": 0.7,
+        "status": "comparison_reference"
+      }
+    ]
+  }
+}

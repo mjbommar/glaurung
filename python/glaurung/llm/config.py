@@ -3,8 +3,7 @@
 import os
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Dict
-from pydantic_ai import Agent
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +59,21 @@ class LLMConfig:
     temperature: float = 0.3
     max_tokens: Optional[int] = None
 
+    # --- Per-Agent.run() budget defaults (F1) ---
+    #
+    # pydantic-ai's built-in UsageLimits.request_limit is 50, which is
+    # both too generous AND undefended -- a confused tool-using agent
+    # can burn 50 round-trips of full-prompt input tokens before
+    # giving up. The values below are tuned for May-2026 models that
+    # routinely emit 64K+ output tokens and have million-token context
+    # windows; the request_limit fail-fast cap is the new default.
+    #
+    # Override via env (one-off) or per-call (build_usage_limits(...)).
+    default_request_limit: int = 12         # max tool-turns per Agent.run()
+    default_input_tokens_limit: int = 400_000
+    default_total_tokens_limit: int = 500_000
+    default_max_output_tokens: int = 32_768
+
     enable_logging: bool = True
     log_level: str = "INFO"
     fallback_on_error: bool = True
@@ -80,13 +94,28 @@ class LLMConfig:
             except ValueError:
                 logger.warning(f"Invalid temperature value: {temp_env}")
 
+        # Budget envs (F1). Each is parsed as int; bad values log + ignore.
+        for env_name, attr in (
+            ("GLAURUNG_REQUEST_LIMIT", "default_request_limit"),
+            ("GLAURUNG_INPUT_TOKENS_LIMIT", "default_input_tokens_limit"),
+            ("GLAURUNG_TOTAL_TOKENS_LIMIT", "default_total_tokens_limit"),
+            ("GLAURUNG_MAX_OUTPUT_TOKENS", "default_max_output_tokens"),
+        ):
+            if raw := os.getenv(env_name):
+                try:
+                    setattr(self, attr, int(raw))
+                except ValueError:
+                    logger.warning(f"Invalid {env_name} value: {raw!r}")
+
     def create_agent(
         self,
         system_prompt: str,
         model: Optional[str] = None,
         output_type: Optional[type] = None,
-        **kwargs,
-    ) -> Agent:
+        **kwargs: Any,
+    ) -> Any:
+        from pydantic_ai import Agent
+
         model = model or self.default_model
         if self.openai_api_key and "openai" in model:
             os.environ["OPENAI_API_KEY"] = self.openai_api_key
@@ -98,13 +127,16 @@ class LLMConfig:
             os.environ["GEMINI_API_KEY"] = self.gemini_api_key
         if self.enable_logging:
             logger.info(f"Creating agent with model: {model}")
-        agent_kwargs = {"model": model, "system_prompt": system_prompt}
+        agent_kwargs: dict[str, Any] = {
+            "model": model,
+            "system_prompt": system_prompt,
+        }
         if output_type:
             agent_kwargs["output_type"] = output_type
         agent_kwargs.update(kwargs)
         return Agent(**agent_kwargs)
 
-    def available_models(self) -> Dict[str, bool]:
+    def available_models(self) -> dict[str, bool]:
         return {
             "openai": bool(self.openai_api_key or os.getenv("OPENAI_API_KEY")),
             "anthropic": bool(self.anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")),

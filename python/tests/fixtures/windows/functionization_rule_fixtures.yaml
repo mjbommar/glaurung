@@ -1,0 +1,168 @@
+- rule_id: win-pe-data-ref-padding-boundary-gate
+  kind: data_ref_precision_gate
+  seed_class: data_ref
+  source_files:
+  - windows-update-amd-xilinx-xrt_coreutil.dll
+  - windows-update-amd-xilinx-xrt_core.dll
+  - windows-update-intel-ipf-ipfcore.dll
+  - windows-update-intel-wifi-NETwtw10.sys
+  - windows-update-intel-npu-npu_level_zero_umd.dll
+  implementation_scope:
+  - data-ref confidence gates
+  - padding-run detection
+  non_goals:
+  - do not demote multi-entry callback tables with strong provenance
+  cases:
+  - id: netwtw_padding_run_data_ref_not_function
+    kind: negative
+    fixture: NETwtw10.sys padding-run data-ref addresses
+    expected_state: label_or_rejected_start
+    expected: padding-run data refs remain labels or rejected starts
+    rationale: guards concrete adjacent cc-padding false positives
+  - id: surfacepen_callback_table_still_promotes
+    kind: positive
+    fixture: SurfacePenBleLcAddrAdaptationDriver callback table
+    expected_state: strict_function
+    expected: high-confidence callback-table targets stay strict functions
+    rationale: preserves the known data-ref recall win
+- rule_id: win-pe-tiny-stub-provenance-gate
+  kind: tiny_stub_precision_gate
+  seed_class: tiny_stub
+  source_files:
+  - windows-update-amd-xilinx-xrt_coreutil.dll
+  - windows-update-amd-xilinx-xrt_core.dll
+  - windows-update-intel-ipf-ipfcore.dll
+  - windows-update-intel-npu-npu_level_zero_umd.dll
+  - windows-update-intel-npu-npu_d3d12_umd.dll
+  implementation_scope:
+  - function-start seed classifier
+  - candidate/label/function state mapping
+  - Ghidra parity dashboard seed-class metrics
+  non_goals:
+  - do not blindly suppress all tiny helpers
+  - do not treat Ghidra-only public seeds as vulnerability findings
+  cases:
+  - id: npu_xrt_unreferenced_tiny_stub_stays_candidate
+    kind: negative
+    fixture: windows-update-intel-npu-npu_d3d12_umd.dll and xrt_coreutil.dll samples
+    expected_state: candidate_or_label
+    expected: unreferenced tiny_stub addresses are candidates or labels, not strict
+      functions
+    rationale: guards the NPU/XRT over-promotion class before scanner edits
+  - id: referenced_adjustor_or_return_helper_stays_function
+    kind: positive
+    fixture: Dism/Realtek referenced tiny helper samples
+    expected_state: strict_function
+    expected: tiny helpers with xref/table provenance remain promoted
+    rationale: prevents precision work from losing useful Ghidra-parity starts
+  - id: tiny_stub_seed_precision_dashboard
+    kind: metric_guard
+    fixture: 30-file Ghidra stress suite
+    expected_state: metric_guard
+    expected: track tiny_stub extra_entries and Ghidra recall together
+    rationale: rule must lower false positives without hiding recall loss
+- rule_id: win-pe-internal-start-body-split-candidates
+  kind: body_split_recall_guard
+  seed_class: direct_call_body_split
+  source_files:
+  - windows-update-intel-npu-ze_loader.dll
+  - win11-webservices.dll
+  - win10-webservices.dll
+  - windows-update-intel-npu-npu_level_zero_umd.dll
+  - windows-update-realtek-RtkAudUService64.exe
+  implementation_scope:
+  - function body split candidates
+  - owner overlap reporting
+  non_goals:
+  - do not split shared epilogues without boundary evidence
+  cases:
+  - id: webservices_internal_method_split_candidate
+    kind: positive
+    fixture: Win10/Win11 webservices.dll body-overmerge samples
+    expected_state: body_split_candidate
+    expected: internal Ghidra-like starts become body-split candidates
+    rationale: targets the largest OS-side recall gap
+  - id: shared_epilogue_stays_label
+    kind: negative
+    fixture: SyncInfrastructure/acledit zero-return epilogues
+    expected_state: candidate_or_label
+    expected: shared epilogues remain code labels, not split functions
+    rationale: prevents local-label promotion regressions
+- rule_id: win-pe-import-thunk-shape-catalog
+  kind: import_thunk_recall_guard
+  seed_class: thunk
+  source_files:
+  - win11-webservices.dll
+  - windows-update-realtek-RtkAudUService64.exe
+  - windows-update-intel-wifi-NETwtw10.sys
+  implementation_scope:
+  - import thunk catalog
+  - IAT target provenance
+  non_goals:
+  - do not classify arbitrary indirect jumps as imports
+  cases:
+  - id: padded_rex_ff25_import_thunks_promote
+    kind: positive
+    fixture: DismCore, WDScore, NetSetupAPI thunk samples
+    expected_state: strict_function
+    expected: known IAT thunks are strict functions with import target names
+    rationale: closes high-confidence Ghidra recall gaps
+  - id: non_import_indirect_jump_not_thunk
+    kind: negative
+    fixture: synthetic jmp [rip+imm32] without import target
+    expected_state: candidate_or_label
+    expected: shape without import provenance is a candidate, not strict thunk
+    rationale: prevents shape-only over-promotion
+- rule_id: win-pe-tail-jump-thunk-boundary-gate
+  kind: tail_jump_thunk_precision_gate
+  seed_class: tail_jump_thunk
+  implementation_scope:
+  - direct tail-jump thunk recognition
+  - boundary provenance gate
+  non_goals:
+  - do not promote every branch target as a function
+  - do not treat import thunks as tail-jump thunks
+  cases:
+  - id: direct_rel32_tail_jump_with_xref_promotes
+    kind: positive
+    fixture: synthetic jmp rel32 thunk
+    address: "0x140004000"
+    bytes_hex: "e9 34 12 00 00"
+    has_xref: true
+    expected_state: strict_function
+    expected: direct tail-jump thunk with caller provenance is a strict function
+    rationale: preserves common Ghidra/IDA tail-call thunk boundaries
+  - id: unreferenced_tail_jump_shape_stays_candidate
+    kind: negative
+    fixture: synthetic unreferenced jmp rel32 bytes
+    address: "0x140004100"
+    bytes_hex: "e9 34 12 00 00"
+    expected_state: candidate_or_label
+    expected: shape-only tail jump is a candidate or label
+    rationale: prevents branch-byte over-promotion without boundary evidence
+- rule_id: win-pe-native-function-start-replay
+  kind: native_function_start_replay
+  seed_class: native_analyzer
+  implementation_scope:
+  - native Glaurung function discovery
+  - seed provenance reason codes
+  - emitted and non-emitted real-PE starts
+  non_goals:
+  - do not require Ghidra to agree with every native replay address
+  cases:
+  - id: surfacepen_entrypoint_is_native_function
+    kind: positive
+    binary_path: samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys
+    address: "0x140006a30"
+    expected_state: strict_function
+    expected_seed_kind: entrypoint
+    expected: native Glaurung emits the address as a function start
+    rationale: checks native promotion and seed provenance on a vendored driver
+  - id: ze_loader_simd_missing_start_stays_candidate
+    kind: negative
+    binary_path: samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-npu-ze_loader.dll
+    address: "0x180033b20"
+    expected_state: candidate_or_label
+    expected_seed_kind: none
+    expected: native Glaurung does not emit this SIMD-headed Ghidra-only address
+    rationale: checks native demotion behavior on a real vendored DLL

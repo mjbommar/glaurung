@@ -9,6 +9,7 @@ Python-friendly entry points. Rust types remain available under
 from enum import Enum
 
 from . import _native as _native  # type: ignore
+import importlib as _importlib
 import sys as _sys
 from . import similarity as similarity
 
@@ -111,6 +112,14 @@ _sys.modules[__name__ + ".ir"] = ir
 # Debug-info ingestion (DWARF, PDB) submodule
 debug = _native.debug
 _sys.modules[__name__ + ".debug"] = debug
+
+# Windows metadata extraction submodule
+winmd = _native.winmd
+_sys.modules[__name__ + ".winmd"] = winmd
+
+# Python Windows PE fact helpers
+windows_analysis = _importlib.import_module(".windows_analysis", __name__)
+_sys.modules[__name__ + ".windows_analysis"] = windows_analysis
 
 # Triage module: use native triage, but attach a convenience triage()/analyze_path() wrapper
 _triage_mod = _native.triage

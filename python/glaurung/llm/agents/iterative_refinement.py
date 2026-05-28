@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional, Any, Dict
+from typing import Optional, Any
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry
@@ -398,18 +398,35 @@ class IterativeRefinementAgent:
         state: ExecutionState,
     ) -> Any:
         """Execute a single iteration with monitoring."""
-        # pydantic-ai accepts hyperparameters via a ModelSettings object
-        # passed as `model_settings=`. Spreading the raw dict (as this
-        # layer did previously) raised "AbstractAgent.run() got
-        # unexpected kwarg 'temperature'" and dropped callers into
-        # the heuristic-fallback path.
-        run_kwargs: Dict[str, Any] = {
+        # pydantic-ai >=1.x: sampling params go inside model_settings,
+        # not as top-level Agent.run() kwargs. usage_limits per iteration:
+        # the iterative agent runs up to max_iterations of these, and
+        # each iteration gets its own pydantic-ai request_limit budget.
+        from pydantic_ai.settings import ModelSettings
+        from ..usage_limits import build_usage_limits
+        model_kwargs = params.to_model_kwargs(model_name=self.model)
+        run_kwargs: dict[str, Any] = {
             "deps": context,
-            "model_settings": params.to_model_settings(),
+            "usage_limits": build_usage_limits(model_name=self.model),
         }
         if self.model:
             run_kwargs["model"] = self.model
-        result = await self.agent.run(prompt, **run_kwargs)
+        if model_kwargs:
+            run_kwargs["model_settings"] = ModelSettings(**model_kwargs)
+        result = await self.agent.run(
+            prompt,
+            **run_kwargs,
+        )
+
+        # F4: session-wide cost telemetry.
+        try:
+            from ..usage_tracker import get_tracker
+            get_tracker().record(
+                result, model=self.model or "test",
+                source="iterative_refinement",
+            )
+        except Exception:  # pragma: no cover
+            pass
 
         # Update state with metrics
         state.tokens_used += self.metrics.count_tokens(result)

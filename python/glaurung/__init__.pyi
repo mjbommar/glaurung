@@ -11,6 +11,7 @@ import enum
 
 # Re-export triage submodule
 from . import triage
+from . import windows_analysis as windows_analysis
 
 # Top-level symbols module (alias to triage.symbols)
 class _SymbolsModule:

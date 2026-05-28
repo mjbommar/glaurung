@@ -35,6 +35,8 @@ from .commands.java_recovery_report import JavaRecoveryReportCommand
 from .commands.luac import LuacCommand
 from .commands.pe import PeCommand
 from .commands.windows_risk import WindowsRiskCommand
+from .commands.types import TypesCommand
+from .commands.windows import WindowsCommand
 
 from .formatters import (
     TriageFormatter,
@@ -87,6 +89,8 @@ class GlaurungCLI:
             "luac": LuacCommand(),
             "pe": PeCommand(),
             "windows-risk": WindowsRiskCommand(),
+            "types": TypesCommand(),
+            "windows": WindowsCommand(),
         }
 
         # Map commands to their formatters. The REPL is interactive and
@@ -131,6 +135,8 @@ class GlaurungCLI:
             "luac": TriageFormatter,
             "pe": TriageFormatter,
             "windows-risk": TriageFormatter,
+            "types": TriageFormatter,
+            "windows": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:

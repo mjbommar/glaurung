@@ -95,7 +95,7 @@ note: truncated preview output.
 Quick preview at any VA. For function-aware decompile use
 `view … --pane disasm` after `kickoff`.
 
-### `cfg` — function discovery + bounded CFG
+### `cfg` — function discovery + CFG
 
 ```bash
 $ glaurung cfg $BIN | head -10

@@ -99,8 +99,12 @@ class IterativeAgent:
             refinement_path.append(f"Iteration {state.iteration}: {prompt[:100]}...")
 
             try:
-                # Run agent with current context
-                result = await self.agent.run(prompt, deps=context)
+                # Run agent with current context (F2: usage_limits cap).
+                from ..usage_limits import build_usage_limits
+                result = await self.agent.run(
+                    prompt, deps=context,
+                    usage_limits=build_usage_limits(),
+                )
 
                 # Evaluate result quality
                 confidence = await self._evaluate_confidence(result, context, state)

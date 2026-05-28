@@ -60,6 +60,557 @@ direct exact refs above the comparison-05 bar. Known-index pointer
 loads recover the straightforward one-hop table refs; residual
 PARAM/table-entry refs are still tracked by comparison 05.
 
+## Landed metadata and patch-diff tools
+
+The current Windows-port bridge also includes deterministic tools that
+sit below full IR/CFG bug-class scanners:
+
+- `windows_build_corpus` resolves ASB's priority Windows target
+  manifest against caller-supplied corpus and `.glaurung` project
+  roots.
+- `windows_bootstrap_project_facts` creates or updates a `.glaurung`
+  project for one Windows PE by composing callgraph indexing,
+  code-to-data xref indexing, optional PDB fact import, and a
+  conservative PE `E8 rel32` direct-call fallback when generic
+  callgraph recovery produces no call edges. It returns per-step
+  counts, elapsed time, coverage, and remaining missing capabilities
+  so agents can prepare a project before running rules.
+- `windows_project_fact_summary` inspects a `.glaurung` SQLite project
+  read-only and reports available PE project facts: function names,
+  call/data xrefs, prototypes, stack variables, comments, and CFG table
+  coverage.
+- `windows_project_fact_manifest` exposes ASB's persisted project-fact
+  coverage records, including `.glaurung` project paths, selected row
+  counts, available fact classes, and missing Ghidra-parity substrate
+  such as call xrefs, data labels, CFG facts, dominance summaries, or
+  branch condition facts.
+- `windows_pdb_identity_manifest` exposes ASB's target-to-PDB identity
+  coverage, including CodeView GUID+age values, cached/missing status,
+  and whether public symbols, type layouts, or prototypes are expected
+  for a target.
+- `windows_reconcile_pdb_identity` extracts live CodeView/PDB identity
+  from a PE, checks Microsoft-style PDB cache resolution, optionally
+  asks native PDB ingestion for type/public-symbol counts, and compares
+  the live identity with ASB's manifest.
+- `windows_import_pdb_facts` persists matching PE/PDB public names,
+  requested struct/union layouts, and PDB procedure type records into a
+  `.glaurung` project, returning explicit import counts and remaining
+  gaps so agents can promote a project from cached-PDB state to
+  queryable type/name facts.
+- `windows_decompile_context_packet` builds a bounded function review
+  packet with decompile text, disassembly, CFG shape, calls, optional
+  `.glaurung` names/comments/data labels, and now project-backed
+  call xrefs, resolved callee names, function prototypes, callee
+  prototypes, normalized import/thunk callee-name variants, and
+  persisted memory-access rows for the selected function. This gives an
+  agent one local context object that contains both readable code
+  context and the low-level type/memory/xref facts needed to interpret
+  registers, field accesses, and calls.
+- `windows_function_pretty_lift` also normalizes import/thunk spellings
+  during prototype lookup and call rendering, so project and stdlib
+  prototypes can flow through `nt!__imp_Foo`, `j_Foo`, `thunk_Foo`, and
+  `Foo$thunk` callsites into named Win64 arguments in the pretty lift.
+  The same symbol spelling support applies to import-thunk memory loads
+  when producing data-reference facts. Pretty-lift memory-access rows
+  now expose base object, base-object kind, pointer class, field
+  offset/name, and classification confidence so agents can distinguish
+  stack/global/argument/table/import-thunk and prototype-derived
+  user-pointer or kernel-pointer candidates without reparsing the text.
+  Rendered lifts include a bounded memory-access summary, but only use
+  semantic object names when the classification is high-confidence. The
+  first semantic field labels cover `ReturnLength.value` and common
+  `_IRP` offsets such as `RequestorMode`, `UserBuffer`, and
+  `Tail.Overlay.CurrentStackLocation`; generic buffers stay offset
+  labeled unless stronger type information is available.
+  Prototype-backed `IO_STACK_LOCATION *` bases also label the
+  DeviceIoControl union fields `OutputBufferLength`,
+  `InputBufferLength`, `IoControlCode`, and `Type3InputBuffer`.
+  Known fields also expose value roles/classes such as `ioctl_code`,
+  `output_length`, `type3_input_buffer`, `user_buffer`, and
+  `requestor_mode`. Pretty-lift path-condition facts propagate those
+  roles/classes through local assignments, so later guards over the
+  loaded value carry selector, length, and access-mode meaning instead
+  of degrading to generic comparisons. The same normalization now
+  handles C decompiler field syntax (`base->field` and `base.field`)
+  for known Windows fields, so IDA/Ghidra-style output feeds the
+  structured memory and guard substrate without requiring offset-form
+  Glaurung IR. Curated helper prototypes also propagate typed return
+  targets from `IoGetCurrentIrpStackLocation(Irp)` into local
+  `IO_STACK_LOCATION *` bases before memory and guard classification,
+  including simple straight-line local aliases of those typed values.
+- `windows_component_profile` exposes ASB's high-risk component
+  profiles: entrypoint families, expected gates, validation
+  requirements, initial rule families, evidence-packet fields, and VM
+  harness strategy.
+- `windows_ghidra_delta_manifest` exposes ASB's explicit Ghidra-parity
+  gap records, so agents can ask which fact classes are present,
+  partial, missing, or blocking automated Windows triage.
+- `windows_surface_catalog`, `windows_source_reachability`, and
+  `windows_target_surface_profile` expose attacker-surface and
+  validation context from ASB metadata.
+- `windows_project_callsite_facts` enumerates exact callsite VAs and
+  caller/callee identity from persisted `.glaurung` `xrefs` and
+  `function_names` rows. When callee names match `pe-sinks.yaml`, it
+  attaches operation metadata so agents can query project-backed sink
+  callsites before decompiling for operands. It also normalizes
+  function-name aliases and import/thunk-style callee spellings such as
+  `__imp_*`, `j_*`, and module-qualified aliases before matching ASB
+  sink metadata.
+- `windows_project_sink_operation_summary` aggregates project-backed
+  ASB sink callsites by operation id and sink kind. It reports callsite
+  counts, caller-function counts, observed raw/alias/normalized symbols,
+  sink effects, argument roles, required gates, and sample callsites.
+  This gives rules a compact operation inventory for ranking and
+  selecting validation targets before emitting one packet per callsite;
+  source reachability, argument value flow, and gate dominance remain
+  separate facts.
+- `windows_project_operation_coverage_summary` measures how much of a
+  project's callsite inventory is already classified as ASB sink
+  operations. It reports operation match rate, sink-kind counts,
+  alias/import-thunk match counts, named unmatched callees, unnamed
+  unresolved call targets, and recommended metadata/target-resolution
+  next actions. When a non-sink metadata file is supplied, known
+  telemetry/debug/compiler support calls are counted separately from
+  actionable unmatched backlog. This turns operation-classifier gaps
+  into reviewable backlog data without promoting trace helpers to sinks.
+- `windows_operation_classification_backlog` loads ASB's curated
+  operation-classification backlog for actionable unmatched project call
+  groups. It filters by target, component, symbol, triage category,
+  required capability, relevance, and callsite count so agents can move
+  from broad operation coverage numbers to concrete classifier work
+  items. These entries are not sink claims or findings.
+- `windows_project_operation_backlog_summary` joins that curated backlog
+  to exact `.glaurung` project callsites. It reports which backlog
+  entries are present in the current project, current project callsite
+  and caller counts, sample callsite VAs, resolution-kind counts, and
+  the required capabilities still blocking classification. This turns a
+  static work queue into project-backed classifier evidence.
+- `windows_project_operation_gate_summary` runs the project sink-packet
+  gate refinement path and aggregates the resulting packets by sink
+  operation. It reports gate status counts, fully/partially/unproven
+  packet counts, proven gate semantics, missing required gate semantics,
+  and sample packet ids. This gives rules an operation-level view of
+  missing gates while keeping source reachability and argument value
+  flow as separate proof obligations.
+- `windows_project_operation_source_summary` runs the project
+  sink-packet source-refinement path with ASB source metadata and
+  aggregates the resulting packets by sink operation. It reports source
+  refinement status counts, matched/inferred/missing packet counts,
+  inferred source roles, local source args when proven, blockers, and
+  sample packet ids. This gives rules an operation-level source view
+  while still distinguishing metadata-only inference from local
+  source/sink value matches and full attacker reachability.
+- `windows_project_operation_risk_summary` joins operation-level gate
+  and source summaries into ranked static review groups. It scores by
+  sink kind, packet count, missing gate semantics, partial gate proof,
+  and source-refinement strength, while preserving explicit blockers
+  for end-to-end reachability, path-sensitive value flow, and runtime
+  validation. This is triage ranking, not finding promotion.
+- `windows_project_sink_call_packets` scans persisted project call xrefs
+  for ASB sink operations and emits manifest-backed review packets from
+  those exact callsites. This is the first broad project-scan packet
+  generator: it produces seed packets for operator/rule triage, while
+  source roles and gate proof still need dedicated source/gate rules.
+  When a PE `binary_path` is supplied, it also attaches the local
+  `windows_project_call_argument_snapshot` evidence for each callsite.
+  When `refine_gates` is enabled, it searches same-function project
+  call xrefs for compatible ASB gate operations and attaches persisted
+  CFG dominance evidence plus compact `windows_project_cfg_path_query`
+  path evidence. It also records which sink-required gate semantics the
+  gate metadata proves and which required gates remain unproven as
+  structured `proven_gates`, `gate_proof_sources`, and
+  `missing_required_gates` packet fields;
+  conservative gate-fact implications map facts such as
+  `user_pointer_write_range_valid` to sink requirements such as
+  `destination_range_valid`. Packet promotion stays blocked while
+  required gate coverage is unresolved. With `attach_gate_predicates`, a
+  refined gate can also carry
+  path-filtered persisted branch-condition predicates from
+  `cfg_branch_facts`. When a caller supplies `source_arg` or
+  `source_arg_index`, it can attach local sink-argument match evidence
+  that ties a known source expression to a concrete sink argument role.
+  With `infer_source_roles`, it can also use ASB source metadata for the
+  caller symbol to infer source roles such as `caller_arg0` before doing
+  the same local sink-argument match. Every emitted packet now carries a
+  normalized `source_refinement_status` plus source facts and blockers,
+  so downstream rules can distinguish sink-only seeds from inferred,
+  matched, missing, or ambiguous source refinement. The scanner also
+  reports `source_gate_refined_packet_count` and can run with
+  `source_gate_refined_only` to return only packets that have source
+  refinement plus same-function gate evidence; this is a project-fact
+  candidate class, not interprocedural value-flow proof.
+- `windows_project_callgraph_slice` returns incoming callers and
+  outgoing callees around one project function, with exact callsite VAs
+  and caller/callee names from persisted `.glaurung` call xrefs.
+- `windows_project_callgraph_reachability` answers bounded "does this
+  function reach that sink?" and "who reaches this sink?" questions from
+  persisted `.glaurung` call xrefs. It returns source-to-target paths
+  when both endpoints are supplied, or upstream-to-target path samples
+  when only a target is supplied. The result is callgraph topology
+  evidence only; argument value flow, attacker source reachability, and
+  CFG feasibility remain separate facts.
+- `windows_project_callgraph_diff` compares persisted call/jump xrefs
+  across two `.glaurung` projects. It groups edges by stable
+  caller/callee names when available, falls back to VAs otherwise, and
+  reports added, removed, changed, and unchanged caller-to-callee edges
+  with callsite movement, sink/API-call hints, jump-edge hints, review
+  priority, and security relevance metadata. Patch-diff review ranks
+  those rows as `callgraph_delta` items so added or removed helper/sink
+  calls are visible before decompile, argument, or gate review.
+- `windows_project_guard_condition_diff` compares persisted
+  `cfg_branch_facts` and `callsite_path_conditions` across two
+  `.glaurung` projects. It groups branch guards and path-condition
+  guards by stable function names where available, reports added,
+  removed, changed, and unchanged guards, and attaches bounds, status,
+  mode/user-pointer, privilege, NULL/zero, and guard-location relevance
+  hints. Patch-diff review ranks these rows as `guard_delta` items and
+  preserves them in patch-diff validation packets, making changed guard
+  placement visible before manual decompilation.
+- `windows_project_function_chunk_facts` returns persisted first-class
+  function chunk, thunk, tailcall, shared-tail, and funclet facts. It
+  can filter by owner, chunk kind, relation kind, target VA, or an
+  arbitrary VA that matches a chunk start, containing range, owner, or
+  target. `.pdata` indexing now also parses unwind metadata for
+  exception-handler targets and chained unwind fragments, surfacing
+  `exception_handler_chunk` and `chained_unwind_chunk` rows instead of
+  hiding that evidence in raw runtime-function records. Import-thunk
+  rows now decode RIP-relative `jmp [slot]` forms and carry the
+  resolved IAT/global slot VA and data-label name when available; the
+  indexer also persists a normal `data_read` xref from the thunk entry
+  to the slot so `project-xrefs reads_from` can answer who reads a
+  given import slot. The same query is exposed through
+  `glaurung windows project-function-chunks` for IDA/Ghidra-style
+  boundary explanation during interactive review. These facts explain
+  function layout decisions; they are not vulnerability evidence by
+  themselves.
+- `windows_project_function_boundary_diff` compares persisted
+  `function_boundaries` and `function_chunk_facts` across two
+  `.glaurung` projects. It reports added, removed, changed, and
+  unchanged function ranges, thunks, tailcalls, shared tails, split-body
+  candidates, and exception funclets, with changed fields, reason codes,
+  review priority, and security relevance hints. Patch-diff review can
+  rank those deltas as `boundary_delta` items so boundary drift becomes
+  visible before decompilation or sink review.
+- `windows_project_function_start_explain` answers the analyst question
+  "why is this a function?" for a persisted `.glaurung` project VA or
+  symbol. It joins `function_names`, `function_boundaries`,
+  `function_chunk_facts`, incoming/outgoing xrefs, and comments into a
+  state such as strict function, thunk, chunk/funclet, contained label,
+  xref candidate, symbol-only, or no evidence, with reason codes and a
+  recommended next action. The Windows CLI exposes it as
+  `glaurung windows project-function-start-explain`.
+- `windows_project_symbol_range_facts` audits PDB/public symbol ranges
+  across a `.glaurung` project. It joins `function_names` with
+  `function_boundaries` and `function_chunk_facts` to classify each
+  symbol as exact `.pdata`, symbol-adjacency range, inside-`.pdata`
+  split/funclet candidate, contained label, call-target-only,
+  unbounded symbol, or missing boundary. Rows include previous/next
+  symbol neighbors, range source, confidence, boundary source conflicts,
+  chunk hints, review priority, and security relevance hints. The
+  Windows CLI exposes it as `glaurung windows project-symbol-ranges` for
+  IDA/Ghidra-style public-symbol range review.
+- `windows_analyst_notebook` imports and exports analyst decisions for
+  `.glaurung` Windows projects. It round-trips function names, comments,
+  data labels, function prototypes, stack-variable type overrides,
+  function-start decisions, demotions, and suppressions as typed
+  notebook JSON, and can emit IDAPython/Ghidra script handoffs. The
+  same path is exposed as `glaurung windows analyst-notebook` for
+  command-line workspace use.
+- `windows_project_onehop_sink_chains` finds caller -> helper -> ASB
+  sink call chains from persisted project call xrefs. It returns exact
+  helper callsite VAs, helper function VAs/names, helper-local sink
+  callsite VAs, sink kind/effects, and required gate metadata. This is
+  one-hop topology for prioritizing helper summaries; it does not prove
+  caller-argument propagation into the helper sink.
+- `windows_project_onehop_argument_flow` composes one-hop sink-chain
+  topology with `windows_project_call_argument_snapshot` on both the
+  caller-to-helper callsite and the helper-local sink callsite. It emits
+  a flow only when a caller-supplied helper argument matches a
+  helper-local sink argument rendered as the corresponding
+  `caller_argN`, so the result is conservative calling-convention
+  evidence rather than a general interprocedural alias proof. Matched
+  flows carry ASB sink effects and required-gate metadata so rule code
+  can rank and explain the gate obligations for the bridged value.
+- `windows_project_helper_argument_summary` aggregates those matched
+  one-hop argument-flow facts into per-helper-argument summaries. It
+  records which incoming helper argument reaches which helper-local sink
+  roles, sink callsites, sink effects, and required gates. This gives
+  rules a reusable helper-use summary without claiming general helper
+  side effects, return-value flow, alias-aware propagation, or
+  path-sensitive value constraints.
+- `windows_project_onehop_flow_packets` converts those matched
+  caller/helper/sink argument flows into static Windows review packets.
+  It preserves the one-hop path, matched source-refinement facts, sink
+  effects, required gates, project-fact context, and Ghidra-gap context
+  while keeping gate status unknown until CFG/dominance rules prove the
+  required gates. With helper-gate refinement enabled, it can attach
+  compatible helper-local gate callsites and persisted CFG dominance
+  evidence before the helper-local sink, while preserving any unproven
+  required-gate blockers. It can also attach compact helper
+  entry/gate-to-sink CFG path samples from persisted project CFG facts
+  and nearby helper-gate branch-condition facts when those predicates
+  have been persisted. `helper_gate_refined_only` filters output to
+  matched one-hop packets that have compatible helper-local gate
+  evidence.
+- `windows_project_call_argument_snapshot` uses a project callsite VA
+  plus nearby disassembly to recover a conservative Windows x64
+  RCX/RDX/R8/R9 argument snapshot plus obvious stack argument stores
+  at Windows x64 outgoing stack slots such as `[rsp+0x20]` and
+  `[rsp+0x28]`. It also resolves simple straight-line register aliases,
+  incoming caller-parameter aliases, same-window frame-slot
+  spill/reload chains, and simple LEA-derived address expressions such
+  as `[caller_arg0 + 0x20]` in the local setup window. It also labels
+  conservative rbp-relative local stack addresses such as
+  `[rbp - 0x40]` and simple memory loads from known bases such as
+  `load([caller_arg0 + 0x20])`, plus RIP-relative global address
+  arguments such as `global([rip + 0x1234])`; when the project has an
+  exact data xref for the source instruction, it attaches the referenced
+  data VA, and when `data_labels` has a row for that VA it attaches the
+  label name, C type, and size. It now adds conservative value-role
+  labels such as `local_pointer`, `global_pointer`, `field_derived`,
+  `caller_argument`, `zero_or_null`, `integer_constant`, and data-label
+  hints such as `path`, `registry_value`, `handle`, `length`, `count`,
+  `flag`, `object`, `callback`, or `selector`. These roles are local
+  expression classifications, not attacker-control, sink-role, full
+  alias, stack-frame, or path proof.
+- `windows_project_memory_operand_facts` uses native disassembly for
+  one project function to extract conservative memory operand facts:
+  instruction VA/text, read/write/read-write access kind, width from
+  pointer-size prefixes, normalized address expression, base/index/scale
+  and displacement, stack/global/field-like role hints, first-class base
+  object classification, field offset, confidence, project
+  data-xref/data-label joins, type-field-use joins, and
+  prototype-derived Windows x64 parameter object classifications such as
+  `user_pointer` and `heap_pointer` when function prototypes are present.
+  The tool can persist those rows into `memory_operand_facts`, and
+  `windows_bootstrap_project_facts` can materialize that table
+  project-wide for known function entries. This is the first
+  instruction-level memory read/write inventory for Windows rules; it
+  does not recover complete PDB field names, full aliasing, or
+  path-sensitive memory state.
+- `windows_project_memory_access_query` queries persisted
+  `memory_operand_facts` across a `.glaurung` project. It filters by
+  read/write/read-write direction, function, base object kind, role
+  hint, type/field, field offset, data target VA/name, and confidence,
+  then returns per-instruction rows plus summaries by access kind, base
+  object kind, role hint, field, and data target. This gives analysts
+  IDA/Ghidra-style "who reads/writes this field or global?" navigation
+  over the structured memory substrate.
+- `windows_project_memory_access_diff` compares persisted
+  `memory_operand_facts` across two `.glaurung` projects. It groups
+  stable memory accesses by function, access kind, role, base object,
+  field offset, and data target, then reports added, removed, changed,
+  and unchanged read/write rows with width, location, base-object,
+  field-identity, and data-target drift. Patch-diff review ranks these
+  rows as `memory_access_delta` items, so changed writes to user
+  pointers, length fields, globals, callback tables, and dispatch-like
+  data become packetized validation seeds.
+- `windows_project_data_table_facts` groups persisted `data_labels`,
+  data xrefs, and `function_chunk_facts` into first-class table
+  candidates: dispatch tables, callback arrays, vtables, jump tables,
+  selector-indexed globals, import-thunk tables, code-pointer tables,
+  and generic global arrays. With `--binary-path`, it can also attach
+  native PE code-pointer table scan rows. Each candidate carries table
+  kind, VA, declared type/size, slot size, entry count, xref counts,
+  source functions, sampled entries, confidence, reason codes, and
+  security relevance hints for rules and analyst navigation.
+- `windows_project_data_table_diff` compares those recovered table
+  candidates across two `.glaurung` projects. It reports added,
+  removed, changed, and unchanged dispatch tables, callback arrays,
+  vtables, jump tables, selector globals, import-thunk runs,
+  code-pointer tables, and global arrays, including entry-count,
+  target, layout, source-function, and xref-count deltas. Patch-diff
+  review ranks those rows as `table_delta` items so callback, dispatch,
+  vtable, selector, and thunk-table drift becomes visible before
+  decompilation or sink review.
+- `windows_project_return_value_use_snapshot` uses a project callsite
+  VA plus nearby post-call disassembly to recover a conservative local
+  Windows x64 `RAX` return-value use snapshot. It classifies immediate
+  checks such as `test rax, rax` or `cmp eax, ...`, adjacent
+  conditional branch relations, branch-taken/fallthrough constraints
+  for adjacent zero/status checks, stores to registers or memory,
+  argument passing through RCX/RDX/R8/R9 before a nested call,
+  arithmetic or bitwise uses, and obvious clobbers such as zeroing or a
+  nested call before a proven use. This is the first low-level return-flow
+  primitive for helper status checks, size-returning helpers,
+  allocation-result checks, reference-acquire success paths, and
+  policy-query helpers. The branch constraints are local adjacent-branch
+  facts only; interprocedural return flow, non-adjacent flag flow, full
+  alias tracking, and helper side-effect summaries remain separate
+  facts.
+- `windows_project_operation_return_value_summary` joins ASB
+  operation-classification backlog entries to exact project callsites
+  and samples those callsites with
+  `windows_project_return_value_use_snapshot`. It aggregates use-kind
+  counts, checked callsite counts, adjacent-branch counts, clobber
+  counts, ignored-in-window counts, and representative sample facts per
+  backlog entry. This turns requirements such as `return_value_flow` on
+  groups like `HsmpGetStreamSize` into measurable project evidence
+  without claiming interprocedural or path-sensitive return-flow proof.
+- `windows_operation_return_value_snapshots` loads checked-in ASB
+  return-value snapshot data such as
+  `data/kg/pe-operation-return-value-snapshots.yaml`. Agents can filter
+  by target, component, backlog id, symbol, return-use kind, and minimum
+  sample count, and receive bounded representative callsite samples with
+  instruction VAs and branch facts. This is a catalogue query for
+  precomputed local evidence, not a disassembly pass or a finding
+  verdict.
+- `windows_project_data_label_facts` reports project global data
+  references with label coverage. It lists labeled targets, unlabeled
+  data targets, sample source VAs, read/write counts, source-function
+  counts, and label metadata from `data_labels`, so rules can separate
+  known globals from unresolved project data references before relying
+  on call-argument global expressions. With `attach_sink_context`, it
+  also joins ASB sink metadata to callsites in functions that reference
+  each data target, giving unlabeled globals a security-relevance
+  context without pretending their names or types are recovered.
+- `windows_callsite_operand_facts` enumerates structured callsite
+  argument facts from supplied or decompiled pseudocode, attaches
+  optional callsite VA markers when present, and joins operation-backed
+  calls to `pe-sinks.yaml` roles. This gives later source-gate-sink
+  rules a reusable argument table instead of re-parsing snippets.
+- `windows_source_sink_operand_match` checks whether a traced source
+  value is exactly a selected sink argument, reaches it through a
+  simple alias, appears in a transformed expression, or does not match,
+  while attaching sink argument role metadata.
+- `windows_vulnerability_seed_catalog` loads prior-public Windows
+  vulnerability seeds as reusable invariant metadata for
+  patch-regression triage, without using public PoCs as the scanner
+  substrate.
+- `windows_binary_diff_summary` wraps Glaurung's function-level binary
+  diff engine as an agent-callable Patch Tuesday primitive, returning
+  changed/added/removed function rows with hashes and sizes.
+- `windows_seed_binary_diff_triage` composes prior-public seed
+  metadata with a pre/post binary diff and reports whether seed-named
+  functions changed, stayed unchanged, or are absent from the pair.
+- `windows_project_prototype_diff` compares persisted
+  `function_prototypes` across two `.glaurung` projects and reports
+  added, removed, changed, and unchanged signatures. It highlights
+  return-type, parameter name/type/role, variadic, calling-convention,
+  module, and risk-tag deltas, with security-relevance hints for
+  buffer, pointer, length, and role changes. The Windows CLI exposes it
+  as `glaurung windows project-prototype-diff`, and patch-diff review
+  can consume the same project pair to rank prototype deltas and carry
+  them into emitted validation packets.
+- `windows_cfg_dominance` checks whether a gate basic block dominates
+  a sink basic block using persisted `.glaurung` CFG tables, native PE
+  function CFG recovery, or supplied fixture CFG rows. It reports
+  `dominated`, `not_dominated`, `same_block`, `unreachable`, or
+  `unknown`.
+- `windows_bootstrap_project_facts` can now persist native PE basic
+  blocks and CFG edges into `.glaurung` projects via its `index_cfg`
+  step, then precompute immediate dominator/post-dominator summaries
+  via `index_cfg_dominance`, and capture simple conditional
+  branch/compare facts via `index_branch_conditions`, so project
+  summaries can report CFG coverage without re-running on-demand
+  function recovery.
+- `windows_project_cfg_path_query` reads persisted `.glaurung` CFG
+  tables to resolve containing blocks, branch/source-to-sink
+  reachability, and whether every entry-to-sink path passes through a
+  candidate gate. It returns bounded entry-to-sink, branch-to-sink, and
+  gate-to-sink sample block paths, and when coverage fails it also
+  returns a compact bypass block path for review packets.
+- `windows_project_branch_condition_facts` reads persisted
+  `cfg_branch_facts` rows, returning conditional branch mnemonics,
+  nearby `cmp`/`test` operands, condition classes, and target/fallthrough
+  block ids. It also renders simple taken/fallthrough predicates by
+  inverting the branch condition, preserves same-block flag-setting
+  arithmetic/logical instructions such as `sub`, `add`, `and`, `or`,
+  `xor`, `inc`, and `dec`, and can filter to a path from
+  `windows_project_cfg_path_query`.
+- `windows_cfg_gate_to_sink` composes ASB gate/sink metadata with
+  concrete gate and sink callsite VAs, runs CFG dominance, and returns
+  a packet-ready gate status for candidate evidence.
+- `windows_compose_source_gate_sink_packet` composes source/sink
+  operand matching with CFG gate-to-sink evidence and emits a normal
+  candidate review packet for operator triage. It can carry project
+  fact coverage and Ghidra-parity gap context so the packet records
+  which substrate was present or missing when the hit was produced,
+  including required project fact classes and promotion blockers. It
+  also passes matched and missing required gate semantics into the
+  structured `proven_gates`, `gate_proof_sources`, and
+  `missing_required_gates` packet fields, using the same conservative
+  gate-fact implication mapping.
+- `windows_emit_review_packet` and `windows_compose_candidate_packets`
+  preserve structured PDB identity, component-profile, patch-diff,
+  project-fact, and Ghidra-delta context in every emitted candidate
+  packet, so downstream ranking and validation can see which build/PDB,
+  expected gates, harness plan, regression signals, project coverage,
+  and blocking Ghidra gaps backed the hit. Packets infer conservative
+  required project facts when the caller does not provide them and keep
+  hits below promotion when required coverage, required gate semantics,
+  or Ghidra parity are missing. They also carry structured
+  `proven_gates`, `gate_proof_sources`, and `missing_required_gates`
+  fields for downstream ranking and validation scripts. When
+  `auto_join_manifest_context` is
+  enabled, the packet emitter fills missing project/Ghidra context from ASB
+  `pe-project-facts.yaml` and `pe-ghidra-delta.yaml` records by
+  target, build label, and component.
+- `windows_rank_candidate_packets` now treats promotion preconditions
+  separately from triage priority: a high-risk packet can still rank for
+  review, but it is not validation-ready while project coverage,
+  required gate coverage, or blocking Ghidra gaps remain. The ranker
+  uses `missing_required_gates` directly in score reasons so partial
+  gate coverage is visible without parsing evidence text. When supplied
+  with `windows_emit_vm_validation_plan` output, ranked items carry the
+  matched validation plan and its runtime blockers, and validation-ready
+  stays false until both static packet and VM-plan prerequisites pass.
+- `windows_emit_vm_validation_plan` converts a static review packet into
+  a concrete VM validation plan using ASB
+  `pe-validation-inventory.yaml` records. The plan carries snapshot,
+  QMP/RDP, KDNET status, KDNET attach-proof metadata, harness, expected
+  artifact, stock/current comparison, and runtime-blocker fields while
+  keeping the claim level at `validation_plan_not_reproduction`.
+- `windows_candidate_validation_report` renders ranked candidates and
+  attached VM validation plans into an operator-facing markdown handoff.
+  It can persist the report and add a KB evidence node. When supplied
+  with candidate/snapshot mappings and runtime artifact bundles, it
+  displays mapping confidence, mapping blockers, execution status,
+  artifact counts, missing required artifacts, runtime blockers, and
+  compact artifact hash/path summaries.
+- `windows_record_candidate_snapshot_mapping` records why a static
+  candidate maps to a specific validation snapshot. It checks candidate
+  id, binary name, project/Ghidra build label, optional ASB validation
+  inventory build number, plan runtime blockers, and optional artifact
+  bundle readiness. Its claim level is
+  `candidate_snapshot_mapping_not_reproduction`, so the mapping can be
+  audited without treating the candidate as reproduced.
+- `windows_emit_validation_harness_template` emits an operator-facing
+  harness scaffold from a candidate packet, optional VM validation plan,
+  optional candidate/snapshot mapping, and optional component-specific
+  harness recipe. It records preconditions, stock/current run steps,
+  required artifacts, a PowerShell skeleton, and readiness blockers, and
+  can write a `README.md` plus `run-validation-template.ps1`. Its claim
+  level is
+  `harness_template_not_execution`, so it is a run scaffold rather than
+  runtime proof.
+- `windows_validation_harness_recipe` exposes ASB's
+  `pe-validation-harness-recipes.yaml` component runbooks. Recipes add
+  trigger kind, setup steps, stock/current command skeletons, artifact
+  requirements, known blockers, and operator notes for targets such as
+  cldflt, fltmgr, and clfs. They are execution guidance, not exploit
+  recipes or validation proof.
+- `windows_record_validation_artifact_bundle` records operator-supplied
+  runtime evidence after a VM validation plan is executed. It accepts
+  artifact kinds such as KDNET attach logs, serial logs, crash dumps,
+  harness output, binary/PDB identity records, and stock/current
+  transcripts; requires paths and SHA256 digests for required
+  artifacts; can hash local existing paths on request; and emits a KB
+  evidence node. Its claim level is
+  `runtime_artifact_bundle_not_finding`, so it accounts for evidence
+  without promoting a candidate to a reproduced finding.
+- `windows_import_validation_artifact_directory` scans a local harness
+  output directory, classifies common Windows validation artifacts by
+  path/name, computes SHA256 hashes, and emits the same runtime artifact
+  bundle model consumed by candidate reports. It is the bridge from a
+  completed VM run directory to reportable evidence accounting, not a
+  reproduction verdict.
+
+These tools do not replace the Ghidra-grade facts this document still
+tracks: function matching across renamed builds, instruction-level
+diffs, richer callsite operands, full path predicates over persisted
+CFG, and PDB-backed type facts.
+
 ## Per-tool authoring template
 
 Each tool is one file under

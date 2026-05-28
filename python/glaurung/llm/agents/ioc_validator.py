@@ -103,9 +103,14 @@ async def validate_iocs_async(
     batch = IOCValidationBatch(
         candidates=candidates, binary_format=binary_format, binary_type=binary_type
     )
+    from ..usage_limits import build_usage_limits
     result = await agent.run(
         f"Validate these {len(candidates)} IOC candidates and filter out false positives. Binary format: {binary_format or 'unknown'}",
         deps=batch,
+        # IOC validator emits structured output, no tool use needed.
+        usage_limits=build_usage_limits(
+            model_name=model, request_limit=2, tool_calls_limit=0,
+        ),
     )
     return result.output
 

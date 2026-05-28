@@ -48,7 +48,7 @@ def _make_agent(
     async def _inject(ctx: RunContext[MemoryContext]) -> str:
         return inject_kb_context(ctx)
 
-    return register_analysis_tools(agent)
+    return register_analysis_tools(agent, model_name=model_name)
 
 
 # ---------------------------------------------------------------------------

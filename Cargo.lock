@@ -573,6 +573,7 @@ dependencies = [
  "unicode-script",
  "uuid",
  "whatlang",
+ "windows-metadata",
 ]
 
 [[package]]
@@ -1609,6 +1610,12 @@ name = "windows-link"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e6ad25900d524eaabdbbb96d20b4311e1e7ae1699af4fb28c17ae66c80d798a"
+
+[[package]]
+name = "windows-metadata"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3433ff56dde0408f2549eb155235c9991023d8c2a13608afa384d2681a6c3ad5"
 
 [[package]]
 name = "windows-result"

@@ -48,43 +48,11 @@ class ModelHyperparameters(BaseModel):
         default=None, description="Random seed for deterministic output"
     )
 
-    def to_model_settings(self) -> Any:
-        """Convert to a pydantic_ai ModelSettings object.
+    def to_model_kwargs(self, *, model_name: str | None = None) -> Dict[str, Any]:
+        """Convert to kwargs for pydantic-ai ModelSettings.
 
-        Use this and pass via ``model_settings=`` to ``Agent.run()`` or
-        ``Agent`` constructor. The previous ``to_model_kwargs()`` API
-        passed ``temperature`` directly as a kwarg to ``agent.run()``,
-        which pydantic-ai rejects with ``AbstractAgent.run() got
-        unexpected kwarg 'temperature'``. That silently triggered the
-        heuristic fallback path across the 2026-05-26 hunt cycle.
-        """
-        from pydantic_ai.settings import ModelSettings
-
-        kwargs: Dict[str, Any] = {}
-        if self.temperature is not None:
-            kwargs["temperature"] = self.temperature
-        if self.top_p is not None:
-            kwargs["top_p"] = self.top_p
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
-        if self.presence_penalty is not None:
-            kwargs["presence_penalty"] = self.presence_penalty
-        if self.frequency_penalty is not None:
-            kwargs["frequency_penalty"] = self.frequency_penalty
-        if self.seed is not None:
-            kwargs["seed"] = self.seed
-        # NOTE: ``top_k`` is intentionally omitted -- pydantic-ai's
-        # ModelSettings does not accept it (only OpenAI/Anthropic-native
-        # APIs do, and pydantic-ai routes through model-specific
-        # settings for that).
-        return ModelSettings(**kwargs)
-
-    def to_model_kwargs(self) -> Dict[str, Any]:
-        """DEPRECATED: returns kwargs that pydantic-ai rejects.
-
-        Kept for backward compatibility callers that pass the result to
-        a custom layer. New code should use ``to_model_settings()`` and
-        pass via ``model_settings=`` to ``Agent.run()``.
+        When ``model_name`` indicates an OpenAI model, the project default
+        ``service_tier`` (typically 'flex') is added via ``extra_body``.
         """
         kwargs: Dict[str, Any] = {}
         if self.temperature is not None:
@@ -94,13 +62,22 @@ class ModelHyperparameters(BaseModel):
         if self.top_k is not None:
             kwargs["top_k"] = self.top_k
         if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens  # was max_output_tokens
+            kwargs["max_tokens"] = self.max_tokens
         if self.presence_penalty is not None:
             kwargs["presence_penalty"] = self.presence_penalty
         if self.frequency_penalty is not None:
             kwargs["frequency_penalty"] = self.frequency_penalty
         if self.seed is not None:
             kwargs["seed"] = self.seed
+        # OpenAI service_tier handoff. pydantic-ai 1.x forwards
+        # ModelSettings.extra_body verbatim to the provider's request.
+        if model_name and model_name.startswith("openai:"):
+            from ..config import get_config
+            tier = get_config().openai_service_tier
+            if tier and tier != "default":
+                existing = kwargs.get("extra_body") or {}
+                existing["service_tier"] = tier
+                kwargs["extra_body"] = existing
         return kwargs
 
 
