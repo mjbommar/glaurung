@@ -8,8 +8,14 @@
 //!    rcx/rdx/r8/r9; AArch64: x0..x7), and
 //! 2. that register is not read between the assignment and the call, and
 //! 3. no intervening statement has a side effect we can't reason about
-//!    (calls, stores are treated as a barrier to keep the transformation
+//!    (calls are treated as a barrier to keep the transformation
 //!    semantically safe).
+//!
+//! If a later slot was explicitly set but an earlier slot was never written
+//! since the previous call boundary, the pass fills that earlier slot from
+//! the function's incoming argument register. This covers common forwarding
+//! shapes such as Win64 `rdx = 256; call strnlen`, where `rcx` still carries
+//! the function's incoming first parameter.
 //!
 //! A 32-bit sub-register write (e.g. `%esi = 0`) also counts as writing the
 //! corresponding 64-bit arg register because on x86-64 the upper 32 bits of
@@ -72,11 +78,11 @@ fn slot_of(arch: CallConv, name: &str) -> Option<usize> {
         .position(|names| names.contains(&name))
 }
 
-fn all_slot_names(arch: CallConv) -> Vec<&'static str> {
+fn incoming_arg_expr(arch: CallConv, slot: usize) -> Option<Expr> {
     arg_slots(arch)
-        .iter()
-        .flat_map(|s| s.iter().copied())
-        .collect()
+        .get(slot)
+        .and_then(|names| names.first())
+        .map(|name| Expr::Reg(VReg::Phys((*name).to_string())))
 }
 
 /// Run argument reconstruction on `f` using the given calling convention.
@@ -127,12 +133,14 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv) {
 fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
     // Map slot → (stmt_index, expression) for assignments we will eat.
     let mut found: Vec<Option<(usize, Expr)>> = vec![None; arg_slots(arch).len()];
+    let mut read_between: Vec<bool> = vec![false; arg_slots(arch).len()];
+    let mut blocked_incoming: Vec<bool> = vec![false; arg_slots(arch).len()];
 
     // Walk backwards from the call.
     let mut i = call_idx;
     while i > 0 {
         i -= 1;
-        let stop = matches!(&body[i], Stmt::Call { .. }) || matches!(&body[i], Stmt::Store { .. });
+        let stop = matches!(&body[i], Stmt::Call { .. });
         if let Stmt::Assign { dst, src } = &body[i] {
             if let VReg::Phys(name) = dst {
                 if let Some(slot) = slot_of(arch, name.as_str()) {
@@ -144,9 +152,12 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
                         let would_dangle = found
                             .iter()
                             .any(|f| f.as_ref().is_some_and(|(_, e)| reads_reg_in_expr(e, dst)));
-                        if !would_dangle {
+                        if !would_dangle && !read_between[slot] {
                             found[slot] = Some((i, src.clone()));
+                        } else {
+                            blocked_incoming[slot] = true;
                         }
+                        mark_arg_reads_in_expr(src, arch, &mut read_between);
                         continue;
                     }
                     // Second assignment to the same slot before the call —
@@ -154,28 +165,13 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
                     break;
                 }
             }
+            mark_arg_reads_in_expr(src, arch, &mut read_between);
+        } else {
+            mark_arg_reads_in_stmt(&body[i], arch, &mut read_between);
+            mark_arg_writes_in_stmt(&body[i], arch, &mut blocked_incoming);
         }
         if stop {
             break;
-        }
-        // Also bail if any slot we've already claimed is read by this stmt
-        // (its def-to-call window must be clean).
-        let names: Vec<&str> = all_slot_names(arch);
-        for slot in 0..found.len() {
-            if found[slot].is_none() {
-                continue;
-            }
-            // Check if any register in this slot is read here.
-            for &n in &names {
-                if slot_of(arch, n) != Some(slot) {
-                    continue;
-                }
-                let target = VReg::Phys(n.to_string());
-                if reads_reg_in_stmt(&body[i], &target) {
-                    // Unsafe to fold — drop the slot and downstream args.
-                    found[slot] = None;
-                }
-            }
         }
     }
 
@@ -185,11 +181,20 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
     // gap is the safe choice.
     let mut args_out: Vec<Expr> = Vec::new();
     let mut used_stmt_indices: Vec<usize> = Vec::new();
-    for slot in &found {
-        match slot {
+    let Some(last_filled_slot) = found.iter().rposition(Option::is_some) else {
+        return;
+    };
+    for slot_idx in 0..=last_filled_slot {
+        match &found[slot_idx] {
             Some((stmt_idx, expr)) => {
                 args_out.push(expr.clone());
                 used_stmt_indices.push(*stmt_idx);
+            }
+            None if args_out.is_empty() && !blocked_incoming[slot_idx] => {
+                let Some(expr) = incoming_arg_expr(arch, slot_idx) else {
+                    break;
+                };
+                args_out.push(expr);
             }
             None => break,
         }
@@ -211,6 +216,167 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
     }
 }
 
+fn mark_slot_write(reg: &VReg, arch: CallConv, blocked_incoming: &mut [bool]) {
+    let VReg::Phys(name) = reg else {
+        return;
+    };
+    if let Some(slot) = slot_of(arch, name.as_str()) {
+        if let Some(blocked) = blocked_incoming.get_mut(slot) {
+            *blocked = true;
+        }
+    }
+}
+
+fn mark_slot_read(reg: &VReg, arch: CallConv, read_between: &mut [bool]) {
+    let VReg::Phys(name) = reg else {
+        return;
+    };
+    if let Some(slot) = slot_of(arch, name.as_str()) {
+        if let Some(read) = read_between.get_mut(slot) {
+            *read = true;
+        }
+    }
+}
+
+fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
+    match e {
+        Expr::Reg(r) => mark_slot_read(r, arch, read_between),
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => {}
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            if let Some(base) = base {
+                mark_slot_read(base, arch, read_between);
+            }
+            if let Some(index) = index {
+                mark_slot_read(index, arch, read_between);
+            }
+        }
+        Expr::Deref { addr, .. } => mark_arg_reads_in_expr(addr, arch, read_between),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            mark_arg_reads_in_expr(lhs, arch, read_between);
+            mark_arg_reads_in_expr(rhs, arch, read_between);
+        }
+        Expr::Un { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
+    }
+}
+
+fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
+    match s {
+        Stmt::Assign { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
+        Stmt::Store { addr, src } => {
+            mark_arg_reads_in_expr(addr, arch, read_between);
+            mark_arg_reads_in_expr(src, arch, read_between);
+        }
+        Stmt::Call { target, args } => {
+            mark_arg_reads_in_expr(target, arch, read_between);
+            for arg in args {
+                mark_arg_reads_in_expr(arg, arch, read_between);
+            }
+        }
+        Stmt::Return { value } => {
+            if let Some(value) = value {
+                mark_arg_reads_in_expr(value, arch, read_between);
+            }
+        }
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            mark_arg_reads_in_expr(cond, arch, read_between);
+            for stmt in then_body {
+                mark_arg_reads_in_stmt(stmt, arch, read_between);
+            }
+            if let Some(else_body) = else_body {
+                for stmt in else_body {
+                    mark_arg_reads_in_stmt(stmt, arch, read_between);
+                }
+            }
+        }
+        Stmt::While { cond, body } => {
+            mark_arg_reads_in_expr(cond, arch, read_between);
+            for stmt in body {
+                mark_arg_reads_in_stmt(stmt, arch, read_between);
+            }
+        }
+        Stmt::Push { value } => mark_arg_reads_in_expr(value, arch, read_between),
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            mark_arg_reads_in_expr(discriminant, arch, read_between);
+            for (_case, body) in cases {
+                for stmt in body {
+                    mark_arg_reads_in_stmt(stmt, arch, read_between);
+                }
+            }
+            if let Some(default) = default {
+                for stmt in default {
+                    mark_arg_reads_in_stmt(stmt, arch, read_between);
+                }
+            }
+        }
+        Stmt::Pop { .. }
+        | Stmt::Goto { .. }
+        | Stmt::Label(_)
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => {}
+    }
+}
+
+fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [bool]) {
+    match s {
+        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
+            mark_slot_write(dst, arch, blocked_incoming);
+        }
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for stmt in then_body {
+                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+            }
+            if let Some(else_body) = else_body {
+                for stmt in else_body {
+                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                }
+            }
+        }
+        Stmt::While { body, .. } => {
+            for stmt in body {
+                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+            }
+        }
+        Stmt::Switch { cases, default, .. } => {
+            for (_case, body) in cases {
+                for stmt in body {
+                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                }
+            }
+            if let Some(default) = default {
+                for stmt in default {
+                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                }
+            }
+        }
+        Stmt::Store { .. }
+        | Stmt::Call { .. }
+        | Stmt::Return { .. }
+        | Stmt::Push { .. }
+        | Stmt::Goto { .. }
+        | Stmt::Label(_)
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => {}
+    }
+}
+
 fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
     match e {
         Expr::Reg(r) => r == target,
@@ -227,51 +393,6 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
             reads_reg_in_expr(lhs, target) || reads_reg_in_expr(rhs, target)
         }
         Expr::Un { src, .. } => reads_reg_in_expr(src, target),
-    }
-}
-
-fn reads_reg_in_stmt(s: &Stmt, target: &VReg) -> bool {
-    match s {
-        Stmt::Assign { src, .. } => reads_reg_in_expr(src, target),
-        Stmt::Store { addr, src } => {
-            reads_reg_in_expr(addr, target) || reads_reg_in_expr(src, target)
-        }
-        Stmt::Call { target: t, args } => {
-            reads_reg_in_expr(t, target) || args.iter().any(|a| reads_reg_in_expr(a, target))
-        }
-        Stmt::Return { value } => value.as_ref().is_some_and(|e| reads_reg_in_expr(e, target)),
-        Stmt::If {
-            cond,
-            then_body,
-            else_body,
-        } => {
-            reads_reg_in_expr(cond, target)
-                || then_body.iter().any(|s| reads_reg_in_stmt(s, target))
-                || else_body
-                    .as_ref()
-                    .is_some_and(|eb| eb.iter().any(|s| reads_reg_in_stmt(s, target)))
-        }
-        Stmt::While { cond, body } => {
-            reads_reg_in_expr(cond, target) || body.iter().any(|s| reads_reg_in_stmt(s, target))
-        }
-        Stmt::Push { value } => reads_reg_in_expr(value, target),
-        Stmt::Pop { target: t } => t == target,
-        Stmt::Switch {
-            discriminant,
-            cases,
-            default,
-        } => {
-            reads_reg_in_expr(discriminant, target)
-                || cases
-                    .iter()
-                    .any(|(_, body)| body.iter().any(|s| reads_reg_in_stmt(s, target)))
-                || default
-                    .as_ref()
-                    .is_some_and(|b| b.iter().any(|s| reads_reg_in_stmt(s, target)))
-        }
-        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {
-            false
-        }
     }
 }
 
@@ -520,6 +641,164 @@ mod tests {
             assert_eq!(args, &vec![Expr::Const(2)]);
         } else {
             panic!("expected Call, got {:?}", f.body[1]);
+        }
+    }
+
+    #[test]
+    fn win64_folds_args_across_unrelated_stores() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rax"))),
+                        rhs: Box::new(Expr::Const(40)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rax")),
+                        index: None,
+                        scale: 1,
+                        disp: 0x14,
+                        segment: None,
+                    },
+                    src: Expr::Reg(reg("rbx")),
+                },
+                assign("r8", 3),
+                assign("rdx", 256),
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rax")),
+                        index: None,
+                        scale: 1,
+                        disp: 0x18,
+                        segment: None,
+                    },
+                    src: Expr::Reg(reg("r11")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "strcpy_s".into(),
+                    },
+                    args: Vec::new(),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::Win64);
+
+        assert_eq!(f.body.len(), 3, "only unrelated stores and call remain");
+        assert!(matches!(f.body[0], Stmt::Store { .. }));
+        assert!(matches!(f.body[1], Stmt::Store { .. }));
+        if let Stmt::Call { args, .. } = &f.body[2] {
+            assert_eq!(args.len(), 3);
+            assert_eq!(
+                args[0],
+                Expr::Bin {
+                    op: crate::ir::types::BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("rax"))),
+                    rhs: Box::new(Expr::Const(40)),
+                }
+            );
+            assert_eq!(args[1], Expr::Const(256));
+            assert_eq!(args[2], Expr::Const(3));
+        } else {
+            panic!("expected Call, got {:?}", f.body[2]);
+        }
+    }
+
+    #[test]
+    fn win64_fills_leading_incoming_arg_when_later_slot_is_set() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdx", 256),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "strnlen".into(),
+                    },
+                    args: Vec::new(),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::Win64);
+
+        assert_eq!(f.body.len(), 1);
+        if let Stmt::Call { args, .. } = &f.body[0] {
+            assert_eq!(args, &vec![Expr::Reg(reg("rcx")), Expr::Const(256)]);
+        } else {
+            panic!("expected Call, got {:?}", f.body[0]);
+        }
+    }
+
+    #[test]
+    fn win64_does_not_fill_internal_argument_gap() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rcx", 1),
+                assign("r8", 3),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "foo".into(),
+                    },
+                    args: Vec::new(),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::Win64);
+
+        assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("r8")));
+        if let Stmt::Call { args, .. } = &f.body[1] {
+            assert_eq!(args, &vec![Expr::Const(1)]);
+        } else {
+            panic!("expected Call, got {:?}", f.body[1]);
+        }
+    }
+
+    #[test]
+    fn win64_does_not_fold_arg_read_by_intervening_store() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rcx", 1),
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rcx")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(99),
+                },
+                assign("rdx", 2),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "foo".into(),
+                    },
+                    args: Vec::new(),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::Win64);
+
+        assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("rcx")));
+        assert!(matches!(&f.body[2], Stmt::Assign { dst, .. } if dst == &reg("rdx")));
+        if let Stmt::Call { args, .. } = &f.body[3] {
+            assert!(args.is_empty(), "call args should not fold: {:?}", f.body);
+        } else {
+            panic!("expected Call, got {:?}", f.body[3]);
         }
     }
 
