@@ -38,7 +38,14 @@ class TestModelHyperparameters:
         assert params.max_tokens is None
 
     def test_to_model_kwargs(self):
-        """Test conversion to model kwargs."""
+        """Test conversion to model kwargs.
+
+        Note: max_tokens (NOT max_output_tokens) is the correct
+        pydantic-ai ModelSettings key. The earlier wrong-key behavior
+        was pinned by a test; that test has been updated to assert
+        the correct key. See test_model_hyperparameters.py for the
+        full regression suite.
+        """
         params = ModelHyperparameters(
             temperature=0.7, top_p=0.9, max_tokens=2048, seed=42
         )
@@ -46,7 +53,7 @@ class TestModelHyperparameters:
         kwargs = params.to_model_kwargs()
         assert kwargs["temperature"] == 0.7
         assert kwargs["top_p"] == 0.9
-        assert kwargs["max_output_tokens"] == 2048
+        assert kwargs["max_tokens"] == 2048
         assert kwargs["seed"] == 42
 
     def test_validation_bounds(self):
@@ -186,10 +193,13 @@ class TestSinglePassAgent:
         params = ModelHyperparameters(temperature=0.9, max_tokens=1000)
         await agent.analyze("Question?", mock_context, params)
 
-        # Check kwargs passed to agent
+        # Hyperparameters are routed via model_settings= (pydantic-ai
+        # rejects temperature= as a direct Agent.run kwarg).
         call_kwargs = mock_base_agent.run.call_args[1]
-        assert call_kwargs.get("temperature") == 0.9
-        assert call_kwargs.get("max_output_tokens") == 1000
+        model_settings = call_kwargs.get("model_settings")
+        assert model_settings is not None
+        assert model_settings.get("temperature") == 0.9
+        assert model_settings.get("max_tokens") == 1000
 
     @pytest.mark.asyncio
     async def test_timeout_handling(self, mock_base_agent, mock_context):
@@ -377,7 +387,9 @@ class TestIterativeRefinementAgent:
         temperatures_used = []
 
         async def track_temp(*args, **kwargs):
-            temperatures_used.append(kwargs.get("temperature", 0.3))
+            # Hyperparameters now live inside model_settings=
+            model_settings = kwargs.get("model_settings", {})
+            temperatures_used.append(model_settings.get("temperature", 0.3))
             mock_result = MagicMock()
             mock_result.output = MagicMock()
             mock_result.output.confidence = 0.2  # Stay low to trigger progression

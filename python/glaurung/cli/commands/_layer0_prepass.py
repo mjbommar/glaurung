@@ -524,17 +524,39 @@ def run_layer0_prepass(
         if cached is not None:
             result.cache_hits += 1
             name = str(cached.get("name") or ident)
-            result.variable_names[ident] = name
-            result.variables_audit.append(
-                Layer0Pair(
-                    input=ident,
-                    output=name,
-                    source="cache",
-                    confidence=float(cached.get("confidence") or 0.0),
-                    rationale=str(cached.get("rationale") or ""),
+            conf = float(cached.get("confidence") or 0.0)
+            # Skip cached identity / low-confidence results. The fresh
+            # LLM path further down already skips identity (line ~562);
+            # the cache path needs the same guard or every prior failed
+            # session's "couldn't name -- echoed ident" result leaks
+            # forward forever. Treat conf < 0.30 OR identity as junk and
+            # re-run the LLM. This is what poisoned the AfdConnect run
+            # on 2026-05-26.
+            if name == ident or conf < 0.30:
+                result.variables_audit.append(
+                    Layer0Pair(
+                        input=ident,
+                        output=name,
+                        source="cache_skipped",
+                        confidence=conf,
+                        rationale=str(cached.get("rationale") or "")
+                        + " | cache-hit skipped: identity-or-low-confidence",
+                    )
                 )
-            )
-            continue
+                # Don't `continue` -- fall through so the fresh LLM
+                # call below recomputes and re-caches.
+            else:
+                result.variable_names[ident] = name
+                result.variables_audit.append(
+                    Layer0Pair(
+                        input=ident,
+                        output=name,
+                        source="cache",
+                        confidence=conf,
+                        rationale=str(cached.get("rationale") or ""),
+                    )
+                )
+                continue
 
         # Cheap role hint: arg* -> 'parameter', everything else local.
         role_hint = "parameter" if ident.startswith("arg") else "local"
@@ -599,16 +621,30 @@ def run_layer0_prepass(
         if cached is not None:
             result.cache_hits += 1
             name = str(cached.get("name") or "")
-            if name:
+            conf = float(cached.get("confidence") or 0.0)
+            # Same cache-poison guard as the variables path (iter 3 on
+            # 2026-05-26). Empty / identity / low-confidence cached
+            # results force a fresh LLM call.
+            if not name or conf < 0.30:
+                result.strings_audit.append(
+                    Layer0Pair(
+                        input=text, output=name, source="cache_skipped",
+                        confidence=conf,
+                        rationale=str(cached.get("rationale") or "")
+                        + " | cache-hit skipped: empty-or-low-confidence",
+                    )
+                )
+                # Fall through to fresh LLM call below.
+            else:
                 result.string_names[text] = name
                 result.strings_audit.append(
                     Layer0Pair(
                         input=text, output=name, source="cache",
-                        confidence=float(cached.get("confidence") or 0.0),
+                        confidence=conf,
                         rationale=str(cached.get("rationale") or ""),
                     )
                 )
-            continue
+                continue
 
         payload = _run_name_string_literal(
             ctx=ctx, text=text, use_sites=use_sites, use_llm=use_llm,
@@ -655,16 +691,30 @@ def run_layer0_prepass(
             result.cache_hits += 1
             symbolic = str(cached.get("symbolic") or "")
             const_key = f"0x{val:x}"
-            if symbolic and symbolic != const_key:
+            conf = float(cached.get("confidence") or 0.0)
+            # Same cache-poison guard as the variables and strings
+            # paths. Empty / identity / low-confidence cached results
+            # force a fresh LLM call.
+            if not symbolic or symbolic == const_key or conf < 0.30:
+                result.constants_audit.append(
+                    Layer0Pair(
+                        input=const_key, output=symbolic, source="cache_skipped",
+                        confidence=conf,
+                        rationale=str(cached.get("rationale") or "")
+                        + " | cache-hit skipped: empty-identity-or-low-confidence",
+                    )
+                )
+                # Fall through to fresh LLM call below.
+            else:
                 result.constant_labels[const_key] = symbolic
                 result.constants_audit.append(
                     Layer0Pair(
                         input=const_key, output=symbolic, source="cache",
-                        confidence=float(cached.get("confidence") or 0.0),
+                        confidence=conf,
                         rationale=str(cached.get("rationale") or ""),
                     )
                 )
-            continue
+                continue
 
         payload = _run_classify_constant(
             ctx=ctx, value=val, snippet=snippet, use_llm=use_llm,

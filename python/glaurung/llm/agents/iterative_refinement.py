@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry
@@ -398,18 +398,18 @@ class IterativeRefinementAgent:
         state: ExecutionState,
     ) -> Any:
         """Execute a single iteration with monitoring."""
-        # Note: pydantic-ai doesn't accept hyperparameters directly in run()
-        # Would need to configure at agent creation or use model-specific settings
-
-        # Run agent
-        model_kwargs = params.to_model_kwargs()
+        # pydantic-ai accepts hyperparameters via a ModelSettings object
+        # passed as `model_settings=`. Spreading the raw dict (as this
+        # layer did previously) raised "AbstractAgent.run() got
+        # unexpected kwarg 'temperature'" and dropped callers into
+        # the heuristic-fallback path.
+        run_kwargs: Dict[str, Any] = {
+            "deps": context,
+            "model_settings": params.to_model_settings(),
+        }
         if self.model:
-            model_kwargs["model"] = self.model
-        result = await self.agent.run(
-            prompt,
-            deps=context,
-            **model_kwargs,
-        )
+            run_kwargs["model"] = self.model
+        result = await self.agent.run(prompt, **run_kwargs)
 
         # Update state with metrics
         state.tokens_used += self.metrics.count_tokens(result)

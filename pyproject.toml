@@ -35,6 +35,7 @@ dependencies = [
     "pydantic-ai-slim[anthropic,google,openai]>=1.86.0",
     "rich>=14.1.0",
     "pydantic-ai>=1.86.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.scripts]

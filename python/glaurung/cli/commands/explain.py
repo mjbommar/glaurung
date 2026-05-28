@@ -151,8 +151,21 @@ def _rewrite_idiomatic(
     variable_names: Optional[dict[str, str]] = None,
     string_names: Optional[dict[str, str]] = None,
     constant_labels: Optional[dict[str, str]] = None,
+    fidelity: str = "tldr",
+    suspicious_vas: Optional[list[int]] = None,
+    struct_pack: Optional[list[Any]] = None,
 ) -> dict[str, Any]:
-    """Run Tool #14. Layer-0 dicts populated by F4 prepass when enabled."""
+    """Run Tool #14. Layer-0 dicts populated by F4 prepass when enabled.
+
+    Returns one of two dict shapes depending on ``fidelity``:
+      - fidelity='tldr' (default): keys source / language / assumptions /
+        confidence / rationale / rewrite_source. Single source string,
+        idiomatic compressed rewrite.
+      - fidelity='annotated': keys prototype / blocks / assumptions /
+        confidence / rationale / rewrite_source. blocks is a list of
+        CodeBlock dicts (start_va / end_va / lifted_c / calls /
+        mem_accesses / branches / block_confidence). For bug-hunting.
+    """
     from glaurung.llm.context import Budgets, MemoryContext
     from glaurung.llm.tools.rewrite_function_idiomatic import (
         RewriteFunctionArgs,
@@ -172,26 +185,43 @@ def _rewrite_idiomatic(
             entry_va=int(va),
             c_prototype=c_prototype,
             role=role,
+            fidelity=fidelity,  # type: ignore[arg-type]
+            suspicious_vas=suspicious_vas or [],
             # Layer-0 tables: populated by F4 prepass when
             # --with-layer0 is set, else empty (F3 behaviour).
             variable_names=variable_names or {},
             constant_labels=constant_labels or {},
             string_names=string_names or {},
             loop_idioms=[],
-            structs=[],
+            structs=list(struct_pack) if struct_pack else [],
             enums=[],
             error_codes=[],
             target_language=target_language,  # type: ignore[arg-type]
             timeout_ms=int(timeout_ms),
         ),
     )
+
+    if fidelity == "annotated" and result.annotated is not None:
+        ann = result.annotated
+        return {
+            "fidelity": "annotated",
+            "prototype": ann.prototype,
+            "blocks": [b.model_dump() for b in ann.blocks],
+            "assumptions": list(ann.assumptions),
+            "confidence": float(ann.overall_confidence),
+            "rationale": ann.rationale,
+            "rewrite_source": result.source,
+        }
+
+    rw = result.rewrite
     return {
-        "source": result.rewrite.source,
-        "language": result.rewrite.language,
-        "assumptions": list(result.rewrite.assumptions),
-        "confidence": float(result.rewrite.confidence),
-        "rationale": result.rewrite.rationale,
-        "rewrite_source": result.source,  # 'llm' | 'heuristic'
+        "fidelity": "tldr",
+        "source": rw.source,
+        "language": rw.language,
+        "assumptions": list(rw.assumptions),
+        "confidence": float(rw.confidence),
+        "rationale": rw.rationale,
+        "rewrite_source": result.source,
     }
 
 
@@ -279,6 +309,37 @@ class ExplainCommand(BaseCommand):
             "$GLAURUNG_CACHE_DIR when unset. Tool #10 / Tool #14 "
             "themselves remain uncached for now.",
         )
+        parser.add_argument(
+            "--fidelity",
+            choices=["tldr", "annotated"],
+            default="tldr",
+            help="Rewrite preset. 'tldr' (default) = idiomatic compressed "
+            "rewrite for source recovery / readability. 'annotated' = "
+            "per-basic-block faithful for bug-hunting triage; emits a "
+            "block list with start_va/end_va/lifted_c plus enumerated "
+            "calls/mem_accesses/branches per block. Use 'annotated' when "
+            "feeding the output to a vulnerability reviewer.",
+        )
+        parser.add_argument(
+            "--suspicious-va",
+            dest="suspicious_vas",
+            action="append",
+            type=lambda x: int(x, 0),
+            default=[],
+            help="VA (hex/decimal) of a region a static rule fired on. "
+            "Repeatable. The annotated rewriter biases attention here -- "
+            "blocks containing these VAs are emitted with extra fidelity.",
+        )
+        parser.add_argument(
+            "--require-llm",
+            action="store_true",
+            default=False,
+            help="Hard-fail (non-zero exit) when the LLM is unreachable "
+            "instead of silently degrading to the heuristic fallback. "
+            "Recommended for automation/batch pipelines where heuristic "
+            "output downstream would be mistaken for an LLM lift. Same "
+            "effect as GLAURUNG_REQUIRE_LLM=1.",
+        )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         try:
@@ -286,6 +347,14 @@ class ExplainCommand(BaseCommand):
         except (FileNotFoundError, ValueError) as e:
             formatter.output_plain(f"Error: {e}")
             return 2
+
+        # --require-llm sets the env var that run_structured_llm
+        # checks; this propagates through every Tool #14/Tool #10/etc.
+        # call inside the rewrite stack without needing to thread a
+        # kwarg through every layer.
+        if getattr(args, "require_llm", False):
+            import os
+            os.environ["GLAURUNG_REQUIRE_LLM"] = "1"
 
         as_json = formatter.format_type in (OutputFormat.JSON, OutputFormat.JSONL)
         quiet = getattr(args, "quiet", False)
@@ -371,6 +440,13 @@ class ExplainCommand(BaseCommand):
                 layer0_source = "error"
 
         # Stage 3: idiomatic rewrite (Tool #14).
+        # For annotated mode, inject the curated Windows-kernel struct
+        # pack when the role classifier says kernel. Lets Tool #14
+        # resolve raw `[arg1 + 0x18]` offsets to `irp->AssociatedIrp.SystemBuffer`.
+        struct_pack: list[Any] = []
+        if args.fidelity == "annotated":
+            from ._kernel_struct_pack import kernel_struct_pack_for_role
+            struct_pack = kernel_struct_pack_for_role(role)
         try:
             rewrite = _rewrite_idiomatic(
                 file_path=str(path),
@@ -389,6 +465,9 @@ class ExplainCommand(BaseCommand):
                 constant_labels=(
                     layer0_result.constant_labels if layer0_result else None
                 ),
+                fidelity=args.fidelity,
+                suspicious_vas=list(args.suspicious_vas),
+                struct_pack=struct_pack,
             )
         except Exception as exc:  # pragma: no cover - surfaces as CLI error
             formatter.output_plain(f"Error: rewrite failed: {exc}")
@@ -399,8 +478,7 @@ class ExplainCommand(BaseCommand):
                 "entry_va": int(func_va),
                 "c_prototype": c_prototype,
                 "role": role,
-                "language": rewrite["language"],
-                "source": rewrite["source"],
+                "fidelity": rewrite.get("fidelity", "tldr"),
                 "assumptions": rewrite["assumptions"],
                 "confidence": rewrite["confidence"],
                 "rationale": rewrite["rationale"],
@@ -420,6 +498,12 @@ class ExplainCommand(BaseCommand):
                     },
                 },
             }
+            if rewrite.get("fidelity") == "annotated":
+                payload["prototype"] = rewrite["prototype"]
+                payload["blocks"] = rewrite["blocks"]
+            else:
+                payload["language"] = rewrite["language"]
+                payload["source"] = rewrite["source"]
             if layer0_result is not None:
                 payload["layer0"] = layer0_result.to_json()
             print(json.dumps(payload, indent=2))
@@ -441,10 +525,53 @@ class ExplainCommand(BaseCommand):
                 )
             formatter.output_plain(
                 f"// rewrite-source: {rewrite['rewrite_source']} "
-                f"(confidence {rewrite['confidence']:.2f})"
+                f"(fidelity={rewrite.get('fidelity', 'tldr')}, "
+                f"confidence {rewrite['confidence']:.2f})"
             )
             formatter.output_plain("")
-        formatter.output_plain(rewrite["source"])
+        if rewrite.get("fidelity") == "annotated":
+            # Render each CodeBlock as a labelled chunk so the output is
+            # still human-readable in plain text mode.
+            formatter.output_plain(
+                f"// prototype: {rewrite.get('prototype', c_prototype)}"
+            )
+            if args.suspicious_vas:
+                sv = ", ".join(f"0x{v:x}" for v in args.suspicious_vas)
+                formatter.output_plain(f"// suspicious VAs: {sv}")
+            formatter.output_plain("")
+            for i, blk in enumerate(rewrite["blocks"]):
+                formatter.output_plain(
+                    f"// ---- block {i}: {blk['start_va']}..{blk['end_va']} "
+                    f"(confidence {blk['block_confidence']:.2f}) ----"
+                )
+                formatter.output_plain(blk["lifted_c"])
+                if blk.get("calls"):
+                    formatter.output_plain("// calls in this block:")
+                    for c in blk["calls"]:
+                        notable = " (notable)" if c.get("notable") else ""
+                        formatter.output_plain(
+                            f"//   {c['call_va']} -> {c['callee']} "
+                            f"[{c.get('kind', 'direct')}]{notable}"
+                        )
+                if blk.get("mem_accesses"):
+                    formatter.output_plain("// mem accesses in this block:")
+                    for m in blk["mem_accesses"]:
+                        formatter.output_plain(
+                            f"//   {m['va']} {m['kind']} "
+                            f"w={m['width']} {m['addr_expr']}"
+                        )
+                if blk.get("branches"):
+                    formatter.output_plain("// branches in this block:")
+                    for b in blk["branches"]:
+                        tgt = b.get("target_va") or "-"
+                        pred = b.get("predicate") or ""
+                        formatter.output_plain(
+                            f"//   {b['va']} {b['kind']} -> {tgt}"
+                            + (f"  ({pred})" if pred else "")
+                        )
+                formatter.output_plain("")
+        else:
+            formatter.output_plain(rewrite["source"])
         if not quiet and rewrite["assumptions"]:
             formatter.output_plain("")
             formatter.output_plain("// assumptions:")

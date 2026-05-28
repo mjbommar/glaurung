@@ -112,3 +112,5 @@ uv.lock
 
 # Temporary files
 tmp/
+
+.claude/worktrees/

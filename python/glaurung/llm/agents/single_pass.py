@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
@@ -188,15 +188,20 @@ class SinglePassAgent:
             context.kb.add_node = monitored_add_node
 
         try:
-            # Run the agent, passing model + hyperparameters as kwargs
-            model_kwargs = params.to_model_kwargs()
+            # Run the agent. pydantic-ai's Agent.run() does NOT accept
+            # `temperature` / `top_p` / `max_tokens` as direct kwargs --
+            # they must be wrapped in a ModelSettings object passed via
+            # `model_settings=`. Previously this layer spread the raw
+            # dict, which raised "AbstractAgent.run() got unexpected
+            # kwarg 'temperature'" and dropped callers into the
+            # heuristic-fallback path.
+            run_kwargs: Dict[str, Any] = {
+                "deps": context,
+                "model_settings": params.to_model_settings(),
+            }
             if self.model:
-                model_kwargs["model"] = self.model
-            result = await self.agent.run(
-                question,
-                deps=context,
-                **model_kwargs,
-            )
+                run_kwargs["model"] = self.model
+            result = await self.agent.run(question, **run_kwargs)
 
             # Track tools used
             for tool_name, args in self.metrics.extract_tools_with_args(result):

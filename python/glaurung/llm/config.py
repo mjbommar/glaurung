@@ -9,6 +9,29 @@ from pydantic_ai import Agent
 logger = logging.getLogger(__name__)
 
 
+# Auto-load .env from the cwd (and any parent up to filesystem root) the
+# moment this module is imported. Without this, non-interactive shells
+# (background agents, CI, test runners, subprocess.Popen) see
+# OPENAI_API_KEY / ANTHROPIC_API_KEY as unset whenever the operator's
+# keys live in ~/.bashrc rather than .env, and every LLM call silently
+# falls back to heuristic output. The fail-loud guard in
+# `tools/_llm_helpers.py` (require_llm + WARNING) catches this, but
+# preventing it in the first place is the right fix.
+#
+# `find_dotenv()` walks parent directories from cwd, so running glaurung
+# from any subtree of a repo that has a .env file Just Works.
+try:
+    from dotenv import find_dotenv, load_dotenv  # type: ignore
+    _dotenv_path = find_dotenv(usecwd=True)
+    if _dotenv_path:
+        load_dotenv(_dotenv_path, override=False)
+        logger.debug("Loaded .env from %s", _dotenv_path)
+except ImportError:
+    # python-dotenv not installed; environment-only mode (existing
+    # behavior pre-2026-05-27).
+    pass
+
+
 @dataclass
 class LLMConfig:
     # REQUIRED project default per CLAUDE.md: openai:gpt-5.4-mini with
@@ -94,18 +117,30 @@ class LLMConfig:
         }
 
     def preferred_model(self) -> str:
-        """Return the best model available given current credentials.
+        """Return the project-required default model when its provider is
+        available; otherwise fall back.
 
-        Anthropic Claude Opus 4.7 is preferred; we fall back to OpenAI's
-        GPT-5.5 when the Anthropic key is missing. Returns the configured
-        ``default_model`` when neither provider is available so callers
-        that only want to *construct* an Agent (e.g. tests) still get a
-        sensible value.
+        Per CLAUDE.md / feedback-llm-model-default, the project default is
+        ``openai:gpt-5.4-mini`` with ``service_tier=flex``. Anthropic
+        Claude is an explicit-override target via ``--model
+        anthropic:claude-...`` -- NEVER a silent swap.
+
+        Previous version of this function inverted the if-clauses: it
+        returned the OpenAI default when an Anthropic key was set, and
+        returned the Anthropic fallback when only an OpenAI key was set.
+        That caused every Layer-0 / Tool #14 call to route to Anthropic
+        whenever ANTHROPIC_API_KEY was unset -- the opposite of intent.
+        Fixed 2026-05-26.
         """
         avail = self.available_models()
-        if avail.get("anthropic"):
+        default_provider = self.default_model.split(":", 1)[0]
+        if avail.get(default_provider):
             return self.default_model
-        if avail.get("openai"):
+        # Default provider unavailable. Fall back if its provider is up;
+        # otherwise return default_model anyway so callers that only need
+        # to construct an Agent (e.g. tests) still get a sensible value.
+        fallback_provider = self.fallback_model.split(":", 1)[0]
+        if avail.get(fallback_provider):
             return self.fallback_model
         return self.default_model
 
