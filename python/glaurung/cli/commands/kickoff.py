@@ -1,7 +1,6 @@
 """One-shot first-touch analysis CLI subcommand (#206)."""
 
 import argparse
-import json
 from dataclasses import asdict
 from pathlib import Path
 
@@ -38,6 +37,17 @@ class KickoffCommand(BaseCommand):
             help="Analyse a binary even when packer detection flags it. "
                  "Default: skip deep analysis on packed binaries.",
         )
+        parser.add_argument(
+            "--pdb-cache", default=None,
+            help="Microsoft-style PDB cache dir. When set, apply the "
+                 "matching PDB's public symbol names to discovered "
+                 "functions (provenance 'pdb').",
+        )
+        parser.add_argument(
+            "--fetch-pdb", action="store_true",
+            help="Download the matching PDB from the Microsoft symbol "
+                 "server into --pdb-cache if absent (requires --pdb-cache).",
+        )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         try:
@@ -54,6 +64,8 @@ class KickoffCommand(BaseCommand):
             session=args.session,
             max_functions_for_kb_lift=args.max_functions,
             skip_if_packed=not args.analyze_packed,
+            pdb_cache=args.pdb_cache,
+            fetch_pdb=args.fetch_pdb,
         )
 
         if formatter.format_type == OutputFormat.JSON:

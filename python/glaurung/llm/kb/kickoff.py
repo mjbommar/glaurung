@@ -32,7 +32,7 @@ from typing import List, Optional
 
 from . import type_db as _type_db
 from . import xref_db as _xref_db
-from .packer_detect import PackerVerdict, detect_packer
+from .packer_detect import detect_packer
 from .persistent import PersistentKnowledgeBase
 
 
@@ -66,6 +66,11 @@ class KickoffSummary:
     # symbol provenance counts
     by_set_by: dict = field(default_factory=dict)
 
+    # PDB (Microsoft symbol-server) naming
+    functions_named_pdb: int = 0
+    pdb_cache_hit: bool = False
+    pdb_name: Optional[str] = None
+
     # type-KB lift across the whole binary
     stack_slots_discovered: int = 0
     types_propagated: int = 0
@@ -92,6 +97,8 @@ def kickoff_analysis(
     session: str = "main",
     max_functions_for_kb_lift: int = 64,
     skip_if_packed: bool = True,
+    pdb_cache: Optional[str] = None,
+    fetch_pdb: bool = False,
 ) -> KickoffSummary:
     """Run the full first-touch pipeline on `binary_path`.
 
@@ -197,6 +204,50 @@ def kickoff_analysis(
             edges = 0
         summary.callgraph_edges = edges
         timings["index_callgraph_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+
+        # 4.5 Microsoft PDB naming. glaurung's discovery names only
+        # exports (everything else is sub_<addr>); the authoritative
+        # internal names live in the matching PDB on the Microsoft
+        # symbol server. When a cache dir is given (and optionally
+        # fetch_pdb), download/resolve the PDB and apply its public
+        # symbol map to function_names with provenance "pdb". The cache
+        # dir falls back to $GLAURUNG_PDB_CACHE so symbol naming is
+        # first-class without passing the flag on every invocation.
+        import os as _os
+
+        pdb_cache = pdb_cache or _os.environ.get("GLAURUNG_PDB_CACHE")
+        if pdb_cache:
+            t0 = time.perf_counter()
+            try:
+                import glaurung as _g
+                from glaurung.pdb_fetch import ensure_pdb_cached, read_codeview
+
+                cv = read_codeview(str(binary))
+                if cv is not None:
+                    summary.pdb_name = cv.pdb_name
+                cached = ensure_pdb_cached(
+                    str(binary), pdb_cache, download=fetch_pdb
+                )
+                summary.pdb_cache_hit = cached is not None
+                pdb_map = dict(
+                    _g.symbols.pdb_symbol_map(str(binary), pdb_cache)
+                )
+                applied = 0
+                for va, nm in pdb_map.items():
+                    if not nm:
+                        continue
+                    _xref_db.set_function_name(
+                        kb, int(va), str(nm), set_by="pdb"
+                    )
+                    applied += 1
+                summary.functions_named_pdb = applied
+                if applied:
+                    kb._conn.commit()
+            except Exception as e:  # noqa: BLE001 - informational pass
+                summary.notes.append(f"pdb naming failed: {e}")
+            timings["pdb_naming_ms"] = round(
+                (time.perf_counter() - t0) * 1000, 1
+            )
 
         # 5. Optional: import DWARF types into type_db.
         t0 = time.perf_counter()
