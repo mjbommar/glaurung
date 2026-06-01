@@ -37,6 +37,8 @@ from .commands.pe import PeCommand
 from .commands.windows_risk import WindowsRiskCommand
 from .commands.types import TypesCommand
 from .commands.windows import WindowsCommand
+from .commands.locks import LocksCommand
+from .commands.group import GroupCommand
 
 from .formatters import (
     TriageFormatter,
@@ -91,6 +93,8 @@ class GlaurungCLI:
             "windows-risk": WindowsRiskCommand(),
             "types": TypesCommand(),
             "windows": WindowsCommand(),
+            "locks": LocksCommand(),
+            "group": GroupCommand(),
         }
 
         # Map commands to their formatters. The REPL is interactive and
@@ -137,6 +141,8 @@ class GlaurungCLI:
             "windows-risk": TriageFormatter,
             "types": TriageFormatter,
             "windows": TriageFormatter,
+            "locks": TriageFormatter,
+            "group": TriageFormatter,
         }
 
     def create_parser(self) -> argparse.ArgumentParser:
