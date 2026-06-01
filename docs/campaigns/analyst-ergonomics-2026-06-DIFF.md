@@ -89,18 +89,28 @@ shared tag != proven overflow path; lookaside/segment-heap buckets not modeled.
 `glaurung group --member dxgmms2=...dxgmms2.sys --member dxgmms1=...dxgmms1.sys`.
 Future extension: cross-module callee-VA resolution + per-tag site cross-ref.
 
-### C2 Patch diff-explain (DONE, in agentic-security-bot)
-`tools/windows/diff_explain.py`:
-- `filter_layout_shifts()` / `_norm_signature()`: drops same-size pairs whose
-  relocation-normalized instruction signature is identical pre/post (only
-  control-flow targets + RIP-relative addresses masked, so a real logic change
-  still differs -- conservative, never drops a real edit). Wired into the
-  orchestration after `select_changed_pairs`; writes `layout_shift_dropped.json`;
-  `--no-layout-filter` to disable.
-- `render_pair_markdown()` now prefixes the Evidence block with an **UNVERIFIED
+### C2 Patch diff-explain (DONE) -- now engine-backed
+First cut reimplemented relocation-normalization as a bespoke byte/operand
+masker in ASB (`_norm_signature`). That duplicated glaurung's existing
+`structural_fingerprint` (which masks call/branch/global targets and is
+IAT-name-aware and better). Rewired to consume the engine instead:
+
+glaurung side (`python/glaurung/llm/kb/binary_diff.py`):
+- `FunctionDiff.relocation_only` + `is_relocation_only(status, similarity)`
+  (threshold `RELOCATION_ONLY_SIMILARITY = 0.999`). A `changed` row whose every
+  block matched structurally (similarity ~1.0) is relocation / reordering noise,
+  not a real edit. Pure relocations already collapse to `same` upstream; this
+  names the residual noise. Surfaced in `to_json` so every consumer gets it.
+  Test: `python/tests/test_binary_diff_relocation_only.py`.
+
+ASB side (`tools/windows/diff_explain.py`):
+- `_norm_signature` / `_HEX` byte-masker DELETED. `ChangedPair.from_row` now
+  reads `relocation_only` + `similarity`; `filter_layout_shifts(pairs)` drops
+  rows the engine flagged `relocation_only` (no more per-pair re-disasm).
+  `--no-layout-filter` to disable; `layout_shift_dropped.json` artifact kept.
+- `render_pair_markdown()` prefixes the Evidence block with an **UNVERIFIED
   (lifted-C, not disasm-confirmed)** banner pointing at `glaurung disasm --db
-  --function` (#2) for ground-truth confirmation.
-Tests: `tests/unit/test_windows_diff_explain_layout_filter.py`.
+  --function` (#2). Test: `tests/unit/test_windows_diff_explain_layout_filter.py`.
 
 ## Root observations (from the session)
 

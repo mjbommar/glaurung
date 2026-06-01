@@ -82,6 +82,17 @@ A shared tag implies a shared pool surface, NOT a proven overflow path -- the
 footer says so, and notes that lookaside lists / segment-heap buckets are not
 modeled.
 
+## `diff` relocation-only flag
+
+`glaurung diff --json` now tags each `changed` row with `relocation_only`:
+true when every block matched structurally (`similarity >= 0.999`), i.e. the
+delta is relocation / block-reordering noise rather than a real instruction
+change. Pure relocations already collapse to status `same` (the structural
+fingerprint masks call/branch/global targets); this flag names the residual
+noise so patch-diff consumers can drop it instead of re-deriving the judgment.
+The relocation-aware comparison itself is `structural_fingerprint` -- not a
+per-consumer reimplementation.
+
 ## Known disassembler limitation (affects offset/constant analysis)
 
 The disassembler currently drops standalone immediate operands for some ALU

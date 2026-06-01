@@ -98,6 +98,14 @@ class FunctionDiff:
     # sides resolved to a structural fingerprint; ``None`` otherwise
     # (e.g. one-sided rows or blocks-less thunks). Phase F5 extension.
     similarity: Optional[float] = None
+    # True for a ``changed`` row whose every block matched structurally
+    # (similarity ~1.0): the structural hash differs only by relocation /
+    # block-reordering noise, NOT a real instruction add/remove/change.
+    # Consumers (e.g. patch-diff explainers) use this to suppress the
+    # layout-shift false positives that otherwise waste an analysis pass.
+    # The relocation-target masking itself lives in structural_fingerprint;
+    # this flag just surfaces "structurally identical modulo relocation".
+    relocation_only: bool = False
 
 
 @dataclass
@@ -251,6 +259,29 @@ def _fingerprint_via_path(
 #: ~967 to ~140 (mostly genuine new/removed code paths) while no
 #: obviously wrong pairings creep in.
 CROSS_NAME_THRESHOLD_DEFAULT = 0.85
+
+#: A ``changed`` row at or above this Jaccard similarity is treated as
+#: relocation / block-reordering noise (every block matched structurally),
+#: not a real code change. Conservative on purpose: only near-perfect
+#: matches are flagged so a genuine one-block edit is never suppressed.
+RELOCATION_ONLY_SIMILARITY = 0.999
+
+
+def is_relocation_only(status: str, similarity: Optional[float]) -> bool:
+    """True when a ``changed`` row differs only by relocation/reordering.
+
+    Pure relocations (only call/branch/global targets moved) already
+    collapse to ``status == "same"`` because ``structural_fingerprint``
+    masks those targets. What still reaches ``changed`` with similarity
+    ~1.0 is block-reordering / token-identical noise -- this predicate
+    names that case for consumers. Anything below the threshold (a real
+    instruction added/removed/changed) returns False.
+    """
+    return (
+        status == "changed"
+        and similarity is not None
+        and similarity >= RELOCATION_ONLY_SIMILARITY
+    )
 
 
 def diff_binaries(
@@ -457,6 +488,7 @@ def diff_binaries(
                         public_name_pre=pn_a,
                         public_name_post=pn_b,
                         similarity=sim,
+                        relocation_only=is_relocation_only("changed", sim),
                     )
                 )
         elif fa:
@@ -628,6 +660,7 @@ def _rematch_unnamed_by_structure(
             public_name_post=added_row.public_name_post
             or (pdb_map_b.get(added_row.b.entry_va) if added_row.b else None),
             similarity=sim,
+            relocation_only=is_relocation_only("changed", sim),
         )
         diff.rows[added_row_idx] = merged
         drop.append(removed_row_idx)
@@ -758,6 +791,7 @@ def to_json(diff: BinaryDiff) -> str:
                 "public_name_pre": r.public_name_pre,
                 "public_name_post": r.public_name_post,
                 "similarity": r.similarity,
+                "relocation_only": r.relocation_only,
             }
             for r in diff.rows
         ],
