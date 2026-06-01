@@ -68,6 +68,7 @@ class KickoffSummary:
 
     # PDB (Microsoft symbol-server) naming
     functions_named_pdb: int = 0
+    pdb_types_imported: int = 0
     pdb_cache_hit: bool = False
     pdb_name: Optional[str] = None
 
@@ -97,8 +98,10 @@ def kickoff_analysis(
     session: str = "main",
     max_functions_for_kb_lift: int = 64,
     skip_if_packed: bool = True,
+    pdb: bool = True,
     pdb_cache: Optional[str] = None,
-    fetch_pdb: bool = False,
+    fetch_pdb: bool = True,
+    pdb_struct_names: Optional[list] = None,
 ) -> KickoffSummary:
     """Run the full first-touch pipeline on `binary_path`.
 
@@ -213,10 +216,17 @@ def kickoff_analysis(
         # symbol map to function_names with provenance "pdb". The cache
         # dir falls back to $GLAURUNG_PDB_CACHE so symbol naming is
         # first-class without passing the flag on every invocation.
-        import os as _os
+        # On by default (pdb=True): a matching PDB is the difference
+        # between an all-`sub_XXXX` DB and a navigable one. Resolution is
+        # cache-first, then symbol-server fetch (fetch_pdb), so naming
+        # "just works" without a flag. read_codeview() short-circuits to
+        # None for non-PE / no-RSDS inputs, so this never touches the
+        # network for ELF/Mach-O and the whole block is best-effort.
+        from glaurung.pdb_fetch import default_cache_dir
 
-        pdb_cache = pdb_cache or _os.environ.get("GLAURUNG_PDB_CACHE")
-        if pdb_cache:
+        if pdb_cache is None:
+            pdb_cache = str(default_cache_dir())
+        if pdb:
             t0 = time.perf_counter()
             try:
                 import glaurung as _g
@@ -225,29 +235,61 @@ def kickoff_analysis(
                 cv = read_codeview(str(binary))
                 if cv is not None:
                     summary.pdb_name = cv.pdb_name
-                cached = ensure_pdb_cached(
-                    str(binary), pdb_cache, download=fetch_pdb
-                )
-                summary.pdb_cache_hit = cached is not None
-                pdb_map = dict(
-                    _g.symbols.pdb_symbol_map(str(binary), pdb_cache)
-                )
-                applied = 0
-                for va, nm in pdb_map.items():
-                    if not nm:
-                        continue
-                    _xref_db.set_function_name(
-                        kb, int(va), str(nm), set_by="pdb"
+                    cached = ensure_pdb_cached(
+                        str(binary), pdb_cache, download=fetch_pdb
                     )
-                    applied += 1
-                summary.functions_named_pdb = applied
-                if applied:
-                    kb._conn.commit()
+                    summary.pdb_cache_hit = cached is not None
+                    if cached is None:
+                        summary.notes.append(
+                            f"pdb {cv.pdb_name} ({cv.guid_age_key}) "
+                            f"unresolved (cache miss"
+                            + (", fetch off)" if not fetch_pdb else ", fetch failed)")
+                        )
+                    pdb_map = dict(
+                        _g.symbols.pdb_symbol_map(str(binary), pdb_cache)
+                    )
+                    applied = 0
+                    for va, nm in pdb_map.items():
+                        if not nm:
+                            continue
+                        _xref_db.set_function_name(
+                            kb, int(va), str(nm), set_by="pdb"
+                        )
+                        applied += 1
+                    summary.functions_named_pdb = applied
+                    if applied:
+                        kb._conn.commit()
             except Exception as e:  # noqa: BLE001 - informational pass
                 summary.notes.append(f"pdb naming failed: {e}")
             timings["pdb_naming_ms"] = round(
                 (time.perf_counter() - t0) * 1000, 1
             )
+
+            # #4: surface PDB struct layouts at analysis time. Bounded to
+            # an explicit name list when supplied (Windows PDBs carry
+            # thousands of types; a blanket import is wasteful). On-demand
+            # layout lookup for the rest lives in `glaurung pdb-types`.
+            if pdb_struct_names and summary.pdb_cache_hit:
+                t0 = time.perf_counter()
+                try:
+                    ty = _type_db.import_pe_pdb_types(
+                        kb, str(binary), pdb_cache, list(pdb_struct_names)
+                    )
+                    summary.pdb_types_imported = int(ty.get("imported_struct", 0))
+                    # Microsoft PUBLIC PDBs carry function publics but usually
+                    # NOT private struct layouts -- so requested structs often
+                    # land here. Surface that instead of silently importing 0.
+                    miss = ty.get("missing_layouts") or ty.get("missing_struct_names") or []
+                    if miss:
+                        summary.notes.append(
+                            f"pdb types: {len(miss)} requested layout(s) not in "
+                            f"(public) PDB: {', '.join(map(str, miss[:8]))}"
+                        )
+                except Exception as e:  # noqa: BLE001
+                    summary.notes.append(f"pdb type import failed: {e}")
+                timings["pdb_types_ms"] = round(
+                    (time.perf_counter() - t0) * 1000, 1
+                )
 
         # 5. Optional: import DWARF types into type_db.
         t0 = time.perf_counter()
