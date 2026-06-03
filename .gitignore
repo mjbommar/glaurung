@@ -32,6 +32,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 .pytest_cache/
+.benchmarks/
 .coverage
 .coverage.*
 coverage.xml
