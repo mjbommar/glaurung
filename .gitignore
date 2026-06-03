@@ -116,5 +116,7 @@ uv.lock
 
 # Temporary files
 tmp/
+# NFS "silly-rename" artifacts (deleted-but-open files)
+.nfs*
 
 .claude/worktrees/

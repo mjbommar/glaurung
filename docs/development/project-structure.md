@@ -22,18 +22,15 @@ glaurung/
 │   ├── cle/               # Binary loader
 │   ├── claripy/           # Constraint solver
 │   └── LIEF/              # Binary instrumentation
-├── .claude/                # Claude AI assistant configuration
-│   └── modules/           # Context modules for development
+├── .claude/                # Claude Code configuration (agents, settings)
 ├── todo/                   # Task tracking
-├── notes/                  # Development notes
 ├── target/                 # Rust build artifacts (gitignored)
 ├── Cargo.toml             # Rust package configuration
 ├── Cargo.lock             # Rust dependency lock file
 ├── pyproject.toml         # Python package configuration
 ├── README.md              # Project readme
 ├── LICENSE                # MIT license
-├── CLAUDE.md              # AI assistant context (auto-generated)
-└── cm.py                  # Claude module manager
+└── CLAUDE.md              # AI assistant context (hand-maintained)
 
 ```
 
@@ -56,8 +53,7 @@ Included for study and design inspiration:
 - **LIEF**: Binary format instrumentation
 
 ### Development Tools
-- **`.claude/`**: AI assistant configuration and context modules
-- **`cm.py`**: Tool for managing Claude context modules
+- **`.claude/`**: Claude Code configuration (custom agents, local settings)
 - **`todo/`**: Task tracking and project planning
 
 ## Build System
