@@ -23,7 +23,6 @@ glaurung/
 │   ├── claripy/           # Constraint solver
 │   └── LIEF/              # Binary instrumentation
 ├── .claude/                # Claude Code configuration (agents, settings)
-├── todo/                   # Task tracking
 ├── target/                 # Rust build artifacts (gitignored)
 ├── Cargo.toml             # Rust package configuration
 ├── Cargo.lock             # Rust dependency lock file
@@ -54,7 +53,6 @@ Included for study and design inspiration:
 
 ### Development Tools
 - **`.claude/`**: Claude Code configuration (custom agents, local settings)
-- **`todo/`**: Task tracking and project planning
 
 ## Build System
 
