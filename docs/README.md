@@ -40,6 +40,16 @@ Development environment setup and project management.
 - `project-structure.md` - Repository organization
 - `roadmap.md` - Development milestones and future plans
 
+### `cli/`
+Per-command CLI guides.
+- `analyst-ergonomics.md` - PDB naming on by default, KB-aware `disasm`,
+  `locks` (CFG-aware lock-state), `group` (cross-binary shared pool tags),
+  and the coverage-footer convention
+
+### `campaigns/`
+Multi-change effort records (design + as-built status).
+- `analyst-ergonomics-2026-06-DIFF.md` - the campaign behind the `cli/` doc above
+
 ### `research/`
 Experimental features and proposals.
 - `pyext-separation.md` - PyO3 extension separation design

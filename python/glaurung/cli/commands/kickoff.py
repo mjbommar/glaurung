@@ -39,15 +39,26 @@ class KickoffCommand(BaseCommand):
         )
         parser.add_argument(
             "--pdb-cache", default=None,
-            help="Microsoft-style PDB cache dir. When set, apply the "
-                 "matching PDB's public symbol names to discovered "
-                 "functions (provenance 'pdb').",
+            help="Microsoft-style PDB cache dir for symbol naming. "
+                 "Defaults to $GLAURUNG_PDB_CACHE / a local _NT_SYMBOL_PATH "
+                 "dir / ~/.cache/glaurung/symbols.",
         )
         parser.add_argument(
-            "--fetch-pdb", action="store_true",
-            help="Download the matching PDB from the Microsoft symbol "
-                 "server into --pdb-cache if absent (requires --pdb-cache).",
+            "--no-pdb", dest="pdb", action="store_false",
+            help="Disable PDB public-symbol naming (default: on for PE "
+                 "with a CodeView record).",
         )
+        parser.add_argument(
+            "--no-fetch-pdb", dest="fetch_pdb", action="store_false",
+            help="Do not download a missing PDB from the Microsoft symbol "
+                 "server; use only what is already cached.",
+        )
+        parser.add_argument(
+            "--pdb-struct", action="append", default=None, metavar="NAME",
+            help="Import this PDB struct's layout into the type DB during "
+                 "kickoff (repeatable). Unlisted structs stay on-demand.",
+        )
+        parser.set_defaults(pdb=True, fetch_pdb=True)
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         try:
@@ -64,8 +75,10 @@ class KickoffCommand(BaseCommand):
             session=args.session,
             max_functions_for_kb_lift=args.max_functions,
             skip_if_packed=not args.analyze_packed,
+            pdb=args.pdb,
             pdb_cache=args.pdb_cache,
             fetch_pdb=args.fetch_pdb,
+            pdb_struct_names=args.pdb_struct,
         )
 
         if formatter.format_type == OutputFormat.JSON:

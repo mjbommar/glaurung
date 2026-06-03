@@ -23,6 +23,29 @@ MSDL_BASE = "https://msdl.microsoft.com/download/symbols"
 # MS symbol server historically gates on a symbol-server-style UA.
 _UA = "Microsoft-Symbol-Server/10.0.0.0"
 
+
+def default_cache_dir() -> Path:
+    """Resolve the default Microsoft-style PDB cache directory.
+
+    Order: ``$GLAURUNG_PDB_CACHE`` if set, else the first existing local
+    directory token in a Windows-style ``$_NT_SYMBOL_PATH``, else
+    ``~/.cache/glaurung/symbols``. This only computes the path (parents
+    are created lazily on write by ``ensure_pdb_cached``) so PDB symbol
+    naming can be first-class in kickoff without passing a flag.
+    """
+    import os
+
+    env = os.environ.get("GLAURUNG_PDB_CACHE")
+    if env:
+        return Path(env)
+    ntsym = os.environ.get("_NT_SYMBOL_PATH", "")
+    for tok in ntsym.replace(";", "*").split("*"):
+        tok = tok.strip()
+        if tok and "://" not in tok and Path(tok).is_dir():
+            return Path(tok)
+    return Path.home() / ".cache" / "glaurung" / "symbols"
+
+
 IMAGE_DIRECTORY_ENTRY_DEBUG = 6
 IMAGE_DEBUG_TYPE_CODEVIEW = 2
 

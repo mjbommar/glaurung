@@ -10,6 +10,7 @@ from glaurung import DisassemblerConfig, Architecture, Endianness, Address, Addr
 
 from .base import BaseCommand
 from ..formatters.disasm import DisasmFormatter
+from ..formatters.base import OutputFormat
 
 
 class DisasmCommand(BaseCommand):
@@ -96,6 +97,17 @@ class DisasmCommand(BaseCommand):
         parser.add_argument(
             "--comments", action="store_true", help="Add comments for calls and strings"
         )
+        parser.add_argument(
+            "--db", type=Path, default=None,
+            help="A .glaurung project. With --function, disassemble one "
+                 "function with symbol-annotated call targets, CFG-derived "
+                 "bounds, and a coverage footer (KB-aware mode).",
+        )
+        parser.add_argument(
+            "--function", default=None, metavar="NAME|VA",
+            help="Function to disassemble in KB-aware mode: a canonical/"
+                 "demangled name or a hex/decimal VA. Requires --db.",
+        )
 
     def _get_architecture(self, path: Path, arch_str: Optional[str]) -> Architecture:
         """Determine the architecture for disassembly."""
@@ -152,6 +164,10 @@ class DisasmCommand(BaseCommand):
         except (FileNotFoundError, ValueError) as e:
             formatter.output_plain(f"Error: {e}")
             return 2
+
+        # KB-aware mode: one function, symbol-annotated, from a .glaurung.
+        if args.db is not None and args.function is not None:
+            return self._execute_kb_function(args, formatter, str(path))
 
         # Determine architecture
         arch = self._get_architecture(path, args.arch)
@@ -277,3 +293,38 @@ class DisasmCommand(BaseCommand):
         # This would analyze the instruction for interesting patterns
         # For now, return None
         return None
+
+    def _execute_kb_function(
+        self, args: argparse.Namespace, formatter: DisasmFormatter, path: str
+    ) -> int:
+        """KB-aware single-function disassembly with symbol annotation."""
+        from glaurung.llm.kb.function_disasm import disasm_function
+
+        try:
+            fd = disasm_function(
+                path, db_path=str(args.db), function=args.function,
+                max_instructions=args.max_instructions,
+            )
+        except (KeyError, FileNotFoundError, ValueError) as e:
+            formatter.output_plain(f"Error: {e}")
+            return 2
+
+        if formatter.format_type in (OutputFormat.JSON, OutputFormat.JSONL):
+            data = {
+                "name": fd.name,
+                "start_va": fd.start_va,
+                "end_va": fd.end_va,
+                "instructions": [
+                    {"address": i.va, "text": i.text, "comment": i.comment}
+                    for i in fd.insns
+                ],
+                "coverage": fd.coverage.to_dict() if fd.coverage else None,
+            }
+            if formatter.format_type == OutputFormat.JSON:
+                formatter.output_json(data)
+            else:
+                formatter.output_jsonl(data)
+            return 0
+
+        formatter.output_plain(fd.render())
+        return 0
