@@ -410,3 +410,162 @@ fn add_signed_u64(base: u64, delta: i64) -> u64 {
         base.saturating_sub(delta.unsigned_abs())
     }
 }
+
+/// Find executable-section `call`/`jmp` sites that reference a PE import's IAT slot.
+///
+/// This is xrefs-to-an-imported-symbol for PE. Where [`pe_import_thunk_map`]
+/// only aliases the `jmp [IAT]` thunk bodies, this returns EVERY
+/// `call [rip+disp32]` (`FF /2`) and `jmp [rip+disp32]` (`FF /4`) instruction --
+/// x64, with or without a `REX.W` (`0x48`) prefix -- whose memory operand
+/// resolves to a known IAT slot, plus the x86 absolute (`FF 15`/`FF 25 imm32`)
+/// forms. Each row is `(site_va, iat_slot_va, import_name)`.
+///
+/// Map the IAT name to its call sites, then attribute each site to its
+/// containing function (e.g. via a PDB public-symbol map + a sorted-entry
+/// bisect) to learn which functions call a given API -- without paying for full
+/// CFG/decompile recovery. The IAT-target constraint keeps the linear byte scan
+/// conservative: a stray `FF 15`/`FF 25` whose displacement lands exactly on an
+/// IAT slot is vanishingly unlikely, so false positives are negligible in
+/// practice. The scan does not attempt full instruction-boundary recovery, so a
+/// caller wanting only true boundaries can cross-check `site_va` against a
+/// disassembler.
+pub fn pe_import_call_sites(data: &[u8]) -> Vec<(u64, u64, String)> {
+    let iat_names: BTreeMap<u64, String> = pe_iat_map(data).into_iter().collect();
+    if iat_names.is_empty() {
+        return Vec::new();
+    }
+
+    let Ok(parser) = crate::formats::pe::PeParser::new(data) else {
+        return Vec::new();
+    };
+
+    let image_base = parser.image_base();
+    let is_64bit = parser.is_64bit();
+    let mut out: Vec<(u64, u64, String)> = Vec::new();
+
+    for section in parser.sections() {
+        if !section.header.is_executable() {
+            continue;
+        }
+        let raw_start = section.header.pointer_to_raw_data as usize;
+        let raw_size = section.header.size_of_raw_data as usize;
+        let Some(raw_end) = raw_start
+            .checked_add(raw_size)
+            .map(|end| end.min(data.len()))
+        else {
+            continue;
+        };
+        if raw_start >= raw_end || raw_start >= data.len() {
+            continue;
+        }
+
+        let bytes = &data[raw_start..raw_end];
+        let va_base = image_base.saturating_add(u64::from(section.header.virtual_address));
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let site_va = va_base.saturating_add(offset as u64);
+            let decoded = if is_64bit {
+                decode_x64_iat_mem_ref(bytes, offset, site_va)
+            } else {
+                decode_x86_iat_mem_ref(bytes, offset)
+            };
+            match decoded {
+                Some((target_va, size)) => {
+                    if let Some(name) = iat_names.get(&target_va) {
+                        out.push((site_va, target_va, name.clone()));
+                    }
+                    offset += size.max(1);
+                }
+                None => offset += 1,
+            }
+        }
+    }
+
+    out
+}
+
+/// Decode an x64 `call`/`jmp` through a RIP-relative memory operand
+/// (`FF /2` call m64, `FF /4` jmp m64), with or without a `REX.W` (`0x48`)
+/// prefix. Returns `(rip_relative_target_va, instruction_size)`.
+fn decode_x64_iat_mem_ref(bytes: &[u8], offset: usize, site_va: u64) -> Option<(u64, usize)> {
+    // Optional REX.W prefix (0x48) ahead of the FF opcode.
+    let (op_off, extra) = if bytes.get(offset) == Some(&0x48) {
+        (offset + 1, 1usize)
+    } else {
+        (offset, 0usize)
+    };
+    if bytes.get(op_off) != Some(&0xff) {
+        return None;
+    }
+    // ModRM: mod=00, reg=/2 (call) or /4 (jmp), rm=101 (RIP-relative) => 0x15 / 0x25.
+    let modrm = *bytes.get(op_off + 1)?;
+    if modrm != 0x15 && modrm != 0x25 {
+        return None;
+    }
+    let disp = read_i32_le(bytes, op_off + 2)? as i64;
+    let size = extra + 6; // [REX] + FF + ModRM + disp32
+    let next_va = site_va.saturating_add(size as u64);
+    Some((add_signed_u64(next_va, disp), size))
+}
+
+/// Decode an x86 `call`/`jmp` through an absolute memory operand
+/// (`FF 15 imm32` / `FF 25 imm32`). Returns `(absolute_target_va, size)`.
+fn decode_x86_iat_mem_ref(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
+    if bytes.get(offset) != Some(&0xff) {
+        return None;
+    }
+    let modrm = *bytes.get(offset + 1)?;
+    if modrm != 0x15 && modrm != 0x25 {
+        return None;
+    }
+    let target = read_u32_le(bytes, offset + 2)? as u64;
+    Some((target, 6))
+}
+
+#[cfg(test)]
+mod import_call_site_tests {
+    use super::{decode_x64_iat_mem_ref, decode_x86_iat_mem_ref};
+
+    #[test]
+    fn x64_call_mem_ref_rip_relative() {
+        // FF 15 disp32; disp = 0x100 at site 0x1000 -> 0x1000 + 6 + 0x100.
+        let bytes = [0xFF, 0x15, 0x00, 0x01, 0x00, 0x00];
+        let (target, size) = decode_x64_iat_mem_ref(&bytes, 0, 0x1000).unwrap();
+        assert_eq!(size, 6);
+        assert_eq!(target, 0x1000 + 6 + 0x100);
+    }
+
+    #[test]
+    fn x64_jmp_mem_ref_with_rex_w() {
+        // 48 FF 25 disp32; disp = 0x10 at site 0x2000 -> 0x2000 + 7 + 0x10.
+        let bytes = [0x48, 0xFF, 0x25, 0x10, 0x00, 0x00, 0x00];
+        let (target, size) = decode_x64_iat_mem_ref(&bytes, 0, 0x2000).unwrap();
+        assert_eq!(size, 7);
+        assert_eq!(target, 0x2000 + 7 + 0x10);
+    }
+
+    #[test]
+    fn x64_mem_ref_negative_disp() {
+        let mut bytes = vec![0xFF, 0x15];
+        bytes.extend_from_slice(&(-0x20i32).to_le_bytes());
+        let (target, _) = decode_x64_iat_mem_ref(&bytes, 0, 0x3000).unwrap();
+        assert_eq!(target, 0x3000 + 6 - 0x20);
+    }
+
+    #[test]
+    fn x64_rejects_register_indirect_and_short() {
+        // FF D0 = call rax (reg-direct), not a memory IAT ref.
+        assert!(decode_x64_iat_mem_ref(&[0xFF, 0xD0, 0, 0, 0, 0], 0, 0).is_none());
+        // Truncated displacement.
+        assert!(decode_x64_iat_mem_ref(&[0xFF, 0x15, 0x00], 0, 0).is_none());
+    }
+
+    #[test]
+    fn x86_absolute_mem_ref() {
+        // FF 15 imm32 absolute = 0x00401000.
+        let bytes = [0xFF, 0x15, 0x00, 0x10, 0x40, 0x00];
+        let (target, size) = decode_x86_iat_mem_ref(&bytes, 0).unwrap();
+        assert_eq!(size, 6);
+        assert_eq!(target, 0x0040_1000);
+    }
+}

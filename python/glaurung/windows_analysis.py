@@ -9,7 +9,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from . import _native, analysis, disasm  # ty: ignore[unresolved-import]
+import bisect
+
+from . import _native, analysis, disasm, symbols  # ty: ignore[unresolved-import]
 from .windows_config import WindowsAnalysisConfig
 
 
@@ -324,6 +326,77 @@ def containing_function(
             entry_va = _addr_value(function.entry_point)
             return function_to_dict(function, seed_by_va.get(entry_va))
     return None
+
+
+def import_callers(
+    path: str | Path,
+    import_name: str | None = None,
+    *,
+    pdb_cache: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Group PE import call/jmp sites by the function that contains them.
+
+    This is xrefs-to-an-imported-symbol: ``analysis.pe_import_call_sites_path``
+    finds every ``call``/``jmp`` through an IAT slot, and -- when a ``pdb_cache``
+    is supplied -- each call site is attributed to its containing function via
+    the PDB public-symbol map (parsed once) plus a sorted-entry bisect, so the
+    whole binary is answered without per-VA CFG recovery.
+
+    Args:
+        path: PE binary.
+        import_name: restrict to one imported symbol (e.g.
+            ``"SHLoadIndirectString"``); ``None`` returns callers for every
+            import.
+        pdb_cache: Microsoft-style PDB cache dir for function-name attribution.
+            Without it, ``function``/``function_va`` are ``None`` and sites are
+            grouped per import only.
+
+    Returns:
+        A list of ``{import_name, function, function_va, call_sites, count}``
+        dicts, sorted by descending ``count``.
+    """
+
+    sites = analysis.pe_import_call_sites_path(str(path))
+    if import_name is not None:
+        sites = [row for row in sites if row[2] == import_name]
+
+    symmap: dict[int, str] = {}
+    if pdb_cache:
+        cache_dir = Path(pdb_cache)
+        if cache_dir.is_dir():
+            symmap = {
+                int(va): str(name)
+                for va, name in symbols.pdb_symbol_map(str(path), str(cache_dir)).items()
+            }
+    entries = sorted(symmap)
+
+    def _containing(site_va: int) -> tuple[int | None, str | None]:
+        if not entries:
+            return (None, None)
+        idx = bisect.bisect_right(entries, site_va) - 1
+        if idx < 0:
+            return (None, None)
+        entry_va = entries[idx]
+        return (entry_va, symmap[entry_va])
+
+    groups: dict[tuple[str, int | None, str | None], list[int]] = defaultdict(list)
+    for site_va, _iat_va, name in sites:
+        entry_va, func_name = _containing(int(site_va))
+        groups[(str(name), entry_va, func_name)].append(int(site_va))
+
+    out = [
+        {
+            "import_name": name,
+            "function": func_name,
+            "function_va": entry_va,
+            "function_hex": _hex(entry_va),
+            "call_sites": sorted(call_sites),
+            "count": len(call_sites),
+        }
+        for (name, entry_va, func_name), call_sites in groups.items()
+    ]
+    out.sort(key=lambda row: (-row["count"], row["import_name"], row["function_va"] or 0))
+    return out
 
 
 def bytes_at(

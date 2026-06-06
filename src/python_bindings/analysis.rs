@@ -41,6 +41,7 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
 
     // PE-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(pe_iat_map_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(pe_import_call_sites_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_bytes_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_view_resource_path_py, &analysis_mod)?)?;
@@ -487,6 +488,26 @@ fn pe_iat_map_path_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     Ok(crate::analysis::pe_iat::pe_iat_map(&data))
+}
+
+/// List PE import call/jmp sites (xrefs to imported symbols) for a file.
+///
+/// Returns `(site_va, iat_slot_va, import_name)` for every `call`/`jmp` through
+/// an IAT slot found in the executable sections. Attribute each `site_va` to its
+/// containing function (e.g. with `symbols.pdb_symbol_map` + a sorted bisect) to
+/// learn which functions call a given API.
+#[pyfunction]
+#[pyo3(name = "pe_import_call_sites_path")]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
+fn pe_import_call_sites_path_py(
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Vec<(u64, u64, String)>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    Ok(crate::analysis::pe_iat::pe_import_call_sites(&data))
 }
 
 /// List PE resource metadata for a file.
