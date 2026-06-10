@@ -104,6 +104,19 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked
 
 ## Worklog (most recent first)
 
+- **2026-06-10** — Emulator fundamentals pass (correctness · performance · tests),
+  committed on the branch. **Correctness:** the Unicorn differential oracle now
+  compares **memory** (stack/scratch + rsp), not just GPRs; validated
+  load/store/push/pop; **fixed `div`** (was an approximate quotient-only lift —
+  now full `rdx:rax` quotient+remainder via a two-output helper) and added `bt`;
+  the common-instruction inventory is **26/26 match, 0 diverged**, plus an
+  edge-case suite (shift-count masking, sub-register chains, overflow).
+  **Performance:** added a criterion benchmark (`benches/emulator.rs`); rewrote
+  the register file to an **indexed** model (once_cell slot maps, Vec cells, flag
+  array, Cow lowercasing) — arith loop 282µs→182µs (~35%); **paged** the memory
+  (single-page fast path) — mem loop 518µs→251µs (~52%). **Tests:** memcpy
+  integration, emulator determinism, oracle edge cases. All suites green
+  (exec+dev-oracle 66, symbolic 19, default 758 + 2 pre-existing WinAPI).
 - **2026-06-10** — Fundamentals run (Unicorn axis + IOCTLance axis), committed on
   branch `glaurung-execution-engine-2026-06`. (a) **Lifter coverage**: closed
   `imul`(3-op)/`rol`/`ror` gaps (oracle-validated, 23/26 match Unicorn, 0
