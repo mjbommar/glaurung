@@ -1,30 +1,36 @@
-//! Minimal byte-addressed memory, generic over the value [`Domain`].
+//! Sparse, paged byte-addressed memory, generic over the value [`Domain`].
 //!
-//! This is the Phase-1 starting point: a sparse `addr -> byte` map where each
-//! byte is a `Domain::Val` of width 8. Multi-byte loads/stores assemble/split
-//! through the domain's `concat`/`extract`, honouring endianness, so the same
-//! memory serves the concrete and (future) symbolic backends. Unmapped bytes
-//! read as zero.
+//! Memory is a map of 4 KiB pages; each page is an array of `Domain::Val` bytes
+//! (width 8, unset = zero). Multi-byte loads/stores assemble/split through the
+//! domain's `concat`/`extract`, honouring endianness, so the same memory serves
+//! the concrete and symbolic backends. A non-page-crossing access (the common
+//! case) does a single page lookup then indexes; page-crossing accesses fall to
+//! a per-byte slow path.
 //!
-//! The full softmmu (page tables, permissions, sparse pages, dirty-page COW
-//! snapshots, MMIO/hook regions) arrives in later Phase-1/Phase-3 increments
-//! (`docs/design/execution-engine/02-architecture/machine-state.md`); this keeps
-//! the interpreter testable end-to-end now.
+//! Permissions, dirty-page COW snapshots, and MMIO/hook regions arrive in later
+//! increments (`docs/design/execution-engine/02-architecture/machine-state.md`).
 
 use std::collections::HashMap;
 
 use crate::exec::domain::Domain;
 use crate::ir::types::{Endian, Width};
 
-/// Sparse byte-addressed memory holding `Domain::Val` bytes.
+const PAGE_BITS: u32 = 12;
+const PAGE_SIZE: usize = 1 << PAGE_BITS;
+const PAGE_MASK: u64 = (PAGE_SIZE as u64) - 1;
+
+/// Sparse, **paged** byte-addressed memory holding `Domain::Val` bytes. Each
+/// touched 4 KiB page is a `Box<[Option<Val>; 4096]>` (unset = zero). A
+/// non-page-crossing access (the common case) does one page lookup then indexes
+/// — instead of one hash per byte.
 pub struct Memory<D: Domain> {
-    bytes: HashMap<u64, D::Val>,
+    pages: HashMap<u64, Box<[Option<D::Val>]>>,
 }
 
 impl<D: Domain> Default for Memory<D> {
     fn default() -> Self {
         Self {
-            bytes: HashMap::new(),
+            pages: HashMap::new(),
         }
     }
 }
@@ -33,9 +39,13 @@ impl<D: Domain> Default for Memory<D> {
 impl<D: Domain> Clone for Memory<D> {
     fn clone(&self) -> Self {
         Self {
-            bytes: self.bytes.clone(),
+            pages: self.pages.clone(),
         }
     }
+}
+
+fn fresh_page<D: Domain>() -> Box<[Option<D::Val>]> {
+    vec![None; PAGE_SIZE].into_boxed_slice()
 }
 
 impl<D: Domain> Memory<D> {
@@ -43,25 +53,52 @@ impl<D: Domain> Memory<D> {
         Self::default()
     }
 
-    /// One byte (width 8), zero if unmapped.
+    /// True if `[addr, addr+size)` lies within a single page.
+    fn in_one_page(addr: u64, size: usize) -> bool {
+        (addr & PAGE_MASK) + size as u64 <= PAGE_SIZE as u64
+    }
+
+    /// One byte (width 8), zero if unmapped (slow path, used across page bounds).
     fn byte(&self, dom: &mut D, addr: u64) -> D::Val {
-        match self.bytes.get(&addr) {
-            Some(v) => v.clone(),
-            None => dom.constant(Width::W8, 0),
-        }
+        let pg = addr >> PAGE_BITS;
+        let off = (addr & PAGE_MASK) as usize;
+        self.pages
+            .get(&pg)
+            .and_then(|p| p[off].clone())
+            .unwrap_or_else(|| dom.constant(Width::W8, 0))
+    }
+
+    fn set_byte(&mut self, addr: u64, byte: D::Val) {
+        let pg = addr >> PAGE_BITS;
+        let off = (addr & PAGE_MASK) as usize;
+        self.pages.entry(pg).or_insert_with(fresh_page::<D>)[off] = Some(byte);
     }
 
     /// Load `size` bytes at `addr` with the given byte order, returning a value
     /// of width `8 * size`.
     pub fn load(&mut self, dom: &mut D, addr: u64, size: u8, endian: Endian) -> D::Val {
         debug_assert!(size >= 1);
-        // Collect bytes in increasing-address order.
-        let lsb_first: Vec<D::Val> = (0..size as u64).map(|i| self.byte(dom, addr + i)).collect();
-        // Order them most-significant first for left-to-right concat.
+        let n = size as usize;
+        // Collect bytes in increasing-address (LSB-first) order.
+        let lsb_first: Vec<D::Val> = if Self::in_one_page(addr, n) {
+            let pg = addr >> PAGE_BITS;
+            let base = (addr & PAGE_MASK) as usize;
+            match self.pages.get(&pg) {
+                Some(p) => (0..n)
+                    .map(|i| {
+                        p[base + i]
+                            .clone()
+                            .unwrap_or_else(|| dom.constant(Width::W8, 0))
+                    })
+                    .collect(),
+                None => (0..n).map(|_| dom.constant(Width::W8, 0)).collect(),
+            }
+        } else {
+            (0..size as u64).map(|i| self.byte(dom, addr + i)).collect()
+        };
+        // Order most-significant first for left-to-right concat.
         let msb_first: Vec<&D::Val> = match endian {
-            // little-endian: highest address is most significant
             Endian::Little => lsb_first.iter().rev().collect(),
-            // big-endian: lowest address is most significant
             Endian::Big => lsb_first.iter().collect(),
         };
         let mut acc = msb_first[0].clone();
@@ -75,15 +112,30 @@ impl<D: Domain> Memory<D> {
 
     /// Store the low `size` bytes of `val` at `addr` with the given byte order.
     pub fn store(&mut self, dom: &mut D, addr: u64, val: &D::Val, size: u8, endian: Endian) {
-        for i in 0..size as u64 {
-            // Byte i (0 = least significant) = bits [8*i, 8*i+8).
-            let lo = (i * 8) as u16;
-            let byte = dom.extract(val, lo + 8, lo);
-            let target = match endian {
-                Endian::Little => addr + i,
-                Endian::Big => addr + (size as u64 - 1 - i),
-            };
-            self.bytes.insert(target, byte);
+        let n = size as usize;
+        if Self::in_one_page(addr, n) {
+            let pg = addr >> PAGE_BITS;
+            let base = (addr & PAGE_MASK) as usize;
+            let page = self.pages.entry(pg).or_insert_with(fresh_page::<D>);
+            for i in 0..n {
+                let lo = (i as u16) * 8;
+                let byte = dom.extract(val, lo + 8, lo);
+                let off = match endian {
+                    Endian::Little => base + i,
+                    Endian::Big => base + (n - 1 - i),
+                };
+                page[off] = Some(byte);
+            }
+        } else {
+            for i in 0..size as u64 {
+                let lo = (i * 8) as u16;
+                let byte = dom.extract(val, lo + 8, lo);
+                let target = match endian {
+                    Endian::Little => addr + i,
+                    Endian::Big => addr + (size as u64 - 1 - i),
+                };
+                self.set_byte(target, byte);
+            }
         }
     }
 }
@@ -145,5 +197,20 @@ mod tests {
         m.store(&mut d, 0x5000, &b, 1, Endian::Little);
         // low byte overwritten, high byte preserved
         assert_eq!(m.load(&mut d, 0x5000, 2, Endian::Little), 0xaabb);
+    }
+
+    #[test]
+    fn store_load_across_page_boundary() {
+        // 8-byte access at 0xFFE spans pages 0 and 1 — exercises the slow path.
+        let (mut d, mut m) = mem();
+        let v = d.constant(Width::W64, 0x1122_3344_5566_7788);
+        m.store(&mut d, 0xFFE, &v, 8, Endian::Little);
+        assert_eq!(
+            m.load(&mut d, 0xFFE, 8, Endian::Little),
+            0x1122_3344_5566_7788
+        );
+        // Spot-check individual bytes land on both sides of the boundary.
+        assert_eq!(m.load(&mut d, 0xFFE, 1, Endian::Little), 0x88); // page 0
+        assert_eq!(m.load(&mut d, 0x1000, 1, Endian::Little), 0x66); // page 1
     }
 }
