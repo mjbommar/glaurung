@@ -13,13 +13,73 @@
 //! witness concrete-replay are later Phase-5 increments
 //! (`docs/design/execution-engine/02-architecture/symbolic-engine.md`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::exec::domain::{BranchDecision, Domain};
-use crate::exec::{Flow, Machine};
-use crate::ir::types::{LlirBlock, LlirFunction, Op};
+use crate::exec::{Concrete, Flow, Halt, Machine};
+use crate::ir::types::{CmpOp, LlirBlock, LlirFunction, Op, Width};
+use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{solve, Assert, SolveResult};
 use crate::symbolic::Symbolic;
+
+/// Concretely evaluate a symbolic [`Expr`] under a model (free symbols not in the
+/// model default to 0), reusing the `Concrete` domain's exact semantics so the
+/// result matches what the emulator would compute.
+fn eval_expr(pool: &ExprPool, id: ExprId, model: &BTreeMap<u32, u128>, dom: &mut Concrete) -> u128 {
+    match *pool.get(id) {
+        Expr::Const { value, .. } => value,
+        Expr::Sym { id, width } => {
+            let v = model.get(&id).copied().unwrap_or(0);
+            dom.constant(width, v)
+        }
+        Expr::Bin { op, a, b, width } => {
+            let a = eval_expr(pool, a, model, dom);
+            let b = eval_expr(pool, b, model, dom);
+            dom.binop(op, &a, &b, width)
+        }
+        Expr::Un { op, a, width } => {
+            let a = eval_expr(pool, a, model, dom);
+            dom.unop(op, &a, width)
+        }
+        Expr::Cmp { op, a, b, width } => {
+            let a = eval_expr(pool, a, model, dom);
+            let b = eval_expr(pool, b, model, dom);
+            dom.cmp(op, &a, &b, width)
+        }
+        Expr::ZExt { a, from, to } => {
+            let a = eval_expr(pool, a, model, dom);
+            dom.zext(&a, from, to)
+        }
+        Expr::SExt { a, from, to } => {
+            let a = eval_expr(pool, a, model, dom);
+            dom.sext(&a, from, to)
+        }
+        Expr::Trunc { a, to } => {
+            let a = eval_expr(pool, a, model, dom);
+            dom.trunc(&a, to)
+        }
+        Expr::Extract { a, hi, lo } => {
+            let a = eval_expr(pool, a, model, dom);
+            dom.extract(&a, hi, lo)
+        }
+        Expr::Concat { hi, lo, hi_w, lo_w } => {
+            let h = eval_expr(pool, hi, model, dom);
+            let l = eval_expr(pool, lo, model, dom);
+            dom.concat(&h, &l, hi_w, lo_w)
+        }
+        Expr::Ite {
+            c: cond,
+            t,
+            e,
+            width,
+        } => {
+            let cc = eval_expr(pool, cond, model, dom);
+            let t = eval_expr(pool, t, model, dom);
+            let e = eval_expr(pool, e, model, dom);
+            dom.ite(&cc, &t, &e, width)
+        }
+    }
+}
 
 /// One in-flight path: a machine snapshot, its program counter, and the path
 /// condition collected so far.
@@ -133,8 +193,16 @@ fn process_block(blocks: &HashMap<u64, LlirBlock>, mut st: State) -> Vec<State> 
                     st.pc = t;
                     return vec![st];
                 }
-                // Branch shouldn't occur (CondJump handled above); halt/return/
-                // call end the path.
+                // A load/store through a symbolic address: concretize it and
+                // execute the op manually, then continue the path.
+                Flow::Halt(Halt::UnresolvedAddress) => {
+                    if symbolic_mem_op(&mut st, other).is_none() {
+                        return Vec::new();
+                    }
+                    continue;
+                }
+                // Branch shouldn't occur (CondJump handled above); other halts /
+                // return / call end the path.
                 _ => return Vec::new(),
             },
         }
@@ -143,6 +211,54 @@ fn process_block(blocks: &HashMap<u64, LlirBlock>, mut st: State) -> Vec<State> 
     // Fell off the end with no terminator → fall through to the next block.
     st.pc = block.end_va;
     vec![st]
+}
+
+/// Concretize a symbolic address: solve the path condition for a model, evaluate
+/// the address expression under it, and bind `addr == chosen` so the path stays
+/// consistent (the "any" strategy; concretize-with-threshold for reads is a
+/// later refinement). Returns the concrete address.
+fn concretize_addr(st: &mut State, addr_val: ExprId) -> u64 {
+    let model = match solve(&st.machine.dom.pool, &st.constraints) {
+        SolveResult::Sat(m) => m.values,
+        _ => BTreeMap::new(),
+    };
+    let mut c = Concrete;
+    let a = eval_expr(&st.machine.dom.pool, addr_val, &model, &mut c);
+    let chosen = st.machine.dom.constant(Width::W64, a);
+    let eq = st
+        .machine
+        .dom
+        .cmp(CmpOp::Eq, &addr_val, &chosen, Width::W64);
+    st.constraints.push((eq, true));
+    a as u64
+}
+
+/// Execute a memory op whose address is symbolic by concretizing the address.
+/// Returns `Some(())` when handled.
+fn symbolic_mem_op(st: &mut State, op: &Op) -> Option<()> {
+    match op {
+        Op::Load { dst, addr } => {
+            let av = st.machine.eval_addr(addr);
+            let a = concretize_addr(st, av);
+            let val = st
+                .machine
+                .mem
+                .load(&mut st.machine.dom, a, addr.size, addr.endian);
+            st.machine.regs.write(&mut st.machine.dom, dst, val);
+            Some(())
+        }
+        Op::Store { addr, src } => {
+            let av = st.machine.eval_addr(addr);
+            let a = concretize_addr(st, av);
+            let w = Width::from_bytes(addr.size as u16);
+            let v = st.machine.read(src, w);
+            st.machine
+                .mem
+                .store(&mut st.machine.dom, a, &v, addr.size, addr.endian);
+            Some(())
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -220,6 +336,47 @@ mod tests {
             }
             other => panic!("expected a reaching witness, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn symbolic_address_store_does_not_halt_exploration() {
+        // B0: store [rdi], rax  (rdi symbolic → symbolic address) ; jmp SINK
+        // SINK: ret
+        // Before symbolic-address handling, the store halted the path and SINK was
+        // unreachable. Now the address is concretized and the path reaches SINK —
+        // the fundamental that lets driver code dereferencing attacker-controlled
+        // pointers be explored (IOCTLance-style).
+        use crate::ir::types::MemOp;
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Store {
+                        addr: MemOp::plain(Some(VReg::phys("rdi")), None, 1, 0, 8),
+                        src: Value::Reg(VReg::phys("rax")),
+                    },
+                    Op::Jump { target: 0x2000 },
+                ],
+                0x1008,
+            ),
+            (0x2000, vec![Op::Return], 0x2004),
+        ]);
+        let result = find_input_reaching(
+            &lf,
+            0x2000,
+            |m| {
+                let rdi = m.dom.fresh(Width::W64);
+                m.regs.write(&mut m.dom, &VReg::phys("rdi"), rdi);
+                let rax = m.dom.fresh(Width::W64);
+                m.regs.write(&mut m.dom, &VReg::phys("rax"), rax);
+            },
+            1000,
+        );
+        assert!(
+            matches!(result, SolveResult::Sat(_)),
+            "symbolic-address store should be concretized, not halt the path; got {:?}",
+            result
+        );
     }
 
     #[test]

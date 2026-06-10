@@ -19,7 +19,7 @@ use crate::exec::helpers::HelperRegistry;
 use crate::exec::memory::Memory;
 use crate::exec::simproc::SimProcRegistry;
 use crate::exec::state::{RegArch, RegFile};
-use crate::ir::types::{CallTarget, LlirBlock, LlirFunction, MemOp, Op, VReg, Value, Width};
+use crate::ir::types::{BinOp, CallTarget, LlirBlock, LlirFunction, MemOp, Op, VReg, Value, Width};
 
 /// Why execution stopped without normal control flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,8 +153,32 @@ impl<D: Domain> Machine<D> {
         self.tsc
     }
 
+    /// Compute a memory operand's effective address as a domain value
+    /// (`base + index*scale + disp`). Unlike [`Machine::effective_addr`] (which
+    /// concretizes to a `u64`), this keeps the address symbolic when the domain
+    /// is — used by the symbolic explorer to concretize symbolic addresses.
+    pub(crate) fn eval_addr(&mut self, mo: &MemOp) -> D::Val {
+        let w = Width::W64;
+        let mut acc = self.dom.constant(w, mo.disp as u128);
+        if let Some(b) = &mo.base {
+            let bv = self.regs.read(&mut self.dom, b);
+            acc = self.dom.binop(BinOp::Add, &acc, &bv, w);
+        }
+        if let Some(i) = &mo.index {
+            let iv = self.regs.read(&mut self.dom, i);
+            let scaled = if mo.scale > 1 {
+                let s = self.dom.constant(w, mo.scale as u128);
+                self.dom.binop(BinOp::Mul, &iv, &s, w)
+            } else {
+                iv
+            };
+            acc = self.dom.binop(BinOp::Add, &acc, &scaled, w);
+        }
+        acc
+    }
+
     /// Read a value at the given width.
-    fn read(&mut self, v: &Value, w: Width) -> D::Val {
+    pub(crate) fn read(&mut self, v: &Value, w: Width) -> D::Val {
         match v {
             Value::Reg(r) => self.regs.read(&mut self.dom, r),
             // i64 immediate: `as u128` sign-extends to 128 bits, then the domain
