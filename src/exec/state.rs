@@ -15,7 +15,10 @@
 //! * a 16-bit or 8-bit write **preserves** the unaffected high bits;
 //! * the legacy high-byte registers (`ah`/`bh`/`ch`/`dh`) write bits `[8:16)`.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+
+use once_cell::sync::Lazy;
 
 use crate::exec::domain::Domain;
 use crate::ir::types::{Flag, VReg, Width};
@@ -28,186 +31,259 @@ pub enum RegArch {
     AArch64,
 }
 
+/// Number of canonical full-width parent cells (covers x86-64 `rax`..`r15`,`rip`
+/// at 0..=16 and AArch64 `x0`..`x30`,`sp`,`pc` at 0..=32).
+const NUM_PARENTS: usize = 40;
+/// Number of processor flags ([`Flag`] variants).
+const NUM_FLAGS: usize = 9;
+
 /// How a physical register name maps onto a canonical full-width cell.
 #[derive(Debug, Clone, Copy)]
 struct RegSlot {
-    /// Canonical full-width register name (e.g. `"rax"`, `"x0"`).
-    parent: &'static str,
+    /// Index of the canonical full-width parent cell.
+    parent: u8,
     /// Bit offset of this view within the parent (0, or 8 for x86 high-byte regs).
     offset: u16,
     /// Bit width of this view.
     width: u16,
 }
 
-/// Resolve an x86-64 register name to its canonical slot. Returns `None` for
-/// names this layout doesn't model (vector/segment/etc. are handled as their
-/// own full-width cells by [`RegFile`], keyed by the lowercased name).
-fn x86_64_slot(name: &str) -> Option<RegSlot> {
-    // (view, parent, offset, width)
-    const TABLE: &[(&str, &str, u16, u16)] = &[
-        // rax family
-        ("rax", "rax", 0, 64),
-        ("eax", "rax", 0, 32),
-        ("ax", "rax", 0, 16),
-        ("al", "rax", 0, 8),
-        ("ah", "rax", 8, 8),
-        ("rbx", "rbx", 0, 64),
-        ("ebx", "rbx", 0, 32),
-        ("bx", "rbx", 0, 16),
-        ("bl", "rbx", 0, 8),
-        ("bh", "rbx", 8, 8),
-        ("rcx", "rcx", 0, 64),
-        ("ecx", "rcx", 0, 32),
-        ("cx", "rcx", 0, 16),
-        ("cl", "rcx", 0, 8),
-        ("ch", "rcx", 8, 8),
-        ("rdx", "rdx", 0, 64),
-        ("edx", "rdx", 0, 32),
-        ("dx", "rdx", 0, 16),
-        ("dl", "rdx", 0, 8),
-        ("dh", "rdx", 8, 8),
-        ("rsi", "rsi", 0, 64),
-        ("esi", "rsi", 0, 32),
-        ("si", "rsi", 0, 16),
-        ("sil", "rsi", 0, 8),
-        ("rdi", "rdi", 0, 64),
-        ("edi", "rdi", 0, 32),
-        ("di", "rdi", 0, 16),
-        ("dil", "rdi", 0, 8),
-        ("rbp", "rbp", 0, 64),
-        ("ebp", "rbp", 0, 32),
-        ("bp", "rbp", 0, 16),
-        ("bpl", "rbp", 0, 8),
-        ("rsp", "rsp", 0, 64),
-        ("esp", "rsp", 0, 32),
-        ("sp", "rsp", 0, 16),
-        ("spl", "rsp", 0, 8),
-        ("r8", "r8", 0, 64),
-        ("r8d", "r8", 0, 32),
-        ("r8w", "r8", 0, 16),
-        ("r8b", "r8", 0, 8),
-        ("r9", "r9", 0, 64),
-        ("r9d", "r9", 0, 32),
-        ("r9w", "r9", 0, 16),
-        ("r9b", "r9", 0, 8),
-        ("r10", "r10", 0, 64),
-        ("r10d", "r10", 0, 32),
-        ("r10w", "r10", 0, 16),
-        ("r10b", "r10", 0, 8),
-        ("r11", "r11", 0, 64),
-        ("r11d", "r11", 0, 32),
-        ("r11w", "r11", 0, 16),
-        ("r11b", "r11", 0, 8),
-        ("r12", "r12", 0, 64),
-        ("r12d", "r12", 0, 32),
-        ("r12w", "r12", 0, 16),
-        ("r12b", "r12", 0, 8),
-        ("r13", "r13", 0, 64),
-        ("r13d", "r13", 0, 32),
-        ("r13w", "r13", 0, 16),
-        ("r13b", "r13", 0, 8),
-        ("r14", "r14", 0, 64),
-        ("r14d", "r14", 0, 32),
-        ("r14w", "r14", 0, 16),
-        ("r14b", "r14", 0, 8),
-        ("r15", "r15", 0, 64),
-        ("r15d", "r15", 0, 32),
-        ("r15w", "r15", 0, 16),
-        ("r15b", "r15", 0, 8),
-        ("rip", "rip", 0, 64),
-        ("eip", "rip", 0, 32),
-    ];
-    for (view, parent, offset, width) in TABLE {
-        if *view == name {
-            return Some(RegSlot {
+/// Flag → dense index.
+fn flag_idx(f: Flag) -> usize {
+    match f {
+        Flag::Z => 0,
+        Flag::C => 1,
+        Flag::Ule => 2,
+        Flag::S => 3,
+        Flag::Slt => 4,
+        Flag::Sle => 5,
+        Flag::O => 6,
+        Flag::P => 7,
+        Flag::A => 8,
+    }
+}
+
+/// x86-64 canonical parent register → cell index (`rax`=0..`r15`=15, `rip`=16).
+fn x86_64_parent_idx(name: &str) -> Option<u8> {
+    Some(match name {
+        "rax" => 0,
+        "rbx" => 1,
+        "rcx" => 2,
+        "rdx" => 3,
+        "rsi" => 4,
+        "rdi" => 5,
+        "rbp" => 6,
+        "rsp" => 7,
+        "r8" => 8,
+        "r9" => 9,
+        "r10" => 10,
+        "r11" => 11,
+        "r12" => 12,
+        "r13" => 13,
+        "r14" => 14,
+        "r15" => 15,
+        "rip" => 16,
+        _ => return None,
+    })
+}
+
+/// x86-64 register views: (view name, canonical parent name, bit offset, width).
+const X86_64_VIEWS: &[(&str, &str, u16, u16)] = &[
+    ("rax", "rax", 0, 64),
+    ("eax", "rax", 0, 32),
+    ("ax", "rax", 0, 16),
+    ("al", "rax", 0, 8),
+    ("ah", "rax", 8, 8),
+    ("rbx", "rbx", 0, 64),
+    ("ebx", "rbx", 0, 32),
+    ("bx", "rbx", 0, 16),
+    ("bl", "rbx", 0, 8),
+    ("bh", "rbx", 8, 8),
+    ("rcx", "rcx", 0, 64),
+    ("ecx", "rcx", 0, 32),
+    ("cx", "rcx", 0, 16),
+    ("cl", "rcx", 0, 8),
+    ("ch", "rcx", 8, 8),
+    ("rdx", "rdx", 0, 64),
+    ("edx", "rdx", 0, 32),
+    ("dx", "rdx", 0, 16),
+    ("dl", "rdx", 0, 8),
+    ("dh", "rdx", 8, 8),
+    ("rsi", "rsi", 0, 64),
+    ("esi", "rsi", 0, 32),
+    ("si", "rsi", 0, 16),
+    ("sil", "rsi", 0, 8),
+    ("rdi", "rdi", 0, 64),
+    ("edi", "rdi", 0, 32),
+    ("di", "rdi", 0, 16),
+    ("dil", "rdi", 0, 8),
+    ("rbp", "rbp", 0, 64),
+    ("ebp", "rbp", 0, 32),
+    ("bp", "rbp", 0, 16),
+    ("bpl", "rbp", 0, 8),
+    ("rsp", "rsp", 0, 64),
+    ("esp", "rsp", 0, 32),
+    ("sp", "rsp", 0, 16),
+    ("spl", "rsp", 0, 8),
+    ("r8", "r8", 0, 64),
+    ("r8d", "r8", 0, 32),
+    ("r8w", "r8", 0, 16),
+    ("r8b", "r8", 0, 8),
+    ("r9", "r9", 0, 64),
+    ("r9d", "r9", 0, 32),
+    ("r9w", "r9", 0, 16),
+    ("r9b", "r9", 0, 8),
+    ("r10", "r10", 0, 64),
+    ("r10d", "r10", 0, 32),
+    ("r10w", "r10", 0, 16),
+    ("r10b", "r10", 0, 8),
+    ("r11", "r11", 0, 64),
+    ("r11d", "r11", 0, 32),
+    ("r11w", "r11", 0, 16),
+    ("r11b", "r11", 0, 8),
+    ("r12", "r12", 0, 64),
+    ("r12d", "r12", 0, 32),
+    ("r12w", "r12", 0, 16),
+    ("r12b", "r12", 0, 8),
+    ("r13", "r13", 0, 64),
+    ("r13d", "r13", 0, 32),
+    ("r13w", "r13", 0, 16),
+    ("r13b", "r13", 0, 8),
+    ("r14", "r14", 0, 64),
+    ("r14d", "r14", 0, 32),
+    ("r14w", "r14", 0, 16),
+    ("r14b", "r14", 0, 8),
+    ("r15", "r15", 0, 64),
+    ("r15d", "r15", 0, 32),
+    ("r15w", "r15", 0, 16),
+    ("r15b", "r15", 0, 8),
+    ("rip", "rip", 0, 64),
+    ("eip", "rip", 0, 32),
+];
+
+/// Name → slot map for x86-64 (built once; O(1) lookup, no allocation/scan).
+static X86_64_SLOTS: Lazy<HashMap<&'static str, RegSlot>> = Lazy::new(|| {
+    let mut m = HashMap::with_capacity(X86_64_VIEWS.len());
+    for (view, parent, offset, width) in X86_64_VIEWS {
+        let parent = x86_64_parent_idx(parent).expect("known x86-64 parent");
+        m.insert(
+            *view,
+            RegSlot {
                 parent,
                 offset: *offset,
                 width: *width,
-            });
-        }
+            },
+        );
     }
-    None
-}
+    m
+});
 
-/// Canonical 64-bit AArch64 GPR names `x0`..`x30`.
+/// Canonical 64-bit AArch64 GPR names `x0`..`x30` and their 32-bit `w` views.
 const XREG_NAMES: [&str; 31] = [
     "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14",
     "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27",
     "x28", "x29", "x30",
 ];
+const WREG_NAMES: [&str; 31] = [
+    "w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w9", "w10", "w11", "w12", "w13", "w14",
+    "w15", "w16", "w17", "w18", "w19", "w20", "w21", "w22", "w23", "w24", "w25", "w26", "w27",
+    "w28", "w29", "w30",
+];
 
-/// Resolve an AArch64 register name to its canonical slot. `xN`/`wN` share the
-/// 64-bit parent `xN`; a `wN` write zero-extends the parent (as on x86-64). The
-/// zero register (`xzr`/`wzr`) is handled by [`RegFile`] directly, not here.
-/// Vector/FP and unknown names get their own full-width cell.
-fn aarch64_slot(name: &str) -> Option<RegSlot> {
-    if let Some(rest) = name.strip_prefix('x') {
-        if let Ok(n) = rest.parse::<u8>() {
-            if n <= 30 {
-                return Some(RegSlot {
-                    parent: XREG_NAMES[n as usize],
-                    offset: 0,
-                    width: 64,
-                });
-            }
-        }
+/// Name → slot map for AArch64. `wN` writes zero-extend the 64-bit parent `xN`;
+/// `lr`=x30, `fp`=x29; `sp`/`pc` are their own cells. Zero registers (`xzr`/`wzr`)
+/// are handled directly by [`RegFile`].
+static AARCH64_SLOTS: Lazy<HashMap<&'static str, RegSlot>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    for i in 0..=30u8 {
+        m.insert(
+            XREG_NAMES[i as usize],
+            RegSlot {
+                parent: i,
+                offset: 0,
+                width: 64,
+            },
+        );
+        m.insert(
+            WREG_NAMES[i as usize],
+            RegSlot {
+                parent: i,
+                offset: 0,
+                width: 32,
+            },
+        );
     }
-    if let Some(rest) = name.strip_prefix('w') {
-        if let Ok(n) = rest.parse::<u8>() {
-            if n <= 30 {
-                return Some(RegSlot {
-                    parent: XREG_NAMES[n as usize],
-                    offset: 0,
-                    width: 32,
-                });
-            }
-        }
-    }
-    match name {
-        "sp" => Some(RegSlot {
-            parent: "sp",
+    m.insert(
+        "sp",
+        RegSlot {
+            parent: 31,
             offset: 0,
             width: 64,
-        }),
-        "wsp" => Some(RegSlot {
-            parent: "sp",
+        },
+    );
+    m.insert(
+        "wsp",
+        RegSlot {
+            parent: 31,
             offset: 0,
             width: 32,
-        }),
-        "lr" => Some(RegSlot {
-            parent: "x30",
+        },
+    );
+    m.insert(
+        "lr",
+        RegSlot {
+            parent: 30,
             offset: 0,
             width: 64,
-        }),
-        "fp" => Some(RegSlot {
-            parent: "x29",
+        },
+    );
+    m.insert(
+        "fp",
+        RegSlot {
+            parent: 29,
             offset: 0,
             width: 64,
-        }),
-        "pc" => Some(RegSlot {
-            parent: "pc",
+        },
+    );
+    m.insert(
+        "pc",
+        RegSlot {
+            parent: 32,
             offset: 0,
             width: 64,
-        }),
-        _ => None,
-    }
-}
+        },
+    );
+    m
+});
 
 /// Is `name` the AArch64 zero register (reads 0, writes discarded)?
 fn is_aarch64_zero_reg(name: &str) -> bool {
     matches!(name, "xzr" | "wzr")
 }
 
+/// Lowercase `name` without allocating when it is already lowercase (the common
+/// case — the lifter emits lowercase register names).
+fn lower(name: &str) -> Cow<'_, str> {
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(name.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(name)
+    }
+}
+
 /// A register file holding `Domain::Val` cells, with arch-aware sub-register
 /// semantics (x86-64 or AArch64). Cells are created lazily (zero on first read).
 pub struct RegFile<D: Domain> {
-    /// Canonical 64-bit GPR cells + any other full-width registers, keyed by
-    /// canonical lowercased name.
-    cells: HashMap<String, D::Val>,
-    /// Processor flags (each a 1-bit value).
-    flags: HashMap<Flag, D::Val>,
-    /// Lifter temporaries (dynamic width; the value carries its own width).
-    temps: HashMap<u32, D::Val>,
+    /// Canonical full-width parent cells, indexed by parent id (see
+    /// [`x86_64_parent_idx`]). `None` reads as zero. O(1), no hashing.
+    cells: Vec<Option<D::Val>>,
+    /// Processor flags, indexed by [`flag_idx`].
+    flags: [Option<D::Val>; NUM_FLAGS],
+    /// Lifter temporaries, indexed by temp id (dense, grows on demand).
+    temps: Vec<Option<D::Val>>,
+    /// Vector/segment/unknown registers that aren't a modelled GPR — keyed by
+    /// (lowercased) name. The slow path; rare in arithmetic-heavy code.
+    other: HashMap<String, D::Val>,
     /// Which ISA's register layout to apply.
     arch: RegArch,
 }
@@ -226,6 +302,7 @@ impl<D: Domain> Clone for RegFile<D> {
             cells: self.cells.clone(),
             flags: self.flags.clone(),
             temps: self.temps.clone(),
+            other: self.other.clone(),
             arch: self.arch,
         }
     }
@@ -239,9 +316,10 @@ impl<D: Domain> RegFile<D> {
     /// A register file for a specific ISA layout.
     pub fn with_arch(arch: RegArch) -> Self {
         Self {
-            cells: HashMap::new(),
-            flags: HashMap::new(),
-            temps: HashMap::new(),
+            cells: (0..NUM_PARENTS).map(|_| None).collect(),
+            flags: std::array::from_fn(|_| None),
+            temps: Vec::new(),
+            other: HashMap::new(),
             arch,
         }
     }
@@ -249,14 +327,15 @@ impl<D: Domain> RegFile<D> {
     /// Resolve a physical register name to its canonical slot for this arch.
     fn slot(&self, name: &str) -> Option<RegSlot> {
         match self.arch {
-            RegArch::X86_64 => x86_64_slot(name),
-            RegArch::AArch64 => aarch64_slot(name),
+            RegArch::X86_64 => X86_64_SLOTS.get(name).copied(),
+            RegArch::AArch64 => AARCH64_SLOTS.get(name).copied(),
         }
     }
 
-    /// The canonical full-width cell value for `parent`, zero if unset.
-    fn cell(&mut self, dom: &mut D, parent: &str) -> D::Val {
-        if let Some(v) = self.cells.get(parent) {
+    /// The canonical full-width cell value for parent index `parent`, zero if
+    /// unset.
+    fn cell(&mut self, dom: &mut D, parent: u8) -> D::Val {
+        if let Some(v) = &self.cells[parent as usize] {
             v.clone()
         } else {
             dom.constant(Width::W64, 0)
@@ -266,21 +345,23 @@ impl<D: Domain> RegFile<D> {
     /// Read a register at its natural width.
     pub fn read(&mut self, dom: &mut D, reg: &VReg) -> D::Val {
         match reg {
-            VReg::Flag(f) => self
-                .flags
-                .get(f)
-                .cloned()
+            VReg::Flag(f) => self.flags[flag_idx(*f)]
+                .clone()
                 .unwrap_or_else(|| dom.constant(Width::W1, 0)),
             VReg::Temp(id) => self
                 .temps
-                .get(id)
-                .cloned()
+                .get(*id as usize)
+                .and_then(|o| o.clone())
                 .unwrap_or_else(|| dom.constant(Width::W64, 0)),
             VReg::Phys(name) => {
-                let n = name.to_ascii_lowercase();
+                let n = lower(name);
                 // AArch64 zero register always reads 0.
                 if self.arch == RegArch::AArch64 && is_aarch64_zero_reg(&n) {
-                    let w = if n == "wzr" { Width::W32 } else { Width::W64 };
+                    let w = if n.as_ref() == "wzr" {
+                        Width::W32
+                    } else {
+                        Width::W64
+                    };
                     return dom.constant(w, 0);
                 }
                 match self.slot(&n) {
@@ -294,8 +375,8 @@ impl<D: Domain> RegFile<D> {
                     }
                     // Non-GPR (vector/segment/unknown): its own full-width cell.
                     None => self
-                        .cells
-                        .get(&n)
+                        .other
+                        .get(n.as_ref())
                         .cloned()
                         .unwrap_or_else(|| dom.constant(Width::W64, 0)),
                 }
@@ -307,14 +388,16 @@ impl<D: Domain> RegFile<D> {
     /// x86-64 partial-register semantics.
     pub fn write(&mut self, dom: &mut D, reg: &VReg, val: D::Val) {
         match reg {
-            VReg::Flag(f) => {
-                self.flags.insert(*f, val);
-            }
+            VReg::Flag(f) => self.flags[flag_idx(*f)] = Some(val),
             VReg::Temp(id) => {
-                self.temps.insert(*id, val);
+                let id = *id as usize;
+                if id >= self.temps.len() {
+                    self.temps.resize_with(id + 1, || None);
+                }
+                self.temps[id] = Some(val);
             }
             VReg::Phys(name) => {
-                let n = name.to_ascii_lowercase();
+                let n = lower(name);
                 // AArch64 zero register discards writes.
                 if self.arch == RegArch::AArch64 && is_aarch64_zero_reg(&n) {
                     return;
@@ -322,10 +405,10 @@ impl<D: Domain> RegFile<D> {
                 match self.slot(&n) {
                     Some(slot) => {
                         let new = self.merge_subreg(dom, &slot, val);
-                        self.cells.insert(slot.parent.to_string(), new);
+                        self.cells[slot.parent as usize] = Some(new);
                     }
                     None => {
-                        self.cells.insert(n, val);
+                        self.other.insert(n.into_owned(), val);
                     }
                 }
             }
