@@ -106,3 +106,8 @@ harness = false
 [[bench]]
 name = "lang_detect"
 harness = false
+
+[[bench]]
+name = "emulator"
+harness = false
+required-features = ["exec"]
