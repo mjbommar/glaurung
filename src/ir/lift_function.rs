@@ -88,10 +88,30 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
     // Sort deterministically by VA for stable consumers.
     blocks.sort_by_key(|b| b.start_va);
 
+    // Phase 0 (task 0.7): the executable IR has no untyped holes. Rewrite any
+    // residual `Op::Unknown` the per-arch lifters emitted into a conservative,
+    // footprint-declaring `Op::Intrinsic` so downstream execution/dataflow stays
+    // sound. The lifters keep emitting `Unknown` internally (their unit tests
+    // assert on it); this pass is the single migration point at the function
+    // boundary.
+    lower_unknowns(&mut blocks);
+
     Some(LlirFunction {
         entry_va: func.entry_point.value,
         blocks,
     })
+}
+
+/// Rewrite every residual [`Op::Unknown`] in `blocks` into a conservative
+/// [`Op::Intrinsic`] (see [`Op::opaque`]).
+fn lower_unknowns(blocks: &mut [LlirBlock]) {
+    for b in blocks.iter_mut() {
+        for ins in &mut b.instrs {
+            if let Op::Unknown { mnemonic } = &ins.op {
+                ins.op = Op::opaque(mnemonic.clone());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -159,12 +179,70 @@ mod tests {
                     | Op::Call { .. }
                     | Op::Jump { .. }
                     | Op::CondJump { .. }
-                    | Op::Unknown { .. }
+                    // Unmodelled terminators are lowered to Intrinsic (task 0.7).
+                    | Op::Intrinsic { .. }
             ),
             "unexpected terminator at 0x{:x}: {:?}",
             last.va,
             last.op
         );
+
+        // Phase 0 task 0.7 exit criterion: a lifted function has NO residual
+        // `Op::Unknown` — every unmodelled instruction is a typed Intrinsic.
+        for b in &lf.blocks {
+            for i in &b.instrs {
+                assert!(
+                    !matches!(&i.op, Op::Unknown { .. }),
+                    "residual Op::Unknown at 0x{:x} after lift",
+                    i.va
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lowered_functions_have_no_residual_unknown_x86_and_arm64() {
+        // Stronger, multi-function form of the exit criterion across both arches.
+        for (rel, arch) in [
+            (
+                "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
+                Arch::X86_64,
+            ),
+            (
+                "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc",
+                Arch::AArch64,
+            ),
+        ] {
+            let path = Path::new(rel);
+            if !path.exists() {
+                continue;
+            }
+            let data = std::fs::read(path).expect("read sample");
+            let budgets = Budgets {
+                max_functions: 32,
+                max_blocks: 256,
+                max_instructions: 20_000,
+                timeout_ms: 2000,
+            };
+            let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
+            let mut checked = 0;
+            for f in &funcs {
+                if let Some(lf) = lift_function_from_bytes(&data, f, arch) {
+                    for b in &lf.blocks {
+                        for i in &b.instrs {
+                            assert!(
+                                !matches!(&i.op, Op::Unknown { .. }),
+                                "residual Op::Unknown at 0x{:x} ({:?})",
+                                i.va,
+                                arch
+                            );
+                        }
+                    }
+                    checked += 1;
+                }
+            }
+            assert!(checked > 0, "no functions lifted for {:?}", arch);
+        }
     }
 
     #[test]

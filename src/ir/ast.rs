@@ -311,6 +311,70 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
             }]
         }
         Op::Return => vec![Stmt::Return { value: None }],
+        // Width changes render as a plain assignment of the source — the cast is
+        // implicit in the higher-level form (`dst = src`).
+        Op::ZExt { dst, src, .. } | Op::SExt { dst, src, .. } | Op::Trunc { dst, src, .. } => {
+            vec![Stmt::Assign {
+                dst: dst.clone(),
+                src: lower_value(src),
+            }]
+        }
+        // Bit-slice `src[lo:hi]` → (src >> lo) & ((1<<(hi-lo))-1).
+        Op::Extract { dst, src, hi, lo } => {
+            let shifted = if *lo == 0 {
+                lower_value(src)
+            } else {
+                Expr::Bin {
+                    op: BinOp::Shr,
+                    lhs: Box::new(lower_value(src)),
+                    rhs: Box::new(Expr::Const(*lo as i64)),
+                }
+            };
+            let width = hi.saturating_sub(*lo);
+            let mask: i64 = if width >= 64 { -1 } else { (1i64 << width) - 1 };
+            vec![Stmt::Assign {
+                dst: dst.clone(),
+                src: Expr::Bin {
+                    op: BinOp::And,
+                    lhs: Box::new(shifted),
+                    rhs: Box::new(Expr::Const(mask)),
+                },
+            }]
+        }
+        // Concatenation: render as `hi | lo` (the shift amount needs operand
+        // widths, refined when widths flow through values — Phase 0.7).
+        Op::Concat { dst, hi, lo } => vec![Stmt::Assign {
+            dst: dst.clone(),
+            src: Expr::Bin {
+                op: BinOp::Or,
+                lhs: Box::new(lower_value(hi)),
+                rhs: Box::new(lower_value(lo)),
+            },
+        }],
+        // Pure select renders as a full if/else assigning both arms.
+        Op::Ite {
+            dst, cond, t, e, ..
+        } => vec![Stmt::If {
+            cond: Expr::Reg(cond.clone()),
+            then_body: vec![Stmt::Assign {
+                dst: dst.clone(),
+                src: lower_value(t),
+            }],
+            else_body: Some(vec![Stmt::Assign {
+                dst: dst.clone(),
+                src: lower_value(e),
+            }]),
+        }],
+        // Opaque intrinsic. For the lowered-`Unknown` case (no typed operands)
+        // render exactly as the old `Unknown` did — including the semantic
+        // comments for known system instructions — so decompiler output is
+        // unchanged by the Phase-0 migration. Intrinsics carrying operands
+        // (future richer lifting) render with an argument ellipsis.
+        Op::Intrinsic { name, ins, .. } => match semantic_comment_for_unknown(name) {
+            Some(comment) => vec![Stmt::Comment(comment.to_string())],
+            None if ins.is_empty() => vec![Stmt::Unknown(name.clone())],
+            None => vec![Stmt::Unknown(format!("{}(...)", name))],
+        },
         Op::Unknown { mnemonic } => match semantic_comment_for_unknown(mnemonic) {
             Some(comment) => vec![Stmt::Comment(comment.to_string())],
             None => vec![Stmt::Unknown(mnemonic.clone())],

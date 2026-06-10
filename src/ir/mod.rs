@@ -45,6 +45,7 @@ pub mod structure;
 pub mod types;
 pub mod types_recover;
 pub mod use_def;
+pub mod verify;
 pub mod winapi_prototypes;
 pub mod x86_prologue;
 

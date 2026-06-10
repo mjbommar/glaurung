@@ -49,6 +49,16 @@ pub mod formats;
 /// Windows metadata extraction
 pub mod winmd;
 
+/// Native execution engine (concrete emulation + symbolic execution) over the
+/// LLIR. See `docs/design/execution-engine/`. Feature-gated; pure Rust.
+#[cfg(feature = "exec")]
+pub mod exec;
+
+/// Symbolic / concolic execution: a bitvector expression IR and a symbolic
+/// `Domain` over the same interpreter. See `docs/design/execution-engine/`.
+#[cfg(feature = "symbolic")]
+pub mod symbolic;
+
 /// Python bindings module
 #[cfg(feature = "python-ext")]
 pub mod python_bindings;

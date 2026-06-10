@@ -513,6 +513,34 @@ fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
             }
             None
         }
+        // Width changes (zero/sign-extend, truncate, bit-extract) preserve the
+        // underlying taint kind — a zero-extended InputLen is still a length.
+        Op::ZExt { dst, src, .. }
+        | Op::SExt { dst, src, .. }
+        | Op::Trunc { dst, src, .. }
+        | Op::Extract { dst, src, .. } => {
+            let v = transfer_value(state, src);
+            if let Some(d) = vreg_canon(dst) {
+                write_reg(state, &d, v);
+            }
+            None
+        }
+        // Concatenation / selection: conservatively lose taint (mark Top).
+        Op::Concat { dst, .. } | Op::Ite { dst, .. } => {
+            if let Some(d) = vreg_canon(dst) {
+                write_reg(state, &d, Taint::Top);
+            }
+            None
+        }
+        // Opaque intrinsics: every declared output becomes unknown taint.
+        Op::Intrinsic { outs, .. } => {
+            for (r, _w) in outs {
+                if let Some(d) = vreg_canon(r) {
+                    write_reg(state, &d, Taint::Top);
+                }
+            }
+            None
+        }
         Op::Jump { .. } | Op::CondJump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => None,
     }
 }

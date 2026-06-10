@@ -107,6 +107,35 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
             }
             None
         }
+        Op::ZExt { dst, src, .. }
+        | Op::SExt { dst, src, .. }
+        | Op::Trunc { dst, src, .. }
+        | Op::Extract { dst, src, .. } => {
+            reads_of_value(src, &mut uses);
+            Some(dst.clone())
+        }
+        Op::Concat { dst, hi, lo } => {
+            reads_of_value(hi, &mut uses);
+            reads_of_value(lo, &mut uses);
+            Some(dst.clone())
+        }
+        Op::Ite {
+            dst, cond, t, e, ..
+        } => {
+            uses.push(cond.clone());
+            reads_of_value(t, &mut uses);
+            reads_of_value(e, &mut uses);
+            Some(dst.clone())
+        }
+        Op::Intrinsic { ins, outs, .. } => {
+            for v in ins {
+                reads_of_value(v, &mut uses);
+            }
+            // Three-address def model returns at most one def; report the first
+            // output. TODO(exec-engine): extend for multi-output intrinsics once
+            // the lifter emits them (Phase 0.7 / Phase 2).
+            outs.first().map(|(r, _)| r.clone())
+        }
         Op::Jump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => None,
     };
     (def, uses)
@@ -286,6 +315,56 @@ mod tests {
         let idx = compute_use_def(&lf);
         assert_eq!(idx.defs_by_reg.get(&VReg::phys("rax")).unwrap().len(), 2);
         assert_eq!(idx.defs_by_reg.get(&VReg::phys("rbx")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn width_change_ops_def_and_use() {
+        use crate::ir::types::Width;
+        let op = Op::ZExt {
+            dst: VReg::phys("rax"),
+            src: Value::Reg(VReg::phys("eax")),
+            from: Width::W32,
+            to: Width::W64,
+        };
+        let (def, uses) = def_uses(&op);
+        assert_eq!(def, Some(VReg::phys("rax")));
+        assert_eq!(uses, vec![VReg::phys("eax")]);
+    }
+
+    #[test]
+    fn ite_reads_cond_and_both_arms() {
+        use crate::ir::types::Width;
+        let op = Op::Ite {
+            dst: VReg::phys("rax"),
+            cond: VReg::Flag(Flag::Z),
+            t: Value::Reg(VReg::phys("rbx")),
+            e: Value::Reg(VReg::phys("rcx")),
+            width: Width::W64,
+        };
+        let (def, uses) = def_uses(&op);
+        assert_eq!(def, Some(VReg::phys("rax")));
+        assert_eq!(
+            uses,
+            vec![VReg::Flag(Flag::Z), VReg::phys("rbx"), VReg::phys("rcx")]
+        );
+    }
+
+    #[test]
+    fn intrinsic_reads_ins_defs_first_out() {
+        use crate::ir::types::Width;
+        let op = Op::Intrinsic {
+            name: "cpuid".into(),
+            ins: vec![Value::Reg(VReg::phys("eax"))],
+            outs: vec![
+                (VReg::phys("eax"), Width::W32),
+                (VReg::phys("edx"), Width::W32),
+            ],
+            reads_mem: false,
+            writes_mem: false,
+        };
+        let (def, uses) = def_uses(&op);
+        assert_eq!(def, Some(VReg::phys("eax")));
+        assert_eq!(uses, vec![VReg::phys("eax")]);
     }
 
     #[test]

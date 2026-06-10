@@ -6,6 +6,8 @@ Binary lifting (also called binary translation or binary raising) transforms low
 
 Glaurung uses binary lifting as a foundation for multiple analysis techniques:
 - **Static Analysis**: Dataflow, taint analysis, symbolic execution
+  (native emulation + symbolic/concolic execution are planned on top of the LLIR —
+  see the design plan in [`docs/design/execution-engine/`](../../design/execution-engine/README.md))
 - **Optimization**: Binary optimization and hardening
 - **Recompilation**: Cross-architecture translation
 - **Decompilation**: IR serves as input to decompiler pipeline

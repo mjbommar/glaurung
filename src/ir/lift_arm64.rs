@@ -58,6 +58,7 @@ fn operand_to_memop(op: &Operand) -> Option<MemOp> {
         disp,
         size: 8, // capstone doesn't give a precise width; 8 is a safe default for 64-bit
         segment: None, // ARM64 has no segment registers
+        endian: Endian::Little,
     })
 }
 
@@ -256,6 +257,7 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                                 disp: abs,
                                 size,
                                 segment: None,
+                                endian: Endian::Little,
                             },
                         }];
                     }

@@ -7,6 +7,8 @@ pub mod analysis;
 pub mod core_types;
 pub mod debug;
 pub mod disasm;
+#[cfg(feature = "exec")]
+pub mod exec;
 pub mod ir;
 pub mod similarity;
 pub mod strings;
@@ -34,6 +36,8 @@ pub fn register_python_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRe
     ir::register_ir_bindings(py, m)?;
     debug::register_debug_bindings(py, m)?;
     winmd::register_winmd_bindings(py, m)?;
+    #[cfg(feature = "exec")]
+    exec::register_exec_bindings(py, m)?;
 
     Ok(())
 }

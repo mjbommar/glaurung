@@ -77,6 +77,7 @@ fn mem_op_of(instr: &iced_x86::Instruction) -> MemOp {
         disp: instr.memory_displacement64() as i64,
         size: instr.memory_size().size() as u8,
         segment: segment_override(instr.memory_segment()),
+        endian: Endian::Little,
     }
 }
 
@@ -300,6 +301,7 @@ fn push_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             disp: 0,
             size: width,
             segment: None,
+            endian: Endian::Little,
         },
         src,
     });
@@ -331,6 +333,7 @@ fn pop_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 disp: 0,
                 size: width,
                 segment: None,
+                endian: Endian::Little,
             },
         },
         Op::Bin {
@@ -359,6 +362,7 @@ fn stos_ops(mnem: Mnemonic, bits: u32) -> Vec<Op> {
                 disp: 0,
                 size: width,
                 segment: None,
+                endian: Endian::Little,
             },
             src: Value::Reg(acc),
         },
@@ -388,6 +392,7 @@ fn string_movs_ops(width: u8, bits: u32) -> Vec<Op> {
                 disp: 0,
                 size: width,
                 segment: None,
+                endian: Endian::Little,
             },
         },
         Op::Store {
@@ -398,6 +403,7 @@ fn string_movs_ops(width: u8, bits: u32) -> Vec<Op> {
                 disp: 0,
                 size: width,
                 segment: None,
+                endian: Endian::Little,
             },
             src: Value::Reg(tmp),
         },
@@ -1407,6 +1413,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         disp: 0,
                         size: width,
                         segment: None,
+                        endian: Endian::Little,
                     },
                 },
                 Op::Bin {

@@ -35,6 +35,9 @@ pelite = { version = "0.10", optional = true }
 iced-x86 = "1.20"
 capstone = "0.12"
 
+# Native in-process SMT solver (feature `solver-z3`); links libz3. Optional.
+z3 = { version = "0.12", optional = true }
+
 # Error handling
 thiserror = "2.0"
 anyhow = "1.0"
@@ -62,7 +65,20 @@ triage-core = []
 triage-heuristics = []
 triage-containers = []
 triage-parsers-extra = ["goblin", "pelite"]
-python-ext = ["pyo3", "pyo3/extension-module"]
+# The Python extension bundles the (pure-Rust) emulator (`exec`). The symbolic
+# engine / native solver stay opt-in (build the wheel with `--features symbolic`
+# or `solver-z3` to include them).
+python-ext = ["pyo3", "pyo3/extension-module", "exec"]
+# Native execution engine (concrete emulator). Pure Rust, no new C dependency —
+# see docs/design/execution-engine/. Off by default; opt in with --features exec.
+exec = []
+# Symbolic / concolic execution over the same engine. Builds a bitvector
+# expression IR (pure Rust). The solver is pluggable behind a trait.
+symbolic = ["exec"]
+# Native, in-process SMT backend via the `z3` crate (Rust API, links libz3).
+# This is the preferred solver path — keeps the engine self-contained rather
+# than shelling out to a binary. Optional; the base build needs no solver.
+solver-z3 = ["symbolic", "dep:z3"]
 
 [dev-dependencies]
 tempfile = "3.21.0"

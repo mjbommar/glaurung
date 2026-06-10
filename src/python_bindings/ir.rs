@@ -195,6 +195,80 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
         Op::Nop => {
             d.set_item("kind", "nop")?;
         }
+        Op::ZExt {
+            dst, src, from, to, ..
+        } => {
+            d.set_item("kind", "zext")?;
+            d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("src", value_to_pyobj(py, src)?)?;
+            d.set_item("from", from.bits())?;
+            d.set_item("to", to.bits())?;
+        }
+        Op::SExt {
+            dst, src, from, to, ..
+        } => {
+            d.set_item("kind", "sext")?;
+            d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("src", value_to_pyobj(py, src)?)?;
+            d.set_item("from", from.bits())?;
+            d.set_item("to", to.bits())?;
+        }
+        Op::Trunc {
+            dst, src, from, to, ..
+        } => {
+            d.set_item("kind", "trunc")?;
+            d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("src", value_to_pyobj(py, src)?)?;
+            d.set_item("from", from.bits())?;
+            d.set_item("to", to.bits())?;
+        }
+        Op::Extract { dst, src, hi, lo } => {
+            d.set_item("kind", "extract")?;
+            d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("src", value_to_pyobj(py, src)?)?;
+            d.set_item("hi", *hi)?;
+            d.set_item("lo", *lo)?;
+        }
+        Op::Concat { dst, hi, lo } => {
+            d.set_item("kind", "concat")?;
+            d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("hi", value_to_pyobj(py, hi)?)?;
+            d.set_item("lo", value_to_pyobj(py, lo)?)?;
+        }
+        Op::Ite {
+            dst, cond, t, e, ..
+        } => {
+            d.set_item("kind", "ite")?;
+            d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("cond", vreg_to_str(cond))?;
+            d.set_item("t", value_to_pyobj(py, t)?)?;
+            d.set_item("e", value_to_pyobj(py, e)?)?;
+        }
+        Op::Intrinsic {
+            name,
+            ins,
+            outs,
+            reads_mem,
+            writes_mem,
+        } => {
+            d.set_item("kind", "intrinsic")?;
+            d.set_item("name", name)?;
+            let ins_list = pyo3::types::PyList::empty(py);
+            for v in ins {
+                ins_list.append(value_to_pyobj(py, v)?)?;
+            }
+            d.set_item("ins", ins_list)?;
+            let outs_list = pyo3::types::PyList::empty(py);
+            for (r, w) in outs {
+                let o = PyDict::new(py);
+                o.set_item("reg", vreg_to_str(r))?;
+                o.set_item("width", w.bits())?;
+                outs_list.append(o)?;
+            }
+            d.set_item("outs", outs_list)?;
+            d.set_item("reads_mem", *reads_mem)?;
+            d.set_item("writes_mem", *writes_mem)?;
+        }
         Op::Unknown { mnemonic } => {
             d.set_item("kind", "unknown")?;
             d.set_item("mnemonic", mnemonic)?;

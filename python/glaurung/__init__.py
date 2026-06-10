@@ -117,6 +117,11 @@ _sys.modules[__name__ + ".debug"] = debug
 winmd = _native.winmd
 _sys.modules[__name__ + ".winmd"] = winmd
 
+# Native execution engine (concrete emulator) submodule, when built in.
+if hasattr(_native, "engine"):
+    engine = _native.engine
+    _sys.modules[__name__ + ".engine"] = engine
+
 # Python Windows PE fact helpers
 windows_analysis = _importlib.import_module(".windows_analysis", __name__)
 _sys.modules[__name__ + ".windows_analysis"] = windows_analysis
