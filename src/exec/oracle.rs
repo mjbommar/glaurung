@@ -14,9 +14,14 @@ use unicorn_engine::{Arch, Mode, Prot, RegisterX86, Unicorn};
 
 use crate::exec::{Concrete, Domain, Flow, Machine};
 use crate::ir::lift_x86;
-use crate::ir::types::{LlirBlock, VReg, Width};
+use crate::ir::types::{Endian, LlirBlock, VReg, Width};
 
 const BASE: u64 = 0x1000;
+/// A writable scratch + stack region mapped in both engines. The default stack
+/// pointer sits in the middle so `push` (which grows down) stays in-region.
+const SCRATCH_BASE: u64 = 0x4_0000;
+const SCRATCH_SIZE: u64 = 0x1000;
+const DEFAULT_SP: u64 = SCRATCH_BASE + 0x800;
 
 /// The x86-64 general-purpose registers compared by the oracle.
 const GPRS: &[(&str, RegisterX86)] = &[
@@ -37,20 +42,28 @@ const GPRS: &[(&str, RegisterX86)] = &[
     ("r15", RegisterX86::R15),
 ];
 
-/// A single register disagreement between our emulator and Unicorn.
+/// A single disagreement between our emulator and Unicorn — a register value or
+/// a memory byte.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Divergence {
-    pub reg: &'static str,
-    pub ours: u64,
-    pub unicorn: u64,
+pub enum Divergence {
+    Reg {
+        reg: &'static str,
+        ours: u64,
+        unicorn: u64,
+    },
+    Mem {
+        addr: u64,
+        ours: u8,
+        unicorn: u8,
+    },
 }
 
 /// Outcome of a differential run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffOutcome {
-    /// All compared GPRs agree.
+    /// All compared registers and memory bytes agree.
     Match,
-    /// One or more registers disagree.
+    /// One or more registers / memory bytes disagree.
     Diverged(Vec<Divergence>),
     /// Our emulator did not run the block to completion (e.g. an unmodelled
     /// instruction halted it) — a coverage gap, not a semantic divergence.
@@ -58,12 +71,22 @@ pub enum DiffOutcome {
 }
 
 /// Run `code` (linear x86-64, no control flow) on both engines from identical
-/// `init` register state and compare the GPRs.
+/// `init` register state (with a shared stack/scratch region) and compare both
+/// GPRs and the scratch memory region.
 pub fn diff_x86_64(code: &[u8], init: &[(&str, u64)]) -> DiffOutcome {
+    let sp = init
+        .iter()
+        .find(|(n, _)| *n == "rsp")
+        .map(|(_, v)| *v)
+        .unwrap_or(DEFAULT_SP);
+
     // --- Unicorn reference ---
     let mut uc = Unicorn::new(Arch::X86, Mode::MODE_64).expect("unicorn new");
-    uc.mem_map(BASE, 0x1000, Prot::ALL).expect("mem_map");
+    uc.mem_map(BASE, 0x1000, Prot::ALL).expect("map code");
+    uc.mem_map(SCRATCH_BASE, SCRATCH_SIZE, Prot::ALL)
+        .expect("map scratch");
     uc.mem_write(BASE, code).expect("mem_write");
+    uc.reg_write(RegisterX86::RSP, sp).expect("set rsp");
     for (name, val) in init {
         if let Some((_, reg)) = GPRS.iter().find(|(n, _)| n == name) {
             uc.reg_write(*reg, *val).expect("reg_write");
@@ -74,6 +97,8 @@ pub fn diff_x86_64(code: &[u8], init: &[(&str, u64)]) -> DiffOutcome {
 
     // --- Our emulator ---
     let mut m = Machine::new(Concrete);
+    let spv = m.dom.constant(Width::W64, sp as u128);
+    m.regs.write(&mut m.dom, &VReg::phys("rsp"), spv);
     for (name, val) in init {
         let v = m.dom.constant(Width::W64, *val as u128);
         m.regs.write(&mut m.dom, &VReg::phys(*name), v);
@@ -97,13 +122,42 @@ pub fn diff_x86_64(code: &[u8], init: &[(&str, u64)]) -> DiffOutcome {
         let unicorn = uc.reg_read(*reg).expect("reg_read");
         let ours = m.regs.read(&mut m.dom, &VReg::phys(*name)) as u64;
         if ours != unicorn {
-            diffs.push(Divergence {
+            diffs.push(Divergence::Reg {
                 reg: name,
                 ours,
                 unicorn,
             });
         }
     }
+    // rsp too (push/pop adjust it).
+    {
+        let unicorn = uc.reg_read(RegisterX86::RSP).expect("read rsp");
+        let ours = m.regs.read(&mut m.dom, &VReg::phys("rsp")) as u64;
+        if ours != unicorn {
+            diffs.push(Divergence::Reg {
+                reg: "rsp",
+                ours,
+                unicorn,
+            });
+        }
+    }
+
+    // --- Compare the scratch/stack memory region ---
+    let mut uc_mem = vec![0u8; SCRATCH_SIZE as usize];
+    uc.mem_read(SCRATCH_BASE, &mut uc_mem)
+        .expect("read scratch");
+    for (i, &ub) in uc_mem.iter().enumerate() {
+        let addr = SCRATCH_BASE + i as u64;
+        let ours = m.mem.load(&mut m.dom, addr, 1, Endian::Little) as u8;
+        if ours != ub {
+            diffs.push(Divergence::Mem {
+                addr,
+                ours,
+                unicorn: ub,
+            });
+        }
+    }
+
     if diffs.is_empty() {
         DiffOutcome::Match
     } else {
@@ -152,6 +206,54 @@ mod tests {
             0x48, 0x09, 0xC8, // or rax, rcx
         ];
         let init = [("rax", 0xff0fu64), ("rbx", 0x0ff0u64), ("rcx", 0x3u64)];
+        assert_eq!(diff_x86_64(&code, &init), DiffOutcome::Match);
+    }
+
+    // Memory & stack instructions — validated against Unicorn including the
+    // scratch/stack memory contents, not just registers.
+
+    #[test]
+    fn store_then_load_through_register() {
+        // mov [rbx], rax ; mov rcx, [rbx]   (rbx points into scratch)
+        let code = [
+            0x48, 0x89, 0x03, // mov [rbx], rax
+            0x48, 0x8B, 0x0B, // mov rcx, [rbx]
+        ];
+        let init = [
+            ("rax", 0xcafef00d_12345678u64),
+            ("rbx", SCRATCH_BASE + 0x100),
+        ];
+        assert_eq!(diff_x86_64(&code, &init), DiffOutcome::Match);
+    }
+
+    #[test]
+    fn byte_and_word_stores() {
+        // mov byte [rbx], al ; mov word [rbx+2], cx
+        let code = [
+            0x88, 0x03, // mov [rbx], al
+            0x66, 0x89, 0x4B, 0x02, // mov [rbx+2], cx
+        ];
+        let init = [
+            ("rax", 0xAAu64),
+            ("rcx", 0xBBBBu64),
+            ("rbx", SCRATCH_BASE + 0x40),
+        ];
+        assert_eq!(diff_x86_64(&code, &init), DiffOutcome::Match);
+    }
+
+    #[test]
+    fn push_pop_round_trip() {
+        // push rax ; pop rcx   — stack pointer + memory must match Unicorn.
+        let code = [0x50, 0x59];
+        let init = [("rax", 0x1122_3344_5566_7788u64)];
+        assert_eq!(diff_x86_64(&code, &init), DiffOutcome::Match);
+    }
+
+    #[test]
+    fn multiple_push_then_pops() {
+        // push rax ; push rbx ; pop rcx ; pop rdx
+        let code = [0x50, 0x53, 0x59, 0x5A];
+        let init = [("rax", 0xA), ("rbx", 0xB)];
         assert_eq!(diff_x86_64(&code, &init), DiffOutcome::Match);
     }
 
