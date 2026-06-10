@@ -682,6 +682,140 @@ mod tests {
         assert_eq!(m.run_function(&returns, &mut b2), Outcome::Returned);
     }
 
+    #[test]
+    fn emulates_a_byte_memcpy_loop() {
+        // while (rcx != 0) { al = [rsi]; [rdi] = al; rsi++; rdi++; rcx--; }
+        // Exercises load/store/loop/branch/sub-register end-to-end and verifies
+        // the copied memory.
+        use crate::ir::types::Endian;
+        let body = vec![
+            Op::Load {
+                dst: VReg::phys("al"),
+                addr: MemOp::plain(Some(VReg::phys("rsi")), None, 1, 0, 1),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("rdi")), None, 1, 0, 1),
+                src: Value::Reg(VReg::phys("al")),
+            },
+            Op::Bin {
+                dst: VReg::phys("rsi"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("rsi")),
+                rhs: Value::Const(1),
+            },
+            Op::Bin {
+                dst: VReg::phys("rdi"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("rdi")),
+                rhs: Value::Const(1),
+            },
+            Op::Bin {
+                dst: VReg::phys("rcx"),
+                op: BinOp::Sub,
+                lhs: Value::Reg(VReg::phys("rcx")),
+                rhs: Value::Const(1),
+            },
+            Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(VReg::phys("rcx")),
+                rhs: Value::Const(0),
+            },
+            Op::CondJump {
+                cond: VReg::Flag(Flag::Z),
+                target: 0x1000,
+                inverted: true,
+            },
+        ];
+        let lf = func(vec![
+            (0x1000, body, vec![0x1000, 0x101c]),
+            (0x101c, vec![Op::Return], vec![]),
+        ]);
+
+        let mut m = machine();
+        let (src, dst, n) = (0x6000u64, 0x7000u64, 8u64);
+        for (name, v) in [("rsi", src), ("rdi", dst), ("rcx", n)] {
+            let cv = m.dom.constant(Width::W64, v as u128);
+            m.regs.write(&mut m.dom, &VReg::phys(name), cv);
+        }
+        let data: [u8; 8] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+        for (i, b) in data.iter().enumerate() {
+            let bv = m.dom.constant(Width::W8, *b as u128);
+            m.mem
+                .store(&mut m.dom, src + i as u64, &bv, 1, Endian::Little);
+        }
+
+        let mut budget = Budget::new(1000);
+        assert_eq!(m.run_function(&lf, &mut budget), Outcome::Returned);
+
+        for (i, b) in data.iter().enumerate() {
+            let got = m.mem.load(&mut m.dom, dst + i as u64, 1, Endian::Little) as u8;
+            assert_eq!(got, *b, "copied byte {} mismatch", i);
+        }
+        assert_eq!(m.regs.read(&mut m.dom, &VReg::phys("rcx")), 0);
+    }
+
+    #[test]
+    fn emulation_is_deterministic() {
+        // The emulator must produce byte-identical results on repeated runs.
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Assign {
+                        dst: VReg::phys("rax"),
+                        src: Value::Const(0),
+                    },
+                    Op::Assign {
+                        dst: VReg::phys("rcx"),
+                        src: Value::Const(7),
+                    },
+                ],
+                vec![0x1008],
+            ),
+            (
+                0x1008,
+                vec![
+                    Op::Bin {
+                        dst: VReg::phys("rax"),
+                        op: BinOp::Add,
+                        lhs: Value::Reg(VReg::phys("rax")),
+                        rhs: Value::Reg(VReg::phys("rcx")),
+                    },
+                    Op::Bin {
+                        dst: VReg::phys("rcx"),
+                        op: BinOp::Sub,
+                        lhs: Value::Reg(VReg::phys("rcx")),
+                        rhs: Value::Const(1),
+                    },
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("rcx")),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1008,
+                        inverted: true,
+                    },
+                ],
+                vec![0x1008, 0x1018],
+            ),
+            (0x1018, vec![Op::Return], vec![]),
+        ]);
+        let run = || {
+            let mut m = machine();
+            let mut b = Budget::new(1000);
+            m.run_function(&lf, &mut b);
+            ["rax", "rcx", "rbx", "rdx"]
+                .iter()
+                .map(|r| m.regs.read(&mut m.dom, &VReg::phys(*r)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(), run());
+    }
+
     /// Lift real x86-64 machine-code bytes and execute them as one block.
     /// Returns the machine and the terminating flow.
     fn run_x86_bytes(bytes: &[u8], bits: u32) -> (Machine<Concrete>, Flow) {

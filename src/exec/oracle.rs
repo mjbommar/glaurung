@@ -277,6 +277,39 @@ mod tests {
     }
 
     #[test]
+    fn edge_cases_match_unicorn() {
+        // Correctness stress: shift-count masking, sub-register arithmetic,
+        // overflow/wrap, mixed widths — all cross-checked against Unicorn.
+        #[rustfmt::skip]
+        let cases: &[(&str, &[u8], &[(&str, u64)])] = &[
+            // shl rax, cl with cl=70 → x86 masks count to 6 bits (70 & 63 = 6)
+            ("shl rax,cl(70)",   &[0x48,0xD3,0xE0], &[("rax",1),("rcx",70)]),
+            // shl eax, cl with cl=33 → masked to 5 bits (33 & 31 = 1)
+            ("shl eax,cl(33)",   &[0xD3,0xE0], &[("rax",1),("rcx",33)]),
+            // 8-bit add wraps, upper bits of rax preserved
+            ("add al,bl wrap",   &[0x00,0xD8], &[("rax",0xAABBCCDD_000000FF),("rbx",2)]),
+            // 16-bit sub, upper bits preserved
+            ("sub ax,bx",        &[0x66,0x29,0xD8], &[("rax",0xFFFF_0005),("rbx",3)]),
+            // add overflow at 64 bits
+            ("add rax,rbx ovf",  &[0x48,0x01,0xD8], &[("rax",u64::MAX),("rbx",2)]),
+            // neg of a negative
+            ("neg eax",          &[0xF7,0xD8], &[("rax",0xFFFF_FFFF)]),
+            // imul (2-op) with a negative operand — low half is signed-agnostic
+            ("imul rax,rbx neg", &[0x48,0x0F,0xAF,0xC3], &[("rax",0xFFFF_FFFF_FFFF_FFFF),("rbx",3)]),
+            // chained sub-register writes: write eax then read ax
+            ("mov eax;movzx",    &[0xB8,0x78,0x56,0x34,0x12,0x0F,0xB7,0xC0], &[]),
+        ];
+        for (name, code, init) in cases {
+            assert_eq!(
+                diff_x86_64(code, init),
+                DiffOutcome::Match,
+                "edge case {:?} diverged from Unicorn",
+                name
+            );
+        }
+    }
+
+    #[test]
     fn inventory_coverage_against_unicorn() {
         // Common linear instructions, cross-checked against Unicorn.
         // MATCH = validated semantic; GAP = unmodelled (tolerated, backlog);
