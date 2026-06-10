@@ -885,6 +885,32 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
             }]
         }
+        // mul reg: unsigned multiply, hi:lo = accumulator * src. Typed intrinsic
+        // executed by a two-output helper. (8-bit and memory forms deferred.)
+        Mnemonic::Mul => {
+            if instr.op_count() == 1 && instr.op_kind(0) == OpKind::Register {
+                let src_name = reg_name(instr.op_register(0));
+                let w = phys_reg_width(&src_name).unwrap_or(Width::W64);
+                let acc = match w.bits() {
+                    64 => Some(("rax", "rdx")),
+                    32 => Some(("eax", "edx")),
+                    16 => Some(("ax", "dx")),
+                    _ => None,
+                };
+                if let Some((lo, hi)) = acc {
+                    return vec![Op::Intrinsic {
+                        name: "mul".into(),
+                        ins: vec![Value::Reg(VReg::phys(lo)), Value::Reg(VReg::phys(src_name))],
+                        outs: vec![(VReg::phys(lo), w), (VReg::phys(hi), w)],
+                        reads_mem: false,
+                        writes_mem: false,
+                    }];
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: "mul".into(),
+            }]
+        }
         // bswap reg: byte-reverse. Emitted as a typed intrinsic executed by a
         // helper (the byte shuffle needs explicit per-byte widths).
         Mnemonic::Bswap => {

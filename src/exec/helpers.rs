@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use crate::exec::domain::Domain;
 use crate::exec::interp::{Halt, Machine};
-use crate::ir::types::{VReg, Value, Width};
+use crate::ir::types::{BinOp, VReg, Value, Width};
 
 /// A helper: executes one intrinsic against the machine, reading `ins` and
 /// writing `outs` (and/or fixed architectural registers). Returns `Err(halt)` to
@@ -75,6 +75,7 @@ impl<D: Domain> HelperRegistry<D> {
         r.register("rdtscp", helper_rdtsc::<D>);
         r.register("cpuid", helper_cpuid::<D>);
         r.register("bswap", helper_bswap::<D>);
+        r.register("mul", helper_mul::<D>);
         r
     }
 
@@ -141,6 +142,30 @@ fn helper_bswap<D: Domain>(
         acc_w += 8;
     }
     m.regs.write(&mut m.dom, dst, acc);
+    Ok(())
+}
+
+/// `mul` (unsigned multiply): `outs[1]:outs[0] = ins[0] * ins[1]` at the operand
+/// width. Two-output helper — the full 2w-bit product is split into low (rax/…)
+/// and high (rdx/…) halves. Computed by widening both operands to `2w` and
+/// extracting; works for concrete and symbolic backends.
+fn helper_mul<D: Domain>(
+    m: &mut Machine<D>,
+    ins: &[Value],
+    outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    let (lo_reg, w) = (&outs[0].0, outs[0].1);
+    let hi_reg = &outs[1].0;
+    let w2 = Width(w.bits() * 2);
+    let a = m.read(&ins[0], w);
+    let b = m.read(&ins[1], w);
+    let az = m.dom.zext(&a, w, w2);
+    let bz = m.dom.zext(&b, w, w2);
+    let prod = m.dom.binop(BinOp::Mul, &az, &bz, w2);
+    let lo = m.dom.trunc(&prod, w);
+    let hi = m.dom.extract(&prod, w.bits() * 2, w.bits());
+    m.regs.write(&mut m.dom, lo_reg, lo);
+    m.regs.write(&mut m.dom, hi_reg, hi);
     Ok(())
 }
 
