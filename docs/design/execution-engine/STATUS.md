@@ -12,7 +12,7 @@
 | **Current phase** | Cores of Phases 0–6 done. **Remaining is breadth + product/design surface.** |
 | **Next action** | Breadth/integration (each somewhat design-laden): symbolic `find_inputs` Python surface; CLI `emulate`/`find-inputs` (6.3); agent tools + KB writeback (6.4/6.5); symbolic addresses (5.2); libc/Windows SimProc stubs (3.5/3.6); SIMD/FP helpers; Phase 7 applications (string-decrypt, indirect-resolution). |
 | **Carried forward** | 0.8 (flag DCE); 1.6 (lift cache); 1.8 operand-carrying helpers; 4.5 (constraint caching); `bitwuzla` native backend (optional). |
-| **Blockers** | **None.** (Earlier I wrongly called the solver and Unicorn "environment-blocked" after single failed attempts — see correction in worklog. The solver works: z3 + libz3 installed via apt, native `z3` crate links in-process. The Unicorn dev-oracle is still **untested**, not confirmed blocked — re-attempt pending.) |
+| **Blockers** | **None.** (Both earlier "environment-blocked" calls were wrong/premature and are now disproven: the native z3 solver works (apt `z3 libz3-dev` + `z3` crate, in-process), and the **Unicorn differential oracle works** via the system lib (apt `pkg-config libunicorn-dev`) — it already caught + fixed a `movsx` bug. Nothing is blocked.) |
 | **Last updated** | 2026-06-10 |
 | **Updated by** | Claude (impl session) |
 
@@ -70,10 +70,11 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked
   solver-z3`. For the shipped wheel, use the `z3` crate's `bundled`/`gh-release`
   instead of the system lib (reproducible). The pipe fallback also finds the
   `z3` binary on PATH.
-- **Dev-oracle (Unicorn, future):** `dev-oracle` feature, never shipped. A prior
-  `cargo build --features dev-oracle` failed compiling Unicorn's vendored QEMU C
-  (`implicit declaration of munmap`); this was **not** re-investigated (system
-  `libunicorn`, build flags, etc.) — treat as open, not blocked.
+- **Dev-oracle (Unicorn):** `dev-oracle` feature, never shipped. Links the
+  **system** Unicorn via pkg-config — `sudo apt-get install -y pkg-config
+  libunicorn-dev` (the `unicorn-engine` crate's `build.rs` then skips the vendored
+  QEMU compile). `cargo test --features dev-oracle`. (The earlier vendored-build
+  failure was a dead end I shouldn't have called "blocked"; the system lib works.)
 
 ## Open questions / decisions pending (resolve before the relevant phase)
 
@@ -103,6 +104,15 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked
 
 ## Worklog (most recent first)
 
+- **2026-06-10** — Unicorn differential oracle (fundamentals; corrects another
+  bad "blocked" call). `apt install pkg-config libunicorn-dev` → the
+  `unicorn-engine` crate links the system lib (no vendored QEMU compile). Added
+  `src/exec/oracle.rs` (`dev-oracle` feature): `diff_x86_64` runs real bytes on
+  our emulator + Unicorn and compares GPRs. **It immediately found a real
+  `movsx` bug** (lifted as zero-extend instead of sign-extend) — fixed in
+  `lift_x86.rs` (now emits explicit `SExt`/`ZExt`). 13-instruction inventory
+  matches Unicorn; lift_x86 movzx test updated for the Load+ZExt shape. All
+  suites green. This is the validation backbone driving emulation fundamentals.
 - **2026-06-10** — Phase 6 core (PyO3 surface). `python-ext` now bundles the
   pure-Rust `exec` engine. Added `src/python_bindings/exec.rs` →
   `glaurung.engine.emulate_function(path, va, arch, max_steps)` returning an

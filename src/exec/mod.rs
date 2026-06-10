@@ -16,6 +16,8 @@ pub mod domain;
 pub mod helpers;
 pub mod interp;
 pub mod memory;
+#[cfg(feature = "dev-oracle")]
+pub mod oracle;
 pub mod simproc;
 pub mod state;
 

@@ -38,6 +38,10 @@ capstone = "0.12"
 # Native in-process SMT solver (feature `solver-z3`); links libz3. Optional.
 z3 = { version = "0.12", optional = true }
 
+# DEV-ONLY differential-test oracle (feature `dev-oracle`); links the system
+# Unicorn engine via pkg-config (libunicorn-dev). Never shipped in the wheel.
+unicorn-engine = { version = "2.1.5", optional = true, features = ["dynamic_linkage"] }
+
 # Error handling
 thiserror = "2.0"
 anyhow = "1.0"
@@ -75,6 +79,9 @@ exec = []
 # Symbolic / concolic execution over the same engine. Builds a bitvector
 # expression IR (pure Rust). The solver is pluggable behind a trait.
 symbolic = ["exec"]
+# DEV-ONLY: validate the emulator against the Unicorn engine (links system
+# libunicorn). Never shipped. Use: cargo test --features dev-oracle.
+dev-oracle = ["exec", "dep:unicorn-engine"]
 # Native, in-process SMT backend via the `z3` crate (Rust API, links libz3).
 # This is the preferred solver path — keeps the engine self-contained rather
 # than shelling out to a binary. Optional; the base build needs no solver.

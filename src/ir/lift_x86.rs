@@ -767,16 +767,49 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
                 }];
             }
-            let dst = VReg::phys(reg_name(instr.op_register(0)));
+            let dst_name = reg_name(instr.op_register(0));
+            let to = phys_reg_width(&dst_name).unwrap_or(Width::W64);
+            let dst = VReg::phys(dst_name);
+            // `movzx` zero-extends; `movsx`/`movsxd` sign-extend. (The previous
+            // code emitted a plain Assign for all three, which silently
+            // zero-extended `movsx` — caught by the Unicorn differential oracle.)
+            let signed = !matches!(mnem, Mnemonic::Movzx);
             match instr.op_kind(1) {
-                OpKind::Memory => vec![Op::Load {
-                    dst,
-                    addr: mem_op_of(instr),
-                }],
-                OpKind::Register => vec![Op::Assign {
-                    dst,
-                    src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
-                }],
+                OpKind::Register => {
+                    let src_name = reg_name(instr.op_register(1));
+                    let from = phys_reg_width(&src_name).unwrap_or(Width::W8);
+                    let src = Value::Reg(VReg::phys(src_name));
+                    if signed {
+                        vec![Op::SExt { dst, src, from, to }]
+                    } else {
+                        vec![Op::ZExt { dst, src, from, to }]
+                    }
+                }
+                OpKind::Memory => {
+                    let mo = mem_op_of(instr);
+                    let from = Width::from_bytes(mo.size as u16);
+                    let tmp = VReg::Temp(0);
+                    let load = Op::Load {
+                        dst: tmp.clone(),
+                        addr: mo,
+                    };
+                    let ext = if signed {
+                        Op::SExt {
+                            dst,
+                            src: Value::Reg(tmp),
+                            from,
+                            to,
+                        }
+                    } else {
+                        Op::ZExt {
+                            dst,
+                            src: Value::Reg(tmp),
+                            from,
+                            to,
+                        }
+                    };
+                    vec![load, ext]
+                }
                 _ => vec![Op::Unknown {
                     mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
                 }],
@@ -1471,8 +1504,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         },
         _ => {
             // Conditional jumps
-            if let Some(condition) = condition_suffix(mnem, "j")
-                .and_then(|s| condition_for_suffix(&s))
+            if let Some(condition) =
+                condition_suffix(mnem, "j").and_then(|s| condition_for_suffix(&s))
             {
                 match instr.op_kind(0) {
                     OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
@@ -2231,19 +2264,30 @@ mod tests {
     }
 
     #[test]
-    fn movzx_indexed_mem_lifts_to_load() {
+    fn movzx_indexed_mem_lifts_to_load_then_zext() {
         // movzx eax, word ptr [r15 + rax*2]  (41 0f b7 04 47)
+        // Now lifts to a Load into a temp followed by a zero-extend to the dst
+        // width (so the widening is explicit and correct for both backends).
         let ops = lift64(&[0x41, 0x0f, 0xb7, 0x04, 0x47]);
-        assert_eq!(ops.len(), 1);
-        match &ops[0].op {
+        assert_eq!(ops.len(), 2);
+        let tmp = match &ops[0].op {
             Op::Load { dst, addr } => {
-                assert_eq!(*dst, VReg::phys("eax"));
                 assert_eq!(addr.base, Some(VReg::phys("r15")));
                 assert_eq!(addr.index, Some(VReg::phys("rax")));
                 assert_eq!(addr.scale, 2);
                 assert_eq!(addr.size, 2);
+                dst.clone()
             }
             other => panic!("expected Load, got {:?}", other),
+        };
+        match &ops[1].op {
+            Op::ZExt { dst, src, from, to } => {
+                assert_eq!(*dst, VReg::phys("eax"));
+                assert_eq!(*src, Value::Reg(tmp));
+                assert_eq!(*from, Width::W16);
+                assert_eq!(*to, Width::W32);
+            }
+            other => panic!("expected ZExt, got {:?}", other),
         }
     }
 
