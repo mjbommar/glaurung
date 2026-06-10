@@ -819,6 +819,72 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             dst: VReg::phys("rax"),
             src: Value::Reg(VReg::phys("eax")),
         }],
+        // 3-operand imul: `imul dst, src, imm` → dst = src * imm. (The 2-operand
+        // form is handled by the binary-op path above.)
+        Mnemonic::Imul => {
+            if instr.op_count() == 3 && instr.op_kind(0) == OpKind::Register {
+                let dst = VReg::phys(reg_name(instr.op_register(0)));
+                if let (Some(lhs), Some(rhs)) =
+                    (value_of_operand(instr, 1), value_of_operand(instr, 2))
+                {
+                    return vec![Op::Bin {
+                        dst,
+                        op: BinOp::Mul,
+                        lhs,
+                        rhs,
+                    }];
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: "imul".into(),
+            }]
+        }
+        // Rotate by an immediate: `rol`/`ror r, imm` lifts to
+        // `(x << n) | (x >> (w-n))` (the consuming `or`'s width comes from the
+        // physical dst, so the temps need no explicit width). Rotate-by-cl and
+        // memory forms remain unmodelled for now.
+        Mnemonic::Rol | Mnemonic::Ror => {
+            if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
+                if let Some(Value::Const(cnt)) = value_of_operand(instr, 1) {
+                    let dst_name = reg_name(instr.op_register(0));
+                    let w = phys_reg_width(&dst_name).unwrap_or(Width::W64).bits() as i64;
+                    let n = ((cnt % w) + w) % w;
+                    if n == 0 {
+                        return vec![Op::Nop];
+                    }
+                    let dst = VReg::phys(dst_name);
+                    let (t1, t2) = (VReg::Temp(0), VReg::Temp(1));
+                    let (a_op, a_sh, b_op, b_sh) = if matches!(mnem, Mnemonic::Rol) {
+                        (BinOp::Shl, n, BinOp::Shr, w - n)
+                    } else {
+                        (BinOp::Shr, n, BinOp::Shl, w - n)
+                    };
+                    return vec![
+                        Op::Bin {
+                            dst: t1.clone(),
+                            op: a_op,
+                            lhs: Value::Reg(dst.clone()),
+                            rhs: Value::Const(a_sh),
+                        },
+                        Op::Bin {
+                            dst: t2.clone(),
+                            op: b_op,
+                            lhs: Value::Reg(dst.clone()),
+                            rhs: Value::Const(b_sh),
+                        },
+                        Op::Bin {
+                            dst,
+                            op: BinOp::Or,
+                            lhs: Value::Reg(t1),
+                            rhs: Value::Reg(t2),
+                        },
+                    ];
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
+            }]
+        }
         Mnemonic::Lea => {
             if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
                 // When the base is RIP we can resolve to an absolute VA.

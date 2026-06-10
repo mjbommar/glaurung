@@ -157,56 +157,65 @@ mod tests {
 
     #[test]
     fn inventory_coverage_against_unicorn() {
-        // Probe common linear instructions; report Match / coverage-gap / DIVERGENCE.
+        // Common linear instructions, cross-checked against Unicorn.
+        // MATCH = validated semantic; GAP = unmodelled (tolerated, backlog);
+        // DIVERGED = real bug (fails the test).
+        #[rustfmt::skip]
         let cases: &[(&str, &[u8], &[(&str, u64)])] = &[
-            ("mov rax,rbx", &[0x48, 0x89, 0xD8], &[("rbx", 0x1234)]),
-            (
-                "lea rax,[rbx+rcx*2+8]",
-                &[0x48, 0x8D, 0x44, 0x4B, 0x08],
-                &[("rbx", 0x100), ("rcx", 0x10)],
-            ),
-            ("movzx eax,bl", &[0x0F, 0xB6, 0xC3], &[("rbx", 0xff)]),
-            ("movsx rax,bl", &[0x48, 0x0F, 0xBE, 0xC3], &[("rbx", 0x80)]),
-            (
-                "imul rax,rbx",
-                &[0x48, 0x0F, 0xAF, 0xC3],
-                &[("rax", 7), ("rbx", 6)],
-            ),
-            ("inc rax", &[0x48, 0xFF, 0xC0], &[("rax", 0xff)]),
-            ("dec rax", &[0x48, 0xFF, 0xC8], &[("rax", 0x100)]),
-            ("neg rax", &[0x48, 0xF7, 0xD8], &[("rax", 5)]),
-            ("not rax", &[0x48, 0xF7, 0xD0], &[("rax", 0xff)]),
-            (
-                "xchg rax,rbx",
-                &[0x48, 0x87, 0xD8],
-                &[("rax", 1), ("rbx", 2)],
-            ),
-            (
-                "test+sete",
-                &[0x48, 0x85, 0xC0, 0x0F, 0x94, 0xC0],
-                &[("rax", 0)],
-            ),
-            ("shl rax,cl", &[0x48, 0xD3, 0xE0], &[("rax", 1), ("rcx", 8)]),
-            (
-                "add eax,imm32",
-                &[0x05, 0x10, 0x00, 0x00, 0x00],
-                &[("rax", 1)],
-            ),
+            ("mov rax,rbx",          &[0x48,0x89,0xD8], &[("rbx", 0x1234)]),
+            ("lea rax,[rbx+rcx*2+8]",&[0x48,0x8D,0x44,0x4B,0x08], &[("rbx",0x100),("rcx",0x10)]),
+            ("movzx eax,bl",         &[0x0F,0xB6,0xC3], &[("rbx", 0xff)]),
+            ("movsx rax,bl",         &[0x48,0x0F,0xBE,0xC3], &[("rbx", 0x80)]),
+            ("movsxd rax,ebx",       &[0x48,0x63,0xC3], &[("rbx", 0x8000_0000)]),
+            ("imul rax,rbx",         &[0x48,0x0F,0xAF,0xC3], &[("rax",7),("rbx",6)]),
+            ("imul rax,rbx,imm",     &[0x48,0x6B,0xC3,0x05], &[("rbx",6)]),
+            ("inc rax",              &[0x48,0xFF,0xC0], &[("rax", 0xff)]),
+            ("dec rax",              &[0x48,0xFF,0xC8], &[("rax", 0x100)]),
+            ("neg rax",              &[0x48,0xF7,0xD8], &[("rax", 5)]),
+            ("not rax",              &[0x48,0xF7,0xD0], &[("rax", 0xff)]),
+            ("xchg rax,rbx",         &[0x48,0x87,0xD8], &[("rax",1),("rbx",2)]),
+            ("test+sete",            &[0x48,0x85,0xC0,0x0F,0x94,0xC0], &[("rax",0)]),
+            ("cmp+setl",             &[0x48,0x39,0xD8,0x0F,0x9C,0xC0], &[("rax",1),("rbx",2)]),
+            ("shl rax,cl",           &[0x48,0xD3,0xE0], &[("rax",1),("rcx",8)]),
+            ("shr rax,imm",          &[0x48,0xC1,0xE8,0x04], &[("rax",0xff0)]),
+            ("sar rax,imm",          &[0x48,0xC1,0xF8,0x04], &[("rax",0xffff_ffff_ffff_ff00)]),
+            ("rol eax,imm",          &[0xC1,0xC0,0x08], &[("rax",0x1234_5678)]),
+            ("ror eax,imm",          &[0xC1,0xC8,0x08], &[("rax",0x1234_5678)]),
+            ("add eax,imm32",        &[0x05,0x10,0x00,0x00,0x00], &[("rax",1)]),
+            ("and rax,imm8",         &[0x48,0x83,0xE0,0x0F], &[("rax",0xff)]),
+            ("bswap eax",            &[0x0F,0xC8], &[("rax",0x1234_5678)]),
+            ("cmovz rbx,rcx",        &[0x48,0x85,0xC0,0x48,0x0F,0x44,0xD9], &[("rax",0),("rbx",1),("rcx",0x55)]),
+            ("mul rbx",              &[0x48,0xF7,0xE3], &[("rax",0x10),("rbx",0x20)]),
+            ("xadd rax,rbx",         &[0x48,0x0F,0xC1,0xD8], &[("rax",1),("rbx",2)]),
+            ("bt+setc",              &[0x48,0x0F,0xA3,0xD8,0x0F,0x92,0xC1], &[("rax",0b1000),("rbx",3)]),
         ];
-        let mut diverged = vec![];
+        let (mut matched, mut gaps, mut diverged) = (0u32, Vec::new(), Vec::new());
         for (name, code, init) in cases {
             match diff_x86_64(code, init) {
-                DiffOutcome::Match => eprintln!("  MATCH      {}", name),
-                DiffOutcome::OurRunIncomplete(why) => eprintln!("  GAP        {}  ({})", name, why),
+                DiffOutcome::Match => {
+                    matched += 1;
+                    eprintln!("  MATCH      {}", name);
+                }
+                DiffOutcome::OurRunIncomplete(why) => {
+                    gaps.push(*name);
+                    eprintln!("  GAP        {}  ({})", name, why);
+                }
                 DiffOutcome::Diverged(d) => {
-                    eprintln!("  DIVERGED   {}  {:?}", name, d);
                     diverged.push(*name);
+                    eprintln!("  DIVERGED   {}  {:?}", name, d);
                 }
             }
         }
+        eprintln!(
+            "  ---- {}/{} match, {} gap(s), {} diverged ----",
+            matched,
+            cases.len(),
+            gaps.len(),
+            diverged.len()
+        );
         assert!(
             diverged.is_empty(),
-            "semantic divergences (not just gaps): {:?}",
+            "semantic divergences from Unicorn (real bugs): {:?}",
             diverged
         );
     }
