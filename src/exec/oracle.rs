@@ -258,6 +258,25 @@ mod tests {
     }
 
     #[test]
+    fn unsigned_div_matches_unicorn() {
+        // xor rdx,rdx ; div rbx   →  rax = rax/rbx, rdx = rax%rbx
+        let code = [
+            0x48, 0x31, 0xD2, // xor rdx, rdx
+            0x48, 0xF7, 0xF3, // div rbx
+        ];
+        let init = [("rax", 1000u64), ("rbx", 7u64)];
+        assert_eq!(diff_x86_64(&code, &init), DiffOutcome::Match);
+    }
+
+    #[test]
+    fn unsigned_div_32bit_matches_unicorn() {
+        // xor edx,edx ; div ecx
+        let code = [0x31, 0xD2, 0xF7, 0xF1];
+        let init = [("rax", 0xFFFF_FFFFu64), ("rcx", 0x10000u64)];
+        assert_eq!(diff_x86_64(&code, &init), DiffOutcome::Match);
+    }
+
+    #[test]
     fn inventory_coverage_against_unicorn() {
         // Common linear instructions, cross-checked against Unicorn.
         // MATCH = validated semantic; GAP = unmodelled (tolerated, backlog);

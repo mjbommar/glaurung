@@ -76,6 +76,7 @@ impl<D: Domain> HelperRegistry<D> {
         r.register("cpuid", helper_cpuid::<D>);
         r.register("bswap", helper_bswap::<D>);
         r.register("mul", helper_mul::<D>);
+        r.register("div", helper_div::<D>);
         r
     }
 
@@ -166,6 +167,35 @@ fn helper_mul<D: Domain>(
     let hi = m.dom.extract(&prod, w.bits() * 2, w.bits());
     m.regs.write(&mut m.dom, lo_reg, lo);
     m.regs.write(&mut m.dom, hi_reg, hi);
+    Ok(())
+}
+
+/// `div` (unsigned divide): the `2w`-bit dividend `ins[0]:ins[1]` (hi:lo, i.e.
+/// rdx:rax) is divided by `ins[2]`; quotient → `outs[0]` (rax/…), remainder →
+/// `outs[1]` (rdx/…). Computed at `2w` then truncated. (Division by zero is a
+/// CPU fault; the domain returns 0 — callers should model the fault separately.
+/// Signed `idiv` needs a signed-divide domain primitive and is not yet handled.)
+fn helper_div<D: Domain>(
+    m: &mut Machine<D>,
+    ins: &[Value],
+    outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    let (q_reg, w) = (&outs[0].0, outs[0].1);
+    let r_reg = &outs[1].0;
+    let w2 = Width(w.bits() * 2);
+    let hi = m.read(&ins[0], w);
+    let lo = m.read(&ins[1], w);
+    let divisor = m.read(&ins[2], w);
+    let dividend = m.dom.concat(&hi, &lo, w, w);
+    let div2 = m.dom.zext(&divisor, w, w2);
+    let q = m.dom.binop(BinOp::Div, &dividend, &div2, w2);
+    // remainder = dividend - q*divisor  (at 2w), then truncate.
+    let prod = m.dom.binop(BinOp::Mul, &q, &div2, w2);
+    let rem = m.dom.binop(BinOp::Sub, &dividend, &prod, w2);
+    let qt = m.dom.trunc(&q, w);
+    let rt = m.dom.trunc(&rem, w);
+    m.regs.write(&mut m.dom, q_reg, qt);
+    m.regs.write(&mut m.dom, r_reg, rt);
     Ok(())
 }
 

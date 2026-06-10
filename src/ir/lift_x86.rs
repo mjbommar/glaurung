@@ -911,6 +911,54 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: "mul".into(),
             }]
         }
+        // bt reg, imm/reg: CF = (reg >> (offset & (w-1))) & 1. (bts/btr/btc,
+        // which also modify the bit, and memory forms are not modelled yet.)
+        Mnemonic::Bt => {
+            if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
+                let r_name = reg_name(instr.op_register(0));
+                let w = phys_reg_width(&r_name).unwrap_or(Width::W64);
+                let wmask = (w.bits() as i64) - 1;
+                if let Some(raw_bit) = value_of_operand(instr, 1) {
+                    let r = VReg::phys(r_name);
+                    let mut ops = Vec::new();
+                    let bit = match raw_bit {
+                        Value::Const(c) => Value::Const(c & wmask),
+                        other => {
+                            let t0 = VReg::Temp(0);
+                            ops.push(Op::Bin {
+                                dst: t0.clone(),
+                                op: BinOp::And,
+                                lhs: other,
+                                rhs: Value::Const(wmask),
+                            });
+                            Value::Reg(t0)
+                        }
+                    };
+                    let t1 = VReg::Temp(1);
+                    ops.push(Op::Bin {
+                        dst: t1.clone(),
+                        op: BinOp::Shr,
+                        lhs: Value::Reg(r),
+                        rhs: bit,
+                    });
+                    let t2 = VReg::Temp(2);
+                    ops.push(Op::Bin {
+                        dst: t2.clone(),
+                        op: BinOp::And,
+                        lhs: Value::Reg(t1),
+                        rhs: Value::Const(1),
+                    });
+                    ops.push(Op::Assign {
+                        dst: VReg::Flag(Flag::C),
+                        src: Value::Reg(t2),
+                    });
+                    return ops;
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: "bt".into(),
+            }]
+        }
         // bswap reg: byte-reverse. Emitted as a typed intrinsic executed by a
         // helper (the byte shuffle needs explicit per-byte widths).
         Mnemonic::Bswap => {
@@ -1295,7 +1343,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         }
         Mnemonic::Div | Mnemonic::Idiv => {
             if instr.op_count() == 1 {
-                let acc = VReg::phys(div_accumulator_name(instr, bits));
+                let lo_name = div_accumulator_name(instr, bits);
+                let acc = VReg::phys(lo_name);
                 let mut ops = Vec::new();
                 let divisor = match instr.op_kind(0) {
                     OpKind::Register => Value::Reg(VReg::phys(reg_name(instr.op_register(0)))),
@@ -1313,9 +1362,29 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         }]
                     }
                 };
-                // x86 div/idiv also writes the high-half remainder register.
-                // This first-pass lift preserves the quotient dataflow that
-                // tends to feed later buffer and bounds calculations.
+                let w = phys_reg_width(lo_name).unwrap_or(Width::W64);
+                // High-half register for the dividend / remainder.
+                let hi_name = match (lo_name, w.bits()) {
+                    ("rax", _) => Some("rdx"),
+                    ("eax", _) => Some("edx"),
+                    ("ax", _) => Some("dx"),
+                    _ => None, // 8-bit div uses ah:al — not modelled yet
+                };
+                if let (Mnemonic::Div, Some(hi)) = (mnem, hi_name) {
+                    // Unsigned div: full rdx:rax / divisor → rax=quotient,
+                    // rdx=remainder, via a two-output helper.
+                    ops.push(Op::Intrinsic {
+                        name: "div".into(),
+                        ins: vec![Value::Reg(VReg::phys(hi)), Value::Reg(acc.clone()), divisor],
+                        outs: vec![(acc, w), (VReg::phys(hi), w)],
+                        reads_mem: false,
+                        writes_mem: false,
+                    });
+                    return ops;
+                }
+                // idiv (signed) / 8-bit: approximate quotient lift (acc = acc /
+                // divisor) — signed divide and the remainder need a signed-div
+                // domain primitive (TODO). Preserves quotient dataflow for now.
                 ops.push(Op::Bin {
                     dst: acc.clone(),
                     op: BinOp::Div,
@@ -2111,22 +2180,33 @@ mod tests {
     }
 
     #[test]
-    fn div_reg_lifts_to_accumulator_divide() {
-        // div rcx  (48 f7 f1)
+    fn div_reg_lifts_to_full_div_intrinsic() {
+        // div rcx  (48 f7 f1) → unsigned rdx:rax / rcx, quotient→rax,
+        // remainder→rdx (a two-output intrinsic, executed by a helper).
         let ops = lift64(&[0x48, 0xf7, 0xf1]);
         assert_eq!(ops.len(), 1, "got: {:#?}", ops);
         match &ops[0].op {
-            Op::Bin {
-                dst,
-                op: BinOp::Div,
-                lhs: Value::Reg(lhs),
-                rhs: Value::Reg(rhs),
+            Op::Intrinsic {
+                name, ins, outs, ..
             } => {
-                assert_eq!(*dst, VReg::phys("rax"));
-                assert_eq!(*lhs, VReg::phys("rax"));
-                assert_eq!(*rhs, VReg::phys("rcx"));
+                assert_eq!(name, "div");
+                assert_eq!(
+                    *ins,
+                    vec![
+                        Value::Reg(VReg::phys("rdx")),
+                        Value::Reg(VReg::phys("rax")),
+                        Value::Reg(VReg::phys("rcx")),
+                    ]
+                );
+                assert_eq!(
+                    *outs,
+                    vec![
+                        (VReg::phys("rax"), Width::W64),
+                        (VReg::phys("rdx"), Width::W64),
+                    ]
+                );
             }
-            other => panic!("expected accumulator Div, got {:?}", other),
+            other => panic!("expected div intrinsic, got {:?}", other),
         }
     }
 
