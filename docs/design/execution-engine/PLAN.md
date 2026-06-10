@@ -89,7 +89,7 @@ Phases 2 and 3 may run in parallel. Phase 6 can surface the concrete emulator
 ## Phase 5 — Symbolic exploration  *(feature `symbolic`; [phase file](03-phases/phase-5-symbolic-exploration.md))*
 
 - [~] 5.1 state forking — `Machine<Symbolic>` is `Clone` (per-fork pool copy; shared COW pool is a future optimization). A lightweight `State` (machine + pc + path constraints) lives in `explore.rs`; a dedicated `symstate.rs` with persistent maps is the optimization step.
-- [ ] 5.2 `symbolic/symmem.rs` — concretize-with-threshold (1024 B) symbolic memory *(not started; symbolic load/store addresses currently halt via `as_u64`→None)*
+- [~] 5.2 **Symbolic addresses concretized** — the explorer intercepts a symbolic-address load/store (`Halt::UnresolvedAddress`), solves the path condition for a model, evaluates the address expr (`eval_expr`, reusing `Concrete` semantics), binds `addr==chosen`, and executes at the concrete address. `Machine::eval_addr` added. Test: a store through symbolic `rdi` reaches a downstream target (was unreachable). *Remaining:* concretize-with-threshold ITE trees for symbolic **reads** (currently the "any" strategy); a dedicated `symmem.rs`.
 - [x] 5.3 `symbolic/explore.rs` — DFS worklist; forks at symbolic `CondJump`; **prunes infeasible paths with the solver**; `find_input_reaching(lf, target, seed, max_states)`. Tests (native z3): finds `rdi=42` reaches the target block; unreachable → Unsat.
 - [ ] 5.4 Directed search (`(dist_to_sink, state_id)` PQ; find/avoid; random-path tie-break) *(currently plain DFS)*
 - [~] 5.5 Bounds — `max_states` cap (→ `Unknown`); spill-to-disk + loop bounds later

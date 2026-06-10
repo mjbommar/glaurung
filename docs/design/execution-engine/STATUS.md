@@ -104,6 +104,13 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked
 
 ## Worklog (most recent first)
 
+- **2026-06-10** — Fundamentals run (Unicorn axis + IOCTLance axis), committed on
+  branch `glaurung-execution-engine-2026-06`. (a) **Lifter coverage**: closed
+  `imul`(3-op)/`rol`/`ror` gaps (oracle-validated, 23/26 match Unicorn, 0
+  diverged; `mul`/`bswap`/`bt` remain). (b) **Symbolic addresses**: the explorer
+  now concretizes symbolic load/store addresses (solve→eval→bind) instead of
+  halting — driver code dereferencing attacker-controlled pointers is now
+  explorable. All suites green.
 - **2026-06-10** — Unicorn differential oracle (fundamentals; corrects another
   bad "blocked" call). `apt install pkg-config libunicorn-dev` → the
   `unicorn-engine` crate links the system lib (no vendored QEMU compile). Added
