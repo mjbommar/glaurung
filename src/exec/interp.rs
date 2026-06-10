@@ -157,6 +157,7 @@ impl<D: Domain> Machine<D> {
     /// (`base + index*scale + disp`). Unlike [`Machine::effective_addr`] (which
     /// concretizes to a `u64`), this keeps the address symbolic when the domain
     /// is — used by the symbolic explorer to concretize symbolic addresses.
+    #[cfg_attr(not(feature = "symbolic"), allow(dead_code))]
     pub(crate) fn eval_addr(&mut self, mo: &MemOp) -> D::Val {
         let w = Width::W64;
         let mut acc = self.dom.constant(w, mo.disp as u128);

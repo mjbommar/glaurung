@@ -885,6 +885,27 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
             }]
         }
+        // bswap reg: byte-reverse. Emitted as a typed intrinsic executed by a
+        // helper (the byte shuffle needs explicit per-byte widths).
+        Mnemonic::Bswap => {
+            if instr.op_count() == 1 && instr.op_kind(0) == OpKind::Register {
+                let name = reg_name(instr.op_register(0));
+                let w = phys_reg_width(&name).unwrap_or(Width::W64);
+                if w.bytes() >= 2 {
+                    let dst = VReg::phys(name);
+                    return vec![Op::Intrinsic {
+                        name: "bswap".into(),
+                        ins: vec![Value::Reg(dst.clone())],
+                        outs: vec![(dst, w)],
+                        reads_mem: false,
+                        writes_mem: false,
+                    }];
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: "bswap".into(),
+            }]
+        }
         Mnemonic::Lea => {
             if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
                 // When the base is RIP we can resolve to an absolute VA.

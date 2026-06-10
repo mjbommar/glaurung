@@ -74,6 +74,7 @@ impl<D: Domain> HelperRegistry<D> {
         r.register("rdtsc", helper_rdtsc::<D>);
         r.register("rdtscp", helper_rdtsc::<D>);
         r.register("cpuid", helper_cpuid::<D>);
+        r.register("bswap", helper_bswap::<D>);
         r
     }
 
@@ -116,6 +117,30 @@ fn helper_cpuid<D: Domain>(
         let v = m.dom.constant(Width::W32, val);
         m.regs.write(&mut m.dom, &VReg::phys(reg), v);
     }
+    Ok(())
+}
+
+/// `bswap`: reverse the bytes of the operand. An operand-carrying helper —
+/// reads `ins[0]` at the output width and byte-reverses it through the domain
+/// (explicit widths, so it works for both concrete and symbolic backends).
+fn helper_bswap<D: Domain>(
+    m: &mut Machine<D>,
+    ins: &[Value],
+    outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    let (dst, w) = (&outs[0].0, outs[0].1);
+    let v = m.read(&ins[0], w);
+    let nbytes = w.bytes();
+    // Build the reversal: byte 0 (LSB of the source) becomes the MSB of the
+    // result. acc accumulates [b0 .. b_{i}] with b0 at the top.
+    let mut acc = m.dom.extract(&v, 8, 0);
+    let mut acc_w = 8u16;
+    for i in 1..nbytes {
+        let bi = m.dom.extract(&v, (i + 1) * 8, i * 8);
+        acc = m.dom.concat(&acc, &bi, Width(acc_w), Width::W8);
+        acc_w += 8;
+    }
+    m.regs.write(&mut m.dom, dst, acc);
     Ok(())
 }
 
