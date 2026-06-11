@@ -104,6 +104,30 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked
 
 ## Worklog (most recent first)
 
+- **2026-06-11** — **Real-CVE validation + engine performance & precision.**
+  Ran against the fork's real-world samples (which carry IOCTLance ground truth)
+  and hardened the engine. **Validation:** on `ilp60x64_3.sys` (GT: 19 read/write
+  controllable-address) the engine emits `arbitrary-write severity=Arbitrary` at
+  attacker-controlled sites — the same class. **Engine perf fixes (correctness-
+  preserving):** memoized `ExprPool::collect_syms` and the z3 `to_bv` translation
+  — both recursed a *hash-consed DAG* without a visited set, i.e. exponential on
+  shared subexpressions (obfuscated code especially); reuse one z3 `Context` per
+  thread instead of building one per solve; add a per-solve z3 timeout (250 ms →
+  `unknown`, kept feasible) so a pathological formula can't stall the run;
+  collapse `record_access` from up to 5 solves to 1 (solve the path once, reuse),
+  with an **affine-unit fast path** (`Sym`/`Sym+const` unconstrained ⇒ Arbitrary &
+  null-capable with no solve) and a **branch-independence** skip (a predicate
+  sharing no symbol with the path can't make it unsat). **Precision/orchestration**
+  (`examples/ioctl_scan.rs`): rank findings severity-first; gate the IRP-seed pass
+  to functions that chase `Irp->CurrentStackLocation` (0xB8); run the stateful
+  sweep only where a free is reachable; parallelize lifting; cap function size and
+  per-function states. 40 symbolic tests; 852 lib pass + 2 pre-existing; oracle
+  11/11. **Known limitation:** heavily-obfuscated drivers (`ilp60x64`) stay
+  expensive — per-function symbolic cost × ~160 functions, with a few crypto/VM
+  functions whose every solve hits the timeout; bounded by the size/state caps and
+  solve timeout (the same place IOCTLance accepts errored/timed-out states). True
+  fixes (directed search, function-level budget, lazy constraint solving) are
+  future work.
 - **2026-06-10** — **IOCTLance gap closed: 5 of 5 planted bug classes detected.**
   Added stateful multi-invocation exploration and fixed the last reachability
   blocker, so the cross-invocation use-after-free / double-free are now caught.

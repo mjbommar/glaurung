@@ -237,30 +237,45 @@ impl ExprPool {
         }
     }
 
-    /// Collect every free symbol `(id, width)` reachable from `root`.
+    /// Collect every free symbol `(id, width)` reachable from `root`. Memoized
+    /// over visited nodes: expressions are a hash-consed DAG with heavy sharing
+    /// (obfuscated code in particular), so a naive recursion is exponential.
     pub fn collect_syms(&self, root: ExprId, out: &mut std::collections::BTreeMap<u32, Width>) {
+        let mut seen = std::collections::HashSet::new();
+        self.collect_syms_rec(root, out, &mut seen);
+    }
+
+    fn collect_syms_rec(
+        &self,
+        root: ExprId,
+        out: &mut std::collections::BTreeMap<u32, Width>,
+        seen: &mut std::collections::HashSet<ExprId>,
+    ) {
+        if !seen.insert(root) {
+            return;
+        }
         match *self.get(root) {
             Expr::Const { .. } => {}
             Expr::Sym { id, width } => {
                 out.insert(id, width);
             }
             Expr::Bin { a, b, .. } | Expr::Cmp { a, b, .. } => {
-                self.collect_syms(a, out);
-                self.collect_syms(b, out);
+                self.collect_syms_rec(a, out, seen);
+                self.collect_syms_rec(b, out, seen);
             }
             Expr::Un { a, .. }
             | Expr::ZExt { a, .. }
             | Expr::SExt { a, .. }
             | Expr::Trunc { a, .. }
-            | Expr::Extract { a, .. } => self.collect_syms(a, out),
+            | Expr::Extract { a, .. } => self.collect_syms_rec(a, out, seen),
             Expr::Concat { hi, lo, .. } => {
-                self.collect_syms(hi, out);
-                self.collect_syms(lo, out);
+                self.collect_syms_rec(hi, out, seen);
+                self.collect_syms_rec(lo, out, seen);
             }
             Expr::Ite { c, t, e, .. } => {
-                self.collect_syms(c, out);
-                self.collect_syms(t, out);
-                self.collect_syms(e, out);
+                self.collect_syms_rec(c, out, seen);
+                self.collect_syms_rec(t, out, seen);
+                self.collect_syms_rec(e, out, seen);
             }
         }
     }

@@ -495,16 +495,22 @@ fn process_block(
                     BranchDecision::Fork => {
                         let pc_if_true = if !*inverted { *target } else { block.end_va };
                         let pc_if_false = if *inverted { *target } else { block.end_va };
+                        // A branch predicate that shares no symbol with the prior
+                        // path condition is independent: adding it can't make the
+                        // set unsat (the forked predicate is non-constant, so
+                        // satisfiable on its own), so the feasibility solve can be
+                        // skipped — the common case of branching on a fresh field.
+                        let independent = !shares_symbols(&st, c);
                         let mut out = Vec::new();
                         for (bit, npc) in [(true, pc_if_true), (false, pc_if_false)] {
                             let mut child = st.fork(npc);
                             child.constraints.push((c, bit));
-                            // Prune only when provably infeasible; keep on
-                            // Sat / Unknown / NoSolver.
-                            if !matches!(
-                                solve(&child.machine.dom.pool, &child.constraints),
-                                SolveResult::Unsat
-                            ) {
+                            if independent
+                                || !matches!(
+                                    solve(&child.machine.dom.pool, &child.constraints),
+                                    SolveResult::Unsat
+                                )
+                            {
                                 out.push(child);
                             }
                         }
@@ -663,22 +669,111 @@ fn eval_concrete(st: &mut State, val: ExprId) -> u64 {
     eval_expr(&st.machine.dom.pool, val, &model, &mut c) as u64
 }
 
+/// A reaching witness for the current path: the empty model when there are no
+/// constraints (no solver call needed), otherwise a solve. `None` only when the
+/// path is provably infeasible (Unsat); Unknown/NoSolver are kept as a sound
+/// over-approximation. This avoids a z3 context-build per sink on shallow paths.
+fn reach_model(st: &State) -> Option<Model> {
+    if st.constraints.is_empty() {
+        return Some(Model::default());
+    }
+    match solve(&st.machine.dom.pool, &st.constraints) {
+        SolveResult::Sat(m) => Some(m),
+        SolveResult::Unsat => None,
+        _ => Some(Model::default()),
+    }
+}
+
+/// True if `pred`'s free symbols overlap any symbol already in the path
+/// condition — i.e. adding `pred` could interact with (and possibly contradict)
+/// the existing constraints, so a feasibility solve is warranted.
+fn shares_symbols(st: &State, pred: ExprId) -> bool {
+    let pool = &st.machine.dom.pool;
+    let mut psyms = BTreeMap::new();
+    pool.collect_syms(pred, &mut psyms);
+    if psyms.is_empty() {
+        return false;
+    }
+    for (c, _) in &st.constraints {
+        let mut csyms = BTreeMap::new();
+        pool.collect_syms(*c, &mut csyms);
+        if csyms.keys().any(|k| psyms.contains_key(k)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if `expr` has at least one free symbol and *none* of them appear in the
+/// path condition — so the attacker can still drive `expr` to any value. For such
+/// an address, `addr == sentinel` and `addr == 0` are trivially satisfiable, so
+/// the severity and null-deref solves can be skipped (the common case for a fresh
+/// attacker pointer with no guards yet).
+fn unconstrained(st: &State, expr: ExprId) -> bool {
+    let pool = &st.machine.dom.pool;
+    let mut esyms = BTreeMap::new();
+    pool.collect_syms(expr, &mut esyms);
+    if esyms.is_empty() {
+        return false;
+    }
+    for (c, _) in &st.constraints {
+        let mut csyms = BTreeMap::new();
+        pool.collect_syms(*c, &mut csyms);
+        if csyms.keys().any(|k| esyms.contains_key(k)) {
+            return false;
+        }
+    }
+    true
+}
+
+/// True if `id` is an affine combination of symbols and constants with unit
+/// coefficients (`Sym`, `Const`, or `Add` of such) — i.e. its value is *not*
+/// bounded by its own structure (no masking, multiply, shift). Such an expression
+/// spans the whole width when its symbols are unconstrained, so it can reach the
+/// sentinel and 0 without a solve. `BUF + (len & 0xF)` is **not** affine-unit (the
+/// `And` bounds it), so it correctly falls through to the solver.
+fn is_affine_unit(pool: &ExprPool, id: ExprId) -> bool {
+    match *pool.get(id) {
+        Expr::Sym { .. } | Expr::Const { .. } => true,
+        Expr::Bin {
+            op: BinOp::Add,
+            a,
+            b,
+            ..
+        } => is_affine_unit(pool, a) && is_affine_unit(pool, b),
+        _ => false,
+    }
+}
+
+/// An address the attacker can drive to *any* value with no solve: affine-unit in
+/// shape and unconstrained by the path. Used to skip the sentinel and null solves.
+fn freely_controllable(st: &State, addr: ExprId) -> bool {
+    is_affine_unit(&st.machine.dom.pool, addr) && unconstrained(st, addr)
+}
+
+/// The arbitrariness severity of an address: `Arbitrary` if it is freely
+/// controllable (fast path, no solve) or the solver can pin it to the sentinel;
+/// else `Constrained`.
+fn severity_of(st: &mut State, addr: ExprId) -> Severity {
+    if freely_controllable(st, addr) || witness_for_value(st, addr, SENTINEL_ADDR).is_some() {
+        Severity::Arbitrary
+    } else {
+        Severity::Constrained
+    }
+}
+
 /// Emit a `kind` sink (with reaching witness and arbitrariness severity from
-/// `severity_of`) when the path is satisfiable. `tainted_by` is the provenance.
+/// `severity_for`) when the path is satisfiable. `tainted_by` is the provenance.
 fn push_sink(
     st: &mut State,
     va: u64,
     kind: SinkKind,
-    severity_of: ExprId,
+    severity_for: ExprId,
     tainted_by: Vec<String>,
     sinks: &mut Vec<Sink>,
 ) {
-    if let SolveResult::Sat(reach) = solve(&st.machine.dom.pool, &st.constraints) {
-        let severity = if witness_for_value(st, severity_of, SENTINEL_ADDR).is_some() {
-            Severity::Arbitrary
-        } else {
-            Severity::Constrained
-        };
+    if let Some(reach) = reach_model(st) {
+        let severity = severity_of(st, severity_for);
         sinks.push(Sink {
             va,
             kind,
@@ -704,31 +799,53 @@ fn record_access(st: &mut State, va: u64, addr_val: ExprId, write: bool, sinks: 
     if tainted_by.is_empty() {
         return; // internally-symbolic address: not an attacker primitive
     }
+    // Solve the path condition once and reuse it for every sink at this access
+    // (controlled R/W, double-fetch, null-deref) instead of re-solving per sink.
+    let Some(reach) = reach_model(st) else {
+        return; // path infeasible
+    };
+    let free_addr = freely_controllable(st, addr_val);
+    let severity = if free_addr {
+        Severity::Arbitrary
+    } else {
+        severity_of(st, addr_val)
+    };
     let kind = if write {
         SinkKind::ControlledWrite
     } else {
         SinkKind::ControlledRead
     };
-    push_sink(st, va, kind, addr_val, tainted_by.clone(), sinks);
+    sinks.push(Sink {
+        va,
+        kind,
+        witness: reach.clone(),
+        severity,
+        tainted_by: tainted_by.clone(),
+    });
 
     // Double-fetch (TOCTOU): a second read of the same attacker pointer.
     if !write && !st.tainted_reads.insert(addr_val) {
-        push_sink(
-            st,
+        sinks.push(Sink {
             va,
-            SinkKind::DoubleFetch,
-            addr_val,
-            tainted_by.clone(),
-            sinks,
-        );
+            kind: SinkKind::DoubleFetch,
+            witness: reach.clone(),
+            severity,
+            tainted_by: tainted_by.clone(),
+        });
     }
 
-    // Null deref: only if the path does not already guard the pointer non-null.
-    if let Some(null_witness) = witness_for_value(st, addr_val, 0) {
+    // Null deref: trivially possible for a freely-controllable pointer (no solve);
+    // otherwise only if the path does not already guard it non-null.
+    let null_witness = if free_addr {
+        Some(reach)
+    } else {
+        witness_for_value(st, addr_val, 0)
+    };
+    if let Some(w) = null_witness {
         sinks.push(Sink {
             va,
             kind: SinkKind::NullDeref,
-            witness: null_witness,
+            witness: w,
             severity: Severity::Arbitrary,
             tainted_by,
         });

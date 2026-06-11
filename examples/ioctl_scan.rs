@@ -15,10 +15,12 @@ use glaurung::analysis::cfg::{analyze_functions_bytes, Budgets};
 use glaurung::analysis::pe_iat::pe_iat_map;
 use glaurung::core::binary::Arch;
 use glaurung::ir::lift_function::lift_function_from_bytes;
+use glaurung::ir::types::{CallTarget, LlirFunction, Op, Value};
 use glaurung::symbolic::{
     driver_api_model, find_function_sinks_with_apis, find_function_stateful_sinks,
-    find_ioctl_sinks_with_apis, SinkKind,
+    find_ioctl_sinks_with_apis, ApiSummary, SinkKind,
 };
+use rayon::prelude::*;
 
 fn kind_str(k: SinkKind) -> &'static str {
     match k {
@@ -64,37 +66,122 @@ fn main() {
         model.len()
     );
 
-    let mut total = 0usize;
-    for f in &funcs {
-        let Some(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) else {
+    // IAT slots that free a heap block — the stateful (cross-invocation) sweep is
+    // only meaningful for functions that can reach one.
+    let free_slots: BTreeSet<u64> = model
+        .iter()
+        .filter(|(_, s)| matches!(s, ApiSummary::Free { .. }))
+        .map(|(va, _)| *va)
+        .collect();
+
+    // Lift all functions in parallel (lifting is pure and thread-safe), then run
+    // the symbolic passes sequentially — the z3 backend is not safe under
+    // concurrent solving. Two cheap passes always; the 4-round stateful sweep only
+    // where a free is reachable.
+    let t_lift = std::time::Instant::now();
+    let lifted: Vec<(&_, LlirFunction)> = funcs
+        .par_iter()
+        .filter_map(|f| lift_function_from_bytes(&data, f, Arch::X86_64).map(|lf| (f, lf)))
+        .collect();
+    eprintln!(
+        "[lift] {} functions in {:?}",
+        lifted.len(),
+        t_lift.elapsed()
+    );
+    let t_sym = std::time::Instant::now();
+
+    // State caps bound the worst-case (a few functions explode); the synthetic
+    // handlers and the real arbitrary-write sites are found well within these.
+    const BROAD_STATES: usize = 120;
+    const STATEFUL_STATES: usize = 1000;
+    // Skip a handful of pathological/obfuscated functions that explode the state
+    // space and are not plausible IOCTL handlers (they crowd out everything else).
+    const MAX_BLOCKS: usize = 60;
+
+    let mut skipped = 0usize;
+    let mut lines: Vec<String> = Vec::new();
+    for (f, lf) in &lifted {
+        if lf.blocks.len() > MAX_BLOCKS {
+            skipped += 1;
             continue;
+        }
+        // The IRP-seed pass only matters for the dispatch handler, recognized by
+        // its chase of Irp->CurrentStackLocation (offset 0xB8). Every other
+        // function is covered by the assume-tainted-entry pass alone.
+        let mut sinks = if references_irp(lf) {
+            find_ioctl_sinks_with_apis(lf, &model, BROAD_STATES)
+        } else {
+            Vec::new()
         };
-        // Three passes: the dispatcher's symbolic IRP, assume-tainted-entry for
-        // the per-IOCTL helper functions, and a stateful multi-invocation sweep
-        // that carries heap/global state across IOCTL calls (cross-invocation
-        // use-after-free / double-free).
-        let mut sinks = find_ioctl_sinks_with_apis(&lf, &model, 4000);
-        sinks.extend(find_function_sinks_with_apis(&lf, &model, 4000));
-        sinks.extend(find_function_stateful_sinks(&lf, &model, 4000, 4));
-        if sinks.is_empty() {
-            continue;
+        sinks.extend(find_function_sinks_with_apis(lf, &model, BROAD_STATES));
+        if references_free(lf, &free_slots) {
+            sinks.extend(find_function_stateful_sinks(lf, &model, STATEFUL_STATES, 4));
         }
         let mut seen = BTreeSet::new();
         for s in &sinks {
             if !seen.insert((kind_str(s.kind), s.va)) {
                 continue;
             }
-            total += 1;
-            println!(
-                "  {:>18}  va={:#010x}  fn={} @ {:#x}  severity={:?}  taint={:?}",
+            // (severity rank, kind, va) prefix sorts high-signal findings first.
+            let rank = match s.severity {
+                glaurung::symbolic::Severity::Arbitrary => 0,
+                glaurung::symbolic::Severity::Constrained => 1,
+            };
+            lines.push(format!(
+                "{}\t  {:>18}  va={:#010x}  fn={} @ {:#x}  severity={:?}  taint={:?}",
+                rank,
                 kind_str(s.kind),
                 s.va,
                 f.name,
                 f.entry_point.value,
                 s.severity,
                 s.tainted_by,
-            );
+            ));
         }
     }
-    eprintln!("[{}] total unique sinks: {}", path, total);
+
+    eprintln!("[symbolic] {:?}", t_sym.elapsed());
+    lines.sort();
+    for l in &lines {
+        // strip the sort-key prefix before printing
+        println!("{}", l.splitn(2, '\t').nth(1).unwrap_or(l));
+    }
+    eprintln!(
+        "[{}] total unique sinks: {} (skipped {} oversized functions)",
+        path,
+        lines.len(),
+        skipped
+    );
+}
+
+/// True if `lf` chases `Irp->Tail.Overlay.CurrentStackLocation` (offset 0xB8) —
+/// the distinctive move of an IOCTL dispatch handler, used to gate the (more
+/// expensive) IRP-seed pass to plausible handlers.
+fn references_irp(lf: &LlirFunction) -> bool {
+    lf.blocks
+        .iter()
+        .flat_map(|b| &b.instrs)
+        .any(|ins| matches!(&ins.op, Op::Load { addr, .. } if addr.disp == 0xB8))
+}
+
+/// True if any op in `lf` references a free-summarized IAT slot — either a
+/// `call [rip+slot]` (`Indirect(Addr)`) or the `mov reg,[slot]; call reg` form
+/// (a `Load` whose displacement is the slot). Cheap gate for the stateful sweep.
+fn references_free(lf: &LlirFunction, free_slots: &BTreeSet<u64>) -> bool {
+    if free_slots.is_empty() {
+        return false;
+    }
+    lf.blocks
+        .iter()
+        .flat_map(|b| &b.instrs)
+        .any(|ins| match &ins.op {
+            Op::Load { addr, .. } => free_slots.contains(&(addr.disp as u64)),
+            Op::Call {
+                target: CallTarget::Indirect(Value::Addr(va)),
+            }
+            | Op::Call {
+                target: CallTarget::Direct(va),
+            } => free_slots.contains(va),
+            _ => false,
+        })
 }
