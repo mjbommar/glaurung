@@ -715,6 +715,129 @@ fn decompile_all_py(
     Ok(list.into())
 }
 
+#[pyfunction]
+#[pyo3(name = "decompile_many")]
+#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=30_000usize))]
+#[allow(clippy::too_many_arguments)]
+fn decompile_many_py(
+    py: Python<'_>,
+    path: String,
+    func_vas: Vec<u64>,
+    max_blocks: usize,
+    max_instructions: usize,
+    timeout_ms: u64,
+    types: bool,
+    style: &str,
+    pdb_cache: &str,
+    max_functions: usize,
+) -> PyResult<PyObject> {
+    // Decompile an arbitrary SUBSET of functions in a SINGLE analysis pass.
+    //
+    // `decompile_at` re-runs `analyze_functions_bytes` (and the PDB/addr-map
+    // build) on every call, so decompiling N scattered functions in a large
+    // binary (e.g. the 18 MB mpengine.dll, ~30k functions) costs N full
+    // analyses. This amortises that fixed cost across the whole requested set:
+    // analyse once, then run the same per-function pipeline as `decompile_at`
+    // for each requested VA. Returns a list of (name, va, c_or_ir_text) for
+    // every requested VA that resolves to a known function.
+    use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+    use crate::ir::ast::{lower, render, render_with_types};
+    use crate::ir::expr_reconstruct::reconstruct;
+    use crate::ir::lift_function::lift_function_from_bytes;
+    use crate::ir::ssa::compute_ssa;
+    use crate::ir::structure::recover;
+    use crate::ir::types_recover::recover_types;
+    use std::collections::HashSet;
+
+    let data = std::fs::read(&path)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let budgets = Budgets {
+        max_functions,
+        max_blocks,
+        max_instructions,
+        timeout_ms,
+    };
+    // --- one-time analysis + name/field/string maps -----------------------
+    let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
+    let (arch, cc) = detect_arch_and_call_conv(&data);
+    let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
+    let mut addr_map =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
+    let field_map =
+        pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
+    let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
+
+    let wanted: HashSet<u64> = func_vas.iter().copied().collect();
+    let list = PyList::empty(py);
+
+    for func in funcs.iter() {
+        let func_va = func.entry_point.value;
+        if !wanted.contains(&func_va) {
+            continue;
+        }
+        let Some(lf) = lift_function_from_bytes(&data, func, arch) else {
+            continue;
+        };
+        let ssa = compute_ssa(&lf);
+        let region = recover(&lf, &ssa);
+        let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
+        let mut f = lower(&lf, &region, outer_name);
+        reconstruct(&mut f);
+        crate::ir::const_fold::fold_constants(&mut f);
+        crate::ir::dce::prune_dead_flags(&mut f);
+        crate::ir::call_args::reconstruct_args(&mut f, cc);
+        crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
+        crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
+        crate::ir::canary::recognise_canary(&mut f);
+        crate::ir::stack_locals::promote_stack_locals(&mut f);
+        let tm = if types {
+            Some(recover_types(&lf))
+        } else {
+            None
+        };
+        crate::ir::naming::apply_role_names(&mut f, cc);
+        crate::ir::canary::collapse_canary_save(&mut f);
+        if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
+            crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
+        }
+        crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
+        crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
+        crate::ir::label_prune::prune_unreferenced_labels(&mut f);
+        if matches!(
+            cc,
+            crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
+        ) {
+            crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
+        }
+        if let Some(field_map) = &field_map {
+            crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
+        }
+        let pdb_outer_name = pdb_cache
+            .and_then(|_| addr_map.get(&func_va))
+            .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
+            .cloned();
+        let text = if style == "c" {
+            let body = crate::ir::ast::render_c(&f);
+            match pdb_outer_name {
+                Some(name) => format!("// PDB: {}\n{}", name, body),
+                None => body,
+            }
+        } else {
+            match tm {
+                Some(tm) => {
+                    let renamed = remap_type_map(&tm, &f, cc);
+                    render_with_types(&f, &renamed)
+                }
+                None => render(&f),
+            }
+        };
+        let name = resolve_outer_function_name(&func.name, func_va, &addr_map);
+        list.append((name, func_va, text))?;
+    }
+    Ok(list.into())
+}
+
 /// Pick the best name for the outer function being decompiled.
 ///
 /// `discovered_name` is whatever the CFG discovery pass produced
@@ -747,6 +870,7 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
     ir_mod.add_function(wrap_pyfunction!(decompile_at_py, &ir_mod)?)?;
     ir_mod.add_function(wrap_pyfunction!(decompile_range_at_py, &ir_mod)?)?;
     ir_mod.add_function(wrap_pyfunction!(decompile_all_py, &ir_mod)?)?;
+    ir_mod.add_function(wrap_pyfunction!(decompile_many_py, &ir_mod)?)?;
     m.add_submodule(&ir_mod)?;
     Ok(())
 }
