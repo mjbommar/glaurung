@@ -49,8 +49,17 @@ impl Solver for Z3Solver {
             let mut memo: BTreeMap<ExprId, BV> = BTreeMap::new();
             for (e, expected) in asserts {
                 let bv = to_bv(ctx, pool, *e, &mut memo);
-                let want = BV::from_u64(ctx, *expected as u64, 1);
-                solver.assert(&bv._eq(&want));
+                // A constraint predicate is truthy (`!= 0`) when its bit should be
+                // set. Using `!= 0` instead of `== 1` is width-safe: predicates
+                // from `Cmp` are 1-bit, but a stray wider value (e.g. an unset flag
+                // in obfuscated code) must not crash the solver on a sort mismatch.
+                let zero = BV::from_u64(ctx, 0, bv.get_size());
+                let is_true = bv._eq(&zero).not();
+                if *expected {
+                    solver.assert(&is_true);
+                } else {
+                    solver.assert(&is_true.not());
+                }
             }
 
             match solver.check() {
@@ -193,6 +202,61 @@ fn to_bv<'c>(
 mod tests {
     use super::*;
     use crate::ir::types::Width;
+
+    #[test]
+    fn z3_timeout_bails_on_hard_formula() {
+        // Bit-vector factoring: a * b == N (a 64-bit semiprime), with a,b > 1.
+        // This is hard; the per-solve timeout must make it return `unknown`
+        // quickly rather than hang (the whole point of the safety cap). If this
+        // test ever hangs, the z3 timeout has regressed.
+        let mut p = ExprPool::new();
+        let a = p.fresh_symbol(Width::W64);
+        let b = p.fresh_symbol(Width::W64);
+        let prod = p.intern(Expr::Bin {
+            op: BinOp::Mul,
+            a,
+            b,
+            width: Width::W64,
+        });
+        // N = 1000000007 * 1000000009
+        let n = p.intern(Expr::Const {
+            value: 1_000_000_016_000_000_063,
+            width: Width::W64,
+        });
+        let one = p.intern(Expr::Const {
+            value: 1,
+            width: Width::W64,
+        });
+        let eq = p.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: prod,
+            b: n,
+            width: Width::W64,
+        });
+        let a_gt = p.intern(Expr::Cmp {
+            op: CmpOp::Ult,
+            a: one,
+            b: a,
+            width: Width::W64,
+        });
+        let b_gt = p.intern(Expr::Cmp {
+            op: CmpOp::Ult,
+            a: one,
+            b,
+            width: Width::W64,
+        });
+        let start = std::time::Instant::now();
+        let r = Z3Solver::new().check(&p, &[(eq, true), (a_gt, true), (b_gt, true)]);
+        // The per-solve timeout must keep any single check bounded — it returns
+        // a result (sat/unsat/unknown) quickly rather than hanging. If this ever
+        // exceeds the bound, the z3 timeout has regressed.
+        assert!(
+            start.elapsed().as_secs() < 5,
+            "a single solve must stay bounded, took {:?}",
+            start.elapsed()
+        );
+        let _ = r;
+    }
 
     #[test]
     fn z3_solves_simple_constraint() {

@@ -27,5 +27,8 @@ pub use ioctl::{
     find_function_stateful_sinks, find_ioctl_sinks, find_ioctl_sinks_with_apis, seed_irp,
     seed_tainted_args, IrpSeed,
 };
-pub use solver::{solve, Model, SolveResult, Solver};
+pub use solver::{
+    set_solver_budget, set_time_budget, solve, solver_budget, solver_meter, time_budget, Model,
+    SolveResult, Solver, DEFAULT_SOLVER_BUDGET,
+};
 pub use symdomain::Symbolic;

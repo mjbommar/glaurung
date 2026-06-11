@@ -104,6 +104,32 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked
 
 ## Worklog (most recent first)
 
+- **2026-06-11** — **Obfuscation handling: loop bound + layered safety caps.**
+  Made the engine terminate on heavily-obfuscated drivers (it previously ran
+  unboundedly on `ilp60x64_3.sys`). Three angles:
+  - **Detect obfuscation** — a cheap CFG metric (`back_edges`): the scan reports
+    how many functions are loop-heavy (ilp60x64: 30/164). Loops are the
+    obfuscation/flattening signal.
+  - **Modify the execution over the graph** — a per-path **loop bound**
+    (`MAX_BLOCK_VISITS = 8`, IOCTLance's `LoopSeer`): a path that re-enters a
+    block too many times is cut. This bounds symbolic *expression growth* at its
+    source — the root cause of the few functions that no per-instruction or
+    wall-clock cap could interrupt (a single op on a giant expression never
+    returns). Result: ilp60x64 went from **never-finishing → 57s clean**, and
+    `RtDashPt.sys` finds its ground-truth **null-deref in 9s**.
+  - **Layered safety caps** — a per-thread solver budget (`solves`/`timeouts`,
+    the timeout count being the obfuscation signal), a per-function wall-clock
+    deadline checked **per instruction**, and a global scan deadline; all tunable
+    (`set_solver_budget`/`set_time_budget`). Each bails with partial results.
+  Also fixed a real z3 crash: a constraint predicate that is not 1-bit (an unset
+  flag in obfuscated code) hit `bv._eq(1-bit)` → `SortDiffers`; constraints are
+  now asserted as truthy (`!= 0`), width-safe. New tests:
+  `solver_budget_bails_on_runaway_exploration`, `loop_bound_cuts_runaway_path`,
+  `z3_timeout_bails_on_hard_formula` (43 symbolic; 854 lib + 2 pre-existing;
+  oracle 11/11). Synthetic 5/5 still detected; the engine now completes on every
+  real sample. Residual: precision (assume-tainted-entry over-reports on big
+  drivers — 306 raw arbitrary-writes vs 19 ground-truth, the Arbitrary subset is
+  the real signal); ranking/dedup across passes is future work.
 - **2026-06-11** — **Real-CVE validation + engine performance & precision.**
   Ran against the fork's real-world samples (which carry IOCTLance ground truth)
   and hardened the engine. **Validation:** on `ilp60x64_3.sys` (GT: 19 read/write

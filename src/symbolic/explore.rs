@@ -22,6 +22,23 @@ use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{solve, Assert, Model, SolveResult};
 use crate::symbolic::Symbolic;
 
+use std::cell::Cell;
+use std::time::Instant;
+
+thread_local! {
+    /// Per-function wall-clock deadline, set by [`run_worklist`] and checked
+    /// *per instruction* so a single block built from huge (obfuscated)
+    /// expressions can still be interrupted — coarser checks at block boundaries
+    /// are not enough when one block takes minutes.
+    static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+fn deadline_passed() -> bool {
+    DEADLINE
+        .with(Cell::get)
+        .is_some_and(|dl| Instant::now() >= dl)
+}
+
 /// A sentinel address the attacker would "love to" write to — distinct from any
 /// plausible legitimate pointer. If the solver can satisfy `addr == SENTINEL`
 /// under the path condition, the write target is *fully* attacker-chosen (a true
@@ -260,7 +277,15 @@ struct State {
     validated: BTreeSet<u32>,
     /// Attacker-pointer reads already seen on this path, for double-fetch.
     tainted_reads: BTreeSet<ExprId>,
+    /// Per-path block-visit counts. A loop unrolled symbolically grows the
+    /// path's expressions without bound (obfuscated code can make a single op on
+    /// the resulting giant expression non-interruptible); capping revisits per
+    /// path bounds expression growth at the source — IOCTLance's `LoopSeer`.
+    visits: BTreeMap<u64, u32>,
 }
+
+/// Max times a single path may re-enter the same block before it is cut.
+const MAX_BLOCK_VISITS: u32 = 8;
 
 impl State {
     /// A fresh root state at `pc` with the given machine and seed taint.
@@ -274,6 +299,7 @@ impl State {
             heap_next: HEAP_BASE,
             validated: BTreeSet::new(),
             tainted_reads: BTreeSet::new(),
+            visits: BTreeMap::new(),
         }
     }
 
@@ -289,6 +315,7 @@ impl State {
             heap_next: self.heap_next,
             validated: self.validated.clone(),
             tainted_reads: self.tainted_reads.clone(),
+            visits: self.visits.clone(),
         }
     }
 }
@@ -380,12 +407,19 @@ fn consider_terminal(st: &State, best: &mut Option<State>) {
 
 /// Drive the DFS worklist from `root`, returning the sinks found and the terminal
 /// path that advanced the heap lifecycle furthest (for stateful carry-over).
+/// Bails (returning partial results) when the per-function solver budget is spent
+/// — the safety cap that keeps a pathological/obfuscated function from stalling.
 fn run_worklist(
     blocks: &HashMap<u64, LlirBlock>,
     root: State,
     apis: &CallModel,
     max_states: usize,
 ) -> (Vec<Sink>, Option<State>) {
+    use crate::symbolic::solver::{reset_solver_meter, solver_budget, solver_meter, time_budget};
+    reset_solver_meter();
+    let (max_solves, max_timeouts) = solver_budget();
+    let deadline = time_budget().map(|d| Instant::now() + d);
+    DEADLINE.with(|c| c.set(deadline)); // checked per-instruction in process_block
     let mut work = vec![root];
     let mut explored = 0usize;
     let mut out = Vec::new();
@@ -394,6 +428,13 @@ fn run_worklist(
     while let Some(st) = work.pop() {
         if explored >= max_states {
             break;
+        }
+        let (solves, timeouts) = solver_meter();
+        if solves >= max_solves || timeouts >= max_timeouts {
+            break; // solver budget spent: bail with partial findings
+        }
+        if deadline.is_some_and(|dl| std::time::Instant::now() >= dl) {
+            break; // wall-clock budget spent: bail with partial findings
         }
         explored += 1;
         let mut sinks = Vec::new();
@@ -473,7 +514,23 @@ fn process_block(
         return Vec::new();
     };
 
+    // Loop bound: cut the path once it has re-entered this block too many times,
+    // which bounds symbolic expression growth (the root cause of the few
+    // functions that no per-instruction/wall-clock cap can interrupt).
+    let visits = st.visits.entry(st.pc).or_insert(0);
+    *visits += 1;
+    if *visits > MAX_BLOCK_VISITS {
+        consider_terminal(&st, best);
+        return Vec::new();
+    }
+
     for ins in &block.instrs {
+        // Per-instruction wall-clock guard: a block built from huge obfuscated
+        // expressions can take a long time in a single op, so bail mid-block.
+        if deadline_passed() {
+            consider_terminal(&st, best);
+            return Vec::new();
+        }
         match &ins.op {
             Op::CondJump {
                 cond,
@@ -1246,6 +1303,99 @@ mod tests {
             matches!(result, SolveResult::Unsat | SolveResult::Unknown),
             "got {:?}",
             result
+        );
+    }
+
+    /// The solver budget bails out of a runaway exploration. The block loops to
+    /// itself on a symbolic condition, so without a cap it would fork forever (up
+    /// to the state cap). With a small solver budget and a huge state cap, the
+    /// *solver* budget is what stops it — proving the safety cap engages.
+    #[test]
+    fn solver_budget_bails_on_runaway_exploration() {
+        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("rdi")),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x2000,
+                        inverted: false,
+                    },
+                ],
+                0x1000, // fall-through loops back to the block's own start
+            ),
+            (0x2000, vec![Op::Return], 0x2004),
+        ]);
+
+        set_solver_budget(40, 5);
+        let sinks = find_sinks(
+            &lf,
+            |m| {
+                let s = m.dom.fresh(Width::W64);
+                m.regs.write(&mut m.dom, &VReg::phys("rdi"), s);
+                TaintSpec::new()
+            },
+            &CallModel::new(),
+            1_000_000, // huge state cap: the *solver* budget must be what stops it
+        );
+        let (solves, _) = solver_meter();
+        set_solver_budget(DEFAULT_SOLVER_BUDGET.0, DEFAULT_SOLVER_BUDGET.1);
+
+        assert!(
+            solves <= 80,
+            "should bail near the 40-solve budget, did {solves}"
+        );
+        assert!(sinks.is_empty(), "no attacker memory ops in the loop");
+    }
+
+    /// The per-path loop bound alone (with the *default*, huge solver budget)
+    /// stops a self-looping function quickly — bounding symbolic expression growth
+    /// at its source. Without it, the loop would fork up to the state cap.
+    #[test]
+    fn loop_bound_cuts_runaway_path() {
+        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("rdi")),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x2000,
+                        inverted: false,
+                    },
+                ],
+                0x1000, // fall-through loops back to self
+            ),
+            (0x2000, vec![Op::Return], 0x2004),
+        ]);
+        set_solver_budget(DEFAULT_SOLVER_BUDGET.0, DEFAULT_SOLVER_BUDGET.1);
+        let _ = find_sinks(
+            &lf,
+            |m| {
+                let s = m.dom.fresh(Width::W64);
+                m.regs.write(&mut m.dom, &VReg::phys("rdi"), s);
+                TaintSpec::new()
+            },
+            &CallModel::new(),
+            1_000_000, // huge state cap: the loop bound, not the cap, must stop it
+        );
+        let (solves, _) = solver_meter();
+        assert!(
+            solves < 200,
+            "loop bound should keep a self-loop's solving tiny, did {solves}"
         );
     }
 }
