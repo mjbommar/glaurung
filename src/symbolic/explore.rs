@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::exec::domain::{BranchDecision, Domain};
 use crate::exec::{Concrete, Flow, Halt, Machine};
-use crate::ir::types::{BinOp, CallTarget, CmpOp, LlirBlock, LlirFunction, Op, VReg, Width};
+use crate::ir::types::{BinOp, CallTarget, CmpOp, LlirBlock, LlirFunction, Op, VReg, Value, Width};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{solve, Assert, Model, SolveResult};
 use crate::symbolic::Symbolic;
@@ -423,20 +423,33 @@ fn process_block(
                 st.pc = *target;
                 return vec![st];
             }
-            // A call to a *modeled* API is summarized (its memory effects are
-            // checked for attacker-controlled primitives) and execution continues
-            // past it; an unmodeled call ends the path (no inter-procedural
-            // descent yet). An indirect call through an attacker-controlled
-            // pointer is a control-flow hijack regardless of the target.
+            // Resolve the callee VA: a direct call, an `call [rip+__imp_Api]`
+            // (lifted to `Indirect(Addr(slot))`), or a register-indirect
+            // `mov reg,[__imp_Api]; call reg` whose target evaluates to a concrete
+            // IAT slot. A modeled callee is summarized and execution continues; a
+            // register-indirect call through an *attacker-controlled* target is a
+            // control-flow hijack (shellcode); anything else ends the path.
             Op::Call { target } => {
-                if let CallTarget::Indirect(v) = target {
-                    let tv = st.machine.read(v, Width::W64);
-                    let prov = st.taint.provenance_of(&st.machine.dom.pool, tv);
-                    if !prov.is_empty() {
-                        push_sink(&mut st, ins.va, SinkKind::Shellcode, tv, prov, sinks);
+                let callee: Option<u64> = match target {
+                    CallTarget::Direct(va) => Some(*va),
+                    CallTarget::Indirect(Value::Addr(va)) => Some(*va),
+                    CallTarget::Indirect(v) => {
+                        let tv = st.machine.read(v, Width::W64);
+                        let mut syms = BTreeMap::new();
+                        st.machine.dom.pool.collect_syms(tv, &mut syms);
+                        if syms.is_empty() {
+                            // Concrete function pointer (e.g. loaded from the IAT).
+                            Some(eval_concrete(&mut st, tv))
+                        } else {
+                            let prov = st.taint.provenance_of(&st.machine.dom.pool, tv);
+                            if !prov.is_empty() {
+                                push_sink(&mut st, ins.va, SinkKind::Shellcode, tv, prov, sinks);
+                            }
+                            None
+                        }
                     }
-                }
-                match summary_for(target, apis) {
+                };
+                match callee.and_then(|va| apis.get(&va).copied()) {
                     Some(summary) => {
                         apply_summary(&mut st, ins.va, summary, sinks);
                         continue;
@@ -634,20 +647,6 @@ fn uaf_check(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) {
     if hit {
         push_sink(st, va, SinkKind::UseAfterFree, ptr, Vec::new(), sinks);
     }
-}
-
-/// Resolve a call target to its [`ApiSummary`], if modeled. Direct calls match by
-/// target VA; an `call [rip+disp]` (an IAT thunk, lifted to `Indirect(Addr(slot))`)
-/// matches by the import slot VA — so a `CallModel` keyed by IAT-slot address
-/// resolves real driver imports. Register-indirect calls are unresolved here
-/// (they are handled as shellcode upstream).
-fn summary_for(target: &CallTarget, apis: &CallModel) -> Option<ApiSummary> {
-    let va = match target {
-        CallTarget::Direct(va) => *va,
-        CallTarget::Indirect(crate::ir::types::Value::Addr(va)) => *va,
-        CallTarget::Indirect(_) => return None,
-    };
-    apis.get(&va).copied()
 }
 
 /// Stack window (bytes) around `rsp` within which a `memcpy` destination is
@@ -854,15 +853,15 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
             let addr_tainted = !st.taint.provenance_of(&st.machine.dom.pool, av).is_empty();
             record_access(st, va, av, false, sinks);
             let a = concretize_addr(st, av);
-            let mut val = st
-                .machine
-                .mem
-                .load(&mut st.machine.dom, a, addr.size, addr.endian);
-            // Taint-through-memory: a load from an attacker-controlled pointer
-            // into *uninitialized* memory yields fresh attacker data (mirrors a
+            // Taint-through-memory: a load from an attacker-controlled pointer into
+            // *uninitialized* memory yields fresh attacker data (mirrors a
             // fully-symbolic memory model). Mark the fresh symbol so values read
-            // out of `*(SystemBuffer)` stay attacker-controlled downstream.
-            if addr_tainted && st.machine.dom.pool.as_const(val) == Some(0) {
+            // out of `*(SystemBuffer)` stay attacker-controlled downstream — this
+            // is what lets handle/PID/pointer args derived from buffer contents be
+            // detected. Detect "uninitialized" via the memory map, not the loaded
+            // value, since an uninitialized multi-byte load is a `Concat` of zero
+            // bytes (never a bare `Const`).
+            let val = if addr_tainted && !st.machine.mem.is_initialized(a, addr.size) {
                 let w = Width::from_bytes(addr.size as u16);
                 let fresh = st.machine.dom.fresh(w);
                 if let Expr::Sym { id, .. } = *st.machine.dom.pool.get(fresh) {
@@ -871,8 +870,12 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
                 st.machine
                     .mem
                     .store(&mut st.machine.dom, a, &fresh, addr.size, addr.endian);
-                val = fresh;
-            }
+                fresh
+            } else {
+                st.machine
+                    .mem
+                    .load(&mut st.machine.dom, a, addr.size, addr.endian)
+            };
             st.machine.regs.write(&mut st.machine.dom, dst, val);
             Some(())
         }

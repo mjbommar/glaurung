@@ -74,6 +74,18 @@ impl<D: Domain> Memory<D> {
         self.pages.entry(pg).or_insert_with(fresh_page::<D>)[off] = Some(byte);
     }
 
+    /// True if any byte in `[addr, addr+size)` has been written. Used by symbolic
+    /// callers to distinguish *uninitialized* memory (which a symbolic engine may
+    /// treat as fresh attacker data) from values the program actually stored.
+    pub fn is_initialized(&self, addr: u64, size: u8) -> bool {
+        (0..size as u64).any(|i| {
+            let a = addr.wrapping_add(i);
+            let pg = a >> PAGE_BITS;
+            let off = (a & PAGE_MASK) as usize;
+            self.pages.get(&pg).is_some_and(|p| p[off].is_some())
+        })
+    }
+
     /// Load `size` bytes at `addr` with the given byte order, returning a value
     /// of width `8 * size`.
     pub fn load(&mut self, dom: &mut D, addr: u64, size: u8, endian: Endian) -> D::Val {

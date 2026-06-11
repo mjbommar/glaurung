@@ -119,13 +119,73 @@ pub fn find_ioctl_sinks_with_apis(
     apis: &CallModel,
     max_states: usize,
 ) -> Vec<Sink> {
-    find_sinks(lf, |m| seed_irp(m).taint_spec(), apis, max_states)
+    find_sinks(
+        lf,
+        |m| {
+            let spec = seed_irp(m).taint_spec();
+            seed_iat(m, apis);
+            spec
+        },
+        apis,
+        max_states,
+    )
+}
+
+/// Store a self-pointer at every modeled IAT slot: `mem[slot] = slot`. Real MSVC
+/// drivers call imports as `mov reg, [rip+__imp_Api]; call reg`, so the callee
+/// register holds the slot's contents. Seeding each slot with its own address
+/// makes that loaded value resolve back to the slot VA, which the explorer looks
+/// up in the [`CallModel`] — so register-indirect import calls are summarized
+/// just like the `call [rip+__imp_Api]` form.
+fn seed_iat(m: &mut Machine<Symbolic>, apis: &CallModel) {
+    for &slot in apis.keys() {
+        let v = m.dom.constant(Width::W64, slot as u128);
+        m.mem.store(&mut m.dom, slot, &v, 8, Endian::Little);
+    }
 }
 
 /// As [`find_ioctl_sinks_with_apis`] with no modeled callees (raw memory accesses
 /// only).
 pub fn find_ioctl_sinks(lf: &LlirFunction, max_states: usize) -> Vec<Sink> {
     find_ioctl_sinks_with_apis(lf, &CallModel::new(), max_states)
+}
+
+/// Mark the four integer-argument registers (`rcx`/`rdx`/`r8`/`r9`) as attacker
+/// input. Real dispatchers delegate to per-IOCTL helpers `ProcessX(UserBuffer,
+/// len, ...)` reached by direct calls the engine does not yet follow; analyzing
+/// each *helper* with its arguments assumed tainted (the assume-tainted-entry
+/// model) recovers those sinks without inter-procedural exploration.
+pub fn seed_tainted_args(m: &mut Machine<Symbolic>) -> TaintSpec {
+    let mut t = TaintSpec::new();
+    for (i, r) in ["rcx", "rdx", "r8", "r9"].iter().enumerate() {
+        let s = m.dom.fresh(Width::W64);
+        if let Expr::Sym { id, .. } = *m.dom.pool.get(s) {
+            t.mark(id, format!("Arg{i}"));
+        }
+        m.regs.write(&mut m.dom, &VReg::phys(*r), s);
+    }
+    t
+}
+
+/// Explore `lf` as a standalone function whose arguments are attacker-controlled
+/// (see [`seed_tainted_args`]), resolving `apis` calls. Complements
+/// [`find_ioctl_sinks_with_apis`]: that seeds the dispatcher's IRP, this seeds the
+/// per-IOCTL helper functions the dispatcher calls.
+pub fn find_function_sinks_with_apis(
+    lf: &LlirFunction,
+    apis: &CallModel,
+    max_states: usize,
+) -> Vec<Sink> {
+    find_sinks(
+        lf,
+        |m| {
+            let t = seed_tainted_args(m);
+            seed_iat(m, apis);
+            t
+        },
+        apis,
+        max_states,
+    )
 }
 
 /// Convenience: just the attacker-controlled *write* sinks (the classic
@@ -556,6 +616,42 @@ mod tests {
         let sinks = find_ioctl_sinks_with_apis(&lf, &model("ZwTerminateProcess", API), 1000);
         assert_eq!(kinds(&sinks), ["proc_term"].into_iter().collect());
         assert_eq!(sinks[0].tainted_by, vec!["SystemBuffer".to_string()]);
+    }
+
+    /// The full real-MSVC pattern, end to end: a handle read from buffer contents
+    /// (`rcx = *SystemBuffer`, taint-through-memory) passed to an import called
+    /// register-indirect (`mov rax,[__imp_ZwTerminateProcess]; call rax`). Both
+    /// the IAT-self-pointer resolution and taint-through-memory must fire for the
+    /// process-termination sink to appear. (Mirrors test_process_termination.sys.)
+    #[test]
+    fn register_indirect_import_with_buffer_derived_handle() {
+        const SLOT: u64 = 0x40000; // __imp_ZwTerminateProcess IAT slot
+        let lf = func(vec![(
+            0x1000,
+            vec![
+                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // rax = SystemBuffer ptr
+                Op::Load {
+                    dst: VReg::phys("rcx"),
+                    addr: MemOp::plain(Some(VReg::phys("rax")), None, 1, 0, 8),
+                }, // rcx = *SystemBuffer (handle) -> taint-through-memory
+                Op::Load {
+                    dst: VReg::phys("rax"),
+                    addr: MemOp::plain(None, None, 1, SLOT as i64, 8),
+                }, // rax = mem[SLOT] = SLOT (seeded self-pointer)
+                Op::Call {
+                    target: CallTarget::Indirect(Value::Reg(VReg::phys("rax"))),
+                },
+                Op::Return,
+            ],
+            0x1014,
+            vec![],
+        )]);
+        let sinks = find_ioctl_sinks_with_apis(&lf, &model("ZwTerminateProcess", SLOT), 1000);
+        assert!(
+            sinks.iter().any(|s| s.kind == SinkKind::ProcessTermination),
+            "expected process-termination via buffer-derived handle, got {:?}",
+            kinds(&sinks)
+        );
     }
 
     /// `MmMapIoSpace(phys = attacker, size = attacker)` → physical-memory finding,

@@ -15,7 +15,9 @@ use glaurung::analysis::cfg::{analyze_functions_bytes, Budgets};
 use glaurung::analysis::pe_iat::pe_iat_map;
 use glaurung::core::binary::Arch;
 use glaurung::ir::lift_function::lift_function_from_bytes;
-use glaurung::symbolic::{driver_api_model, find_ioctl_sinks_with_apis, SinkKind};
+use glaurung::symbolic::{
+    driver_api_model, find_function_sinks_with_apis, find_ioctl_sinks_with_apis, SinkKind,
+};
 
 fn kind_str(k: SinkKind) -> &'static str {
     match k {
@@ -66,7 +68,10 @@ fn main() {
         let Some(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) else {
             continue;
         };
-        let sinks = find_ioctl_sinks_with_apis(&lf, &model, 4000);
+        // Two seeds: the dispatcher's symbolic IRP, and assume-tainted-entry for
+        // the per-IOCTL helper functions the dispatcher delegates to.
+        let mut sinks = find_ioctl_sinks_with_apis(&lf, &model, 4000);
+        sinks.extend(find_function_sinks_with_apis(&lf, &model, 4000));
         if sinks.is_empty() {
             continue;
         }

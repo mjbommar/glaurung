@@ -22,8 +22,8 @@ pub use explore::{
 };
 pub use expr::{Expr, ExprId, ExprPool};
 pub use ioctl::{
-    driver_api_model, find_arbitrary_writes, find_ioctl_sinks, find_ioctl_sinks_with_apis,
-    seed_irp, IrpSeed,
+    driver_api_model, find_arbitrary_writes, find_function_sinks_with_apis, find_ioctl_sinks,
+    find_ioctl_sinks_with_apis, seed_irp, seed_tainted_args, IrpSeed,
 };
 pub use solver::{solve, Model, SolveResult, Solver};
 pub use symdomain::Symbolic;

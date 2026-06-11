@@ -104,6 +104,34 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked
 
 ## Worklog (most recent first)
 
+- **2026-06-10** — **Closing the IOCTLance gap on real drivers (0→4 of 5 planted
+  bugs).** Drove the engine against the fork's synthetic single-bug `.sys` via
+  `examples/ioctl_scan.rs` and fixed the blockers that made it find *nothing*
+  real, by reading the actual disassembly rather than guessing:
+  - **Register-indirect import resolution.** MSVC emits imports as
+    `mov reg,[rip+__imp_Api]; call reg` (lifted `Indirect(Reg)`), which the old
+    `summary_for` (only `Direct`/`Indirect(Addr)`) dropped → the modeled API call
+    vanished. Now: seed each IAT slot with a self-pointer (`mem[slot]=slot`) and
+    resolve a register-indirect callee by concretely evaluating its target — so
+    `call reg` lands back on the slot VA and the `CallModel` resolves it.
+  - **Taint-through-memory actually fires now.** The old `as_const(val)==Some(0)`
+    guard never matched, because an uninitialized multi-byte load is a `Concat`
+    of zero bytes, not a bare `Const`. Added `Memory::is_initialized`; a load from
+    an attacker pointer into unwritten memory now mints a fresh tainted symbol —
+    so `handle = *(SystemBuffer)` stays attacker-controlled into the API call.
+  - **Assume-tainted-entry mode** (`find_function_sinks_with_apis` /
+    `seed_tainted_args`): dispatchers delegate to `ProcessX(UserBuffer,…)` helpers
+    via direct calls the engine does not yet follow; analyzing each helper with
+    `rcx/rdx/r8/r9` tainted recovers those sinks without inter-procedural search.
+  - Result on the corpus: **process_termination, physical_memory, race_condition
+    (double-fetch), file_operations now detected** (were all missed). New unit
+    test `register_indirect_import_with_buffer_derived_handle` locks the path in
+    (39 symbolic tests; oracle 11/11; 850 lib pass + 2 pre-existing).
+  - **Still open — the one honest miss:** `use_after_free`/`double_free` are
+    *cross-invocation* (alloc on IOCTL #1, free on #2, use on #3 via a global), so
+    a single-invocation symbolic run cannot observe alloc+free+use together. Needs
+    stateful multi-invocation exploration (carry globals/heap across IOCTL codes)
+    — the next frontier, plus true inter-procedural call-following.
 - **2026-06-10** — **Full IOCTLance detector parity (all 13).** Implemented the
   remaining 11 detector classes on the symbolic engine so glaurung now covers the
   same set the IOCTLance fork does, each TDD'd (symbolic suite 27→38; full lib 850
