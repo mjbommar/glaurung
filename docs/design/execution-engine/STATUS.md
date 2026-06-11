@@ -104,6 +104,69 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked
 
 ## Worklog (most recent first)
 
+- **2026-06-10** — **Full IOCTLance detector parity (all 13).** Implemented the
+  remaining 11 detector classes on the symbolic engine so glaurung now covers the
+  same set the IOCTLance fork does, each TDD'd (symbolic suite 27→38; full lib 850
+  pass + 2 pre-existing WinAPI fails; Unicorn oracle 11/11; default build clean).
+  `SinkKind` grew to 14 variants; sinks keep provenance + arbitrariness severity.
+  **(A) Call-argument detectors** via a generalized `ApiSummary`
+  (`CopyMemory | Alloc | Free | Probe | DangerousCall{args,kind}`) and a real
+  import-table seam `driver_api_model(&BTreeMap<name,va>)`: `process_termination`
+  (`ZwTerminateProcess` handle), `physical_memory` (`MmMapIoSpace` phys/size),
+  `file_operations` (`ZwCreateFile`/…), `format_string` (`sprintf` fmt arg),
+  `probe_bypass` (`ProbeForRead/Write` zero-length **+ region validation** that
+  suppresses later derefs built from probed symbols), `shellcode` (attacker
+  indirect call target). **(B) Allocation lifecycle**: `ExAllocatePool*`/
+  `ExFreePool*` summaries drive a per-path bump allocator + freed-set →
+  `double_free` (second free) and `use_after_free` (deref/copy of a freed block).
+  **(C) Instruction-level**: `integer_overflow` (tainted add/sub/mul, overflow
+  predicate solved at operand width), `stack_buffer_overflow` (attacker-length
+  `memcpy` onto the stack window), `race_condition`/double-fetch (same attacker
+  pointer read twice on a path). New API: `find_sinks`/`find_ioctl_sinks[_with_apis]`,
+  `driver_api_model`. **Mapping to the fork's 13:** arbitrary_rw→Controlled
+  Read/Write, null_pointer→NullDeref, +the 11 above. **Still deferred (the only
+  real gap left):** the PE→DriverEntry→MajorFunction[14] bridge to populate the
+  `CallModel`/`TaintSpec` from a real `.sys` and run end-to-end.
+- **2026-06-10** — **IOCTLance detector quality (3 iterations).** Closed the
+  precision/breadth/kernel-API gaps the IOCTLance-fork comparison surfaced, all
+  TDD'd against `solver-z3` (symbolic suite 21→26, Unicorn oracle still 11/11).
+  **(1) Precision** — sinks now carry *provenance* (`TaintSpec` maps each seeded
+  IRP symbol to a label; a sink whose address touches no attacker symbol is *not*
+  reported — kills the "every symbolic store" over-report) and a *severity* from
+  IOCTLance's `0x87` sentinel probe (`Arbitrary` = address satisfiable to a
+  chosen sentinel = write-where; `Constrained` = attacker-derived but bounded).
+  **(2) Breadth** — generalized the single write sink into `Sink{kind,severity,
+  tainted_by,witness}` over `ControlledWrite | ControlledRead | NullDeref`; null
+  deref is *path-sensitive* (a `if(p==0) return;` guard makes `p==0` unsat on the
+  deref path, so it's correctly suppressed — better than IOCTLance's manual global
+  tracking). Found+fixed a latent emulator bug: `Memory::{load,store}` slow path
+  did non-wrapping `addr+i`, panicking on a wild concretized address — now
+  `wrapping_add` (hardware semantics; oracle unaffected). **(3) Kernel API** —
+  `ApiSummary::CopyMemory` + `CallModel` (VA→summary): a `memcpy`/`RtlCopyMemory`
+  through an attacker `dst`/`src` is now detected even though it never appears as
+  a raw symbolic store; an unmodeled call still ends the path. New API:
+  `find_sinks` / `find_ioctl_sinks[_with_apis]`; `find_arbitrary_writes` kept as a
+  write-only filter. **Still deferred:** PE→DriverEntry→MajorFunction[14] bridge
+  to drive real `.sys`; the `CallModel` is the seam the import table will fill.
+- **2026-06-10** — **IOCTLance capability (first cut).** Built the symbolic
+  arbitrary-write detector on our own engine. (a) Threaded a controlled-write
+  sink collector through the explorer: new `ControlledWrite { store_va, witness }`
+  and `find_controlled_writes(lf, seed, max_states)` in `src/symbolic/explore.rs`
+  — a store through a *symbolic (input-derived)* address is recorded with a
+  solver witness (the input that reaches it) before the address is concretized.
+  (b) New `src/symbolic/ioctl.rs`: `seed_irp` lays out a **symbolic IRP** per the
+  WDM dispatch ABI (`rcx`=DeviceObject, `rdx`=Irp; IRP/`IO_STACK_LOCATION`
+  offsets mirror `src/analysis/ioctl_taint.rs` — SystemBuffer/UserBuffer/lengths/
+  IoControlCode/Type3 symbolic, the Irp→stack-location pointer concrete), and
+  `find_arbitrary_writes(lf, max_states)` runs it. `IrpSeed` returns the free-symbol
+  ids so a witness `Model` is interpretable. (c) Tests (3, all green under
+  `solver-z3`): a synthetic gated handler where the engine recovers the exact
+  triggering `IoControlCode` (`0x800`) as the witness; the **real x86-64
+  machine-bytes** pipeline (lift → symbolic-detect) on a `mov [rax],imm` through
+  SystemBuffer; and a negative (no write → no finding). This is the symbolic
+  *confirmation* layer above the static `ioctl_taint` *nomination* pass.
+  **Deferred (next):** PE memory loader + DriverEntry→MajorFunction[14] traversal
+  to drive this from real `.sys` samples; read/OOB-length sinks; null-deref sink.
 - **2026-06-10** — Emulator fundamentals pass (correctness · performance · tests),
   committed on the branch. **Correctness:** the Unicorn differential oracle now
   compares **memory** (stack/scratch + rsp), not just GPRs; validated

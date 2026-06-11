@@ -13,10 +13,17 @@
 
 pub mod explore;
 pub mod expr;
+pub mod ioctl;
 pub mod solver;
 pub mod symdomain;
 
-pub use explore::find_input_reaching;
+pub use explore::{
+    find_input_reaching, find_sinks, ApiSummary, CallModel, Severity, Sink, SinkKind, TaintSpec,
+};
 pub use expr::{Expr, ExprId, ExprPool};
+pub use ioctl::{
+    driver_api_model, find_arbitrary_writes, find_ioctl_sinks, find_ioctl_sinks_with_apis,
+    seed_irp, IrpSeed,
+};
 pub use solver::{solve, Model, SolveResult, Solver};
 pub use symdomain::Symbolic;

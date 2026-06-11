@@ -94,7 +94,9 @@ impl<D: Domain> Memory<D> {
                 None => (0..n).map(|_| dom.constant(Width::W8, 0)).collect(),
             }
         } else {
-            (0..size as u64).map(|i| self.byte(dom, addr + i)).collect()
+            (0..size as u64)
+                .map(|i| self.byte(dom, addr.wrapping_add(i)))
+                .collect()
         };
         // Order most-significant first for left-to-right concat.
         let msb_first: Vec<&D::Val> = match endian {
@@ -131,8 +133,8 @@ impl<D: Domain> Memory<D> {
                 let lo = (i * 8) as u16;
                 let byte = dom.extract(val, lo + 8, lo);
                 let target = match endian {
-                    Endian::Little => addr + i,
-                    Endian::Big => addr + (size as u64 - 1 - i),
+                    Endian::Little => addr.wrapping_add(i),
+                    Endian::Big => addr.wrapping_add(size as u64 - 1 - i),
                 };
                 self.set_byte(target, byte);
             }

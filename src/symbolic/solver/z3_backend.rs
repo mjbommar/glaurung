@@ -63,6 +63,22 @@ impl Solver for Z3Solver {
     }
 }
 
+/// Coerce a bit-vector to exactly `bits` wide — zero-extending if narrower,
+/// truncating to the low bits if wider. This mirrors the `Concrete` domain, which
+/// masks operands to each operation's declared width; z3, by contrast, rejects
+/// mismatched widths (returning a null AST), so honoring the node width here keeps
+/// translation total and the two domains in agreement.
+fn coerce<'c>(bv: BV<'c>, bits: u32) -> BV<'c> {
+    let w = bv.get_size();
+    if w == bits {
+        bv
+    } else if w < bits {
+        bv.zero_ext(bits - w)
+    } else {
+        bv.extract(bits - 1, 0)
+    }
+}
+
 /// Translate an `Expr` into a z3 bit-vector. Re-uses z3's structural sharing and
 /// name-based const interning, so no explicit cache is needed for correctness.
 fn to_bv<'c>(ctx: &'c Context, pool: &ExprPool, id: ExprId) -> BV<'c> {
@@ -71,9 +87,10 @@ fn to_bv<'c>(ctx: &'c Context, pool: &ExprPool, id: ExprId) -> BV<'c> {
         Expr::Sym { id, width } => {
             BV::new_const(ctx, ExprPool::sym_name(id, width), width.bits() as u32)
         }
-        Expr::Bin { op, a, b, .. } => {
-            let a = to_bv(ctx, pool, a);
-            let b = to_bv(ctx, pool, b);
+        Expr::Bin { op, a, b, width } => {
+            let tb = width.bits() as u32;
+            let a = coerce(to_bv(ctx, pool, a), tb);
+            let b = coerce(to_bv(ctx, pool, b), tb);
             match op {
                 BinOp::Add => a.bvadd(&b),
                 BinOp::Sub => a.bvsub(&b),
@@ -94,9 +111,10 @@ fn to_bv<'c>(ctx: &'c Context, pool: &ExprPool, id: ExprId) -> BV<'c> {
                 UnOp::Neg => a.bvneg(),
             }
         }
-        Expr::Cmp { op, a, b, .. } => {
-            let a = to_bv(ctx, pool, a);
-            let b = to_bv(ctx, pool, b);
+        Expr::Cmp { op, a, b, width } => {
+            let tb = width.bits() as u32;
+            let a = coerce(to_bv(ctx, pool, a), tb);
+            let b = coerce(to_bv(ctx, pool, b), tb);
             let cond: Bool = match op {
                 CmpOp::Eq => a._eq(&b),
                 CmpOp::Ne => a._eq(&b).not(),
@@ -116,11 +134,14 @@ fn to_bv<'c>(ctx: &'c Context, pool: &ExprPool, id: ExprId) -> BV<'c> {
             a.sign_ext((to.bits() - from.bits()) as u32)
         }
         Expr::Trunc { a, to } => {
-            let a = to_bv(ctx, pool, a);
-            a.extract((to.bits() - 1) as u32, 0)
+            let tb = to.bits() as u32;
+            // Ensure the source is at least `to` bits before extracting low bits.
+            let a = coerce(to_bv(ctx, pool, a), tb);
+            a.extract(tb - 1, 0)
         }
         Expr::Extract { a, hi, lo } => {
-            let a = to_bv(ctx, pool, a);
+            // Ensure the source is wide enough for the requested bit range.
+            let a = coerce(to_bv(ctx, pool, a), hi as u32);
             a.extract((hi - 1) as u32, lo as u32)
         }
         Expr::Concat { hi, lo, .. } => {
@@ -128,10 +149,11 @@ fn to_bv<'c>(ctx: &'c Context, pool: &ExprPool, id: ExprId) -> BV<'c> {
             let l = to_bv(ctx, pool, lo);
             h.concat(&l)
         }
-        Expr::Ite { c, t, e, .. } => {
+        Expr::Ite { c, t, e, width } => {
+            let tb = width.bits() as u32;
             let c = to_bv(ctx, pool, c);
-            let t = to_bv(ctx, pool, t);
-            let e = to_bv(ctx, pool, e);
+            let t = coerce(to_bv(ctx, pool, t), tb);
+            let e = coerce(to_bv(ctx, pool, e), tb);
             let cbool = c._eq(&BV::from_u64(ctx, 1, 1));
             cbool.ite(&t, &e)
         }
