@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 
 use crate::exec::{Domain, Machine};
 use crate::ir::types::{Endian, LlirFunction, VReg, Width};
-use crate::symbolic::explore::{find_sinks, ApiSummary, CallModel, Sink, SinkKind, TaintSpec};
+use crate::symbolic::explore::{
+    find_sinks, find_sinks_stateful, ApiSummary, CallModel, Sink, SinkKind, TaintSpec,
+};
 use crate::symbolic::{Expr, Symbolic};
 
 // WDM IRP field offsets (x64), per src/analysis/ioctl_taint.rs::struct_field.
@@ -185,6 +187,31 @@ pub fn find_function_sinks_with_apis(
         },
         apis,
         max_states,
+    )
+}
+
+/// Stateful, multi-invocation version of [`find_function_sinks_with_apis`]: runs
+/// the helper `rounds` times, carrying the heap/global state forward, so
+/// *cross-invocation* lifecycle bugs are found — e.g. a block allocated on one
+/// IOCTL (command 1), freed on another (command 2), and used or freed again on a
+/// third (command 3) through a persisted global pointer. This is what catches the
+/// use-after-free / double-free a single run structurally cannot.
+pub fn find_function_stateful_sinks(
+    lf: &LlirFunction,
+    apis: &CallModel,
+    max_states: usize,
+    rounds: usize,
+) -> Vec<Sink> {
+    find_sinks_stateful(
+        lf,
+        |m| {
+            let t = seed_tainted_args(m);
+            seed_iat(m, apis);
+            t
+        },
+        apis,
+        max_states,
+        rounds,
     )
 }
 
@@ -910,6 +937,106 @@ mod tests {
             .find(|s| s.kind == SinkKind::IntegerOverflow)
             .unwrap();
         assert_eq!(io.tainted_by, vec!["InputBufferLength".to_string()]);
+    }
+
+    /// Cross-invocation lifecycle: a block is allocated on one IOCTL (cmd 1) and
+    /// its pointer saved to a *global*; freed on another (cmd 2); and used / freed
+    /// again on a third (cmd 3). No single invocation sees alloc+free+use — only
+    /// the stateful multi-invocation sweep, carrying the heap/global forward, can.
+    /// Must report both use-after-free and double-free.
+    #[test]
+    fn cross_invocation_uaf_and_double_free() {
+        const ALLOC: u64 = 0x40000;
+        const FREE: u64 = 0x40008;
+        const GLOBAL: i64 = 0x50000; // persisted pointer in ".data"
+        let store_global = |reg: &str| Op::Store {
+            addr: MemOp::plain(None, None, 1, GLOBAL, 8),
+            src: Value::Reg(VReg::phys(reg)),
+        };
+        let load_global = |reg: &str| Op::Load {
+            dst: VReg::phys(reg),
+            addr: MemOp::plain(None, None, 1, GLOBAL, 8),
+        };
+        let cmp_jmp = |start: u64, n: i64, target: u64, end: u64, succs: Vec<u64>| {
+            (
+                start,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("rcx")), // arg0 = command (tainted)
+                        rhs: Value::Const(n),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target,
+                        inverted: false,
+                    },
+                ],
+                end,
+                succs,
+            )
+        };
+        let lf = func(vec![
+            // dispatch: command == 1 / 2 / 3
+            cmp_jmp(0x1000, 1, 0x1100, 0x1008, vec![0x1100, 0x1008]),
+            cmp_jmp(0x1008, 2, 0x1200, 0x1010, vec![0x1200, 0x1010]),
+            cmp_jmp(0x1010, 3, 0x1300, 0x1018, vec![0x1300, 0x1018]),
+            (0x1018, vec![Op::Return], 0x101c, vec![]),
+            // cmd 1: g = ExAllocatePoolWithTag()
+            (
+                0x1100,
+                vec![call(ALLOC), store_global("rax"), Op::Return],
+                0x110c,
+                vec![],
+            ),
+            // cmd 2: ExFreePoolWithTag(g)
+            (
+                0x1200,
+                vec![load_global("rcx"), call(FREE), Op::Return],
+                0x120c,
+                vec![],
+            ),
+            // cmd 3: use *g
+            (
+                0x1300,
+                vec![
+                    load_global("rax"),
+                    Op::Load {
+                        dst: VReg::phys("rbx"),
+                        addr: MemOp::plain(Some(VReg::phys("rax")), None, 1, 0, 8),
+                    },
+                    Op::Return,
+                ],
+                0x130c,
+                vec![],
+            ),
+        ]);
+        let apis = model_multi(&[
+            ("ExAllocatePoolWithTag", ALLOC),
+            ("ExFreePoolWithTag", FREE),
+        ]);
+
+        // Single invocation sees nothing (alloc/free/use are separate paths).
+        assert!(
+            !find_function_sinks_with_apis(&lf, &apis, 2000)
+                .iter()
+                .any(|s| matches!(s.kind, SinkKind::UseAfterFree | SinkKind::DoubleFree)),
+            "a single invocation cannot observe the cross-invocation bug"
+        );
+
+        // Stateful multi-invocation recovers both.
+        let sinks = find_function_stateful_sinks(&lf, &apis, 2000, 4);
+        assert!(
+            sinks.iter().any(|s| s.kind == SinkKind::UseAfterFree),
+            "expected use-after-free, got {:?}",
+            kinds(&sinks)
+        );
+        assert!(
+            sinks.iter().any(|s| s.kind == SinkKind::DoubleFree),
+            "expected double-free, got {:?}",
+            kinds(&sinks)
+        );
     }
 
     /// A handler with no attacker-controlled write must report nothing.

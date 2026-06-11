@@ -240,6 +240,7 @@ const HEAP_BASE: u64 = 0x7000_0000;
 
 /// One in-flight path: a machine snapshot, its program counter, the path
 /// condition, and the per-path bookkeeping the lifecycle detectors need.
+#[derive(Clone)]
 struct State {
     machine: Machine<Symbolic>,
     pc: u64,
@@ -325,7 +326,7 @@ pub fn find_input_reaching(
         }
 
         let apis = CallModel::new();
-        for s in process_block(&blocks, st, &apis, &mut Vec::new()) {
+        for s in process_block(&blocks, st, &apis, &mut Vec::new(), &mut None) {
             work.push(s);
         }
     }
@@ -348,10 +349,47 @@ pub fn find_sinks(
 
     let mut machine = Machine::new(Symbolic::new());
     let taint = seed(&mut machine);
+    let (sinks, _) = run_worklist(
+        &blocks,
+        State::root(machine, lf.entry_va, taint),
+        apis,
+        max_states,
+    );
+    sinks
+}
 
-    let mut work = vec![State::root(machine, lf.entry_va, taint)];
+/// How far along the alloc→free→use lifecycle a terminal path got, used to pick
+/// which path's machine to carry into the next stateful round. A freed block
+/// dominates a merely-allocated one.
+fn progress(st: &State) -> usize {
+    let freed = st.allocations.iter().filter(|a| a.freed).count();
+    freed * 1_000_000 + st.allocations.len() * 1_000
+}
+
+/// Remember `st` as the round's carry candidate if it made the most lifecycle
+/// progress so far (clones only when it wins, to avoid copying every path).
+fn consider_terminal(st: &State, best: &mut Option<State>) {
+    let p = progress(st);
+    if p == 0 {
+        return;
+    }
+    if best.as_ref().is_none_or(|b| progress(b) < p) {
+        *best = Some(st.clone());
+    }
+}
+
+/// Drive the DFS worklist from `root`, returning the sinks found and the terminal
+/// path that advanced the heap lifecycle furthest (for stateful carry-over).
+fn run_worklist(
+    blocks: &HashMap<u64, LlirBlock>,
+    root: State,
+    apis: &CallModel,
+    max_states: usize,
+) -> (Vec<Sink>, Option<State>) {
+    let mut work = vec![root];
     let mut explored = 0usize;
     let mut out = Vec::new();
+    let mut best: Option<State> = None;
 
     while let Some(st) = work.pop() {
         if explored >= max_states {
@@ -359,10 +397,63 @@ pub fn find_sinks(
         }
         explored += 1;
         let mut sinks = Vec::new();
-        let succs = process_block(&blocks, st, apis, &mut sinks);
+        let succs = process_block(blocks, st, apis, &mut sinks, &mut best);
         out.append(&mut sinks);
         for s in succs {
             work.push(s);
+        }
+    }
+    (out, best)
+}
+
+/// Stateful, multi-invocation exploration: run the handler `rounds` times,
+/// carrying the machine (memory + heap/allocation table) forward between runs and
+/// re-seeding a fresh request each round (via `seed`). This recovers
+/// *cross-invocation* bugs a single run cannot see — e.g. an allocation freed on
+/// one IOCTL and used (or freed again) on a later IOCTL through a global pointer.
+/// Each round keeps the terminal path that advanced the heap lifecycle furthest.
+pub fn find_sinks_stateful(
+    lf: &LlirFunction,
+    seed: impl Fn(&mut Machine<Symbolic>) -> TaintSpec,
+    apis: &CallModel,
+    max_states: usize,
+    rounds: usize,
+) -> Vec<Sink> {
+    let blocks: HashMap<u64, LlirBlock> =
+        lf.blocks.iter().map(|b| (b.start_va, b.clone())).collect();
+
+    let mut carry: Option<State> = None;
+    let mut out: Vec<Sink> = Vec::new();
+    let mut seen: BTreeSet<(u64, u8)> = BTreeSet::new();
+
+    for _ in 0..rounds {
+        // Build this round's root: reuse the carried machine (persistent globals
+        // and heap) but re-seed a fresh request and reset the path bookkeeping.
+        let root = match carry.take() {
+            Some(mut st) => {
+                st.taint = seed(&mut st.machine);
+                st.pc = lf.entry_va;
+                st.constraints.clear();
+                st.validated.clear();
+                st.tainted_reads.clear();
+                st
+            }
+            None => {
+                let mut machine = Machine::new(Symbolic::new());
+                let taint = seed(&mut machine);
+                State::root(machine, lf.entry_va, taint)
+            }
+        };
+
+        let (sinks, best) = run_worklist(&blocks, root, apis, max_states);
+        for s in sinks {
+            if seen.insert((s.va, s.kind as u8)) {
+                out.push(s);
+            }
+        }
+        match best {
+            Some(b) => carry = Some(b),
+            None => break, // no progress this round → further rounds are identical
         }
     }
     out
@@ -375,9 +466,11 @@ fn process_block(
     mut st: State,
     apis: &CallModel,
     sinks: &mut Vec<Sink>,
+    best: &mut Option<State>,
 ) -> Vec<State> {
     let Some(block) = blocks.get(&st.pc).cloned() else {
-        return Vec::new(); // ran off the known CFG
+        consider_terminal(&st, best); // ran off the known CFG
+        return Vec::new();
     };
 
     for ins in &block.instrs {
@@ -450,16 +543,28 @@ fn process_block(
                     }
                 };
                 match callee.and_then(|va| apis.get(&va).copied()) {
-                    Some(summary) => {
-                        apply_summary(&mut st, ins.va, summary, sinks);
-                        continue;
-                    }
-                    None => return Vec::new(),
+                    Some(summary) => apply_summary(&mut st, ins.va, summary, sinks),
+                    // An unmodeled callee (a local helper, logging, etc.) is
+                    // treated as opaque: havoc the return and continue, rather than
+                    // ending the path. Ending here would cut off everything after a
+                    // `DbgPrint`/helper call — including the bug.
+                    None => havoc_rax(&mut st),
                 }
+                continue;
             }
-            Op::Return => return Vec::new(),
+            Op::Return => {
+                consider_terminal(&st, best);
+                return Vec::new();
+            }
             other => {
                 check_int_overflow(&mut st, ins.va, other, sinks);
+                // Use-after-free is temporal, not address-symbolic: check every
+                // load/store target (concrete or symbolic) against freed blocks,
+                // so a deref of a freed pointer held in a global is caught.
+                if let Op::Load { addr, .. } | Op::Store { addr, .. } = other {
+                    let av = st.machine.eval_addr(addr);
+                    uaf_check(&mut st, ins.va, av, sinks);
+                }
                 match st.machine.step(other) {
                     Flow::Next => continue,
                     Flow::Jump(t) => {
@@ -470,13 +575,17 @@ fn process_block(
                     // execute the op manually, then continue the path.
                     Flow::Halt(Halt::UnresolvedAddress) => {
                         if symbolic_mem_op(&mut st, other, ins.va, sinks).is_none() {
+                            consider_terminal(&st, best);
                             return Vec::new();
                         }
                         continue;
                     }
                     // Branch shouldn't occur (CondJump handled above); other
                     // halts / return / call end the path.
-                    _ => return Vec::new(),
+                    _ => {
+                        consider_terminal(&st, best);
+                        return Vec::new();
+                    }
                 }
             }
         }
@@ -591,9 +700,6 @@ fn record_access(st: &mut State, va: u64, addr_val: ExprId, write: bool, sinks: 
     if is_validated(st, addr_val) {
         return;
     }
-    // Use-after-free is independent of taint (temporal, not spatial).
-    uaf_check(st, va, addr_val, sinks);
-
     let tainted_by = st.taint.provenance_of(&st.machine.dom.pool, addr_val);
     if tainted_by.is_empty() {
         return; // internally-symbolic address: not an attacker primitive
@@ -661,6 +767,8 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             let dst = read_arg(st, 0);
             let src = read_arg(st, 1);
             let len = read_arg(st, 2);
+            uaf_check(st, va, dst, sinks);
+            uaf_check(st, va, src, sinks);
             record_access(st, va, dst, true, sinks);
             record_access(st, va, src, false, sinks);
             stack_overflow_check(st, va, dst, len, sinks);

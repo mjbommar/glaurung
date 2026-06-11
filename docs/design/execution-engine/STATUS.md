@@ -104,6 +104,31 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done · ⛔ blocked
 
 ## Worklog (most recent first)
 
+- **2026-06-10** — **IOCTLance gap closed: 5 of 5 planted bug classes detected.**
+  Added stateful multi-invocation exploration and fixed the last reachability
+  blocker, so the cross-invocation use-after-free / double-free are now caught.
+  - **Unmodeled calls no longer end the path.** They are treated as opaque (havoc
+    `rax`, continue) — ending on every `DbgPrint`/helper cut off everything after
+    it, including the `ExFreePool` that the free path reaches *after* a log call.
+    This also deepens reach for every other detector.
+  - **Stateful multi-invocation sweep** (`find_sinks_stateful` /
+    `find_function_stateful_sinks`): run the handler N rounds, carrying the
+    machine (memory + heap/allocation table) forward and re-seeding a fresh
+    request each round; keep the terminal path that advanced the heap lifecycle
+    furthest (`progress` = freed≫allocated). Round 1 commits the alloc (pointer
+    saved to a global), round 2 the free, round 3 detects use-after-free /
+    double-free. `State` is now `Clone`; `uaf_check` moved to cover every
+    load/store (concrete *and* symbolic) plus `memcpy` args, since a freed pointer
+    held in a global is dereferenced at a concrete address.
+  - **Corpus result (`examples/ioctl_scan.rs`, three passes — IRP / tainted-entry
+    / stateful):** process_termination, physical_memory, race_condition
+    (double-fetch), file_operations, **and use_after_free + double_free** all
+    detected. New unit test `cross_invocation_uaf_and_double_free` proves a single
+    invocation finds nothing while the stateful sweep finds both (40 symbolic
+    tests; oracle 11/11; 852 lib pass + 2 pre-existing WinAPI).
+  - Residual quality work (not blocking): the generic arbitrary-read/null-deref
+    on IRP buffer pointers are noisy nominators; precision ranking and true
+    inter-procedural call-following (vs. assume-tainted-entry) are future polish.
 - **2026-06-10** — **Closing the IOCTLance gap on real drivers (0→4 of 5 planted
   bugs).** Drove the engine against the fork's synthetic single-bug `.sys` via
   `examples/ioctl_scan.rs` and fixed the blockers that made it find *nothing*
