@@ -163,7 +163,7 @@ async def critique_finding(
     critic_settings: dict[str, object] = {
         "temperature": 0.0, "max_tokens": 4_096,
     }
-    if model_name and model_name.startswith("openai:"):
+    if model_name and model_name.startswith(("openai:", "openai-responses:")):
         from .config import get_config
         tier = get_config().openai_service_tier
         if tier and tier != "default":

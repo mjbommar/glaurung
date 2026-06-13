@@ -71,7 +71,7 @@ class ModelHyperparameters(BaseModel):
             kwargs["seed"] = self.seed
         # OpenAI service_tier handoff. pydantic-ai 1.x forwards
         # ModelSettings.extra_body verbatim to the provider's request.
-        if model_name and model_name.startswith("openai:"):
+        if model_name and model_name.startswith(("openai:", "openai-responses:")):
             from ..config import get_config
             tier = get_config().openai_service_tier
             if tier and tier != "default":

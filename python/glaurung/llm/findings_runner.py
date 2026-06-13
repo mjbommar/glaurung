@@ -106,7 +106,7 @@ async def run_findings_pass(
     # Always route the findings pass under the default OpenAI model:
     # gpt-5.4-mini's 128 tool cap is hard, and the broad-discovery
     # subset (~17 tools) is enough for vuln hunting.
-    if tool_filter is None and model_name.startswith("openai:"):
+    if tool_filter is None and model_name.startswith(("openai:", "openai-responses:")):
         from .tool_routing import select_tools_for_question
         tool_filter = set(select_tools_for_question(
             getattr(args, "cwe_class_prompt", None) or _FINDINGS_QUESTION
