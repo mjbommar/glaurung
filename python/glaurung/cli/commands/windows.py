@@ -187,6 +187,25 @@ class WindowsCommand(BaseCommand):
         diff.add_argument("--max-instructions", type=int, default=30_000_000)
         diff.add_argument("--timeout-ms", type=int, default=600_000)
 
+        ioctl = subparsers.add_parser(
+            "ioctl",
+            help="Map a Windows driver's IOCTL attack surface "
+            "(dispatchers, codes, MSVC switch jump tables, handlers)",
+        )
+        self._add_common_child_arguments(ioctl)
+        ioctl.add_argument("path", help="Windows driver .sys (PE) to scan")
+        ioctl.add_argument(
+            "--min-codes",
+            type=int,
+            default=2,
+            help="codes sharing a device type to call a function a dispatcher (default 2)",
+        )
+        ioctl.add_argument(
+            "--all-functions",
+            action="store_true",
+            help="report every function carrying an IOCTL-shaped constant",
+        )
+
         analyst = subparsers.add_parser(
             "analyst",
             help="Ask the deterministic Windows analyst workflow a bounded question",
@@ -1343,6 +1362,8 @@ class WindowsCommand(BaseCommand):
             return _execute_runner_artifact_promotion_apply(args, formatter)
         if args.windows_action == "target-pipeline":
             return _execute_target_pipeline(args, formatter)
+        if args.windows_action == "ioctl":
+            return _execute_ioctl(args, formatter)
         if args.windows_action != "diff-ghidra":
             raise ValueError(f"unsupported Windows action: {args.windows_action}")
         path = self.validate_file_path(args.path)
@@ -1634,6 +1655,44 @@ def _write_analyst_state(
         json.dumps(state.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _execute_ioctl(args: argparse.Namespace, formatter: BaseFormatter) -> int:
+    """Map a Windows driver's IOCTL attack surface natively via the Rust engine."""
+    from glaurung import analysis as _analysis
+
+    path = args.path
+    dispatchers = _analysis.ioctl_surface_map_path(
+        path,
+        min_codes=args.min_codes,
+        all_functions=getattr(args, "all_functions", False),
+    )
+    payload = {
+        "binary": path,
+        "dispatcher_count": len(dispatchers),
+        "dispatchers": dispatchers,
+    }
+    if formatter.format_type == OutputFormat.JSON:
+        formatter.output_json(payload)
+        return 0
+    if formatter.format_type == OutputFormat.JSONL:
+        formatter.output_jsonl([{"type": "dispatcher", "data": d} for d in dispatchers])
+        return 0
+    print(f"== IOCTL surface: {path} ==")
+    print(f"   {len(dispatchers)} dispatcher(s)")
+    for d in dispatchers:
+        print(
+            f"  dispatcher @ {d['dispatcher_va']}  "
+            f"({len(d['codes'])} codes, {len(d['jump_table'])} jump-table, "
+            f"{len(d['handlers'])} call-handlers)"
+        )
+        for c in d["codes"]:
+            handler = c["handler_va"] or "?"
+            print(
+                f"      {c['code']:<12} dev={c['device_type']:<7} {c['method']:<10} "
+                f"{c['access']:<9} func={c['function']:<6} -> handler {handler}  [{c['source']}]"
+            )
+    return 0
 
 
 def _execute_corpus_guard(args: argparse.Namespace, formatter: BaseFormatter) -> int:

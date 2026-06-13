@@ -42,6 +42,9 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     // PE-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(pe_iat_map_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_import_call_sites_path_py, &analysis_mod)?)?;
+    // Windows driver IOCTL attack-surface mapper (dispatchers, codes, jump tables, handlers).
+    analysis_mod.add_function(wrap_pyfunction!(ioctl_surface_map_bytes_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(ioctl_surface_map_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_list_resources_bytes_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_view_resource_path_py, &analysis_mod)?)?;
@@ -68,6 +71,106 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     m.add_submodule(&analysis_mod)?;
 
     Ok(())
+}
+
+/// Build the Python representation of an IoctlSurface: a list of dispatcher dicts
+/// shaped identically to the reference JSON (dispatcher_va, codes[], jump_table{},
+/// handlers[]) so existing consumers can switch backends transparently.
+fn ioctl_surface_to_py(
+    py: Python<'_>,
+    surface: &crate::analysis::ioctl_surface::IoctlSurface,
+) -> PyResult<PyObject> {
+    use crate::analysis::ioctl_surface::IoctlCode;
+    let list = pyo3::types::PyList::empty(py);
+    for d in &surface.dispatchers {
+        let dd = pyo3::types::PyDict::new(py);
+        dd.set_item("dispatcher_va", format!("{:#x}", d.va))?;
+        let codes = pyo3::types::PyList::empty(py);
+        // jump-table-resolved codes first (precise handler), then cmp codes
+        let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        let mut push_code = |code: u32,
+                             ins_va: u64,
+                             handler: Option<u64>,
+                             is_base: bool,
+                             source: &'static str|
+         -> PyResult<()> {
+            let c = IoctlCode {
+                code,
+                ins_va,
+                handler_va: handler,
+                is_base,
+                source,
+            };
+            let cd = pyo3::types::PyDict::new(py);
+            cd.set_item("code", format!("{:#x}", code))?;
+            cd.set_item("device_type", format!("{:#x}", c.device_type()))?;
+            cd.set_item("access", c.access())?;
+            cd.set_item("function", format!("{:#x}", c.function()))?;
+            cd.set_item("method", c.method())?;
+            cd.set_item("ins_va", format!("{:#x}", ins_va))?;
+            cd.set_item("handler_va", handler.map(|h| format!("{:#x}", h)))?;
+            cd.set_item("is_base", is_base)?;
+            cd.set_item("source", source)?;
+            codes.append(cd)?;
+            Ok(())
+        };
+        for (code, handler) in &d.jump_table {
+            seen.insert(*code);
+            push_code(*code, d.va, Some(*handler), false, "jump_table")?;
+        }
+        for c in &d.cmp_codes {
+            if seen.insert(c.code) {
+                push_code(c.code, c.ins_va, c.handler_va, c.is_base, "cmp")?;
+            }
+        }
+        dd.set_item("codes", codes)?;
+        let jt = pyo3::types::PyDict::new(py);
+        for (k, v) in &d.jump_table {
+            jt.set_item(format!("{:#x}", k), format!("{:#x}", v))?;
+        }
+        dd.set_item("jump_table", jt)?;
+        let handlers = pyo3::types::PyList::empty(py);
+        for (h, tail) in &d.handlers {
+            let hd = pyo3::types::PyDict::new(py);
+            hd.set_item("handler_va", format!("{:#x}", h))?;
+            hd.set_item("tail_call", *tail)?;
+            handlers.append(hd)?;
+        }
+        dd.set_item("handlers", handlers)?;
+        list.append(dd)?;
+    }
+    Ok(list.into())
+}
+
+/// Map a Windows driver's IOCTL attack surface from raw PE bytes.
+#[pyfunction]
+#[pyo3(name = "ioctl_surface_map_bytes", signature = (data, min_codes=2, all_functions=false))]
+fn ioctl_surface_map_bytes_py(
+    py: Python<'_>,
+    data: Vec<u8>,
+    min_codes: usize,
+    all_functions: bool,
+) -> PyResult<PyObject> {
+    let surface = crate::analysis::ioctl_surface::map_ioctl_surface(&data, min_codes, all_functions);
+    ioctl_surface_to_py(py, &surface)
+}
+
+/// Map a Windows driver's IOCTL attack surface from a file path.
+#[pyfunction]
+#[pyo3(name = "ioctl_surface_map_path", signature = (path, min_codes=2, all_functions=false, max_read_bytes=104_857_600u64, max_file_size=209_715_200u64))]
+fn ioctl_surface_map_path_py(
+    py: Python<'_>,
+    path: String,
+    min_codes: usize,
+    all_functions: bool,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<PyObject> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    let surface = crate::analysis::ioctl_surface::map_ioctl_surface(&data, min_codes, all_functions);
+    ioctl_surface_to_py(py, &surface)
 }
 
 /// Detect entry point from binary data.
