@@ -170,8 +170,8 @@ def _bytes_of(dis: str) -> bytes:
 
 
 def _add_imm_to_rcx(dis: str) -> Optional[int]:
-    """Decode the immediate of ``add rcx, imm`` from raw bytes (the glaurung
-    renderer currently drops standalone immediate operands -- see DIFF)."""
+    """Decode the immediate of ``add rcx, imm`` from raw bytes. Reading the bytes
+    directly is robust regardless of how the disassembler renders the immediate."""
     b = _bytes_of(dis)
     j = 0
     while j < len(b) and 0x40 <= b[j] <= 0x4F:
@@ -194,7 +194,9 @@ def _resolve_lock_id(mnem: str, ops: str, dis: str) -> Optional[str]:
     m = re.search(r"(\w+):\[\w+ ([+-]) (0x[0-9a-fA-F]+)\]", ops)
     if m and mnem in ("lea", "mov"):
         return f"{m.group(1)}{m.group(2)}{m.group(3)}"
-    if mnem == "add" and ops.strip() == "rcx":
+    if mnem == "add" and ops.split(",")[0].strip() == "rcx":
+        # The immediate is decoded from the raw bytes (_add_imm_to_rcx), so this
+        # works whether or not the disassembler renders the immediate operand.
         imm = _add_imm_to_rcx(dis)
         if imm is not None:
             return f"+0x{imm:x}"
@@ -493,8 +495,7 @@ def analyze_locks(
     if lockobj_unresolved:
         cov.caveat(
             f"{lockobj_unresolved} acquire(s) had an unresolved lock object "
-            "(rcx not a simple base+disp / immediate dropped by disasm); "
-            "treated as distinct unknown locks"
+            "(rcx not a simple base+disp); treated as distinct unknown locks"
         )
     unbalanced = {k: v for k, v in rep.balance.items() if v[0] != v[1]}
     if unbalanced:
