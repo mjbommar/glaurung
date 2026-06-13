@@ -65,7 +65,7 @@ class TestOperandCreation:
 
     def test_operand_register_creation(self):
         """Test creating a register operand."""
-        reg = Operand.register("rax", 64, Access.ReadWrite)
+        reg = Operand.new_register("rax", 64, Access.ReadWrite)
 
         assert str(reg.kind) == "Register"
         assert reg.size == 64
@@ -80,7 +80,7 @@ class TestOperandCreation:
 
     def test_operand_immediate_creation(self):
         """Test creating an immediate operand."""
-        imm = Operand.immediate(0x1000, 32)
+        imm = Operand.new_immediate(0x1000, 32)
 
         assert str(imm.kind) == "Immediate"
         assert imm.size == 32
@@ -95,7 +95,7 @@ class TestOperandCreation:
 
     def test_operand_memory_creation_simple(self):
         """Test creating a simple memory operand."""
-        mem = Operand.memory(32, Access.Read, 0x100, None, None, None)
+        mem = Operand.new_memory(32, Access.Read, 0x100, None, None, None)
 
         assert str(mem.kind) == "Memory"
         assert mem.size == 32
@@ -111,7 +111,7 @@ class TestOperandCreation:
 
     def test_operand_memory_creation_complex(self):
         """Test creating a complex memory operand."""
-        mem = Operand.memory(64, Access.ReadWrite, 0x100, "rbx", "rcx", 4)
+        mem = Operand.new_memory(64, Access.ReadWrite, 0x100, "rbx", "rcx", 4)
 
         assert str(mem.kind) == "Memory"
         assert mem.size == 64
@@ -127,20 +127,20 @@ class TestOperandCreation:
 
     def test_operand_memory_negative_displacement(self):
         """Test memory operand with negative displacement."""
-        mem = Operand.memory(32, Access.Read, -8, "rsp", None, None)
+        mem = Operand.new_memory(32, Access.Read, -8, "rsp", None, None)
 
         assert mem.displacement == -8
         assert mem.base == "rsp"
 
     def test_operand_display(self):
         """Test operand string representation."""
-        reg = Operand.register("eax", 32, Access.Read)
+        reg = Operand.new_register("eax", 32, Access.Read)
         assert str(reg) == "eax"
 
-        imm = Operand.immediate(42, 32)
+        imm = Operand.new_immediate(42, 32)
         assert str(imm) == "0x2a"
 
-        mem = Operand.memory(64, Access.Read, 0x100, "rbx", None, None)
+        mem = Operand.new_memory(64, Access.Read, 0x100, "rbx", None, None)
         mem_str = str(mem)
         assert "rbx" in mem_str
         assert "100" in mem_str
@@ -173,8 +173,8 @@ class TestInstructionCreation:
         address = Address(AddressKind.VA, 0x400000, bits=64)
         bytes_data = [0x48, 0x89, 0xC7]  # mov rdi, rax
         operands = [
-            Operand.register("rdi", 64, Access.Write),
-            Operand.register("rax", 64, Access.Read),
+            Operand.new_register("rdi", 64, Access.Write),
+            Operand.new_register("rax", 64, Access.Read),
         ]
 
         instr = Instruction(
@@ -202,7 +202,7 @@ class TestInstructionCreation:
         """Test creating a jump instruction."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
         bytes_data = [0xEB, 0x10]  # jmp +0x10
-        operands = [Operand.immediate(0x10, 8)]
+        operands = [Operand.new_immediate(0x10, 8)]
 
         instr = Instruction(
             address,
@@ -226,7 +226,7 @@ class TestInstructionCreation:
         """Test creating a call instruction."""
         address = Address(AddressKind.VA, 0x400000, bits=64)
         bytes_data = [0xE8, 0x00, 0x00, 0x00, 0x00]  # call 0x400010
-        operands = [Operand.immediate(0x400010, 32)]
+        operands = [Operand.new_immediate(0x400010, 32)]
 
         instr = Instruction(
             address,
@@ -281,8 +281,8 @@ class TestInstructionProperties:
             [0x89, 0x07],  # mov [rdi], eax
             "mov",
             [
-                Operand.memory(32, Access.Write, None, "rdi", None, None),
-                Operand.register("eax", 32, Access.Read),
+                Operand.new_memory(32, Access.Write, None, "rdi", None, None),
+                Operand.new_register("eax", 32, Access.Read),
             ],
             2,
             "x86_64",
@@ -297,8 +297,8 @@ class TestInstructionProperties:
             [0x89, 0xC7],  # mov edi, eax
             "mov",
             [
-                Operand.register("edi", 32, Access.Write),
-                Operand.register("eax", 32, Access.Read),
+                Operand.new_register("edi", 32, Access.Write),
+                Operand.new_register("eax", 32, Access.Read),
             ],
             2,
             "x86_64",
@@ -316,8 +316,8 @@ class TestInstructionProperties:
             [0x89, 0xC7],  # mov edi, eax
             "mov",
             [
-                Operand.register("edi", 32, Access.Write),
-                Operand.register("eax", 32, Access.Read),
+                Operand.new_register("edi", 32, Access.Write),
+                Operand.new_register("eax", 32, Access.Read),
             ],
             2,
             "x86_64",
@@ -361,8 +361,8 @@ class TestInstructionProperties:
             [0x89, 0xC7],  # mov edi, eax
             "mov",
             [
-                Operand.register("edi", 32, Access.Write),
-                Operand.register("eax", 32, Access.Read),
+                Operand.new_register("edi", 32, Access.Write),
+                Operand.new_register("eax", 32, Access.Read),
             ],
             2,
             "x86_64",
@@ -397,8 +397,8 @@ class TestInstructionProperties:
             [0x48, 0x89, 0xC7],  # mov rdi, rax
             "mov",
             [
-                Operand.register("rdi", 64, Access.Write),
-                Operand.register("rax", 64, Access.Read),
+                Operand.new_register("rdi", 64, Access.Write),
+                Operand.new_register("rax", 64, Access.Read),
             ],
             3,
             "x86_64",
@@ -420,8 +420,8 @@ class TestInstructionProperties:
             [0x48, 0x89, 0xC7],  # mov rdi, rax
             "mov",
             [
-                Operand.register("rdi", 64, Access.Write),
-                Operand.register("rax", 64, Access.Read),
+                Operand.new_register("rdi", 64, Access.Write),
+                Operand.new_register("rax", 64, Access.Read),
             ],
             3,
             "x86_64",
@@ -452,8 +452,8 @@ class TestInstructionProperties:
             [0x48, 0x89, 0xC7],
             "mov",
             [
-                Operand.register("rdi", 64, Access.Write),
-                Operand.register("rax", 64, Access.Read),
+                Operand.new_register("rdi", 64, Access.Write),
+                Operand.new_register("rax", 64, Access.Read),
             ],
             3,
             "x86_64",
@@ -493,10 +493,10 @@ class TestInstructionEdgeCases:
         address = Address(AddressKind.VA, 0x400000, bits=64)
 
         operands = [
-            Operand.register("rax", 64, Access.Read),
-            Operand.register("rbx", 64, Access.Read),
-            Operand.register("rcx", 64, Access.Read),
-            Operand.register("rdx", 64, Access.Write),
+            Operand.new_register("rax", 64, Access.Read),
+            Operand.new_register("rbx", 64, Access.Read),
+            Operand.new_register("rcx", 64, Access.Read),
+            Operand.new_register("rdx", 64, Access.Write),
         ]
 
         instr = Instruction(
@@ -533,7 +533,7 @@ class TestInstructionEdgeCases:
             address,
             [0xCD, 0x80],  # int 0x80 (Linux syscall)
             "int",
-            [Operand.immediate(0x80, 8)],
+            [Operand.new_immediate(0x80, 8)],
             2,
             "x86",
             side_effects=[

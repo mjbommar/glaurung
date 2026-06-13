@@ -151,7 +151,7 @@ pub struct Operand {
 impl Operand {
     /// Create a new register operand
     #[staticmethod]
-    #[pyo3(name = "register")]
+    #[pyo3(name = "new_register")]
     pub fn register_py(name: String, size: u8, access: Access) -> Self {
         Self {
             kind: OperandKind::Register,
@@ -170,7 +170,7 @@ impl Operand {
 
     /// Create a new immediate operand
     #[staticmethod]
-    #[pyo3(name = "immediate")]
+    #[pyo3(name = "new_immediate")]
     pub fn immediate_py(value: i64, size: u8) -> Self {
         Self {
             kind: OperandKind::Immediate,
@@ -189,7 +189,7 @@ impl Operand {
 
     /// Create a new memory operand
     #[staticmethod]
-    #[pyo3(name = "memory")]
+    #[pyo3(name = "new_memory")]
     pub fn memory_py(
         size: u8,
         access: Access,
