@@ -114,8 +114,22 @@ pub fn is_ioctl_shaped(v: u32) -> bool {
     if func == 0xFFF {
         return false;
     }
+    // NTSTATUS error codes (0xCxxxxxxx) are the dominant spurious "cluster" in
+    // error-handling switches, so keep rejecting the 0xC top nibble entirely. But
+    // DeviceType 0x8000-0x8FFF is the DDK customer/vendor range -- a CTL_CODE with
+    // a vendor device type is 0x8xxxxxxx (e.g. gna.sys 0x80002400..0x80002808, and
+    // many Intel/Lenovo OEM drivers). Rejecting top==0x8 outright made every
+    // vendor-DeviceType dispatcher invisible (dispatchers=0). Allow it, but still
+    // reject the one ambiguous overlap: facility-0 NTSTATUS *warnings* (0x8000_00xx,
+    // e.g. STATUS_BUFFER_OVERFLOW 0x80000005) share the 0x8000 high word and would
+    // otherwise let a pair of status comparisons register as a false dispatcher.
+    // Real vendor IOCTLs carry a non-trivial Function field (code >= 0x100), so the
+    // facility-0 + tiny-code test separates them.
     let top = v >> 28;
-    if top == 0xC || top == 0x8 {
+    if top == 0xC {
+        return false;
+    }
+    if top == 0x8 && (v & 0x0FFF_0000) == 0 && (v & 0xFFFF) < 0x100 {
         return false;
     }
     // four printable-ASCII bytes => a signature, not a CTL_CODE
@@ -647,7 +661,14 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
     let is_kmdf = data.windows(14).any(|w| w == b"WdfVersionBind");
     let disp_set: BTreeSet<u64> = dispatchers.iter().map(|d| d.va).collect();
     let mut root_set: BTreeSet<u64> = BTreeSet::new();
-    if is_kmdf {
+    // KMDF all-address-taken fallback: ONLY when no precise dispatcher was found.
+    // Seeding every address-taken .pdata callback (DPCs, timers, completion/EvtIoRead/
+    // Write routines -- 1266 on rtwlanu) floods FPs and explodes the reachable set
+    // (the iter09 over-collection). Now that customer DeviceType 0x8xxx dispatchers
+    // are recognised, a driver with a real EvtIoDeviceControl dispatcher is seeded
+    // precisely from it + its resolved handlers; the blunt fallback is only needed
+    // when the dispatcher scan still comes up empty (genuinely table/computed dispatch).
+    if is_kmdf && dispatchers.is_empty() {
         root_set.extend(
             lea_taken
                 .into_iter()
@@ -681,8 +702,17 @@ mod tests {
         assert!(!is_ioctl_shaped(0x0)); // too small
         assert!(!is_ioctl_shaped(0xFFFFFFFF)); // sentinel / mask
         assert!(!is_ioctl_shaped(0x41424344)); // "ABCD" ascii signature
-        assert!(!is_ioctl_shaped(0xC0000001)); // NTSTATUS-shaped
+        assert!(!is_ioctl_shaped(0xC0000001)); // NTSTATUS error-shaped (0xC top)
         assert!(!is_ioctl_shaped(0x00220000)); // func==0, too round
+        // Customer/vendor DeviceType 0x8000 range: these ARE real CTL_CODEs (gna.sys,
+        // many OEM drivers) and must pass despite the 0x8 top nibble.
+        assert!(is_ioctl_shaped(0x80002400)); // gna.sys EvtIoDeviceControl code
+        assert!(is_ioctl_shaped(0x80002808)); // gna.sys code
+        assert!(is_ioctl_shaped(0x8000e00c)); // ISH/Tee customer IOCTL
+        // ...but facility-0 NTSTATUS *warnings* (0x8000_00xx, tiny code field) must
+        // still be rejected so a pair of them is not a false dispatcher.
+        assert!(!is_ioctl_shaped(0x80000005)); // STATUS_BUFFER_OVERFLOW
+        assert!(!is_ioctl_shaped(0x80000001)); // NTSTATUS warning
     }
 
     /// Parity check against real driver fixtures. Gated on GLAURUNG_IOCTL_FIXTURES
