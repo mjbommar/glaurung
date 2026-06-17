@@ -17,10 +17,10 @@ use glaurung::analysis::ioctl_surface::map_ioctl_surface;
 use glaurung::analysis::pe_iat::pe_iat_map;
 use glaurung::core::binary::Arch;
 use glaurung::ir::lift_function::lift_function_from_bytes;
-use glaurung::ir::types::{LlirFunction, Op};
+use glaurung::ir::types::{CallTarget, LlirFunction, Op, Value};
 use glaurung::symbolic::{
-    driver_api_model, find_function_sinks_with_apis, find_ioctl_sinks_with_apis,
-    set_solver_budget, set_time_budget, SinkKind,
+    driver_api_model, find_function_sinks_with_apis, find_function_stateful_sinks,
+    find_ioctl_sinks_with_apis, set_solver_budget, set_time_budget, ApiSummary, SinkKind,
 };
 
 fn kind_str(k: SinkKind) -> &'static str {
@@ -95,6 +95,27 @@ fn references_irp(lf: &LlirFunction) -> bool {
         .any(|ins| matches!(&ins.op, Op::Load { addr, .. } if addr.disp == 0xB8))
 }
 
+/// True if the function calls a pool-free API (direct or via an IAT thunk slot).
+/// Gates the expensive stateful multi-round pass to free-touching functions only.
+fn references_free(lf: &LlirFunction, free_slots: &BTreeSet<u64>) -> bool {
+    if free_slots.is_empty() {
+        return false;
+    }
+    lf.blocks
+        .iter()
+        .flat_map(|b| &b.instrs)
+        .any(|ins| match &ins.op {
+            Op::Load { addr, .. } => free_slots.contains(&(addr.disp as u64)),
+            Op::Call {
+                target: CallTarget::Indirect(Value::Addr(va)),
+            }
+            | Op::Call {
+                target: CallTarget::Direct(va),
+            } => free_slots.contains(va),
+            _ => false,
+        })
+}
+
 fn reach_hops() -> usize {
     std::env::var("IOCTLANCE_HOPS")
         .ok()
@@ -154,6 +175,15 @@ fn main() {
     let iat = pe_iat_map(&data);
     let imports: BTreeMap<String, u64> = iat.iter().map(|(s, n)| (n.clone(), *s)).collect();
     let model = driver_api_model(&imports);
+    // IAT slots of the pool-free APIs: gate the stateful pass on functions that
+    // actually free (the alloc->free->free / alloc->free->use lifecycle bugs a
+    // single-path run structurally cannot see -- they span IOCTL command branches
+    // with the pointer persisted in a global).
+    let free_slots: BTreeSet<u64> = model
+        .iter()
+        .filter(|(_, s)| matches!(s, ApiSummary::Free { .. }))
+        .map(|(va, _)| *va)
+        .collect();
 
     eprintln!(
         "[{}] dispatchers={} kmdf-roots={} dispatch-roots={} reachable-fns={} (of {}) imports={}",
@@ -174,15 +204,33 @@ fn main() {
     // 3) Symbolic sinks, only over dispatch-reachable functions.
     let show_all = std::env::var_os("IOCTLANCE_ALL").is_some();
     let t = std::time::Instant::now();
+    // Global per-driver wall-clock budget. A batch analysis tool must never hang on a
+    // single driver: a KMDF driver with thousands of address-taken callbacks can seed a
+    // huge reachable set (rtwlanu: 1552 reachable fns), and analysing them all blows any
+    // sweep timeout. Once the budget is hit we stop opening NEW functions and report the
+    // coverage honestly (analysed/reachable), rather than being SIGKILLed with no output.
+    let deadline = std::time::Duration::from_secs(
+        std::env::var("IOCTLANCE_DEADLINE_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(150),
+    );
     let mut lines: Vec<String> = Vec::new();
     let mut raw = 0usize;
     let mut suppressed = 0usize;
+    let mut analyzed = 0usize;
+    let mut deadline_hit = false;
     let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
     for f in &funcs {
         let va = f.entry_point.value;
         if !reachable.contains(&va) {
             continue;
         }
+        if t.elapsed() > deadline {
+            deadline_hit = true;
+            break;
+        }
+        analyzed += 1;
         let lf = match lift_function_from_bytes(&data, f, Arch::X86_64) {
             Some(lf) => lf,
             None => continue,
@@ -199,6 +247,22 @@ fn main() {
             Vec::new()
         };
         sinks.extend(find_function_sinks_with_apis(&lf, &model, STATES));
+        // Cross-invocation lifecycle pass (UAF / double-free): only on free-touching
+        // functions, carrying heap/global state forward across rounds. This pass is
+        // multiplicative in cost (states x rounds), so bound it: alloc/free/use
+        // lifecycle bugs sit in focused command handlers, not giant (>STATEFUL_MAX_BLOCKS)
+        // dispatch monoliths. Skipping those keeps WiFi-class drivers (many large
+        // free-touching handlers) from blowing the time budget -- rtwlane/rtwlanu went
+        // 110s -> >180s without this cap. The bounded pass still fires on every real
+        // lifecycle control we have. Tunable via IOCTLANCE_STATEFUL_BLOCKS.
+        const STATEFUL_MAX_BLOCKS: usize = 48;
+        let stateful_cap = std::env::var("IOCTLANCE_STATEFUL_BLOCKS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(STATEFUL_MAX_BLOCKS);
+        if lf.blocks.len() <= stateful_cap && references_free(&lf, &free_slots) {
+            sinks.extend(find_function_stateful_sinks(&lf, &model, STATES * 2, 3));
+        }
         let mut seen = BTreeSet::new();
         for s in &sinks {
             if !seen.insert((kind_str(s.kind), s.va)) {
@@ -242,11 +306,18 @@ fn main() {
         }
     }
     eprintln!(
-        "[symbolic] {:?}  raw={} high-confidence={} suppressed={} (ArgN pointer-deref noise)",
+        "[symbolic] {:?}  raw={} high-confidence={} suppressed={} (ArgN pointer-deref noise)  analyzed={}/{}{}",
         t.elapsed(),
         raw,
         lines.len(),
         suppressed,
+        analyzed,
+        reachable.len(),
+        if deadline_hit {
+            " DEADLINE-HIT (coverage bounded; raise IOCTLANCE_DEADLINE_SECS)"
+        } else {
+            ""
+        },
     );
     eprintln!("[by-kind] {:?}", by_kind);
     lines.sort();

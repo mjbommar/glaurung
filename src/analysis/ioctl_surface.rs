@@ -432,6 +432,12 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
     // Address-taken .pdata functions (`lea reg,[rip+fn]`): callback registrations.
     // KMDF EvtIoDeviceControl & friends are taken this way for WDF_IO_QUEUE_CONFIG.
     let mut lea_taken: BTreeSet<u64> = BTreeSet::new();
+    // WDM dispatch registration: `DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL]
+    // = handler` compiles to `mov [drvobj+0xe0], reg` (0xe8 for INTERNAL_DEVICE_CONTROL),
+    // where `reg` was `lea`'d from the handler's address. A single-handler driver with
+    // no IOCTL command switch (no cmp-immediate cluster) is otherwise invisible to the
+    // dispatcher scan; recover the handler here so the symbolic engine still seeds it.
+    let mut devctl_roots: BTreeSet<u64> = BTreeSet::new();
 
     let is_dispatcher = |codes: &[IoctlCode]| -> bool {
         if all_functions {
@@ -455,6 +461,11 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
         }
         let mut has_jmp_reg = false;
         let mut codes: Vec<IoctlCode> = Vec::new();
+        // Per-function register->lea'd-handler provenance for the MajorFunction store
+        // idiom (`lea reg,[rip+handler]; mov [drvobj+0xe0],reg`). Conservatively
+        // overwritten on each lea; only the most-recent lea into a register matters
+        // for the immediately-following store the DriverEntry idiom produces.
+        let mut reg_lea: BTreeMap<String, u64> = BTreeMap::new();
         for i in 0..insns.len() {
             let ins = &insns[i];
             let m = ins.mnemonic.as_str();
@@ -471,6 +482,28 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
                     if o.kind == OperandKind::Memory && o.base.as_deref() == Some("rip") {
                         if let Some(d) = o.displacement {
                             lea_taken.insert(d as u64);
+                            if let Some(dst) = ins.operands.first().and_then(|o| o.register.clone())
+                            {
+                                reg_lea.insert(dst, d as u64);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            // MajorFunction[IRP_MJ_DEVICE_CONTROL/INTERNAL_DEVICE_CONTROL] registration:
+            // mov [base+0xe0], reg / mov [base+0xe8], reg where reg was lea'd from a
+            // .pdata function start -> that function is an IOCTL dispatch handler.
+            if m == "mov" {
+                if let (Some(dstm), Some(srcr)) = (ins.operands.first(), ins.operands.get(1)) {
+                    if dstm.kind == OperandKind::Memory
+                        && matches!(dstm.displacement, Some(0xe0) | Some(0xe8))
+                        && srcr.kind == OperandKind::Register
+                    {
+                        if let Some(t) = srcr.register.as_deref().and_then(|r| reg_lea.get(r)) {
+                            if pdata_starts.contains(t) {
+                                devctl_roots.insert(*t);
+                            }
                         }
                     }
                 }
@@ -570,15 +603,21 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
     // (minus those already recognised as dispatchers) as callback roots so the symbolic
     // engine seeds at the real KMDF handlers instead of analysing nothing.
     let is_kmdf = data.windows(14).any(|w| w == b"WdfVersionBind");
-    let mut callback_roots: Vec<u64> = Vec::new();
+    let disp_set: BTreeSet<u64> = dispatchers.iter().map(|d| d.va).collect();
+    let mut root_set: BTreeSet<u64> = BTreeSet::new();
     if is_kmdf {
-        let disp_set: BTreeSet<u64> = dispatchers.iter().map(|d| d.va).collect();
-        callback_roots = lea_taken
-            .into_iter()
-            .filter(|t| pdata_starts.contains(t) && !disp_set.contains(t))
-            .collect();
-        callback_roots.sort_unstable();
+        root_set.extend(
+            lea_taken
+                .into_iter()
+                .filter(|t| pdata_starts.contains(t) && !disp_set.contains(t)),
+        );
     }
+    // WDM MajorFunction[MJ_DEVICE_CONTROL] handlers recovered from the registration
+    // store -- seeded for every driver, not just KMDF (a single-handler WDM driver
+    // has no cmp-cluster dispatcher). Drop any that are already known dispatchers.
+    root_set.extend(devctl_roots.into_iter().filter(|t| !disp_set.contains(t)));
+    let mut callback_roots: Vec<u64> = root_set.into_iter().collect();
+    callback_roots.sort_unstable();
 
     IoctlSurface {
         dispatchers,
