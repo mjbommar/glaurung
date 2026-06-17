@@ -320,6 +320,9 @@ mod tests {
             SinkKind::ProbeBypass => "probe_bypass",
             SinkKind::ProcessTermination => "proc_term",
             SinkKind::FileOperation => "file_op",
+            SinkKind::ArbitraryMsrWrite => "wrmsr",
+            SinkKind::ArbitraryMsrRead => "rdmsr",
+            SinkKind::PortAccess => "portio",
         }
     }
 

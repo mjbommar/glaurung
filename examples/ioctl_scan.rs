@@ -38,6 +38,9 @@ fn kind_str(k: SinkKind) -> &'static str {
         SinkKind::ProbeBypass => "probe-bypass",
         SinkKind::ProcessTermination => "process-termination",
         SinkKind::FileOperation => "file-operation",
+        SinkKind::ArbitraryMsrWrite => "arbitrary-wrmsr",
+        SinkKind::ArbitraryMsrRead => "arbitrary-rdmsr",
+        SinkKind::PortAccess => "arbitrary-portio",
     }
 }
 

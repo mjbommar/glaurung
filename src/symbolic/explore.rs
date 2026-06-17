@@ -128,6 +128,20 @@ pub enum SinkKind {
     ProcessTermination,
     /// An attacker-tainted path/handle into a file API.
     FileOperation,
+    /// An attacker-tainted MSR index reaching `wrmsr` (`__writemsr`): a write to
+    /// an attacker-chosen model-specific register. Writing IA32_LSTAR
+    /// (0xC0000082) redirects the syscall entry to attacker code -> ring-0 code
+    /// execution. (IOCTLance "arbitrary wrmsr".)
+    ArbitraryMsrWrite,
+    /// An attacker-tainted MSR index reaching `rdmsr` (`__readmsr`): reads an
+    /// attacker-chosen MSR. Reading IA32_LSTAR leaks KiSystemCall64 -> defeats
+    /// KASLR and EDR syscall-hook detection.
+    ArbitraryMsrRead,
+    /// An attacker-tainted port reaching a port-I/O instruction (`out`/`in`,
+    /// `__outbyte`/`__inbyte`): arbitrary hardware port access. Port 0xCF9 forces
+    /// a platform reset (unauth DoS); general access enables firmware / PCI-config
+    /// manipulation. (IOCTLance "arbitrary out".)
+    PortAccess,
 }
 
 /// A summary for a known callee, letting the explorer detect attacker-controlled
@@ -638,6 +652,40 @@ fn process_block(
                 }
                 consider_terminal(&st, best);
                 return Vec::new();
+            }
+            // Privileged-instruction sinks. `wrmsr`/`rdmsr`/`out`/`in` lift to an
+            // opaque `Op::Intrinsic` (empty ins/outs, no register dataflow). We
+            // inspect the architectural operand register for attacker taint, raise
+            // the matching primitive, then continue (the intrinsic has no declared
+            // outputs to havoc, so it is a no-op for the symbolic state).
+            // `wrmsr`/`rdmsr` MSR index = ECX (rcx); `out`/`in` port = DX (rdx).
+            // Mirrors IOCTLance's wrmsr/out hooks.
+            Op::Intrinsic { name, .. } if name == "wrmsr" || name == "rdmsr" => {
+                let idx = st
+                    .machine
+                    .regs
+                    .read(&mut st.machine.dom, &VReg::phys("rcx"));
+                let prov = st.taint.provenance_of(&st.machine.dom.pool, idx);
+                if !prov.is_empty() {
+                    let kind = if name == "wrmsr" {
+                        SinkKind::ArbitraryMsrWrite
+                    } else {
+                        SinkKind::ArbitraryMsrRead
+                    };
+                    push_sink(&mut st, ins.va, kind, idx, prov, sinks);
+                }
+                continue;
+            }
+            Op::Intrinsic { name, .. } if name == "out" || name == "in" => {
+                let port = st
+                    .machine
+                    .regs
+                    .read(&mut st.machine.dom, &VReg::phys("rdx"));
+                let prov = st.taint.provenance_of(&st.machine.dom.pool, port);
+                if !prov.is_empty() {
+                    push_sink(&mut st, ins.va, SinkKind::PortAccess, port, prov, sinks);
+                }
+                continue;
             }
             other => {
                 check_int_overflow(&mut st, ins.va, other, sinks);
