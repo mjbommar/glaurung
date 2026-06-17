@@ -123,7 +123,14 @@ fn main() {
             }
         }
     }
-    let dispatch_vas: BTreeSet<u64> = surface.dispatchers.iter().map(|d| d.va).collect();
+    // KMDF callback roots (EvtIoDeviceControl & friends, reached via the WDF function
+    // table): seed analysis here and treat them as dispatch entries so the engine applies
+    // full request/IRP taint -- otherwise pure-KMDF drivers are analysed not-at-all.
+    for r in &surface.callback_roots {
+        roots.insert(*r);
+    }
+    let mut dispatch_vas: BTreeSet<u64> = surface.dispatchers.iter().map(|d| d.va).collect();
+    dispatch_vas.extend(surface.callback_roots.iter().copied());
 
     // 2) Call graph -> reachable set from the dispatch roots (bounded hops).
     let (funcs, _cg) = analyze_functions_bytes(&data, &Budgets::default());
@@ -149,9 +156,10 @@ fn main() {
     let model = driver_api_model(&imports);
 
     eprintln!(
-        "[{}] dispatchers={} dispatch-roots={} reachable-fns={} (of {}) imports={}",
+        "[{}] dispatchers={} kmdf-roots={} dispatch-roots={} reachable-fns={} (of {}) imports={}",
         path,
         surface.dispatchers.len(),
+        surface.callback_roots.len(),
         roots.len(),
         reachable.len(),
         funcs.len(),

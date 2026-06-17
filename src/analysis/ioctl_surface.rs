@@ -73,6 +73,12 @@ pub struct Dispatcher {
 #[derive(Debug, Clone, Default)]
 pub struct IoctlSurface {
     pub dispatchers: Vec<Dispatcher>,
+    /// KMDF callback roots: address-taken `.pdata` functions (e.g. EvtIoDeviceControl,
+    /// EvtIoRead/Write) registered via a WDF_IO_QUEUE_CONFIG and reached through the WDF
+    /// function table -- NOT the WDM DriverObject->MajorFunction the cmp-immediate scan
+    /// keys on. Without these, a pure-KMDF driver whose dispatcher uses a computed/table
+    /// index (codes never appear as immediates) is invisible. Seed symbolic analysis here.
+    pub callback_roots: Vec<u64>,
     /// Functions carrying any IOCTL-shaped constant.
     pub n_code_functions: usize,
     /// Functions with a decoded jump table.
@@ -423,6 +429,9 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
     let mut per_func: BTreeMap<u64, Vec<IoctlCode>> = BTreeMap::new();
     let mut jt_maps: BTreeMap<u64, BTreeMap<u32, u64>> = BTreeMap::new();
     let mut handlers_map: BTreeMap<u64, Vec<(u64, bool)>> = BTreeMap::new();
+    // Address-taken .pdata functions (`lea reg,[rip+fn]`): callback registrations.
+    // KMDF EvtIoDeviceControl & friends are taken this way for WDF_IO_QUEUE_CONFIG.
+    let mut lea_taken: BTreeSet<u64> = BTreeSet::new();
 
     let is_dispatcher = |codes: &[IoctlCode]| -> bool {
         if all_functions {
@@ -453,6 +462,16 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
                 if let Some(o) = ins.operands.first() {
                     if o.kind == OperandKind::Register {
                         has_jmp_reg = true;
+                    }
+                }
+                continue;
+            }
+            if m == "lea" {
+                if let Some(o) = ins.operands.get(1) {
+                    if o.kind == OperandKind::Memory && o.base.as_deref() == Some("rip") {
+                        if let Some(d) = o.displacement {
+                            lea_taken.insert(d as u64);
+                        }
                     }
                 }
                 continue;
@@ -545,8 +564,25 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
         score(b).cmp(&score(a))
     });
 
+    // KMDF augmentation: if this is a WDF driver, the IOCTL dispatcher (EvtIoDeviceControl)
+    // is an address-taken callback reached via the WDF function table, which the WDM
+    // cmp-immediate scan above does not find. Surface the address-taken .pdata functions
+    // (minus those already recognised as dispatchers) as callback roots so the symbolic
+    // engine seeds at the real KMDF handlers instead of analysing nothing.
+    let is_kmdf = data.windows(14).any(|w| w == b"WdfVersionBind");
+    let mut callback_roots: Vec<u64> = Vec::new();
+    if is_kmdf {
+        let disp_set: BTreeSet<u64> = dispatchers.iter().map(|d| d.va).collect();
+        callback_roots = lea_taken
+            .into_iter()
+            .filter(|t| pdata_starts.contains(t) && !disp_set.contains(t))
+            .collect();
+        callback_roots.sort_unstable();
+    }
+
     IoctlSurface {
         dispatchers,
+        callback_roots,
         n_code_functions: per_func.len(),
         n_jumptable: jt_maps.len(),
     }
