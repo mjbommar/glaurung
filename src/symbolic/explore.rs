@@ -25,6 +25,7 @@ use crate::symbolic::solver::{solve, Assert, Model, SolveResult};
 use crate::symbolic::Symbolic;
 
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::time::Instant;
 
 thread_local! {
@@ -33,12 +34,32 @@ thread_local! {
     /// expressions can still be interrupted — coarser checks at block boundaries
     /// are not enough when one block takes minutes.
     static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+
+    /// Summaries keyed by CALL-INSTRUCTION VA (not callee VA). Used for indirect
+    /// calls whose callee cannot be resolved statically — notably KMDF WDF
+    /// function-table calls (`mov rax,[WdfFunctions+idx*8]; call *[thunk]`), which
+    /// all share one dynamic thunk so they cannot be keyed by callee. The runner
+    /// detects e.g. `WdfRequestRetrieveInputBuffer` call sites and registers a
+    /// [`ApiSummary::RetrieveBuffer`] here so the engine taints the retrieved
+    /// buffer as `SystemBuffer` (the KMDF analogue of IRP.AssociatedIrp.SystemBuffer).
+    static CALL_SITE_SUMMARIES: RefCell<BTreeMap<u64, ApiSummary>> =
+        const { RefCell::new(BTreeMap::new()) };
 }
 
 fn deadline_passed() -> bool {
     DEADLINE
         .with(Cell::get)
         .is_some_and(|dl| Instant::now() >= dl)
+}
+
+/// Register call-site-keyed summaries (see [`CALL_SITE_SUMMARIES`]). Set once per
+/// function before [`find_function_sinks_with_apis`]; pass an empty map to clear.
+pub fn set_call_site_summaries(map: BTreeMap<u64, ApiSummary>) {
+    CALL_SITE_SUMMARIES.with(|c| *c.borrow_mut() = map);
+}
+
+fn call_site_summary(va: u64) -> Option<ApiSummary> {
+    CALL_SITE_SUMMARIES.with(|c| c.borrow().get(&va).copied())
 }
 
 /// A sentinel address the attacker would "love to" write to — distinct from any
@@ -173,6 +194,13 @@ pub enum ApiSummary {
     /// `MmMapIoSpace` args 0/1 → [`SinkKind::PhysicalMemory`], `sprintf` fmt arg →
     /// [`SinkKind::FormatString`], `ZwCreateFile` path → [`SinkKind::FileOperation`]).
     DangerousCall { args: &'static [u8], kind: SinkKind },
+    /// A KMDF buffer-retrieval call (`WdfRequestRetrieveInputBuffer`/`InputMemory`):
+    /// `(globals, request, minlen, OUT *Buffer = arg[out_ptr_arg], OUT *Length)`.
+    /// Writes a fresh `SystemBuffer`-tainted pointer to `*arg[out_ptr_arg]`, so the
+    /// subsequent `mov reg,[buf_slot]; ...[reg]` loads carry precise attacker taint
+    /// — the KMDF analogue of seeding `IRP.AssociatedIrp.SystemBuffer`. Used via the
+    /// call-site-keyed map (the WDF callee is a dynamic function-table thunk).
+    RetrieveBuffer { out_ptr_arg: u8 },
 }
 
 /// Maps a call-target VA to its [`ApiSummary`]. Populated by the analysis layer
@@ -602,6 +630,13 @@ fn process_block(
             // register-indirect call through an *attacker-controlled* target is a
             // control-flow hijack (shellcode); anything else ends the path.
             Op::Call { target } => {
+                // Call-site-keyed summary (indirect WDF function-table calls whose
+                // callee is a dynamic thunk, e.g. WdfRequestRetrieveInputBuffer).
+                // Checked before callee resolution; args are still in registers here.
+                if let Some(summary) = call_site_summary(ins.va) {
+                    apply_summary(&mut st, ins.va, summary, sinks);
+                    continue;
+                }
                 let callee: Option<u64> = match target {
                     CallTarget::Direct(va) => Some(*va),
                     CallTarget::Indirect(Value::Addr(va)) => Some(*va),
@@ -1077,6 +1112,22 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
         ApiSummary::DangerousCall { args, kind } => {
             dangerous_call(st, va, args, kind, sinks);
             havoc_rax(st);
+        }
+        ApiSummary::RetrieveBuffer { out_ptr_arg } => {
+            // *arg[out_ptr_arg] := fresh SystemBuffer-tainted pointer.
+            let out_ptr = read_arg(st, out_ptr_arg);
+            let addr = eval_concrete(st, out_ptr);
+            if addr != 0 {
+                let e = st.machine.dom.fresh(Width::W64);
+                if let Expr::Sym { id, .. } = st.machine.dom.pool.get(e) {
+                    let id = *id;
+                    st.taint.mark(id, "SystemBuffer");
+                }
+                st.machine
+                    .mem
+                    .store(&mut st.machine.dom, addr, &e, 8, Endian::Little);
+            }
+            havoc_rax(st); // returns NTSTATUS
         }
     }
 }

@@ -20,7 +20,8 @@ use glaurung::ir::lift_function::lift_function_from_bytes;
 use glaurung::ir::types::{CallTarget, LlirFunction, Op, Value};
 use glaurung::symbolic::{
     driver_api_model, find_function_sinks_with_apis, find_function_stateful_sinks,
-    find_ioctl_sinks_with_apis, set_solver_budget, set_time_budget, ApiSummary, SinkKind,
+    find_ioctl_sinks_with_apis, set_call_site_summaries, set_solver_budget, set_time_budget,
+    ApiSummary, SinkKind,
 };
 
 fn kind_str(k: SinkKind) -> &'static str {
@@ -119,6 +120,37 @@ fn references_free(lf: &LlirFunction, free_slots: &BTreeSet<u64>) -> bool {
             } => free_slots.contains(va),
             _ => false,
         })
+}
+
+/// Detect KMDF `WdfRequestRetrieveInputBuffer` call sites and map each to a
+/// [`ApiSummary::RetrieveBuffer`] keyed by the call-instruction VA. The KMDF idiom
+/// is `mov rax,[WdfFunctions+idx*8]; ...; call *[thunk]`; the index load lifts to an
+/// `Op::Load` with disp == 0x868 (index 269 = WdfRequestRetrieveInputBuffer on the
+/// current Win11 KMDF function table), and the next indirect `Op::Call` is the call
+/// site. The out-buffer is the 4th arg (r9, arg index 3): WdfRequestRetrieveInputBuffer
+/// (globals, request, minlen, OUT *Buffer, OUT *Length). NOTE: 0x868 is the
+/// WDF-version-specific table offset — revisit if a build's WdfFunctions layout differs.
+fn wdf_input_buffer_calls(lf: &LlirFunction) -> BTreeMap<u64, ApiSummary> {
+    const WDF_RETRIEVE_INPUT_BUFFER_OFF: i64 = 0x868;
+    let mut out = BTreeMap::new();
+    for b in &lf.blocks {
+        let mut pending = false;
+        for ins in &b.instrs {
+            match &ins.op {
+                Op::Load { addr, .. } if addr.disp == WDF_RETRIEVE_INPUT_BUFFER_OFF => {
+                    pending = true;
+                }
+                Op::Call {
+                    target: CallTarget::Indirect(_),
+                } if pending => {
+                    out.insert(ins.va, ApiSummary::RetrieveBuffer { out_ptr_arg: 3 });
+                    pending = false;
+                }
+                _ => {}
+            }
+        }
+    }
+    out
 }
 
 fn reach_hops() -> usize {
@@ -255,6 +287,10 @@ fn main() {
         // Dispatchers / IRP-chasers get the IRP-seeded pass; handlers and their
         // callees (reached from a handler, so called with attacker IRP buffers)
         // get the tainted-args pass.
+        // KMDF: tag WdfRequestRetrieveInputBuffer call sites so the engine taints
+        // the retrieved buffer as SystemBuffer (precise attacker taint) instead of
+        // falling back to ArgN. Set per-function (empty clears it for non-KMDF fns).
+        set_call_site_summaries(wdf_input_buffer_calls(&lf));
         let mut sinks = if dispatch_vas.contains(&va) || references_irp(&lf) {
             find_ioctl_sinks_with_apis(&lf, &model, STATES)
         } else {

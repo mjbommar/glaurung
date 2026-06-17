@@ -423,6 +423,52 @@ mod tests {
         assert_eq!(w.tainted_by, vec!["SystemBuffer".to_string()]);
     }
 
+    /// Positive control for the KMDF `WdfRequestRetrieveInputBuffer` model
+    /// (`ApiSummary::RetrieveBuffer` via the call-site map). An UNGUARDED handler that
+    /// retrieves the input buffer and writes through it must produce a `SystemBuffer`-
+    /// tainted controlled write — proving the WDF-retrieved buffer flows as precise
+    /// attacker taint, the KMDF analogue of `IRP.AssociatedIrp.SystemBuffer`.
+    #[test]
+    fn wdf_retrieve_input_buffer_taints_systembuffer() {
+        use crate::symbolic::explore::set_call_site_summaries;
+        // r9 = &buf (scratch local); call <retrieve> (taints *r9); rax = *r9; *rax = x
+        let lf = func(vec![(
+            0x2000,
+            vec![
+                Op::Assign {
+                    dst: VReg::phys("r9"),
+                    src: Value::Const(0x60000),
+                }, // va 0x2000: r9 = &buf
+                Op::Call {
+                    target: CallTarget::Indirect(Value::Addr(0xDEAD)),
+                }, // va 0x2004: WdfRequestRetrieveInputBuffer (call-site summarized)
+                load("rax", "r9", 0, 8), // va 0x2008: rax = *r9 = tainted buffer ptr
+                Op::Store {
+                    addr: MemOp::plain(Some(VReg::phys("rax")), None, 1, 0, 8),
+                    src: Value::Const(0x4141_4141),
+                }, // va 0x200c: *buf = x  -> controlled write through SystemBuffer
+                Op::Return,
+            ],
+            0x2014,
+            vec![],
+        )]);
+        let mut m = std::collections::BTreeMap::new();
+        m.insert(0x2004u64, ApiSummary::RetrieveBuffer { out_ptr_arg: 3 });
+        set_call_site_summaries(m);
+        let sinks = find_function_sinks_with_apis(&lf, &CallModel::new(), 1000);
+        set_call_site_summaries(std::collections::BTreeMap::new()); // clear for other tests
+        let w = sinks
+            .iter()
+            .find(|s| s.kind == SinkKind::ControlledWrite)
+            .expect("expected a controlled write through the WDF-retrieved buffer");
+        assert_eq!(
+            w.tainted_by,
+            vec!["SystemBuffer".to_string()],
+            "WDF-retrieved buffer must carry SystemBuffer taint, got {:?}",
+            w.tainted_by
+        );
+    }
+
     /// A handler that writes into a *concrete* scratch buffer at an attacker
     /// offset bounded to a 16-byte window: `dst = 0x50000 + (InputBufferLength & 0xF)`.
     /// The address is attacker-*derived* (so it is still flagged, with provenance)

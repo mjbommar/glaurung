@@ -18,8 +18,8 @@ pub mod solver;
 pub mod symdomain;
 
 pub use explore::{
-    find_input_reaching, find_sinks, find_sinks_stateful, ApiSummary, CallModel, Severity, Sink,
-    SinkKind, TaintSpec,
+    find_input_reaching, find_sinks, find_sinks_stateful, set_call_site_summaries, ApiSummary,
+    CallModel, Severity, Sink, SinkKind, TaintSpec,
 };
 pub use expr::{Expr, ExprId, ExprPool};
 pub use ioctl::{
