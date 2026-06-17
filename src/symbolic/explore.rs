@@ -717,21 +717,42 @@ fn witness_for_value(st: &mut State, addr_val: ExprId, value: u128) -> Option<Mo
 }
 
 /// The MS x64 integer argument register for parameter index `n` (0-based).
-fn arg_reg(n: u8) -> &'static str {
+/// Only the first four parameters are register-passed; index >=4 lives on the
+/// stack (see [`read_arg`]).
+fn arg_reg(n: u8) -> Option<&'static str> {
     match n {
-        0 => "rcx",
-        1 => "rdx",
-        2 => "r8",
-        3 => "r9",
-        _ => "rsp", // beyond arg3 args are on the stack; unmodeled → harmless
+        0 => Some("rcx"),
+        1 => Some("rdx"),
+        2 => Some("r8"),
+        3 => Some("r9"),
+        _ => None,
     }
 }
 
-/// Read call argument `n` as a symbolic value.
+/// Read call argument `n` as a symbolic value. Args 0-3 are in rcx/rdx/r8/r9;
+/// args >=4 are on the stack at `[rsp + 0x20 + (n-4)*8]` at the call site -- the
+/// 32-byte shadow space precedes the first stack arg in the MS x64 ABI. Reading
+/// them (rather than the old `rsp` stub) is what lets a dangerous-call detector
+/// see attacker taint that reached a high-numbered parameter, e.g. the
+/// attacker-controlled CreateDisposition (param 7) of `ZwCreateFile`, which the
+/// handler spills from the IRP system buffer into `[rsp+0x38]`.
 fn read_arg(st: &mut State, n: u8) -> ExprId {
-    st.machine
-        .regs
-        .read(&mut st.machine.dom, &VReg::phys(arg_reg(n)))
+    match arg_reg(n) {
+        Some(r) => st.machine.regs.read(&mut st.machine.dom, &VReg::phys(r)),
+        None => {
+            let rsp = st
+                .machine
+                .regs
+                .read(&mut st.machine.dom, &VReg::phys("rsp"));
+            let off = st
+                .machine
+                .dom
+                .constant(Width::W64, 0x20 + (n as u128 - 4) * 8);
+            let addr = st.machine.dom.binop(BinOp::Add, &rsp, &off, Width::W64);
+            let a = concretize_addr(st, addr);
+            st.machine.mem.load(&mut st.machine.dom, a, 8, Endian::Little)
+        }
+    }
 }
 
 /// Concretely evaluate `val` under a model of the current path *without* binding

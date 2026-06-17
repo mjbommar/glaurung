@@ -83,6 +83,13 @@ pub struct IoctlSurface {
     pub n_code_functions: usize,
     /// Functions with a decoded jump table.
     pub n_jumptable: usize,
+    /// Import call-stub thunks: a tiny `jmp *[rip+slot]` function (entry VA) ->
+    /// the IAT slot VA it tail-jumps to. This is the non-`dllimport` call form
+    /// the compiler emits for e.g. `memcpy` / `sprintf` (`call <thunk>` rather
+    /// than `call *[__imp_x]`). The symbolic API model is keyed on IAT slot VAs,
+    /// so a `call <thunk>` would not resolve; the runner uses this map to alias
+    /// the thunk entry to the slot's summary.
+    pub import_thunks: BTreeMap<u64, u64>,
 }
 
 /// Decode whether an immediate is a plausible CTL_CODE. Mirrors the calibrated
@@ -426,6 +433,41 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
     let pdata_starts: BTreeSet<u64> = ranges.iter().map(|&(b, _)| b).collect();
     let dis = IcedDisassembler::new(Architecture::X86_64, Endianness::Little);
 
+    // Import call-stub thunks live OUTSIDE .pdata (leaf stubs carry no unwind info),
+    // so the pdata-driven function loop never sees them. Scan executable section
+    // bytes for the `FF 25 <disp32>` (jmp qword ptr [rip+disp32]) shape directly and
+    // record entry VA -> rip-relative target (the IAT slot). The runner keeps only
+    // entries whose target is a modeled import, so stray FF25 bytes inside other
+    // instructions are harmless (no call targets them, and the target rarely lands
+    // exactly on a modeled slot). This is what makes `call <memcpy/sprintf thunk>`
+    // resolve to its API summary.
+    let mut import_thunks: BTreeMap<u64, u64> = BTreeMap::new();
+    for sec in obj.sections() {
+        let exec = matches!(
+            sec.flags(),
+            object::SectionFlags::Coff { characteristics } if characteristics & 0x2000_0000 != 0
+        );
+        if !exec {
+            continue;
+        }
+        let base = sec.address();
+        if let Ok(bytes) = sec.data() {
+            let mut i = 0usize;
+            while i + 6 <= bytes.len() {
+                if bytes[i] == 0xFF && bytes[i + 1] == 0x25 {
+                    let disp =
+                        i32::from_le_bytes([bytes[i + 2], bytes[i + 3], bytes[i + 4], bytes[i + 5]]);
+                    let va = base + i as u64;
+                    let target = va.wrapping_add(6).wrapping_add(disp as i64 as u64);
+                    import_thunks.insert(va, target);
+                    i += 6;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
     let mut per_func: BTreeMap<u64, Vec<IoctlCode>> = BTreeMap::new();
     let mut jt_maps: BTreeMap<u64, BTreeMap<u32, u64>> = BTreeMap::new();
     let mut handlers_map: BTreeMap<u64, Vec<(u64, bool)>> = BTreeMap::new();
@@ -624,6 +666,7 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
         callback_roots,
         n_code_functions: per_func.len(),
         n_jumptable: jt_maps.len(),
+        import_thunks,
     }
 }
 

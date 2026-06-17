@@ -255,12 +255,30 @@ pub fn driver_api_model(imports: &BTreeMap<String, u64>) -> CallModel {
                     kind: PhysicalMemory,
                 }
             }
-            "ZwCreateFile" | "IoCreateFile" | "ZwOpenFile" | "ZwWriteFile" | "ZwDeleteFile" => {
-                ApiSummary::DangerousCall {
-                    args: &[0],
-                    kind: FileOperation,
-                }
-            }
+            // File APIs: flag when an attacker-controlled parameter reaches the call.
+            // Per-API arg lists target the value-carrying params an attacker steers
+            // (DesiredAccess / CreateDisposition / CreateOptions / Buffer / Length /
+            // OpenOptions), not the output handle. NOTE: the attacker FILENAME lives
+            // in OBJECT_ATTRIBUTES.ObjectName->Buffer (tainted by reference, several
+            // derefs deep) -- value-taint on the OA pointer arg does not fire, so a
+            // pure-filename ZwDeleteFile is not yet caught; that needs struct-deref
+            // taint. The disposition/options/access/buffer/length value-taint IS caught.
+            "ZwCreateFile" | "IoCreateFile" => ApiSummary::DangerousCall {
+                args: &[1, 2, 7, 8],
+                kind: FileOperation,
+            },
+            "ZwOpenFile" => ApiSummary::DangerousCall {
+                args: &[1, 2, 5],
+                kind: FileOperation,
+            },
+            "ZwWriteFile" => ApiSummary::DangerousCall {
+                args: &[5, 6],
+                kind: FileOperation,
+            },
+            "ZwDeleteFile" => ApiSummary::DangerousCall {
+                args: &[0],
+                kind: FileOperation,
+            },
             "sprintf" | "swprintf" | "vsprintf" | "vswprintf" | "_snprintf" | "_snwprintf" => {
                 ApiSummary::DangerousCall {
                     args: &[1],
@@ -706,7 +724,9 @@ mod tests {
     #[test]
     fn tainted_path_to_zwcreatefile() {
         const API: u64 = 0x9000;
-        let lf = handler_calling(vec![load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], API);
+        // rdx (arg1 = DesiredAccess) = SystemBuffer: an attacker-controlled file-op
+        // parameter. (arg0 is the output FileHandle and is no longer a trigger.)
+        let lf = handler_calling(vec![load("rdx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], API);
         let sinks = find_ioctl_sinks_with_apis(&lf, &model("ZwCreateFile", API), 1000);
         assert_eq!(kinds(&sinks), ["file_op"].into_iter().collect());
     }

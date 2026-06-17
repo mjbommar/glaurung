@@ -174,7 +174,16 @@ fn main() {
 
     let iat = pe_iat_map(&data);
     let imports: BTreeMap<String, u64> = iat.iter().map(|(s, n)| (n.clone(), *s)).collect();
-    let model = driver_api_model(&imports);
+    let mut model = driver_api_model(&imports);
+    // Alias import call-stub thunks to their target IAT slot's summary, so a direct
+    // `call <thunk>` (the non-dllimport form the compiler emits for memcpy/sprintf
+    // and friends) is recognised the same as `call *[__imp_x]`. Without this, a
+    // CopyMemory/format-string/etc. reached through a thunk is invisible.
+    for (&thunk_va, &slot_va) in &surface.import_thunks {
+        if let Some(summary) = model.get(&slot_va).copied() {
+            model.insert(thunk_va, summary);
+        }
+    }
     // IAT slots of the pool-free APIs: gate the stateful pass on functions that
     // actually free (the alloc->free->free / alloc->free->use lifecycle bugs a
     // single-path run structurally cannot see -- they span IOCTL command branches
