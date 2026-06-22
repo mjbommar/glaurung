@@ -55,8 +55,24 @@ def test_explain_help_exposes_new_flags():
         "--pdb-cache",
         "--cache-dir",
         "--json",
+        "--range-start",
+        "--range-end",
     ):
         assert flag in text, f"--help missing {flag}"
+
+
+def test_explain_range_start_requires_range_end():
+    """--range-start without --range-end is a usage error (rc=2), reported
+    before any decompile/LLM work -- so this is deterministic and needs no
+    LLM credentials. Locks in the range-seed contract added so explain can
+    reach arbitrary VAs on large stripped binaries (e.g. the 168MB Bedrock
+    server) where whole-binary auto-discovery is slow or misses the target.
+    """
+    if not SAMPLE.exists():
+        pytest.skip("linux sample missing")
+    result = _run([str(SAMPLE), "--func", "0x1840", "--range-start", "0x1840"])
+    assert result.returncode == 2, result.stderr
+    assert "--range-end is required" in result.stdout
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="linux sample missing")

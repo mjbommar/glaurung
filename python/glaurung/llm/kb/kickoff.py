@@ -97,6 +97,8 @@ def kickoff_analysis(
     db_path: Optional[str] = None,
     session: str = "main",
     max_functions_for_kb_lift: int = 64,
+    max_file_size: int = 104_857_600,
+    max_read_bytes: int = 10_000_000,
     skip_if_packed: bool = True,
     pdb: bool = True,
     pdb_cache: Optional[str] = None,
@@ -146,7 +148,7 @@ def kickoff_analysis(
     # 2. Triage — format/arch/entry.
     t0 = time.perf_counter()
     try:
-        art = g.triage.analyze_path(str(binary), 10_000_000, 100_000_000, 1)
+        art = g.triage.analyze_path(str(binary), max_read_bytes, max_file_size, 1)
     except Exception as e:
         summary.notes.append(f"triage failed: {e}")
         summary.elapsed_ms = timings
@@ -201,7 +203,10 @@ def kickoff_analysis(
         # 4. Index callgraph (also runs the demangle pass automatically).
         t0 = time.perf_counter()
         try:
-            edges = _xref_db.index_callgraph(kb, str(binary))
+            edges = _xref_db.index_callgraph(
+                kb, str(binary),
+                max_read_bytes=max_read_bytes, max_file_size=max_file_size,
+            )
         except Exception as e:
             summary.notes.append(f"index_callgraph failed: {e}")
             edges = 0
@@ -307,7 +312,9 @@ def kickoff_analysis(
         # 6. Per-function lifts: stack slots, propagation, struct
         # candidates. Capped because the bench-style work scales.
         t0 = time.perf_counter()
-        funcs, _cg = g.analysis.analyze_functions_path(str(binary))
+        funcs, _cg = g.analysis.analyze_functions_path(
+            str(binary), max_read_bytes, max_file_size
+        )
         summary.functions_total = len(funcs)
         summary.functions_with_blocks = sum(1 for f in funcs if f.basic_blocks)
         summary.functions_named = sum(

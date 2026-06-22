@@ -209,6 +209,22 @@ def _triage_wrapper(
     max_read_bytes = kwargs.get("_max_read_bytes", max_read_bytes)
     max_file_size = kwargs.get("_max_file_size", max_file_size)
     max_depth = kwargs.get("_max_recursion_depth", max_depth)
+    # Global override for large binaries (e.g. 168MB game servers): GLAURUNG_MAX_FILE_SIZE
+    # / GLAURUNG_MAX_READ_BYTES raise the caps for EVERY command that triages through
+    # this wrapper (explain, find, name-func, ask, kickoff, ...) without a per-command flag.
+    import os as _os
+    _mfs = _os.environ.get("GLAURUNG_MAX_FILE_SIZE")
+    if _mfs:
+        try:
+            max_file_size = max(max_file_size, int(_mfs))
+        except ValueError:
+            pass
+    _mrb = _os.environ.get("GLAURUNG_MAX_READ_BYTES")
+    if _mrb:
+        try:
+            max_read_bytes = max(max_read_bytes, int(_mrb))
+        except ValueError:
+            pass
     try:
         art = _triage_analyze_native(
             path,

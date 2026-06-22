@@ -33,6 +33,14 @@ class KickoffCommand(BaseCommand):
             help="Cap on functions analysed for stack-frame / propagation / struct lifts.",
         )
         parser.add_argument(
+            "--max-file-size", type=int, default=104_857_600,
+            help="Max file size to triage/analyze in bytes (default 100MB). Raise for large binaries.",
+        )
+        parser.add_argument(
+            "--max-read-bytes", type=int, default=10_000_000,
+            help="Max bytes read during triage (default 10MB).",
+        )
+        parser.add_argument(
             "--analyze-packed", action="store_true",
             help="Analyse a binary even when packer detection flags it. "
                  "Default: skip deep analysis on packed binaries.",
@@ -74,6 +82,8 @@ class KickoffCommand(BaseCommand):
             db_path=str(args.db) if args.db else None,
             session=args.session,
             max_functions_for_kb_lift=args.max_functions,
+            max_file_size=args.max_file_size,
+            max_read_bytes=args.max_read_bytes,
             skip_if_packed=not args.analyze_packed,
             pdb=args.pdb,
             pdb_cache=args.pdb_cache,
