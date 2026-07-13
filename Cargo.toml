@@ -114,3 +114,13 @@ harness = false
 name = "emulator"
 harness = false
 required-features = ["exec"]
+
+# Examples that drive the symbolic engine only build with its feature enabled,
+# so `cargo build --all-targets` under default features skips them cleanly.
+[[example]]
+name = "ioctl_scan"
+required-features = ["symbolic"]
+
+[[example]]
+name = "ioctlance"
+required-features = ["symbolic"]
