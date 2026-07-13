@@ -89,6 +89,54 @@ pub fn reset_solver_meter() {
     TIMEOUT_COUNT.with(|c| c.set(0));
 }
 
+// ---------------------------------------------------------------------------
+// Cross-run solver-cost instrumentation (benchmarking; not reset per function).
+//
+// The per-thread meters above are reset before each function; these global
+// atomics accumulate across an entire analysis run so a benchmark can attribute
+// wall-clock to the solver specifically (isolating it from lifting/CFG cost).
+// Thread-safe so parallel scanning is counted correctly.
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TOTAL_SOLVE_COUNT: AtomicU64 = AtomicU64::new(0);
+static TOTAL_SOLVE_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// Reset the cross-run solver-cost accumulators. Call once before a run.
+pub fn reset_total_solver_stats() {
+    TOTAL_SOLVE_COUNT.store(0, Ordering::Relaxed);
+    TOTAL_SOLVE_NANOS.store(0, Ordering::Relaxed);
+}
+
+/// `(total_solves, total_solver_nanos)` since the last reset -- the time spent
+/// inside the solver backend across the whole run.
+pub fn total_solver_stats() -> (u64, u64) {
+    (
+        TOTAL_SOLVE_COUNT.load(Ordering::Relaxed),
+        TOTAL_SOLVE_NANOS.load(Ordering::Relaxed),
+    )
+}
+
+// Shadow differential: when both backends are compiled and
+// GLAURUNG_SHADOW_DIFF is set, every solve runs BOTH and records whether the
+// sat/unsat verdicts agree (unknowns tolerated). z3 stays authoritative so
+// exploration is deterministic. This tests verdict parity on the REAL query
+// stream (paper claim C1) independent of model-choice divergence.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_AGREE: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_DISAGREE: AtomicU64 = AtomicU64::new(0);
+
+/// `(agreements, confident_disagreements)` from shadow-differential solving.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+pub fn shadow_diff_stats() -> (u64, u64) {
+    (
+        SHADOW_AGREE.load(Ordering::Relaxed),
+        SHADOW_DISAGREE.load(Ordering::Relaxed),
+    )
+}
+
 /// `(solves, timeouts)` issued on this thread since the last [`reset_solver_meter`].
 pub fn solver_meter() -> (u64, u64) {
     (SOLVE_COUNT.with(Cell::get), TIMEOUT_COUNT.with(Cell::get))
@@ -110,14 +158,43 @@ pub fn solver_budget() -> (u64, u64) {
 /// [`solver_meter`]) so the explorer can bound total solving work.
 pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     SOLVE_COUNT.with(|c| c.set(c.get() + 1));
+    // Shadow-differential mode: run both backends, record verdict agreement,
+    // return z3 authoritatively. Diagnostic only (env-gated).
+    #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+    {
+        if std::env::var_os("GLAURUNG_SHADOW_DIFF").is_some() {
+            let rz = z3_backend::Z3Solver::new().check(pool, asserts);
+            let ra = axeyum_backend::AxeyumSolver::new().check(pool, asserts);
+            let unknown = matches!(rz, SolveResult::Unknown)
+                || matches!(ra, SolveResult::Unknown)
+                || matches!(rz, SolveResult::Error(_))
+                || matches!(ra, SolveResult::Error(_));
+            let same = matches!(
+                (&rz, &ra),
+                (SolveResult::Sat(_), SolveResult::Sat(_))
+                    | (SolveResult::Unsat, SolveResult::Unsat)
+            );
+            if unknown || same {
+                SHADOW_AGREE.fetch_add(1, Ordering::Relaxed);
+            } else {
+                SHADOW_DISAGREE.fetch_add(1, Ordering::Relaxed);
+            }
+            return rz;
+        }
+    }
+
     // Backend priority (ADR-002): explicitly-enabled z3 (perf) > axeyum
     // (pure-Rust default) > pipe (zero-dep fallback).
+    let __solve_start = std::time::Instant::now();
     #[cfg(feature = "solver-z3")]
     let result = z3_backend::Z3Solver::new().check(pool, asserts);
     #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
     let result = axeyum_backend::AxeyumSolver::new().check(pool, asserts);
     #[cfg(all(not(feature = "solver-z3"), not(feature = "solver-axeyum")))]
     let result = pipe::PipeSolver::new().check(pool, asserts);
+    let __elapsed = __solve_start.elapsed().as_nanos() as u64;
+    TOTAL_SOLVE_COUNT.fetch_add(1, Ordering::Relaxed);
+    TOTAL_SOLVE_NANOS.fetch_add(__elapsed, Ordering::Relaxed);
     if matches!(result, SolveResult::Unknown) {
         TIMEOUT_COUNT.with(|c| c.set(c.get() + 1));
     }

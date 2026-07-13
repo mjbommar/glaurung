@@ -242,8 +242,19 @@ fn main() {
         iat.len(),
     );
 
-    set_solver_budget(4000, 16);
-    set_time_budget(Some(std::time::Duration::from_secs(2)));
+    // Per-function solver budget + time budget. Env-tunable so a benchmark
+    // can raise them high enough that neither backend hits the ceiling (to
+    // separate a coverage-under-budget effect from a verdict disagreement).
+    let solve_budget: u64 = std::env::var("IOCTLANCE_SOLVE_BUDGET")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4000);
+    let solve_secs: u64 = std::env::var("IOCTLANCE_SOLVE_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
+    set_solver_budget(solve_budget, 16);
+    set_time_budget(Some(std::time::Duration::from_secs(solve_secs)));
     const STATES: usize = 300;
     const MAX_BLOCKS: usize = 200;
 
@@ -370,6 +381,36 @@ fn main() {
         },
     );
     eprintln!("[by-kind] {:?}", by_kind);
+    // Benchmark footer: solver-only cost across the whole run (isolates the
+    // solver from lifting/CFG), for the z3-vs-axeyum comparison.
+    let (n_solves, solve_ns) = glaurung::symbolic::total_solver_stats();
+    eprintln!(
+        "[solver] backend={} solves={} solver_time={:.1}ms avg={:.1}us/solve",
+        if cfg!(feature = "solver-z3") {
+            "z3"
+        } else if cfg!(feature = "solver-axeyum") {
+            "axeyum"
+        } else {
+            "pipe"
+        },
+        n_solves,
+        solve_ns as f64 / 1e6,
+        if n_solves > 0 {
+            solve_ns as f64 / n_solves as f64 / 1000.0
+        } else {
+            0.0
+        },
+    );
+    #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+    {
+        let (agree, disagree) = glaurung::symbolic::solver::shadow_diff_stats();
+        if agree + disagree > 0 {
+            eprintln!(
+                "[shadow-diff] z3-vs-axeyum verdict agreements={} confident_disagreements={}",
+                agree, disagree
+            );
+        }
+    }
     lines.sort();
     for l in &lines {
         println!("{}", l.splitn(2, '\t').nth(1).unwrap_or(l));

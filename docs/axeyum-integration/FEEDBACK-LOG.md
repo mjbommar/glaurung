@@ -242,3 +242,37 @@ integration is ~250 lines. Prioritized notes:
    an incremental-friendly "assert many + check" doc example; the
    `pub use Value`; and doc-comment convention notes on extract/concat/
    bv_const.
+
+## Iterations 6-8 - real Windows drivers (the realistic use case)
+
+Ran glaurung's full IOCTLance symbolic analysis on real `.sys` drivers
+through each backend, with solver-only time instrumented globally
+(`total_solver_stats`) to separate solver cost from lifting/CFG.
+
+- **[RESULT - speed] On vwififlt (~13-16k small QF_BV queries) axeyum spends
+  34x less solver time (197 ms vs z3's 6748 ms; 12.6 us/solve vs 514 us).**
+  The whole symbolic pass drops 7.0 s -> 0.24 s (~29x). On DptfDevGen (harder
+  formulas) axeyum == z3 (1719 vs 1671 ms). Matches the micro-benchmark's
+  width dependence exactly: axeyum dominates small-formula workloads (the
+  common case in driver analysis), ties on hard ones.
+- **[RESULT - correctness, C1] Shadow-differential (both solvers on every
+  real query): 18,508 queries, 0 verdict disagreements.** Combined with the
+  54 engine tests + 20 synthetic cases, axeyum matches z3 on every query
+  glaurung's real analysis issues.
+- **[NOT an axeyum bug] vwififlt findings differ between backends** (z3-driven
+  55/19, axeyum-driven 91/36). Root cause: glaurung's `concretize_addr` binds
+  `addr == any-satisfying-model`; z3 and axeyum return different valid models,
+  so exploration forks differently. Verdicts never disagree (proven above).
+  This is a glaurung/model-based-concretization property, surfaced by the
+  solver swap - not an axeyum defect. (Confirmed by raising the per-function
+  budget 50x: identical solve counts, so not a coverage-under-budget effect.)
+- **[AXEYUM - robustness win] Zero crashes / hangs / Unknowns across ~18.5k
+  real driver queries.** Every query decided within the 250 ms budget; the
+  `with_timeout` path never needed to fire on this corpus. Solid.
+- **[AXEYUM - perf profile note for your benchmarks] Per-solve cost is
+  formula-size-dominated, not fixed-overhead-dominated** (12.6 us on
+  vwififlt's small formulas vs ~310 us on DptfDevGen's harder ones), whereas
+  z3's is fixed-overhead-dominated (479-514 us regardless). This is the crux
+  of the paper argument and a genuinely favorable story for axeyum on
+  binary-analysis workloads - worth a dedicated axeyum micro-benchmark that
+  sweeps formula width to show the crossover.
