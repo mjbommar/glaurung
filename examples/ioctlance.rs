@@ -403,11 +403,25 @@ fn main() {
     );
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     {
-        let (agree, disagree) = glaurung::symbolic::solver::shadow_diff_stats();
+        let (agree, disagree, z3_ns, ax_ns) = glaurung::symbolic::solver::shadow_diff_stats();
         if agree + disagree > 0 {
+            let z3_ms = z3_ns as f64 / 1e6;
+            let ax_ms = ax_ns as f64 / 1e6;
             eprintln!(
-                "[shadow-diff] z3-vs-axeyum verdict agreements={} confident_disagreements={}",
-                agree, disagree
+                "[shadow-diff] queries={} agree={} disagree={} | SAME-STREAM z3={:.1}ms axeyum={:.1}ms speedup={:.1}x",
+                agree + disagree,
+                agree,
+                disagree,
+                z3_ms,
+                ax_ms,
+                if ax_ms > 0.0 { z3_ms / ax_ms } else { 0.0 },
+            );
+            let (both_sat, model_diff) = glaurung::symbolic::solver::shadow_model_stats();
+            let (z3_unk, ax_unk, unk_split) =
+                glaurung::symbolic::solver::shadow_unknown_stats();
+            eprintln!(
+                "[model-choice] both-sat={} different-model={} | z3-unknown={} axeyum-unknown={} unknown-split={}",
+                both_sat, model_diff, z3_unk, ax_unk, unk_split,
             );
         }
     }

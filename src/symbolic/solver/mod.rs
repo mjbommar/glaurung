@@ -127,13 +127,61 @@ pub fn total_solver_stats() -> (u64, u64) {
 static SHADOW_AGREE: AtomicU64 = AtomicU64::new(0);
 #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
 static SHADOW_DISAGREE: AtomicU64 = AtomicU64::new(0);
-
-/// `(agreements, confident_disagreements)` from shadow-differential solving.
 #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
-pub fn shadow_diff_stats() -> (u64, u64) {
+static SHADOW_Z3_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_AX_NANOS: AtomicU64 = AtomicU64::new(0);
+// Model-divergence counters: of the queries where BOTH backends return Sat,
+// how many returned a DIFFERENT satisfying model. This directly measures the
+// mechanism behind finding divergence (model-based concretization), distinct
+// from verdict agreement.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_BOTH_SAT: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_MODEL_DIFF: AtomicU64 = AtomicU64::new(0);
+// Unknown/timeout divergence: a query one backend DECIDES (sat/unsat) but the
+// other returns Unknown (e.g. z3 hitting its 250ms per-solve timeout where
+// fast axeyum decides). This is a real behavioral divergence that steers
+// exploration even though it is not a sat-vs-unsat disagreement.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_Z3_UNK: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_AX_UNK: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_UNK_SPLIT: AtomicU64 = AtomicU64::new(0);
+
+/// `(z3_unknown, axeyum_unknown, one_unknown_other_decided)`.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+pub fn shadow_unknown_stats() -> (u64, u64, u64) {
+    (
+        SHADOW_Z3_UNK.load(Ordering::Relaxed),
+        SHADOW_AX_UNK.load(Ordering::Relaxed),
+        SHADOW_UNK_SPLIT.load(Ordering::Relaxed),
+    )
+}
+
+/// `(both_sat, model_diff)`: of queries both backends found satisfiable, how
+/// many returned different models. High `model_diff` explains finding
+/// divergence without any verdict disagreement.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+pub fn shadow_model_stats() -> (u64, u64) {
+    (
+        SHADOW_BOTH_SAT.load(Ordering::Relaxed),
+        SHADOW_MODEL_DIFF.load(Ordering::Relaxed),
+    )
+}
+
+/// Shadow-differential stats on the IDENTICAL query stream:
+/// `(agreements, confident_disagreements, z3_total_nanos, axeyum_total_nanos)`.
+/// z3 and axeyum solve the same queries, so the two nanos are directly
+/// comparable (apples-to-apples, unlike two divergent single-backend runs).
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+pub fn shadow_diff_stats() -> (u64, u64, u64, u64) {
     (
         SHADOW_AGREE.load(Ordering::Relaxed),
         SHADOW_DISAGREE.load(Ordering::Relaxed),
+        SHADOW_Z3_NANOS.load(Ordering::Relaxed),
+        SHADOW_AX_NANOS.load(Ordering::Relaxed),
     )
 }
 
@@ -163,8 +211,25 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     {
         if std::env::var_os("GLAURUNG_SHADOW_DIFF").is_some() {
-            let rz = z3_backend::Z3Solver::new().check(pool, asserts);
-            let ra = axeyum_backend::AxeyumSolver::new().check(pool, asserts);
+            // Time each backend on the SAME query for an apples-to-apples
+            // comparison. Alternate order per call to cancel warm-cache bias.
+            let z3_first = SHADOW_AGREE.load(Ordering::Relaxed) % 2 == 0;
+            let (rz, ra);
+            if z3_first {
+                let t = std::time::Instant::now();
+                rz = z3_backend::Z3Solver::new().check(pool, asserts);
+                SHADOW_Z3_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                let t = std::time::Instant::now();
+                ra = axeyum_backend::AxeyumSolver::new().check(pool, asserts);
+                SHADOW_AX_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            } else {
+                let t = std::time::Instant::now();
+                ra = axeyum_backend::AxeyumSolver::new().check(pool, asserts);
+                SHADOW_AX_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                let t = std::time::Instant::now();
+                rz = z3_backend::Z3Solver::new().check(pool, asserts);
+                SHADOW_Z3_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            }
             let unknown = matches!(rz, SolveResult::Unknown)
                 || matches!(ra, SolveResult::Unknown)
                 || matches!(rz, SolveResult::Error(_))
@@ -178,6 +243,30 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                 SHADOW_AGREE.fetch_add(1, Ordering::Relaxed);
             } else {
                 SHADOW_DISAGREE.fetch_add(1, Ordering::Relaxed);
+            }
+            if let (SolveResult::Sat(mz), SolveResult::Sat(ma)) = (&rz, &ra) {
+                SHADOW_BOTH_SAT.fetch_add(1, Ordering::Relaxed);
+                if mz.values != ma.values {
+                    SHADOW_MODEL_DIFF.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            // Diagnostic: print the first few axeyum non-decided reasons so
+            // we know WHY (Unknown budget vs Error translation) it punts.
+            if matches!(ra, SolveResult::Unknown | SolveResult::Error(_))
+                && SHADOW_AX_UNK.load(Ordering::Relaxed) < 5
+            {
+                eprintln!("[ax-nondecided #{}] {:?}", SHADOW_AX_UNK.load(Ordering::Relaxed), ra);
+            }
+            let z3_unk = matches!(rz, SolveResult::Unknown | SolveResult::Error(_));
+            let ax_unk = matches!(ra, SolveResult::Unknown | SolveResult::Error(_));
+            if z3_unk {
+                SHADOW_Z3_UNK.fetch_add(1, Ordering::Relaxed);
+            }
+            if ax_unk {
+                SHADOW_AX_UNK.fetch_add(1, Ordering::Relaxed);
+            }
+            if z3_unk != ax_unk {
+                SHADOW_UNK_SPLIT.fetch_add(1, Ordering::Relaxed);
             }
             return rz;
         }

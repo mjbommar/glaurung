@@ -276,3 +276,41 @@ through each backend, with solver-only time instrumented globally
   of the paper argument and a genuinely favorable story for axeyum on
   binary-analysis workloads - worth a dedicated axeyum micro-benchmark that
   sweeps formula width to show the crossover.
+
+## Iteration 12 - MAJOR CORRECTION: axeyum is SLOWER on real formulas, not faster
+
+Chasing an anomaly (shadow-diff reported 0 model differences, which
+contradicted the finding divergence) uncovered that **the earlier speed
+results were invalid.**
+
+- **[GLAURUNG - my bug] The translator did not coerce width-mismatched
+  operands.** glaurung's lifter emits e.g. `BitVec16 op BitVec64`; z3_backend
+  silently coerces (zero-extend/truncate), axeyum strictly rejects with
+  `IrError("operands must share a sort")`. So axeyum was **erroring on ~98%
+  of real driver queries** (z3-unknown=0, axeyum-unknown/error=12915/13126).
+  The "12-29x faster" was fast FAILURE, not fast solving. Fixed by mirroring
+  z3_backend's `coerce` at Bin/Cmp/Trunc/Extract/Ite. (This was flagged as
+  risk R3 in the plan and I failed to implement it in P2 - the synthetic
+  tests were all well-typed so never hit it.)
+- **[AXEYUM - honest headline] After the fix, axeyum decides every real query
+  correctly (0 disagreements) but is 1.7-3.2x SLOWER than z3** on real driver
+  formulas (per-solve ~1418 us vs z3's ~468 us on vwififlt; consistent across
+  DptfDevGen 0.6x, IntcSST 0.3x). **This is the most important feedback for
+  the axeyum project: the real optimization target is binary-analysis path
+  conditions - width-mismatched, extract/concat/memory-derived, small-to-
+  medium - where z3's preprocessing currently wins ~2-3x.**
+- **[AXEYUM - the strictness was RIGHT and it helped]** axeyum's refusal to
+  build a mismatched-sort term (vs z3's silent coercion) is arguably the
+  correct behavior - it surfaced a real translator bug that z3 would have
+  masked. Keep it. But do document that consumers must coerce (a one-line
+  note + maybe a `coerce_to(term, width)` helper in axeyum-ir would save
+  every embedder from reimplementing it).
+- **[PROCESS lesson - goes in the paper] A "faster" result that coincides
+  with a large drop in work done (here: 98% of queries not actually decided)
+  MUST be audited.** Verdict-agreement alone is insufficient; instrument
+  Unknown/Error per backend. The synthetic micro-benchmarks (author-chosen,
+  well-typed, tiny) flattered axeyum; only the real application's query
+  stream told the truth.
+- **[STILL TRUE] axeyum's value proposition is correctness + deployability**
+  (pure-Rust, no libz3, WASM, DRAT proofs), NOT speed on this workload. Those
+  are real and worth a paper - just not a "faster" paper yet.

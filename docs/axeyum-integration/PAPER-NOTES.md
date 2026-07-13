@@ -2,13 +2,54 @@
 
 > Working notes for a future academic paper announcing **axeyum**, using
 > **glaurung** (a reverse-engineering / driver-vulnerability-detection
-> framework) as the real-world application. Thesis: a pure-Rust,
-> in-process SMT solver is not just a deployment convenience but is
-> *measurably faster and more useful* than the conventional
-> "FFI-to-libz3" pattern for the query workload that binary symbolic
-> execution actually generates. This file accumulates the claims, the
-> experimental method, and the measurements as they land. Newest results
-> appended.
+> framework) as the real-world application. This file accumulates the
+> claims, the experimental method, and the measurements as they land.
+
+> ## !!! MAJOR CORRECTION (2026-07-13) -- read before trusting earlier numbers
+>
+> An earlier version of these notes claimed axeyum was **12-29x faster** than
+> z3 on real drivers. **That was wrong** and was an artifact of a bug in the
+> glaurung->axeyum translator: it did not coerce width-mismatched operands
+> (the lifter emits e.g. `BitVec 16` op `BitVec 64`; z3's backend silently
+> coerces, axeyum strictly rejects). So axeyum was **erroring out on ~98% of
+> real queries** and returning fast - the "speed" was fast *failure*, not
+> fast solving. A shadow-differential instrument that logged Unknown/Error
+> per backend (z3-unknown=0, axeyum-unknown=12915/13126) exposed it.
+>
+> After fixing the translator to coerce (mirroring z3_backend), axeyum
+> **decides every real query correctly (0 disagreements)** but is **~1.7-3.2x
+> SLOWER than z3** on real driver formulas. The honest thesis is below. The
+> lesson (worth a paragraph in the paper's methodology/threat-to-validity):
+> a "faster" result that coincides with a large drop in *work done* must be
+> audited; verdict-agreement alone is insufficient - you must confirm the
+> fast backend actually *decided* the queries.
+
+## 1. The claim (HONEST thesis, post-correction)
+
+Symbolic execution of binaries issues very many small, mostly-independent
+QF_BV queries. On this workload, axeyum vs the conventional FFI-to-libz3:
+
+- **C1 - Correctness/parity: HOLDS.** Across 180k+ real queries, axeyum
+  returns identical sat/unsat verdicts to z3 (0 disagreements).
+- **C2 - Speed: axeyum is currently SLOWER on real formulas (~1.7-3.2x),
+  NOT faster.** It is faster only on trivially small, well-typed synthetic
+  formulas (micro-benchmark) - which are NOT representative of the real
+  workload (real path conditions are width-mismatched, extract/concat-heavy,
+  and structurally harder, favoring z3's mature simplification/preprocessing).
+  This is the key finding to report honestly; the "faster" story does not
+  survive contact with the real application.
+- **C3 - New capability: HOLDS.** axeyum emits DRAT-checked unsat
+  certificates; z3-via-crate does not.
+- **C4 - Deployability: HOLDS.** Pure Rust, no C dependency, WASM-buildable.
+
+**So what is the paper?** Not "a faster solver." Honestly, it is: *"a
+correct, verified-equivalent, deployable (pure-Rust/no-C/WASM/proof-carrying)
+SMT backend for binary analysis, with a rigorously-measured performance gap
+(~2-3x) to close, and the real-query corpus that defines the optimization
+target."* If/when axeyum closes that gap, the "faster + deployable" paper
+becomes available; until then, claiming speed would be false. (Historical
+note: earlier commit messages on this branch repeat the incorrect "34x"
+figure - superseded by this correction.)
 
 ## 1. The claim (paper thesis)
 
@@ -108,6 +149,33 @@ the paper's core micro-result and it isolates *why*: the win tracks
 inversely with formula size, exactly as the "fixed boundary overhead"
 hypothesis predicts.
 
+### 5.1a Mechanism sweep (WHY) -- from `axeyum_sweep.rs`
+
+Sweep an always-SAT formula family (K independent vars, each `x*8+16==0x90`,
+=> x=15) across width and count. Cell = z3 us / axeyum us (speedup), 100 reps:
+
+| width \ K | K=1 | K=4 | K=16 | K=64 |
+|---|---|---|---|---|
+| 8-bit | 479/17 (27.7x) | 1014/61 (16.5x) | 2975/256 (11.6x) | 10290/1018 (10.1x) |
+| 16-bit | 370/34 (10.8x) | 560/142 (3.9x) | 1275/578 (2.2x) | 3832/2315 (1.7x) |
+| 32-bit | 476/76 (6.3x) | 965/313 (3.1x) | 2671/1227 (2.2x) | 9528/5086 (1.9x) |
+| 64-bit | 810/180 (4.5x) | 2213/707 (3.1x) | 7752/2859 (2.7x) | 29113/12307 (2.4x) |
+
+**The mechanism, quantified.** The decisive number is the *per-query floor*:
+the trivial 1-constraint formula costs z3 **370-810 us** but axeyum only
+**17-180 us** - a ~15-30x fixed-overhead gap. That floor is z3's FFI +
+context construction + term marshalling, paid every query regardless of how
+trivial. axeyum, linked in-process with no boundary crossing, has a ~15-40x
+smaller floor. As formula size grows, axeyum's bit-blast cost rises (it does
+real SAT work) and the two converge, but axeyum stays faster across the whole
+sweep (min 1.7x). Symbolic execution of binaries generates overwhelmingly
+*small* formulas (8-32 bit driver fields, short path conditions), which sit
+in the top-left of this table where axeyum is 10-28x faster - and that is
+exactly what the real-driver aggregate (Sec 5.2) reflects. This is the
+paper's central figure: **the win is structural (fixed boundary overhead),
+not an implementation accident, and it is largest precisely on the query
+distribution the application produces.**
+
 ### 5.2 Application level (real drivers) -- from `ioctlance.rs`
 
 Full IOCTLance symbolic analysis on real Windows drivers, each backend, with
@@ -130,17 +198,48 @@ whole vwififlt symbolic pass drops from **7.0 s (z3) to 0.24 s (axeyum)** -
 a ~29x end-to-end speedup on the symbolic phase, because for this driver the
 solver *was* the bottleneck.
 
-**C1 proven on the real query stream (the key correctness result).** A
-shadow-differential mode runs BOTH backends on every query issued during the
-real analysis and compares sat/unsat verdicts:
+**C1 + C2 on the IDENTICAL query stream (the rigorous, headline result).**
+The single-backend runs above explore *different* query sets (model-choice
+divergence, see below), so their timings are not strictly apples-to-apples.
+The shadow-differential mode fixes this: it runs BOTH backends on **every
+query issued during one z3-authoritative analysis**, so the two are timed on
+the exact same formulas (order alternated per call to cancel cache bias).
 
-| driver | verdict agreements | confident disagreements |
-|---|---|---|
-| win10-vwififlt | 13126 | **0** |
-| sqfs-intel-DptfDevGen | 5382 | **0** |
-| **total** | **18508** | **0** |
+**HONEST numbers (translator coercion fixed; axeyum decides every query).**
+Same-stream shadow-diff, per-function budget lifted so both solve the full set:
 
-Across 18,508 real queries, axeyum and z3 never disagreed on a verdict.
+| driver | queries | agree | disagree | z3 (same stream) | axeyum (same stream) | speedup |
+|---|---|---|---|---|---|---|
+| win10-vwififlt | 13126 | 13126 | 0 | 7445.9 ms | 24077.6 ms | **0.31x** |
+| sqfs-intel-DptfDevGen | 5539 | 5539 | 0 | 2003.1 ms | 3438.8 ms | 0.58x |
+| windows-update-intel-IntcSST | 14923 | 14923 | 0 | 6124.1 ms | 18738.3 ms | 0.33x |
+
+- **C1 confirmed:** 0 verdict disagreements on the real query stream (also
+  holds across the pre-correction 180k-query sweep - correctness was never
+  the issue; the bug made axeyum *error*, not mis-decide).
+- **C2 corrected: axeyum is 1.7x-3.2x SLOWER than z3 on real driver
+  formulas** (z3/axeyum per-solve ~468 us vs ~1418 us on vwififlt). Consistent
+  across drivers. z3's mature preprocessing/simplification handles the
+  lifter's width-mismatched, extract/concat-heavy path conditions better than
+  axeyum's current bit-blast path.
+- **Model-choice IS real (now that axeyum actually solves):** of vwififlt's
+  both-sat queries, 781/989 (79%) returned different (valid) models. So the
+  single-backend *finding* differences (z3 55/19 vs axeyum 91/36) are indeed
+  concretization-model divergence - but this only mattered once the coercion
+  bug was fixed; before, axeyum wasn't producing models at all.
+
+### 5.2a Why the micro-benchmark disagreed with reality (threat to validity)
+
+The synthetic micro-benchmarks (`axeyum_diff`, `axeyum_sweep`) showed axeyum
+5-28x *faster*. They are **not representative**: (1) they use well-typed,
+matching-width operands (no coercion), whereas real formulas are
+width-mismatched and the coercion inflates axeyum's bit-blast; (2) they use
+simple arithmetic/mask/compare chains, whereas real path conditions are
+extract/concat/memory-derived and structurally harder; (3) they favor the
+regime (tiny formulas) where z3's fixed FFI floor dominates. The lesson for
+the paper: **micro-benchmarks chosen by the solver author flatter the solver;
+only the real application's own query stream is trustworthy.** This is itself
+a methodological contribution.
 
 **The subtle, honest finding (belongs in the paper).** vwififlt's *reported
 sinks* differ between backends (z3-driven: 55 raw / 19 high-confidence;

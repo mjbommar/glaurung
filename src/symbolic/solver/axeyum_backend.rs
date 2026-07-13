@@ -217,9 +217,14 @@ impl<'a> Translator<'a> {
                 self.sym_map.push((sid, symid));
                 self.arena.var(symid)
             }
-            Expr::Bin { op, a, b, .. } => {
-                let ta = self.translate(a)?;
-                let tb = self.translate(b)?;
+            Expr::Bin { op, a, b, width } => {
+                // Coerce both operands to the node width, exactly as
+                // z3_backend does: glaurung's lifter emits width-mismatched
+                // operands and relies on the solver to normalize. axeyum
+                // strictly requires a shared sort, so we MUST coerce here.
+                let tw = width.bits() as u32;
+                let ta = self.translate_coerced(a, tw)?;
+                let tb = self.translate_coerced(b, tw)?;
                 match op {
                     BinOp::Add => self.arena.bv_add(ta, tb)?,
                     BinOp::Sub => self.arena.bv_sub(ta, tb)?,
@@ -240,9 +245,11 @@ impl<'a> Translator<'a> {
                     UnOp::Neg => self.arena.bv_neg(ta)?,
                 }
             }
-            Expr::Cmp { op, a, b, .. } => {
-                let ta = self.translate(a)?;
-                let tb = self.translate(b)?;
+            Expr::Cmp { op, a, b, width } => {
+                // Cmp.width is the operand (comparison) width; coerce both.
+                let tw = width.bits() as u32;
+                let ta = self.translate_coerced(a, tw)?;
+                let tb = self.translate_coerced(b, tw)?;
                 let boolt = match op {
                     CmpOp::Eq => self.arena.eq(ta, tb)?,
                     CmpOp::Ne => {
@@ -268,15 +275,18 @@ impl<'a> Translator<'a> {
                 self.arena.sign_ext(by, ta)?
             }
             Expr::Trunc { a, to } => {
-                let ta = self.translate(a)?;
-                self.arena.extract((to.bits() as u32).saturating_sub(1), 0, ta)?
+                // Ensure the source is at least `to` bits, then take low bits.
+                let tw = to.bits() as u32;
+                let ta = self.translate_coerced(a, tw)?;
+                self.arena.extract(tw.saturating_sub(1), 0, ta)?
             }
             Expr::Extract { a, hi, lo } => {
-                let ta = self.translate(a)?;
                 // glaurung's `hi` is EXCLUSIVE (result width = hi - lo, byte
                 // extract of a 64-bit value is hi=64,lo=56); axeyum/SMT
                 // `extract(H,L)` is INCLUSIVE. glaurung's own z3/SMT lowering
-                // uses `hi - 1` as the inclusive top index -- mirror it.
+                // uses `hi - 1` as the inclusive top index -- mirror it. Also
+                // ensure the source is >= hi bits wide before extracting.
+                let ta = self.translate_coerced(a, hi as u32)?;
                 self.arena.extract((hi as u32).saturating_sub(1), lo as u32, ta)?
             }
             Expr::Concat { hi, lo, .. } => {
@@ -285,15 +295,37 @@ impl<'a> Translator<'a> {
                 // SMT-LIB concat(a,b): a is the high half. glaurung Concat{hi,lo}.
                 self.arena.concat(th, tl)?
             }
-            Expr::Ite { c, t, e, .. } => {
+            Expr::Ite { c, t, e, width } => {
+                let tw = width.bits() as u32;
                 let bc = self.to_bool(c)?;
-                let tt = self.translate(t)?;
-                let te = self.translate(e)?;
+                let tt = self.translate_coerced(t, tw)?;
+                let te = self.translate_coerced(e, tw)?;
                 self.arena.ite(bc, tt, te)?
             }
         };
         self.memo.insert(id, t);
         Ok(t)
+    }
+
+    /// Translate `id`, then coerce it to `target` bits (zero-extend if
+    /// narrower, truncate low bits if wider) -- mirroring z3_backend's
+    /// `coerce`, so width-mismatched operands from the lifter are normalized
+    /// to a shared sort before axeyum's strict builders see them.
+    fn translate_coerced(&mut self, id: ExprId, target: u32) -> Result<TermId, IrError> {
+        let t = self.translate(id)?;
+        let cur = self.pool.width_of(id).bits() as u32;
+        self.coerce(t, cur, target)
+    }
+
+    /// Coerce term `t` (currently `cur` bits) to `target` bits.
+    fn coerce(&mut self, t: TermId, cur: u32, target: u32) -> Result<TermId, IrError> {
+        if cur == target {
+            Ok(t)
+        } else if cur < target {
+            self.arena.zero_ext(target - cur, t)
+        } else {
+            self.arena.extract(target.saturating_sub(1), 0, t)
+        }
     }
 
     /// Lift a Bool term to a BitVec(1): `ite(b, 1, 0)`.
