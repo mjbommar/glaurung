@@ -17,7 +17,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::exec::domain::{BranchDecision, Domain};
 use crate::exec::{Concrete, Flow, Halt, Machine};
-use crate::ir::types::{BinOp, CallTarget, CmpOp, LlirBlock, LlirFunction, Op, VReg, Value, Width};
+use crate::ir::types::{
+    BinOp, CallTarget, CmpOp, Endian, LlirBlock, LlirFunction, Op, VReg, Value, Width,
+};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{solve, Assert, Model, SolveResult};
 use crate::symbolic::Symbolic;
@@ -616,6 +618,24 @@ fn process_block(
                 continue;
             }
             Op::Return => {
+                // Controllable-PC check: `ret` pops the saved return address from
+                // [rsp]. If a stack-buffer overflow (or any attacker write) has made
+                // that slot attacker-controlled, this is the classic
+                // stack-overflow -> hijacked-return primitive (ioctlance reports it
+                // as "Buffer Overflow - Controllable PC"). Mirrors the Shellcode
+                // check on attacker-controlled indirect-call targets.
+                let rsp_v = st
+                    .machine
+                    .regs
+                    .read(&mut st.machine.dom, &VReg::phys("rsp"));
+                let rsp = eval_concrete(&mut st, rsp_v);
+                if rsp != 0 {
+                    let ret = st.machine.mem.load(&mut st.machine.dom, rsp, 8, Endian::Little);
+                    let prov = st.taint.provenance_of(&st.machine.dom.pool, ret);
+                    if !prov.is_empty() {
+                        push_sink(&mut st, ins.va, SinkKind::StackOverflow, ret, prov, sinks);
+                    }
+                }
                 consider_terminal(&st, best);
                 return Vec::new();
             }
