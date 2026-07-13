@@ -51,35 +51,6 @@ becomes available; until then, claiming speed would be false. (Historical
 note: earlier commit messages on this branch repeat the incorrect "34x"
 figure - superseded by this correction.)
 
-## 1. The claim (paper thesis)
-
-Symbolic execution of binaries (driver IOCTL analysis, exploit-primitive
-discovery) issues **very many, individually small, mostly-independent
-QF_BV queries**: one feasibility check per branch fork, per candidate
-sink, per concretization. The dominant per-query cost in the conventional
-stack is not the SAT search - it is the **fixed overhead of crossing into
-a C solver**: constructing a solver/context object, marshalling terms
-across the FFI boundary, and tearing down. For small formulas that
-overhead dwarfs the solve.
-
-axeyum removes that overhead by being a **pure-Rust library linked
-in-process**: no FFI, no context marshalling, terms shared directly from
-the host's arena. The paper's measurable claims:
-
-- **C1 - Correctness/parity.** On a real application's full query stream,
-  axeyum returns identical verdicts to z3 (the de-facto reference).
-- **C2 - Speed on the real workload.** For the small-one-shot-query
-  distribution that symbolic execution produces, axeyum is substantially
-  faster than the z3-crate (FFI) backend, *because* it avoids per-query
-  boundary-crossing overhead - a structural, not incidental, advantage.
-- **C3 - New capability.** axeyum emits DRAT-checked unsat certificates,
-  so "this bug path is infeasible" becomes a *checkable* claim - relevant
-  to trustworthy automated triage. z3-via-crate does not give this for
-  free.
-- **C4 - Deployability.** Pure Rust, no C dependency: ships in the
-  analyzer's binary/wheel and builds to WebAssembly. The conventional
-  stack cannot (libz3 is a C/C++ dependency).
-
 ## 2. The application (glaurung)
 
 glaurung is an AI-native RE framework with a native symbolic-execution
@@ -101,6 +72,12 @@ This is a faithful, non-toy consumer: the same solver-query distribution a
 production binary-analysis tool generates.
 
 ## 3. Why the conventional (FFI-to-libz3) pattern is suboptimal here
+
+> NOTE (post-correction): the "per-query boundary cost dominates" hypothesis
+> below holds for *tiny* formulas but is NOT the dominant factor on real
+> driver formulas, where axeyum is slower overall (Sec 1, 5.2). The
+> deployability/proofs/thread points stand; the speed point does not, as
+> stated. Kept as the original hypothesis for the record.
 
 - **Per-query boundary cost.** glaurung's z3 backend builds a fresh
   `Z3Native` solver per `check` and marshals the term DAG across FFI. For
@@ -136,6 +113,12 @@ production binary-analysis tool generates.
 ## 5. Results
 
 ### 5.1 Micro-benchmark (solver isolated) -- from `axeyum_diff.rs`
+
+> NOTE (post-correction): these synthetic micro-benchmarks are NOT
+> representative of the real workload (Sec 5.2a explains why) and their
+> "axeyum faster" numbers do not hold on real driver formulas. Retained
+> because the *mechanism* (Sec 5.1a) and the *methodological lesson* (5.2a)
+> are the real contributions here, not the synthetic speedups.
 
 20 formulas, 50 reps each, release. **Verdict agreement: 20/20, zero
 disagreements.** Aggregate solver time: **z3 ~1050 ms, axeyum ~88 ms
@@ -274,3 +257,76 @@ implications:
   6748 ms / axeyum 197 ms (34x); symbolic wall-clock 7.0 s -> 0.24 s (29x);
   findings differ (model-choice, not verdict); shadow-diff 13126/0.
   Budget-raised-50x re-run: identical solve counts -> not a budget artifact.
+
+### 5.3 Incremental warm-reuse potential (P5 lever) -- UNVERIFIED on real formulas
+
+`axeyum_incremental.rs` models the explorer's pattern (a path condition
+extended one constraint at a time, re-checked each step; K=24, 200 reps):
+
+| approach | ms/run | note |
+|---|---|---|
+| z3 one-shot | 14.14 | glaurung's current backend behavior |
+| axeyum one-shot | 1.87 | (synthetic - do NOT trust vs z3, see 5.2a) |
+| **axeyum WARM (push/assert/check)** | **0.25** | **7.5x faster than axeyum one-shot** |
+
+The load-bearing, defensible number is the **internal** ratio: warm reuse is
+**~7.5x faster than axeyum's own one-shot behavior** on this incremental
+pattern (learned clauses + shared bit-blasting retained across steps). Since
+the one-shot trait re-solves the full growing conjunction from scratch every
+fork, this is exactly the cost axeyum's `IncrementalBvSolver` is built to
+avoid.
+
+**Honest caveat (learned from 5.2a).** The cross-solver numbers in this table
+are synthetic and non-representative - do not read "axeyum faster than z3"
+from them. Whether the 7.5x warm speedup carries to *real* driver formulas
+(where axeyum one-shot is currently ~2-3x slower than z3) is **UNVERIFIED**.
+It requires actually wiring an incremental `Solver` trait into glaurung's
+explorer and re-running the real-driver shadow-diff. That is the concrete
+next experiment and the plausible path to making axeyum competitive on this
+workload - but until measured on real formulas, it is a hypothesis, not a
+result. (The whole point of Sec 5.2a is that synthetic wins must be
+validated against the application before they are believed.)
+
+## 7. Recommended paper framing (honest) + the decisive next experiment
+
+**What the evidence supports RIGHT NOW (all defensible):**
+1. **A verified-equivalent pure-Rust SMT backend for a real binary-analysis
+   tool.** 180k+ real queries, 0 verdict disagreements vs z3. Correctness is
+   airtight.
+2. **A deployability story the C-solver stack cannot match:** no libz3, ships
+   in the pure-Rust wheel, WASM-buildable, and DRAT-checked unsat
+   certificates for infeasible-path claims (proof-carrying triage).
+3. **A rigor/methodology contribution:** the "fast failure" trap (a 12-34x
+   "speedup" that was actually 98% un-decided queries), caught by
+   instrumenting Unknown/Error per backend; and the "author-chosen synthetic
+   benchmarks flatter the solver" lesson, caught by the real-application
+   query stream. These are genuinely useful for the SMT-benchmarking
+   community.
+4. **A characterized performance gap:** axeyum is currently ~1.7-3.2x slower
+   than z3 on real driver formulas, with the real-query corpus as the
+   optimization target and the mechanism (z3's preprocessing vs axeyum's
+   bit-blast on width-mismatched/extract-concat-heavy terms) identified.
+
+**What the evidence does NOT support (do not claim):**
+- "axeyum is faster than z3." False on the real workload.
+- Any speed number from the synthetic micro-benchmarks as representative.
+
+**The single decisive next experiment** (turns this into a possible
+"faster + deployable" paper): wire an **incremental `Solver` trait** into
+glaurung's explorer (push/pop as it forks, mapping to
+`IncrementalBvSolver`) and re-run the real-driver same-stream shadow-diff.
+The synthetic warm-vs-one-shot result (7.5x, Sec 5.3) is a strong hint that
+warm reuse could close or reverse the ~2-3x gap - BUT it must be measured on
+real formulas before any claim. If warm reuse on real drivers brings axeyum
+to parity-or-better, the deployability advantages make it a clear win and the
+paper writes itself. If not, the honest "correct + deployable, with a
+quantified gap and roadmap" paper is still solid and publishable.
+
+**Reproducibility appendix (artifacts on branch `sec/axeyum-backend`):**
+- `examples/axeyum_diff.rs` - synthetic differential + micro-benchmark.
+- `examples/axeyum_sweep.rs` - width/count sweep (mechanism).
+- `examples/axeyum_incremental.rs` - warm-reuse potential.
+- `examples/ioctlance.rs` + `GLAURUNG_SHADOW_DIFF=1` - real-driver
+  same-stream shadow-diff (verdict agreement, per-backend timing, model
+  divergence, Unknown/Error split). Drivers under
+  `samples/binaries/platforms/windows/vendor/realworld/`.
