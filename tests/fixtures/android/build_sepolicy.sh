@@ -8,3 +8,6 @@ for v in 30 33 35; do
   secilc -m -M true -c "$v" -o "sepolicy.$v" pol.cil
 done
 echo "built: sepolicy.30 sepolicy.33 sepolicy.35"
+# Non-MLS variant (simpler traversal) for the avtab-oracle follow-up.
+secilc -m -M false -c 33 -o sepolicy_nomls.33 pol_nomls.cil
+echo "built: sepolicy_nomls.33"
