@@ -11,6 +11,8 @@
 //! solving needs no Python and no external protocol when `solver-z3` is on.
 
 pub mod pipe;
+#[cfg(feature = "solver-axeyum")]
+pub mod axeyum_backend;
 #[cfg(feature = "solver-z3")]
 pub mod z3_backend;
 
@@ -108,9 +110,13 @@ pub fn solver_budget() -> (u64, u64) {
 /// [`solver_meter`]) so the explorer can bound total solving work.
 pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     SOLVE_COUNT.with(|c| c.set(c.get() + 1));
+    // Backend priority (ADR-002): explicitly-enabled z3 (perf) > axeyum
+    // (pure-Rust default) > pipe (zero-dep fallback).
     #[cfg(feature = "solver-z3")]
     let result = z3_backend::Z3Solver::new().check(pool, asserts);
-    #[cfg(not(feature = "solver-z3"))]
+    #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+    let result = axeyum_backend::AxeyumSolver::new().check(pool, asserts);
+    #[cfg(all(not(feature = "solver-z3"), not(feature = "solver-axeyum")))]
     let result = pipe::PipeSolver::new().check(pool, asserts);
     if matches!(result, SolveResult::Unknown) {
         TIMEOUT_COUNT.with(|c| c.set(c.get() + 1));

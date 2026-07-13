@@ -37,6 +37,10 @@ capstone = "0.12"
 
 # Native in-process SMT solver (feature `solver-z3`); links libz3. Optional.
 z3 = { version = "0.12", optional = true }
+# Pure-Rust in-process SMT solver (feature `solver-axeyum`); no C dependency.
+# Dev: absolute path dep (ADR-001); pin to a git rev before release.
+axeyum-solver = { path = "/home/mjbommar/projects/personal/axeyum/crates/axeyum-solver", optional = true }
+axeyum-ir = { path = "/home/mjbommar/projects/personal/axeyum/crates/axeyum-ir", optional = true }
 
 # DEV-ONLY differential-test oracle (feature `dev-oracle`); links the system
 # Unicorn engine via pkg-config (libunicorn-dev). Never shipped in the wheel.
@@ -89,6 +93,10 @@ dev-oracle = ["exec", "dep:unicorn-engine"]
 # This is the preferred solver path — keeps the engine self-contained rather
 # than shelling out to a binary. Optional; the base build needs no solver.
 solver-z3 = ["symbolic", "dep:z3"]
+# Native, in-process, pure-Rust SMT backend via the `axeyum` solver. No C
+# dependency, wheel-shippable. Intended default once validated (ADR-002);
+# opt-in for now. Priority in solve(): solver-z3 > solver-axeyum > pipe.
+solver-axeyum = ["symbolic", "dep:axeyum-solver", "dep:axeyum-ir"]
 
 [dev-dependencies]
 tempfile = "3.21.0"
@@ -124,3 +132,7 @@ required-features = ["symbolic"]
 [[example]]
 name = "ioctlance"
 required-features = ["symbolic"]
+
+[[example]]
+name = "axeyum_diff"
+required-features = ["solver-z3", "solver-axeyum"]
