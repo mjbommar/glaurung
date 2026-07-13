@@ -1,0 +1,33 @@
+(handleunknown deny)
+
+(class chr_file (ioctl read write open getattr))
+(classorder (chr_file))
+
+(sid kernel)
+(sid security)
+(sidorder (kernel security))
+
+(type untrusted_app)
+(type system_server)
+(type foo_device)
+(type bar_device)
+
+; untrusted_app may ioctl+read foo_device, but NOT bar_device.
+(allow untrusted_app foo_device (chr_file (ioctl read)))
+(allow system_server bar_device (chr_file (ioctl read write open)))
+
+(sensitivity s0)
+(sensitivityorder (s0))
+(level systemlow (s0))
+
+(user u)
+(role r)
+(userrole u r)
+(roletype r untrusted_app)
+(roletype r system_server)
+(roletype r foo_device)
+(roletype r bar_device)
+(userlevel u systemlow)
+(userrange u (systemlow systemlow))
+(sidcontext kernel (u r untrusted_app (systemlow systemlow)))
+(sidcontext security (u r untrusted_app (systemlow systemlow)))

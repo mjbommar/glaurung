@@ -79,10 +79,22 @@ command surface is the input the SELinux reachability check consumes.
 
 Validated on an AArch64 driver object built with `aarch64-linux-gnu-gcc -c`.
 
+## SELinux binary policy (`src/formats/sepolicy/`)
+
+Parses the compiled `policydb` (`/sys/fs/selinux/policy`, `precompiled_sepolicy`)
+— the load-bearing Android severity gate. **Implemented:** magic detection
+(`is_sepolicy`) and the header (`parse_header` → version, MLS flag, symbol/
+ocontext counts), validated on real `secilc`-compiled policies at versions
+30/33/35. **Next slice:** the symbol tables (types/classes/perms) and the
+access-vector table (`avtab`) that back a `domain→resource` reachability query
+(`allows(untrusted_app, foo_device, chr_file, ioctl)`) — staged separately so the
+oracle lands correct rather than rushed. It pairs with the Linux ioctl surface
+above: the `.ko` gives the device + command set, sepolicy says who can reach it.
+
 ## Not yet covered (needs device images / dedicated toolchains)
 
 - OAT / VDEX / CDEX (require `dex2oat`; OAT is an ELF with an `oatdata` symbol).
 - `resources.arsc` value resolution (`@resource` → concrete value).
-- SELinux `sepolicy` parser + `domain→resource` reachability (pairs with the
-  Linux ioctl surface above), Binder/AIDL `onTransact` modelling, HAL/HIDL
-  vtables, Trusty/QSEE `MCLF` trustlets, GKI/KMI symbol borrowing.
+- sepolicy `avtab` reachability query (header/detection done; see above),
+  Binder/AIDL `onTransact` modelling, HAL/HIDL vtables, Trusty/QSEE `MCLF`
+  trustlets, GKI/KMI symbol borrowing.
