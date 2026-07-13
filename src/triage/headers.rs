@@ -346,6 +346,32 @@ pub fn validate(data: &[u8]) -> HeaderResult {
         }
     }
 
+    // Dalvik Executable: magic "dex\n0NN\0" where NN are ASCII version digits.
+    if data.len() >= 8
+        && &data[..4] == b"dex\n"
+        && data[7] == 0
+        && data[4..7].iter().all(|b| b.is_ascii_digit())
+    {
+        // A valid DEX also carries the little-endian constant 0x12345678 at
+        // offset 40; use it to separate high-confidence hits from a bare magic.
+        let mut conf = 0.7f32;
+        if data.len() >= 44
+            && u32::from_le_bytes([data[40], data[41], data[42], data[43]]) == 0x1234_5678
+        {
+            conf = 0.95;
+        }
+        if let Ok(v) = TriageVerdict::try_new(
+            Format::Dex,
+            Arch::Unknown,
+            32,
+            Endianness::Little,
+            conf,
+            None,
+        ) {
+            candidates.push(v);
+        }
+    }
+
     // Python bytecode (.pyc) – many versions use 2-byte magic followed by CR/LF in bytes 2..4
     if data.len() >= 4 {
         let tail = (data[2], data[3]);

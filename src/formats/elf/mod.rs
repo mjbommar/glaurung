@@ -5,6 +5,7 @@
 pub mod dynamic;
 pub mod headers;
 pub mod notes;
+pub mod packed_relocations;
 pub mod relocations;
 pub mod sections;
 pub mod segments;
@@ -80,6 +81,77 @@ impl<'data> ElfParser<'data> {
     pub fn plt_relocations(&self) -> Result<Option<RelocationTable>> {
         self.parse_relocations(".rela.plt", true)
             .or_else(|_| self.parse_relocations(".rel.plt", true))
+    }
+
+    /// Decode Android/bionic packed (`APS2`) relocations, if present.
+    ///
+    /// Modern device `.so` files store their relative relocations in the
+    /// compressed `DT_ANDROID_REL`/`DT_ANDROID_RELA` stream rather than a plain
+    /// `.rel(a).dyn`. This resolves the stream via the dynamic segment (so it
+    /// works on section-stripped binaries) and expands it. Returns `Ok(None)`
+    /// when the binary carries no packed relocations.
+    pub fn android_packed_relocations(&self) -> Result<Option<Vec<Relocation>>> {
+        let dynamic = match self.dynamic()? {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+
+        // (addr_tag, size_tag, is_rela)
+        let candidates = [
+            (types::DT_ANDROID_RELA, types::DT_ANDROID_RELASZ, true),
+            (types::DT_ANDROID_REL, types::DT_ANDROID_RELSZ, false),
+        ];
+
+        for (addr_tag, size_tag, is_rela) in candidates {
+            let addr = dynamic.entries_by_tag(addr_tag).first().map(|e| e.d_val);
+            let size = dynamic.entries_by_tag(size_tag).first().map(|e| e.d_val);
+            if let (Some(addr), Some(size)) = (addr, size) {
+                let bytes = self.vaddr_slice(addr, size as usize)?;
+                let relocs =
+                    packed_relocations::decode_android_packed(bytes, is_rela)?;
+                return Ok(Some(relocs));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Decode a `DT_RELR` / `DT_ANDROID_RELR` relative-relocation table, if
+    /// present. Each returned [`Relocation`] is a synthetic `R_*_RELATIVE`
+    /// entry (`r_info == 0`) at the resolved offset.
+    pub fn relr_relocations(&self) -> Result<Option<Vec<Relocation>>> {
+        let dynamic = match self.dynamic()? {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+
+        let first_val = |tag: i64| dynamic.entries_by_tag(tag).first().map(|e| e.d_val);
+        let addr = first_val(types::DT_RELR).or_else(|| first_val(types::DT_ANDROID_RELR));
+        let size = first_val(types::DT_RELRSZ).or_else(|| first_val(types::DT_ANDROID_RELRSZ));
+
+        if let (Some(addr), Some(size)) = (addr, size) {
+            let bytes = self.vaddr_slice(addr, size as usize)?;
+            let relocs = packed_relocations::decode_relr(
+                bytes,
+                self.header.ident.class,
+                self.header.ident.data,
+            )?;
+            return Ok(Some(relocs));
+        }
+
+        Ok(None)
+    }
+
+    /// Resolve a virtual address + length to a file-backed byte slice via the
+    /// program headers (works without section headers).
+    fn vaddr_slice(&self, vaddr: u64, len: usize) -> Result<&'data [u8]> {
+        let segments = self.segments()?;
+        let offset = segments.vaddr_to_offset(vaddr).ok_or_else(|| {
+            ElfError::MalformedHeader(format!("vaddr {vaddr:#x} not mapped by any segment"))
+        })?;
+        self.data
+            .get(offset..offset + len)
+            .ok_or(ElfError::Truncated { offset, needed: len })
     }
 
     /// Parse a symbol table by name

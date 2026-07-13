@@ -612,6 +612,7 @@ dependencies = [
  "cpp_demangle",
  "criterion",
  "encoding_rs",
+ "flate2",
  "gimli 0.33.0",
  "goblin",
  "hex",

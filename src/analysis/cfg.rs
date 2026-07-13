@@ -374,13 +374,33 @@ fn classify_ctrl_flow(mnemonic: &str, arch: BArch) -> (bool, bool, bool) {
             (false, false, false)
         }
         BArch::ARM | BArch::AArch64 => {
-            if m == "ret" {
+            // Returns, including ARMv8.3 pointer-authenticated returns
+            // (RETAA/RETAB) that a PAC-hardened Pixel binary emits instead of
+            // a plain RET at every function epilogue.
+            if m == "ret" || m == "retaa" || m == "retab" {
                 return (false, false, true);
             }
-            if m == "bl" || m == "blr" {
+            // Calls: direct BL plus register-indirect BLR and its
+            // pointer-authenticated forms (BLRAA/BLRAAZ/BLRAB/BLRABZ).
+            if m == "bl"
+                || m == "blr"
+                || m == "blraa"
+                || m == "blraaz"
+                || m == "blrab"
+                || m == "blrabz"
+            {
                 return (false, true, false);
             }
+            // Unconditional and conditional branches. BR and its authenticated
+            // variants (BRAA/BRAAZ/BRAB/BRABZ) are register-indirect branches —
+            // typically tail calls or jump tables; without them the linear
+            // sweep would run straight through a tail call into unrelated code.
             if m == "b"
+                || m == "br"
+                || m == "braa"
+                || m == "braaz"
+                || m == "brab"
+                || m == "brabz"
                 || m.starts_with("b.")
                 || m == "cbz"
                 || m == "cbnz"
@@ -425,6 +445,26 @@ fn classify_ctrl_flow(mnemonic: &str, arch: BArch) -> (bool, bool, bool) {
             (false, false, false)
         }
         _ => (false, false, false),
+    }
+}
+
+/// Whether a branch mnemonic is unconditional (no fallthrough edge).
+///
+/// Conditional branches (`b.<cond>`, `cbz`/`cbnz`, `tbz`/`tbnz`, x86 `j<cc>`)
+/// must still queue their fallthrough successor; unconditional ones must not,
+/// or the sweep spills into the literal pool / next function that follows a
+/// tail call.
+fn is_unconditional_branch_mnemonic(mnemonic: &str, arch: BArch) -> bool {
+    let m = mnemonic.to_ascii_lowercase();
+    match arch {
+        BArch::ARM | BArch::AArch64 => matches!(
+            m.as_str(),
+            "b" | "br" | "braa" | "braaz" | "brab" | "brabz"
+        ),
+        BArch::X86 | BArch::X86_64 => m == "jmp",
+        // Preserve the historical (arch-agnostic) semantics for the remaining
+        // architectures so this refactor is behaviour-preserving for them.
+        _ => m == "jmp" || m == "b",
     }
 }
 
@@ -584,8 +624,7 @@ fn discover_function(
                 // continue to fallthrough
             } else if is_branch {
                 // Determine conditional vs unconditional by mnemonic content
-                let unconditional = ins.mnemonic.eq_ignore_ascii_case("jmp")
-                    || ins.mnemonic.eq_ignore_ascii_case("b");
+                let unconditional = is_unconditional_branch_mnemonic(&ins.mnemonic, arch);
                 if let Some(tgt) = immediate_target(&ins) {
                     let is_exec_target = in_exec_regions(regions, tgt).is_some();
                     let is_pe_tail_target = unconditional
@@ -977,6 +1016,65 @@ fn pe_prologue_scan_candidate(data: &[u8], file_off: usize) -> bool {
 /// Candidates are queued after trusted export/`.pdata` seeds, so the later
 /// body-overlap gate can discard candidates that fall inside an already
 /// discovered function.
+// AArch64 hardened function-entry signatures (little-endian 32-bit words).
+const AARCH64_PACIASP: u32 = 0xd503_233f;
+const AARCH64_PACIBSP: u32 = 0xd503_237f;
+const AARCH64_BTI_C: u32 = 0xd503_245f;
+const AARCH64_BTI_JC: u32 = 0xd503_24df;
+
+/// Scan AArch64 executable regions for pointer-authentication function
+/// prologues, recovering entry points on **stripped** hardened binaries where
+/// no symbol table survives.
+///
+/// The reliable entry signal is `PACIASP`/`PACIBSP` — a function that signs its
+/// return address does so as its first real instruction. When the function is
+/// also a BTI target the compiler emits a `BTI c`/`BTI jc` landing pad one word
+/// earlier, which is the true entry, so we rewind to it. A bare `BTI c` is *not*
+/// used as a seed: it also guards internal branch targets and would over-generate.
+fn scan_aarch64_prologue_function_starts(
+    data: &[u8],
+    regions: &[ExecRegion],
+    arch: BArch,
+) -> Vec<u64> {
+    if arch != BArch::AArch64 {
+        return Vec::new();
+    }
+    let read_word = |va: u64| -> Option<u32> {
+        let off = crate::analysis::entry::va_to_file_offset(data, va)?;
+        let b = data.get(off..off + 4)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+
+    let mut starts = Vec::new();
+    for region in regions {
+        let mut va = align_up_u64(region.start, 4);
+        while va + 4 <= region.end {
+            if let Some(word) = read_word(va) {
+                if word == AARCH64_PACIASP || word == AARCH64_PACIBSP {
+                    // Rewind to a preceding BTI landing pad if present.
+                    let start = match va.checked_sub(4) {
+                        Some(prev)
+                            if prev >= region.start
+                                && matches!(read_word(prev), Some(AARCH64_BTI_C | AARCH64_BTI_JC)) =>
+                        {
+                            prev
+                        }
+                        _ => va,
+                    };
+                    starts.push(start);
+                }
+            }
+            va = match va.checked_add(4) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    starts
+}
+
 fn scan_pe_prologue_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<u64> {
     if !arch.is_64_bit() || data.len() < 2 || &data[..2] != b"MZ" {
         return Vec::new();
@@ -2572,7 +2670,10 @@ pub fn analyze_functions_bytes_with_stats(
         }
     }
 
-    let prologue_starts = scan_pe_prologue_function_starts(data, &regions, arch);
+    let mut prologue_starts = scan_pe_prologue_function_starts(data, &regions, arch);
+    // AArch64 ELF PAC prologues recover functions on stripped hardened binaries
+    // (Pixel device .so files) where the PE-specific scan does not apply.
+    prologue_starts.extend(scan_aarch64_prologue_function_starts(data, &regions, arch));
     stats.prologue_scan_candidates = prologue_starts.len();
     for va in prologue_starts {
         if known.contains(&va) {
@@ -3013,6 +3114,65 @@ pub fn analyze_functions_bytes_with_stats(
     stats.callgraph_edges = cg.edge_count();
 
     (functions, cg, stats)
+}
+
+#[cfg(test)]
+mod aarch64_ctrl_flow_tests {
+    use super::{classify_ctrl_flow, is_unconditional_branch_mnemonic, BArch};
+
+    fn class(m: &str) -> (bool, bool, bool) {
+        classify_ctrl_flow(m, BArch::AArch64)
+    }
+
+    #[test]
+    fn pac_authenticated_returns_are_returns() {
+        // Plain and pointer-authenticated epilogue returns.
+        for m in ["ret", "retaa", "retab"] {
+            assert_eq!(class(m), (false, false, true), "{m} should be a return");
+        }
+    }
+
+    #[test]
+    fn authenticated_indirect_calls_are_calls() {
+        for m in ["bl", "blr", "blraa", "blraaz", "blrab", "blrabz"] {
+            assert_eq!(class(m), (false, true, false), "{m} should be a call");
+        }
+    }
+
+    #[test]
+    fn register_indirect_branches_are_unconditional_branches() {
+        // BR and its authenticated variants: previously unclassified, so the
+        // sweep ran past a tail call into unrelated bytes.
+        for m in ["br", "braa", "braaz", "brab", "brabz"] {
+            assert_eq!(class(m), (true, false, false), "{m} should be a branch");
+            assert!(
+                is_unconditional_branch_mnemonic(m, BArch::AArch64),
+                "{m} must not add a fallthrough edge"
+            );
+        }
+    }
+
+    #[test]
+    fn conditional_branches_keep_fallthrough() {
+        for m in ["b.eq", "b.ne", "cbz", "cbnz", "tbz", "tbnz"] {
+            assert_eq!(class(m), (true, false, false), "{m} is a branch");
+            assert!(
+                !is_unconditional_branch_mnemonic(m, BArch::AArch64),
+                "{m} is conditional and must keep its fallthrough"
+            );
+        }
+        // Plain unconditional B has no fallthrough.
+        assert!(is_unconditional_branch_mnemonic("b", BArch::AArch64));
+    }
+
+    #[test]
+    fn landing_pads_and_pac_signing_are_not_terminators() {
+        // BTI and PAC-sign instructions are ordinary (non-control-flow) ops;
+        // they must not split or end a basic block.
+        for m in ["bti", "paciasp", "pacibsp", "autiasp", "autibsp", "nop"] {
+            assert_eq!(class(m), (false, false, false), "{m} is not control flow");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -360,6 +360,24 @@ pub const DT_VERSYM: i64 = 0x6ffffff0;
 pub const DT_VERNEED: i64 = 0x6ffffffe;
 pub const DT_VERNEEDNUM: i64 = 0x6fffffff;
 
+// Android / bionic packed relocation dynamic tags.
+//
+// Android's `relocation_packer` compresses `.rel(a).dyn` into the "APS2" stream
+// (see `packed_relocations.rs`). The linker locates it via these OS-specific
+// tags rather than `DT_REL`/`DT_RELA`. `DT_LOOS` is `0x6000000d`.
+pub const DT_ANDROID_REL: i64 = 0x6000000f; // DT_LOOS + 2
+pub const DT_ANDROID_RELSZ: i64 = 0x60000010; // DT_LOOS + 3
+pub const DT_ANDROID_RELA: i64 = 0x60000011; // DT_LOOS + 4
+pub const DT_ANDROID_RELASZ: i64 = 0x60000012; // DT_LOOS + 5
+// RELR relative-relocation table (adopted by Android as DT_ANDROID_RELR before
+// upstream standardised the identical DT_RELR = 36 tags).
+pub const DT_RELR: i64 = 36;
+pub const DT_RELRSZ: i64 = 35;
+pub const DT_RELRENT: i64 = 37;
+pub const DT_ANDROID_RELR: i64 = 0x6fffe000;
+pub const DT_ANDROID_RELRSZ: i64 = 0x6fffe001;
+pub const DT_ANDROID_RELRENT: i64 = 0x6fffe003;
+
 /// Dynamic flags
 pub const DF_BIND_NOW: u64 = 0x8;
 

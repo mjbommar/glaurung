@@ -24,6 +24,8 @@ pub enum Format {
     Wasm,
     /// Python bytecode (.pyc/.pyo)
     PythonBytecode,
+    /// Dalvik Executable (Android `classes.dex`)
+    Dex,
     /// Common Object File Format (Unix)
     COFF,
     /// Raw binary (no format)
@@ -43,6 +45,7 @@ impl Format {
             Format::MachO => "MachO".to_string(),
             Format::Wasm => "Wasm".to_string(),
             Format::PythonBytecode => "PythonBytecode".to_string(),
+            Format::Dex => "Dex".to_string(),
             Format::COFF => "COFF".to_string(),
             Format::Raw => "Raw".to_string(),
             Format::Unknown => "Unknown".to_string(),
@@ -784,6 +787,7 @@ impl fmt::Display for Format {
             Format::MachO => write!(f, "MachO"),
             Format::Wasm => write!(f, "Wasm"),
             Format::PythonBytecode => write!(f, "PythonBytecode"),
+            Format::Dex => write!(f, "Dex"),
             Format::COFF => write!(f, "COFF"),
             Format::Raw => write!(f, "Raw"),
             Format::Unknown => write!(f, "Unknown"),

@@ -25,6 +25,8 @@ impl FormatLookups {
             ("wasm", Format::Wasm),
             ("pyc", Format::PythonBytecode),
             ("python", Format::PythonBytecode),
+            ("dex", Format::Dex),
+            ("dalvik", Format::Dex),
         ]
         .into_iter()
         .collect();
@@ -38,6 +40,7 @@ impl FormatLookups {
             ("pyc", Format::PythonBytecode),
             ("dylib", Format::MachO),
             ("macho", Format::MachO),
+            ("dex", Format::Dex),
         ]
         .into_iter()
         .collect();

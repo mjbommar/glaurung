@@ -99,12 +99,41 @@ fn parse_tar_metadata(data: &[u8]) -> Option<ContainerMetadata> {
     })
 }
 
+/// Classify a ZIP archive into a more specific Android/Java subtype by looking
+/// for well-known member paths, which ZIP stores as plaintext in both local and
+/// central-directory headers (so this works without decompressing anything).
+///
+/// Precedence: AAB (app bundle) > APK (installable) > JAR > plain ZIP.
+fn zip_subtype(data: &[u8]) -> &'static str {
+    use memchr::memmem::find;
+    let has = |needle: &[u8]| find(data, needle).is_some();
+
+    // Android App Bundle: protobuf bundle config + protobuf manifest layout.
+    if has(b"BundleConfig.pb") || has(b"base/manifest/AndroidManifest.xml") {
+        return "aab";
+    }
+    // APK: a binary AndroidManifest.xml plus Dalvik bytecode and/or resources.
+    if has(b"AndroidManifest.xml") && (has(b"classes.dex") || has(b"resources.arsc")) {
+        return "apk";
+    }
+    // A bare classes.dex in a zip (our minimal test container) is still Android.
+    if has(b"classes.dex") {
+        return "apk";
+    }
+    if has(b"META-INF/MANIFEST.MF") {
+        return "jar";
+    }
+    "zip"
+}
+
 pub fn detect_containers(data: &[u8]) -> Vec<ContainerChild> {
     let mut containers = Vec::new();
 
-    // ZIP/JAR
-    if data.len() >= 4 && &data[..4] == b"PK\x03\x04" {
-        let mut c = ContainerChild::new("zip".to_string(), 0, data.len() as u64);
+    // ZIP/JAR/APK/AAB. All share the PK signature; the stored (uncompressed)
+    // member filenames disambiguate the Android container subtypes.
+    if data.len() >= 4 && (&data[..4] == b"PK\x03\x04" || &data[..4] == b"PK\x05\x06") {
+        let label = zip_subtype(data);
+        let mut c = ContainerChild::new(label.to_string(), 0, data.len() as u64);
         c.metadata = parse_zip_metadata(data);
         containers.push(c);
     }
