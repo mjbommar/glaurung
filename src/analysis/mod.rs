@@ -15,6 +15,7 @@ pub mod gopclntab;
 pub mod ioctl_surface;
 pub mod ioctl_taint;
 pub mod java_class;
+pub mod linux_ioctl;
 pub mod java_jar;
 pub mod jump_table;
 pub mod lua_bytecode;

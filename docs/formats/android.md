@@ -63,9 +63,26 @@ Validated against a real device manifest with `aapt2 dump xmltree` ground truth.
 This closes the loop: an on-disk APK → every `classes*.dex` (class/method list)
 and → `AndroidManifest.xml` (exported attack surface).
 
+## Linux kernel driver IOCTL surface (`src/analysis/linux_ioctl.rs`)
+
+The Linux analogue of the Windows WDM/WDF `ioctl_surface`. From a `.ko`
+(`ET_REL`) driver object it recovers, for each `*_fops` `file_operations`:
+
+- the `unlocked_ioctl` / `compat_ioctl` handler (resolved via the relocation on
+  that struct slot), and
+- the `_IOC(dir, type, nr, size)` command surface the handler compares `cmd`
+  against — an AArch64 scanner that tracks `MOVZ`/`MOVK` wide-immediate
+  construction and `cmd`-register aliasing across `CMP`/`SUBS`.
+
+`decode_ioc` / `IocDecoded` expose the decoded direction/type/nr/size. This
+command surface is the input the SELinux reachability check consumes.
+
+Validated on an AArch64 driver object built with `aarch64-linux-gnu-gcc -c`.
+
 ## Not yet covered (needs device images / dedicated toolchains)
 
 - OAT / VDEX / CDEX (require `dex2oat`; OAT is an ELF with an `oatdata` symbol).
 - `resources.arsc` value resolution (`@resource` → concrete value).
-- SELinux `sepolicy`, Binder/AIDL `onTransact` modelling, HAL/HIDL vtables,
-  Trusty/QSEE `MCLF` trustlets, GKI/KMI symbol borrowing.
+- SELinux `sepolicy` parser + `domain→resource` reachability (pairs with the
+  Linux ioctl surface above), Binder/AIDL `onTransact` modelling, HAL/HIDL
+  vtables, Trusty/QSEE `MCLF` trustlets, GKI/KMI symbol borrowing.

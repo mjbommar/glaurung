@@ -18,6 +18,8 @@ tests run without a cross toolchain or network.
 | `sample.apk` | Minimal ZIP carrying `classes.dex` | `build_dex.sh` | `tests/android_dex_triage.rs` |
 | `dexsrc/*.java` | Source for `sample.dex` | — | `build_dex.sh` |
 | `AndroidManifest_termux_api.axml` | Compiled binary manifest extracted from `com.termux.api` (F-Droid, GPLv3) | see below | `src/formats/axml/tests.rs` |
+| `foo_drv.ko` | AArch64 `ET_REL` driver object: a `file_operations` with an `unlocked_ioctl` handler switching on `_IOC`-encoded commands | `aarch64-linux-gnu-gcc -O2 -c -fno-pic -o foo_drv.ko drv.c` | `src/analysis/linux_ioctl/tests.rs` |
+| `drv.c` | Source for `foo_drv.ko` | — | — |
 
 ## Rebuilding the AXML manifest fixture
 
