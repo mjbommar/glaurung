@@ -370,3 +370,31 @@ a stable structural property of the workload, not a one-run artifact. The gap
 will not move until an actual GQ2-GQ5 lowering optimization lands; as of this
 check, axeyum has built the profiling scaffolding and confirmed the
 attribution, but not yet the optimizations.
+
+### 5.5 The gap is closing (2026-07-14) -- profile-guided optimization working
+
+After axeyum landed cold-path GQ3/GQ4/GQ5 work (canonical rewriting, bounded
+Glaurung slice rewrites, dense term-bit lift ranges, and CNF-encoding
+optimizations -- all targeting the bit_blast+CNF hotspot the GQ1 attribution
+identified), the gap measurably shrank on the same corpus and the same real
+drivers, with correctness preserved throughout (0 disagreements).
+
+| measurement | original | 2026-07-13 | 2026-07-14 (optimized) |
+|---|---|---|---|
+| corpus ratio (axeyum-bench, gated) | -- | 2.10x -> 2.01x | **1.40x** |
+| real driver vwififlt (same-stream) | 3.2x slower | 3.2x slower | **2.5x slower (0.40x)** |
+| real driver DptfDevGen (same-stream) | 1.7x slower | 1.7x slower | **1.25x slower (0.80x)** -- near parity |
+
+Attribution shift on the corpus (bit_blast/cnf_encode/sat): 42/42/15 ->
+40/43/15 -> **45/31/21**. The CNF-encoding optimizations were the largest
+single win (43% -> 31% share while total time dropped ~30%). SAT's *relative*
+share rose only because the lowering stages shrank.
+
+**Paper narrative.** This is the closing arc: a real client (glaurung)
+captured its own query distribution, a correctness-gated harness attributed
+the cold-path cost to term->AIG->CNF lowering, and targeted lowering
+optimizations then closed most of the gap -- 2.0x -> 1.4x on the gated corpus,
+and to near-parity on the easier real driver -- without any verdict regression.
+The methodology (profile the real stream, optimize the attributed stage,
+re-measure under the same gate) is itself a contribution, and the trajectory
+suggests parity is reachable as GQ3/GQ4 mature.
