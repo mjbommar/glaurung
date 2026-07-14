@@ -74,6 +74,13 @@ impl Solver for AxeyumSolver {
 
         let mut solver = IncrementalBvSolver::with_config(config());
         for t in &assert_terms {
+            // Raw `assert` (no preprocessing) is fastest for this ONE-SHOT
+            // trait: axeyum's word-level preprocessing (`assert_configured`,
+            // added 2026-07-13) pays a per-query canonicalization cost that
+            // only amortizes across REUSED checks on the warm path. Measured:
+            // in one-shot mode `assert_configured` is ~1.3-2x SLOWER than
+            // `assert` on real drivers (no reuse to amortize). It becomes the
+            // right call once the incremental (warm) Solver trait lands (P5).
             if let Err(err) = solver.assert(&arena, *t) {
                 return SolveResult::Error(format!("axeyum assert: {err}"));
             }

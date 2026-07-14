@@ -113,6 +113,7 @@ name = "axeyum-cnf"
 version = "0.1.0"
 dependencies = [
  "axeyum-aig",
+ "batsat",
  "rustsat",
  "rustsat-batsat",
  "web-time",

@@ -314,3 +314,43 @@ results were invalid.**
 - **[STILL TRUE] axeyum's value proposition is correctness + deployability**
   (pure-Rust, no libz3, WASM, DRAT proofs), NOT speed on this workload. Those
   are real and worth a paper - just not a "faster" paper yet.
+
+## Iteration 13 - pulled latest axeyum: ergonomics feedback ACTED ON, perf gap unchanged
+
+Pulled axeyum `dfd33c71..8173bfc1`. The `9b1889cd "Harden QF_BV client
+integration"` commit implemented almost every ergonomics item from this log:
+
+- **[DONE by axeyum] `TermArena::coerce_to(term, width)`** (item: coerce helper).
+- **[DONE] `pub use axeyum_ir::Value` from `axeyum-solver`** (item: Value re-export).
+- **[DONE] QF_BV-only profile** `default-features=false, features=["qfbv"]` +
+  `scripts/check-qfbv-profile.sh` asserting only {solver,aig,bv,cnf,ir,query,
+  rewrite} are pulled (item: slim dep footprint).
+- **[DONE] `docs/user-guide/rust-embedding.md`** documenting extract/concat
+  conventions (cites our exact `extract [64:56]` error), `get_model` vs
+  `get_value`, warm solving, and `IncrementalBvSolver: Send` for parallel
+  workers (items: convention docs, get-model gotcha, warm example, threads).
+
+Impressive turnaround. But on **performance** (the real gap): unchanged.
+Re-ran the honest same-stream shadow-diff on new axeyum: still vwififlt 0.3x /
+DptfDevGen 0.6x / IntcSST 0.3x (axeyum ~2-3x slower).
+
+- **[KEY finding] The new word-level preprocessing (`assert_configured`,
+  purpose-built for lifter-shaped QF_BV) does NOT help glaurung's one-shot
+  path -- it HURTS it.** Switching my backend from `assert` to
+  `assert_configured` made it *slower* (vwififlt 0.3x->0.2x, DptfDevGen
+  0.6x->0.3x). The preprocessing pays a per-query canonicalization cost that
+  only amortizes across REUSED checks on the WARM path; glaurung's `Solver`
+  trait rebuilds a fresh solver per `check`, so there is nothing to amortize.
+  Reverted to raw `assert`.
+- **[CONCLUSION] Latest axeyum does not close the gap in the current
+  integration -- and it can't, until glaurung uses the warm path.** axeyum
+  has now BUILT the machinery (word-level preprocessing + clause/bit-blast
+  reuse + `assert_configured`) that makes the warm path fast for exactly our
+  formula shape. Realizing it requires the glaurung-side work: **wire the
+  incremental (warm) `Solver` trait into the explorer (P5)**, then call
+  `assert_configured` on a reused solver. That is the single remaining lever,
+  now doubly motivated (warm reuse + new preprocessing).
+- **[FEEDBACK to axeyum] Document that `assert_configured` is a net LOSS in
+  one-shot use** (cost without amortization) so embedders don't reach for it
+  by default expecting a speedup on a cold path. The embedding guide implies
+  it's generally beneficial; it is specifically a warm-path optimization.
