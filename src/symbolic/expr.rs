@@ -151,7 +151,7 @@ impl ExprPool {
         match self.get(id) {
             Expr::Const { value, width } => format!("(_ bv{} {})", value, width.bits()),
             Expr::Sym { id, width } => format!("sym{}_{}", id, width.bits()),
-            Expr::Bin { op, a, b, .. } => {
+            Expr::Bin { op, a, b, width } => {
                 let f = match op {
                     BinOp::Add => "bvadd",
                     BinOp::Sub => "bvsub",
@@ -164,11 +164,14 @@ impl ExprPool {
                     BinOp::Shr => "bvlshr",
                     BinOp::Sar => "bvashr",
                 };
+                // Coerce both operands to the node width so the emitted
+                // SMT-LIB is well-typed (the lifter emits width-mismatched
+                // operands; the AST backends coerce, so the text must too).
                 format!(
                     "({} {} {})",
                     f,
-                    self.render_smtlib(*a),
-                    self.render_smtlib(*b)
+                    self.render_coerced(*a, width.bits()),
+                    self.render_coerced(*b, width.bits())
                 )
             }
             Expr::Un { op, a, .. } => {
@@ -178,7 +181,7 @@ impl ExprPool {
                 };
                 format!("({} {})", f, self.render_smtlib(*a))
             }
-            Expr::Cmp { op, a, b, .. } => {
+            Expr::Cmp { op, a, b, width } => {
                 let (pred, signed) = match op {
                     CmpOp::Eq => ("=", false),
                     CmpOp::Ne => ("distinct", false),
@@ -191,8 +194,8 @@ impl ExprPool {
                 format!(
                     "(ite ({} {} {}) (_ bv1 1) (_ bv0 1))",
                     pred,
-                    self.render_smtlib(*a),
-                    self.render_smtlib(*b)
+                    self.render_coerced(*a, width.bits()),
+                    self.render_coerced(*b, width.bits())
                 )
             }
             Expr::ZExt { a, from, to } => format!(
@@ -206,26 +209,48 @@ impl ExprPool {
                 self.render_smtlib(*a)
             ),
             Expr::Trunc { a, to } => {
+                // Ensure the source is at least `to` bits before extracting.
                 format!(
                     "((_ extract {} 0) {})",
                     to.bits() - 1,
-                    self.render_smtlib(*a)
+                    self.render_coerced(*a, to.bits())
                 )
             }
             Expr::Extract { a, hi, lo } => {
-                format!("((_ extract {} {}) {})", hi - 1, lo, self.render_smtlib(*a))
+                // Ensure the source is >= hi bits before extracting [hi-1:lo].
+                format!(
+                    "((_ extract {} {}) {})",
+                    hi - 1,
+                    lo,
+                    self.render_coerced(*a, *hi)
+                )
             }
             Expr::Concat { hi, lo, .. } => format!(
                 "(concat {} {})",
                 self.render_smtlib(*hi),
                 self.render_smtlib(*lo)
             ),
-            Expr::Ite { c, t, e, .. } => format!(
+            Expr::Ite { c, t, e, width } => format!(
                 "(ite (= {} (_ bv1 1)) {} {})",
                 self.render_smtlib(*c),
-                self.render_smtlib(*t),
-                self.render_smtlib(*e)
+                self.render_coerced(*t, width.bits()),
+                self.render_coerced(*e, width.bits())
             ),
+        }
+    }
+
+    /// Render `id` coerced to `target` bits: zero-extend if narrower, extract
+    /// low bits if wider. Mirrors the AST backends' `coerce` so the emitted
+    /// SMT-LIB text is always well-typed.
+    fn render_coerced(&self, id: ExprId, target: u16) -> String {
+        let cur = self.width_of(id).bits();
+        let inner = self.render_smtlib(id);
+        if cur == target {
+            inner
+        } else if cur < target {
+            format!("((_ zero_extend {}) {})", target - cur, inner)
+        } else {
+            format!("((_ extract {} 0) {})", target - 1, inner)
         }
     }
 

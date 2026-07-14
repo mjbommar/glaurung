@@ -118,6 +118,54 @@ pub fn total_solver_stats() -> (u64, u64) {
     )
 }
 
+// Real-query corpus capture (for axeyum's GQ1/GQ10 client-performance lane).
+// When GLAURUNG_DUMP_QUERIES=<dir> is set (build with solver-z3, the trusted
+// oracle), every DECIDED query is written once as `<sha256>.smt2` and its
+// trusted verdict appended to `index.tsv`. Deduplicated by content hash so the
+// pack is the distinct real-formula distribution, not 13k near-duplicates.
+#[cfg(feature = "solver-z3")]
+fn maybe_dump_query(pool: &ExprPool, asserts: &[Assert], result: &SolveResult) {
+    use sha2::{Digest, Sha256};
+    use std::collections::HashSet;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    static SEEN: OnceLock<Mutex<HashSet<[u8; 32]>>> = OnceLock::new();
+
+    let dir = DIR.get_or_init(|| std::env::var_os("GLAURUNG_DUMP_QUERIES").map(PathBuf::from));
+    let Some(dir) = dir.as_ref() else { return };
+
+    // Only capture decided queries with a trusted sat/unsat verdict.
+    let verdict = match result {
+        SolveResult::Sat(_) => "sat",
+        SolveResult::Unsat => "unsat",
+        _ => return,
+    };
+
+    let (script, _names) = pipe::build_script(pool, asserts);
+    let hash: [u8; 32] = Sha256::digest(script.as_bytes()).into();
+    {
+        let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+        let mut s = seen.lock().unwrap();
+        if !s.insert(hash) {
+            return; // duplicate formula, already captured
+        }
+    }
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    let _ = std::fs::create_dir_all(dir);
+    if std::fs::write(dir.join(format!("{hex}.smt2")), script.as_bytes()).is_ok() {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("index.tsv"))
+        {
+            let _ = writeln!(f, "{hex}\t{verdict}");
+        }
+    }
+}
+
 // Shadow differential: when both backends are compiled and
 // GLAURUNG_SHADOW_DIFF is set, every solve runs BOTH and records whether the
 // sat/unsat verdicts agree (unknowns tolerated). z3 stays authoritative so
@@ -287,5 +335,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     if matches!(result, SolveResult::Unknown) {
         TIMEOUT_COUNT.with(|c| c.set(c.get() + 1));
     }
+    #[cfg(feature = "solver-z3")]
+    maybe_dump_query(pool, asserts, &result);
     result
 }
