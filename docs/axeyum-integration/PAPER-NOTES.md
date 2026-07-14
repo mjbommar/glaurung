@@ -330,3 +330,31 @@ quantified gap and roadmap" paper is still solid and publishable.
   same-stream shadow-diff (verdict agreement, per-backend timing, model
   divergence, Unknown/Error split). Drivers under
   `samples/binaries/platforms/windows/vendor/realworld/`.
+
+### 5.4 Harness-validated cold-path profile (GQ1) -- the strongest data
+
+Rather than ad-hoc timing, the real query stream was captured as a
+manifest-gated SMT-LIB corpus and profiled through **axeyum's OWN
+acceptance-gated benchmark** (`axeyum-bench` v17, manifest v1). This is the
+publication-grade measurement: it passes the decided-rate, oracle-agreement,
+model-replay, and manifest gates.
+
+- Corpus: 15,687 distinct deduplicated real queries (97% `extract`, 89%
+  `concat` -- the width-mixed lifter distribution); 128-query stratified
+  representative tier.
+- **Acceptance: 100% decided, 0 unsupported, 0 verdict disagreements**
+  (exit 0). axeyum is a verified-equivalent drop-in on the real distribution.
+- **Axeyum/Z3 ratio: 2.10x** (272 ms vs 130 ms) -- confirms the real-workload
+  gap through the independent harness.
+- **Cold-path attribution (the decisive GQ1 result):**
+  `bit_blast 42% + cnf_encode 42% = 84%`, `SAT 15%`, `model_lift 1%`,
+  `word_preprocess 0%` (cold), `sat_dominates: false`.
+
+**Paper implication.** The performance gap is structurally in **term->AIG->CNF
+lowering (84%), not SAT search (15%).** This is the "where does the time go"
+figure a systems paper needs, and it is measured on the real application's
+own queries, gated for correctness. It says the productive optimization is
+word-level: coercion-cancellation peepholes, cold bit-slice / relevant-bit
+reduction, and faster AIG->CNF encoding -- not SAT tuning. It also validates
+the methodological thesis: only the real, gated query stream produces a
+trustworthy attribution.

@@ -354,3 +354,35 @@ DptfDevGen 0.6x / IntcSST 0.3x (axeyum ~2-3x slower).
   one-shot use** (cost without amortization) so embedders don't reach for it
   by default expecting a speedup on a cold path. The embedding guide implies
   it's generally beneficial; it is specifically a warm-path optimization.
+
+## Iteration 14 - delivered axeyum's GQ1 corpus + found a render_smtlib bug
+
+axeyum stood up a formal "Glaurung QF_BV performance roadmap" (GQ1-GQ10)
+matching this feedback log, explicitly BLOCKED on one artifact: the real
+captured SMT-LIB query pack. Delivered it.
+
+- **[DONE] Real-query corpus captured + handed off.** Added a
+  `GLAURUNG_DUMP_QUERIES` hook (dedup by content hash, trusted z3 verdict) ->
+  15,687 distinct lifter-shaped queries; built a stratified 128-query
+  representative tier with a manifest-v1 that passes axeyum's full acceptance
+  gate (100% decided, 0 unsupported, 0 disagreements). Placed at
+  `axeyum/corpus/glaurung-qfbv/`. Procedure:
+  `glaurung/docs/axeyum-integration/capture/`.
+- **[GLAURUNG bug, fixed] `render_smtlib` emitted ILL-TYPED SMT-LIB.** For
+  width-mismatched operands it produced `(bvadd <BitVec32> <BitVec64>)`,
+  relying on the AST backends' coerce which the text path skips. axeyum's
+  strict parser caught it (56% of queries `unsupported`). Fixed with
+  `render_coerced` at Bin/Cmp/Trunc/Extract/Ite. This also silently broke the
+  pipe backend + the axeyum text bridge for real formulas. **axeyum's strict
+  sort-checking earned its keep AGAIN** -- it surfaced a real glaurung
+  emission bug z3 would have masked.
+- **[GLAURUNG edge case, noted] ~0.07% of queries are ill-typed even after
+  the fix** (declared-vs-actual width mismatch at unusual widths 96/120 --
+  the IR's `width_of` can diverge from a subterm's actual rendered width).
+  Excluded from the pack (`excluded-hashes.txt`); worth a deeper glaurung IR
+  width-consistency fix later.
+- **[FIRST REAL PROFILE for axeyum] ratio 2.10x; attribution bit_blast 42% +
+  cnf_encode 42% = 84%, SAT 15%.** So the gap is in term->AIG->CNF lowering,
+  not SAT. This ranks their roadmap: prioritize GQ3 (coercion peepholes) /
+  GQ4 (bit-slice) / GQ5 (AIG->CNF); deprioritize GQ6 (SAT tuning). Handed
+  over as the GQ1 attribution.
