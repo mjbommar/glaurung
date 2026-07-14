@@ -358,3 +358,15 @@ word-level: coercion-cancellation peepholes, cold bit-slice / relevant-bit
 reduction, and faster AIG->CNF encoding -- not SAT tuning. It also validates
 the methodological thesis: only the real, gated query stream produces a
 trustworthy attribution.
+
+### 5.4a Cross-version reproducibility of the profile (2026-07-14)
+
+Re-ran the representative tier against a later axeyum build (after it landed
+GQ1/GQ10 measurement infrastructure + Lean reconstruction, but no cold-path
+optimization). Result is stable: **ratio 2.01x (was 2.10x), attribution
+bit_blast 40% + cnf_encode 43% + SAT 15% (was 42/42/15).** The 84%-lowering /
+15%-SAT attribution reproduces across two independent axeyum versions -- it is
+a stable structural property of the workload, not a one-run artifact. The gap
+will not move until an actual GQ2-GQ5 lowering optimization lands; as of this
+check, axeyum has built the profiling scaffolding and confirmed the
+attribution, but not yet the optimizations.
