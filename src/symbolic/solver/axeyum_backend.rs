@@ -43,6 +43,12 @@ pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
 static PROFILE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static WARM_CHECKS: AtomicU64 = AtomicU64::new(0);
+static WARM_EXACT_REUSES: AtomicU64 = AtomicU64::new(0);
+static WARM_PREFIX_REUSES: AtomicU64 = AtomicU64::new(0);
+static WARM_ASSERTIONS_ADDED: AtomicU64 = AtomicU64::new(0);
+static WARM_ASSERTIONS_POPPED: AtomicU64 = AtomicU64::new(0);
+static WARM_RESETS: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     /// One retained snapshot adapter per explorer thread. Glaurung currently
@@ -443,7 +449,60 @@ pub(crate) fn warm_reuse_enabled() -> bool {
 
 /// Checks through the retained per-thread snapshot adapter.
 pub(crate) fn check_warm_thread_local(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
-    WARM_SOLVER.with(|solver| solver.borrow_mut().check_snapshot(pool, asserts))
+    let (result, before, after) = WARM_SOLVER.with(|solver| {
+        let mut solver = solver.borrow_mut();
+        let before = solver.stats();
+        let result = solver.check_snapshot(pool, asserts);
+        (result, before, solver.stats())
+    });
+    WARM_CHECKS.fetch_add(
+        after.checks.saturating_sub(before.checks),
+        Ordering::Relaxed,
+    );
+    WARM_EXACT_REUSES.fetch_add(
+        after
+            .exact_snapshot_reuses
+            .saturating_sub(before.exact_snapshot_reuses),
+        Ordering::Relaxed,
+    );
+    WARM_PREFIX_REUSES.fetch_add(
+        after
+            .prefix_assertions_reused
+            .saturating_sub(before.prefix_assertions_reused),
+        Ordering::Relaxed,
+    );
+    WARM_ASSERTIONS_ADDED.fetch_add(
+        after
+            .assertions_added
+            .saturating_sub(before.assertions_added),
+        Ordering::Relaxed,
+    );
+    WARM_ASSERTIONS_POPPED.fetch_add(
+        after
+            .assertions_popped
+            .saturating_sub(before.assertions_popped),
+        Ordering::Relaxed,
+    );
+    WARM_RESETS.fetch_add(
+        after
+            .resets_after_error
+            .saturating_sub(before.resets_after_error),
+        Ordering::Relaxed,
+    );
+    result
+}
+
+/// Process-wide aggregate of opt-in warm snapshot reuse across explorer
+/// threads. A fresh process starts all counters at zero.
+pub fn warm_reuse_stats() -> SnapshotReuseStats {
+    SnapshotReuseStats {
+        checks: WARM_CHECKS.load(Ordering::Relaxed),
+        exact_snapshot_reuses: WARM_EXACT_REUSES.load(Ordering::Relaxed),
+        prefix_assertions_reused: WARM_PREFIX_REUSES.load(Ordering::Relaxed),
+        assertions_added: WARM_ASSERTIONS_ADDED.load(Ordering::Relaxed),
+        assertions_popped: WARM_ASSERTIONS_POPPED.load(Ordering::Relaxed),
+        resets_after_error: WARM_RESETS.load(Ordering::Relaxed),
+    }
 }
 
 fn translate_query(

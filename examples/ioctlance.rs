@@ -423,6 +423,18 @@ fn main() {
                 "[model-choice] both-sat={} different-model={} | z3-unknown={} axeyum-unknown={} unknown-split={}",
                 both_sat, model_diff, z3_unk, ax_unk, unk_split,
             );
+            let warm = glaurung::symbolic::solver::axeyum_backend::warm_reuse_stats();
+            if warm.checks > 0 {
+                eprintln!(
+                    "[axeyum-warm] checks={} exact={} prefix-roots={} added={} popped={} resets={}",
+                    warm.checks,
+                    warm.exact_snapshot_reuses,
+                    warm.prefix_assertions_reused,
+                    warm.assertions_added,
+                    warm.assertions_popped,
+                    warm.resets_after_error,
+                );
+            }
         }
     }
     lines.sort();
