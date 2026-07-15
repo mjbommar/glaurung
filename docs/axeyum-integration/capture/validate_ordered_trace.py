@@ -107,6 +107,7 @@ def validate(root: pathlib.Path) -> dict[str, int]:
     paths: dict[str, PathState] = {"analysis": PathState()}
     checks: dict[str, tuple[str, str]] = {}
     model_reads: dict[str, str] = {}
+    assertion_ids: set[str] = set()
     observed_occurrences: dict[str, list[tuple[str, str, int]]] = {}
     next_event = next_process = next_worker = 0
     analysis_id = process_id = worker_id = None
@@ -193,6 +194,13 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                 fail(f"invalid constraint ID on {path_id}")
             if event.get("assertion_sha256") != constraint or event.get("sort_validated") is not True:
                 fail(f"unvalidated assertion on {path_id}")
+            assertion_path = event.get("assertion_path")
+            if assertion_path != f"assertions/{constraint}.smt2":
+                fail(f"non-canonical assertion path on {path_id}: {assertion_path!r}")
+            assertion_bytes = (root / assertion_path).read_bytes()
+            if sha256(assertion_bytes) != constraint or not assertion_bytes.startswith(b"(assert "):
+                fail(f"assertion bytes do not match constraint ID on {path_id}")
+            assertion_ids.add(constraint)
             state.scopes[-1] = (state.scopes[-1][0], constraint)
             complete = [(scope, value) for scope, value in state.scopes if value is not None]
             if len(complete) != len(state.scopes) or framed_digest(complete) != event.get("scope_digest"):
@@ -217,6 +225,18 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                 fail(f"query assertions do not reconstruct active scopes for {check_id}")
             if outcome not in indexed[query_hash]["outcomes"]:
                 fail(f"check outcome absent from query index for {check_id}")
+            backend_nanos = event.get("backend_nanos")
+            z3_nanos = event.get("z3_nanos")
+            axeyum_nanos = event.get("axeyum_nanos")
+            if not isinstance(backend_nanos, int) or backend_nanos < 0:
+                fail(f"invalid total backend timing for {check_id}")
+            if z3_nanos is not None and (not isinstance(z3_nanos, int) or z3_nanos < 0):
+                fail(f"invalid Z3 timing for {check_id}")
+            if axeyum_nanos is not None and (not isinstance(axeyum_nanos, int) or axeyum_nanos < 0):
+                fail(f"invalid Axeyum timing for {check_id}")
+            measured = (z3_nanos or 0) + (axeyum_nanos or 0)
+            if measured > backend_nanos:
+                fail(f"per-backend timing exceeds total timing for {check_id}")
             checks[check_id] = (outcome, path_id)
             observed_occurrences.setdefault(query_hash, []).append((check_id, path_id, event["event_seq"]))
             state.last_check = check_id
@@ -301,6 +321,15 @@ def validate(root: pathlib.Path) -> dict[str, int]:
         fail("manifest path count mismatch")
     if len(indexed) != manifest.get("query_count"):
         fail("manifest query count mismatch")
+    stored_assertions = {path.stem for path in (root / "assertions").glob("*.smt2")}
+    if stored_assertions != assertion_ids:
+        fail(
+            "assertion-store membership differs from events: "
+            f"unreferenced={sorted(stored_assertions - assertion_ids)[:5]} "
+            f"missing={sorted(assertion_ids - stored_assertions)[:5]}"
+        )
+    if len(assertion_ids) != manifest.get("assertion_count"):
+        fail("manifest assertion count mismatch")
     for query_hash, row in indexed.items():
         expected = [
             (entry.get("check_id"), entry.get("path_id"), entry.get("event_seq"))
@@ -318,6 +347,7 @@ def validate(root: pathlib.Path) -> dict[str, int]:
         "events": event_count,
         "paths": len(paths) - 1,
         "queries": len(indexed),
+        "assertions": len(assertion_ids),
         "checks": len(checks),
         "model_reads": len(model_reads),
     }

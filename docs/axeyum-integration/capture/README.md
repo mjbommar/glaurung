@@ -184,7 +184,10 @@ python3 docs/axeyum-integration/capture/validate_ordered_trace.py "$trace"
 
 The published directory contains `trace-manifest-v1.json`, the non-deduplicated
 `events-v1.ndjson`, content-addressed exact scripts under `queries/`, and
-`query-index-v1.json`. Every event has contiguous process/worker/path order.
+`query-index-v1.json`. Every asserted root is also persisted independently as
+`assertions/<sha256>.smt2`, including terminal branches that never reach a
+check; assert events bind the canonical relative path and the manifest records
+the distinct assertion count. Every event has contiguous process/worker/path order.
 Explorer roots and symbolic forks carry explicit parent lineage; every
 persistent branch/concretization and temporary probe has matching
 push/assert/check/pop history; SAT/UNSAT/unknown/error occurrences are retained;
@@ -195,10 +198,17 @@ consumer can append `expression = chosen-value` to the exact query and check
 that the recorded choice remains SAT. Full query bytes come from the same
 `solver::pipe::build_script` renderer as the cold corpus.
 
+Each check now carries `z3_nanos` and `axeyum_nanos` in addition to the total
+`backend_nanos`. In dual-backend shadow mode the first two fields time the same
+query independently while the total includes shadow-wrapper work. A missing
+backend is represented by `null`; never use the combined total as a Z3-only
+baseline.
+
 The validator fails on manifest/file hash drift, sequence gaps, missing path
 terminals, broken lineage, scope underflow/digest mismatch, assertion/query
-reconstruction mismatch, conflicting decided duplicates, query-index drift, or
-a model read/choice that does not refer to a SAT check on the same path. This is
+reconstruction mismatch, missing/unreferenced assertion bytes, inconsistent
+per-backend timings, conflicting decided duplicates, query-index drift, or a
+model read/choice that does not refer to a SAT check on the same path. This is
 the producer-side T1 structural gate. Axeyum's independent strict QF_BV parse,
 sort, replay, and model-choice satisfiability check remains the T2 consumer gate;
 do not use a structurally valid producer trace alone to enable warm reuse by

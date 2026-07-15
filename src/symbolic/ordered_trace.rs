@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::symbolic::expr::{ExprId, ExprPool};
-use crate::symbolic::solver::{pipe, Assert, SolveResult};
+use crate::symbolic::solver::{pipe, Assert, SolveResult, SolveTiming};
 
 const VERSION: u64 = 1;
 const WORKER_ID: &str = "worker-0";
@@ -104,6 +104,8 @@ fn begin(
         .map_err(|e| format!("create temporary trace {}: {e}", temp_dir.display()))?;
     fs::create_dir(temp_dir.join("queries"))
         .map_err(|e| format!("create trace query store: {e}"))?;
+    fs::create_dir(temp_dir.join("assertions"))
+        .map_err(|e| format!("create trace assertion store: {e}"))?;
     let events_path = temp_dir.join("events-v1.ndjson");
     let events = BufWriter::new(
         File::create(&events_path).map_err(|e| format!("create {}: {e}", events_path.display()))?,
@@ -132,6 +134,7 @@ fn begin(
         started_paths: BTreeSet::new(),
         ended_paths: BTreeSet::new(),
         query_index: BTreeMap::new(),
+        assertion_ids: BTreeSet::new(),
         error: None,
     };
     recorder.emit(
@@ -234,20 +237,12 @@ impl TracePath {
         assertions: &[Assert],
         result: &SolveResult,
         purpose: &str,
-        elapsed_nanos: u64,
+        timing: SolveTiming,
         location: u64,
     ) -> Option<String> {
         RECORDER.with(|slot| {
             slot.borrow_mut().as_mut().map(|recorder| {
-                recorder.check(
-                    self,
-                    pool,
-                    assertions,
-                    result,
-                    purpose,
-                    elapsed_nanos,
-                    location,
-                )
+                recorder.check(self, pool, assertions, result, purpose, timing, location)
             })
         })
     }
@@ -323,6 +318,7 @@ struct Recorder {
     started_paths: BTreeSet<String>,
     ended_paths: BTreeSet<String>,
     query_index: BTreeMap<String, QueryIndexEntry>,
+    assertion_ids: BTreeSet<String>,
     error: Option<String>,
 }
 
@@ -387,6 +383,18 @@ impl Recorder {
         self.next_scope += 1;
         let assertion_bytes = assertion_line(pool, assertion);
         let constraint_id = sha256(assertion_bytes.as_bytes());
+        if self.assertion_ids.insert(constraint_id.clone()) {
+            let assertion_path = self
+                .temp_dir
+                .join("assertions")
+                .join(format!("{constraint_id}.smt2"));
+            if let Err(error) = fs::write(&assertion_path, assertion_bytes.as_bytes()) {
+                self.fail(format!(
+                    "write assertion {}: {error}",
+                    assertion_path.display()
+                ));
+            }
+        }
         self.emit(
             &path.path_id,
             Some(location),
@@ -418,6 +426,7 @@ impl Recorder {
                 "scope_id": scope_id,
                 "constraint_id": constraint_id,
                 "assertion_sha256": sha256(assertion_bytes.as_bytes()),
+                "assertion_path": format!("assertions/{constraint_id}.smt2"),
                 "sort_validated": sort_valid,
                 "semantic_role": role,
                 "scope_digest": scope_digest(&path.scopes),
@@ -453,7 +462,7 @@ impl Recorder {
         assertions: &[Assert],
         result: &SolveResult,
         purpose: &str,
-        elapsed_nanos: u64,
+        timing: SolveTiming,
         location: u64,
     ) -> String {
         if path.scopes.len() != assertions.len() {
@@ -509,7 +518,9 @@ impl Recorder {
                 "query_sha256": content_hash,
                 "outcome": outcome,
                 "outcome_detail": detail,
-                "backend_nanos": elapsed_nanos,
+                "backend_nanos": timing.total_nanos,
+                "z3_nanos": timing.z3_nanos,
+                "axeyum_nanos": timing.axeyum_nanos,
                 "resource_counters": {},
             }),
         );
@@ -755,6 +766,7 @@ impl Recorder {
             "event_count": self.event_seq,
             "path_count": self.started_paths.len(),
             "query_count": self.query_index.len(),
+            "assertion_count": self.assertion_ids.len(),
             "events_sha256": events_sha256,
             "query_index_sha256": query_index_sha256,
             "access_classification": "restricted-driver-analysis",
@@ -923,6 +935,14 @@ mod tests {
     use crate::symbolic::expr::Expr;
     use crate::symbolic::solver::Model;
 
+    fn shadow_timing(total_nanos: u64) -> SolveTiming {
+        SolveTiming {
+            total_nanos,
+            z3_nanos: Some(total_nanos / 3),
+            axeyum_nanos: Some(total_nanos / 2),
+        }
+    }
+
     #[test]
     fn publishes_lineage_scopes_repeated_checks_model_choice_and_unsat() {
         let output = tempfile::tempdir().expect("trace output");
@@ -960,12 +980,19 @@ mod tests {
             &[(eq_one, true)],
             &sat,
             "branch-feasibility",
-            11,
+            shadow_timing(11),
             0x1001,
         );
         root.model_choice(&pool, x, 1, true, "synthetic-model-choice-v1", 0x1001);
         // Exact repeated occurrence: same bytes and verdict, distinct event.
-        root.check(&pool, &[(eq_one, true)], &sat, "repeated-check", 7, 0x1002);
+        root.check(
+            &pool,
+            &[(eq_one, true)],
+            &sat,
+            "repeated-check",
+            shadow_timing(7),
+            0x1002,
+        );
 
         let mut child = root.fork(0x2000);
         root.end("forked", 0x1002);
@@ -975,7 +1002,7 @@ mod tests {
             &[(eq_one, true), (eq_two, true)],
             &SolveResult::Unsat,
             "value-witness",
-            13,
+            shadow_timing(13),
             0x2001,
         );
         child.pop(0x2001);
@@ -985,6 +1012,12 @@ mod tests {
         assert!(published.join("trace-manifest-v1.json").is_file());
         assert!(published.join("events-v1.ndjson").is_file());
         assert!(published.join("query-index-v1.json").is_file());
+        assert_eq!(
+            fs::read_dir(published.join("assertions"))
+                .expect("read assertion store")
+                .count(),
+            2
+        );
 
         let events =
             fs::read_to_string(published.join("events-v1.ndjson")).expect("read trace events");
@@ -1016,6 +1049,19 @@ mod tests {
             assert!(kinds.contains(&required), "missing {required}: {kinds:?}");
         }
         assert_eq!(kinds.iter().filter(|kind| **kind == "check").count(), 3);
+        let checks = rows
+            .iter()
+            .filter(|row| row["event"] == "check")
+            .collect::<Vec<_>>();
+        assert!(checks.iter().all(|row| row["z3_nanos"].is_u64()));
+        assert!(checks.iter().all(|row| row["axeyum_nanos"].is_u64()));
+        let assertions = rows
+            .iter()
+            .filter(|row| row["event"] == "assert")
+            .collect::<Vec<_>>();
+        assert!(assertions.iter().all(|row| row["assertion_path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("assertions/"))));
         let index: Value = serde_json::from_slice(
             &fs::read(published.join("query-index-v1.json")).expect("read query index"),
         )

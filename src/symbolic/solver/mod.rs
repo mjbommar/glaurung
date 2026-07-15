@@ -71,6 +71,30 @@ thread_local! {
     /// keeping the test suite deterministic; batch callers set a few seconds so a
     /// function with slow-but-not-timing-out solves still can't stall the scan.
     static TIME_BUDGET: Cell<Option<Duration>> = const { Cell::new(None) };
+    /// Per-call timing for the most recent solve on this worker. Ordered-trace
+    /// capture reads it immediately after `solve`; ordinary callers ignore it.
+    static LAST_SOLVE_TIMING: Cell<SolveTiming> = const { Cell::new(SolveTiming::ZERO) };
+}
+
+/// Backend-separated timing for one solver call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SolveTiming {
+    pub(crate) total_nanos: u64,
+    pub(crate) z3_nanos: Option<u64>,
+    pub(crate) axeyum_nanos: Option<u64>,
+}
+
+impl SolveTiming {
+    const ZERO: Self = Self {
+        total_nanos: 0,
+        z3_nanos: None,
+        axeyum_nanos: None,
+    };
+}
+
+/// Timing for the immediately preceding [`solve`] call on this worker.
+pub(crate) fn last_solve_timing() -> SolveTiming {
+    LAST_SOLVE_TIMING.with(Cell::get)
 }
 
 /// Set (or clear) the per-thread per-function wall-clock budget.
@@ -254,6 +278,7 @@ pub fn solver_budget() -> (u64, u64) {
 /// [`solver_meter`]) so the explorer can bound total solving work.
 pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     SOLVE_COUNT.with(|c| c.set(c.get() + 1));
+    let total_started = std::time::Instant::now();
     // Shadow-differential mode: run both backends, record verdict agreement,
     // return z3 authoritatively. Diagnostic only (env-gated).
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
@@ -262,18 +287,20 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             // Time each backend on the SAME query for an apples-to-apples
             // comparison. Alternate order per call to cancel warm-cache bias.
             let z3_first = SHADOW_AGREE.load(Ordering::Relaxed) % 2 == 0;
-            let (rz, ra);
+            let (rz, ra, z3_nanos, axeyum_nanos);
             if z3_first {
                 let t = std::time::Instant::now();
                 rz = z3_backend::Z3Solver::new().check(pool, asserts);
-                SHADOW_Z3_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                z3_nanos = t.elapsed().as_nanos() as u64;
+                SHADOW_Z3_NANOS.fetch_add(z3_nanos, Ordering::Relaxed);
                 let t = std::time::Instant::now();
                 ra = if axeyum_backend::warm_reuse_enabled() {
                     axeyum_backend::check_warm_thread_local(pool, asserts)
                 } else {
                     axeyum_backend::AxeyumSolver::new().check(pool, asserts)
                 };
-                SHADOW_AX_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                axeyum_nanos = t.elapsed().as_nanos() as u64;
+                SHADOW_AX_NANOS.fetch_add(axeyum_nanos, Ordering::Relaxed);
             } else {
                 let t = std::time::Instant::now();
                 ra = if axeyum_backend::warm_reuse_enabled() {
@@ -281,10 +308,12 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                 } else {
                     axeyum_backend::AxeyumSolver::new().check(pool, asserts)
                 };
-                SHADOW_AX_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                axeyum_nanos = t.elapsed().as_nanos() as u64;
+                SHADOW_AX_NANOS.fetch_add(axeyum_nanos, Ordering::Relaxed);
                 let t = std::time::Instant::now();
                 rz = z3_backend::Z3Solver::new().check(pool, asserts);
-                SHADOW_Z3_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                z3_nanos = t.elapsed().as_nanos() as u64;
+                SHADOW_Z3_NANOS.fetch_add(z3_nanos, Ordering::Relaxed);
             }
             let unknown = matches!(rz, SolveResult::Unknown)
                 || matches!(ra, SolveResult::Unknown)
@@ -328,6 +357,13 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             if z3_unk != ax_unk {
                 SHADOW_UNK_SPLIT.fetch_add(1, Ordering::Relaxed);
             }
+            LAST_SOLVE_TIMING.with(|timing| {
+                timing.set(SolveTiming {
+                    total_nanos: total_started.elapsed().as_nanos() as u64,
+                    z3_nanos: Some(z3_nanos),
+                    axeyum_nanos: Some(axeyum_nanos),
+                });
+            });
             return rz;
         }
     }
@@ -346,6 +382,31 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     #[cfg(all(not(feature = "solver-z3"), not(feature = "solver-axeyum")))]
     let result = pipe::PipeSolver::new().check(pool, asserts);
     let __elapsed = __solve_start.elapsed().as_nanos() as u64;
+    LAST_SOLVE_TIMING.with(|timing| {
+        timing.set(SolveTiming {
+            total_nanos: total_started.elapsed().as_nanos() as u64,
+            z3_nanos: {
+                #[cfg(feature = "solver-z3")]
+                {
+                    Some(__elapsed)
+                }
+                #[cfg(not(feature = "solver-z3"))]
+                {
+                    None
+                }
+            },
+            axeyum_nanos: {
+                #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+                {
+                    Some(__elapsed)
+                }
+                #[cfg(not(all(not(feature = "solver-z3"), feature = "solver-axeyum")))]
+                {
+                    None
+                }
+            },
+        });
+    });
     TOTAL_SOLVE_COUNT.fetch_add(1, Ordering::Relaxed);
     TOTAL_SOLVE_NANOS.fetch_add(__elapsed, Ordering::Relaxed);
     if matches!(result, SolveResult::Unknown) {

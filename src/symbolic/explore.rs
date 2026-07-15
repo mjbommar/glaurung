@@ -22,7 +22,7 @@ use crate::ir::types::{
 };
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::ordered_trace::TracePath;
-use crate::symbolic::solver::{solve, Assert, Model, SolveResult};
+use crate::symbolic::solver::{last_solve_timing, solve, Assert, Model, SolveResult};
 use crate::symbolic::Symbolic;
 
 use std::cell::Cell;
@@ -391,16 +391,15 @@ impl State {
 
 /// Solve the current path condition and record the exact query occurrence.
 fn solve_traced(st: &mut State, purpose: &str, location: u64) -> SolveResult {
-    let started = Instant::now();
     let result = solve(&st.machine.dom.pool, &st.constraints);
-    let elapsed_nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    let timing = last_solve_timing();
     if let Some(trace) = &mut st.trace {
         trace.check(
             &st.machine.dom.pool,
             &st.constraints,
             &result,
             purpose,
-            elapsed_nanos,
+            timing,
             location,
         );
     }
@@ -421,16 +420,15 @@ fn solve_probe_traced(
     }
     let mut probe = st.constraints.clone();
     probe.push(assertion);
-    let started = Instant::now();
     let result = solve(&st.machine.dom.pool, &probe);
-    let elapsed_nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    let timing = last_solve_timing();
     if let Some(trace) = &mut st.trace {
         trace.check(
             &st.machine.dom.pool,
             &probe,
             &result,
             purpose,
-            elapsed_nanos,
+            timing,
             location,
         );
         trace.pop(location);
