@@ -10,9 +10,9 @@
 //! All backends consume the bit-vector [`ExprPool`](crate::symbolic::ExprPool):
 //! solving needs no Python and no external protocol when `solver-z3` is on.
 
-pub mod pipe;
 #[cfg(feature = "solver-axeyum")]
 pub mod axeyum_backend;
+pub mod pipe;
 #[cfg(feature = "solver-z3")]
 pub mod z3_backend;
 
@@ -268,11 +268,19 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                 rz = z3_backend::Z3Solver::new().check(pool, asserts);
                 SHADOW_Z3_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 let t = std::time::Instant::now();
-                ra = axeyum_backend::AxeyumSolver::new().check(pool, asserts);
+                ra = if axeyum_backend::warm_reuse_enabled() {
+                    axeyum_backend::check_warm_thread_local(pool, asserts)
+                } else {
+                    axeyum_backend::AxeyumSolver::new().check(pool, asserts)
+                };
                 SHADOW_AX_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
             } else {
                 let t = std::time::Instant::now();
-                ra = axeyum_backend::AxeyumSolver::new().check(pool, asserts);
+                ra = if axeyum_backend::warm_reuse_enabled() {
+                    axeyum_backend::check_warm_thread_local(pool, asserts)
+                } else {
+                    axeyum_backend::AxeyumSolver::new().check(pool, asserts)
+                };
                 SHADOW_AX_NANOS.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 let t = std::time::Instant::now();
                 rz = z3_backend::Z3Solver::new().check(pool, asserts);
@@ -303,7 +311,11 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             if matches!(ra, SolveResult::Unknown | SolveResult::Error(_))
                 && SHADOW_AX_UNK.load(Ordering::Relaxed) < 5
             {
-                eprintln!("[ax-nondecided #{}] {:?}", SHADOW_AX_UNK.load(Ordering::Relaxed), ra);
+                eprintln!(
+                    "[ax-nondecided #{}] {:?}",
+                    SHADOW_AX_UNK.load(Ordering::Relaxed),
+                    ra
+                );
             }
             let z3_unk = matches!(rz, SolveResult::Unknown | SolveResult::Error(_));
             let ax_unk = matches!(ra, SolveResult::Unknown | SolveResult::Error(_));
@@ -326,7 +338,11 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     #[cfg(feature = "solver-z3")]
     let result = z3_backend::Z3Solver::new().check(pool, asserts);
     #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
-    let result = axeyum_backend::AxeyumSolver::new().check(pool, asserts);
+    let result = if axeyum_backend::warm_reuse_enabled() {
+        axeyum_backend::check_warm_thread_local(pool, asserts)
+    } else {
+        axeyum_backend::AxeyumSolver::new().check(pool, asserts)
+    };
     #[cfg(all(not(feature = "solver-z3"), not(feature = "solver-axeyum")))]
     let result = pipe::PipeSolver::new().check(pool, asserts);
     let __elapsed = __solve_start.elapsed().as_nanos() as u64;

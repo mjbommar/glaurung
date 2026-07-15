@@ -14,6 +14,7 @@
 //!
 //! See `docs/axeyum-integration/` (esp. `02-interface-mapping.md`).
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -23,24 +24,33 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, CheckResult,
-    IncrementalBvSolver, IncrementalBvStats, SolverConfig, UnsatProofOutcome,
+    CheckResult, IncrementalBvSolver, IncrementalBvStats, SolverConfig, UnsatProofOutcome,
+    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{pipe, Assert, Model, SolveResult, Solver};
+use crate::symbolic::solver::{Assert, Model, SolveResult, Solver, pipe};
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
 /// and metering behave the same regardless of which backend is compiled in.
 const SOLVE_TIMEOUT: Duration = Duration::from_millis(250);
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
+pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
 
 static PROFILE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// One retained snapshot adapter per explorer thread. Glaurung currently
+    /// submits complete assertion snapshots rather than explicit path scopes;
+    /// the adapter reconstructs the common prefix and maps it to Axeyum scopes.
+    static WARM_SOLVER: RefCell<SnapshotIncrementalAxeyumSolver> =
+        RefCell::new(SnapshotIncrementalAxeyumSolver::new());
+}
 
 fn config() -> SolverConfig {
     SolverConfig::new().with_timeout(SOLVE_TIMEOUT)
@@ -286,6 +296,154 @@ impl Solver for AxeyumSolver {
         }
         map_check_result(solver.check(&arena), &translated.sym_map)
     }
+}
+
+/// Cumulative behavior of [`SnapshotIncrementalAxeyumSolver`].
+///
+/// Counts describe assertion roots, not expression-DAG nodes. They make the
+/// first Glaurung warm integration measurable before the explorer grows an
+/// explicit lineage/scope API.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SnapshotReuseStats {
+    /// Complete snapshots checked.
+    pub checks: u64,
+    /// Checks whose complete assertion vector matched the preceding snapshot.
+    pub exact_snapshot_reuses: u64,
+    /// Assertion roots retained across snapshot transitions.
+    pub prefix_assertions_reused: u64,
+    /// New assertion roots encoded after the common prefix.
+    pub assertions_added: u64,
+    /// Divergent assertion scopes deactivated after the common prefix.
+    pub assertions_popped: u64,
+    /// Sessions discarded after a push/assert/check operational error.
+    pub resets_after_error: u64,
+}
+
+/// Adapts Glaurung's complete assertion snapshots to Axeyum's warm scopes.
+///
+/// The retained [`TermArena`] structurally interns translated terms, so common
+/// roots receive the same [`TermId`] even when Glaurung cloned an [`ExprPool`]
+/// and sibling pools reused numeric [`ExprId`] values for different nodes. The
+/// longest common structural prefix stays active; divergent suffix scopes are
+/// popped and only the new suffix is asserted. Every SAT result still follows
+/// Axeyum's original-term model replay before it reaches this adapter.
+#[derive(Debug)]
+pub struct SnapshotIncrementalAxeyumSolver {
+    arena: TermArena,
+    solver: IncrementalBvSolver,
+    active: Vec<TermId>,
+    has_snapshot: bool,
+    preprocess: bool,
+    stats: SnapshotReuseStats,
+}
+
+impl Default for SnapshotIncrementalAxeyumSolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SnapshotIncrementalAxeyumSolver {
+    /// Creates an empty raw-policy snapshot adapter.
+    pub fn new() -> Self {
+        Self::with_preprocessing(false)
+    }
+
+    /// Creates an empty adapter and optionally canonicalizes each newly added
+    /// assertion. Existing prefix assertions are never reprocessed.
+    pub fn with_preprocessing(preprocess: bool) -> Self {
+        Self {
+            arena: TermArena::new(),
+            solver: IncrementalBvSolver::with_config(config().with_preprocess(preprocess)),
+            active: Vec::new(),
+            has_snapshot: false,
+            preprocess,
+            stats: SnapshotReuseStats::default(),
+        }
+    }
+
+    /// Returns cumulative snapshot-reuse counters.
+    pub fn stats(&self) -> SnapshotReuseStats {
+        self.stats
+    }
+
+    fn reset_session(&mut self) {
+        self.arena = TermArena::new();
+        self.solver = IncrementalBvSolver::with_config(config().with_preprocess(self.preprocess));
+        self.active.clear();
+        self.has_snapshot = false;
+        self.stats.resets_after_error = self.stats.resets_after_error.saturating_add(1);
+    }
+
+    /// Checks one complete Glaurung assertion snapshot using retained Axeyum
+    /// translation, AIG, CNF, and SAT state.
+    pub fn check_snapshot(&mut self, pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
+        let translated = match translate_query(pool, asserts, &mut self.arena) {
+            Ok(translated) => translated,
+            Err(err) => return SolveResult::Error(format!("axeyum translate: {err}")),
+        };
+        let common = self
+            .active
+            .iter()
+            .zip(&translated.assertions)
+            .take_while(|(active, next)| active == next)
+            .count();
+
+        self.stats.checks = self.stats.checks.saturating_add(1);
+        self.stats.prefix_assertions_reused = self
+            .stats
+            .prefix_assertions_reused
+            .saturating_add(count(common));
+        if self.has_snapshot && common == self.active.len() && common == translated.assertions.len()
+        {
+            self.stats.exact_snapshot_reuses = self.stats.exact_snapshot_reuses.saturating_add(1);
+        }
+
+        let pop_count = self.active.len().saturating_sub(common);
+        for _ in 0..pop_count {
+            if !self.solver.pop() {
+                self.reset_session();
+                return SolveResult::Error(
+                    "axeyum warm snapshot scope underflow; session reset".to_string(),
+                );
+            }
+        }
+        self.active.truncate(common);
+        self.stats.assertions_popped = self
+            .stats
+            .assertions_popped
+            .saturating_add(count(pop_count));
+
+        for &term in &translated.assertions[common..] {
+            if let Err(err) = self.solver.push() {
+                self.reset_session();
+                return SolveResult::Error(format!("axeyum warm push: {err}"));
+            }
+            if let Err(err) = self.solver.assert_configured(&mut self.arena, term) {
+                self.reset_session();
+                return SolveResult::Error(format!("axeyum warm assert: {err}"));
+            }
+            self.active.push(term);
+            self.stats.assertions_added = self.stats.assertions_added.saturating_add(1);
+        }
+        self.has_snapshot = true;
+
+        let checked = self.solver.check(&self.arena);
+        if checked.is_err() {
+            self.reset_session();
+        }
+        map_check_result(checked, &translated.sym_map)
+    }
+}
+
+/// Whether the opt-in snapshot-to-incremental adapter is selected.
+pub(crate) fn warm_reuse_enabled() -> bool {
+    std::env::var_os(WARM_REUSE_ENV).is_some()
+}
+
+/// Checks through the retained per-thread snapshot adapter.
+pub(crate) fn check_warm_thread_local(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
+    WARM_SOLVER.with(|solver| solver.borrow_mut().check_snapshot(pool, asserts))
 }
 
 fn translate_query(
@@ -783,6 +941,83 @@ mod tests {
                 .saturating_sub(profiled.profile.attributed_nanos())
         );
         assert!(serde_json::to_value(&profiled.profile).is_ok());
+    }
+
+    #[test]
+    fn snapshot_incremental_reuses_exact_and_prefix_then_switches_sibling() {
+        for preprocess in [false, true] {
+            let mut root = ExprPool::new();
+            let x = root.fresh_symbol(Width::W32);
+            let six = c(&mut root, 6, Width::W32);
+            let below_six = cmp(&mut root, CmpOp::Ult, x, six, Width::W32);
+
+            // Cloning at the fork deliberately gives both siblings the same
+            // numeric ExprIds for different new nodes. Warm reuse must compare
+            // translated structure, never raw ExprId identity across pools.
+            let mut left = root.clone();
+            let five = c(&mut left, 5, Width::W32);
+            let x_is_five = cmp(&mut left, CmpOp::Eq, x, five, Width::W32);
+            let mut right = root.clone();
+            let seven = c(&mut right, 7, Width::W32);
+            let x_is_seven = cmp(&mut right, CmpOp::Eq, x, seven, Width::W32);
+            assert_eq!(five, seven);
+            assert_eq!(x_is_five, x_is_seven);
+
+            let mut solver = SnapshotIncrementalAxeyumSolver::with_preprocessing(preprocess);
+            let left_snapshot = [(below_six, true), (x_is_five, true)];
+            match solver.check_snapshot(&left, &left_snapshot) {
+                SolveResult::Sat(model) => {
+                    assert_eq!(model.values.get(&0).copied(), Some(5));
+                }
+                other => panic!("expected left sibling sat, got {other:?}"),
+            }
+            assert!(matches!(
+                solver.check_snapshot(&left, &left_snapshot),
+                SolveResult::Sat(_)
+            ));
+
+            let right_snapshot = [(below_six, true), (x_is_seven, true)];
+            assert!(matches!(
+                solver.check_snapshot(&right, &right_snapshot),
+                SolveResult::Unsat
+            ));
+
+            assert_eq!(
+                solver.stats(),
+                SnapshotReuseStats {
+                    checks: 3,
+                    exact_snapshot_reuses: 1,
+                    prefix_assertions_reused: 3,
+                    assertions_added: 3,
+                    assertions_popped: 1,
+                    resets_after_error: 0,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_incremental_handles_empty_and_shrinking_snapshots() {
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W8);
+        let one = c(&mut pool, 1, Width::W8);
+        let x_is_one = cmp(&mut pool, CmpOp::Eq, x, one, Width::W8);
+        let mut solver = SnapshotIncrementalAxeyumSolver::new();
+
+        assert!(matches!(
+            solver.check_snapshot(&pool, &[(x_is_one, true)]),
+            SolveResult::Sat(_)
+        ));
+        assert!(matches!(
+            solver.check_snapshot(&pool, &[]),
+            SolveResult::Sat(_)
+        ));
+        assert!(matches!(
+            solver.check_snapshot(&pool, &[]),
+            SolveResult::Sat(_)
+        ));
+        assert_eq!(solver.stats().assertions_popped, 1);
+        assert_eq!(solver.stats().exact_snapshot_reuses, 1);
     }
 
     #[test]
