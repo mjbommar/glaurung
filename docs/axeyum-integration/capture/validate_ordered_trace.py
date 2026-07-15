@@ -200,6 +200,20 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             assertion_bytes = (root / assertion_path).read_bytes()
             if sha256(assertion_bytes) != constraint or not assertion_bytes.startswith(b"(assert "):
                 fail(f"assertion bytes do not match constraint ID on {path_id}")
+            assertion_symbols = event.get("assertion_symbols")
+            if not isinstance(assertion_symbols, list):
+                fail(f"missing assertion symbol declarations on {path_id}")
+            prior_symbol_id = None
+            for symbol in assertion_symbols:
+                name = symbol.get("name") if isinstance(symbol, dict) else None
+                width = symbol.get("width") if isinstance(symbol, dict) else None
+                match = re.fullmatch(r"sym([0-9]+)_([0-9]+)", name) if isinstance(name, str) else None
+                if match is None or not isinstance(width, int) or width <= 0 or int(match.group(2)) != width:
+                    fail(f"invalid assertion symbol declaration on {path_id}: {symbol!r}")
+                symbol_id = int(match.group(1))
+                if prior_symbol_id is not None and symbol_id <= prior_symbol_id:
+                    fail(f"assertion symbols are not uniquely ordered on {path_id}")
+                prior_symbol_id = symbol_id
             assertion_ids.add(constraint)
             state.scopes[-1] = (state.scopes[-1][0], constraint)
             complete = [(scope, value) for scope, value in state.scopes if value is not None]

@@ -383,6 +383,17 @@ impl Recorder {
         self.next_scope += 1;
         let assertion_bytes = assertion_line(pool, assertion);
         let constraint_id = sha256(assertion_bytes.as_bytes());
+        let mut symbols = BTreeMap::new();
+        pool.collect_syms(assertion.0, &mut symbols);
+        let assertion_symbols = symbols
+            .into_iter()
+            .map(|(id, symbol_width)| {
+                json!({
+                    "name": ExprPool::sym_name(id, symbol_width),
+                    "width": symbol_width.bits(),
+                })
+            })
+            .collect::<Vec<_>>();
         if self.assertion_ids.insert(constraint_id.clone()) {
             let assertion_path = self
                 .temp_dir
@@ -427,6 +438,7 @@ impl Recorder {
                 "constraint_id": constraint_id,
                 "assertion_sha256": sha256(assertion_bytes.as_bytes()),
                 "assertion_path": format!("assertions/{constraint_id}.smt2"),
+                "assertion_symbols": assertion_symbols,
                 "sort_validated": sort_valid,
                 "semantic_role": role,
                 "scope_digest": scope_digest(&path.scopes),
