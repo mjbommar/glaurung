@@ -15,21 +15,32 @@
 //! See `docs/axeyum-integration/` (esp. `02-interface-mapping.md`).
 
 use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    CheckResult, IncrementalBvSolver, SolverConfig, UnsatProofOutcome, export_qf_bv_unsat_proof,
-    solve_smtlib, solve_smtlib_get_value,
+    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, CheckResult,
+    IncrementalBvSolver, IncrementalBvStats, SolverConfig, UnsatProofOutcome,
 };
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{Assert, Model, SolveResult, Solver, pipe};
+use crate::symbolic::solver::{pipe, Assert, Model, SolveResult, Solver};
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
 /// and metering behave the same regardless of which backend is compiled in.
 const SOLVE_TIMEOUT: Duration = Duration::from_millis(250);
+const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
+
+static PROFILE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn config() -> SolverConfig {
     SolverConfig::new().with_timeout(SOLVE_TIMEOUT)
@@ -43,37 +54,225 @@ fn config() -> SolverConfig {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AxeyumSolver;
 
+/// Query-hash-keyed attribution for one diagnostic native Axeyum check.
+///
+/// All durations are integer nanoseconds so JSON artifacts preserve exact
+/// values without relying on a platform-specific `Duration` representation.
+/// The query hash is computed from the same SMT-LIB bytes as the corpus-capture
+/// hook, but rendering/hashing happens before `total_nanos` starts so the
+/// diagnostic key does not masquerade as solver work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AxeyumCheckProfile {
+    /// Versioned JSON record schema.
+    pub schema: &'static str,
+    /// Operating-system process that produced the record.
+    pub process_id: u32,
+    /// Monotone process-local output order, assigned by the JSONL writer.
+    pub sequence: Option<u64>,
+    /// SHA-256 of the exact SMT-LIB bytes used by the capture hook.
+    pub query_hash: String,
+    /// Word-level assertion policy used by this check.
+    pub word_policy: &'static str,
+    /// Configured per-solve timeout in milliseconds.
+    pub timeout_ms: u64,
+    /// Stable result class: `sat`, `unsat`, `unknown`, or `error`.
+    pub outcome: &'static str,
+    /// Whether translation and solving completed without an operational error.
+    pub complete: bool,
+    /// Number of Glaurung assertions in the query.
+    pub assertion_count: u64,
+    /// Number of distinct Glaurung expressions translated through the memo.
+    pub translated_exprs: u64,
+    /// Number of interned Axeyum terms after translation.
+    pub arena_terms: u64,
+    /// Number of translated Glaurung symbols.
+    pub symbols: u64,
+    /// Number of values exposed in the client model.
+    pub model_values: u64,
+    /// Number of assertion roots added to the retained CNF.
+    pub root_encodings: u64,
+    /// Number of incremental solver checks attempted.
+    pub checks: u64,
+    /// Retained AIG node count at the end of the check.
+    pub aig_nodes: u64,
+    /// Retained CNF variable count at the end of the check.
+    pub cnf_variables: u64,
+    /// Retained CNF clause count at the end of the check.
+    pub cnf_clauses: u64,
+    /// Nanoseconds spent constructing the Axeyum arena.
+    pub arena_create_nanos: u64,
+    /// Nanoseconds spent translating Glaurung expressions and assertions.
+    pub translation_nanos: u64,
+    /// Nanoseconds spent constructing the incremental solver.
+    pub solver_create_nanos: u64,
+    /// Nanoseconds spent in configured word-level rewriting.
+    pub word_rewrite_nanos: u64,
+    /// Nanoseconds spent lowering terms into the retained AIG.
+    pub bit_blast_nanos: u64,
+    /// Nanoseconds spent extending the retained CNF.
+    pub cnf_encode_nanos: u64,
+    /// Nanoseconds spent in the SAT adapter.
+    pub solve_nanos: u64,
+    /// Nanoseconds spent reconstructing the Axeyum model.
+    pub model_lift_nanos: u64,
+    /// Nanoseconds spent replaying SAT candidates against original terms.
+    pub replay_nanos: u64,
+    /// Nanoseconds spent converting the Axeyum model into Glaurung's model.
+    pub model_extract_nanos: u64,
+    /// Total native-adapter nanoseconds, excluding query rendering and output.
+    pub total_nanos: u64,
+}
+
+impl AxeyumCheckProfile {
+    /// Sum of non-overlapping attributed phase durations.
+    pub fn attributed_nanos(&self) -> u64 {
+        self.arena_create_nanos
+            .saturating_add(self.translation_nanos)
+            .saturating_add(self.solver_create_nanos)
+            .saturating_add(self.word_rewrite_nanos)
+            .saturating_add(self.bit_blast_nanos)
+            .saturating_add(self.cnf_encode_nanos)
+            .saturating_add(self.solve_nanos)
+            .saturating_add(self.model_lift_nanos)
+            .saturating_add(self.replay_nanos)
+            .saturating_add(self.model_extract_nanos)
+    }
+
+    /// Time inside the native adapter not covered by a named phase.
+    pub fn unattributed_nanos(&self) -> u64 {
+        self.total_nanos.saturating_sub(self.attributed_nanos())
+    }
+}
+
+/// Result plus diagnostic attribution from [`AxeyumSolver::check_profiled`].
+#[derive(Debug)]
+pub struct ProfiledSolveResult {
+    /// Normal Glaurung solve result.
+    pub result: SolveResult,
+    /// Diagnostic attribution for the same solve.
+    pub profile: AxeyumCheckProfile,
+}
+
+struct TranslatedQuery {
+    assertions: Vec<TermId>,
+    sym_map: Vec<(u32, SymbolId)>,
+    exprs: usize,
+}
+
 impl AxeyumSolver {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Run the unchanged raw one-shot policy with explicit client attribution.
+    ///
+    /// This is diagnostic and opt-in. Ordinary [`Solver::check`] does not
+    /// render/hash the query or enable Axeyum's phase clocks.
+    pub fn check_profiled(&self, pool: &ExprPool, asserts: &[Assert]) -> ProfiledSolveResult {
+        let (script, _) = pipe::build_script(pool, asserts);
+        let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
+        let total_started = Instant::now();
+        let arena_started = Instant::now();
+        let mut arena = TermArena::new();
+        let arena_create_nanos = nanos(arena_started.elapsed());
+        let assertion_count = count(asserts.len());
+
+        let translation_started = Instant::now();
+        let translated = translate_query(pool, asserts, &mut arena);
+        let translation_nanos = nanos(translation_started.elapsed());
+        let mut profile = AxeyumCheckProfile {
+            schema: "glaurung-axeyum-native-profile-v1",
+            process_id: std::process::id(),
+            sequence: None,
+            query_hash,
+            word_policy: "raw",
+            timeout_ms: u64::try_from(SOLVE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+            outcome: "error",
+            complete: false,
+            assertion_count,
+            translated_exprs: 0,
+            arena_terms: count(arena.len()),
+            symbols: 0,
+            model_values: 0,
+            root_encodings: 0,
+            checks: 0,
+            aig_nodes: 0,
+            cnf_variables: 0,
+            cnf_clauses: 0,
+            arena_create_nanos,
+            translation_nanos,
+            solver_create_nanos: 0,
+            word_rewrite_nanos: 0,
+            bit_blast_nanos: 0,
+            cnf_encode_nanos: 0,
+            solve_nanos: 0,
+            model_lift_nanos: 0,
+            replay_nanos: 0,
+            model_extract_nanos: 0,
+            total_nanos: 0,
+        };
+        let translated = match translated {
+            Ok(translated) => translated,
+            Err(err) => {
+                profile.arena_terms = count(arena.len());
+                profile.total_nanos = nanos(total_started.elapsed());
+                return ProfiledSolveResult {
+                    result: SolveResult::Error(format!("axeyum translate: {err}")),
+                    profile,
+                };
+            }
+        };
+        profile.translated_exprs = count(translated.exprs);
+        profile.arena_terms = count(arena.len());
+        profile.symbols = count(translated.sym_map.len());
+
+        let solver_started = Instant::now();
+        let mut solver = IncrementalBvSolver::with_config_and_profiling(config());
+        profile.solver_create_nanos = nanos(solver_started.elapsed());
+        for &term in &translated.assertions {
+            if let Err(err) = solver.assert(&arena, term) {
+                apply_solver_stats(&mut profile, solver.stats());
+                profile.total_nanos = nanos(total_started.elapsed());
+                return ProfiledSolveResult {
+                    result: SolveResult::Error(format!("axeyum assert: {err}")),
+                    profile,
+                };
+            }
+        }
+        let checked = solver.check(&arena);
+        apply_solver_stats(&mut profile, solver.stats());
+
+        let model_started = Instant::now();
+        let result = map_check_result(checked, &translated.sym_map);
+        profile.model_extract_nanos = nanos(model_started.elapsed());
+        if let SolveResult::Sat(model) = &result {
+            profile.model_values = count(model.values.len());
+        }
+        profile.outcome = result_name(&result);
+        profile.complete = !matches!(&result, SolveResult::Error(_));
+        profile.total_nanos = nanos(total_started.elapsed());
+        ProfiledSolveResult { result, profile }
     }
 }
 
 impl Solver for AxeyumSolver {
     fn check(&mut self, pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
-        let mut arena = TermArena::new();
-        let assert_terms: Vec<TermId>;
-        let sym_map: Vec<(u32, SymbolId)>;
-        {
-            let mut tr = Translator {
-                pool,
-                arena: &mut arena,
-                memo: HashMap::new(),
-                sym_map: Vec::new(),
-            };
-            let mut terms = Vec::with_capacity(asserts.len());
-            for (e, expected) in asserts {
-                match tr.translate_assert(*e, *expected) {
-                    Ok(t) => terms.push(t),
-                    Err(err) => return SolveResult::Error(format!("axeyum translate: {err}")),
-                }
+        if let Some(output_dir) = profile_output_dir() {
+            let profiled = self.check_profiled(pool, asserts);
+            if let Err(error) = write_profile_record(output_dir, &profiled.profile) {
+                return SolveResult::Error(error);
             }
-            assert_terms = terms;
-            sym_map = tr.sym_map;
-        } // Translator dropped: releases the &mut arena borrow.
+            return profiled.result;
+        }
+
+        let mut arena = TermArena::new();
+        let translated = match translate_query(pool, asserts, &mut arena) {
+            Ok(translated) => translated,
+            Err(err) => return SolveResult::Error(format!("axeyum translate: {err}")),
+        };
 
         let mut solver = IncrementalBvSolver::with_config(config());
-        for t in &assert_terms {
+        for t in &translated.assertions {
             // Raw `assert` (no preprocessing) is fastest for this ONE-SHOT
             // trait: axeyum's word-level preprocessing (`assert_configured`,
             // added 2026-07-13) pays a per-query canonicalization cost that
@@ -85,23 +284,113 @@ impl Solver for AxeyumSolver {
                 return SolveResult::Error(format!("axeyum assert: {err}"));
             }
         }
-        match solver.check(&arena) {
-            Ok(CheckResult::Sat(model)) => {
-                let mut values = BTreeMap::new();
-                for (gid, sid) in &sym_map {
-                    if let Some(Value::Bv { value, .. }) = model.get(*sid) {
-                        values.insert(*gid, value);
-                    }
-                    // WideBv (>128-bit) does not fit glaurung's u128 slot;
-                    // skipped (does not occur for <=128-bit symbols).
-                }
-                SolveResult::Sat(Model { values })
-            }
-            Ok(CheckResult::Unsat) => SolveResult::Unsat,
-            Ok(CheckResult::Unknown(_)) => SolveResult::Unknown,
-            Err(err) => SolveResult::Error(format!("axeyum check: {err}")),
-        }
+        map_check_result(solver.check(&arena), &translated.sym_map)
     }
+}
+
+fn translate_query(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    arena: &mut TermArena,
+) -> Result<TranslatedQuery, IrError> {
+    let mut translator = Translator {
+        pool,
+        arena,
+        memo: HashMap::new(),
+        sym_map: Vec::new(),
+    };
+    let mut assertions = Vec::with_capacity(asserts.len());
+    for &(expr, expected) in asserts {
+        assertions.push(translator.translate_assert(expr, expected)?);
+    }
+    Ok(TranslatedQuery {
+        assertions,
+        exprs: translator.memo.len(),
+        sym_map: translator.sym_map,
+    })
+}
+
+fn map_check_result(
+    checked: Result<CheckResult, axeyum_solver::SolverError>,
+    sym_map: &[(u32, SymbolId)],
+) -> SolveResult {
+    match checked {
+        Ok(CheckResult::Sat(model)) => {
+            let mut values = BTreeMap::new();
+            for &(glaurung_id, axeyum_id) in sym_map {
+                if let Some(Value::Bv { value, .. }) = model.get(axeyum_id) {
+                    values.insert(glaurung_id, value);
+                }
+                // WideBv (>128-bit) does not fit glaurung's u128 slot; skipped
+                // (it does not occur for <=128-bit symbols).
+            }
+            SolveResult::Sat(Model { values })
+        }
+        Ok(CheckResult::Unsat) => SolveResult::Unsat,
+        Ok(CheckResult::Unknown(_)) => SolveResult::Unknown,
+        Err(err) => SolveResult::Error(format!("axeyum check: {err}")),
+    }
+}
+
+fn apply_solver_stats(profile: &mut AxeyumCheckProfile, stats: IncrementalBvStats) {
+    profile.word_rewrite_nanos = nanos(stats.word_rewrite);
+    profile.bit_blast_nanos = nanos(stats.bit_blast);
+    profile.cnf_encode_nanos = nanos(stats.cnf_encode);
+    profile.solve_nanos = nanos(stats.solve);
+    profile.model_lift_nanos = nanos(stats.model_lift);
+    profile.replay_nanos = nanos(stats.replay);
+    profile.root_encodings = stats.root_encodings;
+    profile.checks = stats.checks;
+    profile.aig_nodes = stats.aig_nodes;
+    profile.cnf_variables = stats.cnf_variables;
+    profile.cnf_clauses = stats.cnf_clauses;
+}
+
+fn profile_output_dir() -> Option<&'static Path> {
+    PROFILE_DIR
+        .get_or_init(|| std::env::var_os(PROFILE_DIR_ENV).map(PathBuf::from))
+        .as_deref()
+}
+
+fn write_profile_record(output_dir: &Path, profile: &AxeyumCheckProfile) -> Result<(), String> {
+    std::fs::create_dir_all(output_dir).map_err(|error| {
+        format!(
+            "create {PROFILE_DIR_ENV} directory {}: {error}",
+            output_dir.display()
+        )
+    })?;
+    let _guard = PROFILE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "axeyum profile writer lock poisoned".to_string())?;
+    let path = output_dir.join(format!("axeyum-profile-{}.jsonl", std::process::id()));
+    let mut output = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("open axeyum profile {}: {error}", path.display()))?;
+    let mut record = profile.clone();
+    record.sequence = Some(PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed));
+    serde_json::to_writer(&mut output, &record)
+        .map_err(|error| format!("serialize axeyum profile: {error}"))?;
+    writeln!(output).map_err(|error| format!("write axeyum profile {}: {error}", path.display()))
+}
+
+fn result_name(result: &SolveResult) -> &'static str {
+    match result {
+        SolveResult::Sat(_) => "sat",
+        SolveResult::Unsat => "unsat",
+        SolveResult::Unknown => "unknown",
+        SolveResult::NoSolver => "no-solver",
+        SolveResult::Error(_) => "error",
+    }
+}
+
+fn nanos(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+fn count(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 /// Outcome of a proof-carrying unsat check ([`AxeyumSolver::prove_unsat`]).
@@ -294,7 +583,8 @@ impl<'a> Translator<'a> {
                 // uses `hi - 1` as the inclusive top index -- mirror it. Also
                 // ensure the source is >= hi bits wide before extracting.
                 let ta = self.translate_coerced(a, hi as u32)?;
-                self.arena.extract((hi as u32).saturating_sub(1), lo as u32, ta)?
+                self.arena
+                    .extract((hi as u32).saturating_sub(1), lo as u32, ta)?
             }
             Expr::Concat { hi, lo, .. } => {
                 let th = self.translate(hi)?;
@@ -446,6 +736,79 @@ mod tests {
             SolveResult::Sat(m) => assert_eq!(m.values.get(&0).copied(), Some(0xff)),
             other => panic!("expected sat x=0xff, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn profiled_native_check_is_capture_keyed_and_phase_complete() {
+        use sha2::{Digest, Sha256};
+
+        let mut p = ExprPool::new();
+        let x = p.fresh_symbol(Width::W32);
+        let one = c(&mut p, 1, Width::W32);
+        let sum = bin(&mut p, BinOp::Add, x, one, Width::W32);
+        let k = c(&mut p, 0x100, Width::W32);
+        let eq = cmp(&mut p, CmpOp::Eq, sum, k, Width::W32);
+        let asserts = [(eq, true)];
+
+        let (script, _) = pipe::build_script(&p, &asserts);
+        let expected_hash = format!("sha256:{:x}", Sha256::digest(script.as_bytes()));
+        let profiled = AxeyumSolver::new().check_profiled(&p, &asserts);
+
+        assert!(
+            matches!(&profiled.result, SolveResult::Sat(model) if model.values.get(&0) == Some(&0xff))
+        );
+        assert_eq!(profiled.profile.schema, "glaurung-axeyum-native-profile-v1");
+        assert_eq!(profiled.profile.process_id, std::process::id());
+        assert_eq!(profiled.profile.sequence, None);
+        assert_eq!(profiled.profile.query_hash, expected_hash);
+        assert_eq!(profiled.profile.word_policy, "raw");
+        assert_eq!(profiled.profile.timeout_ms, 250);
+        assert_eq!(profiled.profile.outcome, "sat");
+        assert_eq!(profiled.profile.assertion_count, 1);
+        assert!(profiled.profile.translated_exprs > 0);
+        assert!(profiled.profile.arena_terms >= profiled.profile.translated_exprs);
+        assert_eq!(profiled.profile.symbols, 1);
+        assert_eq!(profiled.profile.root_encodings, 1);
+        assert_eq!(profiled.profile.checks, 1);
+        assert!(profiled.profile.aig_nodes > 0);
+        assert!(profiled.profile.cnf_variables > 0);
+        assert!(profiled.profile.cnf_clauses > 0);
+        assert_eq!(profiled.profile.model_values, 1);
+        assert!(profiled.profile.attributed_nanos() <= profiled.profile.total_nanos);
+        assert_eq!(
+            profiled.profile.unattributed_nanos(),
+            profiled
+                .profile
+                .total_nanos
+                .saturating_sub(profiled.profile.attributed_nanos())
+        );
+        assert!(serde_json::to_value(&profiled.profile).is_ok());
+    }
+
+    #[test]
+    fn profile_writer_uses_process_isolated_jsonl() {
+        let mut p = ExprPool::new();
+        let x = p.fresh_symbol(Width::W8);
+        let seven = c(&mut p, 7, Width::W8);
+        let eq = cmp(&mut p, CmpOp::Eq, x, seven, Width::W8);
+        let profiled = AxeyumSolver::new().check_profiled(&p, &[(eq, true)]);
+        let output = tempfile::tempdir().unwrap();
+
+        write_profile_record(output.path(), &profiled.profile).unwrap();
+        let path = output
+            .path()
+            .join(format!("axeyum-profile-{}.jsonl", std::process::id()));
+        let contents = std::fs::read_to_string(path).unwrap();
+        let records = contents.lines().collect::<Vec<_>>();
+
+        assert_eq!(records.len(), 1);
+        let record: serde_json::Value = serde_json::from_str(records[0]).unwrap();
+        assert_eq!(record["query_hash"], profiled.profile.query_hash);
+        assert_eq!(record["word_policy"], "raw");
+        assert_eq!(record["outcome"], "sat");
+        assert_eq!(record["complete"], true);
+        assert_eq!(record["process_id"], std::process::id());
+        assert!(record["sequence"].as_u64().is_some());
     }
 
     #[test]
