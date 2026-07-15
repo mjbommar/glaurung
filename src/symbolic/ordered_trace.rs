@@ -542,6 +542,17 @@ impl Recorder {
         let rendered = pool.render_smtlib(expression);
         let width = pool.width_of(expression).bits();
         let expression_id = sha256(format!("{width}\0{rendered}").as_bytes());
+        let mut symbols = BTreeMap::new();
+        pool.collect_syms(expression, &mut symbols);
+        let expression_symbols: Vec<Value> = symbols
+            .into_iter()
+            .map(|(id, symbol_width)| {
+                json!({
+                    "name": ExprPool::sym_name(id, symbol_width),
+                    "width": symbol_width.bits(),
+                })
+            })
+            .collect();
         let read_id = format!("model-read-{}", self.next_model_read);
         self.next_model_read += 1;
         self.emit(
@@ -552,6 +563,8 @@ impl Recorder {
                 "model_read_id": read_id,
                 "check_id": check_id,
                 "expression_id": expression_id,
+                "expression_smtlib": rendered,
+                "expression_symbols": expression_symbols,
                 "sort": format!("(_ BitVec {width})"),
                 "width": width,
                 "returned_value": format!("0x{value:x}"),

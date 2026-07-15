@@ -235,6 +235,28 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             width = event.get("width")
             if not isinstance(width, int) or width <= 0 or event.get("sort") != f"(_ BitVec {width})":
                 fail(f"bad model-read sort for {read_id}")
+            expression = event.get("expression_smtlib")
+            if not isinstance(expression, str) or not expression:
+                fail(f"missing model-read expression for {read_id}")
+            if sha256(f"{width}\0{expression}".encode()) != event.get("expression_id"):
+                fail(f"model-read expression hash mismatch for {read_id}")
+            symbols = event.get("expression_symbols")
+            if not isinstance(symbols, list):
+                fail(f"missing expression symbol declarations for {read_id}")
+            prior_id = None
+            for symbol in symbols:
+                if not isinstance(symbol, dict):
+                    fail(f"invalid expression symbol declaration for {read_id}")
+                name, symbol_width = symbol.get("name"), symbol.get("width")
+                match = re.fullmatch(r"sym([0-9]+)_([0-9]+)", name) if isinstance(name, str) else None
+                if match is None:
+                    fail(f"invalid expression symbol name for {read_id}: {name!r}")
+                if not isinstance(symbol_width, int) or symbol_width <= 0 or not name.endswith(f"_{symbol_width}"):
+                    fail(f"invalid expression symbol width for {read_id}: {symbol!r}")
+                symbol_id = int(match.group(1))
+                if prior_id is not None and symbol_id <= prior_id:
+                    fail(f"expression symbols are not uniquely ordered for {read_id}")
+                prior_id = symbol_id
             model_reads[read_id] = check_id
             state.last_model_read = read_id
         elif kind == "model_choice":

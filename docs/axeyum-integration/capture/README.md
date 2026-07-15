@@ -189,7 +189,10 @@ Explorer roots and symbolic forks carry explicit parent lineage; every
 persistent branch/concretization and temporary probe has matching
 push/assert/check/pop history; SAT/UNSAT/unknown/error occurrences are retained;
 and concretized/evaluated expressions that steer execution emit a model read
-and named choice policy. Full query bytes come from the same
+and named choice policy. Each model read carries the exact rendered expression,
+its width, content hash, and ordered free-symbol declarations so an independent
+consumer can append `expression = chosen-value` to the exact query and check
+that the recorded choice remains SAT. Full query bytes come from the same
 `solver::pipe::build_script` renderer as the cold corpus.
 
 The validator fails on manifest/file hash drift, sequence gaps, missing path
