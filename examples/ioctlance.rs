@@ -163,6 +163,8 @@ fn reach_hops() -> usize {
 fn main() {
     let path = std::env::args().nth(1).expect("usage: ioctlance <driver.sys>");
     let data = std::fs::read(&path).expect("read file");
+    let ordered_trace = glaurung::symbolic::ordered_trace::begin_from_env(&path, &data)
+        .unwrap_or_else(|error| panic!("ordered trace initialization failed: {error}"));
 
     // 1) Native dispatch discovery: the precise IOCTL entry set.
     let surface = map_ioctl_surface(&data, 2, false);
@@ -440,5 +442,11 @@ fn main() {
     lines.sort();
     for l in &lines {
         println!("{}", l.splitn(2, '\t').nth(1).unwrap_or(l));
+    }
+    if let Some(trace) = ordered_trace {
+        let published = trace
+            .finish("completed")
+            .unwrap_or_else(|error| panic!("ordered trace publication failed: {error}"));
+        eprintln!("[ordered-trace] published={}", published.display());
     }
 }

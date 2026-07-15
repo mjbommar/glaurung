@@ -157,3 +157,63 @@ capture must still emit the versioned worker/path/scope/model events in
 Axeyum's `glaurung-ordered-trace-v1.md`; use it to compare explicit per-lineage
 state against this snapshot inference and to publish p50/p95, memory, and
 break-even depth before default enablement or verdict caching.
+
+## Ordered lineage/scope/model trace v1
+
+`GLAURUNG_ORDERED_TRACE_DIR` enables the separate GQ7 functionality artifact.
+It must point at a parent directory, not at a shared output file. Each
+`ioctlance` process writes a unique hidden temporary directory and publishes a
+`glaurung-ordered-trace-<pid>-<uuid>/` child with one atomic rename only after
+all paths are terminal and all repeated decided-query outcomes agree.
+
+```sh
+trace_root=$(mktemp -d /tmp/glaurung-ordered-trace.XXXXXX)
+GLAURUNG_ORDERED_TRACE_DIR="$trace_root" \
+GLAURUNG_TRACE_ORACLE_VERSION="$(z3 --version 2>/dev/null || printf unavailable)" \
+GLAURUNG_SHADOW_DIFF=1 \
+IOCTLANCE_DEADLINE_SECS=30 \
+IOCTLANCE_SOLVE_BUDGET=20000 \
+IOCTLANCE_SOLVE_SECS=60 \
+target/release/examples/ioctlance \
+  samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys
+
+trace=$(find "$trace_root" -mindepth 1 -maxdepth 1 -type d \
+  -name 'glaurung-ordered-trace-*' -print -quit)
+python3 docs/axeyum-integration/capture/validate_ordered_trace.py "$trace"
+```
+
+The published directory contains `trace-manifest-v1.json`, the non-deduplicated
+`events-v1.ndjson`, content-addressed exact scripts under `queries/`, and
+`query-index-v1.json`. Every event has contiguous process/worker/path order.
+Explorer roots and symbolic forks carry explicit parent lineage; every
+persistent branch/concretization and temporary probe has matching
+push/assert/check/pop history; SAT/UNSAT/unknown/error occurrences are retained;
+and concretized/evaluated expressions that steer execution emit a model read
+and named choice policy. Full query bytes come from the same
+`solver::pipe::build_script` renderer as the cold corpus.
+
+The validator fails on manifest/file hash drift, sequence gaps, missing path
+terminals, broken lineage, scope underflow/digest mismatch, assertion/query
+reconstruction mismatch, conflicting decided duplicates, query-index drift, or
+a model read/choice that does not refer to a SAT check on the same path. This is
+the producer-side T1 structural gate. Axeyum's independent strict QF_BV parse,
+sort, replay, and model-choice satisfiability check remains the T2 consumer gate;
+do not use a structurally valid producer trace alone to enable warm reuse by
+default.
+
+The first bounded real-driver sample on 2026-07-15 used the dual-backend shadow
+path and a five-second new-function deadline. It published 8,153 events over
+526 paths: 1,953 ordered checks (1,372 SAT, 581 UNSAT), 1,180 unique exact
+queries, 1,404 push/assert pairs, 508 pops, 915 exploration-driving model
+reads/choices, and 83 explicit UNSAT prunes. All 1,953 Z3/Axeyum verdicts agreed
+with zero unknown splits, and the standalone validator accepted the artifact.
+The unique-query count versus check count confirms exact repeats survive.
+
+An earlier attempt was correctly retained as unpublished `.failed` evidence.
+It exposed a Glaurung explorer bug: the feasibility shortcut treated a
+symbol-free but syntactically nonconstant branch DAG as an independent symbolic
+predicate, preserving a semantically UNSAT child until a later model read. The
+shortcut now requires at least one free symbol before it may skip a check, with
+a focused regression test. The corrected capture published without any
+non-SAT model fallback. This behavior change is a correctness repair, not a
+trace-only workaround.

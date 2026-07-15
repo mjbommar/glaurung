@@ -21,6 +21,7 @@ use crate::ir::types::{
     BinOp, CallTarget, CmpOp, Endian, LlirBlock, LlirFunction, Op, VReg, Value, Width,
 };
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
+use crate::symbolic::ordered_trace::TracePath;
 use crate::symbolic::solver::{solve, Assert, Model, SolveResult};
 use crate::symbolic::Symbolic;
 
@@ -326,6 +327,8 @@ struct State {
     /// the resulting giant expression non-interruptible); capping revisits per
     /// path bounds expression growth at the source — IOCTLance's `LoopSeer`.
     visits: BTreeMap<u64, u32>,
+    /// Ordered-trace lineage and scope state. Absent in ordinary execution.
+    trace: Option<TracePath>,
 }
 
 /// Max times a single path may re-enter the same block before it is cut.
@@ -344,6 +347,7 @@ impl State {
             validated: BTreeSet::new(),
             tainted_reads: BTreeSet::new(),
             visits: BTreeMap::new(),
+            trace: TracePath::root(pc),
         }
     }
 
@@ -360,8 +364,78 @@ impl State {
             validated: self.validated.clone(),
             tainted_reads: self.tainted_reads.clone(),
             visits: self.visits.clone(),
+            trace: self.trace.as_ref().map(|trace| trace.fork(pc)),
         }
     }
+
+    /// Add one persistent path assertion and its matching trace scope.
+    fn assert(&mut self, assertion: Assert, role: &str, location: u64) {
+        if let Some(trace) = &mut self.trace {
+            trace.push_assert(&self.machine.dom.pool, assertion, role, location);
+        }
+        self.constraints.push(assertion);
+    }
+
+    /// Terminate this path in the ordered trace, if capture is active.
+    fn end_trace(&mut self, reason: &str) {
+        if let Some(trace) = &mut self.trace {
+            trace.end(reason, self.pc);
+        }
+    }
+
+    /// A stateful round is a new logical root even when it carries machine data.
+    fn restart_trace(&mut self) {
+        self.trace = TracePath::root(self.pc);
+    }
+}
+
+/// Solve the current path condition and record the exact query occurrence.
+fn solve_traced(st: &mut State, purpose: &str, location: u64) -> SolveResult {
+    let started = Instant::now();
+    let result = solve(&st.machine.dom.pool, &st.constraints);
+    let elapsed_nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    if let Some(trace) = &mut st.trace {
+        trace.check(
+            &st.machine.dom.pool,
+            &st.constraints,
+            &result,
+            purpose,
+            elapsed_nanos,
+            location,
+        );
+    }
+    result
+}
+
+/// Solve with one temporary assertion, preserving explicit push/check/pop
+/// history while leaving the path condition unchanged.
+fn solve_probe_traced(
+    st: &mut State,
+    assertion: Assert,
+    purpose: &str,
+    role: &str,
+    location: u64,
+) -> SolveResult {
+    if let Some(trace) = &mut st.trace {
+        trace.push_temporary(&st.machine.dom.pool, assertion, role, location);
+    }
+    let mut probe = st.constraints.clone();
+    probe.push(assertion);
+    let started = Instant::now();
+    let result = solve(&st.machine.dom.pool, &probe);
+    let elapsed_nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    if let Some(trace) = &mut st.trace {
+        trace.check(
+            &st.machine.dom.pool,
+            &probe,
+            &result,
+            purpose,
+            elapsed_nanos,
+            location,
+        );
+        trace.pop(location);
+    }
+    result
 }
 
 /// Search for an input that reaches `target`, starting from `lf`'s entry with the
@@ -384,8 +458,12 @@ pub fn find_input_reaching(
     let mut work = vec![State::root(machine, lf.entry_va, TaintSpec::new())];
     let mut explored = 0usize;
 
-    while let Some(st) = work.pop() {
+    while let Some(mut st) = work.pop() {
         if explored >= max_states {
+            st.end_trace("state-budget");
+            for pending in &mut work {
+                pending.end_trace("state-budget");
+            }
             return SolveResult::Unknown;
         }
         explored += 1;
@@ -393,7 +471,9 @@ pub fn find_input_reaching(
         if st.pc == target {
             // Reached the target: solve the accumulated path condition for a
             // concrete input that drives execution here.
-            return solve(&st.machine.dom.pool, &st.constraints);
+            let result = solve_traced(&mut st, "target-reachability", target);
+            st.end_trace("target-reached");
+            return result;
         }
 
         let apis = CallModel::new();
@@ -469,15 +549,27 @@ fn run_worklist(
     let mut out = Vec::new();
     let mut best: Option<State> = None;
 
-    while let Some(st) = work.pop() {
+    while let Some(mut st) = work.pop() {
         if explored >= max_states {
+            st.end_trace("state-budget");
+            for pending in &mut work {
+                pending.end_trace("state-budget");
+            }
             break;
         }
         let (solves, timeouts) = solver_meter();
         if solves >= max_solves || timeouts >= max_timeouts {
+            st.end_trace("solver-budget");
+            for pending in &mut work {
+                pending.end_trace("solver-budget");
+            }
             break; // solver budget spent: bail with partial findings
         }
         if deadline.is_some_and(|dl| std::time::Instant::now() >= dl) {
+            st.end_trace("deadline");
+            for pending in &mut work {
+                pending.end_trace("deadline");
+            }
             break; // wall-clock budget spent: bail with partial findings
         }
         explored += 1;
@@ -521,6 +613,7 @@ pub fn find_sinks_stateful(
                 st.constraints.clear();
                 st.validated.clear();
                 st.tainted_reads.clear();
+                st.restart_trace();
                 st
             }
             None => {
@@ -555,6 +648,7 @@ fn process_block(
 ) -> Vec<State> {
     let Some(block) = blocks.get(&st.pc).cloned() else {
         consider_terminal(&st, best); // ran off the known CFG
+        st.end_trace("off-cfg");
         return Vec::new();
     };
 
@@ -565,6 +659,7 @@ fn process_block(
     *visits += 1;
     if *visits > MAX_BLOCK_VISITS {
         consider_terminal(&st, best);
+        st.end_trace("loop-limit");
         return Vec::new();
     }
 
@@ -573,6 +668,7 @@ fn process_block(
         // expressions can take a long time in a single op, so bail mid-block.
         if deadline_passed() {
             consider_terminal(&st, best);
+            st.end_trace("deadline");
             return Vec::new();
         }
         match &ins.op {
@@ -601,20 +697,23 @@ fn process_block(
                         // set unsat (the forked predicate is non-constant, so
                         // satisfiable on its own), so the feasibility solve can be
                         // skipped — the common case of branching on a fresh field.
-                        let independent = !shares_symbols(&st, c);
+                        let independent = can_skip_feasibility_check(&st, c);
                         let mut out = Vec::new();
                         for (bit, npc) in [(true, pc_if_true), (false, pc_if_false)] {
                             let mut child = st.fork(npc);
-                            child.constraints.push((c, bit));
-                            if independent
+                            child.assert((c, bit), "branch", ins.va);
+                            let feasible = independent
                                 || !matches!(
-                                    solve(&child.machine.dom.pool, &child.constraints),
+                                    solve_traced(&mut child, "branch-feasibility", ins.va),
                                     SolveResult::Unsat
-                                )
-                            {
+                                );
+                            if feasible {
                                 out.push(child);
+                            } else {
+                                child.end_trace("unsat-prune");
                             }
                         }
+                        st.end_trace("forked");
                         return out;
                     }
                 }
@@ -679,13 +778,17 @@ fn process_block(
                     .read(&mut st.machine.dom, &VReg::phys("rsp"));
                 let rsp = eval_concrete(&mut st, rsp_v);
                 if rsp != 0 {
-                    let ret = st.machine.mem.load(&mut st.machine.dom, rsp, 8, Endian::Little);
+                    let ret = st
+                        .machine
+                        .mem
+                        .load(&mut st.machine.dom, rsp, 8, Endian::Little);
                     let prov = st.taint.provenance_of(&st.machine.dom.pool, ret);
                     if !prov.is_empty() {
                         push_sink(&mut st, ins.va, SinkKind::StackOverflow, ret, prov, sinks);
                     }
                 }
                 consider_terminal(&st, best);
+                st.end_trace("return");
                 return Vec::new();
             }
             // Privileged-instruction sinks. `wrmsr`/`rdmsr`/`out`/`in` lift to an
@@ -742,6 +845,7 @@ fn process_block(
                     Flow::Halt(Halt::UnresolvedAddress) => {
                         if symbolic_mem_op(&mut st, other, ins.va, sinks).is_none() {
                             consider_terminal(&st, best);
+                            st.end_trace("unresolved-symbolic-memory");
                             return Vec::new();
                         }
                         continue;
@@ -750,6 +854,7 @@ fn process_block(
                     // halts / return / call end the path.
                     _ => {
                         consider_terminal(&st, best);
+                        st.end_trace("execution-halt");
                         return Vec::new();
                     }
                 }
@@ -767,18 +872,28 @@ fn process_block(
 /// consistent (the "any" strategy; concretize-with-threshold for reads is a
 /// later refinement). Returns the concrete address.
 fn concretize_addr(st: &mut State, addr_val: ExprId) -> u64 {
-    let model = match solve(&st.machine.dom.pool, &st.constraints) {
+    let model = match solve_traced(st, "address-concretization", st.pc) {
         SolveResult::Sat(m) => m.values,
         _ => BTreeMap::new(),
     };
     let mut c = Concrete;
     let a = eval_expr(&st.machine.dom.pool, addr_val, &model, &mut c);
+    if let Some(trace) = &mut st.trace {
+        trace.model_choice(
+            &st.machine.dom.pool,
+            addr_val,
+            a,
+            true,
+            "glaurung-any-address-v1",
+            st.pc,
+        );
+    }
     let chosen = st.machine.dom.constant(Width::W64, a);
     let eq = st
         .machine
         .dom
         .cmp(CmpOp::Eq, &addr_val, &chosen, Width::W64);
-    st.constraints.push((eq, true));
+    st.assert((eq, true), "concretization", st.pc);
     a as u64
 }
 
@@ -791,9 +906,9 @@ fn witness_for_value(st: &mut State, addr_val: ExprId, value: u128) -> Option<Mo
     let w = st.machine.dom.pool.width_of(addr_val);
     let target = st.machine.dom.constant(w, value);
     let eq = st.machine.dom.cmp(CmpOp::Eq, &addr_val, &target, w);
-    let mut probe = st.constraints.clone();
-    probe.push((eq, true));
-    match solve(&st.machine.dom.pool, &probe) {
+    match solve_probe_traced(st, (eq, true), "value-witness", "other", st.pc) {
+        // The target value is fixed by the probe, not selected from a backend
+        // model, so this check has no model-driven exploration choice to record.
         SolveResult::Sat(m) => Some(m),
         _ => None,
     }
@@ -833,7 +948,9 @@ fn read_arg(st: &mut State, n: u8) -> ExprId {
                 .constant(Width::W64, 0x20 + (n as u128 - 4) * 8);
             let addr = st.machine.dom.binop(BinOp::Add, &rsp, &off, Width::W64);
             let a = concretize_addr(st, addr);
-            st.machine.mem.load(&mut st.machine.dom, a, 8, Endian::Little)
+            st.machine
+                .mem
+                .load(&mut st.machine.dom, a, 8, Endian::Little)
         }
     }
 }
@@ -842,33 +959,47 @@ fn read_arg(st: &mut State, n: u8) -> ExprId {
 /// it (a read-only probe, unlike [`concretize_addr`]). Used by the lifecycle
 /// checks (free/UAF/stack) that only need a representative concrete value.
 fn eval_concrete(st: &mut State, val: ExprId) -> u64 {
-    let model = match solve(&st.machine.dom.pool, &st.constraints) {
+    let model = match solve_traced(st, "concrete-evaluation", st.pc) {
         SolveResult::Sat(m) => m.values,
         _ => BTreeMap::new(),
     };
     let mut c = Concrete;
-    eval_expr(&st.machine.dom.pool, val, &model, &mut c) as u64
+    let value = eval_expr(&st.machine.dom.pool, val, &model, &mut c);
+    if let Some(trace) = &mut st.trace {
+        trace.model_choice(
+            &st.machine.dom.pool,
+            val,
+            value,
+            true,
+            "glaurung-representative-value-v1",
+            st.pc,
+        );
+    }
+    value as u64
 }
 
 /// A reaching witness for the current path: the empty model when there are no
 /// constraints (no solver call needed), otherwise a solve. `None` only when the
 /// path is provably infeasible (Unsat); Unknown/NoSolver are kept as a sound
 /// over-approximation. This avoids a z3 context-build per sink on shallow paths.
-fn reach_model(st: &State) -> Option<Model> {
+fn reach_model(st: &mut State) -> Option<Model> {
     if st.constraints.is_empty() {
         return Some(Model::default());
     }
-    match solve(&st.machine.dom.pool, &st.constraints) {
+    match solve_traced(st, "finding-reachability", st.pc) {
         SolveResult::Sat(m) => Some(m),
         SolveResult::Unsat => None,
         _ => Some(Model::default()),
     }
 }
 
-/// True if `pred`'s free symbols overlap any symbol already in the path
-/// condition — i.e. adding `pred` could interact with (and possibly contradict)
-/// the existing constraints, so a feasibility solve is warranted.
-fn shares_symbols(st: &State, pred: ExprId) -> bool {
+/// True only when `pred` has at least one free symbol and none overlaps the
+/// existing path condition. In that case either polarity of the non-constant
+/// symbolic branch is satisfiable independently and its feasibility check can
+/// be skipped. A symbol-free expression is *not* admitted: syntactic
+/// `BranchDecision::Fork` does not prove that a constant DAG is semantically
+/// satisfiable, and skipping it can preserve an infeasible path.
+fn can_skip_feasibility_check(st: &State, pred: ExprId) -> bool {
     let pool = &st.machine.dom.pool;
     let mut psyms = BTreeMap::new();
     pool.collect_syms(pred, &mut psyms);
@@ -879,10 +1010,10 @@ fn shares_symbols(st: &State, pred: ExprId) -> bool {
         let mut csyms = BTreeMap::new();
         pool.collect_syms(*c, &mut csyms);
         if csyms.keys().any(|k| psyms.contains_key(k)) {
-            return true;
+            return false;
         }
     }
-    false
+    true
 }
 
 /// True if `expr` has at least one free symbol and *none* of them appear in the
@@ -1234,9 +1365,9 @@ fn check_int_overflow(st: &mut State, va: u64, op: &Op, sinks: &mut Vec<Sink>) {
         _ => unreachable!(),
     };
 
-    let mut probe = st.constraints.clone();
-    probe.push((pred, true));
-    if let SolveResult::Sat(witness) = solve(&st.machine.dom.pool, &probe) {
+    if let SolveResult::Sat(witness) =
+        solve_probe_traced(st, (pred, true), "integer-overflow", "other", va)
+    {
         sinks.push(Sink {
             va,
             kind: SinkKind::IntegerOverflow,
@@ -1444,6 +1575,24 @@ mod tests {
             "got {:?}",
             result
         );
+    }
+
+    #[test]
+    fn symbol_free_branch_never_skips_feasibility() {
+        let mut machine = Machine::new(Symbolic::new());
+        let one = machine.dom.constant(Width::W8, 1);
+        let two = machine.dom.constant(Width::W8, 2);
+        // Construct the constant comparison as a DAG node directly: the branch
+        // classifier may see a syntactically non-constant node even though its
+        // asserted true polarity is semantically UNSAT.
+        let predicate = machine.dom.pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: one,
+            b: two,
+            width: Width::W8,
+        });
+        let state = State::root(machine, 0x1000, TaintSpec::new());
+        assert!(!can_skip_feasibility_check(&state, predicate));
     }
 
     /// The solver budget bails out of a runaway exploration. The block loops to
