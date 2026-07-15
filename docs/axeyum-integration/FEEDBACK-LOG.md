@@ -414,3 +414,34 @@ tier:
   that is cheaper than the blast it removes, and/or the warm/incremental path
   (a batched canonical assertion path also just landed, ADR-0156, untested
   here because glaurung's Solver trait is still one-shot).
+
+## Iteration 16 - admission-controlled GQ4 = break-even (not a win) on the real corpus (2026-07-15)
+
+axeyum landed GQ4 v2 (admission-controlled range-demand lowering) fixing the
+v1 catastrophe, plus incremental CNF-root fusion. Measured on the
+representative tier (Axeyum/Z3, gated, 100% decided, 0 disagreements):
+
+- **default improved 1.42x -> 1.34x** (from `Fuse incremental positive CNF
+  roots` -- the CNF side keeps chipping; the running arc is
+  2.10 -> 2.01 -> 1.40 -> 1.34).
+- **GQ4 v1 `--demand-bit-slicing`: 4.35x** (unbounded, still catastrophic).
+- **GQ4 v2 `--range-demand-slicing`: 1.47x at default thresholds** -- the
+  admission control fixed the 3x regression (safe now).
+- **Threshold sweep for a beneficial operating point:** min-term-bits=64
+  pct=50 -> 1.40x; =64 pct=75 -> 1.33x; =128 pct=75 -> 1.32x. So even at the
+  best-tuned selective point, **GQ4 v2 is at best break-even with no-slice
+  (1.32-1.33x vs 1.34x, within noise).**
+
+- **[AXEYUM, key] GQ4 (even admission-controlled + tuned) does NOT close the
+  gap on this real corpus -- best case ~break-even.** The register slices
+  here lack the wide-value/narrow-demand structure slicing needs (the demanded
+  slices are already near-full-width). Recommend: ship v2 with conservative
+  defaults (min-term-bits>=64, avoided>=75%) so it never regresses, but do not
+  expect it to be the gap-closer. bit_blast (45%) remains the dominant cost
+  and is NOT reduced by slicing here.
+- **[WHERE THE GAP ACTUALLY IS] The productive lever remains CNF/bit-blast
+  micro-optimization (which is what actually moved it: 2.0->1.34x, all
+  CNF-side) and -- for a real structural win below ~1.3x -- the
+  warm/incremental path (GQ7/GQ8), which is still untestable through glaurung
+  (one-shot Solver trait). Native-path profiling + ordered capture now exist
+  (`check_profiled` / GLAURUNG_AXEYUM_PROFILE_DIR) to make that measurable.
