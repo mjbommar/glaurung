@@ -386,3 +386,31 @@ captured SMT-LIB query pack. Delivered it.
   not SAT. This ranks their roadmap: prioritize GQ3 (coercion peepholes) /
   GQ4 (bit-slice) / GQ5 (AIG->CNF); deprioritize GQ6 (SAT tuning). Handed
   over as the GQ1 attribution.
+
+## Iteration 15 - GQ4 demand-bit-slicing REGRESSES on the real corpus (2026-07-14)
+
+axeyum landed GQ4 (demand-driven cold BV lowering, ADR-0157), off-by-default
+pending its real-corpus acceptance gate. Ran that gate on the representative
+tier:
+
+- default (GQ4 off): **ratio 1.42x**, bit_blast/cnf/sat = 47/31/19.
+- `--demand-bit-slicing` (GQ4 on): **ratio 4.49x** (axeyum 193->611ms),
+  bit_blast/cnf/sat = **83/10/6**. 100% decided, 0 disagreements (correct,
+  just slow).
+
+- **[AXEYUM, key] GQ4 v1 is a ~3x NET LOSS on the real corpus.** The demand
+  analysis (backward live-bit propagation) costs far more than the blast it
+  saves here: bit_blast share went 47% -> 83% (the demand pass adds to
+  lowering cost), while cnf/sat shrank only because the denominator grew.
+  It correctly FAILS the ADR-0157 acceptance gate -- do not enable by
+  default. The slicing idea is right (register-slice formulas touch few bits);
+  the demand *computation* must be made cheap (memoized/bounded, or restricted
+  to the wide-value subterms where the saving beats the analysis cost) before
+  it pays. A cost model that only slices when demanded_bits << total_bits by a
+  wide margin would avoid the regression.
+- **[STATUS] The productive gains so far are the CNF-encoding work (2.0->1.4x);
+  the arithmetic rewrites and GQ4-v1 have not helped the register-slice-heavy
+  real corpus.** The gap is stuck at ~1.4x (corpus) pending a demand-slice
+  that is cheaper than the blast it removes, and/or the warm/incremental path
+  (a batched canonical assertion path also just landed, ADR-0156, untested
+  here because glaurung's Solver trait is still one-shot).
