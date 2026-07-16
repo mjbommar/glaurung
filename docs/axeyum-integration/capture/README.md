@@ -97,14 +97,16 @@ target/release/examples/ioctlance \
 check. Without warm reuse it preserves the raw one-shot policy and writes the
 `glaurung-axeyum-native-profile-v1` schema. With snapshot or lineage reuse it
 selects Axeyum's profiling constructor and writes
-`glaurung-axeyum-warm-profile-v1`. Both use one
+`glaurung-axeyum-warm-profile-v2` (v1 remains an accepted historical input).
+Both use one
 `axeyum-profile-<pid>.jsonl` file per process. Every record carries the SHA-256
 of the exact bytes produced by the existing SMT-LIB capture renderer, a
 monotone process-local sequence, outcome/completeness, phase durations, and
 AIG/CNF sizes. Warm records additionally carry path ownership/creation,
-prefix/add/pop root traffic, session creation, structural deltas, and explicit
-unattributed time. Query rendering/hash and JSON output are diagnostic overhead
-and are deliberately outside `total_nanos`.
+prefix/add/pop root traffic, session creation, structural deltas, exact
+incremental CNF gate/root-family deltas, and explicit unattributed time. Query
+rendering/hash and JSON output are diagnostic overhead and are deliberately
+outside `total_nanos`.
 
 Profiled timing is attribution-only and must not replace an unprofiled
 performance gate. Phase clocks and per-check JSON output add observable cost.
@@ -129,6 +131,18 @@ CNF encoding 43.78%, bit blast 22.86%, SAT 17.45%, replay 5.79%, translation
 the same profiled processes measure 9.441 seconds at the client timer because
 rendering and JSON output are intentionally excluded. Compare performance only
 to the repeated unprofiled 5.537-second lineage median.
+
+The v2 rerun preserves all 6,986 decisions and exact structural totals while
+partitioning the 11,734,335 added clauses. Definitions account for 8,419,041
+(71.75%) and guarded roots for 3,313,208 (28.24%); constants account for the
+remaining 2,086. Of 5,697,696 emitted implication halves, 3,070,411 (53.89%)
+are AND-tree shaped, 1,452,816 (25.50%) are inverted-AND shaped, 705,066
+(12.37%) are XOR shaped, and 469,403 (8.24%) are primitive binary ANDs. Every
+measured positive-root opportunity already takes the existing fusion path;
+the duplicate and tautology counters remain zero. This rejects another
+root-dedup or broad root-fusion tranche and selects internal positive AND-tree
+half flattening for the next bounded experiment. It is not yet a performance
+claim: profile clocks and clause-index diagnostics remain enabled.
 
 Validate and summarize from the Axeyum checkout:
 

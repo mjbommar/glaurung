@@ -24,15 +24,15 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, CheckResult,
-    IncrementalBvSolver, IncrementalBvStats, SolverConfig, UnsatProofOutcome,
+    CheckResult, IncrementalBvSolver, IncrementalBvStats, IncrementalCnfStats, SolverConfig,
+    UnsatProofOutcome, export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{pipe, Assert, Model, SolveResult, Solver};
+use crate::symbolic::solver::{Assert, Model, SolveResult, Solver, pipe};
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
 /// and metering behave the same regardless of which backend is compiled in.
@@ -260,6 +260,8 @@ pub struct WarmAxeyumCheckProfile {
     pub cnf_variables: u64,
     /// Current retained CNF clauses after this check.
     pub cnf_clauses: u64,
+    /// Per-check incremental CNF gate/root-family deltas.
+    pub cnf_gate_mix: BTreeMap<&'static str, u64>,
 }
 
 struct WarmProfileContext {
@@ -661,7 +663,7 @@ impl SnapshotIncrementalAxeyumSolver {
         let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
         Some(WarmProfileContext {
             profile: WarmAxeyumCheckProfile {
-                schema: "glaurung-axeyum-warm-profile-v1",
+                schema: "glaurung-axeyum-warm-profile-v2",
                 process_id: std::process::id(),
                 sequence: None,
                 query_hash,
@@ -695,6 +697,7 @@ impl SnapshotIncrementalAxeyumSolver {
                 aig_nodes: 0,
                 cnf_variables: 0,
                 cnf_clauses: 0,
+                cnf_gate_mix: BTreeMap::new(),
             },
             total_started: Instant::now(),
             solver_before: self.solver.stats(),
@@ -724,6 +727,7 @@ impl SnapshotIncrementalAxeyumSolver {
         context.profile.aig_nodes = solver_after.aig_nodes;
         context.profile.cnf_variables = solver_after.cnf_variables;
         context.profile.cnf_clauses = solver_after.cnf_clauses;
+        context.profile.cnf_gate_mix = cnf_gate_mix(delta.cnf_gate_mix);
         context.profile.arena_terms = count(self.arena.len());
         context.profile.outcome = result_name(&result);
         context.profile.complete = !matches!(&result, SolveResult::Error(_));
@@ -749,6 +753,85 @@ impl SnapshotIncrementalAxeyumSolver {
         }
         result
     }
+}
+
+fn cnf_gate_mix(stats: IncrementalCnfStats) -> BTreeMap<&'static str, u64> {
+    BTreeMap::from([
+        ("and_nodes_synced", stats.and_nodes_synced),
+        ("up_half_definitions", stats.up_half_definitions),
+        ("down_half_definitions", stats.down_half_definitions),
+        ("xor_half_definitions", stats.xor_half_definitions),
+        ("not_ite_half_definitions", stats.not_ite_half_definitions),
+        ("not_and_half_definitions", stats.not_and_half_definitions),
+        ("and_tree_half_definitions", stats.and_tree_half_definitions),
+        (
+            "binary_and_half_definitions",
+            stats.binary_and_half_definitions,
+        ),
+        ("constant_clauses", stats.constant_clauses),
+        ("definition_clauses", stats.definition_clauses),
+        ("root_clauses", stats.root_clauses),
+        ("direct_positive_and_roots", stats.direct_positive_and_roots),
+        ("direct_positive_and_nodes", stats.direct_positive_and_nodes),
+        (
+            "direct_positive_and_leaves",
+            stats.direct_positive_and_leaves,
+        ),
+        ("direct_xor_leaves", stats.direct_xor_leaves),
+        ("direct_not_ite_leaves", stats.direct_not_ite_leaves),
+        ("direct_negative_and_roots", stats.direct_negative_and_roots),
+        ("fused_positive_and_roots", stats.fused_positive_and_roots),
+        ("fused_positive_and_nodes", stats.fused_positive_and_nodes),
+        ("fused_xor_leaves", stats.fused_xor_leaves),
+        ("root_assertions", stats.root_assertions),
+        ("guarded_root_assertions", stats.guarded_root_assertions),
+        (
+            "repeated_same_context_roots",
+            stats.repeated_same_context_roots,
+        ),
+        (
+            "deduplicated_root_assertions",
+            stats.deduplicated_root_assertions,
+        ),
+        (
+            "reused_cross_context_roots",
+            stats.reused_cross_context_roots,
+        ),
+        ("guarded_root_clauses", stats.guarded_root_clauses),
+        ("root_clause_attempts", stats.root_clause_attempts),
+        ("unit_payload_root_clauses", stats.unit_payload_root_clauses),
+        (
+            "binary_payload_root_clauses",
+            stats.binary_payload_root_clauses,
+        ),
+        ("wide_payload_root_clauses", stats.wide_payload_root_clauses),
+        (
+            "duplicate_definition_clauses",
+            stats.duplicate_definition_clauses,
+        ),
+        ("duplicate_root_clauses", stats.duplicate_root_clauses),
+        (
+            "duplicate_prior_root_clauses",
+            stats.duplicate_prior_root_clauses,
+        ),
+        (
+            "root_clauses_duplicate_non_root",
+            stats.root_clauses_duplicate_non_root,
+        ),
+        (
+            "tautological_definition_clauses",
+            stats.tautological_definition_clauses,
+        ),
+        ("tautological_root_clauses", stats.tautological_root_clauses),
+        (
+            "fresh_negative_root_definitions",
+            stats.fresh_negative_root_definitions,
+        ),
+        (
+            "reused_negative_root_definitions",
+            stats.reused_negative_root_definitions,
+        ),
+    ])
 }
 
 /// One independently mutable retained solver per explorer-owned path.
@@ -1616,6 +1699,22 @@ mod tests {
         assert!(!try_reserve_path_counter(&live, &peak, 1));
         assert_eq!(live.load(Ordering::Relaxed), 1);
         assert_eq!(peak.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn warm_profile_exports_complete_cnf_gate_mix() {
+        let mut stats = IncrementalCnfStats::default();
+        stats.and_nodes_synced = 3;
+        stats.and_tree_half_definitions = 2;
+        stats.root_clauses = 1;
+
+        let mix = cnf_gate_mix(stats);
+
+        assert_eq!(mix.len(), 38);
+        assert_eq!(mix["and_nodes_synced"], 3);
+        assert_eq!(mix["and_tree_half_definitions"], 2);
+        assert_eq!(mix["root_clauses"], 1);
+        assert_eq!(mix["tautological_root_clauses"], 0);
     }
 
     #[test]
