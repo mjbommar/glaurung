@@ -941,6 +941,29 @@ suppressed; byte collisions fail closed. The hook is inactive outside explicit
 capture. Build the 60-second split corpus first, then decide whether a complete
 600-second tier is affordable and useful.
 
+Validate every captured byte before using or publishing the corpus:
+
+```sh
+python3 validate_shadow_splits.py /path/to/new-split-corpus \
+  --summary-out /path/to/new-split-corpus/summary-v1.json
+python3 -m unittest test_validate_shadow_splits.py
+```
+
+The validator fails closed on malformed or empty indexes, invalid result
+classes, rows without exactly one decided backend, duplicate/conflicting hashes,
+missing or orphaned scripts, non-UTF-8 bytes, and filename/content SHA-256
+mismatches. Its summary counts distinct queries by stable backend-class pair and
+deciding backend. Captured `.smt2` payloads under `shadow-splits/` are Git LFS
+objects; the TSV index and JSON summary remain reviewable ordinary Git text.
+
+The current 60-second `tcpip` capture at Glaurung `a6a5cc0` validates 784
+distinct formulas / 234,463,502 bytes. Axeyum decides 48 formulas that Z3 does
+not; Z3 decides 736 formulas that Axeyum does not. The latter split is 733
+Axeyum `error` results and only three Axeyum `unknown` results, so the immediate
+functional target is adapter/warm-session error attribution rather than SAT
+search. This corpus is diagnostic evidence and does not make `tcpip` a green
+lineage-gate `DriverSpec`.
+
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-
 equivalent snapshot and loses the current serial-snapshot policy on SurfacePen
