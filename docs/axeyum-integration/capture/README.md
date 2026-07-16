@@ -203,6 +203,14 @@ median RSS falls 0.06% and Z3 drift is +1.19%. All 15,306 combined checks agree.
 Every non-empty array/UF projection class still takes the unchanged complete
 projection path.
 
+The held-out three-process NETwtw10 comparison also passes: median Axeyum time
+falls 17,765.2 to 16,996.6 ms (-4.33%), normalized ratio about 0.342x to 0.328x
+Z3 (-3.99%), and median RSS 261,428 to 257,796 KiB (-1.39%); Z3 drift is
+-0.36%. All 170,136 combined checks agree, findings and exact warm/cache
+traffic repeat, and replay failures remain zero. These causal repetitions do
+not replace the machine-readable lineage artifact; regenerate it separately
+from the accepted Axeyum/Glaurung revisions.
+
 The first v5 SurfacePen profile changes the residual priority: replay is
 447.046 ms / 38.82% of internal time because the incremental solver formerly
 created a new ground-evaluator memo for every original root. Axeyum ADR-0193
