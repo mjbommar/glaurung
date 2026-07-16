@@ -1,0 +1,266 @@
+{
+  "drivers": {
+    "netwtw10": {
+      "bytes": 4874856,
+      "path": "/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-wifi-NETwtw10.sys",
+      "sha256": "785a3c05981303b5856f3d86d7ca186843322407ae31f6bb33659cf61cd4e6f1",
+      "solve_budget": 20000
+    },
+    "surface": {
+      "bytes": 320728,
+      "path": "/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys",
+      "sha256": "3c062dc57832caab776bec99656798474af7ffb59ef751c9a004a95c0ae74405",
+      "solve_budget": 1000000
+    }
+  },
+  "policy": {
+    "analysis_deadline_seconds": 400,
+    "max_assertions_per_path": 512,
+    "max_live_paths": 9,
+    "memory_limit_gib": 4,
+    "solver_seconds": 600,
+    "warm_reuse": "lineage"
+  },
+  "repetitions": 3,
+  "runs": [
+    {
+      "agree": 28356,
+      "axeyum_ms": 18774.7,
+      "disagree": 0,
+      "driver": "netwtw10",
+      "max_rss_kib": 257632,
+      "queries": 28356,
+      "repetition": 1,
+      "stderr_path": "netwtw10-r1.stderr",
+      "stdout_path": "netwtw10-r1.stdout",
+      "stdout_sha256": "0ccc9c34d01b6e567347400e082c22d45798ebeba9d6e7d48ac78e9022de1ea7",
+      "time_path": "netwtw10-r1.time",
+      "unknown_split": 0,
+      "wall_seconds": 79.18,
+      "warm": {
+        "added": 247311,
+        "assertion-cap-fallbacks": 0,
+        "checks": 20031,
+        "exact": 1285,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 8325,
+        "paths-closed": 5961,
+        "paths-created": 5961,
+        "paths-live": 0,
+        "paths-peak": 9,
+        "popped": 2228,
+        "prefix-roots": 529071,
+        "resets": 0
+      },
+      "z3_ms": 52220.1
+    },
+    {
+      "agree": 28356,
+      "axeyum_ms": 18735.0,
+      "disagree": 0,
+      "driver": "netwtw10",
+      "max_rss_kib": 257288,
+      "queries": 28356,
+      "repetition": 2,
+      "stderr_path": "netwtw10-r2.stderr",
+      "stdout_path": "netwtw10-r2.stdout",
+      "stdout_sha256": "0ccc9c34d01b6e567347400e082c22d45798ebeba9d6e7d48ac78e9022de1ea7",
+      "time_path": "netwtw10-r2.time",
+      "unknown_split": 0,
+      "wall_seconds": 79.14,
+      "warm": {
+        "added": 247311,
+        "assertion-cap-fallbacks": 0,
+        "checks": 20031,
+        "exact": 1285,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 8325,
+        "paths-closed": 5961,
+        "paths-created": 5961,
+        "paths-live": 0,
+        "paths-peak": 9,
+        "popped": 2228,
+        "prefix-roots": 529071,
+        "resets": 0
+      },
+      "z3_ms": 52108.5
+    },
+    {
+      "agree": 28356,
+      "axeyum_ms": 18744.3,
+      "disagree": 0,
+      "driver": "netwtw10",
+      "max_rss_kib": 261588,
+      "queries": 28356,
+      "repetition": 3,
+      "stderr_path": "netwtw10-r3.stderr",
+      "stdout_path": "netwtw10-r3.stdout",
+      "stdout_sha256": "0ccc9c34d01b6e567347400e082c22d45798ebeba9d6e7d48ac78e9022de1ea7",
+      "time_path": "netwtw10-r3.time",
+      "unknown_split": 0,
+      "wall_seconds": 79.15,
+      "warm": {
+        "added": 247311,
+        "assertion-cap-fallbacks": 0,
+        "checks": 20031,
+        "exact": 1285,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 8325,
+        "paths-closed": 5961,
+        "paths-created": 5961,
+        "paths-live": 0,
+        "paths-peak": 9,
+        "popped": 2228,
+        "prefix-roots": 529071,
+        "resets": 0
+      },
+      "z3_ms": 52117.9
+    },
+    {
+      "agree": 2551,
+      "axeyum_ms": 1070.1,
+      "disagree": 0,
+      "driver": "surface",
+      "max_rss_kib": 82160,
+      "queries": 2551,
+      "repetition": 1,
+      "stderr_path": "surface-r1.stderr",
+      "stdout_path": "surface-r1.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "time_path": "surface-r1.time",
+      "unknown_split": 0,
+      "wall_seconds": 5.68,
+      "warm": {
+        "added": 19467,
+        "assertion-cap-fallbacks": 0,
+        "checks": 2551,
+        "exact": 121,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 0,
+        "paths-closed": 358,
+        "paths-created": 358,
+        "paths-live": 0,
+        "paths-peak": 4,
+        "popped": 147,
+        "prefix-roots": 290670,
+        "resets": 0
+      },
+      "z3_ms": 4435.0
+    },
+    {
+      "agree": 2551,
+      "axeyum_ms": 1057.4,
+      "disagree": 0,
+      "driver": "surface",
+      "max_rss_kib": 82432,
+      "queries": 2551,
+      "repetition": 2,
+      "stderr_path": "surface-r2.stderr",
+      "stdout_path": "surface-r2.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "time_path": "surface-r2.time",
+      "unknown_split": 0,
+      "wall_seconds": 5.58,
+      "warm": {
+        "added": 19467,
+        "assertion-cap-fallbacks": 0,
+        "checks": 2551,
+        "exact": 121,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 0,
+        "paths-closed": 358,
+        "paths-created": 358,
+        "paths-live": 0,
+        "paths-peak": 4,
+        "popped": 147,
+        "prefix-roots": 290670,
+        "resets": 0
+      },
+      "z3_ms": 4371.7
+    },
+    {
+      "agree": 2551,
+      "axeyum_ms": 1061.6,
+      "disagree": 0,
+      "driver": "surface",
+      "max_rss_kib": 91428,
+      "queries": 2551,
+      "repetition": 3,
+      "stderr_path": "surface-r3.stderr",
+      "stdout_path": "surface-r3.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "time_path": "surface-r3.time",
+      "unknown_split": 0,
+      "wall_seconds": 5.59,
+      "warm": {
+        "added": 19467,
+        "assertion-cap-fallbacks": 0,
+        "checks": 2551,
+        "exact": 121,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 0,
+        "paths-closed": 358,
+        "paths-created": 358,
+        "paths-live": 0,
+        "paths-peak": 4,
+        "popped": 147,
+        "prefix-roots": 290670,
+        "resets": 0
+      },
+      "z3_ms": 4376.9
+    }
+  ],
+  "schema": "glaurung-axeyum-lineage-gate-v1",
+  "sources": {
+    "axeyum": {
+      "dirty": [],
+      "path": "/tmp/axeyum-lineage-release.q0Htys/axeyum",
+      "revision": "486b7e288029acf83d3a820692ed3195d82445fd"
+    },
+    "binary": {
+      "path": "/tmp/axeyum-lineage-release.q0Htys/glaurung/target/release/examples/ioctlance",
+      "sha256": "721b435ef0cb98857db8fb1f5ec25c054670ae6b4e9d93bbda3b4a3428a41659"
+    },
+    "glaurung": {
+      "dirty": [],
+      "path": "/tmp/axeyum-lineage-release.q0Htys/glaurung",
+      "revision": "a0e5f9f788c841b45f075cd7acf3d6251863add7"
+    }
+  },
+  "summaries": {
+    "netwtw10": {
+      "axeyum_mean_ms": 18751.333333333332,
+      "axeyum_population_cv": 0.0009041135551670016,
+      "axeyum_z3_ratio": 0.3595734004915418,
+      "max_rss_kib": 261588,
+      "median_rss_kib": 257632,
+      "min_rss_kib": 257288,
+      "runs": 3,
+      "z3_mean_ms": 52148.833333333336,
+      "z3_population_cv": 0.000969130977208051
+    },
+    "surface": {
+      "axeyum_mean_ms": 1063.0333333333333,
+      "axeyum_population_cv": 0.004969633830637634,
+      "axeyum_z3_ratio": 0.24189902606268396,
+      "max_rss_kib": 91428,
+      "median_rss_kib": 82432,
+      "min_rss_kib": 82160,
+      "runs": 3,
+      "z3_mean_ms": 4394.533333333333,
+      "z3_population_cv": 0.006529224561894551
+    }
+  },
+  "system": {
+    "machine": "x86_64",
+    "platform": "Linux-7.0.0-22-generic-x86_64-with-glibc2.43",
+    "processor": "",
+    "rustc": "rustc 1.96.0-nightly (48cc71ee8 2026-03-31)\nbinary: rustc\ncommit-hash: 48cc71ee88cd0f11217eced958b9930970da998b\ncommit-date: 2026-03-31\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0-nightly\nLLVM version: 22.1.2"
+  }
+}

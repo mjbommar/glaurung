@@ -362,6 +362,30 @@ environment alarm in either direction; Axeyum/ratio/RSS alarms are one-sided so
 improvements pass. Thresholds never relax correctness, exact-work, finding, or
 identity validation.
 
+`lineage-baseline-v1.json` is the first clean release baseline for that
+comparator. It was rebuilt and captured from clean detached Glaurung
+`a0e5f9f` and Axeyum `486b7e28` sources; both recorded dirty-path arrays are
+empty. All 92,721 shadow checks across the six processes agree with Z3, with
+zero disagreements or unknown splits. SurfacePen measures 1.063 seconds
+Axeyum versus 4.395 seconds Z3 (0.242x, 0.50% Axeyum CV, 82,432 KiB median
+RSS). NETwtw10 measures 18.751 versus 52.149 seconds (0.360x, 0.09% Axeyum
+CV, 257,632 KiB median RSS). The artifact's SHA-256 is
+`ba615467b3956d21b512841335e6bb495e88f586fbb10cfdf8159cfd3153ff5b`;
+the recorded release binary has SHA-256
+`721b435ef0cb98857db8fb1f5ec25c054670ae6b4e9d93bbda3b4a3428a41659`.
+Future homogeneous candidates compare directly against the committed file:
+
+```sh
+python3 docs/axeyum-integration/capture/lineage_gate.py compare \
+  docs/axeyum-integration/capture/lineage-baseline-v1.json \
+  /path/to/candidate/lineage-gate-v1.json
+```
+
+Only the compact JSON is committed. Per-process stdout/stderr/time files stay
+local; their finding hashes and parsed timing/RSS records are embedded in the
+artifact. The absolute paths are provenance, not inputs to comparison identity;
+driver content hashes and byte lengths are the enforced inputs.
+
 Use `--driver surface --repetitions 1 --allow-dirty` only as a fast plumbing
 smoke. It is not the repeated release gate. The exact traffic constants are
 schema-v1 acceptance identity; a deliberate Glaurung exploration change needs
