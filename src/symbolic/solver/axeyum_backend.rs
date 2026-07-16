@@ -14,7 +14,7 @@
 //!
 //! See `docs/axeyum-integration/` (esp. `02-interface-mapping.md`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -35,7 +35,9 @@ use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{pipe, Assert, IncrementalSolver, Model, SolveResult, Solver};
+use crate::symbolic::solver::{
+    pipe, Assert, IncrementalSolver, Model, SolveResult, Solver, WarmDeltaContext,
+};
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
 /// and metering behave the same regardless of which backend is compiled in.
@@ -44,6 +46,7 @@ const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
 pub(crate) const WARM_OWNER_TRANSFER_ENV: &str = "GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER";
 pub(crate) const WARM_SERIAL_SIBLING_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE";
+pub(crate) const DIRECT_DELTA_ENV: &str = "GLAURUNG_AXEYUM_DIRECT_DELTA";
 const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING";
 pub(crate) const REPLAY_SAT_CACHE_ENV: &str = "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
@@ -105,6 +108,13 @@ thread_local! {
     /// Each worker owns its map; no solver is shared across paths or threads.
     static LINEAGE_SOLVERS: RefCell<LineageIncrementalAxeyumSolver> =
         RefCell::new(LineageIncrementalAxeyumSolver::default());
+    /// Opt-in sessions driven by explicit explorer prefix deltas. Separate from
+    /// the accepted snapshot lineage map so the control remains exact.
+    static DIRECT_DELTA_SOLVERS: RefCell<DirectDeltaLineageAxeyumSolver> =
+        RefCell::new(DirectDeltaLineageAxeyumSolver::default());
+    /// Whether the immediately preceding Axeyum check synchronized its direct
+    /// persistent session. Explorer retain markers advance only on `true`.
+    static LAST_DIRECT_DELTA_SYNCED: Cell<bool> = const { Cell::new(false) };
     /// Path IDs observed once by GQ9's opt-in auto policy. This set is the
     /// constant-size-per-path admission probe; it retains no arena or solver.
     static AUTO_LINEAGE_ADMISSION: RefCell<AutoLineageAdmission> =
@@ -167,6 +177,25 @@ fn parse_warm_reuse_policy(value: Option<&str>) -> WarmReusePolicy {
         Some(value) if value.eq_ignore_ascii_case("lineage") => WarmReusePolicy::Lineage,
         Some(_) => WarmReusePolicy::Snapshot,
     }
+}
+
+pub(crate) fn direct_delta_enabled() -> bool {
+    parse_direct_delta(std::env::var(DIRECT_DELTA_ENV).ok().as_deref())
+}
+
+fn parse_direct_delta(value: Option<&str>) -> bool {
+    matches!(value, Some("1"))
+        || value.is_some_and(|value| {
+            value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("on")
+        })
+}
+
+pub(crate) fn last_direct_delta_synced() -> bool {
+    LAST_DIRECT_DELTA_SYNCED.with(Cell::get)
+}
+
+pub(crate) fn reset_direct_delta_sync() {
+    LAST_DIRECT_DELTA_SYNCED.with(|synced| synced.set(false));
 }
 
 pub(crate) fn warm_owner_transfer_enabled() -> bool {
@@ -595,11 +624,29 @@ impl Default for IncrementalAxeyumSolver {
 impl IncrementalAxeyumSolver {
     /// Create an empty raw-policy retained session.
     pub fn new() -> Self {
+        Self::with_cache_policy(None)
+    }
+
+    fn new_path_owned() -> Self {
+        Self::with_cache_policy(replay_sat_cache_policy())
+    }
+
+    fn with_cache_policy(policy: Option<ReplayCheckedSatCachePolicy>) -> Self {
+        let mut solver = IncrementalBvSolver::with_config(config().with_preprocess(false));
+        if let Some(policy) = policy {
+            solver
+                .enable_replay_checked_sat_cache(policy)
+                .expect("Glaurung replay-SAT-cache bounds are nonzero constants");
+        }
         Self {
             arena: TermArena::new(),
-            solver: IncrementalBvSolver::with_config(config().with_preprocess(false)),
+            solver,
             symbol_frames: vec![Vec::new()],
         }
+    }
+
+    fn replay_sat_cache_stats(&self) -> ReplayCheckedSatCacheStats {
+        self.solver.replay_checked_sat_cache_stats()
     }
 
     fn active_symbol_map(&self) -> Vec<(u32, SymbolId)> {
@@ -1270,6 +1317,8 @@ struct LineageIncrementalAxeyumSolver {
 struct DirectDeltaStats {
     checks: u64,
     full_materializations: u64,
+    exact_reuses: u64,
+    prefix_assertions_reused: u64,
     persistent_assertions_translated: u64,
     temporary_assumptions_translated: u64,
     assertions_added: u64,
@@ -1296,6 +1345,10 @@ struct DirectDeltaLineageAxeyumSolver {
 }
 
 impl DirectDeltaLineageAxeyumSolver {
+    fn has_path(&self, path_id: u64) -> bool {
+        self.paths.contains_key(&path_id)
+    }
+
     fn check_path(
         &mut self,
         path_id: u64,
@@ -1303,7 +1356,7 @@ impl DirectDeltaLineageAxeyumSolver {
         persistent: &[Assert],
         retain_assertions: usize,
         temporary: &[Assert],
-    ) -> (SolveResult, bool) {
+    ) -> (SolveResult, bool, Option<ReplayCheckedSatCacheStats>) {
         self.stats.checks = self.stats.checks.saturating_add(1);
         let created = !self.paths.contains_key(&path_id);
         if created {
@@ -1311,11 +1364,18 @@ impl DirectDeltaLineageAxeyumSolver {
             self.paths.insert(
                 path_id,
                 DirectDeltaPath {
-                    solver: IncrementalAxeyumSolver::new(),
+                    solver: IncrementalAxeyumSolver::new_path_owned(),
                     active_assertions: 0,
                 },
             );
         }
+
+        let exact_reuse = !created
+            && self.paths.get(&path_id).is_some_and(|path| {
+                retain_assertions == path.active_assertions
+                    && retain_assertions == persistent.len()
+                    && temporary.is_empty()
+            });
 
         let result = self.transition_and_check(
             path_id,
@@ -1325,11 +1385,20 @@ impl DirectDeltaLineageAxeyumSolver {
             temporary,
         );
         let synced = !matches!(result, SolveResult::Error(_));
-        if !synced {
-            self.paths.remove(&path_id);
+        if synced && !created {
+            self.stats.prefix_assertions_reused = self
+                .stats
+                .prefix_assertions_reused
+                .saturating_add(count(retain_assertions));
+            if exact_reuse {
+                self.stats.exact_reuses = self.stats.exact_reuses.saturating_add(1);
+            }
+        } else if !synced {
+            let removed_cache = self.close_path(path_id);
             self.stats.resets_after_error = self.stats.resets_after_error.saturating_add(1);
+            return (result, false, removed_cache);
         }
-        (result, synced)
+        (result, true, None)
     }
 
     fn transition_and_check(
@@ -1359,12 +1428,10 @@ impl DirectDeltaLineageAxeyumSolver {
                     "axeyum direct-delta scope underflow; session reset".to_string(),
                 );
             }
+            path.active_assertions -= 1;
+            self.stats.assertions_popped = self.stats.assertions_popped.saturating_add(1);
         }
-        path.active_assertions = retain_assertions;
-        self.stats.assertions_popped = self
-            .stats
-            .assertions_popped
-            .saturating_add(count(pop_count));
+        debug_assert_eq!(path.active_assertions, retain_assertions);
 
         let suffix = &persistent[retain_assertions..];
         for &assertion in suffix {
@@ -1375,15 +1442,12 @@ impl DirectDeltaLineageAxeyumSolver {
                 return SolveResult::Error(error);
             }
             path.active_assertions += 1;
+            self.stats.persistent_assertions_translated = self
+                .stats
+                .persistent_assertions_translated
+                .saturating_add(1);
+            self.stats.assertions_added = self.stats.assertions_added.saturating_add(1);
         }
-        self.stats.persistent_assertions_translated = self
-            .stats
-            .persistent_assertions_translated
-            .saturating_add(count(suffix.len()));
-        self.stats.assertions_added = self
-            .stats
-            .assertions_added
-            .saturating_add(count(suffix.len()));
         self.stats.temporary_assumptions_translated = self
             .stats
             .temporary_assumptions_translated
@@ -1396,8 +1460,34 @@ impl DirectDeltaLineageAxeyumSolver {
         }
     }
 
+    #[cfg(test)]
     fn stats(&self) -> DirectDeltaStats {
         self.stats
+    }
+
+    fn snapshot_stats(&self) -> SnapshotReuseStats {
+        SnapshotReuseStats {
+            checks: self.stats.checks,
+            exact_snapshot_reuses: self.stats.exact_reuses,
+            prefix_assertions_reused: self.stats.prefix_assertions_reused,
+            assertions_added: self.stats.assertions_added,
+            assertions_popped: self.stats.assertions_popped,
+            resets_after_error: self.stats.resets_after_error,
+        }
+    }
+
+    fn replay_sat_cache_stats(&self, path_id: u64) -> ReplayCheckedSatCacheStats {
+        self.paths
+            .get(&path_id)
+            .map_or_else(ReplayCheckedSatCacheStats::default, |path| {
+                path.solver.replay_sat_cache_stats()
+            })
+    }
+
+    fn close_path(&mut self, path_id: u64) -> Option<ReplayCheckedSatCacheStats> {
+        self.paths
+            .remove(&path_id)
+            .map(|path| path.solver.replay_sat_cache_stats())
     }
 }
 
@@ -1547,8 +1637,28 @@ pub(crate) fn check_warm_thread_local(
     pool: &ExprPool,
     asserts: &[Assert],
     path_id: Option<u64>,
+    delta: Option<WarmDeltaContext>,
 ) -> SolveResult {
-    let (result, before, after) = match warm_reuse_policy() {
+    check_warm_thread_local_selected(
+        pool,
+        asserts,
+        path_id,
+        delta,
+        warm_reuse_policy(),
+        direct_delta_enabled(),
+    )
+}
+
+fn check_warm_thread_local_selected(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: Option<u64>,
+    delta: Option<WarmDeltaContext>,
+    policy: WarmReusePolicy,
+    direct_delta_requested: bool,
+) -> SolveResult {
+    LAST_DIRECT_DELTA_SYNCED.with(|synced| synced.set(false));
+    let (result, before, after) = match policy {
         WarmReusePolicy::Off => return AxeyumSolver::new().check(pool, asserts),
         WarmReusePolicy::Snapshot => WARM_SOLVER.with(|solver| {
             let mut solver = solver.borrow_mut();
@@ -1560,6 +1670,37 @@ pub(crate) fn check_warm_thread_local(
             let Some(path_id) = path_id else {
                 return AxeyumSolver::new().check(pool, asserts);
             };
+            let direct = direct_delta_requested && delta.is_some();
+            if direct {
+                let delta = delta.expect("direct mode requires an explicit delta");
+                if delta.retain_assertions > delta.persistent_assertions
+                    || delta.persistent_assertions > asserts.len()
+                {
+                    let (before, after, closed_cache) = DIRECT_DELTA_SOLVERS.with(|lineage| {
+                        let mut lineage = lineage.borrow_mut();
+                        let before = lineage.snapshot_stats();
+                        lineage.stats.checks = lineage.stats.checks.saturating_add(1);
+                        let closed_cache = lineage.close_path(path_id);
+                        if closed_cache.is_some() {
+                            lineage.stats.resets_after_error =
+                                lineage.stats.resets_after_error.saturating_add(1);
+                        }
+                        (before, lineage.snapshot_stats(), closed_cache)
+                    });
+                    if let Some(cache) = closed_cache {
+                        subtract_replay_sat_cache_gauges(cache);
+                        WARM_PATHS_CLOSED.fetch_add(1, Ordering::Relaxed);
+                        WARM_PATHS_LIVE.fetch_sub(1, Ordering::Relaxed);
+                    }
+                    record_warm_delta(before, after);
+                    return SolveResult::Error(format!(
+                        "invalid axeyum direct delta: retain {}, persistent {}, total {}",
+                        delta.retain_assertions,
+                        delta.persistent_assertions,
+                        asserts.len()
+                    ));
+                }
+            }
             let limits = warm_reuse_limits();
             if count(asserts.len()) > limits.max_assertions_per_path {
                 // A serial sibling continuation may still need this owner's
@@ -1571,7 +1712,11 @@ pub(crate) fn check_warm_thread_local(
                 WARM_ASSERTION_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
                 return AxeyumSolver::new().check(pool, asserts);
             }
-            let exists = LINEAGE_SOLVERS.with(|lineage| lineage.borrow().has_path(path_id));
+            let exists = if direct {
+                DIRECT_DELTA_SOLVERS.with(|lineage| lineage.borrow().has_path(path_id))
+            } else {
+                LINEAGE_SOLVERS.with(|lineage| lineage.borrow().has_path(path_id))
+            };
             if policy == WarmReusePolicy::Auto && !exists {
                 let repeated = AUTO_LINEAGE_ADMISSION
                     .with(|admission| admission.borrow_mut().observe(path_id));
@@ -1613,23 +1758,81 @@ pub(crate) fn check_warm_thread_local(
                     return AxeyumSolver::new().check(pool, asserts);
                 }
             };
-            let (result, before, after, cache_before, cache_after, created) =
-                LINEAGE_SOLVERS.with(|lineage| {
+            if direct {
+                let delta = delta.expect("direct mode requires an explicit delta");
+                let persistent = &asserts[..delta.persistent_assertions];
+                let temporary = &asserts[delta.persistent_assertions..];
+                let (
+                    result,
+                    before,
+                    after,
+                    cache_before,
+                    cache_after,
+                    removed_cache,
+                    created,
+                    synced,
+                ) = DIRECT_DELTA_SOLVERS.with(|lineage| {
                     let mut lineage = lineage.borrow_mut();
-                    lineage.check_path(path_id, pool, asserts)
+                    let created = !lineage.has_path(path_id);
+                    let before = lineage.snapshot_stats();
+                    let cache_before = lineage.replay_sat_cache_stats(path_id);
+                    let (result, synced, removed_cache) = lineage.check_path(
+                        path_id,
+                        pool,
+                        persistent,
+                        delta.retain_assertions,
+                        temporary,
+                    );
+                    (
+                        result,
+                        before,
+                        lineage.snapshot_stats(),
+                        cache_before,
+                        removed_cache.unwrap_or_else(|| lineage.replay_sat_cache_stats(path_id)),
+                        removed_cache,
+                        created,
+                        synced,
+                    )
                 });
-            record_replay_sat_cache_delta(cache_before, cache_after);
-            debug_assert_eq!(created, reserved);
-            if created {
-                WARM_PATHS_CREATED.fetch_add(1, Ordering::Relaxed);
-                if policy == WarmReusePolicy::Auto {
-                    AUTO_LINEAGE_ADMISSION.with(|admission| {
-                        admission.borrow_mut().remove(path_id);
-                    });
-                    WARM_AUTO_ACTIVATIONS.fetch_add(1, Ordering::Relaxed);
+                record_replay_sat_cache_delta(cache_before, cache_after);
+                if let Some(cache) = removed_cache {
+                    subtract_replay_sat_cache_gauges(cache);
                 }
+                debug_assert_eq!(created, reserved);
+                LAST_DIRECT_DELTA_SYNCED.with(|state| state.set(synced));
+                if created {
+                    WARM_PATHS_CREATED.fetch_add(1, Ordering::Relaxed);
+                    if policy == WarmReusePolicy::Auto {
+                        AUTO_LINEAGE_ADMISSION.with(|admission| {
+                            admission.borrow_mut().remove(path_id);
+                        });
+                        WARM_AUTO_ACTIVATIONS.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                if !synced {
+                    WARM_PATHS_CLOSED.fetch_add(1, Ordering::Relaxed);
+                    WARM_PATHS_LIVE.fetch_sub(1, Ordering::Relaxed);
+                }
+                (result, before, after)
+            } else {
+                let (result, before, after, cache_before, cache_after, created) = LINEAGE_SOLVERS
+                    .with(|lineage| {
+                        let mut lineage = lineage.borrow_mut();
+                        lineage.check_path(path_id, pool, asserts)
+                    });
+                record_replay_sat_cache_delta(cache_before, cache_after);
+                debug_assert_eq!(created, reserved);
+                if created {
+                    WARM_PATHS_CREATED.fetch_add(1, Ordering::Relaxed);
+                    if policy == WarmReusePolicy::Auto {
+                        AUTO_LINEAGE_ADMISSION.with(|admission| {
+                            admission.borrow_mut().remove(path_id);
+                        });
+                        WARM_AUTO_ACTIVATIONS.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                (result, before, after)
             }
-            (result, before, after)
         }
     };
     record_warm_delta(before, after);
@@ -1724,11 +1927,14 @@ pub(crate) fn close_warm_path(path_id: u64) {
     AUTO_LINEAGE_ADMISSION.with(|admission| {
         admission.borrow_mut().remove(path_id);
     });
-    let closed_cache = LINEAGE_SOLVERS.with(|lineage| {
-        let mut lineage = lineage.borrow_mut();
-        lineage.close_path(path_id)
-    });
-    if let Some(cache) = closed_cache {
+    close_retained_lineage_paths(path_id);
+}
+
+fn close_retained_lineage_paths(path_id: u64) {
+    let snapshot_cache = LINEAGE_SOLVERS.with(|lineage| lineage.borrow_mut().close_path(path_id));
+    let direct_cache =
+        DIRECT_DELTA_SOLVERS.with(|lineage| lineage.borrow_mut().close_path(path_id));
+    for cache in [snapshot_cache, direct_cache].into_iter().flatten() {
         subtract_replay_sat_cache_gauges(cache);
         WARM_PATHS_CLOSED.fetch_add(1, Ordering::Relaxed);
         WARM_PATHS_LIVE.fetch_sub(1, Ordering::Relaxed);
@@ -2676,6 +2882,8 @@ mod tests {
             DirectDeltaStats {
                 checks: 4,
                 full_materializations: 1,
+                exact_reuses: 1,
+                prefix_assertions_reused: 3,
                 persistent_assertions_translated: 2,
                 temporary_assumptions_translated: 1,
                 assertions_added: 2,
@@ -2696,7 +2904,7 @@ mod tests {
         let mut lineage = DirectDeltaLineageAxeyumSolver::default();
 
         assert!(lineage.check_path(owner, &pool, &[assertion], 0, &[]).1);
-        let (invalid, synced) = lineage.check_path(owner, &pool, &[assertion], 2, &[]);
+        let (invalid, synced, _) = lineage.check_path(owner, &pool, &[assertion], 2, &[]);
         assert!(!synced);
         assert!(matches!(invalid, SolveResult::Error(_)));
         assert!(!lineage.paths.contains_key(&owner));
@@ -2710,6 +2918,8 @@ mod tests {
             DirectDeltaStats {
                 checks: 3,
                 full_materializations: 2,
+                exact_reuses: 0,
+                prefix_assertions_reused: 0,
                 persistent_assertions_translated: 2,
                 temporary_assumptions_translated: 0,
                 assertions_added: 2,
@@ -2867,6 +3077,75 @@ mod tests {
             parse_warm_reuse_policy(Some("snapshot")),
             WarmReusePolicy::Snapshot
         );
+    }
+
+    #[test]
+    fn direct_delta_is_strictly_opt_in() {
+        for value in [None, Some("off"), Some("false"), Some("0"), Some("invalid")] {
+            assert!(!parse_direct_delta(value));
+        }
+        for value in [Some("on"), Some("true"), Some("TRUE"), Some("1")] {
+            assert!(parse_direct_delta(value));
+        }
+    }
+
+    #[test]
+    fn selected_direct_delta_adapter_reuses_prefix_and_keeps_assumptions_temporary() {
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W32);
+        let six = c(&mut pool, 6, Width::W32);
+        let five = c(&mut pool, 5, Width::W32);
+        let seven = c(&mut pool, 7, Width::W32);
+        let below_six = cmp(&mut pool, CmpOp::Ult, x, six, Width::W32);
+        let x_is_five = cmp(&mut pool, CmpOp::Eq, x, five, Width::W32);
+        let x_is_seven = cmp(&mut pool, CmpOp::Eq, x, seven, Width::W32);
+        let owner = 0xd1ec_7de1_7a_u64;
+
+        let check = |asserts: &[Assert], retain_assertions, persistent_assertions| {
+            check_warm_thread_local_selected(
+                &pool,
+                asserts,
+                Some(owner),
+                Some(WarmDeltaContext {
+                    retain_assertions,
+                    persistent_assertions,
+                }),
+                WarmReusePolicy::Lineage,
+                true,
+            )
+        };
+
+        assert!(matches!(
+            check(&[(below_six, true)], 0, 1),
+            SolveResult::Sat(_)
+        ));
+        assert!(last_direct_delta_synced());
+
+        match check(&[(below_six, true), (x_is_five, true)], 1, 2) {
+            SolveResult::Sat(model) => assert_eq!(model.values.get(&0), Some(&5)),
+            other => panic!("expected direct-delta SAT, got {other:?}"),
+        }
+        assert!(last_direct_delta_synced());
+
+        assert_eq!(
+            check(&[(below_six, true), (x_is_seven, true)], 1, 1),
+            SolveResult::Unsat
+        );
+        assert!(last_direct_delta_synced());
+        assert!(matches!(
+            check(&[(below_six, true)], 1, 1),
+            SolveResult::Sat(_)
+        ));
+        assert!(last_direct_delta_synced());
+
+        // Backend-local validation is fail-closed even if a caller bypasses
+        // `solve_for_path_delta` and supplies an impossible partition.
+        assert!(matches!(
+            check(&[(below_six, true)], 1, 2),
+            SolveResult::Error(_)
+        ));
+        assert!(!last_direct_delta_synced());
+        assert!(!DIRECT_DELTA_SOLVERS.with(|lineage| lineage.borrow().has_path(owner)));
     }
 
     #[test]

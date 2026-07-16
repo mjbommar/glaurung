@@ -139,10 +139,19 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
     path-owned transition layer now accepts an absolute retained-prefix depth,
     translates only its persistent suffix, keeps probes ephemeral, and
     rematerializes fully after missing or invalid owner state.
-  - **Next:** wire explorer-owned path deltas into that session behind an opt-in
-    control. Keep the accepted snapshot/adaptive path as the default and
-    rollback control until the ordered real-driver gate shows equal semantics
-    and lower translation/snapshot work.
+  - **Opt-in explorer tranche landed:** each state tracks its last confirmed
+    persistent depth and submits `(retain, persistent, temporary)` boundaries
+    through `solve_for_path_delta`. The marker advances only after Axeyum
+    confirms synchronization; forks inherit the depth but receive a distinct
+    owner, restarts reset it, missing owners fully materialize, invalid
+    partitions drop retained state, and temporary probes never persist.
+    `GLAURUNG_AXEYUM_DIRECT_DELTA=1` selects this route only under a path-owned
+    warm policy. The accepted snapshot/adaptive route remains the default and
+    rollback control.
+  - **Next:** add direct-session per-check profile export, then run repeated
+    ordered real-driver comparisons for verdict/finding identity, translation
+    and root traffic, total time, and RSS. Do not enable direct deltas by
+    default until those gates pass.
   - Optional runtime hybrid: when both `solver-axeyum` and `solver-z3` are
     compiled in, try axeyum first and fall back to z3 on per-query
     timeout/`Unknown`.

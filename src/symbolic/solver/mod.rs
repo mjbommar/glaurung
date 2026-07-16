@@ -104,6 +104,17 @@ thread_local! {
     /// Explorer-owned logical path for the current solve. Only the opt-in
     /// Axeyum lineage adapter consumes this; ordinary and snapshot solves ignore it.
     static ACTIVE_WARM_PATH: Cell<Option<u64>> = const { Cell::new(None) };
+    /// Explicit persistent-prefix boundary for the opt-in direct-delta Axeyum
+    /// path. `persistent_assertions` partitions the full query slice from any
+    /// trailing one-shot assumptions.
+    static ACTIVE_WARM_DELTA: Cell<Option<WarmDeltaContext>> = const { Cell::new(None) };
+}
+
+/// Explorer-to-backend direct-delta transition for one check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WarmDeltaContext {
+    pub(crate) retain_assertions: usize,
+    pub(crate) persistent_assertions: usize,
 }
 
 /// Backend-separated timing for one solver call.
@@ -406,6 +417,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                         pool,
                         asserts,
                         ACTIVE_WARM_PATH.with(Cell::get),
+                        ACTIVE_WARM_DELTA.with(Cell::get),
                     )
                 } else {
                     axeyum_backend::AxeyumSolver::new().check(pool, asserts)
@@ -419,6 +431,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                         pool,
                         asserts,
                         ACTIVE_WARM_PATH.with(Cell::get),
+                        ACTIVE_WARM_DELTA.with(Cell::get),
                     )
                 } else {
                     axeyum_backend::AxeyumSolver::new().check(pool, asserts)
@@ -490,7 +503,12 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     let result = z3_backend::Z3Solver::new().check(pool, asserts);
     #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
     let result = if axeyum_backend::warm_reuse_enabled() {
-        axeyum_backend::check_warm_thread_local(pool, asserts, ACTIVE_WARM_PATH.with(Cell::get))
+        axeyum_backend::check_warm_thread_local(
+            pool,
+            asserts,
+            ACTIVE_WARM_PATH.with(Cell::get),
+            ACTIVE_WARM_DELTA.with(Cell::get),
+        )
     } else {
         axeyum_backend::AxeyumSolver::new().check(pool, asserts)
     };
@@ -532,16 +550,46 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     result
 }
 
-/// Solve in the ownership context of one explorer path.
+/// Solve in one path-owner context with an explicit persistent-prefix delta.
 ///
-/// The context is worker-local and restored after the call. It is ignored by
-/// ordinary backends and by Axeyum's consecutive-snapshot policy; only the
-/// explicit opt-in lineage policy uses it to select retained mutable state.
-pub(crate) fn solve_for_path(pool: &ExprPool, asserts: &[Assert], path_id: u64) -> SolveResult {
-    let previous = ACTIVE_WARM_PATH.with(|active| active.replace(Some(path_id)));
+/// The full assertion slice remains available to one-shot/Z3 controls and
+/// trace capture. Only an opt-in direct-delta Axeyum session consumes the
+/// partition. The returned Boolean is true exactly when that retained session
+/// synchronized its persistent stack; callers must advance their retain marker
+/// only then.
+pub(crate) fn solve_for_path_delta(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    retain_assertions: usize,
+    persistent_assertions: usize,
+) -> (SolveResult, bool) {
+    if retain_assertions > persistent_assertions || persistent_assertions > asserts.len() {
+        return (
+            SolveResult::Error(format!(
+                "invalid warm delta: retain {retain_assertions}, persistent {persistent_assertions}, total {}",
+                asserts.len()
+            )),
+            false,
+        );
+    }
+    let previous_path = ACTIVE_WARM_PATH.with(|active| active.replace(Some(path_id)));
+    let previous_delta = ACTIVE_WARM_DELTA.with(|active| {
+        active.replace(Some(WarmDeltaContext {
+            retain_assertions,
+            persistent_assertions,
+        }))
+    });
+    #[cfg(feature = "solver-axeyum")]
+    axeyum_backend::reset_direct_delta_sync();
     let result = solve(pool, asserts);
-    ACTIVE_WARM_PATH.with(|active| active.set(previous));
-    result
+    #[cfg(feature = "solver-axeyum")]
+    let synced = axeyum_backend::last_direct_delta_synced();
+    #[cfg(not(feature = "solver-axeyum"))]
+    let synced = false;
+    ACTIVE_WARM_DELTA.with(|active| active.set(previous_delta));
+    ACTIVE_WARM_PATH.with(|active| active.set(previous_path));
+    (result, synced)
 }
 
 #[cfg(all(test, feature = "solver-z3"))]

@@ -240,8 +240,8 @@ framework-level solver defaults.
 
 ## ADR-011 - First-class direct-delta solver session
 
-**Status:** Accepted as the P5 contract tranche; explorer wiring remains
-opt-in follow-up work.
+**Status:** Accepted as the P5 contract plus opt-in explorer-wiring tranche;
+ordered performance/RSS acceptance remains pending.
 **Context:** The accepted warm lineage adapter proves retained Axeyum state is
 the right performance lever, but Glaurung's only framework trait still accepts
 `check(pool, complete_snapshot)`. The adapter must retranslate every root and
@@ -264,11 +264,20 @@ Glaurung symbol value. Two additional lineage-transition tests prove that a
 retained owner translates only suffix roots, switches siblings by absolute
 prefix depth, treats probes as ephemeral assumptions, and fails closed on an
 impossible prefix by dropping state and fully rematerializing on the next call.
-**Consequences:** Glaurung now has the real P5 session contract without
-claiming the explorer uses it yet. The next tranche must replace whole-snapshot
-calls with explicit path deltas behind an opt-in control, preserve owner/serial
-lifecycle invariants and one-shot fallback, and pass the ordered real-driver
-gate before any default change.
+The explorer-wiring tranche expands that group to 41/41 and adds a deterministic
+adapter test covering full materialization, suffix extension, prefix pop,
+ephemeral contradictory assumptions, synchronization acknowledgement, and
+invalid-partition teardown. Both warm explorer ownership tests pass: forked
+owners remain distinct while inheriting only the confirmed depth, and restart
+resets ownership and depth.
+**Consequences:** Glaurung now drives the real P5 session from explicit path
+deltas behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`. The full query remains intact
+for the Z3 authority, ordered capture, and every one-shot fallback. The
+explorer advances its prefix marker only on an explicit backend
+acknowledgement, so admission fallback, a lost owner, or an operational error
+cannot cause a naked suffix to be asserted. The route is not a production
+default or a performance claim: per-check direct-session profiling and the
+repeated ordered correctness/time/RSS gate remain mandatory.
 **Alternatives rejected:** adding default incremental methods to `Solver` would
 make one-shot emulation indistinguishable from retained state; storing one
 trait object inside cloned `State` would imply illegal mutable-session cloning;

@@ -746,6 +746,33 @@ but it can pay heavily to rebuild sibling prefixes and retain more memory. Run
 both against the ordered trace and publish same-stream p50/p95, memory, root
 traffic, and repeated variance before default enablement or verdict caching.
 
+The first direct-delta P5 route is additionally available behind the strict
+opt-in below:
+
+```sh
+GLAURUNG_AXEYUM_WARM_REUSE=lineage \
+GLAURUNG_AXEYUM_DIRECT_DELTA=1 \
+GLAURUNG_SHADOW_DIFF=1 \
+target/release/examples/ioctlance <driver>
+```
+
+Unlike the snapshot lineage adapter, this route does not rediscover the common
+prefix from a translated complete snapshot. The explorer supplies an absolute
+confirmed retain depth, the complete persistent vector, and a trailing
+temporary-assumption partition. The backend fully materializes a missing owner,
+translates only the persistent suffix for an existing owner, and acknowledges
+successful synchronization before the explorer advances its marker. Invalid
+partitions and operational errors drop the retained session. Forks get distinct
+mutable sessions; they inherit only the parent's confirmed depth, so their first
+check safely rematerializes. The full query is still emitted to the ordered
+trace and sent to the Z3 shadow authority.
+
+This is functionality plumbing, not accepted performance evidence. The
+existing warm JSONL profiler is snapshot-oriented; direct-session per-check
+profile export must land before stage-level attribution. Until repeated ordered
+driver runs prove equal verdicts/findings and improve both time and the bounded
+RSS policy, `GLAURUNG_AXEYUM_DIRECT_DELTA` stays unset by default.
+
 The native path-owned control at `b9febbd`/`950cca4` completes that first
 bounded comparison. Three alternating rounds on `win10-vwififlt`,
 `sqfs-intel-DptfDevGen`, and `windows-update-intel-audio-IntcSST` execute 6,986

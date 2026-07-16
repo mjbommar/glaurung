@@ -50,25 +50,31 @@ concentrated in performance and QF_BV coverage, not in wiring.
 
 ## Status
 
-**Implemented and green (2026-07-13).** P1 (text bridge) + P2 (native
-term-translation backend) + P3 (differential oracle) + proofs (G3) +
-incremental PoC (P5 mechanism) are landed on branch `sec/axeyum-backend`:
+**Implemented and green (2026-07-16).** P1 (text bridge), P2 (native
+term-translation backend), P3 (differential oracle), proofs (G3), and the P5
+retained-session contract are landed on branch `sec/axeyum-backend`:
 
 - `src/symbolic/solver/axeyum_backend.rs` - `AxeyumSolver` (native) +
   `AxeyumTextSolver` (bridge) + `prove_unsat` (DRAT). Feature
   `solver-axeyum`; `solve()` cascade z3 > axeyum > pipe.
 - `examples/axeyum_diff.rs` - z3-vs-axeyum differential + benchmark.
-- **54/54 glaurung symbolic tests pass on axeyum; 20/20 differential cases
-  agree with z3; 0 disagreements.** Axeyum is ~12x faster than z3 on
-  glaurung's small one-shot solves.
+- The native backend group is 41/41 green, including scopes, ephemeral
+  assumptions, model lifting, proof replay, snapshot lineage, direct deltas,
+  cache bounds, profiling, and fail-closed resource limits.
+- The ordered real-driver controls establish the honest performance boundary:
+  cold one-shot Axeyum remains slower than Z3 on lifter formulas, while retained
+  path lineage can amortize lowering and beat Z3. The direct-delta explorer
+  route is now wired behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`; repeated ordered
+  correctness/time/RSS acceptance is still pending.
 - Findings + full feedback: `FEEDBACK-LOG.md`.
 
-Key result that revises the plan: for glaurung's workload axeyum is not
-just the pure-Rust choice but the **faster** one (z3's per-call FFI/context
-setup dominates on small formulas), which softens the perf risk (R1) and
-questions the "z3 for perf" framing of ADR-002. Still pending: making
-axeyum a default feature (P4 packaging), the incremental Solver-trait
-extension (P5), and the AArch64/Android reachability endgame (P6).
+The earlier 12x one-shot claim was a fast-failure artifact caused by
+width-invalid consumer terms; strict Axeyum checking exposed those soundness
+bugs. Current performance claims therefore require a 100% decided/agreed gate,
+original-model replay, and same-stream timing. Still pending: direct-delta P5
+acceptance and safe automatic policy, broader driver/variance coverage, and the
+AArch64/Android reachability endgame (P6).
 
 Placement note: this lives in glaurung because glaurung is the integrator;
-the axeyum side is an unchanged dependency.
+Axeyum supplies the additive retained-session contract, while ownership,
+ordered capture, and production admission remain Glaurung responsibilities.

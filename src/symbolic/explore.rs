@@ -22,7 +22,9 @@ use crate::ir::types::{
 };
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::ordered_trace::TracePath;
-use crate::symbolic::solver::{last_solve_timing, solve_for_path, Assert, Model, SolveResult};
+use crate::symbolic::solver::{
+    last_solve_timing, solve_for_path_delta, Assert, Model, SolveResult,
+};
 use crate::symbolic::Symbolic;
 
 use std::cell::Cell;
@@ -371,6 +373,9 @@ struct State {
     trace: Option<TracePath>,
     /// Logical owner of opt-in retained Axeyum mutable state.
     warm_path_id: u64,
+    /// Absolute number of persistent constraints known synchronized in that
+    /// owner. It advances only when the direct-delta backend confirms success.
+    warm_retain_assertions: usize,
 }
 
 /// Max times a single path may re-enter the same block before it is cut.
@@ -391,6 +396,7 @@ impl State {
             visits: BTreeMap::new(),
             trace: TracePath::root(pc),
             warm_path_id: next_warm_path_id(),
+            warm_retain_assertions: 0,
         }
     }
 
@@ -409,6 +415,7 @@ impl State {
             visits: self.visits.clone(),
             trace: self.trace.as_ref().map(|trace| trace.fork(pc)),
             warm_path_id: next_warm_path_id(),
+            warm_retain_assertions: self.warm_retain_assertions,
         }
     }
 
@@ -462,13 +469,24 @@ impl State {
         #[cfg(feature = "solver-axeyum")]
         crate::symbolic::solver::axeyum_backend::close_warm_path(self.warm_path_id);
         self.warm_path_id = next_warm_path_id();
+        self.warm_retain_assertions = 0;
         self.trace = TracePath::root(self.pc);
     }
 }
 
 /// Solve the current path condition and record the exact query occurrence.
 fn solve_traced(st: &mut State, purpose: &str, location: u64) -> SolveResult {
-    let result = solve_for_path(&st.machine.dom.pool, &st.constraints, st.warm_path_id);
+    let persistent = st.constraints.len();
+    let (result, synced) = solve_for_path_delta(
+        &st.machine.dom.pool,
+        &st.constraints,
+        st.warm_path_id,
+        st.warm_retain_assertions,
+        persistent,
+    );
+    if synced {
+        st.warm_retain_assertions = persistent;
+    }
     let timing = last_solve_timing();
     if let Some(trace) = &mut st.trace {
         trace.check(
@@ -497,7 +515,17 @@ fn solve_probe_traced(
     }
     let mut probe = st.constraints.clone();
     probe.push(assertion);
-    let result = solve_for_path(&st.machine.dom.pool, &probe, st.warm_path_id);
+    let persistent = st.constraints.len();
+    let (result, synced) = solve_for_path_delta(
+        &st.machine.dom.pool,
+        &probe,
+        st.warm_path_id,
+        st.warm_retain_assertions,
+        persistent,
+    );
+    if synced {
+        st.warm_retain_assertions = persistent;
+    }
     let timing = last_solve_timing();
     if let Some(trace) = &mut st.trace {
         trace.check(
@@ -602,6 +630,7 @@ fn consider_terminal(st: &State, best: &mut Option<State>) {
     if best.as_ref().is_none_or(|b| progress(b) < p) {
         let mut candidate = st.clone();
         candidate.warm_path_id = next_warm_path_id();
+        candidate.warm_retain_assertions = 0;
         *best = Some(candidate);
     }
 }
@@ -1781,13 +1810,16 @@ mod tests {
     fn warm_solver_ownership_is_distinct_across_forks_and_restarts() {
         let machine = Machine::new(Symbolic::new());
         let mut root = State::root(machine, 0x1000, TaintSpec::new());
+        root.warm_retain_assertions = 7;
         let child = root.fork(0x2000);
         assert_ne!(root.warm_path_id, child.warm_path_id);
+        assert_eq!(child.warm_retain_assertions, 7);
 
         let original = root.warm_path_id;
         root.restart_trace();
         assert_ne!(root.warm_path_id, original);
         assert_ne!(root.warm_path_id, child.warm_path_id);
+        assert_eq!(root.warm_retain_assertions, 0);
     }
 
     #[test]

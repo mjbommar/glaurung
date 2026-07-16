@@ -198,5 +198,8 @@ quantifiers, datatypes - **none of which glaurung emits.** So glaurung is
 **Performance is the open gate**: axeyum's own status is "decides a slice
 of real public QF_BV; not yet perf-parity with Z3." Warm incrementality
 (shared subterms blasted once, learned clauses retained) is the mitigation
-and fits glaurung's many-related-queries shape - but the current one-shot
-trait does not exploit it (needs the P5 incremental trait). See `05` R1.
+and fits glaurung's many-related-queries shape. The P5 incremental trait and a
+path-owned direct-delta adapter now exist, and the explorer can drive them
+behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`; the remaining gate is repeated ordered
+proof that this route preserves decisions/findings while improving time within
+the bounded RSS policy. See `05` R1.
