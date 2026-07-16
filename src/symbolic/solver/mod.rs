@@ -229,7 +229,7 @@ fn publish_query_file(dir: &std::path::Path, hex: &str, bytes: &[u8]) -> std::io
         .create_new(true)
         .write(true)
         .open(&temporary)?;
-    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+    if let Err(error) = file.write_all(bytes) {
         let _ = std::fs::remove_file(&temporary);
         return Err(error);
     }
