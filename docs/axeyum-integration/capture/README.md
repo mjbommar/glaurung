@@ -208,8 +208,19 @@ falls 17,765.2 to 16,996.6 ms (-4.33%), normalized ratio about 0.342x to 0.328x
 Z3 (-3.99%), and median RSS 261,428 to 257,796 KiB (-1.39%); Z3 drift is
 -0.36%. All 170,136 combined checks agree, findings and exact warm/cache
 traffic repeat, and replay failures remain zero. These causal repetitions do
-not replace the machine-readable lineage artifact; regenerate it separately
-from the accepted Axeyum/Glaurung revisions.
+not substitute for the production-policy gate.
+
+The production-policy refresh is now committed as
+`lineage-adaptive-model-completion-baseline-v1.json` (SHA-256
+`21b9522725650ab4ffe47347d97b310d861a6fa92779ec6b82377bea6c1f7c07`) and
+`lineage-adaptive-model-completion-candidate-v1.json` (SHA-256
+`9ac47b7c77d8ebf60672eed12432e26081adbdb0af6495f994a654ec308f015d`).
+Both use the same clean Glaurung revision, adaptive/cache-on policy, driver
+bytes, system identity, and three repetitions. The guarded comparison keeps
+all 185,442 checks, findings, warm/cache traffic, and cleanup exact. SurfacePen
+mean Axeyum time/ratio improve 23.82%/24.99%; NETwtw10 improve 3.55%/4.04%.
+Median RSS changes +1.13%/+0.97%, and absolute Z3 drift is 1.56%/0.52%; every
+3% Axeyum, 3% ratio, 5% RSS, and 2% Z3 alarm passes.
 
 The first v5 SurfacePen profile changes the residual priority: replay is
 447.046 ms / 38.82% of internal time because the incremental solver formerly
