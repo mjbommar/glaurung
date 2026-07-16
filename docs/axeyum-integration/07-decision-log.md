@@ -237,3 +237,37 @@ This accepts adaptive as the GQ9 production admission policy and the Axeyum
 explorer default. The default parser and explicit one-shot override have direct
 unit coverage. This downstream scheduling choice does not alter Axeyum's
 framework-level solver defaults.
+
+## ADR-011 - First-class direct-delta solver session
+
+**Status:** Accepted as the P5 contract tranche; explorer wiring remains
+opt-in follow-up work.
+**Context:** The accepted warm lineage adapter proves retained Axeyum state is
+the right performance lever, but Glaurung's only framework trait still accepts
+`check(pool, complete_snapshot)`. The adapter must retranslate every root and
+reconstruct the longest common prefix before it can issue Axeyum push/pop/assert
+operations. Axeyum ADR-0201 now exposes an object-safe retained session trait,
+but Glaurung still needs an IR-level lifecycle contract.
+**Decision:** Add a separate object-safe `IncrementalSolver` trait with
+`assert`, `push`, `pop`, `scope_depth`, `check`, and `check_assuming`. Implement
+it first as `IncrementalAxeyumSolver`. Each assert translates only the new
+Glaurung root, then delegates to Axeyum's retained trait. The session retains
+its arena/AIG/CNF/SAT state and keeps symbol mappings in matching frames so
+popped scopes and temporary assumptions cannot leak values into later models.
+The existing one-shot `Solver`, snapshot adapter, adaptive default, and every
+off/fixed/serial control remain unchanged.
+**Evidence:** The complete 37-test Axeyum-backend group passes under the 4 GiB
+serialized build. A new trait-object test drives a base assertion, scoped SAT
+branch, pop underflow, contradictory one-shot assumption, and a subsequent SAT
+check proving non-persistence; the scoped SAT model maps back to the exact
+Glaurung symbol value.
+**Consequences:** Glaurung now has the real P5 session contract without
+claiming the explorer uses it yet. The next tranche must replace whole-snapshot
+calls with explicit path deltas behind an opt-in control, preserve owner/serial
+lifecycle invariants and one-shot fallback, and pass the ordered real-driver
+gate before any default change.
+**Alternatives rejected:** adding default incremental methods to `Solver` would
+make one-shot emulation indistinguishable from retained state; storing one
+trait object inside cloned `State` would imply illegal mutable-session cloning;
+exposing configured preprocessing would hide a measured cold-path loss behind
+the general contract.

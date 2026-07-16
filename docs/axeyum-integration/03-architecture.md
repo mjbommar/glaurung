@@ -16,6 +16,25 @@ Nothing above the trait changes for v1. `explore.rs` and the rest of the
 symbolic engine keep calling the free `solve(pool, asserts)` dispatcher;
 we add a compile-time branch that selects axeyum.
 
+P5 adds a distinct retained contract rather than pretending the one-shot trait
+is warm:
+
+```rust
+pub trait IncrementalSolver {
+    fn assert(&mut self, pool: &ExprPool, assertion: Assert) -> Result<(), String>;
+    fn push(&mut self) -> Result<(), String>;
+    fn pop(&mut self) -> bool;
+    fn scope_depth(&self) -> usize;
+    fn check(&mut self) -> SolveResult;
+    fn check_assuming(&mut self, pool: &ExprPool, assumptions: &[Assert]) -> SolveResult;
+}
+```
+
+`IncrementalAxeyumSolver` implements this contract by translating only delta
+roots and delegating to Axeyum's retained session trait. The current explorer
+still uses the bounded snapshot/lineage adapter; direct path-delta wiring is the
+next opt-in tranche and must retain the existing lifecycle and replay gates.
+
 ## Module + crate layout
 
 ```

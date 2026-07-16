@@ -24,17 +24,18 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    AigConstructionStats, CheckResult, IncrementalBvSolver, IncrementalBvStats,
-    IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
-    ReplayCheckedSatCachePolicy, ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome,
-    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value,
+    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, AigConstructionStats,
+    CheckResult, IncrementalBvSolver, IncrementalBvStats, IncrementalCnfStats,
+    IncrementalLoweringStats, IncrementalModelLiftStats,
+    IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy,
+    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{Assert, Model, SolveResult, Solver, pipe};
+use crate::symbolic::solver::{pipe, Assert, IncrementalSolver, Model, SolveResult, Solver};
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
 /// and metering behave the same regardless of which backend is compiled in.
@@ -568,6 +569,110 @@ impl Solver for AxeyumSolver {
             }
         }
         map_check_result(solver.check(&arena), &translated.sym_map)
+    }
+}
+
+/// A direct-delta Axeyum session for Glaurung's first-class incremental trait.
+///
+/// Each [`IncrementalSolver::assert`] translates only that assertion's
+/// expression DAG. The Axeyum arena, AIG, CNF, SAT state, learned clauses, and
+/// original-term replay metadata remain live across checks. Per-scope symbol
+/// maps are retained alongside the solver frames so popped and temporary terms
+/// cannot leak values into a later client model.
+#[derive(Debug)]
+pub struct IncrementalAxeyumSolver {
+    arena: TermArena,
+    solver: IncrementalBvSolver,
+    symbol_frames: Vec<Vec<(u32, SymbolId)>>,
+}
+
+impl Default for IncrementalAxeyumSolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IncrementalAxeyumSolver {
+    /// Create an empty raw-policy retained session.
+    pub fn new() -> Self {
+        Self {
+            arena: TermArena::new(),
+            solver: IncrementalBvSolver::with_config(config().with_preprocess(false)),
+            symbol_frames: vec![Vec::new()],
+        }
+    }
+
+    fn active_symbol_map(&self) -> Vec<(u32, SymbolId)> {
+        self.symbol_frames.iter().flatten().copied().collect()
+    }
+
+    fn translate(
+        &mut self,
+        pool: &ExprPool,
+        assertions: &[Assert],
+    ) -> Result<TranslatedQuery, IrError> {
+        translate_query(pool, assertions, &mut self.arena)
+    }
+}
+
+impl IncrementalSolver for IncrementalAxeyumSolver {
+    fn assert(&mut self, pool: &ExprPool, assertion: Assert) -> Result<(), String> {
+        let translated = self
+            .translate(pool, std::slice::from_ref(&assertion))
+            .map_err(|error| format!("axeyum translate: {error}"))?;
+        let term = translated.assertions[0];
+        AxeyumIncrementalSolver::assert(&mut self.solver, &self.arena, term)
+            .map_err(|error| format!("axeyum assert: {error}"))?;
+        self.symbol_frames
+            .last_mut()
+            .expect("base symbol frame is invariant")
+            .extend(translated.sym_map);
+        Ok(())
+    }
+
+    fn push(&mut self) -> Result<(), String> {
+        AxeyumIncrementalSolver::push(&mut self.solver)
+            .map_err(|error| format!("axeyum push: {error}"))?;
+        self.symbol_frames.push(Vec::new());
+        Ok(())
+    }
+
+    fn pop(&mut self) -> bool {
+        if !AxeyumIncrementalSolver::pop(&mut self.solver) {
+            return false;
+        }
+        let popped = self.symbol_frames.pop();
+        debug_assert!(popped.is_some());
+        true
+    }
+
+    fn scope_depth(&self) -> usize {
+        AxeyumIncrementalSolver::scope_depth(&self.solver)
+    }
+
+    fn check(&mut self) -> SolveResult {
+        let symbols = self.active_symbol_map();
+        map_check_result(
+            AxeyumIncrementalSolver::check(&mut self.solver, &self.arena),
+            &symbols,
+        )
+    }
+
+    fn check_assuming(&mut self, pool: &ExprPool, assumptions: &[Assert]) -> SolveResult {
+        let translated = match self.translate(pool, assumptions) {
+            Ok(translated) => translated,
+            Err(error) => return SolveResult::Error(format!("axeyum translate: {error}")),
+        };
+        let mut symbols = self.active_symbol_map();
+        symbols.extend(translated.sym_map);
+        map_check_result(
+            AxeyumIncrementalSolver::check_assuming(
+                &mut self.solver,
+                &self.arena,
+                &translated.assertions,
+            ),
+            &symbols,
+        )
     }
 }
 
@@ -2331,6 +2436,46 @@ mod tests {
         ));
         assert_eq!(solver.stats().assertions_popped, 1);
         assert_eq!(solver.stats().exact_snapshot_reuses, 1);
+    }
+
+    #[test]
+    fn direct_incremental_trait_handles_scopes_and_ephemeral_assumptions() {
+        let mut root = ExprPool::new();
+        let x = root.fresh_symbol(Width::W32);
+        let six = c(&mut root, 6, Width::W32);
+        let below_six = cmp(&mut root, CmpOp::Ult, x, six, Width::W32);
+
+        let mut left = root.clone();
+        let five = c(&mut left, 5, Width::W32);
+        let x_is_five = cmp(&mut left, CmpOp::Eq, x, five, Width::W32);
+        let mut right = root.clone();
+        let seven = c(&mut right, 7, Width::W32);
+        let x_is_seven = cmp(&mut right, CmpOp::Eq, x, seven, Width::W32);
+
+        let mut concrete = IncrementalAxeyumSolver::new();
+        let solver: &mut dyn IncrementalSolver = &mut concrete;
+        solver.assert(&root, (below_six, true)).unwrap();
+        assert!(matches!(solver.check(), SolveResult::Sat(_)));
+
+        solver.push().unwrap();
+        solver.assert(&left, (x_is_five, true)).unwrap();
+        match solver.check() {
+            SolveResult::Sat(model) => assert_eq!(model.values.get(&0), Some(&5)),
+            other => panic!("expected direct-delta left SAT, got {other:?}"),
+        }
+        assert_eq!(solver.scope_depth(), 1);
+        assert!(solver.pop());
+        assert_eq!(solver.scope_depth(), 0);
+        assert!(!solver.pop());
+
+        assert_eq!(
+            solver.check_assuming(&right, &[(x_is_seven, true)]),
+            SolveResult::Unsat
+        );
+        assert!(
+            matches!(solver.check(), SolveResult::Sat(_)),
+            "the contradictory one-shot assumption must not persist"
+        );
     }
 
     #[test]

@@ -51,6 +51,32 @@ pub trait Solver {
     fn check(&mut self, pool: &ExprPool, asserts: &[Assert]) -> SolveResult;
 }
 
+/// A genuinely retained solver session driven by assertion deltas.
+///
+/// Unlike [`Solver::check`], this contract never receives the complete active
+/// snapshot. Callers explicitly mutate the retained stack, then check it. A
+/// session is exclusive to one explorer owner; cloning or concurrently sharing
+/// mutable backend state is outside this interface.
+pub trait IncrementalSolver {
+    /// Add one persistent assertion to the current scope.
+    fn assert(&mut self, pool: &ExprPool, assertion: Assert) -> Result<(), String>;
+
+    /// Open a new assertion scope.
+    fn push(&mut self) -> Result<(), String>;
+
+    /// Close the latest assertion scope, returning `false` at the base scope.
+    fn pop(&mut self) -> bool;
+
+    /// Return the number of scopes above the base scope.
+    fn scope_depth(&self) -> usize;
+
+    /// Check the currently active persistent assertions.
+    fn check(&mut self) -> SolveResult;
+
+    /// Check with temporary assumptions that do not persist after this call.
+    fn check_assuming(&mut self, pool: &ExprPool, assumptions: &[Assert]) -> SolveResult;
+}
+
 use std::cell::Cell;
 use std::time::Duration;
 

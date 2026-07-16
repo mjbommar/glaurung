@@ -132,11 +132,14 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
 
 - Entry: P4 shipped; perf-watch list from P4 shows where it hurts.
 - Work (each independently optional):
-  - Add an *incremental* solver trait (push/pop/assume) alongside the
-    one-shot `check`, mapping to axeyum's `IncrementalBvSolver`, to reuse
-    solver state across the many-solves-per-function explorer pattern
-    (glaurung meters thousands of solves/function - state reuse is the
-    win). Opt-in; the one-shot path stays the default contract.
+  - **Contract tranche landed (ADR-011):** an object-safe incremental solver
+    trait (push/pop/assert/check/assume) now exists alongside one-shot `check`,
+    with a direct-delta `IncrementalAxeyumSolver` implementation. It translates
+    only newly asserted roots and retains solver state across checks.
+  - **Next:** wire explorer-owned path deltas into that session behind an opt-in
+    control. Keep the accepted snapshot/adaptive path as the default and
+    rollback control until the ordered real-driver gate shows equal semantics
+    and lower translation/snapshot work.
   - Optional runtime hybrid: when both `solver-axeyum` and `solver-z3` are
     compiled in, try axeyum first and fall back to z3 on per-query
     timeout/`Unknown`.
