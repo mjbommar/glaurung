@@ -249,7 +249,7 @@ one-shot Axeyum path; an over-limit retained path is closed before the one-shot
 check. Invalid limit values fail closed as zero. The footer exposes
 `path-cap-fallbacks`, `assertion-cap-fallbacks`, `max-live-paths`, and
 `max-assertions-per-path`. Lineage remains opt-in, but its unset limits now
-select the measured bounded defaults of 9 retained paths and 128 assertions per
+select the measured bounded defaults of 9 retained paths and 512 assertions per
 path. Explicit decimal values override either limit; `18446744073709551615`
 reproduces the former effectively unbounded ceiling.
 
@@ -279,6 +279,26 @@ falls from 137,968 to 126,860 KiB. This admits a bounded default for the
 explicit lineage mode, not automatic warm selection: GQ9 still requires wider
 drivers and a topology/cost policy before setting `GLAURUNG_AXEYUM_WARM_REUSE`
 implicitly.
+
+The first GQ10 widening pass supersedes only the 128-assertion component. The
+held-out 320 KiB SurfacePen driver reaches 479 assertions (p90 352, p95 416,
+p99 467): 128 sends 965/2,551 checks one-shot, while 256 still sends 446.
+Raising the assertion ceiling to 512 eliminates every assertion fallback and
+improves unprofiled Axeyum 1.633 to 1.063 seconds; 512 and the effectively
+unbounded control have the same warm traffic, approximately 1.064-second
+Axeyum time, and approximately 83.3 MiB RSS. Every run agrees 2,551/2,551 with
+Z3. Glaurung therefore defaults explicit lineage to 9/512 after ADR-0177; the
+9-path conclusion and the requirement for explicit warm selection are
+unchanged.
+
+The 4.8 MiB held-out NETwtw10 driver then exercises the opposite boundary under
+a 60-second analysis deadline and hard 4 GiB process cap. With 512 assertions
+it has zero assertion fallbacks, but cap 9 sends 8,325/23,797 checks one-shot;
+all 23,797 agree, Axeyum takes 16.840 seconds versus Z3's 47.613, and RSS peaks
+at 257,280 KiB. Cap 12 recovers only 417 checks and 1.5% Axeyum time while RSS
+rises to 267,232 KiB. This retains nine as the conservative live-session
+default and demonstrates that its fallback count is a deliberate memory/time
+tradeoff, not an error or undecided result.
 
 Three alternating baseline/warm processes on 2026-07-15 each ran 13,126
 same-stream checks with 13,126 agreements, zero disagreements/unknown splits,
