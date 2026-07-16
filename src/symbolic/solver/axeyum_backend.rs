@@ -493,10 +493,6 @@ impl LineageIncrementalAxeyumSolver {
     fn close_path(&mut self, path_id: u64) -> bool {
         self.paths.remove(&path_id).is_some()
     }
-
-    fn live_paths(&self) -> u64 {
-        count(self.paths.len())
-    }
 }
 
 /// Whether the opt-in snapshot-to-incremental adapter is selected.
@@ -1248,10 +1244,10 @@ mod tests {
                 .exact_snapshot_reuses,
             0
         );
-        assert_eq!(lineage.live_paths(), 2);
+        assert_eq!(lineage.paths.len(), 2);
         assert!(lineage.close_path(11));
         assert!(!lineage.close_path(11));
-        assert_eq!(lineage.live_paths(), 1);
+        assert_eq!(lineage.paths.len(), 1);
     }
 
     #[test]
