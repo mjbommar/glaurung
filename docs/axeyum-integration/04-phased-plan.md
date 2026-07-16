@@ -164,10 +164,13 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
     removal of snapshot reconstruction pays. It fails production replacement:
     SurfacePen time/ratio regress 7.83%/9.54%, and NETwtw10 RSS rises 16.73%
     versus serial snapshot. Keep direct opt-in and serial snapshot default.
-  - **Next:** extend the fail-closed lineage gate with the source-prefix direct+
-    serial policy, calibrate exact traffic on a real SurfacePen smoke, then run
-    the repeated SurfacePen/NETwtw10 production comparison. Direct remains
-    opt-in until time, ratio, and RSS all clear.
+  - **Source-prefix gate calibrated:** the runner/validator names direct+serial
+    `source-prefix-v1`, enforces exact SurfacePen/NETwtw10 traffic, and exposes
+    separate exclusive-direct→source-direct and serial-snapshot→source-direct
+    comparisons. One process per driver is fully agreed/replay-clean and
+    promising, but is not release evidence.
+  - **Next:** run three clean processes per driver and both named comparisons.
+    Direct remains opt-in until time, ratio, and RSS all clear.
   - Optional runtime hybrid: when both `solver-axeyum` and `solver-z3` are
     compiled in, try axeyum first and fall back to z3 on per-query
     timeout/`Unknown`.

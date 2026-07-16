@@ -426,7 +426,39 @@ class LineageGateTests(unittest.TestCase):
         )
         self.assertEqual(summaries["surface"]["runs"], 1)
 
-    def test_validate_rejects_direct_delta_with_serial_sibling_reuse(self) -> None:
+    def test_validate_accepts_source_identity_direct_serial_partition(self) -> None:
+        spec = lineage_gate.DRIVERS["surface"]
+        run = {
+            "driver": "surface",
+            "repetition": 1,
+            "queries": spec.expected_queries,
+            "agree": spec.expected_queries,
+            "disagree": 0,
+            "unknown_split": 0,
+            "z3_ms": 4_470.4,
+            "axeyum_ms": 314.4,
+            "warm": dict(spec.expected_direct_serial_warm),
+            "serial": dict(spec.expected_adaptive_serial),
+            "max_rss_kib": 73_900,
+            "stdout_sha256": "a" * 64,
+        }
+        summaries = lineage_gate.validate_artifact(
+            {
+                "schema": lineage_gate.SCHEMA,
+                "policy": {
+                    "warm_reuse": "adaptive",
+                    "warm_owner_transfer": "on",
+                    "serial_sibling_reuse": "on",
+                    "direct_delta": "on",
+                    "direct_sibling_identity": "source-prefix-v1",
+                },
+                "repetitions": 1,
+                "runs": [run],
+            }
+        )
+        self.assertEqual(summaries["surface"]["runs"], 1)
+
+    def test_validate_rejects_direct_serial_without_source_identity(self) -> None:
         artifact = {
             "schema": lineage_gate.SCHEMA,
             "policy": {
@@ -438,7 +470,7 @@ class LineageGateTests(unittest.TestCase):
             "repetitions": 1,
             "runs": [{}],
         }
-        with self.assertRaisesRegex(ValueError, "direct delta gate requires"):
+        with self.assertRaisesRegex(ValueError, "source-prefix-v1"):
             lineage_gate.validate_artifact(artifact)
 
     def test_thresholds_distinguish_regression_from_environment_drift(self) -> None:
@@ -657,6 +689,62 @@ class LineageGateTests(unittest.TestCase):
                 allow_lineage_to_adaptive=False,
                 allow_serial_snapshot_to_direct_delta=True,
             )
+
+    def test_cross_policy_identity_allows_direct_source_siblings(self) -> None:
+        baseline = {
+            "system": {"machine": "x86_64"},
+            "policy": {
+                "warm_reuse": "adaptive",
+                "warm_owner_transfer": "on",
+                "serial_sibling_reuse": "off",
+                "direct_delta": "on",
+                "direct_sibling_identity": "off",
+            },
+            "repetitions": 3,
+            "drivers": {"surface": {"sha256": "a" * 64}},
+        }
+        candidate = {
+            **baseline,
+            "policy": {
+                **baseline["policy"],
+                "serial_sibling_reuse": "on",
+                "direct_sibling_identity": "source-prefix-v1",
+            },
+        }
+        lineage_gate.validate_comparison_identity(
+            baseline,
+            candidate,
+            allow_lineage_to_adaptive=False,
+            allow_direct_source_sibling_enablement=True,
+        )
+
+    def test_cross_policy_identity_allows_serial_snapshot_to_source_direct(self) -> None:
+        baseline = {
+            "system": {"machine": "x86_64"},
+            "policy": {
+                "warm_reuse": "adaptive",
+                "warm_owner_transfer": "on",
+                "serial_sibling_reuse": "on",
+                "direct_delta": "off",
+                "direct_sibling_identity": "off",
+            },
+            "repetitions": 3,
+            "drivers": {"surface": {"sha256": "a" * 64}},
+        }
+        candidate = {
+            **baseline,
+            "policy": {
+                **baseline["policy"],
+                "direct_delta": "on",
+                "direct_sibling_identity": "source-prefix-v1",
+            },
+        }
+        lineage_gate.validate_comparison_identity(
+            baseline,
+            candidate,
+            allow_lineage_to_adaptive=False,
+            allow_serial_snapshot_to_source_direct=True,
+        )
 
 
 if __name__ == "__main__":

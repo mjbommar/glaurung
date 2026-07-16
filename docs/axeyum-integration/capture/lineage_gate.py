@@ -40,6 +40,7 @@ class DriverSpec:
     expected_adaptive_transfer_warm: dict[str, int]
     expected_adaptive_transfer: dict[str, int]
     expected_direct_delta_warm: dict[str, int]
+    expected_direct_serial_warm: dict[str, int]
     expected_adaptive_serial_warm: dict[str, int]
     expected_adaptive_serial: dict[str, int]
 
@@ -139,6 +140,22 @@ DRIVERS = {
             "paths-live": 0,
             "paths-peak": 2,
             "path-cap-fallbacks": 16,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
+        },
+        expected_direct_serial_warm={
+            "checks": 2_551,
+            "exact": 125,
+            "prefix-roots": 307_592,
+            "added": 2_398,
+            "popped": 940,
+            "resets": 0,
+            "paths-created": 43,
+            "paths-closed": 43,
+            "paths-live": 0,
+            "paths-peak": 1,
+            "path-cap-fallbacks": 0,
             "assertion-cap-fallbacks": 0,
             "max-live-paths": 9,
             "max-assertions-per-path": 512,
@@ -260,6 +277,22 @@ DRIVERS = {
             "paths-live": 0,
             "paths-peak": 9,
             "path-cap-fallbacks": 2_536,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
+        },
+        expected_direct_serial_warm={
+            "checks": 28_356,
+            "exact": 2_597,
+            "prefix-roots": 1_220_938,
+            "added": 23_884,
+            "popped": 20_393,
+            "resets": 0,
+            "paths-created": 164,
+            "paths-closed": 164,
+            "paths-live": 0,
+            "paths-peak": 1,
+            "path-cap-fallbacks": 0,
             "assertion-cap-fallbacks": 0,
             "max-live-paths": 9,
             "max-assertions-per-path": 512,
@@ -464,15 +497,22 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
     direct_delta = policy.get("direct_delta", "off")
     if direct_delta not in {"off", "on"}:
         fail(f"unsupported direct-delta policy: {direct_delta!r}")
+    direct_sibling_identity = policy.get("direct_sibling_identity", "off")
+    if direct_sibling_identity not in {"off", "source-prefix-v1"}:
+        fail(
+            f"unsupported direct-sibling-identity policy: {direct_sibling_identity!r}"
+        )
     if direct_delta == "on" and (
-        warm_reuse != "adaptive"
-        or warm_owner_transfer != "on"
-        or serial_sibling_reuse != "off"
+        warm_reuse != "adaptive" or warm_owner_transfer != "on"
     ):
         fail(
-            "direct delta gate requires adaptive reuse, exclusive owner transfer, "
-            "and serial sibling reuse off"
+            "direct delta gate requires adaptive reuse and exclusive owner transfer"
         )
+    if direct_delta == "on" and serial_sibling_reuse == "on":
+        if direct_sibling_identity != "source-prefix-v1":
+            fail("direct serial reuse requires source-prefix-v1 identity")
+    elif direct_sibling_identity != "off":
+        fail("source-prefix-v1 identity requires direct delta plus serial sibling reuse")
     by_driver: dict[str, list[dict[str, Any]]] = {}
     for run in runs:
         if not isinstance(run, dict):
@@ -484,7 +524,9 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
     summaries: dict[str, dict[str, Any]] = {}
     for name, driver_runs in sorted(by_driver.items()):
         spec = DRIVERS[name]
-        if direct_delta == "on":
+        if direct_delta == "on" and serial_sibling_reuse == "on":
+            expected_warm = spec.expected_direct_serial_warm
+        elif direct_delta == "on":
             expected_warm = spec.expected_direct_delta_warm
         elif serial_sibling_reuse == "on":
             expected_warm = spec.expected_adaptive_serial_warm
@@ -641,13 +683,10 @@ def run_gate(args: argparse.Namespace) -> None:
     ):
         fail("serial sibling reuse requires adaptive warm reuse and owner transfer")
     if args.direct_delta == "on" and (
-        args.warm_reuse != "adaptive"
-        or args.warm_owner_transfer != "on"
-        or args.serial_sibling_reuse != "off"
+        args.warm_reuse != "adaptive" or args.warm_owner_transfer != "on"
     ):
         fail(
-            "direct delta gate requires adaptive reuse, exclusive owner transfer, "
-            "and serial sibling reuse off"
+            "direct delta gate requires adaptive reuse and exclusive owner transfer"
         )
     binary = pathlib.Path(args.binary).resolve()
     sample_root = pathlib.Path(args.sample_root).resolve()
@@ -687,6 +726,11 @@ def run_gate(args: argparse.Namespace) -> None:
             "warm_owner_transfer": args.warm_owner_transfer,
             "serial_sibling_reuse": args.serial_sibling_reuse,
             "direct_delta": args.direct_delta,
+            "direct_sibling_identity": (
+                "source-prefix-v1"
+                if args.direct_delta == "on" and args.serial_sibling_reuse == "on"
+                else "off"
+            ),
             "replay_sat_cache": args.replay_sat_cache,
             "replay_sat_cache_max_entries_per_path": DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
             "replay_sat_cache_max_model_values_per_path": DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES,
@@ -785,6 +829,8 @@ def validate_comparison_identity(
     allow_serial_sibling_reuse_enablement: bool = False,
     allow_direct_delta_enablement: bool = False,
     allow_serial_snapshot_to_direct_delta: bool = False,
+    allow_direct_source_sibling_enablement: bool = False,
+    allow_serial_snapshot_to_source_direct: bool = False,
 ) -> None:
     for field in ("system", "repetitions", "drivers"):
         if baseline.get(field) != candidate.get(field):
@@ -797,6 +843,8 @@ def validate_comparison_identity(
     after_common = dict(after_policy)
     before_common.setdefault("direct_delta", "off")
     after_common.setdefault("direct_delta", "off")
+    before_common.setdefault("direct_sibling_identity", "off")
+    after_common.setdefault("direct_sibling_identity", "off")
     if (
         not allow_lineage_to_adaptive
         and not allow_replay_sat_cache_enablement
@@ -804,6 +852,8 @@ def validate_comparison_identity(
         and not allow_serial_sibling_reuse_enablement
         and not allow_direct_delta_enablement
         and not allow_serial_snapshot_to_direct_delta
+        and not allow_direct_source_sibling_enablement
+        and not allow_serial_snapshot_to_source_direct
     ):
         if before_common != after_common:
             fail("comparison identity drift in policy")
@@ -835,6 +885,46 @@ def validate_comparison_identity(
             )
         if before_common != after_common:
             fail("comparison identity drift outside production direct transition")
+        return
+    if allow_direct_source_sibling_enablement:
+        before_serial = before_common.pop("serial_sibling_reuse", "off")
+        after_serial = after_common.pop("serial_sibling_reuse", "off")
+        before_direct = before_common.pop("direct_delta", "off")
+        after_direct = after_common.pop("direct_delta", "off")
+        before_identity = before_common.pop("direct_sibling_identity", "off")
+        after_identity = after_common.pop("direct_sibling_identity", "off")
+        if (
+            before_serial,
+            after_serial,
+            before_direct,
+            after_direct,
+            before_identity,
+            after_identity,
+        ) != ("off", "on", "on", "on", "off", "source-prefix-v1"):
+            fail(
+                "source-sibling comparison requires exclusive direct baseline "
+                "and source-prefix direct candidate"
+            )
+        if before_common != after_common:
+            fail("comparison identity drift outside source-sibling transition")
+        return
+    if allow_serial_snapshot_to_source_direct:
+        before_direct = before_common.pop("direct_delta", "off")
+        after_direct = after_common.pop("direct_delta", "off")
+        before_identity = before_common.pop("direct_sibling_identity", "off")
+        after_identity = after_common.pop("direct_sibling_identity", "off")
+        if (before_direct, after_direct, before_identity, after_identity) != (
+            "off",
+            "on",
+            "off",
+            "source-prefix-v1",
+        ):
+            fail(
+                "source production comparison requires serial snapshot baseline "
+                "and source-prefix direct candidate"
+            )
+        if before_common != after_common:
+            fail("comparison identity drift outside source production transition")
         return
     if allow_replay_sat_cache_enablement:
         before_cache = before_common.pop("replay_sat_cache", "off")
@@ -877,6 +967,12 @@ def compare_artifacts(args: argparse.Namespace) -> None:
         allow_direct_delta_enablement=args.allow_direct_delta_enablement,
         allow_serial_snapshot_to_direct_delta=(
             args.allow_serial_snapshot_to_direct_delta
+        ),
+        allow_direct_source_sibling_enablement=(
+            args.allow_direct_source_sibling_enablement
+        ),
+        allow_serial_snapshot_to_source_direct=(
+            args.allow_serial_snapshot_to_source_direct
         ),
     )
     if set(baseline_summary) != set(candidate_summary):
@@ -972,6 +1068,8 @@ def main() -> int:
     compare.add_argument("--allow-serial-sibling-reuse-enablement", action="store_true")
     compare.add_argument("--allow-direct-delta-enablement", action="store_true")
     compare.add_argument("--allow-serial-snapshot-to-direct-delta", action="store_true")
+    compare.add_argument("--allow-direct-source-sibling-enablement", action="store_true")
+    compare.add_argument("--allow-serial-snapshot-to-source-direct", action="store_true")
     args = parser.parse_args()
     try:
         if args.command == "run":

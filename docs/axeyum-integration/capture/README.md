@@ -858,10 +858,35 @@ node identity, pops to it, and translates only the target suffix. Cloned pools
 may reuse an `ExprId`, but independently appended sibling nodes cannot alias.
 The adapter and explorer tests are 42/42 and 12/12 green, including a stale
 equal-depth sibling that correctly changes the model from `x=5` to `x=7` after
-one pop. Direct+serial runtime functionality is now sound, but its exact real-
-driver traffic is not yet calibrated in this gate. Add that fail-closed policy
-identity from a one-process SurfacePen smoke before running the repeated
-SurfacePen/NETwtw10 production comparison.
+one pop. Direct+serial runtime functionality is now sound and the gate names it
+`source-prefix-v1`. Run it with:
+
+```sh
+python3 docs/axeyum-integration/capture/lineage_gate.py run \
+  --binary target/release/examples/ioctlance \
+  --axeyum-repo /home/mjbommar/projects/personal/axeyum \
+  --output /path/to/source-direct-artifact \
+  --warm-reuse adaptive \
+  --warm-owner-transfer on \
+  --serial-sibling-reuse on \
+  --direct-delta on
+```
+
+The artifact records `direct_sibling_identity=source-prefix-v1`. Exact traffic
+is calibrated for both drivers. SurfacePen records 2,551 checks, 125 exact
+reuses, 307,592 prefix roots, 2,398 additions, 940 pops, and one peak live
+session. NETwtw10 records 28,356 checks, 2,597 exact reuses, 1,220,938 prefix
+roots, 23,884 additions, 20,393 pops, and one peak live session. Both have zero
+resets/fallbacks and terminal-zero ownership/cache gauges.
+
+One process per driver passes the complete validator at 100% agreement with
+zero unknown/replay failures and identical findings. SurfacePen measures
+298.6 ms Axeyum versus 4,490.9 ms Z3 at 74,384 KiB RSS; NETwtw10 measures
+10.383 versus 52.531 seconds at 224,712 KiB. This is calibration, not release
+evidence. Compare the exclusive direct control using
+`--allow-direct-source-sibling-enablement`, and the production serial snapshot
+using `--allow-serial-snapshot-to-source-direct`. Three clean processes per
+driver remain mandatory.
 
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-

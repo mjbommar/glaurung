@@ -380,3 +380,11 @@ source expressions would make collision handling part of the trust boundary;
 numeric `ExprId` equality aliases across independently growing cloned pools;
 cloning mutable solver state violates exclusive ownership and worsens RSS;
 complete-snapshot LCP reconstructs the work direct entry is intended to remove.
+
+The subsequent gate calibration adds explicit `source-prefix-v1` policy
+identity and exact direct+serial traffic for both held-out drivers. One clean-
+behavior process each remains 100% agreed with zero unknown/replay failures:
+SurfacePen measures 298.6 ms Axeyum / 4,490.9 ms Z3 at 74,384 KiB RSS;
+NETwtw10 measures 10.383 s / 52.531 s at 224,712 KiB. These are plumbing and
+traffic evidence, not acceptance; three clean processes and both named
+comparisons remain mandatory.
