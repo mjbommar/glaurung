@@ -94,12 +94,41 @@ target/release/examples/ioctlance \
 ```
 
 `GLAURUNG_AXEYUM_PROFILE_DIR` must be set before the process's first native
-check. It preserves the raw one-shot policy and writes one
-`axeyum-profile-<pid>.jsonl` file per process. Each record carries the SHA-256
+check. Without warm reuse it preserves the raw one-shot policy and writes the
+`glaurung-axeyum-native-profile-v1` schema. With snapshot or lineage reuse it
+selects Axeyum's profiling constructor and writes
+`glaurung-axeyum-warm-profile-v1`. Both use one
+`axeyum-profile-<pid>.jsonl` file per process. Every record carries the SHA-256
 of the exact bytes produced by the existing SMT-LIB capture renderer, a
 monotone process-local sequence, outcome/completeness, phase durations, and
-AIG/CNF sizes. Query rendering/hash and JSON output are diagnostic overhead and
-are deliberately outside `total_nanos`.
+AIG/CNF sizes. Warm records additionally carry path ownership/creation,
+prefix/add/pop root traffic, session creation, structural deltas, and explicit
+unattributed time. Query rendering/hash and JSON output are diagnostic overhead
+and are deliberately outside `total_nanos`.
+
+Profiled timing is attribution-only and must not replace an unprofiled
+performance gate. Phase clocks and per-check JSON output add observable cost.
+Run profiles separately, require the record count to equal the shadow-query
+count, require 100% decisions, and require zero cap fallbacks so a warm stream
+does not mix warm and one-shot schemas. From the Axeyum checkout:
+
+```sh
+python3 scripts/summarize-glaurung-warm-profile.py \
+  "$profile_dir"/axeyum-profile-*.jsonl \
+  --require-records 561 \
+  --require-100-percent-decided
+```
+
+The first clean three-driver lineage profile at Glaurung `49f1fe2` plus the
+profiling worktree records exactly 6,986/6,986 decided checks, 5,102 unique
+query hashes, 2,103 created path sessions, 88,476 added roots, 8,758,247 new
+AIG nodes, and 11,734,335 new CNF clauses. Weighted internal phase shares are
+CNF encoding 43.78%, bit blast 22.86%, SAT 17.45%, replay 5.79%, translation
+3.74%, model lift 3.41%, unattributed adapter work 2.70%, session creation
+0.21%, and model extraction 0.04%. The profile totals 7.106 seconds internally;
+the same profiled processes measure 9.441 seconds at the client timer because
+rendering and JSON output are intentionally excluded. Compare performance only
+to the repeated unprofiled 5.537-second lineage median.
 
 Validate and summarize from the Axeyum checkout:
 

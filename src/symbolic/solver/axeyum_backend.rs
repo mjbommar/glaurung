@@ -189,6 +189,85 @@ pub struct AxeyumCheckProfile {
     pub total_nanos: u64,
 }
 
+/// Exact-query attribution for one opt-in retained warm check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WarmAxeyumCheckProfile {
+    /// Versioned JSON record schema.
+    pub schema: &'static str,
+    /// Operating-system process that produced the record.
+    pub process_id: u32,
+    /// Monotone process-local order across cold and warm profile records.
+    pub sequence: Option<u64>,
+    /// SHA-256 of the exact SMT-LIB bytes used by the capture hook.
+    pub query_hash: String,
+    /// Explicit explorer path owner, absent for consecutive-snapshot mode.
+    pub path_id: Option<u64>,
+    /// Whether this check lazily created its retained path session.
+    pub path_created: bool,
+    /// Stable result class: `sat`, `unsat`, `unknown`, or `error`.
+    pub outcome: &'static str,
+    /// Whether translation and solving completed without an operational error.
+    pub complete: bool,
+    /// Number of Glaurung assertions in the complete snapshot.
+    pub assertion_count: u64,
+    /// Number of assertion roots retained as the common prefix.
+    pub common_prefix_assertions: u64,
+    /// Number of newly asserted roots.
+    pub assertions_added: u64,
+    /// Number of divergent roots popped before this check.
+    pub assertions_popped: u64,
+    /// Number of distinct Glaurung expressions translated through the memo.
+    pub translated_exprs: u64,
+    /// Current retained Axeyum arena term count.
+    pub arena_terms: u64,
+    /// Number of translated Glaurung symbols.
+    pub symbols: u64,
+    /// Number of values exposed in the client model.
+    pub model_values: u64,
+    /// Time spent lazily constructing a new retained path session.
+    pub session_create_nanos: u64,
+    /// Time spent translating the complete client snapshot into the arena.
+    pub translation_nanos: u64,
+    /// Time spent in configured word-level rewriting for newly added roots.
+    pub word_rewrite_nanos: u64,
+    /// Time spent lowering newly required terms into the retained AIG.
+    pub bit_blast_nanos: u64,
+    /// Time spent extending CNF and asserting new roots.
+    pub cnf_encode_nanos: u64,
+    /// Time spent inside the retained SAT adapter.
+    pub solve_nanos: u64,
+    /// Time spent reconstructing the Axeyum model.
+    pub model_lift_nanos: u64,
+    /// Time spent replaying the candidate against original assertions.
+    pub replay_nanos: u64,
+    /// Time spent converting the Axeyum model into Glaurung's model.
+    pub model_extract_nanos: u64,
+    /// Total warm-adapter time, excluding query rendering, hashing, and output.
+    pub total_nanos: u64,
+    /// Adapter time not covered by the named non-overlapping phases.
+    pub unattributed_nanos: u64,
+    /// Newly encoded retained roots in this check.
+    pub root_encodings: u64,
+    /// Newly retained AIG nodes in this check.
+    pub aig_nodes_added: u64,
+    /// Newly retained CNF variables in this check.
+    pub cnf_variables_added: u64,
+    /// Newly retained CNF clauses in this check.
+    pub cnf_clauses_added: u64,
+    /// Current retained AIG nodes after this check.
+    pub aig_nodes: u64,
+    /// Current retained CNF variables after this check.
+    pub cnf_variables: u64,
+    /// Current retained CNF clauses after this check.
+    pub cnf_clauses: u64,
+}
+
+struct WarmProfileContext {
+    profile: WarmAxeyumCheckProfile,
+    total_started: Instant,
+    solver_before: IncrementalBvStats,
+}
+
 impl AxeyumCheckProfile {
     /// Sum of non-overlapping attributed phase durations.
     pub fn attributed_nanos(&self) -> u64 {
@@ -390,6 +469,7 @@ pub struct SnapshotIncrementalAxeyumSolver {
     active: Vec<TermId>,
     has_snapshot: bool,
     preprocess: bool,
+    profiling: bool,
     stats: SnapshotReuseStats,
 }
 
@@ -408,12 +488,22 @@ impl SnapshotIncrementalAxeyumSolver {
     /// Creates an empty adapter and optionally canonicalizes each newly added
     /// assertion. Existing prefix assertions are never reprocessed.
     pub fn with_preprocessing(preprocess: bool) -> Self {
+        Self::with_preprocessing_and_profiling(preprocess, profile_output_dir().is_some())
+    }
+
+    fn with_preprocessing_and_profiling(preprocess: bool, profiling: bool) -> Self {
+        let solver_config = config().with_preprocess(preprocess);
         Self {
             arena: TermArena::new(),
-            solver: IncrementalBvSolver::with_config(config().with_preprocess(preprocess)),
+            solver: if profiling {
+                IncrementalBvSolver::with_config_and_profiling(solver_config)
+            } else {
+                IncrementalBvSolver::with_config(solver_config)
+            },
             active: Vec::new(),
             has_snapshot: false,
             preprocess,
+            profiling,
             stats: SnapshotReuseStats::default(),
         }
     }
@@ -425,7 +515,12 @@ impl SnapshotIncrementalAxeyumSolver {
 
     fn reset_session(&mut self) {
         self.arena = TermArena::new();
-        self.solver = IncrementalBvSolver::with_config(config().with_preprocess(self.preprocess));
+        let solver_config = config().with_preprocess(self.preprocess);
+        self.solver = if self.profiling {
+            IncrementalBvSolver::with_config_and_profiling(solver_config)
+        } else {
+            IncrementalBvSolver::with_config(solver_config)
+        };
         self.active.clear();
         self.has_snapshot = false;
         self.stats.resets_after_error = self.stats.resets_after_error.saturating_add(1);
@@ -434,16 +529,48 @@ impl SnapshotIncrementalAxeyumSolver {
     /// Checks one complete Glaurung assertion snapshot using retained Axeyum
     /// translation, AIG, CNF, and SAT state.
     pub fn check_snapshot(&mut self, pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
+        self.check_snapshot_for_path(pool, asserts, None, false, 0)
+    }
+
+    fn check_snapshot_for_path(
+        &mut self,
+        pool: &ExprPool,
+        asserts: &[Assert],
+        path_id: Option<u64>,
+        path_created: bool,
+        session_create_nanos: u64,
+    ) -> SolveResult {
+        let mut profile =
+            self.start_profile(pool, asserts, path_id, path_created, session_create_nanos);
+        let translation_started = profile.as_ref().map(|_| Instant::now());
         let translated = match translate_query(pool, asserts, &mut self.arena) {
             Ok(translated) => translated,
-            Err(err) => return SolveResult::Error(format!("axeyum translate: {err}")),
+            Err(err) => {
+                if let (Some(profile), Some(started)) = (&mut profile, translation_started) {
+                    profile.profile.translation_nanos = nanos(started.elapsed());
+                }
+                let solver_after = self.solver.stats();
+                return self.finish_profile(
+                    profile,
+                    solver_after,
+                    SolveResult::Error(format!("axeyum translate: {err}")),
+                );
+            }
         };
+        if let (Some(profile), Some(started)) = (&mut profile, translation_started) {
+            profile.profile.translation_nanos = nanos(started.elapsed());
+            profile.profile.translated_exprs = count(translated.exprs);
+            profile.profile.symbols = count(translated.sym_map.len());
+        }
         let common = self
             .active
             .iter()
             .zip(&translated.assertions)
             .take_while(|(active, next)| active == next)
             .count();
+        if let Some(profile) = &mut profile {
+            profile.profile.common_prefix_assertions = count(common);
+        }
 
         self.stats.checks = self.stats.checks.saturating_add(1);
         self.stats.prefix_assertions_reused = self
@@ -456,11 +583,20 @@ impl SnapshotIncrementalAxeyumSolver {
         }
 
         let pop_count = self.active.len().saturating_sub(common);
+        if let Some(profile) = &mut profile {
+            profile.profile.assertions_popped = count(pop_count);
+            profile.profile.assertions_added = count(translated.assertions.len() - common);
+        }
         for _ in 0..pop_count {
             if !self.solver.pop() {
+                let solver_after = self.solver.stats();
                 self.reset_session();
-                return SolveResult::Error(
-                    "axeyum warm snapshot scope underflow; session reset".to_string(),
+                return self.finish_profile(
+                    profile,
+                    solver_after,
+                    SolveResult::Error(
+                        "axeyum warm snapshot scope underflow; session reset".to_string(),
+                    ),
                 );
             }
         }
@@ -472,12 +608,22 @@ impl SnapshotIncrementalAxeyumSolver {
 
         for &term in &translated.assertions[common..] {
             if let Err(err) = self.solver.push() {
+                let solver_after = self.solver.stats();
                 self.reset_session();
-                return SolveResult::Error(format!("axeyum warm push: {err}"));
+                return self.finish_profile(
+                    profile,
+                    solver_after,
+                    SolveResult::Error(format!("axeyum warm push: {err}")),
+                );
             }
             if let Err(err) = self.solver.assert_configured(&mut self.arena, term) {
+                let solver_after = self.solver.stats();
                 self.reset_session();
-                return SolveResult::Error(format!("axeyum warm assert: {err}"));
+                return self.finish_profile(
+                    profile,
+                    solver_after,
+                    SolveResult::Error(format!("axeyum warm assert: {err}")),
+                );
             }
             self.active.push(term);
             self.stats.assertions_added = self.stats.assertions_added.saturating_add(1);
@@ -485,10 +631,123 @@ impl SnapshotIncrementalAxeyumSolver {
         self.has_snapshot = true;
 
         let checked = self.solver.check(&self.arena);
+        let solver_after = self.solver.stats();
         if checked.is_err() {
             self.reset_session();
         }
-        map_check_result(checked, &translated.sym_map)
+        let model_started = profile.as_ref().map(|_| Instant::now());
+        let result = map_check_result(checked, &translated.sym_map);
+        if let (Some(profile), Some(started)) = (&mut profile, model_started) {
+            profile.profile.model_extract_nanos = nanos(started.elapsed());
+            if let SolveResult::Sat(model) = &result {
+                profile.profile.model_values = count(model.values.len());
+            }
+        }
+        self.finish_profile(profile, solver_after, result)
+    }
+
+    fn start_profile(
+        &self,
+        pool: &ExprPool,
+        asserts: &[Assert],
+        path_id: Option<u64>,
+        path_created: bool,
+        session_create_nanos: u64,
+    ) -> Option<WarmProfileContext> {
+        if !self.profiling {
+            return None;
+        }
+        let (script, _) = pipe::build_script(pool, asserts);
+        let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
+        Some(WarmProfileContext {
+            profile: WarmAxeyumCheckProfile {
+                schema: "glaurung-axeyum-warm-profile-v1",
+                process_id: std::process::id(),
+                sequence: None,
+                query_hash,
+                path_id,
+                path_created,
+                outcome: "error",
+                complete: false,
+                assertion_count: count(asserts.len()),
+                common_prefix_assertions: 0,
+                assertions_added: 0,
+                assertions_popped: 0,
+                translated_exprs: 0,
+                arena_terms: 0,
+                symbols: 0,
+                model_values: 0,
+                session_create_nanos,
+                translation_nanos: 0,
+                word_rewrite_nanos: 0,
+                bit_blast_nanos: 0,
+                cnf_encode_nanos: 0,
+                solve_nanos: 0,
+                model_lift_nanos: 0,
+                replay_nanos: 0,
+                model_extract_nanos: 0,
+                total_nanos: 0,
+                unattributed_nanos: 0,
+                root_encodings: 0,
+                aig_nodes_added: 0,
+                cnf_variables_added: 0,
+                cnf_clauses_added: 0,
+                aig_nodes: 0,
+                cnf_variables: 0,
+                cnf_clauses: 0,
+            },
+            total_started: Instant::now(),
+            solver_before: self.solver.stats(),
+        })
+    }
+
+    fn finish_profile(
+        &self,
+        context: Option<WarmProfileContext>,
+        solver_after: IncrementalBvStats,
+        result: SolveResult,
+    ) -> SolveResult {
+        let Some(mut context) = context else {
+            return result;
+        };
+        let delta = solver_after.delta_since(context.solver_before);
+        context.profile.word_rewrite_nanos = nanos(delta.word_rewrite);
+        context.profile.bit_blast_nanos = nanos(delta.bit_blast);
+        context.profile.cnf_encode_nanos = nanos(delta.cnf_encode);
+        context.profile.solve_nanos = nanos(delta.solve);
+        context.profile.model_lift_nanos = nanos(delta.model_lift);
+        context.profile.replay_nanos = nanos(delta.replay);
+        context.profile.root_encodings = delta.root_encodings;
+        context.profile.aig_nodes_added = delta.aig_nodes;
+        context.profile.cnf_variables_added = delta.cnf_variables;
+        context.profile.cnf_clauses_added = delta.cnf_clauses;
+        context.profile.aig_nodes = solver_after.aig_nodes;
+        context.profile.cnf_variables = solver_after.cnf_variables;
+        context.profile.cnf_clauses = solver_after.cnf_clauses;
+        context.profile.arena_terms = count(self.arena.len());
+        context.profile.outcome = result_name(&result);
+        context.profile.complete = !matches!(&result, SolveResult::Error(_));
+        context.profile.total_nanos = nanos(context.total_started.elapsed())
+            .saturating_add(context.profile.session_create_nanos);
+        let attributed = context
+            .profile
+            .session_create_nanos
+            .saturating_add(context.profile.translation_nanos)
+            .saturating_add(context.profile.word_rewrite_nanos)
+            .saturating_add(context.profile.bit_blast_nanos)
+            .saturating_add(context.profile.cnf_encode_nanos)
+            .saturating_add(context.profile.solve_nanos)
+            .saturating_add(context.profile.model_lift_nanos)
+            .saturating_add(context.profile.replay_nanos)
+            .saturating_add(context.profile.model_extract_nanos);
+        context.profile.unattributed_nanos = context.profile.total_nanos.saturating_sub(attributed);
+        let Some(output_dir) = profile_output_dir() else {
+            return result;
+        };
+        if let Err(error) = write_profile_record(output_dir, &context.profile) {
+            return SolveResult::Error(error);
+        }
+        result
     }
 }
 
@@ -515,9 +774,17 @@ impl LineageIncrementalAxeyumSolver {
         asserts: &[Assert],
     ) -> (SolveResult, SnapshotReuseStats, SnapshotReuseStats, bool) {
         let created = !self.paths.contains_key(&path_id);
+        let create_started = (created && profile_output_dir().is_some()).then(Instant::now);
         let solver = self.paths.entry(path_id).or_default();
+        let session_create_nanos = create_started.map_or(0, |started| nanos(started.elapsed()));
         let before = solver.stats();
-        let result = solver.check_snapshot(pool, asserts);
+        let result = solver.check_snapshot_for_path(
+            pool,
+            asserts,
+            Some(path_id),
+            created,
+            session_create_nanos,
+        );
         (result, before, solver.stats(), created)
     }
 
@@ -767,7 +1034,7 @@ fn profile_output_dir() -> Option<&'static Path> {
         .as_deref()
 }
 
-fn write_profile_record(output_dir: &Path, profile: &AxeyumCheckProfile) -> Result<(), String> {
+fn write_profile_record<T: Serialize>(output_dir: &Path, profile: &T) -> Result<(), String> {
     std::fs::create_dir_all(output_dir).map_err(|error| {
         format!(
             "create {PROFILE_DIR_ENV} directory {}: {error}",
@@ -783,8 +1050,15 @@ fn write_profile_record(output_dir: &Path, profile: &AxeyumCheckProfile) -> Resu
         .append(true)
         .open(&path)
         .map_err(|error| format!("open axeyum profile {}: {error}", path.display()))?;
-    let mut record = profile.clone();
-    record.sequence = Some(PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed));
+    let mut record = serde_json::to_value(profile)
+        .map_err(|error| format!("serialize axeyum profile: {error}"))?;
+    let Some(record) = record.as_object_mut() else {
+        return Err("serialize axeyum profile: record is not an object".to_string());
+    };
+    record.insert(
+        "sequence".to_string(),
+        serde_json::Value::from(PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed)),
+    );
     serde_json::to_writer(&mut output, &record)
         .map_err(|error| format!("serialize axeyum profile: {error}"))?;
     writeln!(output).map_err(|error| format!("write axeyum profile {}: {error}", path.display()))
@@ -1354,13 +1628,22 @@ mod tests {
         let output = tempfile::tempdir().unwrap();
 
         write_profile_record(output.path(), &profiled.profile).unwrap();
+        write_profile_record(
+            output.path(),
+            &serde_json::json!({
+                "schema": "glaurung-axeyum-warm-profile-v1",
+                "process_id": std::process::id(),
+                "sequence": null,
+            }),
+        )
+        .unwrap();
         let path = output
             .path()
             .join(format!("axeyum-profile-{}.jsonl", std::process::id()));
         let contents = std::fs::read_to_string(path).unwrap();
         let records = contents.lines().collect::<Vec<_>>();
 
-        assert_eq!(records.len(), 1);
+        assert_eq!(records.len(), 2);
         let record: serde_json::Value = serde_json::from_str(records[0]).unwrap();
         assert_eq!(record["query_hash"], profiled.profile.query_hash);
         assert_eq!(record["word_policy"], "raw");
@@ -1368,6 +1651,9 @@ mod tests {
         assert_eq!(record["complete"], true);
         assert_eq!(record["process_id"], std::process::id());
         assert!(record["sequence"].as_u64().is_some());
+        let warm: serde_json::Value = serde_json::from_str(records[1]).unwrap();
+        assert_eq!(warm["schema"], "glaurung-axeyum-warm-profile-v1");
+        assert!(warm["sequence"].as_u64().unwrap() > record["sequence"].as_u64().unwrap());
     }
 
     #[test]
