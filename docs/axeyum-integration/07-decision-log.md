@@ -185,3 +185,39 @@ exact gate.
 native concretization behavior; zero-extending a BV1 literal would preserve
 the ill-specified equality-to-one semantics for wide values; teaching the
 consumer to accept ill-sorted text would conceal a producer defect.
+
+## ADR-010 - Adapt lineage capacity from sustained live-path pressure
+
+**Status:** Accepted as an opt-in measurement candidate; default decision open.
+**Context:** ADR-008's second-check policy saves memory but fails the 3% time
+alarm because repeated paths pay cold work before rebuilding retained state.
+The corrected SurfacePen ordered trace shows that purpose alone is not enough:
+address/finding/overflow admission covers 2,285/2,551 checks and retains only
+20 singleton paths, but 117 branch-first paths later require warm state. A real
+purpose-policy prototype is 1.140 seconds / 72,868 KiB, essentially the same
+time as rejected auto and slower than fixed lineage. It was removed. Fixed cap
+2 passes SurfacePen but regresses NETwtw10 18.2%, so a universal small cap is
+also rejected.
+**Decision:** Add explicit `GLAURUNG_AXEYUM_WARM_REUSE=adaptive`. It uses the
+existing path-owned lineage solver without another query representation or
+purpose field. Capacity starts at `min(configured_cap, 2)`. Each failed
+low-cap reservation increments a process-wide atomic pressure counter. At 128
+events, capacity expands once to the configured hard cap (currently 9); the
+triggering check retries reservation immediately. Exact pressure, expansion,
+initial-cap, and threshold telemetry enters the fail-closed runner contract.
+Default remains off and fixed `lineage` remains the control.
+**Consequences:** Low-pressure streams can retain fewer concurrent arenas while
+high-pressure streams pay at most 127 initial cap fallbacks before recovering
+the proven envelope. Solver/query/model/proof semantics are unchanged: every
+warm SAT model is still replayed against original terms, every fallback is the
+existing one-shot path, siblings never share mutable state, and the configured
+hard cap remains atomic. Single clean calibrations are encouraging but do not
+authorize a default: SurfacePen is 1.095 seconds / 81,212 KiB versus a same-
+binary cap-9 control at 1.079 seconds / 83,220 KiB; NETwtw10 expands once and
+is 18.543 seconds / 261,648 KiB versus 18.740 seconds / 258,764 KiB. All 30,907
+checks agree with Z3 with zero unknown splits or resets. Repeat both families
+through the versioned runner before deciding GQ9.
+**Alternatives rejected:** purpose admission is dominated by cap 1 and still
+fails time; fixed cap 1 fails SurfacePen time; fixed cap 2 fails NETwtw10 time;
+cap 3 restores SurfacePen time but provides no RSS improvement; formula-shape
+analysis would repeat GQ4's paid-analysis failure at the wrong layer.

@@ -63,7 +63,12 @@ static WARM_PATH_LIMIT_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 static WARM_ASSERTION_LIMIT_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 static WARM_AUTO_PROBES: AtomicU64 = AtomicU64::new(0);
 static WARM_AUTO_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
+static WARM_ADAPTIVE_PRESSURE_EVENTS: AtomicU64 = AtomicU64::new(0);
+static WARM_ADAPTIVE_EXPANSIONS: AtomicU64 = AtomicU64::new(0);
 static WARM_REUSE_LIMITS: OnceLock<WarmReuseLimits> = OnceLock::new();
+
+const ADAPTIVE_INITIAL_LIVE_PATHS: u64 = 2;
+const ADAPTIVE_PRESSURE_THRESHOLD: u64 = 128;
 
 thread_local! {
     /// One retained snapshot adapter per explorer thread. Glaurung currently
@@ -87,6 +92,7 @@ enum WarmReusePolicy {
     Snapshot,
     Lineage,
     Auto,
+    Adaptive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +125,7 @@ fn warm_reuse_policy() -> WarmReusePolicy {
     match std::env::var(WARM_REUSE_ENV) {
         Err(_) => WarmReusePolicy::Off,
         Ok(value) if value.eq_ignore_ascii_case("auto") => WarmReusePolicy::Auto,
+        Ok(value) if value.eq_ignore_ascii_case("adaptive") => WarmReusePolicy::Adaptive,
         Ok(value) if value.eq_ignore_ascii_case("lineage") => WarmReusePolicy::Lineage,
         Ok(_) => WarmReusePolicy::Snapshot,
     }
@@ -988,7 +995,7 @@ pub(crate) fn check_warm_thread_local(
             let result = solver.check_snapshot(pool, asserts);
             (result, before, solver.stats())
         }),
-        policy @ (WarmReusePolicy::Lineage | WarmReusePolicy::Auto) => {
+        policy @ (WarmReusePolicy::Lineage | WarmReusePolicy::Auto | WarmReusePolicy::Adaptive) => {
             let Some(path_id) = path_id else {
                 return AxeyumSolver::new().check(pool, asserts);
             };
@@ -1009,11 +1016,36 @@ pub(crate) fn check_warm_thread_local(
             }
             let reserved = if exists {
                 false
-            } else if try_reserve_warm_path(limits.max_live_paths) {
-                true
             } else {
-                WARM_PATH_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
-                return AxeyumSolver::new().check(pool, asserts);
+                let pressure = WARM_ADAPTIVE_PRESSURE_EVENTS.load(Ordering::Relaxed);
+                let initial_limit = if policy == WarmReusePolicy::Adaptive {
+                    adaptive_live_path_limit(limits.max_live_paths, pressure)
+                } else {
+                    limits.max_live_paths
+                };
+                if try_reserve_warm_path(initial_limit) {
+                    true
+                } else if policy == WarmReusePolicy::Adaptive
+                    && initial_limit < limits.max_live_paths
+                {
+                    let pressure = WARM_ADAPTIVE_PRESSURE_EVENTS
+                        .fetch_add(1, Ordering::Relaxed)
+                        .saturating_add(1);
+                    if pressure == ADAPTIVE_PRESSURE_THRESHOLD {
+                        WARM_ADAPTIVE_EXPANSIONS.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if pressure >= ADAPTIVE_PRESSURE_THRESHOLD
+                        && try_reserve_warm_path(limits.max_live_paths)
+                    {
+                        true
+                    } else {
+                        WARM_PATH_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+                        return AxeyumSolver::new().check(pool, asserts);
+                    }
+                } else {
+                    WARM_PATH_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+                    return AxeyumSolver::new().check(pool, asserts);
+                }
             };
             let (result, before, after, created) = LINEAGE_SOLVERS.with(|lineage| {
                 let mut lineage = lineage.borrow_mut();
@@ -1035,6 +1067,14 @@ pub(crate) fn check_warm_thread_local(
     };
     record_warm_delta(before, after);
     result
+}
+
+fn adaptive_live_path_limit(configured: u64, pressure_events: u64) -> u64 {
+    if pressure_events >= ADAPTIVE_PRESSURE_THRESHOLD {
+        configured
+    } else {
+        configured.min(ADAPTIVE_INITIAL_LIVE_PATHS)
+    }
 }
 
 fn try_reserve_warm_path(limit: u64) -> bool {
@@ -1107,7 +1147,7 @@ fn record_warm_delta(before: SnapshotReuseStats, after: SnapshotReuseStats) {
 pub(crate) fn close_warm_path(path_id: u64) {
     if !matches!(
         warm_reuse_policy(),
-        WarmReusePolicy::Lineage | WarmReusePolicy::Auto
+        WarmReusePolicy::Lineage | WarmReusePolicy::Auto | WarmReusePolicy::Adaptive
     ) {
         return;
     }
@@ -1154,6 +1194,19 @@ pub struct AutoLineageReuseStats {
     pub activations: u64,
 }
 
+/// Process-wide counters for the bounded pressure-adaptive lineage policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AdaptiveLineageReuseStats {
+    /// Failed reservations observed while the initial cap was active.
+    pub pressure_events: u64,
+    /// One-way expansions from the initial cap to the configured hard cap.
+    pub expansions: u64,
+    /// Initial live-session cap used before sustained pressure is observed.
+    pub initial_live_paths: u64,
+    /// Pressure-event count that triggers the one-way expansion.
+    pub pressure_threshold: u64,
+}
+
 /// Returns process-wide lineage ownership counters.
 pub fn warm_path_reuse_stats() -> WarmPathReuseStats {
     let limits = warm_reuse_limits();
@@ -1174,6 +1227,16 @@ pub fn auto_lineage_reuse_stats() -> AutoLineageReuseStats {
     AutoLineageReuseStats {
         probes: WARM_AUTO_PROBES.load(Ordering::Relaxed),
         activations: WARM_AUTO_ACTIVATIONS.load(Ordering::Relaxed),
+    }
+}
+
+/// Returns process-wide pressure-adaptive admission counters.
+pub fn adaptive_lineage_reuse_stats() -> AdaptiveLineageReuseStats {
+    AdaptiveLineageReuseStats {
+        pressure_events: WARM_ADAPTIVE_PRESSURE_EVENTS.load(Ordering::Relaxed),
+        expansions: WARM_ADAPTIVE_EXPANSIONS.load(Ordering::Relaxed),
+        initial_live_paths: ADAPTIVE_INITIAL_LIVE_PATHS,
+        pressure_threshold: ADAPTIVE_PRESSURE_THRESHOLD,
     }
 }
 
@@ -1880,6 +1943,15 @@ mod tests {
         assert!(admission.remove(11));
         assert!(!admission.observe(11));
         assert!(!admission.remove(99));
+    }
+
+    #[test]
+    fn adaptive_lineage_expands_only_after_sustained_pressure() {
+        assert_eq!(adaptive_live_path_limit(9, 0), 2);
+        assert_eq!(adaptive_live_path_limit(9, 127), 2);
+        assert_eq!(adaptive_live_path_limit(9, 128), 9);
+        assert_eq!(adaptive_live_path_limit(1, 0), 1);
+        assert_eq!(adaptive_live_path_limit(0, 128), 0);
     }
 
     #[test]

@@ -384,6 +384,15 @@ baseline and auto candidate intentionally fail homogeneous `compare` on policy
 identity; summarize the validated artifacts side by side until a separately
 specified cross-policy production objective is accepted.
 
+Pass `--warm-reuse adaptive` to run ADR-010's bounded-pressure candidate. It
+starts with at most two live path-owned sessions and expands once to the
+configured hard cap after 128 failed low-cap reservation attempts. The
+`[axeyum-adaptive]` footer records pressure, expansion count, initial cap, and
+threshold; the runner requires exact per-driver values in addition to the
+ordinary warm/fallback partition. This policy is opt-in pending repeated
+cross-policy evidence; it does not change the default or the homogeneous
+comparator's identity rule.
+
 Compare two homogeneous artifacts fail-closed; source revisions and binary
 hashes may differ, while system, policy, driver bytes, work, findings, and
 repetition identity must match:

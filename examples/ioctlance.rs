@@ -428,6 +428,8 @@ fn main() {
             let warm = glaurung::symbolic::solver::axeyum_backend::warm_reuse_stats();
             let paths = glaurung::symbolic::solver::axeyum_backend::warm_path_reuse_stats();
             let auto = glaurung::symbolic::solver::axeyum_backend::auto_lineage_reuse_stats();
+            let adaptive =
+                glaurung::symbolic::solver::axeyum_backend::adaptive_lineage_reuse_stats();
             if warm.checks > 0
                 || paths.path_limit_fallbacks > 0
                 || paths.assertion_limit_fallbacks > 0
@@ -454,6 +456,15 @@ fn main() {
                 eprintln!(
                     "[axeyum-auto] probes={} activations={}",
                     auto.probes, auto.activations,
+                );
+            }
+            if adaptive.pressure_events > 0 || adaptive.expansions > 0 {
+                eprintln!(
+                    "[axeyum-adaptive] pressure-events={} expansions={} initial-live-paths={} pressure-threshold={}",
+                    adaptive.pressure_events,
+                    adaptive.expansions,
+                    adaptive.initial_live_paths,
+                    adaptive.pressure_threshold,
                 );
             }
         }

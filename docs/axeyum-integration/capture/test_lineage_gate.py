@@ -69,6 +69,40 @@ class LineageGateTests(unittest.TestCase):
         self.assertEqual(parsed["warm"], warm)
         self.assertEqual(parsed["auto"], {"probes": 358, "activations": 191})
 
+    def test_parse_run_reads_adaptive_pressure_footer(self) -> None:
+        warm = lineage_gate.DRIVERS["surface"].expected_adaptive_warm
+        warm_text = " ".join(f"{key}={value}" for key, value in warm.items())
+        stderr_text = (
+            "[shadow-diff] queries=2551 agree=2551 disagree=0 | "
+            "SAME-STREAM z3=4437.5ms axeyum=1095.4ms speedup=4.1x\n"
+            "[model-choice] both-sat=1 different-model=0 | "
+            "z3-unknown=0 axeyum-unknown=0 unknown-split=0\n"
+            f"[axeyum-warm] {warm_text}\n"
+            "[axeyum-adaptive] pressure-events=87 expansions=0 "
+            "initial-live-paths=2 pressure-threshold=128\n"
+        )
+        time_text = (
+            "\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:05.80\n"
+            "\tMaximum resident set size (kbytes): 81212\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            stderr_path = root / "run.stderr"
+            time_path = root / "run.time"
+            stderr_path.write_text(stderr_text)
+            time_path.write_text(time_text)
+            parsed = lineage_gate.parse_run(stderr_path, time_path)
+        self.assertEqual(parsed["warm"], warm)
+        self.assertEqual(
+            parsed["adaptive"],
+            {
+                "pressure-events": 87,
+                "expansions": 0,
+                "initial-live-paths": 2,
+                "pressure-threshold": 128,
+            },
+        )
+
     def test_validate_accepts_exact_repetitions(self) -> None:
         spec = lineage_gate.DRIVERS["surface"]
         runs = []
@@ -140,6 +174,32 @@ class LineageGateTests(unittest.TestCase):
             {
                 "schema": lineage_gate.SCHEMA,
                 "policy": {"warm_reuse": "auto"},
+                "repetitions": 1,
+                "runs": [run],
+            }
+        )
+        self.assertEqual(summaries["surface"]["runs"], 1)
+
+    def test_validate_accepts_exact_adaptive_partition(self) -> None:
+        spec = lineage_gate.DRIVERS["surface"]
+        run = {
+            "driver": "surface",
+            "repetition": 1,
+            "queries": spec.expected_queries,
+            "agree": spec.expected_queries,
+            "disagree": 0,
+            "unknown_split": 0,
+            "z3_ms": 4_437.5,
+            "axeyum_ms": 1_095.4,
+            "warm": dict(spec.expected_adaptive_warm),
+            "adaptive": dict(spec.expected_adaptive),
+            "max_rss_kib": 81_212,
+            "stdout_sha256": "a" * 64,
+        }
+        summaries = lineage_gate.validate_artifact(
+            {
+                "schema": lineage_gate.SCHEMA,
+                "policy": {"warm_reuse": "adaptive"},
                 "repetitions": 1,
                 "runs": [run],
             }
