@@ -431,6 +431,8 @@ fn main() {
             let adaptive =
                 glaurung::symbolic::solver::axeyum_backend::adaptive_lineage_reuse_stats();
             let serial = glaurung::symbolic::solver::axeyum_backend::serial_sibling_reuse_stats();
+            let cold_retry =
+                glaurung::symbolic::solver::axeyum_backend::warm_timeout_cold_retry_stats();
             let sat_cache = glaurung::symbolic::solver::axeyum_backend::replay_sat_cache_stats();
             if warm.checks > 0
                 || paths.path_limit_fallbacks > 0
@@ -471,6 +473,15 @@ fn main() {
                     sat_cache.cache.entries,
                     sat_cache.cache.model_values,
                     sat_cache.cache.model_bits,
+                );
+            }
+            if cold_retry.retries > 0 {
+                eprintln!(
+                    "[axeyum-warm-timeout-cold-retry] retries={} recoveries={} unknowns={} errors={}",
+                    cold_retry.retries,
+                    cold_retry.recoveries,
+                    cold_retry.unknowns,
+                    cold_retry.errors,
                 );
             }
             if auto.probes > 0 || auto.activations > 0 {

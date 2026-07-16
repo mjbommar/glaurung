@@ -996,6 +996,30 @@ budgeted SAT-search timeouts, not unsupported syntax, translation failure, or
 wrong verdict. Keep them visible while evaluating warm-state SAT behavior or a
 sound fallback policy; do not relabel them agreement.
 
+ADR-017's first explicit candidate retries only a synchronized direct-warm
+`Unknown` through one fresh Axeyum solver with the same 250 ms cap:
+
+```sh
+export GLAURUNG_AXEYUM_WARM_TIMEOUT_COLD_RETRY=1
+```
+
+The candidate is off by default. Its footer
+`[axeyum-warm-timeout-cold-retry]` partitions retries into recovered decisions,
+repeated unknowns, and hidden retry errors. It never retries an existing
+one-shot resource fallback or an unsynchronized/error session. Measure the
+exact tcpip stream before proposing any default change.
+
+The first tcpip measurement rejects default admission. Fifteen retries recover
+only four decisions and leave eleven `Unknown`; time rises 2.38%, while RSS
+rises 10.46% and fails the 5% alarm. There are zero retry errors or SAT/UNSAT
+disagreements, but query-count drift makes the single process non-causal. Keep
+the switch as an explicit diagnostic only; do not repeat whole-snapshot cold
+retry without a memory-safe topology or a predictor that selects recoverable
+formulas before paying the rebuild.
+The dxgkrnl no-timeout control performs zero retries and preserves the exact
+17,712-query structural traffic, confirming that the opt-in branch is inert
+when the retained solver decides.
+
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-
 equivalent snapshot and loses the current serial-snapshot policy on SurfacePen

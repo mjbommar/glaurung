@@ -48,6 +48,7 @@ pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
 pub(crate) const WARM_OWNER_TRANSFER_ENV: &str = "GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER";
 pub(crate) const WARM_SERIAL_SIBLING_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE";
 pub(crate) const DIRECT_DELTA_ENV: &str = "GLAURUNG_AXEYUM_DIRECT_DELTA";
+pub(crate) const WARM_TIMEOUT_COLD_RETRY_ENV: &str = "GLAURUNG_AXEYUM_WARM_TIMEOUT_COLD_RETRY";
 const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING";
 pub(crate) const REPLAY_SAT_CACHE_ENV: &str = "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
@@ -73,6 +74,10 @@ static WARM_PATHS_LIVE: AtomicU64 = AtomicU64::new(0);
 static WARM_PATHS_PEAK_LIVE: AtomicU64 = AtomicU64::new(0);
 static WARM_PATH_LIMIT_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 static WARM_ASSERTION_LIMIT_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+static WARM_TIMEOUT_COLD_RETRIES: AtomicU64 = AtomicU64::new(0);
+static WARM_TIMEOUT_COLD_RECOVERIES: AtomicU64 = AtomicU64::new(0);
+static WARM_TIMEOUT_COLD_UNKNOWNS: AtomicU64 = AtomicU64::new(0);
+static WARM_TIMEOUT_COLD_ERRORS: AtomicU64 = AtomicU64::new(0);
 static WARM_AUTO_PROBES: AtomicU64 = AtomicU64::new(0);
 static WARM_AUTO_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 static WARM_ADAPTIVE_PRESSURE_EVENTS: AtomicU64 = AtomicU64::new(0);
@@ -182,6 +187,17 @@ fn parse_warm_reuse_policy(value: Option<&str>) -> WarmReusePolicy {
 
 pub(crate) fn direct_delta_enabled() -> bool {
     parse_direct_delta(std::env::var(DIRECT_DELTA_ENV).ok().as_deref())
+}
+
+pub(crate) fn warm_timeout_cold_retry_enabled() -> bool {
+    parse_warm_timeout_cold_retry(std::env::var(WARM_TIMEOUT_COLD_RETRY_ENV).ok().as_deref())
+}
+
+fn parse_warm_timeout_cold_retry(value: Option<&str>) -> bool {
+    matches!(value, Some("1"))
+        || value.is_some_and(|value| {
+            value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("on")
+        })
 }
 
 fn parse_direct_delta(value: Option<&str>) -> bool {
@@ -1981,14 +1997,36 @@ pub(crate) fn check_warm_thread_local(
     path_id: Option<u64>,
     delta: Option<WarmDeltaContext>,
 ) -> SolveResult {
-    check_warm_thread_local_selected(
+    let result = check_warm_thread_local_selected(
         pool,
         asserts,
         path_id,
         delta,
         warm_reuse_policy(),
         direct_delta_enabled(),
-    )
+    );
+    if !matches!(result, SolveResult::Unknown)
+        || !last_direct_delta_synced()
+        || !warm_timeout_cold_retry_enabled()
+    {
+        return result;
+    }
+
+    WARM_TIMEOUT_COLD_RETRIES.fetch_add(1, Ordering::Relaxed);
+    match AxeyumSolver::new().check(pool, asserts) {
+        decided @ (SolveResult::Sat(_) | SolveResult::Unsat) => {
+            WARM_TIMEOUT_COLD_RECOVERIES.fetch_add(1, Ordering::Relaxed);
+            decided
+        }
+        SolveResult::Unknown => {
+            WARM_TIMEOUT_COLD_UNKNOWNS.fetch_add(1, Ordering::Relaxed);
+            result
+        }
+        SolveResult::Error(_) | SolveResult::NoSolver => {
+            WARM_TIMEOUT_COLD_ERRORS.fetch_add(1, Ordering::Relaxed);
+            result
+        }
+    }
 }
 
 fn check_warm_thread_local_selected(
@@ -2347,6 +2385,19 @@ pub struct SerialSiblingReuseStats {
     pub peak_references: u64,
 }
 
+/// Process-wide counters for the opt-in direct-warm timeout cold retry.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WarmTimeoutColdRetryStats {
+    /// Warm `Unknown` checks retried through a fresh one-shot solver.
+    pub retries: u64,
+    /// Retries that recovered a SAT or UNSAT decision.
+    pub recoveries: u64,
+    /// Retries that also returned `Unknown`.
+    pub unknowns: u64,
+    /// Retry errors/no-solver results hidden behind the original `Unknown`.
+    pub errors: u64,
+}
+
 /// Returns process-wide lineage ownership counters.
 pub fn warm_path_reuse_stats() -> WarmPathReuseStats {
     let limits = warm_reuse_limits();
@@ -2387,6 +2438,16 @@ pub fn serial_sibling_reuse_stats() -> SerialSiblingReuseStats {
         tracked_owners: WARM_SERIAL_TRACKED_OWNERS.load(Ordering::Relaxed),
         references: WARM_SERIAL_REFERENCES.load(Ordering::Relaxed),
         peak_references: WARM_SERIAL_PEAK_REFERENCES.load(Ordering::Relaxed),
+    }
+}
+
+/// Returns traffic for the opt-in direct-warm timeout cold retry.
+pub fn warm_timeout_cold_retry_stats() -> WarmTimeoutColdRetryStats {
+    WarmTimeoutColdRetryStats {
+        retries: WARM_TIMEOUT_COLD_RETRIES.load(Ordering::Relaxed),
+        recoveries: WARM_TIMEOUT_COLD_RECOVERIES.load(Ordering::Relaxed),
+        unknowns: WARM_TIMEOUT_COLD_UNKNOWNS.load(Ordering::Relaxed),
+        errors: WARM_TIMEOUT_COLD_ERRORS.load(Ordering::Relaxed),
     }
 }
 
@@ -3574,6 +3635,16 @@ mod tests {
         }
         for value in [Some("on"), Some("true"), Some("TRUE"), Some("1")] {
             assert!(parse_direct_delta(value));
+        }
+    }
+
+    #[test]
+    fn warm_timeout_cold_retry_is_strictly_opt_in() {
+        for value in [None, Some("off"), Some("false"), Some("0"), Some("invalid")] {
+            assert!(!parse_warm_timeout_cold_retry(value));
+        }
+        for value in [Some("on"), Some("true"), Some("TRUE"), Some("1")] {
+            assert!(parse_warm_timeout_cold_retry(value));
         }
     }
 
