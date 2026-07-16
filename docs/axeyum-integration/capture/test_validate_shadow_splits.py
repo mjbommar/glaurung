@@ -74,6 +74,57 @@ class ValidateShadowSplitsTests(unittest.TestCase):
                 sum(path.stat().st_size for path in capture.glob("*.smt2")),
             )
 
+    def test_emits_hash_free_diagnostic_capture_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = self.make_capture(
+                root,
+                [
+                    (b"(check-sat)\n", "sat", "error"),
+                    (b"(assert false)\n(check-sat)\n", "unknown", "unsat"),
+                    (b"(assert true)\n(check-sat)\n", "unsat", "unknown"),
+                ],
+            )
+            capture_index = root / "capture-index-v1.json"
+            result = self.run_validator(
+                capture,
+                "--capture-index-out",
+                str(capture_index),
+                "--source",
+                "test revisions and policy",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            index = json.loads(capture_index.read_text(encoding="utf-8"))
+            self.assertEqual(index["logic"], "QF_BV")
+            self.assertEqual(len(index["files"]), 3)
+            self.assertNotIn("content_hash", index["files"][0])
+            self.assertEqual(
+                {row["expected"] for row in index["files"]}, {"sat", "unsat"}
+            )
+            self.assertEqual(
+                {row["family"] for row in index["files"]},
+                {"shadow-axeyum-decided", "shadow-z3-decided"},
+            )
+            self.assertEqual(
+                sum("representative" in row["tiers"] for row in index["files"]),
+                3,
+            )
+            error_rows = [
+                row for row in index["files"] if "axeyum-error" in row["tiers"]
+            ]
+            self.assertEqual(len(error_rows), 1)
+            self.assertIn("axeyum-error-representative", error_rows[0]["tiers"])
+
+    def test_requires_source_for_capture_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            capture = self.make_capture(root, [(b"(check-sat)\n", "sat", "error")])
+            result = self.run_validator(
+                capture, "--capture-index-out", str(root / "capture-index-v1.json")
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--source", result.stderr)
+
     def test_rejects_filename_content_hash_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -945,7 +945,10 @@ Validate every captured byte before using or publishing the corpus:
 
 ```sh
 python3 validate_shadow_splits.py /path/to/new-split-corpus \
-  --summary-out /path/to/new-split-corpus/summary-v1.json
+  --summary-out /path/to/new-split-corpus/summary-v1.json \
+  --capture-index-out /path/to/new-split-corpus/capture-index-v1.json \
+  --name glaurung-driver-shadow-splits-v1 \
+  --source 'Glaurung and Axeyum revisions, driver, and exact policy'
 python3 -m unittest test_validate_shadow_splits.py
 ```
 
@@ -955,6 +958,11 @@ missing or orphaned scripts, non-UTF-8 bytes, and filename/content SHA-256
 mismatches. Its summary counts distinct queries by stable backend-class pair and
 deciding backend. Captured `.smt2` payloads under `shadow-splits/` are Git LFS
 objects; the TSV index and JSON summary remain reviewable ordinary Git text.
+The optional hash-free capture index assigns the only decided result as the
+diagnostic expectation and exposes `diagnostic`, deciding-backend,
+`axeyum-error`, and smallest-per-class representative tiers. Axeyum must still
+generate and re-read `manifest-v1.json` so byte identity belongs to the
+consumer, not this producer.
 
 The current 60-second `tcpip` capture at Glaurung `a6a5cc0` validates 784
 distinct formulas / 234,463,502 bytes. Axeyum decides 48 formulas that Z3 does

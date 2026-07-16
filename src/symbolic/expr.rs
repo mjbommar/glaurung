@@ -225,10 +225,10 @@ impl ExprPool {
                     self.render_coerced(*a, *hi)
                 )
             }
-            Expr::Concat { hi, lo, .. } => format!(
+            Expr::Concat { hi, lo, hi_w, lo_w } => format!(
                 "(concat {} {})",
-                self.render_smtlib(*hi),
-                self.render_smtlib(*lo)
+                self.render_coerced(*hi, hi_w.bits()),
+                self.render_coerced(*lo, lo_w.bits())
             ),
             Expr::Ite { c, t, e, width } => format!(
                 "(ite (= {} (_ bv1 1)) {} {})",
@@ -374,6 +374,23 @@ mod tests {
         assert_eq!(
             p.render_smtlib(z),
             "((_ zero_extend 32) ((_ extract 31 0) (_ bv4294967297 64)))"
+        );
+    }
+
+    #[test]
+    fn concat_rendering_coerces_to_declared_operand_widths() {
+        let mut p = ExprPool::new();
+        let hi = p.constant(Width(56), 0x12);
+        let lo = p.constant(Width::W1, 1);
+        let cat = p.intern(Expr::Concat {
+            hi,
+            lo,
+            hi_w: Width(56),
+            lo_w: Width::W8,
+        });
+        assert_eq!(
+            p.render_smtlib(cat),
+            "(concat (_ bv18 56) ((_ zero_extend 7) (_ bv1 1)))"
         );
     }
 

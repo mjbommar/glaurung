@@ -452,3 +452,38 @@ corpus may follow only if its cost is justified.
 functionality; capturing every query duplicates GQ1 and adds large diagnostic
 overhead; storing only hashes is not reproducible; storing error text makes
 identity unstable and may expose incidental paths/details.
+
+## ADR-016 - Enforce declared concat operand widths at every solver boundary
+
+**Status:** Accepted correctness fix; widened recapture pending.
+**Context:** Strict replay of the 60-second `tcpip` shadow-split corpus reduces
+733 distinct Axeyum errors to an exact malformed shape. A `setcc` result is a
+one-bit expression stored into an eight-bit register slice; `Expr::Concat`
+records that low half as eight bits, but the SMT renderer plus both native
+solver adapters ignored `hi_w`/`lo_w`. They constructed a 57-bit term while
+`ExprPool::width_of` and the concrete domain correctly treated the node as 64
+bits. The next extract therefore failed in Axeyum as `extract [63:8] out of
+range for width 57`. Z3's later coercion hid the malformed child and also
+shifted the high half by one rather than eight bits, changing program meaning.
+**Decision:** Keep strict Axeyum sorts. Coerce each concat child to its declared
+half-width, by zero-extension or low-bit truncation, in the SMT-LIB renderer,
+the Z3 adapter, and the Axeyum adapter before concatenation. This is the
+existing `Domain::concat(hi, lo, hi_w, lo_w)` contract and matches the concrete
+domain; it is not a solver-specific workaround. Generate Axeyum manifests from
+the strict split-corpus index and retain the old bytes as the reproducer.
+**Evidence:** The two smallest tcpip error representatives, one Z3-SAT and one
+Z3-UNSAT, independently fail Axeyum SMT-LIB ingestion with the same 57-bit
+out-of-range diagnostic. Focused renderer, Z3, and native Axeyum regressions
+prove that a one-bit low child declared as eight bits becomes a 64-bit concat
+with value `0x1201`, and the combined-feature tests pass under the 4 GiB cap.
+The archived corpora contain 784 tcpip and four dxgkrnl distinct split formulas
+with byte-owning Axeyum manifests.
+**Consequences:** Every old capture containing this shape remains valuable as a
+bug reproducer but is not valid post-fix performance evidence. Rebuild and
+repeat tcpip/dxgkrnl before admitting either driver to the lineage gate; compare
+findings because the old Z3 path used the wrong bit placement. Add no coercion
+inside Axeyum IR and do not weaken its error messages.
+**Alternatives rejected:** coercing only in the Axeyum adapter would leave Z3,
+text capture, and concrete execution semantically inconsistent; teaching
+Axeyum to accept mismatched concat sorts would hide a consumer soundness bug;
+changing only `setcc` would leave every other declared-width concat exposed.

@@ -2823,9 +2823,9 @@ impl<'a> Translator<'a> {
                 self.arena
                     .extract((hi as u32).saturating_sub(1), lo as u32, ta)?
             }
-            Expr::Concat { hi, lo, .. } => {
-                let th = self.translate(hi)?;
-                let tl = self.translate(lo)?;
+            Expr::Concat { hi, lo, hi_w, lo_w } => {
+                let th = self.translate_coerced(hi, hi_w.bits() as u32)?;
+                let tl = self.translate_coerced(lo, lo_w.bits() as u32)?;
                 // SMT-LIB concat(a,b): a is the high half. glaurung Concat{hi,lo}.
                 self.arena.concat(th, tl)?
             }
@@ -3978,6 +3978,22 @@ mod tests {
         let kab = c(&mut p, 0xAB, Width::W8);
         let pred_ex = cmp(&mut p, CmpOp::Eq, ex, kab, Width::W8);
         expect_pred(&p, pred_ex, true);
+    }
+
+    #[test]
+    fn native_concat_coerces_to_declared_operand_widths() {
+        let mut p = ExprPool::new();
+        let hi = c(&mut p, 0x12, Width(56));
+        let lo = c(&mut p, 1, Width::W1);
+        let cat = p.intern(Expr::Concat {
+            hi,
+            lo,
+            hi_w: Width(56),
+            lo_w: Width::W8,
+        });
+        let expected = c(&mut p, 0x1201, Width::W64);
+        let pred = cmp(&mut p, CmpOp::Eq, cat, expected, Width::W64);
+        expect_pred(&p, pred, true);
     }
 
     #[test]

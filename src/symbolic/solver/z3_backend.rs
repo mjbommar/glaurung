@@ -180,9 +180,9 @@ fn to_bv<'c>(
             let a = coerce(to_bv(ctx, pool, a, memo), hi as u32);
             a.extract((hi - 1) as u32, lo as u32)
         }
-        Expr::Concat { hi, lo, .. } => {
-            let h = to_bv(ctx, pool, hi, memo);
-            let l = to_bv(ctx, pool, lo, memo);
+        Expr::Concat { hi, lo, hi_w, lo_w } => {
+            let h = coerce(to_bv(ctx, pool, hi, memo), hi_w.bits() as u32);
+            let l = coerce(to_bv(ctx, pool, lo, memo), lo_w.bits() as u32);
             h.concat(&l)
         }
         Expr::Ite { c, t, e, width } => {
@@ -288,6 +288,30 @@ mod tests {
             SolveResult::Sat(m) => assert_eq!(m.values.get(&0).copied(), Some(0xff)),
             other => panic!("expected sat, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn z3_concat_coerces_to_declared_operand_widths() {
+        let mut p = ExprPool::new();
+        let hi = p.constant(Width(56), 0x12);
+        let lo = p.constant(Width::W1, 1);
+        let cat = p.intern(Expr::Concat {
+            hi,
+            lo,
+            hi_w: Width(56),
+            lo_w: Width::W8,
+        });
+        let expected = p.constant(Width::W64, 0x1201);
+        let eq = p.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: cat,
+            b: expected,
+            width: Width::W64,
+        });
+        assert!(matches!(
+            Z3Solver::new().check(&p, &[(eq, true)]),
+            SolveResult::Sat(_)
+        ));
     }
 
     #[test]

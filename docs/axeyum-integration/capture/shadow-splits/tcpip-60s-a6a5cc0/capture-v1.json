@@ -38,5 +38,7 @@
     "max_rss_kib": 439860
   },
   "validated_summary": "summary-v1.json",
-  "split_index": "shadow-splits.tsv"
+  "split_index": "shadow-splits.tsv",
+  "capture_index": "capture-index-v1.json",
+  "axeyum_manifest": "manifest-v1.json"
 }

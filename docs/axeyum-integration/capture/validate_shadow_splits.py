@@ -86,7 +86,9 @@ def validate_script(path: Path, expected_hash: str) -> int:
     return len(payload)
 
 
-def validate(root: Path, jobs: int) -> dict[str, object]:
+def validate_capture(
+    root: Path, jobs: int
+) -> tuple[dict[str, object], dict[str, tuple[str, str]], dict[str, int]]:
     if jobs <= 0:
         raise ValueError("--jobs must be positive")
     rows = load_index(root)
@@ -104,7 +106,7 @@ def validate(root: Path, jobs: int) -> dict[str, object]:
 
     hashes = sorted(rows)
     with ThreadPoolExecutor(max_workers=jobs) as executor:
-        sizes = list(
+        size_values = list(
             executor.map(
                 lambda content_hash: validate_script(
                     scripts[content_hash], content_hash
@@ -112,17 +114,73 @@ def validate(root: Path, jobs: int) -> dict[str, object]:
                 hashes,
             )
         )
+    sizes = dict(zip(hashes, size_values, strict=True))
 
     class_pairs = Counter(f"{rows[key][0]}/{rows[key][1]}" for key in hashes)
     decided_by = Counter(
         "z3" if rows[key][0] in DECIDED else "axeyum" for key in hashes
     )
-    return {
+    summary = {
         "schema": "glaurung-shadow-split-summary-v1",
         "distinct_queries": len(rows),
-        "content_bytes": sum(sizes),
+        "content_bytes": sum(sizes.values()),
         "class_pairs": dict(sorted(class_pairs.items())),
         "decided_by": dict(sorted(decided_by.items())),
+    }
+    return summary, rows, sizes
+
+
+def validate(root: Path, jobs: int) -> dict[str, object]:
+    summary, _, _ = validate_capture(root, jobs)
+    return summary
+
+
+def build_capture_index(
+    rows: dict[str, tuple[str, str]],
+    sizes: dict[str, int],
+    name: str,
+    source: str,
+) -> dict[str, object]:
+    if not name.strip():
+        raise ValueError("--name must be non-empty")
+    if not source.strip():
+        raise ValueError("--source is required with --capture-index-out")
+
+    representative: set[str] = set()
+    for pair in sorted(set(rows.values())):
+        matching = (
+            content_hash for content_hash, value in rows.items() if value == pair
+        )
+        representative.add(min(matching, key=lambda key: (sizes[key], key)))
+
+    files = []
+    for content_hash in sorted(rows):
+        z3_class, axeyum_class = rows[content_hash]
+        z3_decided = z3_class in DECIDED
+        tiers = ["diagnostic"]
+        tiers.append("z3-decided" if z3_decided else "axeyum-decided")
+        if axeyum_class == "error":
+            tiers.append("axeyum-error")
+        if content_hash in representative:
+            tiers.append("representative")
+            if axeyum_class == "error":
+                tiers.append("axeyum-error-representative")
+        files.append(
+            {
+                "path": f"{content_hash}.smt2",
+                "expected": z3_class if z3_decided else axeyum_class,
+                "family": (
+                    "shadow-z3-decided" if z3_decided else "shadow-axeyum-decided"
+                ),
+                "tiers": tiers,
+            }
+        )
+    return {
+        "version": 1,
+        "name": name,
+        "source": source,
+        "logic": "QF_BV",
+        "files": files,
     }
 
 
@@ -131,16 +189,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("capture", type=Path)
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--summary-out", type=Path)
+    parser.add_argument("--capture-index-out", type=Path)
+    parser.add_argument("--name", default="glaurung-shadow-splits-v1")
+    parser.add_argument("--source")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        summary = validate(args.capture, args.jobs)
+        summary, rows, sizes = validate_capture(args.capture, args.jobs)
         rendered = json.dumps(summary, indent=2, sort_keys=True) + "\n"
         if args.summary_out is not None:
             args.summary_out.write_text(rendered, encoding="utf-8")
+        if args.capture_index_out is not None:
+            capture_index = build_capture_index(
+                rows, sizes, args.name, args.source if args.source is not None else ""
+            )
+            args.capture_index_out.write_text(
+                json.dumps(capture_index, indent=2) + "\n", encoding="utf-8"
+            )
         print(rendered, end="")
     except (OSError, ValueError) as error:
         print(f"validate_shadow_splits.py: ERROR: {error}", file=sys.stderr)
