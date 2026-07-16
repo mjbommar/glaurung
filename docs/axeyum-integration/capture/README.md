@@ -183,6 +183,16 @@ field set, rejects nested time beyond `model_lift_nanos`, and validates the
 symbol/node count bounds. These diagnostics select no model policy and do not
 authorize skipping validation, completion, or original replay.
 
+The first v6 SurfacePen lineage run decides and agrees on all 2,551 checks
+(2,282 SAT / 269 UNSAT), with zero unknown splits or replay failures. Of
+175.049 ms in model lift, complete-model construction consumes 165.192 ms
+(94.37%), assignment reconstruction/validation 7.146 ms (4.08%), and retained-
+AIG recomputation 2.427 ms (1.39%). Exactly 5,066 reconstructed symbols become
+5,066 completed values. This rejects duplicate AIG traversal as the next lever
+and selects a causal test of Axeyum's empty warm-theory projection discovery on
+scalar QF_BV. That test must preserve complete user-symbol defaults and replay
+of every original root.
+
 The first v5 SurfacePen profile changes the residual priority: replay is
 447.046 ms / 38.82% of internal time because the incremental solver formerly
 created a new ground-evaluator memo for every original root. Axeyum ADR-0193
