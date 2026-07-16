@@ -229,6 +229,25 @@ It exposed a Glaurung explorer bug: the feasibility shortcut treated a
 symbol-free but syntactically nonconstant branch DAG as an independent symbolic
 predicate, preserving a semantically UNSAT child until a later model read. The
 shortcut now requires at least one free symbol before it may skip a check, with
-a focused regression test. The corrected capture published without any
-non-SAT model fallback. This behavior change is a correctness repair, not a
-trace-only workaround.
+a focused regression test.
+
+The wider IntcSST capture then found a second independent fail-closed defect:
+`eval_concrete` and `concretize_addr` evaluated an empty model after UNSAT,
+unknown, unavailable, or failed checks and allowed the resulting zero/default
+value to steer exploration. Commit `57c6c09` makes both operations return no
+value unless the immediately preceding check is SAT, propagates that result
+through memory operations and API summaries, and terminates a path whose next
+step requires the unavailable model. Its regression verifies that an UNSAT
+evaluation neither produces a value nor adds a concretization assertion. The
+validator remains strict; it was not weakened to hide the producer bug.
+
+That repaired trace exposed a separate width-contract defect rather than a
+solver defect: extension nodes could declare a 32-bit source around a 64-bit
+child. Z3's AST adapter had normalized such children implicitly, while the
+strict SMT-LIB capture and Axeyum adapter correctly rejected the inconsistent
+sort. Commit `d450d2a` now coerces every zero/sign-extension child to its
+declared source width in the renderer and both native adapters. A clean bounded
+IntcSST run then published 7,840 events, 566 paths, 1,672 checks, 1,272 unique
+queries, and 838 model reads; all 1,672 same-stream Z3/Axeyum checks decided and
+agreed with zero unknown splits. These are Glaurung correctness and capture
+repairs, not Axeyum performance claims.
