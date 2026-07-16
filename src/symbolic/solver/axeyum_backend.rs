@@ -49,6 +49,10 @@ static WARM_PREFIX_REUSES: AtomicU64 = AtomicU64::new(0);
 static WARM_ASSERTIONS_ADDED: AtomicU64 = AtomicU64::new(0);
 static WARM_ASSERTIONS_POPPED: AtomicU64 = AtomicU64::new(0);
 static WARM_RESETS: AtomicU64 = AtomicU64::new(0);
+static WARM_PATHS_CREATED: AtomicU64 = AtomicU64::new(0);
+static WARM_PATHS_CLOSED: AtomicU64 = AtomicU64::new(0);
+static WARM_PATHS_LIVE: AtomicU64 = AtomicU64::new(0);
+static WARM_PATHS_PEAK_LIVE: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     /// One retained snapshot adapter per explorer thread. Glaurung currently
@@ -56,6 +60,25 @@ thread_local! {
     /// the adapter reconstructs the common prefix and maps it to Axeyum scopes.
     static WARM_SOLVER: RefCell<SnapshotIncrementalAxeyumSolver> =
         RefCell::new(SnapshotIncrementalAxeyumSolver::new());
+    /// Retained mutable solver state keyed by explorer-owned path identity.
+    /// Each worker owns its map; no solver is shared across paths or threads.
+    static LINEAGE_SOLVERS: RefCell<LineageIncrementalAxeyumSolver> =
+        RefCell::new(LineageIncrementalAxeyumSolver::default());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WarmReusePolicy {
+    Off,
+    Snapshot,
+    Lineage,
+}
+
+fn warm_reuse_policy() -> WarmReusePolicy {
+    match std::env::var(WARM_REUSE_ENV) {
+        Err(_) => WarmReusePolicy::Off,
+        Ok(value) if value.eq_ignore_ascii_case("lineage") => WarmReusePolicy::Lineage,
+        Ok(_) => WarmReusePolicy::Snapshot,
+    }
 }
 
 fn config() -> SolverConfig {
@@ -442,19 +465,81 @@ impl SnapshotIncrementalAxeyumSolver {
     }
 }
 
-/// Whether the opt-in snapshot-to-incremental adapter is selected.
-pub(crate) fn warm_reuse_enabled() -> bool {
-    std::env::var_os(WARM_REUSE_ENV).is_some()
+/// One independently mutable retained solver per explorer-owned path.
+///
+/// A path's first check materializes its complete assertion snapshot. Later
+/// checks on that same path reuse its prefix and add only the delta. Siblings
+/// never share an [`IncrementalBvSolver`]; their common prefix is replayed into
+/// separate sessions, preserving push/pop ownership and learned-state isolation.
+#[derive(Debug, Default)]
+struct LineageIncrementalAxeyumSolver {
+    paths: BTreeMap<u64, SnapshotIncrementalAxeyumSolver>,
 }
 
-/// Checks through the retained per-thread snapshot adapter.
-pub(crate) fn check_warm_thread_local(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
-    let (result, before, after) = WARM_SOLVER.with(|solver| {
-        let mut solver = solver.borrow_mut();
+impl LineageIncrementalAxeyumSolver {
+    fn check_path(
+        &mut self,
+        path_id: u64,
+        pool: &ExprPool,
+        asserts: &[Assert],
+    ) -> (SolveResult, SnapshotReuseStats, SnapshotReuseStats, bool) {
+        let created = !self.paths.contains_key(&path_id);
+        let solver = self.paths.entry(path_id).or_default();
         let before = solver.stats();
         let result = solver.check_snapshot(pool, asserts);
-        (result, before, solver.stats())
-    });
+        (result, before, solver.stats(), created)
+    }
+
+    fn close_path(&mut self, path_id: u64) -> bool {
+        self.paths.remove(&path_id).is_some()
+    }
+
+    fn live_paths(&self) -> u64 {
+        count(self.paths.len())
+    }
+}
+
+/// Whether the opt-in snapshot-to-incremental adapter is selected.
+pub(crate) fn warm_reuse_enabled() -> bool {
+    warm_reuse_policy() != WarmReusePolicy::Off
+}
+
+/// Checks through the selected retained worker-local adapter.
+pub(crate) fn check_warm_thread_local(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: Option<u64>,
+) -> SolveResult {
+    let (result, before, after) = match warm_reuse_policy() {
+        WarmReusePolicy::Off => return AxeyumSolver::new().check(pool, asserts),
+        WarmReusePolicy::Snapshot => WARM_SOLVER.with(|solver| {
+            let mut solver = solver.borrow_mut();
+            let before = solver.stats();
+            let result = solver.check_snapshot(pool, asserts);
+            (result, before, solver.stats())
+        }),
+        WarmReusePolicy::Lineage => {
+            let Some(path_id) = path_id else {
+                return AxeyumSolver::new().check(pool, asserts);
+            };
+            let (result, before, after, created) = LINEAGE_SOLVERS.with(|lineage| {
+                let mut lineage = lineage.borrow_mut();
+                let (result, before, after, created) = lineage.check_path(path_id, pool, asserts);
+                (result, before, after, created)
+            });
+            if created {
+                WARM_PATHS_CREATED.fetch_add(1, Ordering::Relaxed);
+                let live = WARM_PATHS_LIVE.fetch_add(1, Ordering::Relaxed) + 1;
+                WARM_PATHS_PEAK_LIVE.fetch_max(live, Ordering::Relaxed);
+            }
+            (result, before, after)
+        }
+    };
+    record_warm_delta(before, after);
+    result
+}
+
+fn record_warm_delta(before: SnapshotReuseStats, after: SnapshotReuseStats) {
     WARM_CHECKS.fetch_add(
         after.checks.saturating_sub(before.checks),
         Ordering::Relaxed,
@@ -489,7 +574,44 @@ pub(crate) fn check_warm_thread_local(pool: &ExprPool, asserts: &[Assert]) -> So
             .saturating_sub(before.resets_after_error),
         Ordering::Relaxed,
     );
-    result
+}
+
+/// Release retained mutable state when an explorer path becomes terminal.
+pub(crate) fn close_warm_path(path_id: u64) {
+    if warm_reuse_policy() != WarmReusePolicy::Lineage {
+        return;
+    }
+    let closed = LINEAGE_SOLVERS.with(|lineage| {
+        let mut lineage = lineage.borrow_mut();
+        lineage.close_path(path_id)
+    });
+    if closed {
+        WARM_PATHS_CLOSED.fetch_add(1, Ordering::Relaxed);
+        WARM_PATHS_LIVE.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Process-wide explorer-path ownership counters for lineage warm reuse.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WarmPathReuseStats {
+    /// Path-owned solver sessions created lazily on first check.
+    pub paths_created: u64,
+    /// Path-owned solver sessions released at terminal path events.
+    pub paths_closed: u64,
+    /// Sessions currently retained across all explorer workers.
+    pub live_paths: u64,
+    /// Maximum simultaneously retained sessions observed in this process.
+    pub peak_live_paths: u64,
+}
+
+/// Returns process-wide lineage ownership counters.
+pub fn warm_path_reuse_stats() -> WarmPathReuseStats {
+    WarmPathReuseStats {
+        paths_created: WARM_PATHS_CREATED.load(Ordering::Relaxed),
+        paths_closed: WARM_PATHS_CLOSED.load(Ordering::Relaxed),
+        live_paths: WARM_PATHS_LIVE.load(Ordering::Relaxed),
+        peak_live_paths: WARM_PATHS_PEAK_LIVE.load(Ordering::Relaxed),
+    }
 }
 
 /// Process-wide aggregate of opt-in warm snapshot reuse across explorer
@@ -1077,6 +1199,59 @@ mod tests {
         ));
         assert_eq!(solver.stats().assertions_popped, 1);
         assert_eq!(solver.stats().exact_snapshot_reuses, 1);
+    }
+
+    #[test]
+    fn lineage_incremental_isolates_sibling_solver_state() {
+        let mut root = ExprPool::new();
+        let x = root.fresh_symbol(Width::W32);
+        let ten = c(&mut root, 10, Width::W32);
+        let below_ten = cmp(&mut root, CmpOp::Ult, x, ten, Width::W32);
+
+        let mut left = root.clone();
+        let five = c(&mut left, 5, Width::W32);
+        let x_is_five = cmp(&mut left, CmpOp::Eq, x, five, Width::W32);
+        let mut right = root.clone();
+        let seven = c(&mut right, 7, Width::W32);
+        let x_is_seven = cmp(&mut right, CmpOp::Eq, x, seven, Width::W32);
+
+        let mut lineage = LineageIncrementalAxeyumSolver::default();
+        let left_snapshot = [(below_ten, true), (x_is_five, true)];
+        let right_snapshot = [(below_ten, true), (x_is_seven, true)];
+        assert!(matches!(
+            lineage.check_path(11, &left, &left_snapshot).0,
+            SolveResult::Sat(_)
+        ));
+        assert!(matches!(
+            lineage.check_path(12, &right, &right_snapshot).0,
+            SolveResult::Sat(_)
+        ));
+        assert!(matches!(
+            lineage.check_path(11, &left, &left_snapshot).0,
+            SolveResult::Sat(_)
+        ));
+        assert_eq!(
+            lineage
+                .paths
+                .get(&11)
+                .unwrap()
+                .stats()
+                .exact_snapshot_reuses,
+            1
+        );
+        assert_eq!(
+            lineage
+                .paths
+                .get(&12)
+                .unwrap()
+                .stats()
+                .exact_snapshot_reuses,
+            0
+        );
+        assert_eq!(lineage.live_paths(), 2);
+        assert!(lineage.close_path(11));
+        assert!(!lineage.close_path(11));
+        assert_eq!(lineage.live_paths(), 1);
     }
 
     #[test]

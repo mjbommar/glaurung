@@ -22,11 +22,12 @@ use crate::ir::types::{
 };
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::ordered_trace::TracePath;
-use crate::symbolic::solver::{last_solve_timing, solve, Assert, Model, SolveResult};
+use crate::symbolic::solver::{last_solve_timing, solve_for_path, Assert, Model, SolveResult};
 use crate::symbolic::Symbolic;
 
 use std::cell::Cell;
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 thread_local! {
@@ -300,6 +301,14 @@ struct Alloc {
 /// seeded IRP structures and the stack).
 const HEAP_BASE: u64 = 0x7000_0000;
 
+/// Process-local identity for explicit warm-solver ownership. It never enters
+/// formulas or evidence; ordered trace paths retain their separate stable IDs.
+static NEXT_WARM_PATH_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_warm_path_id() -> u64 {
+    NEXT_WARM_PATH_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 /// One in-flight path: a machine snapshot, its program counter, the path
 /// condition, and the per-path bookkeeping the lifecycle detectors need.
 #[derive(Clone)]
@@ -329,6 +338,8 @@ struct State {
     visits: BTreeMap<u64, u32>,
     /// Ordered-trace lineage and scope state. Absent in ordinary execution.
     trace: Option<TracePath>,
+    /// Logical owner of opt-in retained Axeyum mutable state.
+    warm_path_id: u64,
 }
 
 /// Max times a single path may re-enter the same block before it is cut.
@@ -348,6 +359,7 @@ impl State {
             tainted_reads: BTreeSet::new(),
             visits: BTreeMap::new(),
             trace: TracePath::root(pc),
+            warm_path_id: next_warm_path_id(),
         }
     }
 
@@ -365,6 +377,7 @@ impl State {
             tainted_reads: self.tainted_reads.clone(),
             visits: self.visits.clone(),
             trace: self.trace.as_ref().map(|trace| trace.fork(pc)),
+            warm_path_id: next_warm_path_id(),
         }
     }
 
@@ -378,6 +391,8 @@ impl State {
 
     /// Terminate this path in the ordered trace, if capture is active.
     fn end_trace(&mut self, reason: &str) {
+        #[cfg(feature = "solver-axeyum")]
+        crate::symbolic::solver::axeyum_backend::close_warm_path(self.warm_path_id);
         if let Some(trace) = &mut self.trace {
             trace.end(reason, self.pc);
         }
@@ -385,13 +400,16 @@ impl State {
 
     /// A stateful round is a new logical root even when it carries machine data.
     fn restart_trace(&mut self) {
+        #[cfg(feature = "solver-axeyum")]
+        crate::symbolic::solver::axeyum_backend::close_warm_path(self.warm_path_id);
+        self.warm_path_id = next_warm_path_id();
         self.trace = TracePath::root(self.pc);
     }
 }
 
 /// Solve the current path condition and record the exact query occurrence.
 fn solve_traced(st: &mut State, purpose: &str, location: u64) -> SolveResult {
-    let result = solve(&st.machine.dom.pool, &st.constraints);
+    let result = solve_for_path(&st.machine.dom.pool, &st.constraints, st.warm_path_id);
     let timing = last_solve_timing();
     if let Some(trace) = &mut st.trace {
         trace.check(
@@ -420,7 +438,7 @@ fn solve_probe_traced(
     }
     let mut probe = st.constraints.clone();
     probe.push(assertion);
-    let result = solve(&st.machine.dom.pool, &probe);
+    let result = solve_for_path(&st.machine.dom.pool, &probe, st.warm_path_id);
     let timing = last_solve_timing();
     if let Some(trace) = &mut st.trace {
         trace.check(
@@ -1688,6 +1706,19 @@ mod tests {
         });
         let state = State::root(machine, 0x1000, TaintSpec::new());
         assert!(!can_skip_feasibility_check(&state, predicate));
+    }
+
+    #[test]
+    fn warm_solver_ownership_is_distinct_across_forks_and_restarts() {
+        let machine = Machine::new(Symbolic::new());
+        let mut root = State::root(machine, 0x1000, TaintSpec::new());
+        let child = root.fork(0x2000);
+        assert_ne!(root.warm_path_id, child.warm_path_id);
+
+        let original = root.warm_path_id;
+        root.restart_trace();
+        assert_ne!(root.warm_path_id, original);
+        assert_ne!(root.warm_path_id, child.warm_path_id);
     }
 
     /// The solver budget bails out of a runaway exploration. The block loops to

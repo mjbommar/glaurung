@@ -53,9 +53,8 @@ fn kind_str(k: SinkKind) -> &'static str {
 fn is_attacker_real(taint: &[String]) -> bool {
     taint.iter().any(|t| {
         let t = t.trim_start_matches('*');
-        let is_argn = t.len() > 3
-            && t.starts_with("Arg")
-            && t[3..].chars().all(|c| c.is_ascii_digit());
+        let is_argn =
+            t.len() > 3 && t.starts_with("Arg") && t[3..].chars().all(|c| c.is_ascii_digit());
         !is_argn
     })
 }
@@ -161,7 +160,9 @@ fn reach_hops() -> usize {
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: ioctlance <driver.sys>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: ioctlance <driver.sys>");
     let data = std::fs::read(&path).expect("read file");
     let ordered_trace = glaurung::symbolic::ordered_trace::begin_from_env(&path, &data)
         .unwrap_or_else(|error| panic!("ordered trace initialization failed: {error}"));
@@ -419,22 +420,26 @@ fn main() {
                 if ax_ms > 0.0 { z3_ms / ax_ms } else { 0.0 },
             );
             let (both_sat, model_diff) = glaurung::symbolic::solver::shadow_model_stats();
-            let (z3_unk, ax_unk, unk_split) =
-                glaurung::symbolic::solver::shadow_unknown_stats();
+            let (z3_unk, ax_unk, unk_split) = glaurung::symbolic::solver::shadow_unknown_stats();
             eprintln!(
                 "[model-choice] both-sat={} different-model={} | z3-unknown={} axeyum-unknown={} unknown-split={}",
                 both_sat, model_diff, z3_unk, ax_unk, unk_split,
             );
             let warm = glaurung::symbolic::solver::axeyum_backend::warm_reuse_stats();
             if warm.checks > 0 {
+                let paths = glaurung::symbolic::solver::axeyum_backend::warm_path_reuse_stats();
                 eprintln!(
-                    "[axeyum-warm] checks={} exact={} prefix-roots={} added={} popped={} resets={}",
+                    "[axeyum-warm] checks={} exact={} prefix-roots={} added={} popped={} resets={} paths-created={} paths-closed={} paths-live={} paths-peak={}",
                     warm.checks,
                     warm.exact_snapshot_reuses,
                     warm.prefix_assertions_reused,
                     warm.assertions_added,
                     warm.assertions_popped,
                     warm.resets_after_error,
+                    paths.paths_created,
+                    paths.paths_closed,
+                    paths.live_paths,
+                    paths.peak_live_paths,
                 );
             }
         }

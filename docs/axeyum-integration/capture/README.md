@@ -119,15 +119,24 @@ evidence needed by warm GQ7/GQ8 work. Run the same shadow command without
 compare an Axeyum-authoritative run because different SAT models can change
 Glaurung's exploration and query stream.
 
-## Opt-in warm snapshot reuse (ADR-0164)
+## Opt-in native warm policies (ADR-0164 / ADR-0170)
 
 Glaurung commits `016935d` and `b09ec6b` add the first real warm GQ7 bridge.
 The public `Solver` trait still submits complete assertion snapshots, but
-`GLAURUNG_AXEYUM_WARM_REUSE=1` sends those snapshots through one retained
+`GLAURUNG_AXEYUM_WARM_REUSE=1` (equivalently `snapshot`) sends those snapshots through one retained
 Axeyum arena/solver per explorer thread. The adapter translates structurally,
 keeps the longest common assertion-root prefix active, pops the divergent
 suffix, and asserts only the new suffix. It does not compare raw `ExprId`s
 across cloned path pools, where sibling IDs may collide.
+
+`GLAURUNG_AXEYUM_WARM_REUSE=lineage` selects the explicit path-owned control.
+The explorer assigns an internal logical owner to every root and fork. Each
+worker lazily creates one independent arena/solver for a path's first check,
+then retains that path's assertion prefix and asserts only later deltas. Sibling
+paths never share mutable SAT state; their common roots are replayed into
+separate solvers. Terminal paths release their sessions, and stateful restarts
+receive a fresh owner. A solve outside the explorer's explicit path context
+falls back to one-shot rather than guessing ownership.
 
 Run the same Z3-authoritative shadow stream with warm reuse enabled:
 
@@ -143,6 +152,9 @@ target/release/examples/ioctlance \
 
 The footer adds `[axeyum-warm]` counters for checks, consecutive exact
 snapshots, retained prefix roots, added roots, popped roots, and error resets.
+Lineage mode also reports created, closed, current-live, and peak-live path
+sessions. These counters describe solver ownership and root traffic; process
+RSS remains the memory acceptance measurement.
 Three alternating baseline/warm processes on 2026-07-15 each ran 13,126
 same-stream checks with 13,126 agreements, zero disagreements/unknown splits,
 identical findings, and zero warm resets. Median Axeyum time fell from 17.784
@@ -150,13 +162,12 @@ to 9.426 seconds (-47.0%); median paired Axeyum/Z3 fell from 2.648x to 1.462x.
 Every warm run retained 679,870 prefix roots while adding 8,027 and popping
 8,026; 5,609 snapshots exactly matched the immediately preceding snapshot.
 
-This remains opt-in and is not the ordered warm-trace v1 deliverable. Snapshot
-order cannot prove worker/path lineage, explicit scope history,
-non-consecutive-fork reuse, or which model reads drove exploration. The next
-capture must still emit the versioned worker/path/scope/model events in
-Axeyum's `glaurung-ordered-trace-v1.md`; use it to compare explicit per-lineage
-state against this snapshot inference and to publish p50/p95, memory, and
-break-even depth before default enablement or verdict caching.
+Both policies remain opt-in. Snapshot order alone cannot prove worker/path
+lineage, explicit scope history, non-consecutive-fork reuse, or which model
+reads drove exploration. Lineage ownership supplies that execution boundary,
+but it can pay heavily to rebuild sibling prefixes and retain more memory. Run
+both against the ordered trace and publish same-stream p50/p95, memory, root
+traffic, and repeated variance before default enablement or verdict caching.
 
 ## Ordered lineage/scope/model trace v1
 

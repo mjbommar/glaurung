@@ -74,6 +74,9 @@ thread_local! {
     /// Per-call timing for the most recent solve on this worker. Ordered-trace
     /// capture reads it immediately after `solve`; ordinary callers ignore it.
     static LAST_SOLVE_TIMING: Cell<SolveTiming> = const { Cell::new(SolveTiming::ZERO) };
+    /// Explorer-owned logical path for the current solve. Only the opt-in
+    /// Axeyum lineage adapter consumes this; ordinary and snapshot solves ignore it.
+    static ACTIVE_WARM_PATH: Cell<Option<u64>> = const { Cell::new(None) };
 }
 
 /// Backend-separated timing for one solver call.
@@ -295,7 +298,11 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                 SHADOW_Z3_NANOS.fetch_add(z3_nanos, Ordering::Relaxed);
                 let t = std::time::Instant::now();
                 ra = if axeyum_backend::warm_reuse_enabled() {
-                    axeyum_backend::check_warm_thread_local(pool, asserts)
+                    axeyum_backend::check_warm_thread_local(
+                        pool,
+                        asserts,
+                        ACTIVE_WARM_PATH.with(Cell::get),
+                    )
                 } else {
                     axeyum_backend::AxeyumSolver::new().check(pool, asserts)
                 };
@@ -304,7 +311,11 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             } else {
                 let t = std::time::Instant::now();
                 ra = if axeyum_backend::warm_reuse_enabled() {
-                    axeyum_backend::check_warm_thread_local(pool, asserts)
+                    axeyum_backend::check_warm_thread_local(
+                        pool,
+                        asserts,
+                        ACTIVE_WARM_PATH.with(Cell::get),
+                    )
                 } else {
                     axeyum_backend::AxeyumSolver::new().check(pool, asserts)
                 };
@@ -375,7 +386,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     let result = z3_backend::Z3Solver::new().check(pool, asserts);
     #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
     let result = if axeyum_backend::warm_reuse_enabled() {
-        axeyum_backend::check_warm_thread_local(pool, asserts)
+        axeyum_backend::check_warm_thread_local(pool, asserts, ACTIVE_WARM_PATH.with(Cell::get))
     } else {
         axeyum_backend::AxeyumSolver::new().check(pool, asserts)
     };
@@ -414,5 +425,17 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     }
     #[cfg(feature = "solver-z3")]
     maybe_dump_query(pool, asserts, &result);
+    result
+}
+
+/// Solve in the ownership context of one explorer path.
+///
+/// The context is worker-local and restored after the call. It is ignored by
+/// ordinary backends and by Axeyum's consecutive-snapshot policy; only the
+/// explicit opt-in lineage policy uses it to select retained mutable state.
+pub(crate) fn solve_for_path(pool: &ExprPool, asserts: &[Assert], path_id: u64) -> SolveResult {
+    let previous = ACTIVE_WARM_PATH.with(|active| active.replace(Some(path_id)));
+    let result = solve(pool, asserts);
+    ACTIVE_WARM_PATH.with(|active| active.set(previous));
     result
 }
