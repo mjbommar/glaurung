@@ -95,6 +95,27 @@ class LineageGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "warm traffic drift"):
             lineage_gate.validate_artifact(artifact)
 
+    def test_thresholds_distinguish_regression_from_environment_drift(self) -> None:
+        comparison = {
+            "surface": {
+                "axeyum_change": 0.031,
+                "ratio_change": 0.01,
+                "median_rss_change": 0.051,
+                "z3_change": -0.021,
+            }
+        }
+        violations = lineage_gate.threshold_violations(
+            comparison,
+            max_axeyum=0.03,
+            max_ratio=0.03,
+            max_rss=0.05,
+            max_z3_drift=0.02,
+        )
+        self.assertEqual(len(violations), 3)
+        self.assertTrue(any("axeyum" in violation for violation in violations))
+        self.assertTrue(any("median-rss" in violation for violation in violations))
+        self.assertTrue(any("z3-drift" in violation for violation in violations))
+
 
 if __name__ == "__main__":
     unittest.main()

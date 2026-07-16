@@ -385,10 +385,45 @@ def compare_artifacts(args: argparse.Namespace) -> None:
         after = candidate_summary[name]
         comparison[name] = {
             "axeyum_change": after["axeyum_mean_ms"] / before["axeyum_mean_ms"] - 1,
+            "z3_change": after["z3_mean_ms"] / before["z3_mean_ms"] - 1,
             "ratio_change": after["axeyum_z3_ratio"] / before["axeyum_z3_ratio"] - 1,
             "median_rss_change": after["median_rss_kib"] / before["median_rss_kib"] - 1,
         }
     print(json.dumps(comparison, indent=2, sort_keys=True))
+    violations = threshold_violations(
+        comparison,
+        max_axeyum=args.max_axeyum_regression / 100,
+        max_ratio=args.max_ratio_regression / 100,
+        max_rss=args.max_rss_regression / 100,
+        max_z3_drift=args.max_z3_drift / 100,
+    )
+    if violations:
+        fail("regression alarms: " + "; ".join(violations))
+
+
+def threshold_violations(
+    comparison: dict[str, dict[str, float]],
+    *,
+    max_axeyum: float,
+    max_ratio: float,
+    max_rss: float,
+    max_z3_drift: float,
+) -> list[str]:
+    violations = []
+    for name, row in sorted(comparison.items()):
+        checks = (
+            ("axeyum", row["axeyum_change"], max_axeyum, False),
+            ("ratio", row["ratio_change"], max_ratio, False),
+            ("median-rss", row["median_rss_change"], max_rss, False),
+            ("z3-drift", row["z3_change"], max_z3_drift, True),
+        )
+        for label, value, limit, absolute in checks:
+            observed = abs(value) if absolute else value
+            if observed > limit:
+                violations.append(
+                    f"{name} {label} {value * 100:+.2f}% exceeds {limit * 100:.2f}%"
+                )
+    return violations
 
 
 def main() -> int:
@@ -410,6 +445,10 @@ def main() -> int:
     compare = subparsers.add_parser("compare", help="compare two homogeneous artifacts")
     compare.add_argument("baseline")
     compare.add_argument("candidate")
+    compare.add_argument("--max-axeyum-regression", type=float, default=3.0)
+    compare.add_argument("--max-ratio-regression", type=float, default=3.0)
+    compare.add_argument("--max-rss-regression", type=float, default=5.0)
+    compare.add_argument("--max-z3-drift", type=float, default=2.0)
     args = parser.parse_args()
     try:
         if args.command == "run":
@@ -422,6 +461,16 @@ def main() -> int:
             summary = validate_artifact(load_artifact(pathlib.Path(args.artifact)))
             print(json.dumps(summary, indent=2, sort_keys=True))
         else:
+            if (
+                min(
+                    args.max_axeyum_regression,
+                    args.max_ratio_regression,
+                    args.max_rss_regression,
+                    args.max_z3_drift,
+                )
+                < 0
+            ):
+                fail("comparison thresholds must be nonnegative percentages")
             compare_artifacts(args)
     except (
         OSError,

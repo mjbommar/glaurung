@@ -354,6 +354,14 @@ python3 docs/axeyum-integration/capture/lineage_gate.py compare \
   /path/to/candidate/lineage-gate-v1.json
 ```
 
+The comparator fails on a greater-than-3% Axeyum mean regression, greater-than-
+3% normalized Axeyum/Z3 ratio regression, greater-than-5% median-RSS
+regression, or greater-than-2% absolute Z3 drift. All four percentage ceilings
+are explicit `--max-*-regression`/`--max-z3-drift` options. Z3 drift is an
+environment alarm in either direction; Axeyum/ratio/RSS alarms are one-sided so
+improvements pass. Thresholds never relax correctness, exact-work, finding, or
+identity validation.
+
 Use `--driver surface --repetitions 1 --allow-dirty` only as a fast plumbing
 smoke. It is not the repeated release gate. The exact traffic constants are
 schema-v1 acceptance identity; a deliberate Glaurung exploration change needs
