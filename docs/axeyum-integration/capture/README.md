@@ -143,7 +143,7 @@ target/release/examples/ioctlance \
 check. Without warm reuse it preserves the raw one-shot policy and writes the
 `glaurung-axeyum-native-profile-v1` schema. With snapshot or lineage reuse it
 selects Axeyum's profiling constructor and writes
-`glaurung-axeyum-warm-profile-v5` (v1/v2/v3/v4 remain accepted historical inputs).
+`glaurung-axeyum-warm-profile-v6` (v1 through v5 remain accepted historical inputs).
 Both use one
 `axeyum-profile-<pid>.jsonl` file per process. Every record carries the SHA-256
 of the exact bytes produced by the existing SMT-LIB capture renderer, a
@@ -173,6 +173,15 @@ miss further partitions into insertion or one declined-result class. These
 counters explain work avoided by exact duplicate reuse without conflating it
 with prefix/delta lowering. Axeyum's summarizer rejects incomplete fields,
 policy drift, invalid partitions, and gauges beyond their independent bounds.
+
+V6 adds ADR-0194's exact per-check `model_lift_work` map. Three nested timers
+separate retained-AIG forward recomputation, AIG validation/symbol-assignment
+reconstruction, and complete public-model construction. Five counters record
+recomputed AIG nodes, scanned symbol-bit inputs, reconstructed symbols, scanned
+arena symbols, and completed model values. The summarizer requires the exact
+field set, rejects nested time beyond `model_lift_nanos`, and validates the
+symbol/node count bounds. These diagnostics select no model policy and do not
+authorize skipping validation, completion, or original replay.
 
 The first v5 SurfacePen profile changes the residual priority: replay is
 447.046 ms / 38.82% of internal time because the incremental solver formerly

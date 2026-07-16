@@ -25,9 +25,9 @@ use std::time::{Duration, Instant};
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
     AigConstructionStats, CheckResult, IncrementalBvSolver, IncrementalBvStats,
-    IncrementalCnfStats, IncrementalLoweringStats, ReplayCheckedSatCachePolicy,
-    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome, export_qf_bv_unsat_proof,
-    solve_smtlib, solve_smtlib_get_value,
+    IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
+    ReplayCheckedSatCachePolicy, ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome,
+    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -345,6 +345,8 @@ pub struct WarmAxeyumCheckProfile {
     pub aig_construction: BTreeMap<&'static str, u64>,
     /// Per-check term-memo, literal-copy, and lift-map work.
     pub lowering_work: BTreeMap<&'static str, u64>,
+    /// Per-check model-lift subphase durations and operation counts.
+    pub model_lift_work: BTreeMap<&'static str, u64>,
     /// Per-check replay-cache traffic plus current per-path gauges.
     pub replay_sat_cache: BTreeMap<&'static str, u64>,
 }
@@ -787,7 +789,7 @@ impl SnapshotIncrementalAxeyumSolver {
         let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
         Some(WarmProfileContext {
             profile: WarmAxeyumCheckProfile {
-                schema: "glaurung-axeyum-warm-profile-v5",
+                schema: "glaurung-axeyum-warm-profile-v6",
                 process_id: std::process::id(),
                 sequence: None,
                 query_hash,
@@ -824,6 +826,7 @@ impl SnapshotIncrementalAxeyumSolver {
                 cnf_gate_mix: BTreeMap::new(),
                 aig_construction: BTreeMap::new(),
                 lowering_work: BTreeMap::new(),
+                model_lift_work: BTreeMap::new(),
                 replay_sat_cache: BTreeMap::new(),
             },
             total_started: Instant::now(),
@@ -858,6 +861,7 @@ impl SnapshotIncrementalAxeyumSolver {
         context.profile.cnf_gate_mix = cnf_gate_mix(delta.cnf_gate_mix);
         context.profile.aig_construction = aig_construction(delta.aig_construction);
         context.profile.lowering_work = lowering_work(delta.lowering_work);
+        context.profile.model_lift_work = model_lift_work(delta.model_lift_work);
         context.profile.replay_sat_cache = replay_sat_cache_profile(
             self.replay_sat_cache_policy,
             context.replay_sat_cache_before,
@@ -1014,6 +1018,25 @@ fn lowering_work(stats: IncrementalLoweringStats) -> BTreeMap<&'static str, u64>
         ("memoized_terms", stats.memoized_terms),
         ("term_bit_bindings", stats.term_bit_bindings),
         ("symbol_bit_inputs", stats.symbol_bit_inputs),
+    ])
+}
+
+fn model_lift_work(stats: IncrementalModelLiftStats) -> BTreeMap<&'static str, u64> {
+    BTreeMap::from([
+        ("aig_recompute_nanos", nanos(stats.aig_recompute)),
+        (
+            "assignment_reconstruct_nanos",
+            nanos(stats.assignment_reconstruct),
+        ),
+        ("model_completion_nanos", nanos(stats.model_completion)),
+        ("aig_nodes_recomputed", stats.aig_nodes_recomputed),
+        ("symbol_bit_inputs_scanned", stats.symbol_bit_inputs_scanned),
+        (
+            "assignment_symbols_produced",
+            stats.assignment_symbols_produced,
+        ),
+        ("arena_symbols_scanned", stats.arena_symbols_scanned),
+        ("completed_model_values", stats.completed_model_values),
     ])
 }
 
@@ -2372,6 +2395,30 @@ mod tests {
         assert_eq!(work.len(), 11);
         assert_eq!(work["operand_bits_copied"], 64);
         assert_eq!(work["term_bit_bindings"], 33);
+    }
+
+    #[test]
+    fn warm_profile_exports_complete_model_lift_work() {
+        let mut stats = IncrementalModelLiftStats::default();
+        stats.aig_recompute = Duration::from_nanos(11);
+        stats.assignment_reconstruct = Duration::from_nanos(13);
+        stats.model_completion = Duration::from_nanos(17);
+        stats.aig_nodes_recomputed = 19;
+        stats.symbol_bit_inputs_scanned = 23;
+        stats.assignment_symbols_produced = 2;
+        stats.arena_symbols_scanned = 3;
+        stats.completed_model_values = 2;
+        let work = model_lift_work(stats);
+
+        assert_eq!(work.len(), 8);
+        assert_eq!(work["aig_recompute_nanos"], 11);
+        assert_eq!(work["assignment_reconstruct_nanos"], 13);
+        assert_eq!(work["model_completion_nanos"], 17);
+        assert_eq!(work["aig_nodes_recomputed"], 19);
+        assert_eq!(work["symbol_bit_inputs_scanned"], 23);
+        assert_eq!(work["assignment_symbols_produced"], 2);
+        assert_eq!(work["arena_symbols_scanned"], 3);
+        assert_eq!(work["completed_model_values"], 2);
     }
 
     #[test]
