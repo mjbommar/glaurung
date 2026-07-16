@@ -271,8 +271,9 @@ and immediate clause reduction are insufficient in a growing AIG.
 Profiled timing is attribution-only and must not replace an unprofiled
 performance gate. Phase clocks and per-check JSON output add observable cost.
 Run profiles separately, require the record count to equal the shadow-query
-count, require 100% decisions, and require zero cap fallbacks so a warm stream
-does not mix warm and one-shot schemas. From the Axeyum checkout:
+count, and require 100% decisions. A homogeneous warm control must have zero
+cap fallbacks so it does not mix warm and one-shot schemas. From the Axeyum
+checkout:
 
 ```sh
 python3 scripts/summarize-glaurung-warm-profile.py \
@@ -280,6 +281,30 @@ python3 scripts/summarize-glaurung-warm-profile.py \
   --require-records 561 \
   --require-100-percent-decided
 ```
+
+The accepted adaptive production policy deliberately writes native one-shot
+records for bounded path-cap fallbacks into the same occurrence-ordered file.
+Do not split or delete them. ADR-0197's separate mixed summarizer delegates
+each record to the existing warm-v6 or native-v1 validator, validates the
+global process/sequence order, and keeps retained, created-owner, and fallback
+costs separate:
+
+```sh
+python3 scripts/summarize-glaurung-adaptive-profile.py \
+  "$profile_dir"/axeyum-profile-*.jsonl \
+  --require-records 2551 \
+  --require-native-fallbacks 16 \
+  --require-100-percent-decided \
+  --out "$profile_dir/adaptive-summary.json"
+```
+
+The first post-ADR-0196 SurfacePen default profile validates 2,535 warm plus
+16 native fallback records and 100% decisions. Its 509.677 ms internal total
+is SAT 28.01%, CNF 21.39%, translation 14.77%, bit blast 14.31%, replay 11.19%,
+unattributed 8.11%, and setup 0.16%. Fallbacks are 0.63% of checks but 6.02% of
+time. The 207 created warm owners consume 78.4% of warm bit blast and 70.7% of
+warm CNF; retained owners consume 94.7% of warm SAT. This is diagnostic
+attribution, not a replacement for the repeated unprofiled ADR-0196 gate.
 
 The first clean three-driver lineage profile at Glaurung `49f1fe2` plus the
 profiling worktree records exactly 6,986/6,986 decided checks, 5,102 unique
