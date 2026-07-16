@@ -179,6 +179,12 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
     dispatch-recovery gap separately; zero solver traffic is not solver
     evidence. Keep direct opt-in until widening and the causal environment gate
     close.
+  - **Full-budget widening correction:** `tcpip` at the gate's 600-second per-
+    function ceiling reaches 70,639 queries, not 33,501. SAT/UNSAT disagreements
+    remain zero, but 973 unknown splits (936 Axeyum, 43 Z3), 925 warm resets, and
+    480 assertion-cap fallbacks reject admission. The 60-second result is a
+    truncated diagnostic distribution. ADR-015 adds opt-in exact split capture;
+    build that corpus and attribute the non-decisions before a DriverSpec.
   - Optional runtime hybrid: when both `solver-axeyum` and `solver-z3` are
     compiled in, try axeyum first and fall back to z3 on per-query
     timeout/`Unknown`.

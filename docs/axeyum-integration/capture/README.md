@@ -917,6 +917,30 @@ have zero disagreements but are not repeated/RSS-gated. `win32k`/`pciidex` emit
 zero solver queries and are excluded from solver evidence; inspect dispatch
 recovery before attempting to admit them.
 
+The full gate budget changes the `tcpip` conclusion materially. With
+`IOCTLANCE_SOLVE_SECS=600`, source-prefix direct explores 70,639 queries:
+SAT/UNSAT disagreements remain zero, but Z3 reports 43 non-decisions, Axeyum
+936, and 973 queries are decided by exactly one backend. The run also records
+925 warm resets and 480 assertion-cap fallbacks. Axeyum remains 1.7x faster
+(141.388 versus 240.161 seconds) at 440,384 KiB RSS, but this is not an
+admissible correctness/performance row. The reported 33,501-query/2.5x result
+uses the 60-second per-function ceiling and is a truncated distribution.
+
+ADR-015 adds a separate diagnostic hook for this boundary:
+
+```sh
+export GLAURUNG_DUMP_SHADOW_SPLITS=/path/to/new-split-corpus
+```
+
+In combined Z3+Axeyum shadow mode, only occurrences where one backend returns
+SAT/UNSAT and the other returns `Unknown`/`Error` are serialized. Exact SMT-LIB
+bytes are published atomically as `<sha256>.smt2`; `shadow-splits.tsv` records
+`sha256`, Z3 class, and Axeyum class. Error text is deliberately excluded from
+identity. Same-process duplicate `(hash,z3-class,axeyum-class)` observations are
+suppressed; byte collisions fail closed. The hook is inactive outside explicit
+capture. Build the 60-second split corpus first, then decide whether a complete
+600-second tier is affordable and useful.
+
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-
 equivalent snapshot and loses the current serial-snapshot policy on SurfacePen

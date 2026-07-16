@@ -305,6 +305,103 @@ fn maybe_dump_query(pool: &ExprPool, asserts: &[Assert], result: &SolveResult) {
     seen.insert(hash, verdict);
 }
 
+fn shadow_result_class(result: &SolveResult) -> &'static str {
+    match result {
+        SolveResult::Sat(_) => "sat",
+        SolveResult::Unsat => "unsat",
+        SolveResult::Unknown => "unknown",
+        SolveResult::NoSolver => "no-solver",
+        SolveResult::Error(_) => "error",
+    }
+}
+
+fn should_capture_shadow_split(z3: &SolveResult, axeyum: &SolveResult) -> bool {
+    fn decided(result: &SolveResult) -> bool {
+        matches!(result, SolveResult::Sat(_) | SolveResult::Unsat)
+    }
+    fn nondecided(result: &SolveResult) -> bool {
+        matches!(result, SolveResult::Unknown | SolveResult::Error(_))
+    }
+
+    (decided(z3) && nondecided(axeyum)) || (nondecided(z3) && decided(axeyum))
+}
+
+/// Persist exact SMT-LIB bytes only when one shadow backend decides and the
+/// other returns `Unknown`/`Error`. This diagnostic path is fully opt-in and
+/// does not tax ordinary or verdict-agreeing solves.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+fn maybe_dump_shadow_split(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    z3: &SolveResult,
+    axeyum: &SolveResult,
+) {
+    use sha2::{Digest, Sha256};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    type ShadowSplitIdentity = ([u8; 32], &'static str, &'static str);
+    type ShadowSplitSet = HashSet<ShadowSplitIdentity>;
+
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    static SEEN: OnceLock<Mutex<ShadowSplitSet>> = OnceLock::new();
+
+    if !should_capture_shadow_split(z3, axeyum) {
+        return;
+    }
+    let dir =
+        DIR.get_or_init(|| std::env::var_os("GLAURUNG_DUMP_SHADOW_SPLITS").map(PathBuf::from));
+    let Some(dir) = dir.as_ref() else { return };
+
+    let (script, _names) = pipe::build_script(pool, asserts);
+    let hash: [u8; 32] = Sha256::digest(script.as_bytes()).into();
+    let z3_class = shadow_result_class(z3);
+    let axeyum_class = shadow_result_class(axeyum);
+    let identity = (hash, z3_class, axeyum_class);
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut seen = seen.lock().unwrap();
+    if seen.contains(&identity) {
+        return;
+    }
+    let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+    if let Err(error) =
+        publish_shadow_split_bytes(dir, &hex, script.as_bytes(), z3_class, axeyum_class)
+    {
+        eprintln!("[glaurung-shadow-split] failed to publish {hex}: {error}");
+        return;
+    }
+    seen.insert(identity);
+}
+
+#[cfg(feature = "solver-z3")]
+fn publish_shadow_split_bytes(
+    dir: &std::path::Path,
+    hex: &str,
+    script: &[u8],
+    z3_class: &str,
+    axeyum_class: &str,
+) -> std::io::Result<()> {
+    publish_query_file(dir, hex, script)
+        .and_then(|()| append_shadow_split_index(dir, hex, z3_class, axeyum_class))
+}
+
+#[cfg(feature = "solver-z3")]
+fn append_shadow_split_index(
+    dir: &std::path::Path,
+    hex: &str,
+    z3_class: &str,
+    axeyum_class: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut index = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("shadow-splits.tsv"))?;
+    writeln!(index, "{hex}\t{z3_class}\t{axeyum_class}")
+}
+
 #[cfg(feature = "solver-z3")]
 fn publish_query_file(dir: &std::path::Path, hex: &str, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::{Error, ErrorKind, Write};
@@ -551,6 +648,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             if z3_unk != ax_unk {
                 SHADOW_UNK_SPLIT.fetch_add(1, Ordering::Relaxed);
             }
+            maybe_dump_shadow_split(pool, asserts, &rz, &ra);
             LAST_SOLVE_TIMING.with(|timing| {
                 timing.set(SolveTiming {
                     total_nanos: total_started.elapsed().as_nanos() as u64,
@@ -673,7 +771,10 @@ pub(crate) fn solve_for_path_delta(
 
 #[cfg(all(test, feature = "solver-z3"))]
 mod capture_tests {
-    use super::{append_capture_index, publish_query_file};
+    use super::{
+        append_capture_index, publish_query_file, publish_shadow_split_bytes, shadow_result_class,
+        should_capture_shadow_split, SolveResult,
+    };
 
     #[test]
     fn query_publication_is_idempotent_and_collision_safe() {
@@ -709,6 +810,41 @@ mod capture_tests {
         assert_eq!(
             std::fs::read_to_string(directory.path().join("index.tsv")).unwrap(),
             format!("{hash}\tsat\n{hash}\tunsat\n")
+        );
+    }
+
+    #[test]
+    fn shadow_split_capture_requires_exactly_one_nondecided_backend() {
+        let sat = SolveResult::Sat(Default::default());
+        let unsat = SolveResult::Unsat;
+        let unknown = SolveResult::Unknown;
+        let error = SolveResult::Error("diagnostic must not enter identity".to_string());
+
+        assert!(should_capture_shadow_split(&sat, &unknown));
+        assert!(should_capture_shadow_split(&error, &unsat));
+        assert!(!should_capture_shadow_split(&sat, &unsat));
+        assert!(!should_capture_shadow_split(&unknown, &error));
+        assert_eq!(shadow_result_class(&sat), "sat");
+        assert_eq!(shadow_result_class(&unsat), "unsat");
+        assert_eq!(shadow_result_class(&unknown), "unknown");
+        assert_eq!(shadow_result_class(&error), "error");
+    }
+
+    #[test]
+    fn shadow_split_publication_keeps_exact_bytes_and_backend_classes() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let script = b"(set-logic QF_BV)\n(check-sat)\n";
+
+        publish_shadow_split_bytes(directory.path(), hash, script, "sat", "unknown").unwrap();
+
+        assert_eq!(
+            std::fs::read(directory.path().join(format!("{hash}.smt2"))).unwrap(),
+            script
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("shadow-splits.tsv")).unwrap(),
+            format!("{hash}\tsat\tunknown\n")
         );
     }
 }

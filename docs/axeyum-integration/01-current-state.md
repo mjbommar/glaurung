@@ -207,4 +207,6 @@ RSS. ADR-013 now lands exact copy-on-write source ancestry and restores safe
 serial sibling leasing for the direct candidate. Its fail-closed two-driver
 traffic contract and repeated production comparison are green, but direct stays
 opt-in pending repeated `tcpip`/`dxgkrnl` widening and resolution of the
-exclusive-control Z3-drift alarm. See `05` R1.
+exclusive-control Z3-drift alarm. A full-budget `tcpip` run expands beyond the
+reported truncated tier and exposes unknown splits; ADR-015 adds exact split-
+formula capture before admission. See `05` R1.

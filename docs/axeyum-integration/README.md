@@ -70,7 +70,8 @@ retained-session contract are landed on branch `sec/axeyum-backend`:
   source ancestry and safely restores serial sibling leasing; the new candidate
   passes the strict repeated two-driver production gate and stays opt-in while
   `tcpip`/`dxgkrnl` are added and an exclusive-control Z3-drift alarm is
-  resolved.
+  resolved. Full-budget `tcpip` currently exposes 973 unknown splits; exact
+  shadow-split capture is landed to turn those into an actionable corpus.
 - Findings + full feedback: `FEEDBACK-LOG.md`.
 
 The earlier 12x one-shot claim was a fast-failure artifact caused by
