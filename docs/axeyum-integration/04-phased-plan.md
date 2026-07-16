@@ -135,7 +135,10 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
   - **Contract tranche landed (ADR-011):** an object-safe incremental solver
     trait (push/pop/assert/check/assume) now exists alongside one-shot `check`,
     with a direct-delta `IncrementalAxeyumSolver` implementation. It translates
-    only newly asserted roots and retains solver state across checks.
+    only newly asserted roots and retains solver state across checks. The
+    path-owned transition layer now accepts an absolute retained-prefix depth,
+    translates only its persistent suffix, keeps probes ephemeral, and
+    rematerializes fully after missing or invalid owner state.
   - **Next:** wire explorer-owned path deltas into that session behind an opt-in
     control. Keep the accepted snapshot/adaptive path as the default and
     rollback control until the ordered real-driver gate shows equal semantics

@@ -256,11 +256,14 @@ its arena/AIG/CNF/SAT state and keeps symbol mappings in matching frames so
 popped scopes and temporary assumptions cannot leak values into later models.
 The existing one-shot `Solver`, snapshot adapter, adaptive default, and every
 off/fixed/serial control remain unchanged.
-**Evidence:** The complete 37-test Axeyum-backend group passes under the 4 GiB
+**Evidence:** The complete 39-test Axeyum-backend group passes under the 4 GiB
 serialized build. A new trait-object test drives a base assertion, scoped SAT
 branch, pop underflow, contradictory one-shot assumption, and a subsequent SAT
 check proving non-persistence; the scoped SAT model maps back to the exact
-Glaurung symbol value.
+Glaurung symbol value. Two additional lineage-transition tests prove that a
+retained owner translates only suffix roots, switches siblings by absolute
+prefix depth, treats probes as ephemeral assumptions, and fails closed on an
+impossible prefix by dropping state and fully rematerializing on the next call.
 **Consequences:** Glaurung now has the real P5 session contract without
 claiming the explorer uses it yet. The next tranche must replace whole-snapshot
 calls with explicit path deltas behind an opt-in control, preserve owner/serial

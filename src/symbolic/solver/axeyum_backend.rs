@@ -1265,6 +1265,142 @@ struct LineageIncrementalAxeyumSolver {
     paths: BTreeMap<u64, SnapshotIncrementalAxeyumSolver>,
 }
 
+/// Exact work counters for the direct-delta P5 session adapter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DirectDeltaStats {
+    checks: u64,
+    full_materializations: u64,
+    persistent_assertions_translated: u64,
+    temporary_assumptions_translated: u64,
+    assertions_added: u64,
+    assertions_popped: u64,
+    resets_after_error: u64,
+}
+
+#[derive(Debug)]
+struct DirectDeltaPath {
+    solver: IncrementalAxeyumSolver,
+    active_assertions: usize,
+}
+
+/// Path-owned retained sessions driven by explicit absolute-prefix deltas.
+///
+/// A missing path always materializes the complete persistent snapshot. An
+/// existing path may retain only a prefix no deeper than both its current
+/// session and the caller's persistent vector. Any invalid transition fails
+/// closed and drops the entire session; a later call must materialize again.
+#[derive(Debug, Default)]
+struct DirectDeltaLineageAxeyumSolver {
+    paths: BTreeMap<u64, DirectDeltaPath>,
+    stats: DirectDeltaStats,
+}
+
+impl DirectDeltaLineageAxeyumSolver {
+    fn check_path(
+        &mut self,
+        path_id: u64,
+        pool: &ExprPool,
+        persistent: &[Assert],
+        retain_assertions: usize,
+        temporary: &[Assert],
+    ) -> (SolveResult, bool) {
+        self.stats.checks = self.stats.checks.saturating_add(1);
+        let created = !self.paths.contains_key(&path_id);
+        if created {
+            self.stats.full_materializations = self.stats.full_materializations.saturating_add(1);
+            self.paths.insert(
+                path_id,
+                DirectDeltaPath {
+                    solver: IncrementalAxeyumSolver::new(),
+                    active_assertions: 0,
+                },
+            );
+        }
+
+        let result = self.transition_and_check(
+            path_id,
+            pool,
+            persistent,
+            if created { 0 } else { retain_assertions },
+            temporary,
+        );
+        let synced = !matches!(result, SolveResult::Error(_));
+        if !synced {
+            self.paths.remove(&path_id);
+            self.stats.resets_after_error = self.stats.resets_after_error.saturating_add(1);
+        }
+        (result, synced)
+    }
+
+    fn transition_and_check(
+        &mut self,
+        path_id: u64,
+        pool: &ExprPool,
+        persistent: &[Assert],
+        retain_assertions: usize,
+        temporary: &[Assert],
+    ) -> SolveResult {
+        let path = self
+            .paths
+            .get_mut(&path_id)
+            .expect("direct path was materialized before transition");
+        if retain_assertions > path.active_assertions || retain_assertions > persistent.len() {
+            return SolveResult::Error(format!(
+                "axeyum direct-delta prefix {retain_assertions} exceeds active {} or persistent {}",
+                path.active_assertions,
+                persistent.len()
+            ));
+        }
+
+        let pop_count = path.active_assertions - retain_assertions;
+        for _ in 0..pop_count {
+            if !path.solver.pop() {
+                return SolveResult::Error(
+                    "axeyum direct-delta scope underflow; session reset".to_string(),
+                );
+            }
+        }
+        path.active_assertions = retain_assertions;
+        self.stats.assertions_popped = self
+            .stats
+            .assertions_popped
+            .saturating_add(count(pop_count));
+
+        let suffix = &persistent[retain_assertions..];
+        for &assertion in suffix {
+            if let Err(error) = path.solver.push() {
+                return SolveResult::Error(error);
+            }
+            if let Err(error) = path.solver.assert(pool, assertion) {
+                return SolveResult::Error(error);
+            }
+            path.active_assertions += 1;
+        }
+        self.stats.persistent_assertions_translated = self
+            .stats
+            .persistent_assertions_translated
+            .saturating_add(count(suffix.len()));
+        self.stats.assertions_added = self
+            .stats
+            .assertions_added
+            .saturating_add(count(suffix.len()));
+        self.stats.temporary_assumptions_translated = self
+            .stats
+            .temporary_assumptions_translated
+            .saturating_add(count(temporary.len()));
+
+        if temporary.is_empty() {
+            path.solver.check()
+        } else {
+            path.solver.check_assuming(pool, temporary)
+        }
+    }
+
+    fn stats(&self) -> DirectDeltaStats {
+        self.stats
+    }
+}
+
 /// Minimal GQ9 admission state: retain only IDs until a path proves reuse.
 #[derive(Debug, Default)]
 struct AutoLineageAdmission {
@@ -2475,6 +2611,111 @@ mod tests {
         assert!(
             matches!(solver.check(), SolveResult::Sat(_)),
             "the contradictory one-shot assumption must not persist"
+        );
+    }
+
+    #[test]
+    fn direct_delta_lineage_materializes_once_then_translates_only_suffixes() {
+        let mut root = ExprPool::new();
+        let x = root.fresh_symbol(Width::W32);
+        let six = c(&mut root, 6, Width::W32);
+        let below_six = cmp(&mut root, CmpOp::Ult, x, six, Width::W32);
+
+        let mut left = root.clone();
+        let five = c(&mut left, 5, Width::W32);
+        let x_is_five = cmp(&mut left, CmpOp::Eq, x, five, Width::W32);
+        let mut right = root.clone();
+        let seven = c(&mut right, 7, Width::W32);
+        let x_is_seven = cmp(&mut right, CmpOp::Eq, x, seven, Width::W32);
+
+        let owner = 23;
+        let mut lineage = DirectDeltaLineageAxeyumSolver::default();
+        assert!(matches!(
+            lineage
+                .check_path(owner, &root, &[(below_six, true)], 0, &[])
+                .0,
+            SolveResult::Sat(_)
+        ));
+        match lineage
+            .check_path(
+                owner,
+                &left,
+                &[(below_six, true), (x_is_five, true)],
+                1,
+                &[],
+            )
+            .0
+        {
+            SolveResult::Sat(model) => assert_eq!(model.values.get(&0), Some(&5)),
+            other => panic!("expected direct left SAT, got {other:?}"),
+        }
+
+        // Switch to the sibling prefix and use its branch condition as a true
+        // one-shot assumption: one persistent scope is popped, no assumption
+        // persists, and the shared base root is never translated again.
+        assert_eq!(
+            lineage
+                .check_path(
+                    owner,
+                    &right,
+                    &[(below_six, true)],
+                    1,
+                    &[(x_is_seven, true)],
+                )
+                .0,
+            SolveResult::Unsat
+        );
+        assert!(matches!(
+            lineage
+                .check_path(owner, &right, &[(below_six, true)], 1, &[])
+                .0,
+            SolveResult::Sat(_)
+        ));
+        assert_eq!(
+            lineage.stats(),
+            DirectDeltaStats {
+                checks: 4,
+                full_materializations: 1,
+                persistent_assertions_translated: 2,
+                temporary_assumptions_translated: 1,
+                assertions_added: 2,
+                assertions_popped: 1,
+                resets_after_error: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn direct_delta_lineage_fails_closed_on_impossible_prefix() {
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W8);
+        let one = c(&mut pool, 1, Width::W8);
+        let x_is_one = cmp(&mut pool, CmpOp::Eq, x, one, Width::W8);
+        let assertion = (x_is_one, true);
+        let owner = 29;
+        let mut lineage = DirectDeltaLineageAxeyumSolver::default();
+
+        assert!(lineage.check_path(owner, &pool, &[assertion], 0, &[]).1);
+        let (invalid, synced) = lineage.check_path(owner, &pool, &[assertion], 2, &[]);
+        assert!(!synced);
+        assert!(matches!(invalid, SolveResult::Error(_)));
+        assert!(!lineage.paths.contains_key(&owner));
+
+        // Missing state never applies a naked delta. It safely rematerializes
+        // the complete persistent snapshot even when the caller's retain marker
+        // refers to the lost owner.
+        assert!(lineage.check_path(owner, &pool, &[assertion], 1, &[]).1);
+        assert_eq!(
+            lineage.stats(),
+            DirectDeltaStats {
+                checks: 3,
+                full_materializations: 2,
+                persistent_assertions_translated: 2,
+                temporary_assumptions_translated: 0,
+                assertions_added: 2,
+                assertions_popped: 0,
+                resets_after_error: 1,
+            }
         );
     }
 
