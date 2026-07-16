@@ -247,14 +247,38 @@ and `GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH` for a per-snapshot root cap.
 When either limit would be exceeded, that check runs through the ordinary
 one-shot Axeyum path; an over-limit retained path is closed before the one-shot
 check. Invalid limit values fail closed as zero. The footer exposes
-`path-cap-fallbacks` and `assertion-cap-fallbacks`; unset limits preserve the
-unbounded opt-in experiment.
+`path-cap-fallbacks`, `assertion-cap-fallbacks`, `max-live-paths`, and
+`max-assertions-per-path`. Lineage remains opt-in, but its unset limits now
+select the measured bounded defaults of 9 retained paths and 128 assertions per
+path. Explicit decimal values override either limit; `18446744073709551615`
+reproduces the former effectively unbounded ceiling.
 
 The focused Dptf smoke confirms the limits at the live boundary. A live-path
 cap of one holds `paths-peak=1`, retains 155 checks, and sends 406 checks
 one-shot; a cap of zero sends all 561 checks one-shot. An assertion cap of zero
 sends all 555 nonempty checks one-shot while allowing six empty snapshots. All
 three processes remain 561/561 agreed with Z3 and finish with zero live paths.
+
+The post-ADR-0175 admission gate calibrates those defaults on the faster
+open-addressed AIG baseline. Assertion-count distributions are
+register/lifter-shaped rather than synthetic: the observed maxima are 123 roots
+on `win10-vwififlt`, 78 on Dptf, and 51 on IntcSST, so 128 is a no-fallback
+structural ceiling on the established tier. Live path peaks are 11/5/11.
+Cap sweeps reject 4 paths (1,934/4,753 vwififlt checks fall back and Axeyum
+rises to 7.755 seconds) and show that 12 is behaviorally equivalent to
+unbounded. Nine paths is the measured knee.
+
+Three order-balanced cap-9/cap-12 rounds decide and agree all 20,958 checks per
+policy with zero assertion fallbacks, resets, unknown splits, or finding
+changes. Cap 9 sends only 45/4,753 vwififlt and 4/1,672 IntcSST checks one-shot;
+Dptf never reaches the limit. Weighted mean Axeyum time is unchanged within
+noise (5.088 versus 5.091 seconds), while median RSS falls 125,812 versus
+136,804 KiB on vwififlt (-8.0%) and 120,076 versus 128,164 KiB on IntcSST
+(-6.3%); Dptf is flat (76,532 versus 76,884 KiB). The largest observed RSS
+falls from 137,968 to 126,860 KiB. This admits a bounded default for the
+explicit lineage mode, not automatic warm selection: GQ9 still requires wider
+drivers and a topology/cost policy before setting `GLAURUNG_AXEYUM_WARM_REUSE`
+implicitly.
 
 Three alternating baseline/warm processes on 2026-07-15 each ran 13,126
 same-stream checks with 13,126 agreements, zero disagreements/unknown splits,

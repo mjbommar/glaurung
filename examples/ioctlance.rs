@@ -432,7 +432,7 @@ fn main() {
                 || paths.assertion_limit_fallbacks > 0
             {
                 eprintln!(
-                    "[axeyum-warm] checks={} exact={} prefix-roots={} added={} popped={} resets={} paths-created={} paths-closed={} paths-live={} paths-peak={} path-cap-fallbacks={} assertion-cap-fallbacks={}",
+                    "[axeyum-warm] checks={} exact={} prefix-roots={} added={} popped={} resets={} paths-created={} paths-closed={} paths-live={} paths-peak={} path-cap-fallbacks={} assertion-cap-fallbacks={} max-live-paths={} max-assertions-per-path={}",
                     warm.checks,
                     warm.exact_snapshot_reuses,
                     warm.prefix_assertions_reused,
@@ -445,6 +445,8 @@ fn main() {
                     paths.peak_live_paths,
                     paths.path_limit_fallbacks,
                     paths.assertion_limit_fallbacks,
+                    paths.max_live_paths,
+                    paths.max_assertions_per_path,
                 );
             }
         }

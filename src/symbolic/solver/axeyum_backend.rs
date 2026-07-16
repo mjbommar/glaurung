@@ -43,6 +43,8 @@ pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
 const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
 const WARM_MAX_ASSERTIONS_PER_PATH_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH";
+const DEFAULT_WARM_MAX_LIVE_PATHS: u64 = 9;
+const DEFAULT_WARM_MAX_ASSERTIONS_PER_PATH: u64 = 128;
 
 static PROFILE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -88,16 +90,20 @@ struct WarmReuseLimits {
 
 fn warm_reuse_limits() -> WarmReuseLimits {
     *WARM_REUSE_LIMITS.get_or_init(|| WarmReuseLimits {
-        max_live_paths: parse_warm_limit(std::env::var(WARM_MAX_LIVE_PATHS_ENV).ok()),
+        max_live_paths: parse_warm_limit(
+            std::env::var(WARM_MAX_LIVE_PATHS_ENV).ok(),
+            DEFAULT_WARM_MAX_LIVE_PATHS,
+        ),
         max_assertions_per_path: parse_warm_limit(
             std::env::var(WARM_MAX_ASSERTIONS_PER_PATH_ENV).ok(),
+            DEFAULT_WARM_MAX_ASSERTIONS_PER_PATH,
         ),
     })
 }
 
-fn parse_warm_limit(value: Option<String>) -> u64 {
+fn parse_warm_limit(value: Option<String>, default: u64) -> u64 {
     match value {
-        None => u64::MAX,
+        None => default,
         Some(value) => value.parse().unwrap_or(0),
     }
 }
@@ -1076,6 +1082,10 @@ pub(crate) fn close_warm_path(path_id: u64) {
 /// Process-wide explorer-path ownership counters for lineage warm reuse.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WarmPathReuseStats {
+    /// Configured process-wide retained-session ceiling.
+    pub max_live_paths: u64,
+    /// Configured maximum assertion roots in one retained snapshot.
+    pub max_assertions_per_path: u64,
     /// Path-owned solver sessions created lazily on first check.
     pub paths_created: u64,
     /// Path-owned solver sessions released at terminal path events.
@@ -1092,7 +1102,10 @@ pub struct WarmPathReuseStats {
 
 /// Returns process-wide lineage ownership counters.
 pub fn warm_path_reuse_stats() -> WarmPathReuseStats {
+    let limits = warm_reuse_limits();
     WarmPathReuseStats {
+        max_live_paths: limits.max_live_paths,
+        max_assertions_per_path: limits.max_assertions_per_path,
         paths_created: WARM_PATHS_CREATED.load(Ordering::Relaxed),
         paths_closed: WARM_PATHS_CLOSED.load(Ordering::Relaxed),
         live_paths: WARM_PATHS_LIVE.load(Ordering::Relaxed),
@@ -1751,9 +1764,9 @@ mod tests {
 
     #[test]
     fn warm_resource_limits_fail_closed_and_reserve_atomically() {
-        assert_eq!(parse_warm_limit(None), u64::MAX);
-        assert_eq!(parse_warm_limit(Some("17".to_owned())), 17);
-        assert_eq!(parse_warm_limit(Some("invalid".to_owned())), 0);
+        assert_eq!(parse_warm_limit(None, 9), 9);
+        assert_eq!(parse_warm_limit(Some("17".to_owned()), 9), 17);
+        assert_eq!(parse_warm_limit(Some("invalid".to_owned()), 9), 0);
 
         let live = AtomicU64::new(0);
         let peak = AtomicU64::new(0);
