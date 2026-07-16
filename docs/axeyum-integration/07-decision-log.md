@@ -189,7 +189,7 @@ consumer to accept ill-sorted text would conceal a producer defect.
 
 ## ADR-010 - Adapt lineage capacity from sustained live-path pressure
 
-**Status:** Accepted as an opt-in measurement candidate; default decision open.
+**Status:** Accepted as the Axeyum explorer default.
 **Context:** ADR-008's second-check policy saves memory but fails the 3% time
 alarm because repeated paths pay cold work before rebuilding retained state.
 The corrected SurfacePen ordered trace shows that purpose alone is not enough:
@@ -199,14 +199,16 @@ purpose-policy prototype is 1.140 seconds / 72,868 KiB, essentially the same
 time as rejected auto and slower than fixed lineage. It was removed. Fixed cap
 2 passes SurfacePen but regresses NETwtw10 18.2%, so a universal small cap is
 also rejected.
-**Decision:** Add explicit `GLAURUNG_AXEYUM_WARM_REUSE=adaptive`. It uses the
+**Decision:** Use pressure-adaptive lineage when
+`GLAURUNG_AXEYUM_WARM_REUSE` is unset. It uses the
 existing path-owned lineage solver without another query representation or
 purpose field. Capacity starts at `min(configured_cap, 2)`. Each failed
 low-cap reservation increments a process-wide atomic pressure counter. At 128
 events, capacity expands once to the configured hard cap (currently 9); the
 triggering check retries reservation immediately. Exact pressure, expansion,
 initial-cap, and threshold telemetry enters the fail-closed runner contract.
-Default remains off and fixed `lineage` remains the control.
+`off`, `false`, or `0` selects the one-shot override; fixed `lineage` remains
+the benchmark control, and explicit `auto`/`snapshot` remain diagnostic modes.
 **Consequences:** Low-pressure streams can retain fewer concurrent arenas while
 high-pressure streams pay at most 127 initial cap fallbacks before recovering
 the proven envelope. Solver/query/model/proof semantics are unchanged: every
@@ -231,6 +233,7 @@ Surface Axeyum/ratio/RSS changes of +2.07%/+2.28%/-3.65% and NETwtw10 changes
 of -1.03%/-0.89%/-0.88%; Z3 drift is -0.20%/-0.14%. Every 3%/3%/5% plus 2%
 alarm passes. The 8,965-byte artifact SHA-256 is
 `0255d0ed2a0c5bc078e478cb951561d4de1460c11333a646f3e150b15281e716`.
-This accepts adaptive as the GQ9 production admission policy. Wiring it as the
-Axeyum explorer default remains a separate tested code change with an explicit
-off override; it does not alter Axeyum's framework-level solver defaults.
+This accepts adaptive as the GQ9 production admission policy and the Axeyum
+explorer default. The default parser and explicit one-shot override have direct
+unit coverage. This downstream scheduling choice does not alter Axeyum's
+framework-level solver defaults.

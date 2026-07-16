@@ -204,7 +204,15 @@ evidence needed by warm GQ7/GQ8 work. Run the same shadow command without
 compare an Axeyum-authoritative run because different SAT models can change
 Glaurung's exploration and query stream.
 
-## Opt-in native warm policies (ADR-0164 / ADR-0170)
+## Native warm policies (ADR-0164 / ADR-0170 / ADR-010)
+
+For an Axeyum explorer solve with explicit path ownership, an unset
+`GLAURUNG_AXEYUM_WARM_REUSE` selects the accepted pressure-adaptive policy:
+start with two live sessions and expand once to the hard cap nine at 128
+low-cap pressure events. Set the variable to `off`, `false`, or `0` for
+one-shot behavior. Calls outside explorer path ownership always remain
+one-shot. This is downstream Glaurung scheduling; it does not change Axeyum's
+framework-level solver defaults.
 
 Glaurung commits `016935d` and `b09ec6b` add the first real warm GQ7 bridge.
 The public `Solver` trait still submits complete assertion snapshots, but
@@ -223,7 +231,8 @@ separate solvers. Terminal paths release their sessions, and stateful restarts
 receive a fresh owner. A solve outside the explorer's explicit path context
 falls back to one-shot rather than guessing ownership.
 
-`GLAURUNG_AXEYUM_WARM_REUSE=auto` is GQ9's opt-in detected-reuse candidate.
+`GLAURUNG_AXEYUM_WARM_REUSE=auto` is GQ9's retained low-memory
+detected-reuse control.
 The first check on a path stays one-shot and retains only the explorer-owned
 path ID. A second check on that same live path initializes the existing bounded
 lineage solver from the current complete snapshot; subsequent checks reuse

@@ -122,12 +122,20 @@ fn parse_warm_limit(value: Option<String>, default: u64) -> u64 {
 }
 
 fn warm_reuse_policy() -> WarmReusePolicy {
-    match std::env::var(WARM_REUSE_ENV) {
-        Err(_) => WarmReusePolicy::Off,
-        Ok(value) if value.eq_ignore_ascii_case("auto") => WarmReusePolicy::Auto,
-        Ok(value) if value.eq_ignore_ascii_case("adaptive") => WarmReusePolicy::Adaptive,
-        Ok(value) if value.eq_ignore_ascii_case("lineage") => WarmReusePolicy::Lineage,
-        Ok(_) => WarmReusePolicy::Snapshot,
+    let value = std::env::var(WARM_REUSE_ENV).ok();
+    parse_warm_reuse_policy(value.as_deref())
+}
+
+fn parse_warm_reuse_policy(value: Option<&str>) -> WarmReusePolicy {
+    match value {
+        None => WarmReusePolicy::Adaptive,
+        Some(value) if value.eq_ignore_ascii_case("off") => WarmReusePolicy::Off,
+        Some(value) if value.eq_ignore_ascii_case("false") => WarmReusePolicy::Off,
+        Some("0") => WarmReusePolicy::Off,
+        Some(value) if value.eq_ignore_ascii_case("auto") => WarmReusePolicy::Auto,
+        Some(value) if value.eq_ignore_ascii_case("adaptive") => WarmReusePolicy::Adaptive,
+        Some(value) if value.eq_ignore_ascii_case("lineage") => WarmReusePolicy::Lineage,
+        Some(_) => WarmReusePolicy::Snapshot,
     }
 }
 
@@ -976,7 +984,7 @@ impl LineageIncrementalAxeyumSolver {
     }
 }
 
-/// Whether the opt-in snapshot-to-incremental adapter is selected.
+/// Whether a retained snapshot-to-incremental policy is selected.
 pub(crate) fn warm_reuse_enabled() -> bool {
     warm_reuse_policy() != WarmReusePolicy::Off
 }
@@ -1240,7 +1248,7 @@ pub fn adaptive_lineage_reuse_stats() -> AdaptiveLineageReuseStats {
     }
 }
 
-/// Process-wide aggregate of opt-in warm snapshot reuse across explorer
+/// Process-wide aggregate of warm snapshot reuse across explorer
 /// threads. A fresh process starts all counters at zero.
 pub fn warm_reuse_stats() -> SnapshotReuseStats {
     SnapshotReuseStats {
@@ -1952,6 +1960,27 @@ mod tests {
         assert_eq!(adaptive_live_path_limit(9, 128), 9);
         assert_eq!(adaptive_live_path_limit(1, 0), 1);
         assert_eq!(adaptive_live_path_limit(0, 128), 0);
+    }
+
+    #[test]
+    fn adaptive_is_default_with_explicit_one_shot_override() {
+        assert_eq!(parse_warm_reuse_policy(None), WarmReusePolicy::Adaptive);
+        assert_eq!(
+            parse_warm_reuse_policy(Some("adaptive")),
+            WarmReusePolicy::Adaptive
+        );
+        for value in ["off", "false", "0"] {
+            assert_eq!(parse_warm_reuse_policy(Some(value)), WarmReusePolicy::Off);
+        }
+        assert_eq!(
+            parse_warm_reuse_policy(Some("lineage")),
+            WarmReusePolicy::Lineage
+        );
+        assert_eq!(parse_warm_reuse_policy(Some("auto")), WarmReusePolicy::Auto);
+        assert_eq!(
+            parse_warm_reuse_policy(Some("snapshot")),
+            WarmReusePolicy::Snapshot
+        );
     }
 
     #[test]
