@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -50,7 +51,7 @@ def size_bucket(size: int) -> str:
     return "xl"
 
 
-def load_raw(raw: Path) -> tuple[list[dict[str, object]], dict[str, int]]:
+def load_raw(raw: Path, jobs: int) -> tuple[list[dict[str, object]], dict[str, int]]:
     index = raw / "index.tsv"
     if not index.is_file():
         raise ValueError(f"missing raw capture index: {index}")
@@ -87,8 +88,7 @@ def load_raw(raw: Path) -> tuple[list[dict[str, object]], dict[str, int]]:
     if orphaned:
         raise ValueError(f"raw directory has {len(orphaned)} unindexed scripts; first={orphaned[0]}")
 
-    rows: list[dict[str, object]] = []
-    for query_hash in sorted(verdicts):
+    def load_query(query_hash: str) -> dict[str, object]:
         path = scripts[query_hash]
         payload = path.read_bytes()
         actual_hash = hashlib.sha256(payload).hexdigest()
@@ -100,16 +100,20 @@ def load_raw(raw: Path) -> tuple[list[dict[str, object]], dict[str, int]]:
             text = payload.decode("utf-8")
         except UnicodeDecodeError as error:
             raise ValueError(f"query is not UTF-8: {path.name}: {error}") from error
-        rows.append(
-            {
-                "hash": query_hash,
-                "path": path,
-                "size": len(payload),
-                "expected": verdicts[query_hash],
-                "family": classify(text),
-                "bucket": size_bucket(len(payload)),
-            }
-        )
+        return {
+            "hash": query_hash,
+            "path": path,
+            "size": len(payload),
+            "expected": verdicts[query_hash],
+            "family": classify(text),
+            "bucket": size_bucket(len(payload)),
+        }
+
+    # Network filesystems make metadata latency dominate this corpus. Bounded
+    # parallel reads are safe because every row is independent and executor.map
+    # preserves the sorted input order used by deterministic tier selection.
+    with ThreadPoolExecutor(max_workers=jobs) as executor:
+        rows = list(executor.map(load_query, sorted(verdicts)))
 
     return rows, {
         "index_rows": len(lines),
@@ -187,6 +191,8 @@ def require_empty_output(path: Path, label: str) -> None:
 def build(args: argparse.Namespace) -> dict[str, int]:
     if args.rep_per_bucket <= 0:
         raise ValueError("rep_per_bucket must be positive")
+    if args.jobs <= 0:
+        raise ValueError("--jobs must be positive")
     if not args.source.strip():
         raise ValueError("--source must be non-empty and identify revision plus drivers")
     require_empty_output(args.out, "output directory")
@@ -197,7 +203,7 @@ def build(args: argparse.Namespace) -> dict[str, int]:
             raise ValueError("--full-out must differ from the representative output")
         require_empty_output(args.full_out, "full output directory")
 
-    rows, stats = load_raw(args.raw)
+    rows, stats = load_raw(args.raw, args.jobs)
     representative = representative_hashes(rows, args.rep_per_bucket)
     selected = rows if args.tier == "full" else [row for row in rows if row["hash"] in representative]
     if not selected:
@@ -223,6 +229,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("raw", type=Path, help="raw directory containing index.tsv and HASH.smt2")
     parser.add_argument("out", type=Path, help="new or empty capture-index pack directory")
     parser.add_argument("rep_per_bucket", type=int, nargs="?", default=6)
+    parser.add_argument("--jobs", type=int, default=8, help="bounded parallel raw-file validators")
     parser.add_argument("--tier", choices=("representative", "full"), default="representative")
     parser.add_argument(
         "--full-out",

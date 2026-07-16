@@ -52,14 +52,16 @@ query's **trusted verdict** (from the z3 oracle) and a structural `family`.
    revision=$(git rev-parse HEAD)
    source="Glaurung revision $revision; trusted solver-z3 capture; drivers win10-vwififlt, sqfs-intel-DptfDevGen, windows-update-intel-audio-IntcSST"
    python3 build_corpus.py /path/to/new-raw-corpus /path/to/representative-pack 6 \
-     --tier representative --full-out /path/to/full-pack --source "$source"
+     --tier representative --full-out /path/to/full-pack --jobs 8 --source "$source"
    ```
 
    Both output directories must be absent or empty. `--full-out` emits the two
    independent packs from one complete raw validation pass, avoiding duplicate
-   reads of a large access-controlled payload. Files are hard-linked when
-   possible and copied only when the filesystem requires it. Run the focused
-   fail-closed tests with `python3 -m unittest test_build_corpus.py`.
+   reads of a large access-controlled payload. `--jobs` bounds independent
+   hash/UTF-8 validators while preserving hash-sorted output. Files are
+   hard-linked when possible and copied only when the filesystem requires it.
+   Run the focused fail-closed tests with
+   `python3 -m unittest test_build_corpus.py`.
 
 4. **Generate byte-owning manifests and validate ingestion** in Axeyum. This
    second step makes Axeyum, rather than the untrusted producer, hash the exact
