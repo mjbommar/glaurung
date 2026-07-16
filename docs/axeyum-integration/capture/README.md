@@ -63,6 +63,19 @@ query's **trusted verdict** (from the z3 oracle) and a structural `family`.
    Run the focused fail-closed tests with
    `python3 -m unittest test_build_corpus.py`.
 
+   If a widened full tier exceeds one process's bounded memory, partition the
+   already reconciled full pack into deterministic physical process shards:
+
+   ```
+   python3 shard_corpus.py /path/to/full-pack /path/to/full-shards --shards 4
+   ```
+
+   `shard-set-v1.json` fixes the parent capture-index digest, modulo rule, exact
+   disjoint shard sizes, and each child capture-index digest. Every child still
+   passes through Axeyum's independent manifest generator; sharding never
+   changes a verdict or treats a partial run as full coverage. Test it with
+   `python3 -m unittest test_shard_corpus.py`.
+
 4. **Generate byte-owning manifests and validate ingestion** in Axeyum. This
    second step makes Axeyum, rather than the untrusted producer, hash the exact
    bytes it will benchmark:
