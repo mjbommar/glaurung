@@ -154,13 +154,12 @@ pub fn total_solver_stats() -> (u64, u64) {
 #[cfg(feature = "solver-z3")]
 fn maybe_dump_query(pool: &ExprPool, asserts: &[Assert], result: &SolveResult) {
     use sha2::{Digest, Sha256};
-    use std::collections::HashSet;
-    use std::io::Write;
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
 
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
-    static SEEN: OnceLock<Mutex<HashSet<[u8; 32]>>> = OnceLock::new();
+    static SEEN: OnceLock<Mutex<HashMap<[u8; 32], &'static str>>> = OnceLock::new();
 
     let dir = DIR.get_or_init(|| std::env::var_os("GLAURUNG_DUMP_QUERIES").map(PathBuf::from));
     let Some(dir) = dir.as_ref() else { return };
@@ -174,24 +173,102 @@ fn maybe_dump_query(pool: &ExprPool, asserts: &[Assert], result: &SolveResult) {
 
     let (script, _names) = pipe::build_script(pool, asserts);
     let hash: [u8; 32] = Sha256::digest(script.as_bytes()).into();
-    {
-        let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
-        let mut s = seen.lock().unwrap();
-        if !s.insert(hash) {
-            return; // duplicate formula, already captured
-        }
-    }
     let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
-    let _ = std::fs::create_dir_all(dir);
-    if std::fs::write(dir.join(format!("{hex}.smt2")), script.as_bytes()).is_ok() {
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("index.tsv"))
-        {
-            let _ = writeln!(f, "{hex}\t{verdict}");
+
+    // Serialize same-process publication so a query is indexed only after its
+    // complete bytes are visible. Separate capture processes may append the same
+    // row; the strict corpus builder reconciles duplicates and rejects verdict
+    // conflicts before producing a manifest.
+    let seen = SEEN.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut seen = seen.lock().unwrap();
+    if let Some(previous) = seen.get(&hash) {
+        if *previous != verdict {
+            // Preserve the contradictory observation in the index so strict
+            // ingestion fails closed instead of hiding oracle instability.
+            if let Err(error) = append_capture_index(dir, &hex, verdict) {
+                eprintln!("[glaurung-capture] failed to record verdict conflict: {error}");
+            }
+            eprintln!("[glaurung-capture] conflicting verdict for {hex}: {previous} vs {verdict}");
+        }
+        return;
+    }
+
+    if let Err(error) = publish_query_file(dir, &hex, script.as_bytes())
+        .and_then(|()| append_capture_index(dir, &hex, verdict))
+    {
+        eprintln!("[glaurung-capture] failed to publish {hex}: {error}");
+        return;
+    }
+    seen.insert(hash, verdict);
+}
+
+#[cfg(feature = "solver-z3")]
+fn publish_query_file(dir: &std::path::Path, hex: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind, Write};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    std::fs::create_dir_all(dir)?;
+    let destination = dir.join(format!("{hex}.smt2"));
+    match std::fs::read(&destination) {
+        Ok(existing) if existing == bytes => return Ok(()),
+        Ok(_) => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("existing query bytes do not match content hash {hex}"),
+            ));
+        }
+        Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
+        Err(_) => {}
+    }
+
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = dir.join(format!(".{hex}.{}.{}.tmp", std::process::id(), sequence));
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)?;
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    drop(file);
+
+    match std::fs::hard_link(&temporary, &destination) {
+        Ok(()) => {
+            std::fs::remove_file(&temporary)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&temporary)?;
+            let existing = std::fs::read(&destination)?;
+            if existing == bytes {
+                Ok(())
+            } else {
+                Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("concurrent query bytes do not match content hash {hex}"),
+                ))
+            }
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            Err(error)
         }
     }
+}
+
+#[cfg(feature = "solver-z3")]
+fn append_capture_index(dir: &std::path::Path, hex: &str, verdict: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let row = format!("{hex}\t{verdict}\n");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("index.tsv"))?;
+    file.write_all(row.as_bytes())
 }
 
 // Shadow differential: when both backends are compiled and
@@ -439,4 +516,46 @@ pub(crate) fn solve_for_path(pool: &ExprPool, asserts: &[Assert], path_id: u64) 
     let result = solve(pool, asserts);
     ACTIVE_WARM_PATH.with(|active| active.set(previous));
     result
+}
+
+#[cfg(all(test, feature = "solver-z3"))]
+mod capture_tests {
+    use super::{append_capture_index, publish_query_file};
+
+    #[test]
+    fn query_publication_is_idempotent_and_collision_safe() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        publish_query_file(directory.path(), hash, b"first").unwrap();
+        publish_query_file(directory.path(), hash, b"first").unwrap();
+        let error = publish_query_file(directory.path(), hash, b"second").unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            std::fs::read(directory.path().join(format!("{hash}.smt2"))).unwrap(),
+            b"first"
+        );
+        assert!(std::fs::read_dir(directory.path())
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")));
+    }
+
+    #[test]
+    fn capture_index_appends_complete_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        append_capture_index(directory.path(), hash, "sat").unwrap();
+        append_capture_index(directory.path(), hash, "unsat").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("index.tsv")).unwrap(),
+            format!("{hash}\tsat\n{hash}\tunsat\n")
+        );
+    }
 }

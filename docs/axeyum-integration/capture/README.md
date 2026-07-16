@@ -21,38 +21,68 @@ query's **trusted verdict** (from the z3 oracle) and a structural `family`.
    cargo build --release --example ioctlance --features solver-z3
    ```
 
-2. **Capture** (the `GLAURUNG_DUMP_QUERIES` hook in `solve()` writes each
-   DECIDED query once as `<sha256>.smt2`, appends `<sha256>\t<verdict>` to
-   `index.tsv`, dedup by content hash):
+2. **Capture into a new raw directory** (the `GLAURUNG_DUMP_QUERIES` hook in
+   `solve()` publishes each DECIDED query as `<sha256>.smt2`, then appends
+   `<sha256>\t<verdict>` to `index.tsv`):
    ```
-   export GLAURUNG_DUMP_QUERIES=/path/to/raw-corpus
+   export GLAURUNG_DUMP_QUERIES=/path/to/new-raw-corpus
    export IOCTLANCE_DEADLINE_SECS=400 IOCTLANCE_SOLVE_BUDGET=1000000 IOCTLANCE_SOLVE_SECS=600
    for drv in win10-vwififlt sqfs-intel-DptfDevGen windows-update-intel-audio-IntcSST; do
      cargo run --release --example ioctlance --features solver-z3 -- \
        samples/binaries/platforms/windows/vendor/realworld/$drv.sys >/dev/null 2>&1
    done
    ```
-   (2026-07-13 capture: 15,687 distinct queries, 1,797 sat / 13,913 unsat,
-   ~290 MB, sizes 30 B - 220 KB, p50 ~9 KB; 97% contain `extract`, 89%
-   `concat` -- the width-mixed, extract/concat-heavy target distribution.)
+   Query bytes are published collision-safely before the index observation.
+   Separate driver processes may append duplicate observations; the builder
+   below reconciles them and fails on any verdict conflict. Never append a new
+   experiment to an old raw directory.
 
-3. **Build the manifest + tiers** (`build_corpus.py`: structural family
-   classification, stratified `representative` tier + `full` tier, manifest
-   in axeyum's v1 schema; `excluded-hashes.txt` drops the rare
-   declared-vs-actual width edge cases axeyum's strict parser rejects):
+   Historical 2026-07-13 capture: 15,687 distinct queries, 1,797 sat / 13,913
+   unsat, ~290 MB, sizes 30 B - 220 KB, p50 ~9 KB; 97% contain `extract`,
+   89% `concat` -- the width-mixed, extract/concat-heavy target distribution.
+
+3. **Build separate strict capture-index packs.** `build_corpus.py` validates
+   every index row, verdict, filename/content SHA-256, UTF-8 query, and complete
+   raw-directory inventory before structural classification and deterministic
+   representative selection. It emits Axeyum's hash-free capture-index schema;
+   there is deliberately no exclusion mechanism. A rejected wide assertion is
+   a producer or consumer defect, not a benchmark result.
+
    ```
-   python3 build_corpus.py /path/to/raw-corpus /path/to/pack 6 excluded-hashes.txt
+   revision=$(git rev-parse HEAD)
+   source="Glaurung revision $revision; trusted solver-z3 capture; drivers win10-vwififlt, sqfs-intel-DptfDevGen, windows-update-intel-audio-IntcSST"
+   python3 build_corpus.py /path/to/new-raw-corpus /path/to/representative-pack 6 \
+     --tier representative --source "$source"
+   python3 build_corpus.py /path/to/new-raw-corpus /path/to/full-pack 6 \
+     --tier full --source "$source"
    ```
 
-4. **Validate ingestion + profile** in axeyum:
+   The output directory must be absent or empty. Files are hard-linked when
+   possible and copied only when the filesystem requires it. Run the focused
+   fail-closed tests with `python3 -m unittest test_build_corpus.py`.
+
+4. **Generate byte-owning manifests and validate ingestion** in Axeyum. This
+   second step makes Axeyum, rather than the untrusted producer, hash the exact
+   bytes it will benchmark:
+
    ```
    cd ~/projects/personal/axeyum
+   just generate-glaurung-manifest \
+     /path/to/representative-pack \
+     /path/to/representative-pack/capture-index-v1.json \
+     /path/to/representative-pack/manifest-v1.json
+   just generate-glaurung-manifest \
+     /path/to/full-pack \
+     /path/to/full-pack/capture-index-v1.json \
+     /path/to/full-pack/manifest-v1.json
+
    cargo run --release -p axeyum-bench --features z3 -- \
-     /path/to/pack --corpus-manifest /path/to/pack/manifest-representative-v1.json \
+     /path/to/representative-pack \
+     --corpus-manifest /path/to/representative-pack/manifest-v1.json \
      --corpus-tier representative --backend sat-bv --compare-z3
    ```
 
-## Result (2026-07-13, representative tier, 128 queries)
+## Historical result (2026-07-13, representative tier, 128 queries)
 
 - **100% decided, 0 unsupported, 0 disagreements** (`manifest_agree=128`) --
   passes axeyum's full acceptance gate (exit 0).
@@ -66,11 +96,12 @@ query's **trusted verdict** (from the z3 oracle) and a structural `family`.
 
 ## Hand-off
 
-The representative pack is placed (uncommitted) at
+The historical representative pack is placed (uncommitted) at
 `~/projects/personal/axeyum/corpus/glaurung-qfbv/` ready to ingest. The
 full ~290 MB tier is regenerable via steps 1-3 (too large to commit; keep
-access-controlled). `family`/`tiers`/`content_hash`/`expected` all conform
-to `docs/user-guide/corpus-manifests.md`.
+access-controlled). New packs use the strict capture-index → Axeyum manifest
+boundary above; `family`/`tiers`/`content_hash`/`expected` then conform to
+`docs/user-guide/corpus-manifests.md`.
 
 ## Ordered native Axeyum profile
 
