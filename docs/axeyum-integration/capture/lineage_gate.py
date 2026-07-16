@@ -39,6 +39,8 @@ class DriverSpec:
     expected_adaptive: dict[str, int]
     expected_adaptive_transfer_warm: dict[str, int]
     expected_adaptive_transfer: dict[str, int]
+    expected_adaptive_serial_warm: dict[str, int]
+    expected_adaptive_serial: dict[str, int]
 
 
 DRIVERS = {
@@ -124,6 +126,28 @@ DRIVERS = {
             "initial-live-paths": 2,
             "pressure-threshold": 128,
         },
+        expected_adaptive_serial_warm={
+            "checks": 2_551,
+            "exact": 61,
+            "prefix-roots": 307_592,
+            "added": 2_545,
+            "popped": 1_087,
+            "resets": 0,
+            "paths-created": 43,
+            "paths-closed": 43,
+            "paths-live": 0,
+            "paths-peak": 1,
+            "path-cap-fallbacks": 0,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
+        },
+        expected_adaptive_serial={
+            "share-events": 165,
+            "tracked-owners": 0,
+            "references": 0,
+            "peak-references": 11,
+        },
     ),
     "netwtw10": DriverSpec(
         name="netwtw10",
@@ -207,6 +231,28 @@ DRIVERS = {
             "initial-live-paths": 2,
             "pressure-threshold": 128,
         },
+        expected_adaptive_serial_warm={
+            "checks": 28_356,
+            "exact": 1_056,
+            "prefix-roots": 1_220_943,
+            "added": 28_409,
+            "popped": 24_915,
+            "resets": 0,
+            "paths-created": 164,
+            "paths-closed": 164,
+            "paths-live": 0,
+            "paths-peak": 1,
+            "path-cap-fallbacks": 0,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
+        },
+        expected_adaptive_serial={
+            "share-events": 5_551,
+            "tracked-owners": 0,
+            "references": 0,
+            "peak-references": 31,
+        },
     ),
 }
 
@@ -276,6 +322,7 @@ def parse_run(stderr_path: pathlib.Path, time_path: pathlib.Path) -> dict[str, A
     warm_lines = re.findall(r"^\[axeyum-warm\].*$", stderr, re.MULTILINE)
     auto_lines = re.findall(r"^\[axeyum-auto\].*$", stderr, re.MULTILINE)
     adaptive_lines = re.findall(r"^\[axeyum-adaptive\].*$", stderr, re.MULTILINE)
+    serial_lines = re.findall(r"^\[axeyum-serial-owner\].*$", stderr, re.MULTILINE)
     sat_cache_lines = re.findall(r"^\[axeyum-sat-cache\].*$", stderr, re.MULTILINE)
     model_matches = re.findall(r"unknown-split=(\d+)$", stderr, re.MULTILINE)
     if (
@@ -283,13 +330,15 @@ def parse_run(stderr_path: pathlib.Path, time_path: pathlib.Path) -> dict[str, A
         or len(warm_lines) != 1
         or len(auto_lines) > 1
         or len(adaptive_lines) > 1
+        or len(serial_lines) > 1
         or len(sat_cache_lines) > 1
         or len(model_matches) != 1
     ):
         fail(
-            "expected exactly one shadow/warm/model and at most one auto/adaptive footer: "
+            "expected exactly one shadow/warm/model and at most one auto/adaptive/serial footer: "
             f"shadow={len(shadow_matches)} warm={len(warm_lines)} "
             f"auto={len(auto_lines)} adaptive={len(adaptive_lines)} "
+            f"serial={len(serial_lines)} "
             f"sat-cache={len(sat_cache_lines)} "
             f"model={len(model_matches)}"
         )
@@ -315,6 +364,11 @@ def parse_run(stderr_path: pathlib.Path, time_path: pathlib.Path) -> dict[str, A
         "adaptive": (
             parse_key_values(adaptive_lines[0], "[axeyum-adaptive]")
             if adaptive_lines
+            else {}
+        ),
+        "serial": (
+            parse_key_values(serial_lines[0], "[axeyum-serial-owner]")
+            if serial_lines
             else {}
         ),
         "sat_cache": (
@@ -367,6 +421,13 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
         fail(f"unsupported warm-owner-transfer policy: {warm_owner_transfer!r}")
     if warm_owner_transfer == "on" and warm_reuse != "adaptive":
         fail("warm-owner transfer is admitted only with adaptive warm reuse")
+    serial_sibling_reuse = policy.get("serial_sibling_reuse", "off")
+    if serial_sibling_reuse not in {"off", "on"}:
+        fail(f"unsupported serial-sibling-reuse policy: {serial_sibling_reuse!r}")
+    if serial_sibling_reuse == "on" and (
+        warm_reuse != "adaptive" or warm_owner_transfer != "on"
+    ):
+        fail("serial sibling reuse requires adaptive warm reuse and owner transfer")
     by_driver: dict[str, list[dict[str, Any]]] = {}
     for run in runs:
         if not isinstance(run, dict):
@@ -378,7 +439,9 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
     summaries: dict[str, dict[str, Any]] = {}
     for name, driver_runs in sorted(by_driver.items()):
         spec = DRIVERS[name]
-        if warm_reuse == "adaptive" and warm_owner_transfer == "on":
+        if serial_sibling_reuse == "on":
+            expected_warm = spec.expected_adaptive_serial_warm
+        elif warm_reuse == "adaptive" and warm_owner_transfer == "on":
             expected_warm = spec.expected_adaptive_transfer_warm
         elif warm_reuse == "adaptive":
             expected_warm = spec.expected_adaptive_warm
@@ -387,7 +450,9 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
         else:
             expected_warm = spec.expected_warm
         expected_auto = spec.expected_auto if warm_reuse == "auto" else {}
-        if warm_reuse == "adaptive" and warm_owner_transfer == "on":
+        if serial_sibling_reuse == "on":
+            expected_adaptive = {}
+        elif warm_reuse == "adaptive" and warm_owner_transfer == "on":
             expected_adaptive = spec.expected_adaptive_transfer
         else:
             expected_adaptive = (
@@ -415,6 +480,14 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 fail(
                     f"{name} run {index}: adaptive traffic drift: "
                     f"{run.get('adaptive')!r}"
+                )
+            expected_serial = (
+                spec.expected_adaptive_serial if serial_sibling_reuse == "on" else {}
+            )
+            if run.get("serial", {}) != expected_serial:
+                fail(
+                    f"{name} run {index}: serial-owner traffic drift: "
+                    f"{run.get('serial')!r}"
                 )
             cache = run.get("sat_cache", {})
             if cache != expected_cache:
@@ -516,6 +589,10 @@ def memory_limiter(bytes_limit: int):
 def run_gate(args: argparse.Namespace) -> None:
     if args.warm_owner_transfer == "on" and args.warm_reuse != "adaptive":
         fail("warm-owner transfer is admitted only with adaptive warm reuse")
+    if args.serial_sibling_reuse == "on" and (
+        args.warm_reuse != "adaptive" or args.warm_owner_transfer != "on"
+    ):
+        fail("serial sibling reuse requires adaptive warm reuse and owner transfer")
     binary = pathlib.Path(args.binary).resolve()
     sample_root = pathlib.Path(args.sample_root).resolve()
     output = pathlib.Path(args.output).resolve()
@@ -552,6 +629,7 @@ def run_gate(args: argparse.Namespace) -> None:
         "policy": {
             "warm_reuse": args.warm_reuse,
             "warm_owner_transfer": args.warm_owner_transfer,
+            "serial_sibling_reuse": args.serial_sibling_reuse,
             "replay_sat_cache": args.replay_sat_cache,
             "replay_sat_cache_max_entries_per_path": DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
             "replay_sat_cache_max_model_values_per_path": DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES,
@@ -579,6 +657,7 @@ def run_gate(args: argparse.Namespace) -> None:
                     "GLAURUNG_SHADOW_DIFF": "1",
                     "GLAURUNG_AXEYUM_WARM_REUSE": args.warm_reuse,
                     "GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER": args.warm_owner_transfer,
+                    "GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE": args.serial_sibling_reuse,
                     "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE": args.replay_sat_cache,
                     "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": str(DEFAULT_LIVE_PATHS),
                     "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": str(
@@ -645,6 +724,7 @@ def validate_comparison_identity(
     allow_lineage_to_adaptive: bool,
     allow_replay_sat_cache_enablement: bool = False,
     allow_warm_owner_transfer_enablement: bool = False,
+    allow_serial_sibling_reuse_enablement: bool = False,
 ) -> None:
     for field in ("system", "repetitions", "drivers"):
         if baseline.get(field) != candidate.get(field):
@@ -655,6 +735,7 @@ def validate_comparison_identity(
         not allow_lineage_to_adaptive
         and not allow_replay_sat_cache_enablement
         and not allow_warm_owner_transfer_enablement
+        and not allow_serial_sibling_reuse_enablement
     ):
         if before_policy != after_policy:
             fail("comparison identity drift in policy")
@@ -685,6 +766,11 @@ def validate_comparison_identity(
         after_transfer = after_common.pop("warm_owner_transfer", "off")
         if (before_transfer, after_transfer) != ("off", "on"):
             fail("owner-transfer comparison requires off baseline and on candidate")
+    if allow_serial_sibling_reuse_enablement:
+        before_serial = before_common.pop("serial_sibling_reuse", "off")
+        after_serial = after_common.pop("serial_sibling_reuse", "off")
+        if (before_serial, after_serial) != ("off", "on"):
+            fail("serial-sibling comparison requires off baseline and on candidate")
     if before_common != after_common:
         fail("comparison identity drift outside named policy change")
 
@@ -700,6 +786,7 @@ def compare_artifacts(args: argparse.Namespace) -> None:
         allow_lineage_to_adaptive=args.allow_lineage_to_adaptive,
         allow_replay_sat_cache_enablement=args.allow_replay_sat_cache_enablement,
         allow_warm_owner_transfer_enablement=args.allow_warm_owner_transfer_enablement,
+        allow_serial_sibling_reuse_enablement=args.allow_serial_sibling_reuse_enablement,
     )
     if set(baseline_summary) != set(candidate_summary):
         fail("driver membership drift")
@@ -775,6 +862,7 @@ def main() -> int:
         "--warm-reuse", choices=("adaptive", "auto", "lineage"), default="lineage"
     )
     run.add_argument("--warm-owner-transfer", choices=("off", "on"), default="off")
+    run.add_argument("--serial-sibling-reuse", choices=("off", "on"), default="off")
     run.add_argument("--replay-sat-cache", choices=("off", "on"), default="on")
     run.add_argument("--allow-dirty", action="store_true")
     validate = subparsers.add_parser("validate", help="validate one artifact")
@@ -789,6 +877,7 @@ def main() -> int:
     compare.add_argument("--allow-lineage-to-adaptive", action="store_true")
     compare.add_argument("--allow-replay-sat-cache-enablement", action="store_true")
     compare.add_argument("--allow-warm-owner-transfer-enablement", action="store_true")
+    compare.add_argument("--allow-serial-sibling-reuse-enablement", action="store_true")
     args = parser.parse_args()
     try:
         if args.command == "run":

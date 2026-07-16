@@ -146,6 +146,37 @@ class LineageGateTests(unittest.TestCase):
             },
         )
 
+    def test_parse_run_reads_serial_owner_footer(self) -> None:
+        spec = lineage_gate.DRIVERS["surface"]
+        warm_text = " ".join(
+            f"{key}={value}"
+            for key, value in spec.expected_adaptive_serial_warm.items()
+        )
+        serial_text = " ".join(
+            f"{key}={value}" for key, value in spec.expected_adaptive_serial.items()
+        )
+        stderr_text = (
+            "[shadow-diff] queries=2551 agree=2551 disagree=0 | "
+            "SAME-STREAM z3=4491.4ms axeyum=369.6ms speedup=12.2x\n"
+            "[model-choice] both-sat=1 different-model=0 | "
+            "z3-unknown=0 axeyum-unknown=0 unknown-split=0\n"
+            f"[axeyum-warm] {warm_text}\n"
+            f"[axeyum-serial-owner] {serial_text}\n"
+        )
+        time_text = (
+            "\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:04.88\n"
+            "\tMaximum resident set size (kbytes): 74288\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            stderr_path = root / "run.stderr"
+            time_path = root / "run.time"
+            stderr_path.write_text(stderr_text)
+            time_path.write_text(time_text)
+            parsed = lineage_gate.parse_run(stderr_path, time_path)
+        self.assertEqual(parsed["warm"], spec.expected_adaptive_serial_warm)
+        self.assertEqual(parsed["serial"], spec.expected_adaptive_serial)
+
     def test_validate_accepts_exact_repetitions(self) -> None:
         spec = lineage_gate.DRIVERS["surface"]
         runs = []
@@ -334,6 +365,36 @@ class LineageGateTests(unittest.TestCase):
         )
         self.assertEqual(summaries["surface"]["runs"], 1)
 
+    def test_validate_accepts_exact_adaptive_serial_partition(self) -> None:
+        spec = lineage_gate.DRIVERS["surface"]
+        run = {
+            "driver": "surface",
+            "repetition": 1,
+            "queries": spec.expected_queries,
+            "agree": spec.expected_queries,
+            "disagree": 0,
+            "unknown_split": 0,
+            "z3_ms": 4_491.4,
+            "axeyum_ms": 369.6,
+            "warm": dict(spec.expected_adaptive_serial_warm),
+            "serial": dict(spec.expected_adaptive_serial),
+            "max_rss_kib": 74_288,
+            "stdout_sha256": "a" * 64,
+        }
+        summaries = lineage_gate.validate_artifact(
+            {
+                "schema": lineage_gate.SCHEMA,
+                "policy": {
+                    "warm_reuse": "adaptive",
+                    "warm_owner_transfer": "on",
+                    "serial_sibling_reuse": "on",
+                },
+                "repetitions": 1,
+                "runs": [run],
+            }
+        )
+        self.assertEqual(summaries["surface"]["runs"], 1)
+
     def test_thresholds_distinguish_regression_from_environment_drift(self) -> None:
         comparison = {
             "surface": {
@@ -437,6 +498,44 @@ class LineageGateTests(unittest.TestCase):
                 candidate,
                 allow_lineage_to_adaptive=False,
                 allow_warm_owner_transfer_enablement=True,
+            )
+
+    def test_cross_policy_identity_allows_only_named_serial_reuse(self) -> None:
+        baseline = {
+            "system": {"machine": "x86_64"},
+            "policy": {
+                "warm_reuse": "adaptive",
+                "warm_owner_transfer": "on",
+                "serial_sibling_reuse": "off",
+            },
+            "repetitions": 3,
+            "drivers": {"surface": {"sha256": "a" * 64}},
+        }
+        candidate = {
+            **baseline,
+            "policy": {
+                "warm_reuse": "adaptive",
+                "warm_owner_transfer": "on",
+                "serial_sibling_reuse": "on",
+            },
+        }
+        lineage_gate.validate_comparison_identity(
+            baseline,
+            candidate,
+            allow_lineage_to_adaptive=False,
+            allow_serial_sibling_reuse_enablement=True,
+        )
+        candidate["policy"] = {
+            "warm_reuse": "lineage",
+            "warm_owner_transfer": "on",
+            "serial_sibling_reuse": "on",
+        }
+        with self.assertRaisesRegex(ValueError, "outside named policy"):
+            lineage_gate.validate_comparison_identity(
+                baseline,
+                candidate,
+                allow_lineage_to_adaptive=False,
+                allow_serial_sibling_reuse_enablement=True,
             )
 
 
