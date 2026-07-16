@@ -39,6 +39,7 @@ use crate::symbolic::solver::{Assert, Model, SolveResult, Solver, pipe};
 const SOLVE_TIMEOUT: Duration = Duration::from_millis(250);
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
+const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
 const WARM_MAX_ASSERTIONS_PER_PATH_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH";
 
@@ -109,7 +110,11 @@ fn warm_reuse_policy() -> WarmReusePolicy {
 }
 
 fn config() -> SolverConfig {
-    SolverConfig::new().with_timeout(SOLVE_TIMEOUT)
+    let internal_and_flattening = std::env::var(INTERNAL_AND_FLATTENING_ENV)
+        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on"));
+    SolverConfig::new()
+        .with_timeout(SOLVE_TIMEOUT)
+        .with_incremental_positive_and_flattening(internal_and_flattening)
 }
 
 // ---------------------------------------------------------------------------
@@ -663,7 +668,7 @@ impl SnapshotIncrementalAxeyumSolver {
         let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
         Some(WarmProfileContext {
             profile: WarmAxeyumCheckProfile {
-                schema: "glaurung-axeyum-warm-profile-v2",
+                schema: "glaurung-axeyum-warm-profile-v3",
                 process_id: std::process::id(),
                 sequence: None,
                 query_hash,
@@ -767,6 +772,22 @@ fn cnf_gate_mix(stats: IncrementalCnfStats) -> BTreeMap<&'static str, u64> {
         (
             "binary_and_half_definitions",
             stats.binary_and_half_definitions,
+        ),
+        (
+            "internal_positive_and_opportunities",
+            stats.internal_positive_and_opportunities,
+        ),
+        (
+            "internal_positive_and_opportunity_nodes",
+            stats.internal_positive_and_opportunity_nodes,
+        ),
+        (
+            "internal_positive_and_flattened",
+            stats.internal_positive_and_flattened,
+        ),
+        (
+            "internal_positive_and_immediate_clauses_avoided",
+            stats.internal_positive_and_immediate_clauses_avoided,
         ),
         ("constant_clauses", stats.constant_clauses),
         ("definition_clauses", stats.definition_clauses),
@@ -1710,10 +1731,12 @@ mod tests {
 
         let mix = cnf_gate_mix(stats);
 
-        assert_eq!(mix.len(), 38);
+        assert_eq!(mix.len(), 42);
         assert_eq!(mix["and_nodes_synced"], 3);
         assert_eq!(mix["and_tree_half_definitions"], 2);
         assert_eq!(mix["root_clauses"], 1);
+        assert_eq!(mix["internal_positive_and_opportunities"], 0);
+        assert_eq!(mix["internal_positive_and_immediate_clauses_avoided"], 0);
         assert_eq!(mix["tautological_root_clauses"], 0);
     }
 

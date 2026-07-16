@@ -97,7 +97,7 @@ target/release/examples/ioctlance \
 check. Without warm reuse it preserves the raw one-shot policy and writes the
 `glaurung-axeyum-native-profile-v1` schema. With snapshot or lineage reuse it
 selects Axeyum's profiling constructor and writes
-`glaurung-axeyum-warm-profile-v2` (v1 remains an accepted historical input).
+`glaurung-axeyum-warm-profile-v3` (v1/v2 remain accepted historical inputs).
 Both use one
 `axeyum-profile-<pid>.jsonl` file per process. Every record carries the SHA-256
 of the exact bytes produced by the existing SMT-LIB capture renderer, a
@@ -107,6 +107,23 @@ prefix/add/pop root traffic, session creation, structural deltas, exact
 incremental CNF gate/root-family deltas, and explicit unattributed time. Query
 rendering/hash and JSON output are diagnostic overhead and are deliberately
 outside `total_nanos`.
+
+`GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING=1` enables ADR-0173's bounded,
+off-by-default positive internal AND-tree half-flattening candidate. V3 adds
+exact eligible nodes, applied halves, and immediate primitive clauses avoided;
+run controls without the variable and candidates with it in separate
+processes. This option changes the CNF policy and is not implied by profiling.
+
+The first Dptf gate rejects the candidate. The control observes 3,642 bounded
+opportunities spanning 106,850 fresh nodes. Enabling the policy applies 2,597
+flattenings over 86,141 nodes and avoids 83,544 primitive clauses immediately,
+but later helper reuse emits ordinary definitions anyway: cumulative added
+clauses rise 429,432 to 505,090 (+17.62%) and profiled CNF time rises 119.8 to
+129.6 ms (+8.19%). Three alternating unprofiled runs remain 561/561 agreed
+with identical path/root traffic, but Axeyum mean rises 239.5 to 248.3 ms
+(+3.65%). Keep the option off. The next admissible design needs retained
+future-use evidence or a rollback/replacement mechanism; current-use freshness
+and immediate clause reduction are insufficient in a growing AIG.
 
 Profiled timing is attribution-only and must not replace an unprofiled
 performance gate. Phase clocks and per-check JSON output add observable cost.
