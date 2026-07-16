@@ -363,6 +363,15 @@ finding-output hashes, time, and RSS. Dirty repositories fail unless
 published atomically only after every run passes the expected-work,
 agreement/unknown, lifecycle, finding, and resource-identity gates.
 
+Pass `--warm-reuse auto` to run ADR-008's detected-reuse policy instead of the
+default fixed `lineage` control. Schema v1 remains backward-compatible, but
+policy identity selects a distinct exact-work contract: the auto footer must
+match per-driver probe/activation counts, and `warm checks + probes + path
+fallbacks + assertion fallbacks` must equal every shadow query. A lineage
+baseline and auto candidate intentionally fail homogeneous `compare` on policy
+identity; summarize the validated artifacts side by side until a separately
+specified cross-policy production objective is accepted.
+
 Compare two homogeneous artifacts fail-closed; source revisions and binary
 hashes may differ, while system, policy, driver bytes, work, findings, and
 repetition identity must match:

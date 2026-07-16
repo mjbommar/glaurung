@@ -30,6 +30,8 @@ class DriverSpec:
     solve_budget: int
     expected_queries: int
     expected_warm: dict[str, int]
+    expected_auto_warm: dict[str, int]
+    expected_auto: dict[str, int]
 
 
 DRIVERS = {
@@ -54,6 +56,23 @@ DRIVERS = {
             "max-live-paths": 9,
             "max-assertions-per-path": 512,
         },
+        expected_auto_warm={
+            "checks": 2_193,
+            "exact": 8,
+            "prefix-roots": 281_122,
+            "added": 11_562,
+            "popped": 146,
+            "resets": 0,
+            "paths-created": 191,
+            "paths-closed": 191,
+            "paths-live": 0,
+            "paths-peak": 1,
+            "path-cap-fallbacks": 0,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
+        },
+        expected_auto={"probes": 358, "activations": 191},
     ),
     "netwtw10": DriverSpec(
         name="netwtw10",
@@ -76,6 +95,23 @@ DRIVERS = {
             "max-live-paths": 9,
             "max-assertions-per-path": 512,
         },
+        expected_auto_warm={
+            "checks": 17_669,
+            "exact": 173,
+            "prefix-roots": 546_887,
+            "added": 184_570,
+            "popped": 2_974,
+            "resets": 0,
+            "paths-created": 4_099,
+            "paths-closed": 4_099,
+            "paths-live": 0,
+            "paths-peak": 1,
+            "path-cap-fallbacks": 0,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
+        },
+        expected_auto={"probes": 10_687, "activations": 4_099},
     ),
 }
 
@@ -143,11 +179,18 @@ def parse_run(stderr_path: pathlib.Path, time_path: pathlib.Path) -> dict[str, A
         re.MULTILINE,
     )
     warm_lines = re.findall(r"^\[axeyum-warm\].*$", stderr, re.MULTILINE)
+    auto_lines = re.findall(r"^\[axeyum-auto\].*$", stderr, re.MULTILINE)
     model_matches = re.findall(r"unknown-split=(\d+)$", stderr, re.MULTILINE)
-    if len(shadow_matches) != 1 or len(warm_lines) != 1 or len(model_matches) != 1:
+    if (
+        len(shadow_matches) != 1
+        or len(warm_lines) != 1
+        or len(auto_lines) > 1
+        or len(model_matches) != 1
+    ):
         fail(
-            "expected exactly one shadow/warm/model footer: "
-            f"shadow={len(shadow_matches)} warm={len(warm_lines)} model={len(model_matches)}"
+            "expected exactly one shadow/warm/model and at most one auto footer: "
+            f"shadow={len(shadow_matches)} warm={len(warm_lines)} "
+            f"auto={len(auto_lines)} model={len(model_matches)}"
         )
     queries, agree, disagree, z3_ms, axeyum_ms, _speedup = shadow_matches[0]
     timing = time_path.read_text(errors="replace")
@@ -165,6 +208,9 @@ def parse_run(stderr_path: pathlib.Path, time_path: pathlib.Path) -> dict[str, A
         "z3_ms": float(z3_ms),
         "axeyum_ms": float(axeyum_ms),
         "warm": parse_key_values(warm_lines[0], "[axeyum-warm]"),
+        "auto": (
+            parse_key_values(auto_lines[0], "[axeyum-auto]") if auto_lines else {}
+        ),
         "max_rss_kib": int(rss_matches[0]),
         "wall_seconds": parse_elapsed(elapsed_matches[0]),
     }
@@ -198,6 +244,10 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
     runs = artifact.get("runs")
     if not isinstance(runs, list) or not runs:
         fail("runs must be a non-empty array")
+    policy = artifact.get("policy", {})
+    warm_reuse = policy.get("warm_reuse", "lineage")
+    if warm_reuse not in {"auto", "lineage"}:
+        fail(f"unsupported warm-reuse policy: {warm_reuse!r}")
     by_driver: dict[str, list[dict[str, Any]]] = {}
     for run in runs:
         if not isinstance(run, dict):
@@ -209,6 +259,10 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
     summaries: dict[str, dict[str, Any]] = {}
     for name, driver_runs in sorted(by_driver.items()):
         spec = DRIVERS[name]
+        expected_warm = (
+            spec.expected_auto_warm if warm_reuse == "auto" else spec.expected_warm
+        )
+        expected_auto = spec.expected_auto if warm_reuse == "auto" else {}
         if len(driver_runs) != repetitions:
             fail(f"{name}: expected {repetitions} runs, got {len(driver_runs)}")
         driver_runs.sort(key=lambda run: run.get("repetition", -1))
@@ -222,13 +276,17 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 fail(f"{name} run {index}: agreement gate failed")
             if run.get("unknown_split") != 0:
                 fail(f"{name} run {index}: unknown split is nonzero")
-            if run.get("warm") != spec.expected_warm:
+            if run.get("warm") != expected_warm:
                 fail(f"{name} run {index}: warm traffic drift: {run.get('warm')!r}")
+            if run.get("auto", {}) != expected_auto:
+                fail(f"{name} run {index}: auto traffic drift: {run.get('auto')!r}")
             if run.get("stdout_sha256") != stdout_hash:
                 fail(f"{name} run {index}: finding output drift")
             warm = run["warm"]
+            probes = run.get("auto", {}).get("probes", 0)
             if (
                 warm["checks"]
+                + probes
                 + warm["path-cap-fallbacks"]
                 + warm["assertion-cap-fallbacks"]
                 != run["queries"]
@@ -280,7 +338,7 @@ def run_gate(args: argparse.Namespace) -> None:
             "rustc": command_output("rustc", "-Vv"),
         },
         "policy": {
-            "warm_reuse": "lineage",
+            "warm_reuse": args.warm_reuse,
             "max_live_paths": DEFAULT_LIVE_PATHS,
             "max_assertions_per_path": DEFAULT_ASSERTIONS,
             "analysis_deadline_seconds": 400,
@@ -302,7 +360,7 @@ def run_gate(args: argparse.Namespace) -> None:
             environment.update(
                 {
                     "GLAURUNG_SHADOW_DIFF": "1",
-                    "GLAURUNG_AXEYUM_WARM_REUSE": "lineage",
+                    "GLAURUNG_AXEYUM_WARM_REUSE": args.warm_reuse,
                     "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": str(DEFAULT_LIVE_PATHS),
                     "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": str(
                         DEFAULT_ASSERTIONS
@@ -439,6 +497,7 @@ def main() -> int:
     run.add_argument("--driver", choices=sorted(DRIVERS), action="append", default=[])
     run.add_argument("--repetitions", type=int, default=3)
     run.add_argument("--memory-gib", type=int, default=4)
+    run.add_argument("--warm-reuse", choices=("auto", "lineage"), default="lineage")
     run.add_argument("--allow-dirty", action="store_true")
     validate = subparsers.add_parser("validate", help="validate one artifact")
     validate.add_argument("artifact")
