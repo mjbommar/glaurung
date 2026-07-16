@@ -349,14 +349,15 @@ separate solvers. Terminal paths release their sessions, and stateful restarts
 receive a fresh owner. A solve outside the explorer's explicit path context
 falls back to one-shot rather than guessing ownership.
 
-`GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER=on` is ADR-0196's explicit/off-by-default
-fork-topology candidate. At a symbolic fork, only the last-pushed successor —
+ADR-0196's accepted fork-topology policy defaults
+`GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER` to `on`; set it to `off`, `false`, or `0`
+for the prior fresh-owner control. At a symbolic fork, only the last-pushed successor —
 the one the DFS worklist executes next — inherits the terminal parent's
 retained solver owner. The earlier sibling receives a fresh owner, so mutable
 SAT/scopes/cache state is never shared. The parent swaps to an unused fresh ID,
 allowing ordinary terminal cleanup without closing the transferred solver.
-Unset, `off`, invalid values, and non-Axeyum builds retain fresh owners for both
-children.
+Invalid values fail closed to off, and non-Axeyum builds retain fresh owners for
+both children.
 
 The first ownership-only v1 transferred to the earlier child and failed: that
 session sat dormant behind the sibling subtree, drove adaptive pressure, put
@@ -364,10 +365,18 @@ SurfacePen above its RSS alarm, and regressed NETwtw10 Axeyum time about 9.4%.
 The LIFO-aligned v2 calibration reverses the mechanism. SurfacePen fallbacks
 drop 87→16 and Axeyum measures 446.0 ms / 77,580 KiB; NETwtw10 fallbacks drop
 7,976→2,536 and Axeyum measures 11,020.0 ms / 259,044 KiB. All 30,907 combined
-calibration checks agree and replay failures are zero. These are single runs,
-not acceptance evidence. The lineage gate exposes `--warm-owner-transfer`
-and a named comparison flag; keep the feature off until the repeated adaptive/
-cache-on two-driver artifact passes.
+calibration checks agree and replay failures are zero.
+
+The clean repeated acceptance artifact is
+`lineage-adaptive-owner-transfer-v1.json` (SHA-256
+`7478f60827e2cedbabb2bbe2c8ba07ae7d3b024f5676b61728c5dfc98a137de2`).
+Against the committed adaptive/cache-on off control, all 185,442 checks,
+findings, exact transfer traffic, cache partitions, and terminal cleanup pass.
+SurfacePen mean Axeyum time/ratio improve 14.71%/15.04% with +0.76% median RSS
+and +0.39% Z3 drift. NETwtw10 improves 34.77%/34.36%, RSS falls 0.36%, and Z3
+drift is -0.62%. Every alarm passes, so LIFO transfer is the downstream default
+with explicit off retained. The lineage gate exposes `--warm-owner-transfer`
+and a named comparison flag for future family revalidation.
 
 `GLAURUNG_AXEYUM_WARM_REUSE=auto` is GQ9's retained low-memory
 detected-reuse control.

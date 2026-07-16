@@ -163,10 +163,16 @@ pub(crate) fn warm_owner_transfer_enabled() -> bool {
 }
 
 fn parse_warm_owner_transfer(value: Option<&str>) -> bool {
-    matches!(value, Some("1"))
-        || value.is_some_and(|value| {
-            value.eq_ignore_ascii_case("on") || value.eq_ignore_ascii_case("true")
-        })
+    match value {
+        None => true,
+        Some(value) if value.eq_ignore_ascii_case("off") => false,
+        Some(value) if value.eq_ignore_ascii_case("false") => false,
+        Some("0") => false,
+        Some(value) if value.eq_ignore_ascii_case("on") => true,
+        Some(value) if value.eq_ignore_ascii_case("true") => true,
+        Some("1") => true,
+        Some(_) => false,
+    }
 }
 
 fn replay_sat_cache_policy() -> Option<ReplayCheckedSatCachePolicy> {
@@ -2309,10 +2315,11 @@ mod tests {
     }
 
     #[test]
-    fn warm_owner_transfer_is_explicit_and_fail_closed() {
-        assert!(!parse_warm_owner_transfer(None));
+    fn warm_owner_transfer_is_default_on_with_fail_closed_override() {
+        assert!(parse_warm_owner_transfer(None));
         assert!(!parse_warm_owner_transfer(Some("off")));
         assert!(!parse_warm_owner_transfer(Some("false")));
+        assert!(!parse_warm_owner_transfer(Some("0")));
         assert!(!parse_warm_owner_transfer(Some("unexpected")));
         assert!(parse_warm_owner_transfer(Some("1")));
         assert!(parse_warm_owner_transfer(Some("on")));
