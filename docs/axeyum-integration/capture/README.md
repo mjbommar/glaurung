@@ -242,6 +242,18 @@ seconds / 216,016 KiB versus the clean lineage baseline's 18.751 seconds /
 Extend the versioned runner with auto-policy identity and repeat both families
 before changing the default.
 
+That repeat is now committed as `lineage-auto-candidate-v1.json` (SHA-256
+`bcc6b5cfce173af23b6ad81b9b412cd96dedc002af94b03a4500f53379c04fdf`).
+All 92,721 checks agree and every probe/warm/lifecycle counter repeats exactly.
+SurfacePen auto is 1.141 seconds / 65,404 KiB; NETwtw10 auto is 19.554 seconds /
+216,580 KiB. Relative to the clean lineage baseline, Axeyum time is
+7.37%/4.28% higher and median RSS is 20.66%/15.93% lower. The time regression
+fails the existing 3% alarm on both families. Z3 drift is -2.21%/+2.63%, also
+outside its 2% environment guard, so do not interpret the cross-run normalized
+ratio as causal. Auto remains an explicit memory-optimized option; it is not
+the default. Only the exact atomic JSON is committed; process logs remain
+local.
+
 Run the same Z3-authoritative shadow stream with warm reuse enabled:
 
 ```sh

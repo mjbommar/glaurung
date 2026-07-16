@@ -1,0 +1,290 @@
+{
+  "drivers": {
+    "netwtw10": {
+      "bytes": 4874856,
+      "path": "/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-wifi-NETwtw10.sys",
+      "sha256": "785a3c05981303b5856f3d86d7ca186843322407ae31f6bb33659cf61cd4e6f1",
+      "solve_budget": 20000
+    },
+    "surface": {
+      "bytes": 320728,
+      "path": "/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys",
+      "sha256": "3c062dc57832caab776bec99656798474af7ffb59ef751c9a004a95c0ae74405",
+      "solve_budget": 1000000
+    }
+  },
+  "policy": {
+    "analysis_deadline_seconds": 400,
+    "max_assertions_per_path": 512,
+    "max_live_paths": 9,
+    "memory_limit_gib": 4,
+    "solver_seconds": 600,
+    "warm_reuse": "auto"
+  },
+  "repetitions": 3,
+  "runs": [
+    {
+      "agree": 28356,
+      "auto": {
+        "activations": 4099,
+        "probes": 10687
+      },
+      "axeyum_ms": 19659.5,
+      "disagree": 0,
+      "driver": "netwtw10",
+      "max_rss_kib": 216580,
+      "queries": 28356,
+      "repetition": 1,
+      "stderr_path": "netwtw10-r1.stderr",
+      "stdout_path": "netwtw10-r1.stdout",
+      "stdout_sha256": "0ccc9c34d01b6e567347400e082c22d45798ebeba9d6e7d48ac78e9022de1ea7",
+      "time_path": "netwtw10-r1.time",
+      "unknown_split": 0,
+      "wall_seconds": 81.68,
+      "warm": {
+        "added": 184570,
+        "assertion-cap-fallbacks": 0,
+        "checks": 17669,
+        "exact": 173,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 0,
+        "paths-closed": 4099,
+        "paths-created": 4099,
+        "paths-live": 0,
+        "paths-peak": 1,
+        "popped": 2974,
+        "prefix-roots": 546887,
+        "resets": 0
+      },
+      "z3_ms": 53567.9
+    },
+    {
+      "agree": 28356,
+      "auto": {
+        "activations": 4099,
+        "probes": 10687
+      },
+      "axeyum_ms": 19499.6,
+      "disagree": 0,
+      "driver": "netwtw10",
+      "max_rss_kib": 216512,
+      "queries": 28356,
+      "repetition": 2,
+      "stderr_path": "netwtw10-r2.stderr",
+      "stdout_path": "netwtw10-r2.stdout",
+      "stdout_sha256": "0ccc9c34d01b6e567347400e082c22d45798ebeba9d6e7d48ac78e9022de1ea7",
+      "time_path": "netwtw10-r2.time",
+      "unknown_split": 0,
+      "wall_seconds": 81.56,
+      "warm": {
+        "added": 184570,
+        "assertion-cap-fallbacks": 0,
+        "checks": 17669,
+        "exact": 173,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 0,
+        "paths-closed": 4099,
+        "paths-created": 4099,
+        "paths-live": 0,
+        "paths-peak": 1,
+        "popped": 2974,
+        "prefix-roots": 546887,
+        "resets": 0
+      },
+      "z3_ms": 53439.0
+    },
+    {
+      "agree": 28356,
+      "auto": {
+        "activations": 4099,
+        "probes": 10687
+      },
+      "axeyum_ms": 19501.9,
+      "disagree": 0,
+      "driver": "netwtw10",
+      "max_rss_kib": 216684,
+      "queries": 28356,
+      "repetition": 3,
+      "stderr_path": "netwtw10-r3.stderr",
+      "stdout_path": "netwtw10-r3.stdout",
+      "stdout_sha256": "0ccc9c34d01b6e567347400e082c22d45798ebeba9d6e7d48ac78e9022de1ea7",
+      "time_path": "netwtw10-r3.time",
+      "unknown_split": 0,
+      "wall_seconds": 81.62,
+      "warm": {
+        "added": 184570,
+        "assertion-cap-fallbacks": 0,
+        "checks": 17669,
+        "exact": 173,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 0,
+        "paths-closed": 4099,
+        "paths-created": 4099,
+        "paths-live": 0,
+        "paths-peak": 1,
+        "popped": 2974,
+        "prefix-roots": 546887,
+        "resets": 0
+      },
+      "z3_ms": 53547.5
+    },
+    {
+      "agree": 2551,
+      "auto": {
+        "activations": 191,
+        "probes": 358
+      },
+      "axeyum_ms": 1134.3,
+      "disagree": 0,
+      "driver": "surface",
+      "max_rss_kib": 65404,
+      "queries": 2551,
+      "repetition": 1,
+      "stderr_path": "surface-r1.stderr",
+      "stdout_path": "surface-r1.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "time_path": "surface-r1.time",
+      "unknown_split": 0,
+      "wall_seconds": 5.61,
+      "warm": {
+        "added": 11562,
+        "assertion-cap-fallbacks": 0,
+        "checks": 2193,
+        "exact": 8,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 0,
+        "paths-closed": 191,
+        "paths-created": 191,
+        "paths-live": 0,
+        "paths-peak": 1,
+        "popped": 146,
+        "prefix-roots": 281122,
+        "resets": 0
+      },
+      "z3_ms": 4292.7
+    },
+    {
+      "agree": 2551,
+      "auto": {
+        "activations": 191,
+        "probes": 358
+      },
+      "axeyum_ms": 1151.7,
+      "disagree": 0,
+      "driver": "surface",
+      "max_rss_kib": 65392,
+      "queries": 2551,
+      "repetition": 2,
+      "stderr_path": "surface-r2.stderr",
+      "stdout_path": "surface-r2.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "time_path": "surface-r2.time",
+      "unknown_split": 0,
+      "wall_seconds": 5.59,
+      "warm": {
+        "added": 11562,
+        "assertion-cap-fallbacks": 0,
+        "checks": 2193,
+        "exact": 8,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 0,
+        "paths-closed": 191,
+        "paths-created": 191,
+        "paths-live": 0,
+        "paths-peak": 1,
+        "popped": 146,
+        "prefix-roots": 281122,
+        "resets": 0
+      },
+      "z3_ms": 4301.2
+    },
+    {
+      "agree": 2551,
+      "auto": {
+        "activations": 191,
+        "probes": 358
+      },
+      "axeyum_ms": 1138.0,
+      "disagree": 0,
+      "driver": "surface",
+      "max_rss_kib": 65528,
+      "queries": 2551,
+      "repetition": 3,
+      "stderr_path": "surface-r3.stderr",
+      "stdout_path": "surface-r3.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "time_path": "surface-r3.time",
+      "unknown_split": 0,
+      "wall_seconds": 5.57,
+      "warm": {
+        "added": 11562,
+        "assertion-cap-fallbacks": 0,
+        "checks": 2193,
+        "exact": 8,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 0,
+        "paths-closed": 191,
+        "paths-created": 191,
+        "paths-live": 0,
+        "paths-peak": 1,
+        "popped": 146,
+        "prefix-roots": 281122,
+        "resets": 0
+      },
+      "z3_ms": 4297.7
+    }
+  ],
+  "schema": "glaurung-axeyum-lineage-gate-v1",
+  "sources": {
+    "axeyum": {
+      "dirty": [],
+      "path": "/tmp/axeyum-auto-gate.zdOaiZ/axeyum",
+      "revision": "0b77ccff828d288701066ac0ce7f6db919191f88"
+    },
+    "binary": {
+      "path": "/nas4/data/workspace-infosec/glaurung/target/release/examples/ioctlance",
+      "sha256": "394bc06e713439dcaaa301765e67cf694f50a84ed260540e2d69b3e14c4ca82c"
+    },
+    "glaurung": {
+      "dirty": [],
+      "path": "/tmp/axeyum-auto-gate.zdOaiZ/glaurung",
+      "revision": "5c4ec0f7a7e78f9819beacd86e4a4ea4b054bceb"
+    }
+  },
+  "summaries": {
+    "netwtw10": {
+      "axeyum_mean_ms": 19553.666666666668,
+      "axeyum_population_cv": 0.0038274846053256927,
+      "axeyum_z3_ratio": 0.3653652593762613,
+      "max_rss_kib": 216684,
+      "median_rss_kib": 216580,
+      "min_rss_kib": 216512,
+      "runs": 3,
+      "z3_mean_ms": 53518.13333333333,
+      "z3_population_cv": 0.0010570641021169602
+    },
+    "surface": {
+      "axeyum_mean_ms": 1141.3333333333333,
+      "axeyum_population_cv": 0.006557553198587919,
+      "axeyum_z3_ratio": 0.26559930497378137,
+      "max_rss_kib": 65528,
+      "median_rss_kib": 65404,
+      "min_rss_kib": 65392,
+      "runs": 3,
+      "z3_mean_ms": 4297.2,
+      "z3_population_cv": 0.0008117087691386775
+    }
+  },
+  "system": {
+    "machine": "x86_64",
+    "platform": "Linux-7.0.0-22-generic-x86_64-with-glibc2.43",
+    "processor": "",
+    "rustc": "rustc 1.96.0-nightly (48cc71ee8 2026-03-31)\nbinary: rustc\ncommit-hash: 48cc71ee88cd0f11217eced958b9930970da998b\ncommit-date: 2026-03-31\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0-nightly\nLLVM version: 22.1.2"
+  }
+}
