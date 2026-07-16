@@ -25,8 +25,9 @@ use std::time::{Duration, Instant};
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
     AigConstructionStats, CheckResult, IncrementalBvSolver, IncrementalBvStats,
-    IncrementalCnfStats, IncrementalLoweringStats, SolverConfig, UnsatProofOutcome,
-    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value,
+    IncrementalCnfStats, IncrementalLoweringStats, ReplayCheckedSatCachePolicy,
+    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome, export_qf_bv_unsat_proof,
+    solve_smtlib, solve_smtlib_get_value,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -41,10 +42,14 @@ const SOLVE_TIMEOUT: Duration = Duration::from_millis(250);
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
 const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING";
+pub(crate) const REPLAY_SAT_CACHE_ENV: &str = "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
 const WARM_MAX_ASSERTIONS_PER_PATH_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH";
 const DEFAULT_WARM_MAX_LIVE_PATHS: u64 = 9;
 const DEFAULT_WARM_MAX_ASSERTIONS_PER_PATH: u64 = 512;
+const DEFAULT_REPLAY_SAT_CACHE_ENTRIES: usize = 64;
+const DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES: usize = 4_096;
+const DEFAULT_REPLAY_SAT_CACHE_MODEL_BITS: usize = 262_144;
 
 static PROFILE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -66,6 +71,19 @@ static WARM_AUTO_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 static WARM_ADAPTIVE_PRESSURE_EVENTS: AtomicU64 = AtomicU64::new(0);
 static WARM_ADAPTIVE_EXPANSIONS: AtomicU64 = AtomicU64::new(0);
 static WARM_REUSE_LIMITS: OnceLock<WarmReuseLimits> = OnceLock::new();
+static REPLAY_SAT_CACHE_POLICY: OnceLock<Option<ReplayCheckedSatCachePolicy>> = OnceLock::new();
+static REPLAY_SAT_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_INSERTIONS: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_EVICTIONS: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_REPLAY_FAILURES: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_DECLINED_UNSAT: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_DECLINED_UNKNOWN: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_DECLINED_OVERSIZED_MODELS: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_DECLINED_NON_SCALAR_MODELS: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_ENTRIES: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_MODEL_VALUES: AtomicU64 = AtomicU64::new(0);
+static REPLAY_SAT_CACHE_MODEL_BITS: AtomicU64 = AtomicU64::new(0);
 
 const ADAPTIVE_INITIAL_LIVE_PATHS: u64 = 2;
 const ADAPTIVE_PRESSURE_THRESHOLD: u64 = 128;
@@ -137,6 +155,25 @@ fn parse_warm_reuse_policy(value: Option<&str>) -> WarmReusePolicy {
         Some(value) if value.eq_ignore_ascii_case("lineage") => WarmReusePolicy::Lineage,
         Some(_) => WarmReusePolicy::Snapshot,
     }
+}
+
+fn replay_sat_cache_policy() -> Option<ReplayCheckedSatCachePolicy> {
+    *REPLAY_SAT_CACHE_POLICY.get_or_init(|| {
+        parse_replay_sat_cache_policy(std::env::var(REPLAY_SAT_CACHE_ENV).ok().as_deref())
+    })
+}
+
+fn parse_replay_sat_cache_policy(value: Option<&str>) -> Option<ReplayCheckedSatCachePolicy> {
+    let enabled = value.is_some_and(|value| {
+        value.eq_ignore_ascii_case("on") || value.eq_ignore_ascii_case("true") || value == "1"
+    });
+    enabled.then(|| {
+        ReplayCheckedSatCachePolicy::new(
+            DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
+            DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES,
+            DEFAULT_REPLAY_SAT_CACHE_MODEL_BITS,
+        )
+    })
 }
 
 fn config() -> SolverConfig {
@@ -511,6 +548,7 @@ pub struct SnapshotIncrementalAxeyumSolver {
     has_snapshot: bool,
     preprocess: bool,
     profiling: bool,
+    replay_sat_cache_policy: Option<ReplayCheckedSatCachePolicy>,
     stats: SnapshotReuseStats,
 }
 
@@ -533,18 +571,46 @@ impl SnapshotIncrementalAxeyumSolver {
     }
 
     fn with_preprocessing_and_profiling(preprocess: bool, profiling: bool) -> Self {
+        Self::with_policy(preprocess, profiling, None)
+    }
+
+    fn new_path_owned() -> Self {
+        Self::with_policy(
+            false,
+            profile_output_dir().is_some(),
+            replay_sat_cache_policy(),
+        )
+    }
+
+    #[cfg(test)]
+    fn with_cache_for_test(policy: ReplayCheckedSatCachePolicy) -> Self {
+        Self::with_policy(false, false, Some(policy))
+    }
+
+    fn with_policy(
+        preprocess: bool,
+        profiling: bool,
+        replay_sat_cache_policy: Option<ReplayCheckedSatCachePolicy>,
+    ) -> Self {
         let solver_config = config().with_preprocess(preprocess);
+        let mut solver = if profiling {
+            IncrementalBvSolver::with_config_and_profiling(solver_config)
+        } else {
+            IncrementalBvSolver::with_config(solver_config)
+        };
+        if let Some(policy) = replay_sat_cache_policy {
+            solver
+                .enable_replay_checked_sat_cache(policy)
+                .expect("Glaurung replay-SAT-cache bounds are nonzero constants");
+        }
         Self {
             arena: TermArena::new(),
-            solver: if profiling {
-                IncrementalBvSolver::with_config_and_profiling(solver_config)
-            } else {
-                IncrementalBvSolver::with_config(solver_config)
-            },
+            solver,
             active: Vec::new(),
             has_snapshot: false,
             preprocess,
             profiling,
+            replay_sat_cache_policy,
             stats: SnapshotReuseStats::default(),
         }
     }
@@ -552,6 +618,10 @@ impl SnapshotIncrementalAxeyumSolver {
     /// Returns cumulative snapshot-reuse counters.
     pub fn stats(&self) -> SnapshotReuseStats {
         self.stats
+    }
+
+    fn replay_sat_cache_stats(&self) -> ReplayCheckedSatCacheStats {
+        self.solver.replay_checked_sat_cache_stats()
     }
 
     fn reset_session(&mut self) {
@@ -562,6 +632,11 @@ impl SnapshotIncrementalAxeyumSolver {
         } else {
             IncrementalBvSolver::with_config(solver_config)
         };
+        if let Some(policy) = self.replay_sat_cache_policy {
+            self.solver
+                .enable_replay_checked_sat_cache(policy)
+                .expect("Glaurung replay-SAT-cache bounds are nonzero constants");
+        }
         self.active.clear();
         self.has_snapshot = false;
         self.stats.resets_after_error = self.stats.resets_after_error.saturating_add(1);
@@ -963,12 +1038,23 @@ impl LineageIncrementalAxeyumSolver {
         path_id: u64,
         pool: &ExprPool,
         asserts: &[Assert],
-    ) -> (SolveResult, SnapshotReuseStats, SnapshotReuseStats, bool) {
+    ) -> (
+        SolveResult,
+        SnapshotReuseStats,
+        SnapshotReuseStats,
+        ReplayCheckedSatCacheStats,
+        ReplayCheckedSatCacheStats,
+        bool,
+    ) {
         let created = !self.paths.contains_key(&path_id);
         let create_started = (created && profile_output_dir().is_some()).then(Instant::now);
-        let solver = self.paths.entry(path_id).or_default();
+        let solver = self
+            .paths
+            .entry(path_id)
+            .or_insert_with(SnapshotIncrementalAxeyumSolver::new_path_owned);
         let session_create_nanos = create_started.map_or(0, |started| nanos(started.elapsed()));
         let before = solver.stats();
+        let cache_before = solver.replay_sat_cache_stats();
         let result = solver.check_snapshot_for_path(
             pool,
             asserts,
@@ -976,11 +1062,20 @@ impl LineageIncrementalAxeyumSolver {
             created,
             session_create_nanos,
         );
-        (result, before, solver.stats(), created)
+        (
+            result,
+            before,
+            solver.stats(),
+            cache_before,
+            solver.replay_sat_cache_stats(),
+            created,
+        )
     }
 
-    fn close_path(&mut self, path_id: u64) -> bool {
-        self.paths.remove(&path_id).is_some()
+    fn close_path(&mut self, path_id: u64) -> Option<ReplayCheckedSatCacheStats> {
+        self.paths
+            .remove(&path_id)
+            .map(|solver| solver.replay_sat_cache_stats())
     }
 }
 
@@ -1055,11 +1150,12 @@ pub(crate) fn check_warm_thread_local(
                     return AxeyumSolver::new().check(pool, asserts);
                 }
             };
-            let (result, before, after, created) = LINEAGE_SOLVERS.with(|lineage| {
-                let mut lineage = lineage.borrow_mut();
-                let (result, before, after, created) = lineage.check_path(path_id, pool, asserts);
-                (result, before, after, created)
-            });
+            let (result, before, after, cache_before, cache_after, created) =
+                LINEAGE_SOLVERS.with(|lineage| {
+                    let mut lineage = lineage.borrow_mut();
+                    lineage.check_path(path_id, pool, asserts)
+                });
+            record_replay_sat_cache_delta(cache_before, cache_after);
             debug_assert_eq!(created, reserved);
             if created {
                 WARM_PATHS_CREATED.fetch_add(1, Ordering::Relaxed);
@@ -1162,11 +1258,12 @@ pub(crate) fn close_warm_path(path_id: u64) {
     AUTO_LINEAGE_ADMISSION.with(|admission| {
         admission.borrow_mut().remove(path_id);
     });
-    let closed = LINEAGE_SOLVERS.with(|lineage| {
+    let closed_cache = LINEAGE_SOLVERS.with(|lineage| {
         let mut lineage = lineage.borrow_mut();
         lineage.close_path(path_id)
     });
-    if closed {
+    if let Some(cache) = closed_cache {
+        subtract_replay_sat_cache_gauges(cache);
         WARM_PATHS_CLOSED.fetch_add(1, Ordering::Relaxed);
         WARM_PATHS_LIVE.fetch_sub(1, Ordering::Relaxed);
     }
@@ -1259,6 +1356,121 @@ pub fn warm_reuse_stats() -> SnapshotReuseStats {
         assertions_popped: WARM_ASSERTIONS_POPPED.load(Ordering::Relaxed),
         resets_after_error: WARM_RESETS.load(Ordering::Relaxed),
     }
+}
+
+/// Process-wide aggregate of the bounded path-owned replay-checked SAT cache.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReplaySatCacheProcessStats {
+    /// Whether newly created path-owned warm solvers enable the cache.
+    pub enabled: bool,
+    /// Maximum exact SAT entries retained by each live path solver.
+    pub max_entries_per_path: u64,
+    /// Maximum scalar model values retained by each live path solver.
+    pub max_model_values_per_path: u64,
+    /// Maximum Bool/BV model payload bits retained by each live path solver.
+    pub max_model_bits_per_path: u64,
+    /// Aggregate traffic and current gauges across live path solvers.
+    pub cache: ReplayCheckedSatCacheStats,
+}
+
+/// Returns cache traffic accumulated across all retained path-owned solvers.
+pub fn replay_sat_cache_stats() -> ReplaySatCacheProcessStats {
+    let policy = replay_sat_cache_policy();
+    let mut cache = ReplayCheckedSatCacheStats::default();
+    cache.hits = REPLAY_SAT_CACHE_HITS.load(Ordering::Relaxed);
+    cache.misses = REPLAY_SAT_CACHE_MISSES.load(Ordering::Relaxed);
+    cache.insertions = REPLAY_SAT_CACHE_INSERTIONS.load(Ordering::Relaxed);
+    cache.evictions = REPLAY_SAT_CACHE_EVICTIONS.load(Ordering::Relaxed);
+    cache.replay_failures = REPLAY_SAT_CACHE_REPLAY_FAILURES.load(Ordering::Relaxed);
+    cache.declined_unsat = REPLAY_SAT_CACHE_DECLINED_UNSAT.load(Ordering::Relaxed);
+    cache.declined_unknown = REPLAY_SAT_CACHE_DECLINED_UNKNOWN.load(Ordering::Relaxed);
+    cache.declined_oversized_models =
+        REPLAY_SAT_CACHE_DECLINED_OVERSIZED_MODELS.load(Ordering::Relaxed);
+    cache.declined_non_scalar_models =
+        REPLAY_SAT_CACHE_DECLINED_NON_SCALAR_MODELS.load(Ordering::Relaxed);
+    cache.entries = REPLAY_SAT_CACHE_ENTRIES.load(Ordering::Relaxed);
+    cache.model_values = REPLAY_SAT_CACHE_MODEL_VALUES.load(Ordering::Relaxed);
+    cache.model_bits = REPLAY_SAT_CACHE_MODEL_BITS.load(Ordering::Relaxed);
+    ReplaySatCacheProcessStats {
+        enabled: policy.is_some(),
+        max_entries_per_path: policy.map_or(0, |policy| count(policy.max_entries)),
+        max_model_values_per_path: policy.map_or(0, |policy| count(policy.max_model_values)),
+        max_model_bits_per_path: policy.map_or(0, |policy| count(policy.max_model_bits)),
+        cache,
+    }
+}
+
+fn record_replay_sat_cache_delta(
+    before: ReplayCheckedSatCacheStats,
+    after: ReplayCheckedSatCacheStats,
+) {
+    let monotone = [
+        (&REPLAY_SAT_CACHE_HITS, before.hits, after.hits),
+        (&REPLAY_SAT_CACHE_MISSES, before.misses, after.misses),
+        (
+            &REPLAY_SAT_CACHE_INSERTIONS,
+            before.insertions,
+            after.insertions,
+        ),
+        (
+            &REPLAY_SAT_CACHE_EVICTIONS,
+            before.evictions,
+            after.evictions,
+        ),
+        (
+            &REPLAY_SAT_CACHE_REPLAY_FAILURES,
+            before.replay_failures,
+            after.replay_failures,
+        ),
+        (
+            &REPLAY_SAT_CACHE_DECLINED_UNSAT,
+            before.declined_unsat,
+            after.declined_unsat,
+        ),
+        (
+            &REPLAY_SAT_CACHE_DECLINED_UNKNOWN,
+            before.declined_unknown,
+            after.declined_unknown,
+        ),
+        (
+            &REPLAY_SAT_CACHE_DECLINED_OVERSIZED_MODELS,
+            before.declined_oversized_models,
+            after.declined_oversized_models,
+        ),
+        (
+            &REPLAY_SAT_CACHE_DECLINED_NON_SCALAR_MODELS,
+            before.declined_non_scalar_models,
+            after.declined_non_scalar_models,
+        ),
+    ];
+    for (counter, before, after) in monotone {
+        counter.fetch_add(after.saturating_sub(before), Ordering::Relaxed);
+    }
+    update_replay_sat_cache_gauge(&REPLAY_SAT_CACHE_ENTRIES, before.entries, after.entries);
+    update_replay_sat_cache_gauge(
+        &REPLAY_SAT_CACHE_MODEL_VALUES,
+        before.model_values,
+        after.model_values,
+    );
+    update_replay_sat_cache_gauge(
+        &REPLAY_SAT_CACHE_MODEL_BITS,
+        before.model_bits,
+        after.model_bits,
+    );
+}
+
+fn update_replay_sat_cache_gauge(counter: &AtomicU64, before: u64, after: u64) {
+    if after >= before {
+        counter.fetch_add(after - before, Ordering::Relaxed);
+    } else {
+        counter.fetch_sub(before - after, Ordering::Relaxed);
+    }
+}
+
+fn subtract_replay_sat_cache_gauges(stats: ReplayCheckedSatCacheStats) {
+    REPLAY_SAT_CACHE_ENTRIES.fetch_sub(stats.entries, Ordering::Relaxed);
+    REPLAY_SAT_CACHE_MODEL_VALUES.fetch_sub(stats.model_values, Ordering::Relaxed);
+    REPLAY_SAT_CACHE_MODEL_BITS.fetch_sub(stats.model_bits, Ordering::Relaxed);
 }
 
 fn translate_query(
@@ -1921,8 +2133,8 @@ mod tests {
             0
         );
         assert_eq!(lineage.paths.len(), 2);
-        assert!(lineage.close_path(11));
-        assert!(!lineage.close_path(11));
+        assert!(lineage.close_path(11).is_some());
+        assert!(lineage.close_path(11).is_none());
         assert_eq!(lineage.paths.len(), 1);
     }
 
@@ -1980,6 +2192,58 @@ mod tests {
         assert_eq!(
             parse_warm_reuse_policy(Some("snapshot")),
             WarmReusePolicy::Snapshot
+        );
+    }
+
+    #[test]
+    fn replay_sat_cache_is_explicit_bounded_and_default_off() {
+        assert_eq!(parse_replay_sat_cache_policy(None), None);
+        for value in ["off", "false", "0", "invalid"] {
+            assert_eq!(parse_replay_sat_cache_policy(Some(value)), None);
+        }
+        let expected = Some(ReplayCheckedSatCachePolicy::new(
+            DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
+            DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES,
+            DEFAULT_REPLAY_SAT_CACHE_MODEL_BITS,
+        ));
+        for value in ["on", "true", "1"] {
+            assert_eq!(parse_replay_sat_cache_policy(Some(value)), expected);
+        }
+    }
+
+    #[test]
+    fn path_owned_replay_sat_cache_hits_only_exact_sat_snapshots() {
+        let policy = ReplayCheckedSatCachePolicy::new(4, 16, 128);
+        let mut solver = SnapshotIncrementalAxeyumSolver::with_cache_for_test(policy);
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W8);
+        let one = c(&mut pool, 1, Width::W8);
+        let two = c(&mut pool, 2, Width::W8);
+        let x_is_one = cmp(&mut pool, CmpOp::Eq, x, one, Width::W8);
+        let x_is_two = cmp(&mut pool, CmpOp::Eq, x, two, Width::W8);
+
+        assert!(matches!(
+            solver.check_snapshot(&pool, &[(x_is_one, true)]),
+            SolveResult::Sat(_)
+        ));
+        assert!(matches!(
+            solver.check_snapshot(&pool, &[(x_is_one, true)]),
+            SolveResult::Sat(_)
+        ));
+        assert!(matches!(
+            solver.check_snapshot(&pool, &[(x_is_one, true), (x_is_two, true)]),
+            SolveResult::Unsat
+        ));
+
+        let stats = solver.replay_sat_cache_stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 2);
+        assert_eq!(stats.insertions, 1);
+        assert_eq!(stats.declined_unsat, 1);
+        assert_eq!(stats.replay_failures, 0);
+        assert_eq!(
+            SnapshotIncrementalAxeyumSolver::new().replay_sat_cache_stats(),
+            ReplayCheckedSatCacheStats::default()
         );
     }
 

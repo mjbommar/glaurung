@@ -12,16 +12,16 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use glaurung::analysis::cfg::{analyze_functions_bytes, Budgets};
+use glaurung::analysis::cfg::{Budgets, analyze_functions_bytes};
 use glaurung::analysis::ioctl_surface::map_ioctl_surface;
 use glaurung::analysis::pe_iat::pe_iat_map;
 use glaurung::core::binary::Arch;
 use glaurung::ir::lift_function::lift_function_from_bytes;
 use glaurung::ir::types::{CallTarget, LlirFunction, Op, Value};
 use glaurung::symbolic::{
-    driver_api_model, find_function_sinks_with_apis, find_function_stateful_sinks,
-    find_ioctl_sinks_with_apis, set_call_site_summaries, set_solver_budget, set_time_budget,
-    ApiSummary, SinkKind,
+    ApiSummary, SinkKind, driver_api_model, find_function_sinks_with_apis,
+    find_function_stateful_sinks, find_ioctl_sinks_with_apis, set_call_site_summaries,
+    set_solver_budget, set_time_budget,
 };
 
 fn kind_str(k: SinkKind) -> &'static str {
@@ -430,6 +430,7 @@ fn main() {
             let auto = glaurung::symbolic::solver::axeyum_backend::auto_lineage_reuse_stats();
             let adaptive =
                 glaurung::symbolic::solver::axeyum_backend::adaptive_lineage_reuse_stats();
+            let sat_cache = glaurung::symbolic::solver::axeyum_backend::replay_sat_cache_stats();
             if warm.checks > 0
                 || paths.path_limit_fallbacks > 0
                 || paths.assertion_limit_fallbacks > 0
@@ -450,6 +451,25 @@ fn main() {
                     paths.assertion_limit_fallbacks,
                     paths.max_live_paths,
                     paths.max_assertions_per_path,
+                );
+                eprintln!(
+                    "[axeyum-sat-cache] enabled={} max-entries={} max-model-values={} max-model-bits={} hits={} misses={} insertions={} evictions={} replay-failures={} declined-unsat={} declined-unknown={} declined-oversized-models={} declined-non-scalar-models={} entries={} model-values={} model-bits={}",
+                    u8::from(sat_cache.enabled),
+                    sat_cache.max_entries_per_path,
+                    sat_cache.max_model_values_per_path,
+                    sat_cache.max_model_bits_per_path,
+                    sat_cache.cache.hits,
+                    sat_cache.cache.misses,
+                    sat_cache.cache.insertions,
+                    sat_cache.cache.evictions,
+                    sat_cache.cache.replay_failures,
+                    sat_cache.cache.declined_unsat,
+                    sat_cache.cache.declined_unknown,
+                    sat_cache.cache.declined_oversized_models,
+                    sat_cache.cache.declined_non_scalar_models,
+                    sat_cache.cache.entries,
+                    sat_cache.cache.model_values,
+                    sat_cache.cache.model_bits,
                 );
             }
             if auto.probes > 0 || auto.activations > 0 {

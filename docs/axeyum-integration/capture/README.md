@@ -327,6 +327,38 @@ Lineage mode also reports created, closed, current-live, and peak-live path
 sessions. These counters describe solver ownership and root traffic; process
 RSS remains the memory acceptance measurement.
 
+Axeyum's GQ8 replay-checked SAT cache is a separate experiment and remains
+off by default. Set `GLAURUNG_AXEYUM_REPLAY_SAT_CACHE=on` only with a
+path-owned `lineage`, `auto`, or `adaptive` warm policy. Each retained path
+solver then owns an independent same-arena cache bounded to 64 exact entries,
+4,096 scalar model values, and 262,144 Bool/BV payload bits. Snapshot mode and
+all one-shot fallbacks remain cache-free; exact entries never cross paths,
+arenas, threads, or processes. Only SAT models are retained, every hit still
+passes Axeyum's original-term replay, and UNSAT, unknown, oversized, or
+non-scalar results are counted but not cached. Unset, `off`, `false`, `0`, and
+unrecognized values all select the conservative disabled policy.
+
+The `[axeyum-sat-cache]` footer records the selected per-path bounds, exact
+hits/misses, insertions, deterministic evictions, replay failures, each
+declined-result class, and current entry/value/bit gauges. Terminal path
+cleanup must leave all three gauges at zero. The lineage gate accepts an
+explicit `--replay-sat-cache off|on` control, requires exact cache traffic to
+repeat, partitions every retained warm check into a hit or miss, requires zero
+replay failures, and preserves the existing verdict, unknown-split, finding,
+RSS, and timing gates. Compare a newly captured off/on pair only with the named
+transition:
+
+```sh
+python3 docs/axeyum-integration/capture/lineage_gate.py compare \
+  /path/to/cache-off/lineage-gate-v1.json \
+  /path/to/cache-on/lineage-gate-v1.json \
+  --allow-replay-sat-cache-enablement
+```
+
+This control is measurement infrastructure, not authorization to change the
+adaptive production default. Prefix extensions continue to reuse retained
+AIG/CNF/SAT state through GQ7 and are never treated as verdict-cache hits.
+
 Lineage mode can also enforce explicit resource ceilings. Set
 `GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS` for a process-wide retained-session cap
 and `GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH` for a per-snapshot root cap.

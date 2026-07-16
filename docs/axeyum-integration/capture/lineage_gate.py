@@ -21,6 +21,9 @@ from typing import Any
 SCHEMA = "glaurung-axeyum-lineage-gate-v1"
 DEFAULT_LIVE_PATHS = 9
 DEFAULT_ASSERTIONS = 512
+DEFAULT_REPLAY_SAT_CACHE_ENTRIES = 64
+DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES = 4_096
+DEFAULT_REPLAY_SAT_CACHE_MODEL_BITS = 262_144
 
 
 @dataclass(frozen=True)
@@ -227,18 +230,21 @@ def parse_run(stderr_path: pathlib.Path, time_path: pathlib.Path) -> dict[str, A
     warm_lines = re.findall(r"^\[axeyum-warm\].*$", stderr, re.MULTILINE)
     auto_lines = re.findall(r"^\[axeyum-auto\].*$", stderr, re.MULTILINE)
     adaptive_lines = re.findall(r"^\[axeyum-adaptive\].*$", stderr, re.MULTILINE)
+    sat_cache_lines = re.findall(r"^\[axeyum-sat-cache\].*$", stderr, re.MULTILINE)
     model_matches = re.findall(r"unknown-split=(\d+)$", stderr, re.MULTILINE)
     if (
         len(shadow_matches) != 1
         or len(warm_lines) != 1
         or len(auto_lines) > 1
         or len(adaptive_lines) > 1
+        or len(sat_cache_lines) > 1
         or len(model_matches) != 1
     ):
         fail(
             "expected exactly one shadow/warm/model and at most one auto/adaptive footer: "
             f"shadow={len(shadow_matches)} warm={len(warm_lines)} "
             f"auto={len(auto_lines)} adaptive={len(adaptive_lines)} "
+            f"sat-cache={len(sat_cache_lines)} "
             f"model={len(model_matches)}"
         )
     queries, agree, disagree, z3_ms, axeyum_ms, _speedup = shadow_matches[0]
@@ -263,6 +269,11 @@ def parse_run(stderr_path: pathlib.Path, time_path: pathlib.Path) -> dict[str, A
         "adaptive": (
             parse_key_values(adaptive_lines[0], "[axeyum-adaptive]")
             if adaptive_lines
+            else {}
+        ),
+        "sat_cache": (
+            parse_key_values(sat_cache_lines[0], "[axeyum-sat-cache]")
+            if sat_cache_lines
             else {}
         ),
         "max_rss_kib": int(rss_matches[0]),
@@ -302,6 +313,9 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
     warm_reuse = policy.get("warm_reuse", "lineage")
     if warm_reuse not in {"adaptive", "auto", "lineage"}:
         fail(f"unsupported warm-reuse policy: {warm_reuse!r}")
+    replay_sat_cache = policy.get("replay_sat_cache", "off")
+    if replay_sat_cache not in {"off", "on"}:
+        fail(f"unsupported replay-SAT-cache policy: {replay_sat_cache!r}")
     by_driver: dict[str, list[dict[str, Any]]] = {}
     for run in runs:
         if not isinstance(run, dict):
@@ -325,6 +339,7 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
             fail(f"{name}: expected {repetitions} runs, got {len(driver_runs)}")
         driver_runs.sort(key=lambda run: run.get("repetition", -1))
         stdout_hash = driver_runs[0].get("stdout_sha256")
+        expected_cache = driver_runs[0].get("sat_cache", {})
         for index, run in enumerate(driver_runs, 1):
             if run.get("repetition") != index:
                 fail(f"{name}: non-contiguous repetition sequence")
@@ -343,6 +358,15 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
                     f"{name} run {index}: adaptive traffic drift: "
                     f"{run.get('adaptive')!r}"
                 )
+            cache = run.get("sat_cache", {})
+            if cache != expected_cache:
+                fail(f"{name} run {index}: replay-SAT-cache traffic drift")
+            validate_replay_sat_cache(
+                cache,
+                enabled=replay_sat_cache == "on",
+                warm_checks=run["warm"]["checks"],
+                context=f"{name} run {index}",
+            )
             if run.get("stdout_sha256") != stdout_hash:
                 fail(f"{name} run {index}: finding output drift")
             warm = run["warm"]
@@ -357,6 +381,71 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 fail(f"{name} run {index}: warm/fallback partition mismatch")
         summaries[name] = summarize(driver_runs)
     return summaries
+
+
+def validate_replay_sat_cache(
+    cache: dict[str, int], *, enabled: bool, warm_checks: int, context: str
+) -> None:
+    if not cache:
+        if enabled:
+            fail(f"{context}: missing enabled replay-SAT-cache footer")
+        return
+    expected_fields = {
+        "enabled",
+        "max-entries",
+        "max-model-values",
+        "max-model-bits",
+        "hits",
+        "misses",
+        "insertions",
+        "evictions",
+        "replay-failures",
+        "declined-unsat",
+        "declined-unknown",
+        "declined-oversized-models",
+        "declined-non-scalar-models",
+        "entries",
+        "model-values",
+        "model-bits",
+    }
+    if set(cache) != expected_fields:
+        fail(f"{context}: replay-SAT-cache footer fields drift")
+    if cache["enabled"] != int(enabled):
+        fail(f"{context}: replay-SAT-cache enablement mismatch")
+    expected_bounds = (
+        (
+            DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
+            DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES,
+            DEFAULT_REPLAY_SAT_CACHE_MODEL_BITS,
+        )
+        if enabled
+        else (0, 0, 0)
+    )
+    observed_bounds = (
+        cache["max-entries"],
+        cache["max-model-values"],
+        cache["max-model-bits"],
+    )
+    if observed_bounds != expected_bounds:
+        fail(f"{context}: replay-SAT-cache bounds drift")
+    if not enabled:
+        if any(cache[field] for field in expected_fields - {"enabled"}):
+            fail(f"{context}: disabled replay-SAT-cache has nonzero traffic")
+        return
+    if cache["hits"] + cache["misses"] != warm_checks:
+        fail(f"{context}: replay-SAT-cache check partition mismatch")
+    if cache["replay-failures"] != 0:
+        fail(f"{context}: replay-SAT-cache replay failure")
+    declined = (
+        cache["declined-unsat"]
+        + cache["declined-unknown"]
+        + cache["declined-oversized-models"]
+        + cache["declined-non-scalar-models"]
+    )
+    if cache["insertions"] + declined != cache["misses"]:
+        fail(f"{context}: replay-SAT-cache fresh-result partition mismatch")
+    if cache["entries"] or cache["model-values"] or cache["model-bits"]:
+        fail(f"{context}: replay-SAT-cache state survived terminal paths")
 
 
 def memory_limiter(bytes_limit: int):
@@ -402,6 +491,10 @@ def run_gate(args: argparse.Namespace) -> None:
         },
         "policy": {
             "warm_reuse": args.warm_reuse,
+            "replay_sat_cache": args.replay_sat_cache,
+            "replay_sat_cache_max_entries_per_path": DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
+            "replay_sat_cache_max_model_values_per_path": DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES,
+            "replay_sat_cache_max_model_bits_per_path": DEFAULT_REPLAY_SAT_CACHE_MODEL_BITS,
             "max_live_paths": DEFAULT_LIVE_PATHS,
             "max_assertions_per_path": DEFAULT_ASSERTIONS,
             "analysis_deadline_seconds": 400,
@@ -424,6 +517,7 @@ def run_gate(args: argparse.Namespace) -> None:
                 {
                     "GLAURUNG_SHADOW_DIFF": "1",
                     "GLAURUNG_AXEYUM_WARM_REUSE": args.warm_reuse,
+                    "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE": args.replay_sat_cache,
                     "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": str(DEFAULT_LIVE_PATHS),
                     "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": str(
                         DEFAULT_ASSERTIONS
@@ -487,13 +581,14 @@ def validate_comparison_identity(
     candidate: dict[str, Any],
     *,
     allow_lineage_to_adaptive: bool,
+    allow_replay_sat_cache_enablement: bool = False,
 ) -> None:
     for field in ("system", "repetitions", "drivers"):
         if baseline.get(field) != candidate.get(field):
             fail(f"comparison identity drift in {field}")
     before_policy = baseline.get("policy")
     after_policy = candidate.get("policy")
-    if not allow_lineage_to_adaptive:
+    if not allow_lineage_to_adaptive and not allow_replay_sat_cache_enablement:
         if before_policy != after_policy:
             fail("comparison identity drift in policy")
         return
@@ -501,12 +596,22 @@ def validate_comparison_identity(
         fail("comparison policy identity is not an object")
     before_common = dict(before_policy)
     after_common = dict(after_policy)
-    before_warm = before_common.pop("warm_reuse", None)
-    after_warm = after_common.pop("warm_reuse", None)
-    if (before_warm, after_warm) != ("lineage", "adaptive"):
-        fail("cross-policy comparison requires lineage baseline and adaptive candidate")
+    if allow_lineage_to_adaptive:
+        before_warm = before_common.pop("warm_reuse", None)
+        after_warm = after_common.pop("warm_reuse", None)
+        if (before_warm, after_warm) != ("lineage", "adaptive"):
+            fail(
+                "cross-policy comparison requires lineage baseline and adaptive candidate"
+            )
+        if before_common != after_common:
+            fail("comparison identity drift outside warm-reuse policy")
+        return
+    before_cache = before_common.pop("replay_sat_cache", "off")
+    after_cache = after_common.pop("replay_sat_cache", "off")
+    if (before_cache, after_cache) != ("off", "on"):
+        fail("cache comparison requires replay-SAT-cache off baseline and on candidate")
     if before_common != after_common:
-        fail("comparison identity drift outside warm-reuse policy")
+        fail("cache comparison identity drift outside replay-SAT-cache policy")
 
 
 def compare_artifacts(args: argparse.Namespace) -> None:
@@ -518,6 +623,7 @@ def compare_artifacts(args: argparse.Namespace) -> None:
         baseline,
         candidate,
         allow_lineage_to_adaptive=args.allow_lineage_to_adaptive,
+        allow_replay_sat_cache_enablement=args.allow_replay_sat_cache_enablement,
     )
     if set(baseline_summary) != set(candidate_summary):
         fail("driver membership drift")
@@ -592,6 +698,7 @@ def main() -> int:
     run.add_argument(
         "--warm-reuse", choices=("adaptive", "auto", "lineage"), default="lineage"
     )
+    run.add_argument("--replay-sat-cache", choices=("off", "on"), default="off")
     run.add_argument("--allow-dirty", action="store_true")
     validate = subparsers.add_parser("validate", help="validate one artifact")
     validate.add_argument("artifact")
@@ -603,6 +710,7 @@ def main() -> int:
     compare.add_argument("--max-rss-regression", type=float, default=5.0)
     compare.add_argument("--max-z3-drift", type=float, default=2.0)
     compare.add_argument("--allow-lineage-to-adaptive", action="store_true")
+    compare.add_argument("--allow-replay-sat-cache-enablement", action="store_true")
     args = parser.parse_args()
     try:
         if args.command == "run":

@@ -44,6 +44,49 @@ class LineageGateTests(unittest.TestCase):
         self.assertEqual(parsed["wall_seconds"], 79.22)
         self.assertEqual(parsed["max_rss_kib"], 83_140)
 
+    def test_parse_run_reads_replay_sat_cache_footer(self) -> None:
+        warm = lineage_gate.DRIVERS["surface"].expected_warm
+        warm_text = " ".join(f"{key}={value}" for key, value in warm.items())
+        cache = {
+            "enabled": 1,
+            "max-entries": 64,
+            "max-model-values": 4096,
+            "max-model-bits": 262144,
+            "hits": 121,
+            "misses": 2430,
+            "insertions": 1500,
+            "evictions": 0,
+            "replay-failures": 0,
+            "declined-unsat": 930,
+            "declined-unknown": 0,
+            "declined-oversized-models": 0,
+            "declined-non-scalar-models": 0,
+            "entries": 0,
+            "model-values": 0,
+            "model-bits": 0,
+        }
+        cache_text = " ".join(f"{key}={value}" for key, value in cache.items())
+        stderr_text = (
+            "[shadow-diff] queries=2551 agree=2551 disagree=0 | "
+            "SAME-STREAM z3=4409.0ms axeyum=1069.4ms speedup=4.1x\n"
+            "[model-choice] both-sat=1 different-model=0 | "
+            "z3-unknown=0 axeyum-unknown=0 unknown-split=0\n"
+            f"[axeyum-warm] {warm_text}\n"
+            f"[axeyum-sat-cache] {cache_text}\n"
+        )
+        time_text = (
+            "\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:05.74\n"
+            "\tMaximum resident set size (kbytes): 83140\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            stderr_path = root / "run.stderr"
+            time_path = root / "run.time"
+            stderr_path.write_text(stderr_text)
+            time_path.write_text(time_text)
+            parsed = lineage_gate.parse_run(stderr_path, time_path)
+        self.assertEqual(parsed["sat_cache"], cache)
+
     def test_parse_run_reads_auto_admission_footer(self) -> None:
         warm = lineage_gate.DRIVERS["surface"].expected_auto_warm
         warm_text = " ".join(f"{key}={value}" for key, value in warm.items())
@@ -154,6 +197,62 @@ class LineageGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "warm traffic drift"):
             lineage_gate.validate_artifact(artifact)
 
+    def test_validate_replay_sat_cache_partitions_warm_checks(self) -> None:
+        cache = {
+            "enabled": 1,
+            "max-entries": lineage_gate.DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
+            "max-model-values": (lineage_gate.DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES),
+            "max-model-bits": lineage_gate.DEFAULT_REPLAY_SAT_CACHE_MODEL_BITS,
+            "hits": 3,
+            "misses": 7,
+            "insertions": 4,
+            "evictions": 0,
+            "replay-failures": 0,
+            "declined-unsat": 3,
+            "declined-unknown": 0,
+            "declined-oversized-models": 0,
+            "declined-non-scalar-models": 0,
+            "entries": 0,
+            "model-values": 0,
+            "model-bits": 0,
+        }
+        lineage_gate.validate_replay_sat_cache(
+            cache, enabled=True, warm_checks=10, context="test"
+        )
+        cache["replay-failures"] = 1
+        with self.assertRaisesRegex(ValueError, "replay failure"):
+            lineage_gate.validate_replay_sat_cache(
+                cache, enabled=True, warm_checks=10, context="test"
+            )
+
+    def test_validate_disabled_replay_sat_cache_requires_zero_traffic(self) -> None:
+        cache = {
+            "enabled": 0,
+            "max-entries": 0,
+            "max-model-values": 0,
+            "max-model-bits": 0,
+            "hits": 0,
+            "misses": 0,
+            "insertions": 0,
+            "evictions": 0,
+            "replay-failures": 0,
+            "declined-unsat": 0,
+            "declined-unknown": 0,
+            "declined-oversized-models": 0,
+            "declined-non-scalar-models": 0,
+            "entries": 0,
+            "model-values": 0,
+            "model-bits": 0,
+        }
+        lineage_gate.validate_replay_sat_cache(
+            cache, enabled=False, warm_checks=10, context="test"
+        )
+        cache["misses"] = 1
+        with self.assertRaisesRegex(ValueError, "nonzero traffic"):
+            lineage_gate.validate_replay_sat_cache(
+                cache, enabled=False, warm_checks=10, context="test"
+            )
+
     def test_validate_accepts_exact_auto_partition(self) -> None:
         spec = lineage_gate.DRIVERS["surface"]
         run = {
@@ -245,6 +344,35 @@ class LineageGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lineage.*adaptive"):
             lineage_gate.validate_comparison_identity(
                 baseline, candidate, allow_lineage_to_adaptive=True
+            )
+
+    def test_cross_policy_identity_allows_only_named_cache_enablement(self) -> None:
+        baseline = {
+            "system": {"machine": "x86_64"},
+            "policy": {"warm_reuse": "lineage", "replay_sat_cache": "off"},
+            "repetitions": 3,
+            "drivers": {"surface": {"sha256": "a" * 64}},
+        }
+        candidate = {
+            **baseline,
+            "policy": {"warm_reuse": "lineage", "replay_sat_cache": "on"},
+        }
+        lineage_gate.validate_comparison_identity(
+            baseline,
+            candidate,
+            allow_lineage_to_adaptive=False,
+            allow_replay_sat_cache_enablement=True,
+        )
+        candidate["policy"] = {
+            "warm_reuse": "adaptive",
+            "replay_sat_cache": "on",
+        }
+        with self.assertRaisesRegex(ValueError, "cache comparison"):
+            lineage_gate.validate_comparison_identity(
+                baseline,
+                candidate,
+                allow_lineage_to_adaptive=False,
+                allow_replay_sat_cache_enablement=True,
             )
 
 
