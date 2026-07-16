@@ -117,7 +117,8 @@ reachability engine, not owns it.
 
 ## ADR-008 - Auto warm reuse requires observed same-path reuse
 
-**Status:** Accepted as an opt-in measurement candidate; default decision open.
+**Status:** Accepted by the repeated gate; default wiring is the next bounded
+change.
 **Context:** Fixed lineage reuse is faster than Z3 on every repeated held-out
 stream, but eagerly retains a solver for paths that may never issue a second
 query. GQ9 needs a production admission signal that is observable before paying
@@ -221,3 +222,15 @@ through the versioned runner before deciding GQ9.
 fails time; fixed cap 1 fails SurfacePen time; fixed cap 2 fails NETwtw10 time;
 cap 3 restores SurfacePen time but provides no RSS improvement; formula-shape
 analysis would repeat GQ4's paid-analysis failure at the wrong layer.
+
+**Repeated gate:** The clean three-process-per-family artifact at Glaurung
+`95c43cb` and Axeyum `f91fb232` repeats exact adaptive topology and all 92,721
+agreements. SurfacePen averages 1.085 seconds / 79,424 KiB; NETwtw10 averages
+18.558 seconds / 255,364 KiB. The explicit lineage→adaptive comparator reports
+Surface Axeyum/ratio/RSS changes of +2.07%/+2.28%/-3.65% and NETwtw10 changes
+of -1.03%/-0.89%/-0.88%; Z3 drift is -0.20%/-0.14%. Every 3%/3%/5% plus 2%
+alarm passes. The 8,965-byte artifact SHA-256 is
+`0255d0ed2a0c5bc078e478cb951561d4de1460c11333a646f3e150b15281e716`.
+This accepts adaptive as the GQ9 production admission policy. Wiring it as the
+Axeyum explorer default remains a separate tested code change with an explicit
+off override; it does not alter Axeyum's framework-level solver defaults.

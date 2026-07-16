@@ -389,9 +389,9 @@ starts with at most two live path-owned sessions and expands once to the
 configured hard cap after 128 failed low-cap reservation attempts. The
 `[axeyum-adaptive]` footer records pressure, expansion count, initial cap, and
 threshold; the runner requires exact per-driver values in addition to the
-ordinary warm/fallback partition. This policy is opt-in pending repeated
-cross-policy evidence; it does not change the default or the homogeneous
-comparator's identity rule.
+ordinary warm/fallback partition. The policy is accepted by the repeated gate
+below; explicit `--allow-lineage-to-adaptive` is required to compare it with the
+fixed control, so ordinary homogeneous comparisons remain fail-closed.
 
 Compare two homogeneous artifacts fail-closed; source revisions and binary
 hashes may differ, while system, policy, driver bytes, work, findings, and
@@ -403,6 +403,17 @@ python3 docs/axeyum-integration/capture/lineage_gate.py compare \
   /path/to/candidate/lineage-gate-v1.json
 ```
 
+The only permitted heterogeneous comparison is the named fixed-lineage →
+adaptive GQ9 transition. Every other policy field remains identical, and the
+same alarms apply:
+
+```sh
+python3 docs/axeyum-integration/capture/lineage_gate.py compare \
+  docs/axeyum-integration/capture/lineage-baseline-v1.json \
+  docs/axeyum-integration/capture/lineage-adaptive-candidate-v1.json \
+  --allow-lineage-to-adaptive
+```
+
 The comparator fails on a greater-than-3% Axeyum mean regression, greater-than-
 3% normalized Axeyum/Z3 ratio regression, greater-than-5% median-RSS
 regression, or greater-than-2% absolute Z3 drift. All four percentage ceilings
@@ -410,6 +421,16 @@ are explicit `--max-*-regression`/`--max-z3-drift` options. Z3 drift is an
 environment alarm in either direction; Axeyum/ratio/RSS alarms are one-sided so
 improvements pass. Thresholds never relax correctness, exact-work, finding, or
 identity validation.
+
+`lineage-adaptive-candidate-v1.json` is the clean repeated GQ9 acceptance
+artifact from Glaurung `95c43cb` and Axeyum `f91fb232` (SHA-256
+`0255d0ed2a0c5bc078e478cb951561d4de1460c11333a646f3e150b15281e716`).
+All 92,721 checks agree with zero unknown splits. SurfacePen averages 1.085
+seconds with 79,424 KiB median RSS and does not expand; NETwtw10 averages
+18.558 seconds with 255,364 KiB and expands once at pressure 128. Against the
+clean fixed-lineage baseline, Surface time/ratio/RSS change
++2.07%/+2.28%/-3.65%; NETwtw10 changes -1.03%/-0.89%/-0.88%; absolute Z3
+drift is at most 0.21%. Every alarm passes and Axeyum CV is 0.19%/0.40%.
 
 `lineage-baseline-v1.json` is the first clean release baseline for that
 comparator. It was rebuilt and captured from clean detached Glaurung

@@ -227,6 +227,26 @@ class LineageGateTests(unittest.TestCase):
         self.assertTrue(any("median-rss" in violation for violation in violations))
         self.assertTrue(any("z3-drift" in violation for violation in violations))
 
+    def test_cross_policy_identity_allows_only_lineage_to_adaptive(self) -> None:
+        baseline = {
+            "system": {"machine": "x86_64"},
+            "policy": {"warm_reuse": "lineage", "max_live_paths": 9},
+            "repetitions": 3,
+            "drivers": {"surface": {"sha256": "a" * 64}},
+        }
+        candidate = {
+            **baseline,
+            "policy": {"warm_reuse": "adaptive", "max_live_paths": 9},
+        }
+        lineage_gate.validate_comparison_identity(
+            baseline, candidate, allow_lineage_to_adaptive=True
+        )
+        candidate["policy"] = {"warm_reuse": "auto", "max_live_paths": 9}
+        with self.assertRaisesRegex(ValueError, "lineage.*adaptive"):
+            lineage_gate.validate_comparison_identity(
+                baseline, candidate, allow_lineage_to_adaptive=True
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

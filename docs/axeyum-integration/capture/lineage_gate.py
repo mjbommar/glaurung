@@ -482,14 +482,43 @@ def load_artifact(path: pathlib.Path) -> dict[str, Any]:
     return value
 
 
+def validate_comparison_identity(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    allow_lineage_to_adaptive: bool,
+) -> None:
+    for field in ("system", "repetitions", "drivers"):
+        if baseline.get(field) != candidate.get(field):
+            fail(f"comparison identity drift in {field}")
+    before_policy = baseline.get("policy")
+    after_policy = candidate.get("policy")
+    if not allow_lineage_to_adaptive:
+        if before_policy != after_policy:
+            fail("comparison identity drift in policy")
+        return
+    if not isinstance(before_policy, dict) or not isinstance(after_policy, dict):
+        fail("comparison policy identity is not an object")
+    before_common = dict(before_policy)
+    after_common = dict(after_policy)
+    before_warm = before_common.pop("warm_reuse", None)
+    after_warm = after_common.pop("warm_reuse", None)
+    if (before_warm, after_warm) != ("lineage", "adaptive"):
+        fail("cross-policy comparison requires lineage baseline and adaptive candidate")
+    if before_common != after_common:
+        fail("comparison identity drift outside warm-reuse policy")
+
+
 def compare_artifacts(args: argparse.Namespace) -> None:
     baseline = load_artifact(pathlib.Path(args.baseline))
     candidate = load_artifact(pathlib.Path(args.candidate))
     baseline_summary = validate_artifact(baseline)
     candidate_summary = validate_artifact(candidate)
-    for field in ("system", "policy", "repetitions", "drivers"):
-        if baseline.get(field) != candidate.get(field):
-            fail(f"comparison identity drift in {field}")
+    validate_comparison_identity(
+        baseline,
+        candidate,
+        allow_lineage_to_adaptive=args.allow_lineage_to_adaptive,
+    )
     if set(baseline_summary) != set(candidate_summary):
         fail("driver membership drift")
     comparison = {}
@@ -573,6 +602,7 @@ def main() -> int:
     compare.add_argument("--max-ratio-regression", type=float, default=3.0)
     compare.add_argument("--max-rss-regression", type=float, default=5.0)
     compare.add_argument("--max-z3-drift", type=float, default=2.0)
+    compare.add_argument("--allow-lineage-to-adaptive", action="store_true")
     args = parser.parse_args()
     try:
         if args.command == "run":
