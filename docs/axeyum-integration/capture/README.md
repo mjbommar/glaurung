@@ -752,6 +752,40 @@ smoke. It is not the repeated release gate. The exact traffic constants are
 schema-v1 acceptance identity; a deliberate Glaurung exploration change needs
 a new schema/evidence decision rather than silently comparing different work.
 
+The runner has a named first-class direct-delta policy. Its accepted topology
+is adaptive reuse plus exclusive owner transfer, with serial sibling leasing
+off:
+
+```sh
+python3 docs/axeyum-integration/capture/lineage_gate.py run \
+  --binary target/release/examples/ioctlance \
+  --axeyum-repo /home/mjbommar/projects/personal/axeyum \
+  --output /path/to/direct-artifact \
+  --warm-reuse adaptive \
+  --warm-owner-transfer on \
+  --serial-sibling-reuse off \
+  --direct-delta on
+```
+
+The validator has exact SurfacePen and NETwtw10 direct traffic contracts and
+rejects direct mode under any other topology. Build a topology-equivalent
+snapshot artifact with the same options except `--direct-delta off`, then use
+`--allow-direct-delta-enablement` for the causal snapshot-reconstruction test.
+For the actual production admission question, compare the current serial-
+snapshot baseline (`--serial-sibling-reuse on --direct-delta off`) to the
+exclusive direct candidate with
+`--allow-serial-snapshot-to-direct-delta`. That named transition permits only
+those two policy changes; driver bytes, revisions, repetitions, work, findings,
+system identity, and all alarms remain fail-closed.
+
+The one-process runner smokes are promising but not acceptance evidence.
+Against exclusive-transfer snapshot, direct SurfacePen improves Axeyum 439.0
+to 393.4 ms and ratio 9.25%, while RSS falls 2.25% and Z3 drift is 1.25%.
+An independent NETwtw10 direct smoke is 28,356/28,356 agreed at 10.640 seconds
+Axeyum versus 52.653 seconds Z3, 259,320 KiB RSS. Repeated paired artifacts are
+still required, and the current serial-snapshot SurfacePen control remains
+faster in the initial manual comparison.
+
 Three alternating baseline/warm processes on 2026-07-15 each ran 13,126
 same-stream checks with 13,126 agreements, zero disagreements/unknown splits,
 identical findings, and zero warm resets. Median Axeyum time fell from 17.784

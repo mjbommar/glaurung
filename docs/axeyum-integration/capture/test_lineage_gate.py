@@ -395,6 +395,52 @@ class LineageGateTests(unittest.TestCase):
         )
         self.assertEqual(summaries["surface"]["runs"], 1)
 
+    def test_validate_accepts_exact_direct_delta_partition(self) -> None:
+        spec = lineage_gate.DRIVERS["surface"]
+        run = {
+            "driver": "surface",
+            "repetition": 1,
+            "queries": spec.expected_queries,
+            "agree": spec.expected_queries,
+            "disagree": 0,
+            "unknown_split": 0,
+            "z3_ms": 4_410.2,
+            "axeyum_ms": 399.8,
+            "warm": dict(spec.expected_direct_delta_warm),
+            "adaptive": dict(spec.expected_adaptive_transfer),
+            "max_rss_kib": 79_464,
+            "stdout_sha256": "a" * 64,
+        }
+        summaries = lineage_gate.validate_artifact(
+            {
+                "schema": lineage_gate.SCHEMA,
+                "policy": {
+                    "warm_reuse": "adaptive",
+                    "warm_owner_transfer": "on",
+                    "serial_sibling_reuse": "off",
+                    "direct_delta": "on",
+                },
+                "repetitions": 1,
+                "runs": [run],
+            }
+        )
+        self.assertEqual(summaries["surface"]["runs"], 1)
+
+    def test_validate_rejects_direct_delta_with_serial_sibling_reuse(self) -> None:
+        artifact = {
+            "schema": lineage_gate.SCHEMA,
+            "policy": {
+                "warm_reuse": "adaptive",
+                "warm_owner_transfer": "on",
+                "serial_sibling_reuse": "on",
+                "direct_delta": "on",
+            },
+            "repetitions": 1,
+            "runs": [{}],
+        }
+        with self.assertRaisesRegex(ValueError, "direct delta gate requires"):
+            lineage_gate.validate_artifact(artifact)
+
     def test_thresholds_distinguish_regression_from_environment_drift(self) -> None:
         comparison = {
             "surface": {
@@ -536,6 +582,80 @@ class LineageGateTests(unittest.TestCase):
                 candidate,
                 allow_lineage_to_adaptive=False,
                 allow_serial_sibling_reuse_enablement=True,
+            )
+
+    def test_cross_policy_identity_allows_only_named_direct_delta(self) -> None:
+        baseline = {
+            "system": {"machine": "x86_64"},
+            "policy": {
+                "warm_reuse": "adaptive",
+                "warm_owner_transfer": "on",
+                "serial_sibling_reuse": "off",
+            },
+            "repetitions": 3,
+            "drivers": {"surface": {"sha256": "a" * 64}},
+        }
+        candidate = {
+            **baseline,
+            "policy": {
+                **baseline["policy"],
+                "direct_delta": "on",
+            },
+        }
+        lineage_gate.validate_comparison_identity(
+            baseline,
+            candidate,
+            allow_lineage_to_adaptive=False,
+            allow_direct_delta_enablement=True,
+        )
+        candidate["policy"] = {
+            **candidate["policy"],
+            "serial_sibling_reuse": "on",
+        }
+        with self.assertRaisesRegex(ValueError, "outside named policy"):
+            lineage_gate.validate_comparison_identity(
+                baseline,
+                candidate,
+                allow_lineage_to_adaptive=False,
+                allow_direct_delta_enablement=True,
+            )
+
+    def test_cross_policy_identity_allows_serial_snapshot_to_direct(self) -> None:
+        baseline = {
+            "system": {"machine": "x86_64"},
+            "policy": {
+                "warm_reuse": "adaptive",
+                "warm_owner_transfer": "on",
+                "serial_sibling_reuse": "on",
+                "direct_delta": "off",
+            },
+            "repetitions": 3,
+            "drivers": {"surface": {"sha256": "a" * 64}},
+        }
+        candidate = {
+            **baseline,
+            "policy": {
+                **baseline["policy"],
+                "serial_sibling_reuse": "off",
+                "direct_delta": "on",
+            },
+        }
+        lineage_gate.validate_comparison_identity(
+            baseline,
+            candidate,
+            allow_lineage_to_adaptive=False,
+            allow_serial_snapshot_to_direct_delta=True,
+        )
+        candidate["policy"] = {
+            **candidate["policy"],
+            "warm_owner_transfer": "off",
+        }
+        with self.assertRaisesRegex(ValueError, "outside production direct"):
+            lineage_gate.validate_comparison_identity(
+                baseline,
+                candidate,
+                allow_lineage_to_adaptive=False,
+                allow_serial_snapshot_to_direct_delta=True,
             )
 
 

@@ -39,6 +39,7 @@ class DriverSpec:
     expected_adaptive: dict[str, int]
     expected_adaptive_transfer_warm: dict[str, int]
     expected_adaptive_transfer: dict[str, int]
+    expected_direct_delta_warm: dict[str, int]
     expected_adaptive_serial_warm: dict[str, int]
     expected_adaptive_serial: dict[str, int]
 
@@ -125,6 +126,22 @@ DRIVERS = {
             "expansions": 0,
             "initial-live-paths": 2,
             "pressure-threshold": 128,
+        },
+        expected_direct_delta_warm={
+            "checks": 2_535,
+            "exact": 169,
+            "prefix-roots": 296_225,
+            "added": 11_005,
+            "popped": 0,
+            "resets": 0,
+            "paths-created": 207,
+            "paths-closed": 207,
+            "paths-live": 0,
+            "paths-peak": 2,
+            "path-cap-fallbacks": 16,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
         },
         expected_adaptive_serial_warm={
             "checks": 2_551,
@@ -230,6 +247,22 @@ DRIVERS = {
             "expansions": 1,
             "initial-live-paths": 2,
             "pressure-threshold": 128,
+        },
+        expected_direct_delta_warm={
+            "checks": 25_820,
+            "exact": 2_947,
+            "prefix-roots": 940_152,
+            "added": 160_588,
+            "popped": 0,
+            "resets": 0,
+            "paths-created": 3_739,
+            "paths-closed": 3_739,
+            "paths-live": 0,
+            "paths-peak": 9,
+            "path-cap-fallbacks": 2_536,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
         },
         expected_adaptive_serial_warm={
             "checks": 28_356,
@@ -428,6 +461,18 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
         warm_reuse != "adaptive" or warm_owner_transfer != "on"
     ):
         fail("serial sibling reuse requires adaptive warm reuse and owner transfer")
+    direct_delta = policy.get("direct_delta", "off")
+    if direct_delta not in {"off", "on"}:
+        fail(f"unsupported direct-delta policy: {direct_delta!r}")
+    if direct_delta == "on" and (
+        warm_reuse != "adaptive"
+        or warm_owner_transfer != "on"
+        or serial_sibling_reuse != "off"
+    ):
+        fail(
+            "direct delta gate requires adaptive reuse, exclusive owner transfer, "
+            "and serial sibling reuse off"
+        )
     by_driver: dict[str, list[dict[str, Any]]] = {}
     for run in runs:
         if not isinstance(run, dict):
@@ -439,7 +484,9 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
     summaries: dict[str, dict[str, Any]] = {}
     for name, driver_runs in sorted(by_driver.items()):
         spec = DRIVERS[name]
-        if serial_sibling_reuse == "on":
+        if direct_delta == "on":
+            expected_warm = spec.expected_direct_delta_warm
+        elif serial_sibling_reuse == "on":
             expected_warm = spec.expected_adaptive_serial_warm
         elif warm_reuse == "adaptive" and warm_owner_transfer == "on":
             expected_warm = spec.expected_adaptive_transfer_warm
@@ -593,6 +640,15 @@ def run_gate(args: argparse.Namespace) -> None:
         args.warm_reuse != "adaptive" or args.warm_owner_transfer != "on"
     ):
         fail("serial sibling reuse requires adaptive warm reuse and owner transfer")
+    if args.direct_delta == "on" and (
+        args.warm_reuse != "adaptive"
+        or args.warm_owner_transfer != "on"
+        or args.serial_sibling_reuse != "off"
+    ):
+        fail(
+            "direct delta gate requires adaptive reuse, exclusive owner transfer, "
+            "and serial sibling reuse off"
+        )
     binary = pathlib.Path(args.binary).resolve()
     sample_root = pathlib.Path(args.sample_root).resolve()
     output = pathlib.Path(args.output).resolve()
@@ -630,6 +686,7 @@ def run_gate(args: argparse.Namespace) -> None:
             "warm_reuse": args.warm_reuse,
             "warm_owner_transfer": args.warm_owner_transfer,
             "serial_sibling_reuse": args.serial_sibling_reuse,
+            "direct_delta": args.direct_delta,
             "replay_sat_cache": args.replay_sat_cache,
             "replay_sat_cache_max_entries_per_path": DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
             "replay_sat_cache_max_model_values_per_path": DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES,
@@ -658,6 +715,7 @@ def run_gate(args: argparse.Namespace) -> None:
                     "GLAURUNG_AXEYUM_WARM_REUSE": args.warm_reuse,
                     "GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER": args.warm_owner_transfer,
                     "GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE": args.serial_sibling_reuse,
+                    "GLAURUNG_AXEYUM_DIRECT_DELTA": args.direct_delta,
                     "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE": args.replay_sat_cache,
                     "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": str(DEFAULT_LIVE_PATHS),
                     "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": str(
@@ -725,25 +783,31 @@ def validate_comparison_identity(
     allow_replay_sat_cache_enablement: bool = False,
     allow_warm_owner_transfer_enablement: bool = False,
     allow_serial_sibling_reuse_enablement: bool = False,
+    allow_direct_delta_enablement: bool = False,
+    allow_serial_snapshot_to_direct_delta: bool = False,
 ) -> None:
     for field in ("system", "repetitions", "drivers"):
         if baseline.get(field) != candidate.get(field):
             fail(f"comparison identity drift in {field}")
     before_policy = baseline.get("policy")
     after_policy = candidate.get("policy")
+    if not isinstance(before_policy, dict) or not isinstance(after_policy, dict):
+        fail("comparison policy identity is not an object")
+    before_common = dict(before_policy)
+    after_common = dict(after_policy)
+    before_common.setdefault("direct_delta", "off")
+    after_common.setdefault("direct_delta", "off")
     if (
         not allow_lineage_to_adaptive
         and not allow_replay_sat_cache_enablement
         and not allow_warm_owner_transfer_enablement
         and not allow_serial_sibling_reuse_enablement
+        and not allow_direct_delta_enablement
+        and not allow_serial_snapshot_to_direct_delta
     ):
-        if before_policy != after_policy:
+        if before_common != after_common:
             fail("comparison identity drift in policy")
         return
-    if not isinstance(before_policy, dict) or not isinstance(after_policy, dict):
-        fail("comparison policy identity is not an object")
-    before_common = dict(before_policy)
-    after_common = dict(after_policy)
     if allow_lineage_to_adaptive:
         before_warm = before_common.pop("warm_reuse", None)
         after_warm = after_common.pop("warm_reuse", None)
@@ -753,6 +817,24 @@ def validate_comparison_identity(
             )
         if before_common != after_common:
             fail("comparison identity drift outside warm-reuse policy")
+        return
+    if allow_serial_snapshot_to_direct_delta:
+        before_serial = before_common.pop("serial_sibling_reuse", "off")
+        after_serial = after_common.pop("serial_sibling_reuse", "off")
+        before_direct = before_common.pop("direct_delta", "off")
+        after_direct = after_common.pop("direct_delta", "off")
+        if (before_serial, after_serial, before_direct, after_direct) != (
+            "on",
+            "off",
+            "off",
+            "on",
+        ):
+            fail(
+                "production direct comparison requires serial-snapshot baseline "
+                "and exclusive-transfer direct candidate"
+            )
+        if before_common != after_common:
+            fail("comparison identity drift outside production direct transition")
         return
     if allow_replay_sat_cache_enablement:
         before_cache = before_common.pop("replay_sat_cache", "off")
@@ -771,6 +853,11 @@ def validate_comparison_identity(
         after_serial = after_common.pop("serial_sibling_reuse", "off")
         if (before_serial, after_serial) != ("off", "on"):
             fail("serial-sibling comparison requires off baseline and on candidate")
+    if allow_direct_delta_enablement:
+        before_direct = before_common.pop("direct_delta", "off")
+        after_direct = after_common.pop("direct_delta", "off")
+        if (before_direct, after_direct) != ("off", "on"):
+            fail("direct-delta comparison requires off baseline and on candidate")
     if before_common != after_common:
         fail("comparison identity drift outside named policy change")
 
@@ -787,6 +874,10 @@ def compare_artifacts(args: argparse.Namespace) -> None:
         allow_replay_sat_cache_enablement=args.allow_replay_sat_cache_enablement,
         allow_warm_owner_transfer_enablement=args.allow_warm_owner_transfer_enablement,
         allow_serial_sibling_reuse_enablement=args.allow_serial_sibling_reuse_enablement,
+        allow_direct_delta_enablement=args.allow_direct_delta_enablement,
+        allow_serial_snapshot_to_direct_delta=(
+            args.allow_serial_snapshot_to_direct_delta
+        ),
     )
     if set(baseline_summary) != set(candidate_summary):
         fail("driver membership drift")
@@ -863,6 +954,7 @@ def main() -> int:
     )
     run.add_argument("--warm-owner-transfer", choices=("off", "on"), default="off")
     run.add_argument("--serial-sibling-reuse", choices=("off", "on"), default="off")
+    run.add_argument("--direct-delta", choices=("off", "on"), default="off")
     run.add_argument("--replay-sat-cache", choices=("off", "on"), default="on")
     run.add_argument("--allow-dirty", action="store_true")
     validate = subparsers.add_parser("validate", help="validate one artifact")
@@ -878,6 +970,8 @@ def main() -> int:
     compare.add_argument("--allow-replay-sat-cache-enablement", action="store_true")
     compare.add_argument("--allow-warm-owner-transfer-enablement", action="store_true")
     compare.add_argument("--allow-serial-sibling-reuse-enablement", action="store_true")
+    compare.add_argument("--allow-direct-delta-enablement", action="store_true")
+    compare.add_argument("--allow-serial-snapshot-to-direct-delta", action="store_true")
     args = parser.parse_args()
     try:
         if args.command == "run":
