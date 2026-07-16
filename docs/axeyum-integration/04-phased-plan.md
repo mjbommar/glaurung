@@ -169,8 +169,16 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
     separate exclusive-direct→source-direct and serial-snapshot→source-direct
     comparisons. One process per driver is fully agreed/replay-clean and
     promising, but is not release evidence.
-  - **Next:** run three clean processes per driver and both named comparisons.
-    Direct remains opt-in until time, ratio, and RSS all clear.
+  - **Repeated production gate passes:** source-prefix direct improves
+    SurfacePen time/ratio/RSS 16.11%/17.39%/0.36% and NETwtw10
+    6.07%/6.61%/1.72% against serial snapshot with every alarm green. The fresh
+    exclusive-direct control also favors source-prefix strongly, but its
+    SurfacePen Z3 drift is 4.06%, so that causal comparison remains rejected.
+  - **Next:** add the reported 33,501-query `tcpip` and 17,572-query `dxgkrnl`
+    streams to the strict repeated gate. Investigate `win32k`'s zero-query
+    dispatch-recovery gap separately; zero solver traffic is not solver
+    evidence. Keep direct opt-in until widening and the causal environment gate
+    close.
   - Optional runtime hybrid: when both `solver-axeyum` and `solver-z3` are
     compiled in, try axeyum first and fall back to z3 on per-query
     timeout/`Unknown`.

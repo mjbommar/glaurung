@@ -551,10 +551,23 @@ class LineageGateTests(unittest.TestCase):
                 "warm_owner_transfer": "off",
             },
             "repetitions": 3,
-            "drivers": {"surface": {"sha256": "a" * 64}},
+            "drivers": {
+                "surface": {
+                    "path": "/main/surface.sys",
+                    "sha256": "a" * 64,
+                    "bytes": 17,
+                    "solve_budget": 100,
+                }
+            },
         }
         candidate = {
             **baseline,
+            "drivers": {
+                "surface": {
+                    **baseline["drivers"]["surface"],
+                    "path": "/clean-worktree/surface.sys",
+                }
+            },
             "policy": {
                 "warm_reuse": "adaptive",
                 "warm_owner_transfer": "on",

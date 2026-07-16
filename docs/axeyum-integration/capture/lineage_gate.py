@@ -832,9 +832,28 @@ def validate_comparison_identity(
     allow_direct_source_sibling_enablement: bool = False,
     allow_serial_snapshot_to_source_direct: bool = False,
 ) -> None:
-    for field in ("system", "repetitions", "drivers"):
+    for field in ("system", "repetitions"):
         if baseline.get(field) != candidate.get(field):
             fail(f"comparison identity drift in {field}")
+    before_drivers = baseline.get("drivers")
+    after_drivers = candidate.get("drivers")
+    if not isinstance(before_drivers, dict) or not isinstance(after_drivers, dict):
+        fail("comparison driver identity is not an object")
+
+    def content_identity(drivers: dict[str, Any]) -> dict[str, Any]:
+        return {
+            name: {field: value for field, value in identity.items() if field != "path"}
+            for name, identity in drivers.items()
+            if isinstance(identity, dict)
+        }
+
+    if (
+        len(content_identity(before_drivers)) != len(before_drivers)
+        or len(content_identity(after_drivers)) != len(after_drivers)
+    ):
+        fail("comparison driver member identity is not an object")
+    if content_identity(before_drivers) != content_identity(after_drivers):
+        fail("comparison identity drift in drivers")
     before_policy = baseline.get("policy")
     after_policy = candidate.get("policy")
     if not isinstance(before_policy, dict) or not isinstance(after_policy, dict):

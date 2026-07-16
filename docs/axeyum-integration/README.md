@@ -68,8 +68,9 @@ retained-session contract are landed on branch `sec/axeyum-backend`:
   against equivalent snapshot topology but fails the serial-snapshot production
   time/RSS gate, so ADR-012 keeps it opt-in. ADR-013 adds exact copy-on-write
   source ancestry and safely restores serial sibling leasing; the new candidate
-  has a strict two-driver traffic calibration and still requires repeated
-  production measurement.
+  passes the strict repeated two-driver production gate and stays opt-in while
+  `tcpip`/`dxgkrnl` are added and an exclusive-control Z3-drift alarm is
+  resolved.
 - Findings + full feedback: `FEEDBACK-LOG.md`.
 
 The earlier 12x one-shot claim was a fast-failure artifact caused by

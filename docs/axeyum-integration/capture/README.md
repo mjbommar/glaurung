@@ -885,8 +885,37 @@ zero unknown/replay failures and identical findings. SurfacePen measures
 10.383 versus 52.531 seconds at 224,712 KiB. This is calibration, not release
 evidence. Compare the exclusive direct control using
 `--allow-direct-source-sibling-enablement`, and the production serial snapshot
-using `--allow-serial-snapshot-to-source-direct`. Three clean processes per
-driver remain mandatory.
+using `--allow-serial-snapshot-to-source-direct`. The clean three-process result
+follows.
+
+The clean repeated source-prefix artifact is
+`lineage-direct-source-candidate-v1.json`
+(`ba006d2f8edfdf7754f09702ff172112c5ea3e1134669a7855f5a0a3343660cc`).
+Its six processes execute 92,721 checks with exact traffic and findings, 100%
+Z3 agreement, zero unknown/replay failures, terminal-zero gauges, and the 4 GiB
+child cap. Against the committed serial-snapshot production baseline:
+
+- SurfacePen Axeyum time improves 362.067→303.733 ms (-16.11%), normalized
+  ratio 17.39%, and median RSS 0.36%; Z3 drift is +1.55%.
+- NETwtw10 improves 10.868→10.209 seconds (-6.07%), ratio 6.61%, and median RSS
+  1.72%; Z3 drift is +0.58%.
+
+Every production alarm passes. A same-revision exclusive-direct control also
+shows large candidate gains (SurfacePen time/RSS -23.17%/-5.33%; NETwtw10
+-4.40%/-15.81%), but its SurfacePen Z3 drift is +4.06%, so the causal comparator
+correctly rejects it. Do not waive that alarm or claim the causal control
+accepted.
+
+Comparison identity now excludes only the absolute driver `path`; content hash,
+byte length, solve budget, driver membership, system, and repetitions remain
+exact. This matches the standing provenance contract and lets clean detached
+worktrees compare to main-worktree artifacts without weakening byte identity.
+
+The next widening tier is the reported `tcpip` (33,501 checks, 2.5x one-process
+speedup) and `dxgkrnl` (17,572 checks, 4.7x) streams. Their initial 51,073 checks
+have zero disagreements but are not repeated/RSS-gated. `win32k`/`pciidex` emit
+zero solver queries and are excluded from solver evidence; inspect dispatch
+recovery before attempting to admit them.
 
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-

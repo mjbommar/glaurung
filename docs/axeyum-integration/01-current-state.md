@@ -205,5 +205,6 @@ its correctness and a causal win over equivalent snapshot topology, but rejects
 production admission against serial snapshot on SurfacePen time and NETwtw10
 RSS. ADR-013 now lands exact copy-on-write source ancestry and restores safe
 serial sibling leasing for the direct candidate. Its fail-closed two-driver
-traffic contract and one-process calibration are green; repeated real-driver
-time/RSS admission is the remaining gate. See `05` R1.
+traffic contract and repeated production comparison are green, but direct stays
+opt-in pending repeated `tcpip`/`dxgkrnl` widening and resolution of the
+exclusive-control Z3-drift alarm. See `05` R1.
