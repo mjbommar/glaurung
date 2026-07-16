@@ -320,6 +320,26 @@ fn warm_owner_transfer_enabled() -> bool {
     }
 }
 
+fn warm_serial_sibling_reuse_enabled() -> bool {
+    #[cfg(feature = "solver-axeyum")]
+    {
+        crate::symbolic::solver::axeyum_backend::warm_serial_sibling_reuse_enabled()
+    }
+    #[cfg(not(feature = "solver-axeyum"))]
+    {
+        false
+    }
+}
+
+fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
+    #[cfg(feature = "solver-axeyum")]
+    crate::symbolic::solver::axeyum_backend::share_serial_warm_owner_with_children(
+        path_id, children,
+    );
+    #[cfg(not(feature = "solver-axeyum"))]
+    let _ = (path_id, children);
+}
+
 /// One in-flight path: a machine snapshot, its program counter, the path
 /// condition, and the per-path bookkeeping the lifecycle detectors need.
 #[derive(Clone)]
@@ -405,13 +425,18 @@ impl State {
         pc_if_true: u64,
         pc_if_false: u64,
         transfer_warm_owner: bool,
+        serial_sibling_reuse: bool,
     ) -> [(bool, Self); 2] {
-        let first = self.fork(pc_if_true);
-        let next = if transfer_warm_owner {
+        let mut first = self.fork(pc_if_true);
+        let mut next = if transfer_warm_owner && !serial_sibling_reuse {
             self.fork_transferring_warm_owner(pc_if_false)
         } else {
             self.fork(pc_if_false)
         };
+        if serial_sibling_reuse {
+            first.warm_path_id = self.warm_path_id;
+            next.warm_path_id = self.warm_path_id;
+        }
         [(true, first), (false, next)]
     }
 
@@ -575,7 +600,9 @@ fn consider_terminal(st: &State, best: &mut Option<State>) {
         return;
     }
     if best.as_ref().is_none_or(|b| progress(b) < p) {
-        *best = Some(st.clone());
+        let mut candidate = st.clone();
+        candidate.warm_path_id = next_warm_path_id();
+        *best = Some(candidate);
     }
 }
 
@@ -748,11 +775,16 @@ fn process_block(
                         // satisfiable on its own), so the feasibility solve can be
                         // skipped — the common case of branching on a fresh field.
                         let independent = can_skip_feasibility_check(&st, c);
+                        let serial_sibling_reuse = warm_serial_sibling_reuse_enabled();
+                        if serial_sibling_reuse {
+                            share_serial_warm_owner_with_children(st.warm_path_id, 2);
+                        }
                         let mut out = Vec::new();
                         for (bit, mut child) in st.fork_branch_successors(
                             pc_if_true,
                             pc_if_false,
                             warm_owner_transfer_enabled(),
+                            serial_sibling_reuse,
                         ) {
                             child.assert((c, bit), "branch", ins.va);
                             let feasible = independent
@@ -1765,7 +1797,7 @@ mod tests {
         let original_owner = parent.warm_path_id;
 
         let [(first_bit, first), (next_bit, next)] =
-            parent.fork_branch_successors(0x2000, 0x3000, true);
+            parent.fork_branch_successors(0x2000, 0x3000, true, false);
 
         assert!(first_bit);
         assert!(!next_bit);
@@ -1774,6 +1806,22 @@ mod tests {
         assert_ne!(parent.warm_path_id, original_owner);
         assert_ne!(first.warm_path_id, parent.warm_path_id);
         assert_ne!(first.warm_path_id, next.warm_path_id);
+    }
+
+    #[test]
+    fn serial_sibling_reuse_keeps_one_logical_owner() {
+        let machine = Machine::new(Symbolic::new());
+        let mut parent = State::root(machine, 0x1000, TaintSpec::new());
+        let owner = parent.warm_path_id;
+
+        let [(first_bit, first), (next_bit, next)] =
+            parent.fork_branch_successors(0x2000, 0x3000, true, true);
+
+        assert!(first_bit);
+        assert!(!next_bit);
+        assert_eq!(parent.warm_path_id, owner);
+        assert_eq!(first.warm_path_id, owner);
+        assert_eq!(next.warm_path_id, owner);
     }
 
     /// The solver budget bails out of a runaway exploration. The block loops to

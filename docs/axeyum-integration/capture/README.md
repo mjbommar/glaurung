@@ -413,6 +413,27 @@ drift is -0.62%. Every alarm passes, so LIFO transfer is the downstream default
 with explicit off retained. The lineage gate exposes `--warm-owner-transfer`
 and a named comparison flag for future family revalidation.
 
+`GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE=on` is ADR-0199's explicit,
+off-by-default continuation candidate and is admitted only with adaptive warm
+reuse. Because Glaurung's DFS worklist executes one state at a time, sibling
+continuations may serially lease one logical owner while the existing snapshot
+adapter restores each complete assertion vector through exact LCP/pop/push.
+Reference counting prevents parent or infeasible-child cleanup from closing a
+session while a queued sibling remains. No solver executes concurrently, every
+check and original replay still runs, and `[axeyum-serial-owner]` must finish
+with zero tracked owners/references.
+
+The first SurfacePen smoke is 2,551/2,551 agreed with zero replay failures,
+43 created/closed sessions, peak one live session, 165 share events, peak 11
+logical references, and zero terminal session/cache/reference gauges. Axeyum
+measures 369.6 ms at 74,288 KiB RSS. The diagnostic profile attributes the
+mechanism against the no-fallback ADR-0196 lineage control: created sessions
+fall 79.2%, AIG nodes 88.0%, clauses 77.0%, bit blast 82.4%, CNF 66.8%, and
+internal total 15.2%. SAT rises 36.2% in the larger retained database and is
+47.2% of candidate time. These are single runs, not acceptance evidence; keep
+the candidate off until the repeated two-driver correctness/time/ratio/RSS
+gate passes.
+
 `GLAURUNG_AXEYUM_WARM_REUSE=auto` is GQ9's retained low-memory
 detected-reuse control.
 The first check on a path stays one-shot and retains only the explorer-owned

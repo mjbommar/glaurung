@@ -430,6 +430,7 @@ fn main() {
             let auto = glaurung::symbolic::solver::axeyum_backend::auto_lineage_reuse_stats();
             let adaptive =
                 glaurung::symbolic::solver::axeyum_backend::adaptive_lineage_reuse_stats();
+            let serial = glaurung::symbolic::solver::axeyum_backend::serial_sibling_reuse_stats();
             let sat_cache = glaurung::symbolic::solver::axeyum_backend::replay_sat_cache_stats();
             if warm.checks > 0
                 || paths.path_limit_fallbacks > 0
@@ -485,6 +486,15 @@ fn main() {
                     adaptive.expansions,
                     adaptive.initial_live_paths,
                     adaptive.pressure_threshold,
+                );
+            }
+            if serial.share_events > 0 || serial.references > 0 {
+                eprintln!(
+                    "[axeyum-serial-owner] share-events={} tracked-owners={} references={} peak-references={}",
+                    serial.share_events,
+                    serial.tracked_owners,
+                    serial.references,
+                    serial.peak_references,
                 );
             }
         }

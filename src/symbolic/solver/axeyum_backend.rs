@@ -42,6 +42,7 @@ const SOLVE_TIMEOUT: Duration = Duration::from_millis(250);
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
 pub(crate) const WARM_OWNER_TRANSFER_ENV: &str = "GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER";
+pub(crate) const WARM_SERIAL_SIBLING_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE";
 const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING";
 pub(crate) const REPLAY_SAT_CACHE_ENV: &str = "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
@@ -71,6 +72,10 @@ static WARM_AUTO_PROBES: AtomicU64 = AtomicU64::new(0);
 static WARM_AUTO_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 static WARM_ADAPTIVE_PRESSURE_EVENTS: AtomicU64 = AtomicU64::new(0);
 static WARM_ADAPTIVE_EXPANSIONS: AtomicU64 = AtomicU64::new(0);
+static WARM_SERIAL_SHARE_EVENTS: AtomicU64 = AtomicU64::new(0);
+static WARM_SERIAL_TRACKED_OWNERS: AtomicU64 = AtomicU64::new(0);
+static WARM_SERIAL_REFERENCES: AtomicU64 = AtomicU64::new(0);
+static WARM_SERIAL_PEAK_REFERENCES: AtomicU64 = AtomicU64::new(0);
 static WARM_REUSE_LIMITS: OnceLock<WarmReuseLimits> = OnceLock::new();
 static REPLAY_SAT_CACHE_POLICY: OnceLock<Option<ReplayCheckedSatCachePolicy>> = OnceLock::new();
 static REPLAY_SAT_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
@@ -103,6 +108,11 @@ thread_local! {
     /// constant-size-per-path admission probe; it retains no arena or solver.
     static AUTO_LINEAGE_ADMISSION: RefCell<AutoLineageAdmission> =
         RefCell::new(AutoLineageAdmission::default());
+    /// Logical references held by the active DFS state and its queued sibling
+    /// continuations. One thread executes them serially; this is lifecycle
+    /// bookkeeping, not concurrent solver access.
+    static SERIAL_WARM_OWNER_LEASES: RefCell<SerialWarmOwnerLeases> =
+        RefCell::new(SerialWarmOwnerLeases::default());
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +178,23 @@ fn parse_warm_owner_transfer(value: Option<&str>) -> bool {
         Some(value) if value.eq_ignore_ascii_case("off") => false,
         Some(value) if value.eq_ignore_ascii_case("false") => false,
         Some("0") => false,
+        Some(value) if value.eq_ignore_ascii_case("on") => true,
+        Some(value) if value.eq_ignore_ascii_case("true") => true,
+        Some("1") => true,
+        Some(_) => false,
+    }
+}
+
+pub(crate) fn warm_serial_sibling_reuse_enabled() -> bool {
+    warm_reuse_policy() == WarmReusePolicy::Adaptive
+        && parse_warm_serial_sibling_reuse(
+            std::env::var(WARM_SERIAL_SIBLING_REUSE_ENV).ok().as_deref(),
+        )
+}
+
+fn parse_warm_serial_sibling_reuse(value: Option<&str>) -> bool {
+    match value {
+        None => false,
         Some(value) if value.eq_ignore_ascii_case("on") => true,
         Some(value) if value.eq_ignore_ascii_case("true") => true,
         Some("1") => true,
@@ -1147,6 +1174,74 @@ impl AutoLineageAdmission {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SerialLeaseRelease {
+    Untracked,
+    Retained,
+    Final,
+}
+
+/// Reference counts for one serial DFS owner's active and queued states.
+#[derive(Debug, Default)]
+struct SerialWarmOwnerLeases {
+    references: BTreeMap<u64, u64>,
+}
+
+impl SerialWarmOwnerLeases {
+    fn share_with_children(&mut self, path_id: u64, children: u64) -> (bool, u64) {
+        let newly_tracked = !self.references.contains_key(&path_id);
+        let references = self.references.entry(path_id).or_insert(1);
+        *references = references.saturating_add(children);
+        (newly_tracked, *references)
+    }
+
+    fn release(&mut self, path_id: u64) -> SerialLeaseRelease {
+        let Some(references) = self.references.get_mut(&path_id) else {
+            return SerialLeaseRelease::Untracked;
+        };
+        *references = references.saturating_sub(1);
+        if *references == 0 {
+            self.references.remove(&path_id);
+            SerialLeaseRelease::Final
+        } else {
+            SerialLeaseRelease::Retained
+        }
+    }
+}
+
+pub(crate) fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
+    debug_assert!(children > 0);
+    let (newly_tracked, references) = SERIAL_WARM_OWNER_LEASES
+        .with(|leases| leases.borrow_mut().share_with_children(path_id, children));
+    WARM_SERIAL_SHARE_EVENTS.fetch_add(1, Ordering::Relaxed);
+    let added = if newly_tracked {
+        WARM_SERIAL_TRACKED_OWNERS.fetch_add(1, Ordering::Relaxed);
+        children.saturating_add(1)
+    } else {
+        children
+    };
+    let current = WARM_SERIAL_REFERENCES
+        .fetch_add(added, Ordering::Relaxed)
+        .saturating_add(added);
+    debug_assert!(current >= references);
+    WARM_SERIAL_PEAK_REFERENCES.fetch_max(current, Ordering::Relaxed);
+}
+
+fn release_serial_warm_owner(path_id: u64) -> bool {
+    match SERIAL_WARM_OWNER_LEASES.with(|leases| leases.borrow_mut().release(path_id)) {
+        SerialLeaseRelease::Untracked => true,
+        SerialLeaseRelease::Retained => {
+            WARM_SERIAL_REFERENCES.fetch_sub(1, Ordering::Relaxed);
+            false
+        }
+        SerialLeaseRelease::Final => {
+            WARM_SERIAL_REFERENCES.fetch_sub(1, Ordering::Relaxed);
+            WARM_SERIAL_TRACKED_OWNERS.fetch_sub(1, Ordering::Relaxed);
+            true
+        }
+    }
+}
+
 impl LineageIncrementalAxeyumSolver {
     fn has_path(&self, path_id: u64) -> bool {
         self.paths.contains_key(&path_id)
@@ -1223,7 +1318,12 @@ pub(crate) fn check_warm_thread_local(
             };
             let limits = warm_reuse_limits();
             if count(asserts.len()) > limits.max_assertions_per_path {
-                close_warm_path(path_id);
+                // A serial sibling continuation may still need this owner's
+                // retained prefix. The oversized active state falls back
+                // one-shot, then releases its lease only at real termination.
+                if !warm_serial_sibling_reuse_enabled() {
+                    close_warm_path(path_id);
+                }
                 WARM_ASSERTION_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
                 return AxeyumSolver::new().check(pool, asserts);
             }
@@ -1374,6 +1474,9 @@ pub(crate) fn close_warm_path(path_id: u64) {
     ) {
         return;
     }
+    if !release_serial_warm_owner(path_id) {
+        return;
+    }
     AUTO_LINEAGE_ADMISSION.with(|admission| {
         admission.borrow_mut().remove(path_id);
     });
@@ -1431,6 +1534,19 @@ pub struct AdaptiveLineageReuseStats {
     pub pressure_threshold: u64,
 }
 
+/// Process-wide lifecycle counters for the opt-in serial sibling lease.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SerialSiblingReuseStats {
+    /// Forks that created queued sibling references to one logical owner.
+    pub share_events: u64,
+    /// Owners with at least one active or queued reference.
+    pub tracked_owners: u64,
+    /// Active plus queued references across tracked owners.
+    pub references: u64,
+    /// Maximum tracked references observed at once.
+    pub peak_references: u64,
+}
+
 /// Returns process-wide lineage ownership counters.
 pub fn warm_path_reuse_stats() -> WarmPathReuseStats {
     let limits = warm_reuse_limits();
@@ -1461,6 +1577,16 @@ pub fn adaptive_lineage_reuse_stats() -> AdaptiveLineageReuseStats {
         expansions: WARM_ADAPTIVE_EXPANSIONS.load(Ordering::Relaxed),
         initial_live_paths: ADAPTIVE_INITIAL_LIVE_PATHS,
         pressure_threshold: ADAPTIVE_PRESSURE_THRESHOLD,
+    }
+}
+
+/// Returns lifecycle counters for the opt-in serial sibling lease.
+pub fn serial_sibling_reuse_stats() -> SerialSiblingReuseStats {
+    SerialSiblingReuseStats {
+        share_events: WARM_SERIAL_SHARE_EVENTS.load(Ordering::Relaxed),
+        tracked_owners: WARM_SERIAL_TRACKED_OWNERS.load(Ordering::Relaxed),
+        references: WARM_SERIAL_REFERENCES.load(Ordering::Relaxed),
+        peak_references: WARM_SERIAL_PEAK_REFERENCES.load(Ordering::Relaxed),
     }
 }
 
@@ -2258,6 +2384,46 @@ mod tests {
     }
 
     #[test]
+    fn serial_sibling_snapshots_pop_divergence_and_replay_originals() {
+        let mut root = ExprPool::new();
+        let x = root.fresh_symbol(Width::W32);
+        let six = c(&mut root, 6, Width::W32);
+        let below_six = cmp(&mut root, CmpOp::Ult, x, six, Width::W32);
+
+        let mut left = root.clone();
+        let five = c(&mut left, 5, Width::W32);
+        let x_is_five = cmp(&mut left, CmpOp::Eq, x, five, Width::W32);
+        let mut right = root.clone();
+        let seven = c(&mut right, 7, Width::W32);
+        let x_is_seven = cmp(&mut right, CmpOp::Eq, x, seven, Width::W32);
+
+        let left_snapshot = [(below_six, true), (x_is_five, true)];
+        let right_snapshot = [(below_six, true), (x_is_seven, true)];
+        let mut lineage = LineageIncrementalAxeyumSolver::default();
+        let owner = 19;
+
+        match lineage.check_path(owner, &left, &left_snapshot).0 {
+            SolveResult::Sat(model) => assert_eq!(model.values.get(&0), Some(&5)),
+            other => panic!("expected replayed left SAT model, got {other:?}"),
+        }
+        assert!(matches!(
+            lineage.check_path(owner, &right, &right_snapshot).0,
+            SolveResult::Unsat
+        ));
+        assert!(matches!(
+            lineage.check_path(owner, &left, &left_snapshot).0,
+            SolveResult::Sat(_)
+        ));
+
+        let stats = lineage.paths.get(&owner).unwrap().stats();
+        assert_eq!(stats.checks, 3);
+        assert_eq!(stats.prefix_assertions_reused, 2);
+        assert_eq!(stats.assertions_added, 4);
+        assert_eq!(stats.assertions_popped, 2);
+        assert_eq!(lineage.paths.len(), 1);
+    }
+
+    #[test]
     fn warm_resource_limits_fail_closed_and_reserve_atomically() {
         assert_eq!(parse_warm_limit(None, 9), 9);
         assert_eq!(parse_warm_limit(Some("17".to_owned()), 9), 17);
@@ -2324,6 +2490,30 @@ mod tests {
         assert!(parse_warm_owner_transfer(Some("1")));
         assert!(parse_warm_owner_transfer(Some("on")));
         assert!(parse_warm_owner_transfer(Some("TRUE")));
+    }
+
+    #[test]
+    fn serial_sibling_reuse_is_explicit_and_fail_closed() {
+        assert!(!parse_warm_serial_sibling_reuse(None));
+        for value in ["off", "false", "0", "unexpected"] {
+            assert!(!parse_warm_serial_sibling_reuse(Some(value)));
+        }
+        for value in ["on", "true", "1", "TRUE"] {
+            assert!(parse_warm_serial_sibling_reuse(Some(value)));
+        }
+    }
+
+    #[test]
+    fn serial_owner_lease_closes_only_after_nested_continuations() {
+        let mut leases = SerialWarmOwnerLeases::default();
+        assert_eq!(leases.share_with_children(7, 2), (true, 3));
+        assert_eq!(leases.share_with_children(7, 2), (false, 5));
+        for _ in 0..4 {
+            assert_eq!(leases.release(7), SerialLeaseRelease::Retained);
+        }
+        assert_eq!(leases.release(7), SerialLeaseRelease::Final);
+        assert_eq!(leases.release(7), SerialLeaseRelease::Untracked);
+        assert!(leases.references.is_empty());
     }
 
     #[test]
