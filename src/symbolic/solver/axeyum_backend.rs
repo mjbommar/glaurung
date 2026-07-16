@@ -194,7 +194,10 @@ pub(crate) fn warm_serial_sibling_reuse_enabled() -> bool {
 
 fn parse_warm_serial_sibling_reuse(value: Option<&str>) -> bool {
     match value {
-        None => false,
+        None => true,
+        Some(value) if value.eq_ignore_ascii_case("off") => false,
+        Some(value) if value.eq_ignore_ascii_case("false") => false,
+        Some("0") => false,
         Some(value) if value.eq_ignore_ascii_case("on") => true,
         Some(value) if value.eq_ignore_ascii_case("true") => true,
         Some("1") => true,
@@ -2493,8 +2496,8 @@ mod tests {
     }
 
     #[test]
-    fn serial_sibling_reuse_is_explicit_and_fail_closed() {
-        assert!(!parse_warm_serial_sibling_reuse(None));
+    fn serial_sibling_reuse_is_default_on_and_fail_closed() {
+        assert!(parse_warm_serial_sibling_reuse(None));
         for value in ["off", "false", "0", "unexpected"] {
             assert!(!parse_warm_serial_sibling_reuse(Some(value)));
         }
