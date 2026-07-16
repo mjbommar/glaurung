@@ -300,6 +300,26 @@ rises to 267,232 KiB. This retains nine as the conservative live-session
 default and demonstrates that its fallback count is a deliberate memory/time
 tradeoff, not an error or undecided result.
 
+The wall-deadline process above is admission evidence, not a variance gate: a
+repeat fits 22,132 rather than 23,797 checks before the cutoff. The repeatable
+held-out tier instead uses `IOCTLANCE_SOLVE_BUDGET=20000`, a 400-second analysis
+deadline, the same 600-second per-analysis solver budget, and the hard 4 GiB
+cap. Three processes execute exactly 28,356 checks each with identical warm
+traffic: 20,031 retained checks, 1,285 exact snapshots, 529,071 prefix roots,
+247,311 added roots, 2,228 popped roots, 5,961 created/closed sessions, peak 9,
+8,325 path fallbacks, zero assertion fallbacks, and zero resets. All 85,068
+occurrences agree with Z3. Mean Axeyum/Z3 time is 18.771/52.086 seconds
+(0.360x); Axeyum population CV is 0.44%. Median RSS is 257,736 KiB (range
+257,512--257,996), and wall time is 79.05--79.22 seconds.
+
+SurfacePen also has a three-process default-policy tier. All 7,653 occurrences
+agree and every lifecycle/root/fallback counter is identical; there are zero
+fallbacks. Mean Axeyum/Z3 time is 1.069/4.409 seconds (0.243x), Axeyum
+population CV is 0.34%, and median RSS is 83,140 KiB. Together these repeated
+held-out tiers accept 9/512 as the explicit lineage envelope on every available
+driver that issues solver queries; they still do not select lineage
+automatically.
+
 Three alternating baseline/warm processes on 2026-07-15 each ran 13,126
 same-stream checks with 13,126 agreements, zero disagreements/unknown splits,
 identical findings, and zero warm resets. Median Axeyum time fell from 17.784
