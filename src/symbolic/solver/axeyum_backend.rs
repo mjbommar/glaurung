@@ -41,6 +41,7 @@ use crate::symbolic::solver::{Assert, Model, SolveResult, Solver, pipe};
 const SOLVE_TIMEOUT: Duration = Duration::from_millis(250);
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
+pub(crate) const WARM_OWNER_TRANSFER_ENV: &str = "GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER";
 const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING";
 pub(crate) const REPLAY_SAT_CACHE_ENV: &str = "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
@@ -155,6 +156,17 @@ fn parse_warm_reuse_policy(value: Option<&str>) -> WarmReusePolicy {
         Some(value) if value.eq_ignore_ascii_case("lineage") => WarmReusePolicy::Lineage,
         Some(_) => WarmReusePolicy::Snapshot,
     }
+}
+
+pub(crate) fn warm_owner_transfer_enabled() -> bool {
+    parse_warm_owner_transfer(std::env::var(WARM_OWNER_TRANSFER_ENV).ok().as_deref())
+}
+
+fn parse_warm_owner_transfer(value: Option<&str>) -> bool {
+    matches!(value, Some("1"))
+        || value.is_some_and(|value| {
+            value.eq_ignore_ascii_case("on") || value.eq_ignore_ascii_case("true")
+        })
 }
 
 fn replay_sat_cache_policy() -> Option<ReplayCheckedSatCachePolicy> {
@@ -2294,6 +2306,17 @@ mod tests {
             parse_warm_reuse_policy(Some("snapshot")),
             WarmReusePolicy::Snapshot
         );
+    }
+
+    #[test]
+    fn warm_owner_transfer_is_explicit_and_fail_closed() {
+        assert!(!parse_warm_owner_transfer(None));
+        assert!(!parse_warm_owner_transfer(Some("off")));
+        assert!(!parse_warm_owner_transfer(Some("false")));
+        assert!(!parse_warm_owner_transfer(Some("unexpected")));
+        assert!(parse_warm_owner_transfer(Some("1")));
+        assert!(parse_warm_owner_transfer(Some("on")));
+        assert!(parse_warm_owner_transfer(Some("TRUE")));
     }
 
     #[test]

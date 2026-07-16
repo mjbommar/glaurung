@@ -309,6 +309,17 @@ fn next_warm_path_id() -> u64 {
     NEXT_WARM_PATH_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+fn warm_owner_transfer_enabled() -> bool {
+    #[cfg(feature = "solver-axeyum")]
+    {
+        crate::symbolic::solver::axeyum_backend::warm_owner_transfer_enabled()
+    }
+    #[cfg(not(feature = "solver-axeyum"))]
+    {
+        false
+    }
+}
+
 /// One in-flight path: a machine snapshot, its program counter, the path
 /// condition, and the per-path bookkeeping the lifecycle detectors need.
 #[derive(Clone)]
@@ -379,6 +390,29 @@ impl State {
             trace: self.trace.as_ref().map(|trace| trace.fork(pc)),
             warm_path_id: next_warm_path_id(),
         }
+    }
+
+    fn fork_transferring_warm_owner(&mut self, pc: u64) -> Self {
+        let mut child = self.fork(pc);
+        std::mem::swap(&mut self.warm_path_id, &mut child.warm_path_id);
+        child
+    }
+
+    /// Returns successors in worklist insertion order. The worklist is LIFO,
+    /// so an enabled transfer targets only the second/next-executed child.
+    fn fork_branch_successors(
+        &mut self,
+        pc_if_true: u64,
+        pc_if_false: u64,
+        transfer_warm_owner: bool,
+    ) -> [(bool, Self); 2] {
+        let first = self.fork(pc_if_true);
+        let next = if transfer_warm_owner {
+            self.fork_transferring_warm_owner(pc_if_false)
+        } else {
+            self.fork(pc_if_false)
+        };
+        [(true, first), (false, next)]
     }
 
     /// Add one persistent path assertion and its matching trace scope.
@@ -715,8 +749,11 @@ fn process_block(
                         // skipped — the common case of branching on a fresh field.
                         let independent = can_skip_feasibility_check(&st, c);
                         let mut out = Vec::new();
-                        for (bit, npc) in [(true, pc_if_true), (false, pc_if_false)] {
-                            let mut child = st.fork(npc);
+                        for (bit, mut child) in st.fork_branch_successors(
+                            pc_if_true,
+                            pc_if_false,
+                            warm_owner_transfer_enabled(),
+                        ) {
                             child.assert((c, bit), "branch", ins.va);
                             let feasible = independent
                                 || !matches!(
@@ -1719,6 +1756,24 @@ mod tests {
         root.restart_trace();
         assert_ne!(root.warm_path_id, original);
         assert_ne!(root.warm_path_id, child.warm_path_id);
+    }
+
+    #[test]
+    fn warm_owner_transfer_targets_the_next_lifo_successor_only() {
+        let machine = Machine::new(Symbolic::new());
+        let mut parent = State::root(machine, 0x1000, TaintSpec::new());
+        let original_owner = parent.warm_path_id;
+
+        let [(first_bit, first), (next_bit, next)] =
+            parent.fork_branch_successors(0x2000, 0x3000, true);
+
+        assert!(first_bit);
+        assert!(!next_bit);
+        assert_ne!(first.warm_path_id, original_owner);
+        assert_eq!(next.warm_path_id, original_owner);
+        assert_ne!(parent.warm_path_id, original_owner);
+        assert_ne!(first.warm_path_id, parent.warm_path_id);
+        assert_ne!(first.warm_path_id, next.warm_path_id);
     }
 
     /// The solver budget bails out of a runaway exploration. The block loops to

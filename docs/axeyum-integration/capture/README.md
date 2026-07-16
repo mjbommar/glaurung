@@ -349,6 +349,26 @@ separate solvers. Terminal paths release their sessions, and stateful restarts
 receive a fresh owner. A solve outside the explorer's explicit path context
 falls back to one-shot rather than guessing ownership.
 
+`GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER=on` is ADR-0196's explicit/off-by-default
+fork-topology candidate. At a symbolic fork, only the last-pushed successor —
+the one the DFS worklist executes next — inherits the terminal parent's
+retained solver owner. The earlier sibling receives a fresh owner, so mutable
+SAT/scopes/cache state is never shared. The parent swaps to an unused fresh ID,
+allowing ordinary terminal cleanup without closing the transferred solver.
+Unset, `off`, invalid values, and non-Axeyum builds retain fresh owners for both
+children.
+
+The first ownership-only v1 transferred to the earlier child and failed: that
+session sat dormant behind the sibling subtree, drove adaptive pressure, put
+SurfacePen above its RSS alarm, and regressed NETwtw10 Axeyum time about 9.4%.
+The LIFO-aligned v2 calibration reverses the mechanism. SurfacePen fallbacks
+drop 87→16 and Axeyum measures 446.0 ms / 77,580 KiB; NETwtw10 fallbacks drop
+7,976→2,536 and Axeyum measures 11,020.0 ms / 259,044 KiB. All 30,907 combined
+calibration checks agree and replay failures are zero. These are single runs,
+not acceptance evidence. The lineage gate exposes `--warm-owner-transfer`
+and a named comparison flag; keep the feature off until the repeated adaptive/
+cache-on two-driver artifact passes.
+
 `GLAURUNG_AXEYUM_WARM_REUSE=auto` is GQ9's retained low-memory
 detected-reuse control.
 The first check on a path stays one-shot and retains only the explorer-owned

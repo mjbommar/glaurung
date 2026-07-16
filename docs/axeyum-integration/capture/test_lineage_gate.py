@@ -305,6 +305,35 @@ class LineageGateTests(unittest.TestCase):
         )
         self.assertEqual(summaries["surface"]["runs"], 1)
 
+    def test_validate_accepts_exact_adaptive_owner_transfer_partition(self) -> None:
+        spec = lineage_gate.DRIVERS["surface"]
+        run = {
+            "driver": "surface",
+            "repetition": 1,
+            "queries": spec.expected_queries,
+            "agree": spec.expected_queries,
+            "disagree": 0,
+            "unknown_split": 0,
+            "z3_ms": 4_366.1,
+            "axeyum_ms": 446.0,
+            "warm": dict(spec.expected_adaptive_transfer_warm),
+            "adaptive": dict(spec.expected_adaptive_transfer),
+            "max_rss_kib": 77_580,
+            "stdout_sha256": "a" * 64,
+        }
+        summaries = lineage_gate.validate_artifact(
+            {
+                "schema": lineage_gate.SCHEMA,
+                "policy": {
+                    "warm_reuse": "adaptive",
+                    "warm_owner_transfer": "on",
+                },
+                "repetitions": 1,
+                "runs": [run],
+            }
+        )
+        self.assertEqual(summaries["surface"]["runs"], 1)
+
     def test_thresholds_distinguish_regression_from_environment_drift(self) -> None:
         comparison = {
             "surface": {
@@ -367,12 +396,47 @@ class LineageGateTests(unittest.TestCase):
             "warm_reuse": "adaptive",
             "replay_sat_cache": "on",
         }
-        with self.assertRaisesRegex(ValueError, "cache comparison"):
+        with self.assertRaisesRegex(ValueError, "outside named policy"):
             lineage_gate.validate_comparison_identity(
                 baseline,
                 candidate,
                 allow_lineage_to_adaptive=False,
                 allow_replay_sat_cache_enablement=True,
+            )
+
+    def test_cross_policy_identity_allows_only_named_owner_transfer(self) -> None:
+        baseline = {
+            "system": {"machine": "x86_64"},
+            "policy": {
+                "warm_reuse": "adaptive",
+                "warm_owner_transfer": "off",
+            },
+            "repetitions": 3,
+            "drivers": {"surface": {"sha256": "a" * 64}},
+        }
+        candidate = {
+            **baseline,
+            "policy": {
+                "warm_reuse": "adaptive",
+                "warm_owner_transfer": "on",
+            },
+        }
+        lineage_gate.validate_comparison_identity(
+            baseline,
+            candidate,
+            allow_lineage_to_adaptive=False,
+            allow_warm_owner_transfer_enablement=True,
+        )
+        candidate["policy"] = {
+            "warm_reuse": "lineage",
+            "warm_owner_transfer": "on",
+        }
+        with self.assertRaisesRegex(ValueError, "outside named policy"):
+            lineage_gate.validate_comparison_identity(
+                baseline,
+                candidate,
+                allow_lineage_to_adaptive=False,
+                allow_warm_owner_transfer_enablement=True,
             )
 
 
