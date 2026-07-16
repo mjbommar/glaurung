@@ -162,11 +162,11 @@ fn to_bv<'c>(
             cond.ite(&BV::from_u64(ctx, 1, 1), &BV::from_u64(ctx, 0, 1))
         }
         Expr::ZExt { a, from, to } => {
-            let a = to_bv(ctx, pool, a, memo);
+            let a = coerce(to_bv(ctx, pool, a, memo), from.bits() as u32);
             a.zero_ext((to.bits() - from.bits()) as u32)
         }
         Expr::SExt { a, from, to } => {
-            let a = to_bv(ctx, pool, a, memo);
+            let a = coerce(to_bv(ctx, pool, a, memo), from.bits() as u32);
             a.sign_ext((to.bits() - from.bits()) as u32)
         }
         Expr::Trunc { a, to } => {

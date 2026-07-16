@@ -24,15 +24,15 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    CheckResult, IncrementalBvSolver, IncrementalBvStats, SolverConfig, UnsatProofOutcome,
-    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value,
+    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, CheckResult,
+    IncrementalBvSolver, IncrementalBvStats, SolverConfig, UnsatProofOutcome,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{Assert, Model, SolveResult, Solver, pipe};
+use crate::symbolic::solver::{pipe, Assert, Model, SolveResult, Solver};
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
 /// and metering behave the same regardless of which backend is compiled in.
@@ -778,12 +778,12 @@ impl<'a> Translator<'a> {
                 self.bv1_of_bool(boolt)?
             }
             Expr::ZExt { a, from, to } => {
-                let ta = self.translate(a)?;
+                let ta = self.translate_coerced(a, from.bits() as u32)?;
                 let by = (to.bits() as u32).saturating_sub(from.bits() as u32);
                 self.arena.zero_ext(by, ta)?
             }
             Expr::SExt { a, from, to } => {
-                let ta = self.translate(a)?;
+                let ta = self.translate_coerced(a, from.bits() as u32)?;
                 let by = (to.bits() as u32).saturating_sub(from.bits() as u32);
                 self.arena.sign_ext(by, ta)?
             }
@@ -1236,6 +1236,20 @@ mod tests {
         let kss = c(&mut p, 0xFFFF, Width::W16);
         let pred_s = cmp(&mut p, CmpOp::Eq, s, kss, Width::W16);
         expect_pred(&p, pred_s, true);
+    }
+
+    #[test]
+    fn native_extension_coerces_to_declared_source_width() {
+        let mut p = ExprPool::new();
+        let wide = c(&mut p, 0x1_0000_0001, Width::W64);
+        let z = p.intern(Expr::ZExt {
+            a: wide,
+            from: Width::W32,
+            to: Width::W64,
+        });
+        let low = c(&mut p, 1, Width::W64);
+        let pred = cmp(&mut p, CmpOp::Eq, z, low, Width::W64);
+        expect_pred(&p, pred, true);
     }
 
     #[test]

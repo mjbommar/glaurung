@@ -201,12 +201,12 @@ impl ExprPool {
             Expr::ZExt { a, from, to } => format!(
                 "((_ zero_extend {}) {})",
                 to.bits() - from.bits(),
-                self.render_smtlib(*a)
+                self.render_coerced(*a, from.bits())
             ),
             Expr::SExt { a, from, to } => format!(
                 "((_ sign_extend {}) {})",
                 to.bits() - from.bits(),
-                self.render_smtlib(*a)
+                self.render_coerced(*a, from.bits())
             ),
             Expr::Trunc { a, to } => {
                 // Ensure the source is at least `to` bits before extracting.
@@ -360,6 +360,21 @@ mod tests {
             width: Width::W32,
         });
         assert_eq!(p.width_of(cmp), Width::W1);
+    }
+
+    #[test]
+    fn extension_rendering_coerces_to_declared_source_width() {
+        let mut p = ExprPool::new();
+        let wide = p.constant(Width::W64, 0x1_0000_0001);
+        let z = p.intern(Expr::ZExt {
+            a: wide,
+            from: Width::W32,
+            to: Width::W64,
+        });
+        assert_eq!(
+            p.render_smtlib(z),
+            "((_ zero_extend 32) ((_ extract 31 0) (_ bv4294967297 64)))"
+        );
     }
 
     #[test]
