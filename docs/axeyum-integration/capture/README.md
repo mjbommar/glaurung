@@ -306,6 +306,16 @@ time. The 207 created warm owners consume 78.4% of warm bit blast and 70.7% of
 warm CNF; retained owners consume 94.7% of warm SAT. This is diagnostic
 attribution, not a replacement for the repeated unprofiled ADR-0196 gate.
 
+ADR-0198 tests the obvious admission response without adding a new policy knob.
+On SurfacePen the fixed-lineage ceiling peaks at exactly three live owners, so
+it has the same observed admission behavior as an adaptive initial cap of
+three: zero fallbacks, 207 created/closed owners, and zero terminal state.
+Three order-balanced runs improve mean Axeyum time 436.733→412.733 ms (-5.50%)
+and ratio 6.30%, but median RSS rises 78,708→84,736 KiB (+7.66%) and fails the
+5% alarm. The adaptive initial cap remains two. Do not spend a held-out gate or
+new configuration surface on this rejected candidate; fresh-sibling/fallback
+reuse must avoid retaining or sharing a third mutable solver.
+
 The first clean three-driver lineage profile at Glaurung `49f1fe2` plus the
 profiling worktree records exactly 6,986/6,986 decided checks, 5,102 unique
 query hashes, 2,103 created path sessions, 88,476 added roots, 8,758,247 new
