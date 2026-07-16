@@ -193,6 +193,16 @@ and selects a causal test of Axeyum's empty warm-theory projection discovery on
 scalar QF_BV. That test must preserve complete user-symbol defaults and replay
 of every original root.
 
+ADR-0195 accepts that exact empty-theory gate. On the identical v6 stream,
+model completion falls 165.192 to 1.088 ms (-99.34%), total model lift falls
+175.049 to 10.379 ms (-94.07%), and profiled internal total falls 20.52%, with
+identical outcomes, models, AIG/CNF structure, path/cache traffic, and replay.
+The same-current unprofiled three-process gate improves median Axeyum time
+636.6 to 474.6 ms (-25.45%) and the ratio from about 0.147x to 0.108x Z3;
+median RSS falls 0.06% and Z3 drift is +1.19%. All 15,306 combined checks agree.
+Every non-empty array/UF projection class still takes the unchanged complete
+projection path.
+
 The first v5 SurfacePen profile changes the residual priority: replay is
 447.046 ms / 38.82% of internal time because the incremental solver formerly
 created a new ground-evaluator memo for every original root. Axeyum ADR-0193
