@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""Run and compare the fail-closed Glaurung/Axeyum lineage variance gate."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import pathlib
+import platform
+import re
+import resource
+import statistics
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from typing import Any
+
+SCHEMA = "glaurung-axeyum-lineage-gate-v1"
+DEFAULT_LIVE_PATHS = 9
+DEFAULT_ASSERTIONS = 512
+
+
+@dataclass(frozen=True)
+class DriverSpec:
+    name: str
+    filename: str
+    solve_budget: int
+    expected_queries: int
+    expected_warm: dict[str, int]
+
+
+DRIVERS = {
+    "surface": DriverSpec(
+        name="surface",
+        filename="windows-update-SurfacePenBleLcAddrAdaptationDriver.sys",
+        solve_budget=1_000_000,
+        expected_queries=2_551,
+        expected_warm={
+            "checks": 2_551,
+            "exact": 121,
+            "prefix-roots": 290_670,
+            "added": 19_467,
+            "popped": 147,
+            "resets": 0,
+            "paths-created": 358,
+            "paths-closed": 358,
+            "paths-live": 0,
+            "paths-peak": 4,
+            "path-cap-fallbacks": 0,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
+        },
+    ),
+    "netwtw10": DriverSpec(
+        name="netwtw10",
+        filename="windows-update-intel-wifi-NETwtw10.sys",
+        solve_budget=20_000,
+        expected_queries=28_356,
+        expected_warm={
+            "checks": 20_031,
+            "exact": 1_285,
+            "prefix-roots": 529_071,
+            "added": 247_311,
+            "popped": 2_228,
+            "resets": 0,
+            "paths-created": 5_961,
+            "paths-closed": 5_961,
+            "paths-live": 0,
+            "paths-peak": 9,
+            "path-cap-fallbacks": 8_325,
+            "assertion-cap-fallbacks": 0,
+            "max-live-paths": 9,
+            "max-assertions-per-path": 512,
+        },
+    ),
+}
+
+
+def fail(message: str) -> None:
+    raise ValueError(message)
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def command_output(*command: str) -> str:
+    return subprocess.run(
+        command, check=True, text=True, capture_output=True
+    ).stdout.strip()
+
+
+def git_identity(path: pathlib.Path, allow_dirty: bool) -> dict[str, Any]:
+    git = ("git", "-c", "safe.directory=*")
+    revision = command_output(*git, "-C", str(path), "rev-parse", "HEAD")
+    dirty_lines = command_output(
+        *git, "-C", str(path), "status", "--porcelain"
+    ).splitlines()
+    if dirty_lines and not allow_dirty:
+        fail(f"repository is dirty: {path}: {dirty_lines[:5]}")
+    return {"path": str(path.resolve()), "revision": revision, "dirty": dirty_lines}
+
+
+def parse_key_values(line: str, prefix: str) -> dict[str, int]:
+    if not line.startswith(prefix):
+        fail(f"missing {prefix} prefix")
+    values: dict[str, int] = {}
+    for token in line[len(prefix) :].strip().split():
+        if "=" not in token:
+            continue
+        key, raw = token.split("=", 1)
+        if not re.fullmatch(r"[0-9]+", raw):
+            fail(f"non-integer {prefix} field {key}={raw!r}")
+        values[key] = int(raw)
+    return values
+
+
+def parse_elapsed(raw: str) -> float:
+    parts = raw.split(":")
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return int(minutes) * 60 + float(seconds)
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    fail(f"invalid elapsed time: {raw!r}")
+
+
+def parse_run(stderr_path: pathlib.Path, time_path: pathlib.Path) -> dict[str, Any]:
+    stderr = stderr_path.read_text(errors="replace")
+    shadow_matches = re.findall(
+        r"^\[shadow-diff\] queries=(\d+) agree=(\d+) disagree=(\d+) \| "
+        r"SAME-STREAM z3=([0-9.]+)ms axeyum=([0-9.]+)ms speedup=([0-9.]+)x$",
+        stderr,
+        re.MULTILINE,
+    )
+    warm_lines = re.findall(r"^\[axeyum-warm\].*$", stderr, re.MULTILINE)
+    model_matches = re.findall(r"unknown-split=(\d+)$", stderr, re.MULTILINE)
+    if len(shadow_matches) != 1 or len(warm_lines) != 1 or len(model_matches) != 1:
+        fail(
+            "expected exactly one shadow/warm/model footer: "
+            f"shadow={len(shadow_matches)} warm={len(warm_lines)} model={len(model_matches)}"
+        )
+    queries, agree, disagree, z3_ms, axeyum_ms, _speedup = shadow_matches[0]
+    timing = time_path.read_text(errors="replace")
+    rss_matches = re.findall(r"Maximum resident set size \(kbytes\): (\d+)", timing)
+    elapsed_matches = re.findall(
+        r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\): ([0-9:.]+)", timing
+    )
+    if len(rss_matches) != 1 or len(elapsed_matches) != 1:
+        fail(f"expected exactly one RSS/elapsed record in {time_path}")
+    return {
+        "queries": int(queries),
+        "agree": int(agree),
+        "disagree": int(disagree),
+        "unknown_split": int(model_matches[0]),
+        "z3_ms": float(z3_ms),
+        "axeyum_ms": float(axeyum_ms),
+        "warm": parse_key_values(warm_lines[0], "[axeyum-warm]"),
+        "max_rss_kib": int(rss_matches[0]),
+        "wall_seconds": parse_elapsed(elapsed_matches[0]),
+    }
+
+
+def summarize(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    axeyum = [float(run["axeyum_ms"]) for run in runs]
+    z3 = [float(run["z3_ms"]) for run in runs]
+    rss = [int(run["max_rss_kib"]) for run in runs]
+    axeyum_mean = statistics.fmean(axeyum)
+    z3_mean = statistics.fmean(z3)
+    return {
+        "runs": len(runs),
+        "axeyum_mean_ms": axeyum_mean,
+        "z3_mean_ms": z3_mean,
+        "axeyum_z3_ratio": axeyum_mean / z3_mean,
+        "axeyum_population_cv": statistics.pstdev(axeyum) / axeyum_mean,
+        "z3_population_cv": statistics.pstdev(z3) / z3_mean,
+        "median_rss_kib": int(statistics.median(rss)),
+        "min_rss_kib": min(rss),
+        "max_rss_kib": max(rss),
+    }
+
+
+def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if artifact.get("schema") != SCHEMA:
+        fail(f"unexpected schema: {artifact.get('schema')!r}")
+    repetitions = artifact.get("repetitions")
+    if not isinstance(repetitions, int) or repetitions <= 0:
+        fail("repetitions must be a positive integer")
+    runs = artifact.get("runs")
+    if not isinstance(runs, list) or not runs:
+        fail("runs must be a non-empty array")
+    by_driver: dict[str, list[dict[str, Any]]] = {}
+    for run in runs:
+        if not isinstance(run, dict):
+            fail("run is not an object")
+        name = run.get("driver")
+        if name not in DRIVERS:
+            fail(f"unknown driver in artifact: {name!r}")
+        by_driver.setdefault(name, []).append(run)
+    summaries: dict[str, dict[str, Any]] = {}
+    for name, driver_runs in sorted(by_driver.items()):
+        spec = DRIVERS[name]
+        if len(driver_runs) != repetitions:
+            fail(f"{name}: expected {repetitions} runs, got {len(driver_runs)}")
+        driver_runs.sort(key=lambda run: run.get("repetition", -1))
+        stdout_hash = driver_runs[0].get("stdout_sha256")
+        for index, run in enumerate(driver_runs, 1):
+            if run.get("repetition") != index:
+                fail(f"{name}: non-contiguous repetition sequence")
+            if run.get("queries") != spec.expected_queries:
+                fail(f"{name} run {index}: query count drift: {run.get('queries')}")
+            if run.get("agree") != spec.expected_queries or run.get("disagree") != 0:
+                fail(f"{name} run {index}: agreement gate failed")
+            if run.get("unknown_split") != 0:
+                fail(f"{name} run {index}: unknown split is nonzero")
+            if run.get("warm") != spec.expected_warm:
+                fail(f"{name} run {index}: warm traffic drift: {run.get('warm')!r}")
+            if run.get("stdout_sha256") != stdout_hash:
+                fail(f"{name} run {index}: finding output drift")
+            warm = run["warm"]
+            if (
+                warm["checks"]
+                + warm["path-cap-fallbacks"]
+                + warm["assertion-cap-fallbacks"]
+                != run["queries"]
+            ):
+                fail(f"{name} run {index}: warm/fallback partition mismatch")
+        summaries[name] = summarize(driver_runs)
+    return summaries
+
+
+def memory_limiter(bytes_limit: int):
+    def limit() -> None:
+        resource.setrlimit(resource.RLIMIT_AS, (bytes_limit, bytes_limit))
+
+    return limit
+
+
+def run_gate(args: argparse.Namespace) -> None:
+    binary = pathlib.Path(args.binary).resolve()
+    sample_root = pathlib.Path(args.sample_root).resolve()
+    output = pathlib.Path(args.output).resolve()
+    axeyum_repo = pathlib.Path(args.axeyum_repo).resolve()
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        fail(f"binary is not executable: {binary}")
+    output.mkdir(parents=True, exist_ok=False)
+    selected = [DRIVERS[name] for name in args.driver]
+    sources = {
+        "glaurung": git_identity(pathlib.Path.cwd(), args.allow_dirty),
+        "axeyum": git_identity(axeyum_repo, args.allow_dirty),
+        "binary": {"path": str(binary), "sha256": sha256_file(binary)},
+    }
+    drivers = {}
+    for spec in selected:
+        path = sample_root / spec.filename
+        if not path.is_file():
+            fail(f"missing driver: {path}")
+        drivers[spec.name] = {
+            "path": str(path),
+            "sha256": sha256_file(path),
+            "bytes": path.stat().st_size,
+            "solve_budget": spec.solve_budget,
+        }
+    artifact: dict[str, Any] = {
+        "schema": SCHEMA,
+        "sources": sources,
+        "system": {
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "processor": platform.processor(),
+            "rustc": command_output("rustc", "-Vv"),
+        },
+        "policy": {
+            "warm_reuse": "lineage",
+            "max_live_paths": DEFAULT_LIVE_PATHS,
+            "max_assertions_per_path": DEFAULT_ASSERTIONS,
+            "analysis_deadline_seconds": 400,
+            "solver_seconds": 600,
+            "memory_limit_gib": args.memory_gib,
+        },
+        "repetitions": args.repetitions,
+        "drivers": drivers,
+        "runs": [],
+    }
+    bytes_limit = args.memory_gib * 1024**3
+    for spec in selected:
+        for repetition in range(1, args.repetitions + 1):
+            prefix = f"{spec.name}-r{repetition}"
+            stdout_path = output / f"{prefix}.stdout"
+            stderr_path = output / f"{prefix}.stderr"
+            time_path = output / f"{prefix}.time"
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "GLAURUNG_SHADOW_DIFF": "1",
+                    "GLAURUNG_AXEYUM_WARM_REUSE": "lineage",
+                    "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": str(DEFAULT_LIVE_PATHS),
+                    "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": str(
+                        DEFAULT_ASSERTIONS
+                    ),
+                    "IOCTLANCE_DEADLINE_SECS": "400",
+                    "IOCTLANCE_SOLVE_BUDGET": str(spec.solve_budget),
+                    "IOCTLANCE_SOLVE_SECS": "600",
+                }
+            )
+            command = [
+                "/usr/bin/time",
+                "-v",
+                "-o",
+                str(time_path),
+                str(binary),
+                str(sample_root / spec.filename),
+            ]
+            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                result = subprocess.run(
+                    command,
+                    env=environment,
+                    stdout=stdout,
+                    stderr=stderr,
+                    preexec_fn=memory_limiter(bytes_limit),
+                    check=False,
+                )
+            if result.returncode != 0:
+                fail(f"{spec.name} repetition {repetition} exited {result.returncode}")
+            run = parse_run(stderr_path, time_path)
+            run.update(
+                {
+                    "driver": spec.name,
+                    "repetition": repetition,
+                    "stdout_sha256": sha256_file(stdout_path),
+                    "stdout_path": stdout_path.name,
+                    "stderr_path": stderr_path.name,
+                    "time_path": time_path.name,
+                }
+            )
+            artifact["runs"].append(run)
+    artifact["summaries"] = validate_artifact(artifact)
+    destination = output / "lineage-gate-v1.json"
+    with tempfile.NamedTemporaryFile("w", dir=output, delete=False) as temporary:
+        json.dump(artifact, temporary, indent=2, sort_keys=True)
+        temporary.write("\n")
+        temporary_path = pathlib.Path(temporary.name)
+    temporary_path.replace(destination)
+    print(json.dumps(artifact["summaries"], indent=2, sort_keys=True))
+    print(f"artifact={destination}")
+
+
+def load_artifact(path: pathlib.Path) -> dict[str, Any]:
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        fail(f"artifact is not an object: {path}")
+    return value
+
+
+def compare_artifacts(args: argparse.Namespace) -> None:
+    baseline = load_artifact(pathlib.Path(args.baseline))
+    candidate = load_artifact(pathlib.Path(args.candidate))
+    baseline_summary = validate_artifact(baseline)
+    candidate_summary = validate_artifact(candidate)
+    for field in ("system", "policy", "repetitions", "drivers"):
+        if baseline.get(field) != candidate.get(field):
+            fail(f"comparison identity drift in {field}")
+    if set(baseline_summary) != set(candidate_summary):
+        fail("driver membership drift")
+    comparison = {}
+    for name in sorted(baseline_summary):
+        before_hashes = {
+            run["stdout_sha256"] for run in baseline["runs"] if run["driver"] == name
+        }
+        after_hashes = {
+            run["stdout_sha256"] for run in candidate["runs"] if run["driver"] == name
+        }
+        if before_hashes != after_hashes:
+            fail(f"{name}: finding output drift across artifacts")
+        before = baseline_summary[name]
+        after = candidate_summary[name]
+        comparison[name] = {
+            "axeyum_change": after["axeyum_mean_ms"] / before["axeyum_mean_ms"] - 1,
+            "ratio_change": after["axeyum_z3_ratio"] / before["axeyum_z3_ratio"] - 1,
+            "median_rss_change": after["median_rss_kib"] / before["median_rss_kib"] - 1,
+        }
+    print(json.dumps(comparison, indent=2, sort_keys=True))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    run = subparsers.add_parser("run", help="run the fixed-work held-out gate")
+    run.add_argument("--binary", required=True)
+    run.add_argument("--axeyum-repo", required=True)
+    run.add_argument(
+        "--sample-root", default="samples/binaries/platforms/windows/vendor/realworld"
+    )
+    run.add_argument("--output", required=True)
+    run.add_argument("--driver", choices=sorted(DRIVERS), action="append", default=[])
+    run.add_argument("--repetitions", type=int, default=3)
+    run.add_argument("--memory-gib", type=int, default=4)
+    run.add_argument("--allow-dirty", action="store_true")
+    validate = subparsers.add_parser("validate", help="validate one artifact")
+    validate.add_argument("artifact")
+    compare = subparsers.add_parser("compare", help="compare two homogeneous artifacts")
+    compare.add_argument("baseline")
+    compare.add_argument("candidate")
+    args = parser.parse_args()
+    try:
+        if args.command == "run":
+            if not args.driver:
+                args.driver = sorted(DRIVERS)
+            if args.repetitions <= 0 or args.memory_gib <= 0:
+                fail("repetitions and memory-gib must be positive")
+            run_gate(args)
+        elif args.command == "validate":
+            summary = validate_artifact(load_artifact(pathlib.Path(args.artifact)))
+            print(json.dumps(summary, indent=2, sort_keys=True))
+        else:
+            compare_artifacts(args)
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as error:
+        print(f"lineage gate failed: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

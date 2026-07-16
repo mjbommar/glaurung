@@ -320,6 +320,45 @@ held-out tiers accept 9/512 as the explicit lineage envelope on every available
 driver that issues solver queries; they still do not select lineage
 automatically.
 
+The committed runner turns that boundary into a fail-closed per-commit
+artifact. Run it from the Glaurung repository root with a release binary that
+contains both backends:
+
+```sh
+gate_dir=$(mktemp -d /tmp/glaurung-lineage-gate.XXXXXX)/artifact
+python3 docs/axeyum-integration/capture/lineage_gate.py run \
+  --binary target/release/examples/ioctlance \
+  --axeyum-repo /home/mjbommar/projects/personal/axeyum \
+  --output "$gate_dir"
+
+python3 docs/axeyum-integration/capture/lineage_gate.py validate \
+  "$gate_dir/lineage-gate-v1.json"
+```
+
+The default full tier runs three SurfacePen and three fixed-budget NETwtw10
+processes. Each child receives a hard 4 GiB address-space limit. The artifact
+records both git revisions and dirty paths, the binary/driver hashes, platform
+and Rust identity, every command policy, exact query/traffic/fallback counters,
+finding-output hashes, time, and RSS. Dirty repositories fail unless
+`--allow-dirty` is supplied for an explicitly exploratory artifact. Output is
+published atomically only after every run passes the expected-work,
+agreement/unknown, lifecycle, finding, and resource-identity gates.
+
+Compare two homogeneous artifacts fail-closed; source revisions and binary
+hashes may differ, while system, policy, driver bytes, work, findings, and
+repetition identity must match:
+
+```sh
+python3 docs/axeyum-integration/capture/lineage_gate.py compare \
+  /path/to/baseline/lineage-gate-v1.json \
+  /path/to/candidate/lineage-gate-v1.json
+```
+
+Use `--driver surface --repetitions 1 --allow-dirty` only as a fast plumbing
+smoke. It is not the repeated release gate. The exact traffic constants are
+schema-v1 acceptance identity; a deliberate Glaurung exploration change needs
+a new schema/evidence decision rather than silently comparing different work.
+
 Three alternating baseline/warm processes on 2026-07-15 each ran 13,126
 same-stream checks with 13,126 agreements, zero disagreements/unknown splits,
 identical findings, and zero warm resets. Median Axeyum time fell from 17.784
