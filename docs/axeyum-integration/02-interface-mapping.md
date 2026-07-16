@@ -27,10 +27,10 @@ first.
 - **glaurung is uniformly BV-typed.** Every `Expr` node has a `Width`.
   A `Cmp` node has width 1 (a BV1), and that BV1 can flow anywhere a BV
   operand is expected (e.g. as an `Ite` condition, or concatenated).
-  Asserts test truthiness: z3 backend lowers `assert(e, expected)` as
-  `e != 0` (== `expected`); the pipe backend lowers it as `e == (_ bv1 1)`
-  for expected-true. Since asserted `e` is width-1, `!= 0` and `== bv1`
-  coincide.
+  Asserts test arbitrary-width truthiness: every backend lowers expected-true
+  as `e != 0` and expected-false as `e == 0`, using `e`'s actual width. Most
+  branch predicates are BV1, but concretization/probe callers can assert a
+  wider value directly.
 - **axeyum separates `Sort::Bool` from `Sort::BitVec(1)`** with no implicit
   coercion, and `IncrementalBvSolver::assert` requires a **`Bool`** term
   (else `SolverError::NonBooleanAssertion`). axeyum's comparison builders
@@ -48,10 +48,10 @@ term uniformly, and bridge to `Bool` only at two boundaries:**
 2. **A glaurung `Ite` condition** (a BV1) is converted to Bool for axeyum's
    `ite`, which wants a Bool condition:
    `bool(c_bv1) := not(eq(c_bv1, bv_const(1,0)))`  (i.e. `c != 0`).
-3. **A top-level assert** `(ExprId e, bool expected)` becomes the axeyum
-   Bool `assert( eq( T(e), bv_const(width(e), expected?1:0) ) )` - mirroring
-   z3's `e != 0`/`e == 0` truthiness. Because asserted `e` is width-1, this
-   is `T(e) == bv1` / `T(e) == bv0`.
+3. **A top-level assert** `(ExprId e, bool expected)` becomes the axeyum Bool
+   `not(eq(T(e), bv_const(width(e), 0)))` when expected is true, or
+   `eq(T(e), bv_const(width(e), 0))` when expected is false. This exactly
+   mirrors z3 and remains well-sorted for BV1 and wider asserted values.
 
 Everywhere else the translation stays in BitVec, so glaurung's uniform-BV
 discipline is preserved and only these three boundaries touch Bool.

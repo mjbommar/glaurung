@@ -487,8 +487,11 @@ The published directory contains `trace-manifest-v1.json`, the non-deduplicated
 `assertions/<sha256>.smt2`, including terminal branches that never reach a
 check; assert events bind the canonical relative path and the manifest records
 the distinct assertion count. The same event carries the assertion's sorted
-free-symbol names and widths, so a consumer can type-check a root that never
-appears in a complete query. Every event has contiguous process/worker/path order.
+free-symbol names and widths plus `assertion_width`, so a consumer can
+type-check a root that never appears in a complete query. Assertion bytes use
+the native backends' arbitrary-width truthiness contract (`term != 0@width`
+for true, `term == 0@width` for false). Every event has contiguous
+process/worker/path order.
 Explorer roots and symbolic forks carry explicit parent lineage; every
 persistent branch/concretization and temporary probe has matching
 push/assert/check/pop history; SAT/UNSAT/unknown/error occurrences are retained;

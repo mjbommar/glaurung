@@ -21,12 +21,12 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::symbolic::expr::{ExprId, ExprPool};
-use crate::symbolic::solver::{pipe, Assert, SolveResult, SolveTiming};
+use crate::symbolic::solver::{Assert, SolveResult, SolveTiming, pipe};
 
 const VERSION: u64 = 1;
 const WORKER_ID: &str = "worker-0";
@@ -381,7 +381,7 @@ impl Recorder {
         let prior_depth = path.scopes.len();
         let scope_id = format!("scope-{}", self.next_scope);
         self.next_scope += 1;
-        let assertion_bytes = assertion_line(pool, assertion);
+        let assertion_bytes = pipe::assertion_line(pool, assertion);
         let constraint_id = sha256(assertion_bytes.as_bytes());
         let mut symbols = BTreeMap::new();
         pool.collect_syms(assertion.0, &mut symbols);
@@ -420,13 +420,12 @@ impl Recorder {
             scope_id: scope_id.clone(),
             constraint_id: constraint_id.clone(),
         });
-        let sort_valid = pool.width_of(assertion.0).bits() == 1;
+        let assertion_width = pool.width_of(assertion.0).bits();
+        let sort_valid = assertion_width > 0;
         if !sort_valid {
             self.fail(format!(
-                "assertion {} on {} has width {}, expected 1",
-                constraint_id,
-                path.path_id,
-                pool.width_of(assertion.0).bits()
+                "assertion {} on {} has zero width",
+                constraint_id, path.path_id
             ));
         }
         self.emit(
@@ -439,6 +438,7 @@ impl Recorder {
                 "assertion_sha256": sha256(assertion_bytes.as_bytes()),
                 "assertion_path": format!("assertions/{constraint_id}.smt2"),
                 "assertion_symbols": assertion_symbols,
+                "assertion_width": assertion_width,
                 "sort_validated": sort_valid,
                 "semantic_role": role,
                 "scope_digest": scope_digest(&path.scopes),
@@ -801,15 +801,6 @@ impl Recorder {
     }
 }
 
-fn assertion_line(pool: &ExprPool, assertion: Assert) -> String {
-    let bit = if assertion.1 {
-        "(_ bv1 1)"
-    } else {
-        "(_ bv0 1)"
-    };
-    format!("(assert (= {} {}))\n", pool.render_smtlib(assertion.0), bit)
-}
-
 fn scope_digest(scopes: &[ScopeRef]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"glaurung-scope-digest-v1\0");
@@ -1071,19 +1062,23 @@ mod tests {
             .iter()
             .filter(|row| row["event"] == "assert")
             .collect::<Vec<_>>();
-        assert!(assertions.iter().all(|row| row["assertion_path"]
-            .as_str()
-            .is_some_and(|path| path.starts_with("assertions/"))));
+        assert!(assertions.iter().all(|row| {
+            row["assertion_path"]
+                .as_str()
+                .is_some_and(|path| path.starts_with("assertions/"))
+        }));
         let index: Value = serde_json::from_slice(
             &fs::read(published.join("query-index-v1.json")).expect("read query index"),
         )
         .expect("query-index JSON");
         assert_eq!(index["queries"].as_array().expect("queries").len(), 2);
-        assert!(index["queries"]
-            .as_array()
-            .expect("queries")
-            .iter()
-            .any(|query| query["occurrences"].as_array().expect("occurrences").len() == 2));
+        assert!(
+            index["queries"]
+                .as_array()
+                .expect("queries")
+                .iter()
+                .any(|query| query["occurrences"].as_array().expect("occurrences").len() == 2)
+        );
 
         let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("docs/axeyum-integration/capture/validate_ordered_trace.py");
@@ -1093,5 +1088,52 @@ mod tests {
             .status()
             .expect("run ordered-trace validator");
         assert!(status.success(), "ordered-trace validator rejected fixture");
+    }
+
+    #[test]
+    fn publishes_width_safe_truthiness_for_wide_assertion() {
+        let output = tempfile::tempdir().expect("trace output");
+        let guard =
+            begin(output.path(), Path::new("wide-driver.sys"), b"driver").expect("start trace");
+        let mut pool = ExprPool::new();
+        let wide = pool.fresh_symbol(Width::W64);
+        let mut root = TracePath::root(0x1000).expect("root trace path");
+        root.push_assert(&pool, (wide, true), "wide-truthiness", 0x1000);
+        root.check(
+            &pool,
+            &[(wide, true)],
+            &SolveResult::Sat(Model::default()),
+            "wide-truthiness",
+            shadow_timing(1),
+            0x1000,
+        );
+        root.end("completed", 0x1000);
+
+        let published = guard.finish("completed").expect("publish wide trace");
+        let events =
+            fs::read_to_string(published.join("events-v1.ndjson")).expect("read trace events");
+        let assertion: Value = events
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("event JSON"))
+            .find(|row: &Value| row["event"] == "assert")
+            .expect("assert event");
+        assert_eq!(assertion["assertion_width"], 64);
+        assert_eq!(assertion["sort_validated"], true);
+        let path = assertion["assertion_path"]
+            .as_str()
+            .expect("assertion path");
+        let bytes = fs::read_to_string(published.join(path)).expect("assertion bytes");
+        assert_eq!(bytes, "(assert (distinct sym0_64 (_ bv0 64)))\n");
+        let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/axeyum-integration/capture/validate_ordered_trace.py");
+        let status = Command::new("python3")
+            .arg(validator)
+            .arg(&published)
+            .status()
+            .expect("run ordered-trace validator");
+        assert!(
+            status.success(),
+            "validator rejected wide truthiness fixture"
+        );
     }
 }

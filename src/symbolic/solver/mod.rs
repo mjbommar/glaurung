@@ -41,7 +41,8 @@ pub enum SolveResult {
     Error(String),
 }
 
-/// A constraint: a 1-bit predicate expression that must equal `expected`.
+/// A constraint using arbitrary-width bit-vector truthiness: `expected=true`
+/// requires a nonzero value, while `expected=false` requires zero.
 pub type Assert = (ExprId, bool);
 
 /// A solver backend.

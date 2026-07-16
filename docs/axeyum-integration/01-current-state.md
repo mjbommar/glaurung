@@ -29,7 +29,7 @@ wired inside `solve()`** so metering + budgets still apply.
 ```rust
 // src/symbolic/solver/mod.rs:46
 pub trait Solver { fn check(&mut self, pool: &ExprPool, asserts: &[Assert]) -> SolveResult; }
-pub type Assert = (ExprId, bool);                 // :43  a width-1 predicate == expected
+pub type Assert = (ExprId, bool);                 // :45  arbitrary-width BV truthiness
 pub struct Model { pub values: BTreeMap<u32,u128> } // :22  Sym id -> value
 pub enum SolveResult { Sat(Model), Unsat, Unknown, NoSolver, Error(String) } // :28
 ```
@@ -74,7 +74,8 @@ No all-SAT / model enumeration.
   `as_u64()` (**drops > 64-bit symbols**).
 - `pipe::PipeSolver` (always compiled inside `symbolic`): SMT-LIB2 over a
   subprocess. Emits `(set-logic QF_BV)`, `(declare-const sym{id}_{w} (_ BitVec w))`,
-  `(assert (= <term> <bv1|bv0>))`, `(check-sat)`, `(get-value ...)`.
+  expected-true as `(assert (distinct <term> (_ bv0 w)))`, expected-false as
+  `(assert (= <term> (_ bv0 w)))`, `(check-sat)`, and `(get-value ...)`.
   Solver chosen by `$GLAURUNG_SMT_SOLVER` (args `--lang smt2`), else
   bitwuzla/z3/cvc5. `build_script` is a reusable SMT-LIB serializer.
 

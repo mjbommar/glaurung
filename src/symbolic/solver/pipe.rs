@@ -91,12 +91,7 @@ pub(crate) fn build_script(pool: &ExprPool, asserts: &[Assert]) -> (String, Vec<
         names.push((*id, name));
     }
     for (e, expected) in asserts {
-        let bit = if *expected { "(_ bv1 1)" } else { "(_ bv0 1)" };
-        script.push_str(&format!(
-            "(assert (= {} {}))\n",
-            pool.render_smtlib(*e),
-            bit
-        ));
+        script.push_str(&assertion_line(pool, (*e, *expected)));
     }
     script.push_str("(check-sat)\n");
     if !names.is_empty() {
@@ -104,6 +99,20 @@ pub(crate) fn build_script(pool: &ExprPool, asserts: &[Assert]) -> (String, Vec<
         script.push_str(&format!("(get-value ({}))\n", vars.join(" ")));
     }
     (script, names)
+}
+
+/// Render one assertion with the same arbitrary-width truthiness semantics as
+/// the native Z3 and Axeyum backends: expected true means `e != 0`, while
+/// expected false means `e == 0` at `e`'s actual bit-vector width.
+pub(crate) fn assertion_line(pool: &ExprPool, assertion: Assert) -> String {
+    let width = pool.width_of(assertion.0).bits();
+    let term = pool.render_smtlib(assertion.0);
+    let zero = format!("(_ bv0 {width})");
+    if assertion.1 {
+        format!("(assert (distinct {term} {zero}))\n")
+    } else {
+        format!("(assert (= {term} {zero}))\n")
+    }
 }
 
 fn parse_bv_literal(s: &str) -> Option<u128> {
@@ -179,12 +188,49 @@ mod tests {
     }
 
     #[test]
+    fn script_generation_uses_width_safe_truthiness_for_wide_assertions() {
+        let mut pool = ExprPool::new();
+        let wide = pool.fresh_symbol(Width::W64);
+
+        let (truthy, _) = build_script(&pool, &[(wide, true)]);
+        assert!(truthy.contains("(assert (distinct sym0_64 (_ bv0 64)))"));
+        let (falsey, _) = build_script(&pool, &[(wide, false)]);
+        assert!(falsey.contains("(assert (= sym0_64 (_ bv0 64)))"));
+    }
+
+    #[test]
     fn pipe_solves_or_skips() {
         let (p, eq) = add1_eq_256_32();
         match PipeSolver::new().check(&p, &[(eq, true)]) {
             SolveResult::Sat(m) => assert_eq!(m.values.get(&0).copied(), Some(0xff)),
             SolveResult::NoSolver => eprintln!("no solver binary on PATH — skipping"),
             other => panic!("expected sat or no-solver, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pipe_wide_truthiness_matches_native_semantics_or_skips() {
+        let mut pool = ExprPool::new();
+        let wide = pool.fresh_symbol(Width::W64);
+        let zero = pool.intern(Expr::Const {
+            value: 0,
+            width: Width::W64,
+        });
+        let is_zero = pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: wide,
+            b: zero,
+            width: Width::W64,
+        });
+        match PipeSolver::new().check(&pool, &[(wide, true), (is_zero, true)]) {
+            SolveResult::Unsat => {}
+            SolveResult::NoSolver => eprintln!("no solver binary on PATH — skipping"),
+            other => panic!("expected wide truthiness contradiction unsat, got {other:?}"),
+        }
+        match PipeSolver::new().check(&pool, &[(wide, false), (is_zero, true)]) {
+            SolveResult::Sat(_) => {}
+            SolveResult::NoSolver => eprintln!("no solver binary on PATH — skipping"),
+            other => panic!("expected wide falsey assertion sat, got {other:?}"),
         }
     }
 

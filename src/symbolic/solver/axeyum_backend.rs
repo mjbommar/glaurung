@@ -24,16 +24,16 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, AigConstructionStats,
-    CheckResult, IncrementalBvSolver, IncrementalBvStats, IncrementalCnfStats,
-    IncrementalLoweringStats, SolverConfig, UnsatProofOutcome,
+    AigConstructionStats, CheckResult, IncrementalBvSolver, IncrementalBvStats,
+    IncrementalCnfStats, IncrementalLoweringStats, SolverConfig, UnsatProofOutcome,
+    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{pipe, Assert, Model, SolveResult, Solver};
+use crate::symbolic::solver::{Assert, Model, SolveResult, Solver, pipe};
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
 /// and metering behave the same regardless of which backend is compiled in.
@@ -1541,7 +1541,7 @@ impl<'a> Translator<'a> {
         self.arena.ite(b, one, zero)
     }
 
-    /// Convert a glaurung BV1 condition to an axeyum Bool: `c != 0`.
+    /// Convert a glaurung BV condition to an axeyum Bool: `c != 0`.
     fn to_bool(&mut self, c: ExprId) -> Result<TermId, IrError> {
         let tc = self.translate(c)?;
         let w = self.pool.width_of(c).bits() as u32;
@@ -1644,6 +1644,37 @@ mod tests {
         match solve_native(&p, &[(eq, true)]) {
             SolveResult::Sat(m) => assert_eq!(m.values.get(&0).copied(), Some(0xff)),
             other => panic!("expected sat x=0xff, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_wide_assertion_uses_truthiness() {
+        let mut pool = ExprPool::new();
+        let wide = pool.fresh_symbol(Width::W64);
+        let zero = c(&mut pool, 0, Width::W64);
+        let is_zero = cmp(&mut pool, CmpOp::Eq, wide, zero, Width::W64);
+
+        assert!(matches!(
+            solve_native(&pool, &[(wide, true), (is_zero, true)]),
+            SolveResult::Unsat
+        ));
+        assert!(matches!(
+            solve_native(&pool, &[(wide, false), (is_zero, true)]),
+            SolveResult::Sat(_)
+        ));
+
+        #[cfg(feature = "solver-z3")]
+        {
+            use crate::symbolic::solver::z3_backend::Z3Solver;
+
+            assert_eq!(
+                Z3Solver::new().check(&pool, &[(wide, true), (is_zero, true)]),
+                SolveResult::Unsat
+            );
+            assert!(matches!(
+                Z3Solver::new().check(&pool, &[(wide, false), (is_zero, true)]),
+                SolveResult::Sat(_)
+            ));
         }
     }
 
@@ -2210,5 +2241,22 @@ mod tests {
             SolveResult::Sat(m) => assert_eq!(m.values.get(&0).copied(), Some(0xff)),
             other => panic!("expected sat x=0xff, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn text_bridge_wide_assertion_uses_truthiness() {
+        let mut pool = ExprPool::new();
+        let wide = pool.fresh_symbol(Width::W64);
+        let zero = c(&mut pool, 0, Width::W64);
+        let is_zero = cmp(&mut pool, CmpOp::Eq, wide, zero, Width::W64);
+
+        assert!(matches!(
+            AxeyumTextSolver::new().check(&pool, &[(wide, true), (is_zero, true)]),
+            SolveResult::Unsat
+        ));
+        assert!(matches!(
+            AxeyumTextSolver::new().check(&pool, &[(wide, false), (is_zero, true)]),
+            SolveResult::Sat(_)
+        ));
     }
 }

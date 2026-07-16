@@ -61,7 +61,10 @@ def validate(root: pathlib.Path) -> dict[str, int]:
     index_path = root / "query-index-v1.json"
     manifest = load_json(manifest_path)
     index = load_json(index_path)
-    if not isinstance(manifest, dict) or manifest.get("schema") != "glaurung-ordered-trace-v1":
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != "glaurung-ordered-trace-v1"
+    ):
         fail("manifest schema is not glaurung-ordered-trace-v1")
     if manifest.get("version") != 1:
         fail("manifest version is not 1")
@@ -81,7 +84,9 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             fail("query-index row is not an object")
         content_hash = row.get("content_hash")
         relative = row.get("path")
-        if not isinstance(content_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", content_hash):
+        if not isinstance(content_hash, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", content_hash
+        ):
             fail(f"invalid query content hash: {content_hash!r}")
         if content_hash in indexed:
             fail(f"duplicate query-index row: {content_hash}")
@@ -126,7 +131,9 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             ("worker_seq", next_worker),
         ):
             if event.get(field_name) != expected:
-                fail(f"non-contiguous {field_name} on line {line_number}: {event.get(field_name)!r} != {expected}")
+                fail(
+                    f"non-contiguous {field_name} on line {line_number}: {event.get(field_name)!r} != {expected}"
+                )
         next_event += 1
         next_process += 1
         next_worker += 1
@@ -165,14 +172,22 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                 inherited = list(paths[parent].scopes)
             state = PathState(scopes=inherited)
             paths[path_id] = state
-            complete = [(scope, constraint) for scope, constraint in inherited if constraint is not None]
-            if len(complete) != len(inherited) or framed_digest(complete) != event.get("scope_digest"):
+            complete = [
+                (scope, constraint)
+                for scope, constraint in inherited
+                if constraint is not None
+            ]
+            if len(complete) != len(inherited) or framed_digest(complete) != event.get(
+                "scope_digest"
+            ):
                 fail(f"bad inherited scope digest for {path_id}")
         elif not isinstance(path_id, str) or path_id not in paths:
             fail(f"event {kind!r} references unknown path {path_id!r}")
         state = paths[path_id]
         if event.get("path_seq") != state.next_seq:
-            fail(f"non-contiguous path_seq on {path_id}: {event.get('path_seq')!r} != {state.next_seq}")
+            fail(
+                f"non-contiguous path_seq on {path_id}: {event.get('path_seq')!r} != {state.next_seq}"
+            )
         state.next_seq += 1
         if state.ended and kind != "path_start":
             fail(f"event after terminal event on {path_id}: {kind}")
@@ -181,24 +196,42 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             if event.get("prior_depth") != len(state.scopes):
                 fail(f"bad push prior depth on {path_id}")
             scope_id = event.get("scope_id")
-            if not isinstance(scope_id, str) or any(scope_id == scope for scope, _ in state.scopes):
+            if not isinstance(scope_id, str) or any(
+                scope_id == scope for scope, _ in state.scopes
+            ):
                 fail(f"invalid/reused active scope ID on {path_id}: {scope_id!r}")
             state.scopes.append((scope_id, None))
             if event.get("resulting_depth") != len(state.scopes):
                 fail(f"bad push resulting depth on {path_id}")
         elif kind == "assert":
-            if not state.scopes or state.scopes[-1][0] != event.get("scope_id") or state.scopes[-1][1] is not None:
+            if (
+                not state.scopes
+                or state.scopes[-1][0] != event.get("scope_id")
+                or state.scopes[-1][1] is not None
+            ):
                 fail(f"assert does not fill the top scope on {path_id}")
             constraint = event.get("constraint_id")
-            if not isinstance(constraint, str) or not re.fullmatch(r"[0-9a-f]{64}", constraint):
+            if not isinstance(constraint, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", constraint
+            ):
                 fail(f"invalid constraint ID on {path_id}")
-            if event.get("assertion_sha256") != constraint or event.get("sort_validated") is not True:
+            if (
+                event.get("assertion_sha256") != constraint
+                or event.get("sort_validated") is not True
+            ):
                 fail(f"unvalidated assertion on {path_id}")
+            assertion_width = event.get("assertion_width")
+            if assertion_width is not None and (
+                not isinstance(assertion_width, int) or assertion_width <= 0
+            ):
+                fail(f"invalid assertion width on {path_id}: {assertion_width!r}")
             assertion_path = event.get("assertion_path")
             if assertion_path != f"assertions/{constraint}.smt2":
                 fail(f"non-canonical assertion path on {path_id}: {assertion_path!r}")
             assertion_bytes = (root / assertion_path).read_bytes()
-            if sha256(assertion_bytes) != constraint or not assertion_bytes.startswith(b"(assert "):
+            if sha256(assertion_bytes) != constraint or not assertion_bytes.startswith(
+                b"(assert "
+            ):
                 fail(f"assertion bytes do not match constraint ID on {path_id}")
             assertion_symbols = event.get("assertion_symbols")
             if not isinstance(assertion_symbols, list):
@@ -207,17 +240,32 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             for symbol in assertion_symbols:
                 name = symbol.get("name") if isinstance(symbol, dict) else None
                 width = symbol.get("width") if isinstance(symbol, dict) else None
-                match = re.fullmatch(r"sym([0-9]+)_([0-9]+)", name) if isinstance(name, str) else None
-                if match is None or not isinstance(width, int) or width <= 0 or int(match.group(2)) != width:
-                    fail(f"invalid assertion symbol declaration on {path_id}: {symbol!r}")
+                match = (
+                    re.fullmatch(r"sym([0-9]+)_([0-9]+)", name)
+                    if isinstance(name, str)
+                    else None
+                )
+                if (
+                    match is None
+                    or not isinstance(width, int)
+                    or width <= 0
+                    or int(match.group(2)) != width
+                ):
+                    fail(
+                        f"invalid assertion symbol declaration on {path_id}: {symbol!r}"
+                    )
                 symbol_id = int(match.group(1))
                 if prior_symbol_id is not None and symbol_id <= prior_symbol_id:
                     fail(f"assertion symbols are not uniquely ordered on {path_id}")
                 prior_symbol_id = symbol_id
             assertion_ids.add(constraint)
             state.scopes[-1] = (state.scopes[-1][0], constraint)
-            complete = [(scope, value) for scope, value in state.scopes if value is not None]
-            if len(complete) != len(state.scopes) or framed_digest(complete) != event.get("scope_digest"):
+            complete = [
+                (scope, value) for scope, value in state.scopes if value is not None
+            ]
+            if len(complete) != len(state.scopes) or framed_digest(
+                complete
+            ) != event.get("scope_digest"):
                 fail(f"bad assertion scope digest on {path_id}")
         elif kind == "check":
             check_id = event.get("check_id")
@@ -225,18 +273,29 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             outcome = event.get("outcome")
             if not isinstance(check_id, str) or check_id in checks:
                 fail(f"duplicate/invalid check ID: {check_id!r}")
-            if query_hash not in indexed or outcome not in {"sat", "unsat", "unknown", "error"}:
+            if query_hash not in indexed or outcome not in {
+                "sat",
+                "unsat",
+                "unknown",
+                "error",
+            }:
                 fail(f"invalid query/outcome for {check_id}")
-            complete = [(scope, value) for scope, value in state.scopes if value is not None]
+            complete = [
+                (scope, value) for scope, value in state.scopes if value is not None
+            ]
             if len(complete) != len(state.scopes):
                 fail(f"check with unasserted scope on {path_id}")
-            if event.get("scope_depth") != len(complete) or event.get("active_constraint_count") != len(complete):
+            if event.get("scope_depth") != len(complete) or event.get(
+                "active_constraint_count"
+            ) != len(complete):
                 fail(f"check scope/count mismatch for {check_id}")
             if framed_digest(complete) != event.get("scope_digest"):
                 fail(f"check scope digest mismatch for {check_id}")
             query_bytes = (root / f"queries/{query_hash}.smt2").read_bytes()
             if assertion_hashes(query_bytes) != [value for _, value in complete]:
-                fail(f"query assertions do not reconstruct active scopes for {check_id}")
+                fail(
+                    f"query assertions do not reconstruct active scopes for {check_id}"
+                )
             if outcome not in indexed[query_hash]["outcomes"]:
                 fail(f"check outcome absent from query index for {check_id}")
             backend_nanos = event.get("backend_nanos")
@@ -246,13 +305,17 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                 fail(f"invalid total backend timing for {check_id}")
             if z3_nanos is not None and (not isinstance(z3_nanos, int) or z3_nanos < 0):
                 fail(f"invalid Z3 timing for {check_id}")
-            if axeyum_nanos is not None and (not isinstance(axeyum_nanos, int) or axeyum_nanos < 0):
+            if axeyum_nanos is not None and (
+                not isinstance(axeyum_nanos, int) or axeyum_nanos < 0
+            ):
                 fail(f"invalid Axeyum timing for {check_id}")
             measured = (z3_nanos or 0) + (axeyum_nanos or 0)
             if measured > backend_nanos:
                 fail(f"per-backend timing exceeds total timing for {check_id}")
             checks[check_id] = (outcome, path_id)
-            observed_occurrences.setdefault(query_hash, []).append((check_id, path_id, event["event_seq"]))
+            observed_occurrences.setdefault(query_hash, []).append(
+                (check_id, path_id, event["event_seq"])
+            )
             state.last_check = check_id
             state.last_model_read = None
             if outcome in {"unknown", "error"} and not event.get("outcome_detail"):
@@ -263,11 +326,19 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             if not isinstance(read_id, str) or read_id in model_reads:
                 fail(f"duplicate/invalid model-read ID: {read_id!r}")
             if checks.get(check_id) != ("sat", path_id):
-                fail(f"model read {read_id} does not follow a SAT check on the same path")
+                fail(
+                    f"model read {read_id} does not follow a SAT check on the same path"
+                )
             if state.last_event != "check" or state.last_check != check_id:
-                fail(f"model read {read_id} is not immediately after its SAT check on the path")
+                fail(
+                    f"model read {read_id} is not immediately after its SAT check on the path"
+                )
             width = event.get("width")
-            if not isinstance(width, int) or width <= 0 or event.get("sort") != f"(_ BitVec {width})":
+            if (
+                not isinstance(width, int)
+                or width <= 0
+                or event.get("sort") != f"(_ BitVec {width})"
+            ):
                 fail(f"bad model-read sort for {read_id}")
             expression = event.get("expression_smtlib")
             if not isinstance(expression, str) or not expression:
@@ -282,10 +353,18 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                 if not isinstance(symbol, dict):
                     fail(f"invalid expression symbol declaration for {read_id}")
                 name, symbol_width = symbol.get("name"), symbol.get("width")
-                match = re.fullmatch(r"sym([0-9]+)_([0-9]+)", name) if isinstance(name, str) else None
+                match = (
+                    re.fullmatch(r"sym([0-9]+)_([0-9]+)", name)
+                    if isinstance(name, str)
+                    else None
+                )
                 if match is None:
                     fail(f"invalid expression symbol name for {read_id}: {name!r}")
-                if not isinstance(symbol_width, int) or symbol_width <= 0 or not name.endswith(f"_{symbol_width}"):
+                if (
+                    not isinstance(symbol_width, int)
+                    or symbol_width <= 0
+                    or not name.endswith(f"_{symbol_width}")
+                ):
                     fail(f"invalid expression symbol width for {read_id}: {symbol!r}")
                 symbol_id = int(match.group(1))
                 if prior_id is not None and symbol_id <= prior_id:
@@ -296,12 +375,21 @@ def validate(root: pathlib.Path) -> dict[str, int]:
         elif kind == "model_choice":
             check_id = event.get("check_id")
             read_ids = event.get("model_read_ids")
-            if checks.get(check_id) != ("sat", path_id) or not isinstance(read_ids, list) or not read_ids:
+            if (
+                checks.get(check_id) != ("sat", path_id)
+                or not isinstance(read_ids, list)
+                or not read_ids
+            ):
                 fail(f"invalid model choice on {path_id}")
             if any(model_reads.get(read_id) != check_id for read_id in read_ids):
                 fail(f"model choice references foreign/missing reads on {path_id}")
-            if state.last_event != "model_read" or state.last_model_read not in read_ids:
-                fail(f"model choice is not immediately after its model read on {path_id}")
+            if (
+                state.last_event != "model_read"
+                or state.last_model_read not in read_ids
+            ):
+                fail(
+                    f"model choice is not immediately after its model read on {path_id}"
+                )
         elif kind == "pop":
             if not state.scopes or event.get("scope_id") != state.scopes[-1][0]:
                 fail(f"scope underflow/mismatch on {path_id}")
@@ -310,12 +398,20 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             state.scopes.pop()
             if event.get("resulting_depth") != len(state.scopes):
                 fail(f"bad pop resulting depth on {path_id}")
-            complete = [(scope, value) for scope, value in state.scopes if value is not None]
-            if len(complete) != len(state.scopes) or framed_digest(complete) != event.get("scope_digest"):
+            complete = [
+                (scope, value) for scope, value in state.scopes if value is not None
+            ]
+            if len(complete) != len(state.scopes) or framed_digest(
+                complete
+            ) != event.get("scope_digest"):
                 fail(f"bad pop scope digest on {path_id}")
         elif kind == "path_end":
-            complete = [(scope, value) for scope, value in state.scopes if value is not None]
-            if len(complete) != len(state.scopes) or framed_digest(complete) != event.get("scope_digest"):
+            complete = [
+                (scope, value) for scope, value in state.scopes if value is not None
+            ]
+            if len(complete) != len(state.scopes) or framed_digest(
+                complete
+            ) != event.get("scope_digest"):
                 fail(f"bad terminal scope digest on {path_id}")
             if event.get("terminal_scope_depth") != len(state.scopes):
                 fail(f"bad terminal scope depth on {path_id}")
@@ -376,7 +472,10 @@ def main() -> int:
     except (OSError, ValueError) as error:
         print(f"ordered trace INVALID: {error}", file=sys.stderr)
         return 1
-    print("ordered trace valid: " + " ".join(f"{key}={value}" for key, value in summary.items()))
+    print(
+        "ordered trace valid: "
+        + " ".join(f"{key}={value}" for key, value in summary.items())
+    )
     return 0
 
 

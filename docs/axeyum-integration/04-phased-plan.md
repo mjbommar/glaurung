@@ -73,7 +73,8 @@ Goal: the real deliverable - `axeyum_backend.rs` linking axeyum, behind
 - Entry: P1 green (flow validated); `02` mapping reviewed.
 - Work:
   - Implement the total translator `Expr -> axeyum term` (memoized on
-    `ExprId`), the `Assert` handling (`term == expected@1`), and result
+    `ExprId`), width-safe `Assert` truthiness (`term != 0@width` for true,
+    `term == 0@width` for false), and result
     mapping to `SolveResult`/`Model` (`03` data-flow).
   - Add `solver-axeyum` feature + axeyum deps to Cargo.toml.
   - Unit tests: one per `Expr` variant (Const/Sym/Bin{10}/Un{2}/Cmp{6}/
