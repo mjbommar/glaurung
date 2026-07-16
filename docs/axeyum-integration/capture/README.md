@@ -143,7 +143,7 @@ target/release/examples/ioctlance \
 check. Without warm reuse it preserves the raw one-shot policy and writes the
 `glaurung-axeyum-native-profile-v1` schema. With snapshot or lineage reuse it
 selects Axeyum's profiling constructor and writes
-`glaurung-axeyum-warm-profile-v4` (v1/v2/v3 remain accepted historical inputs).
+`glaurung-axeyum-warm-profile-v5` (v1/v2/v3/v4 remain accepted historical inputs).
 Both use one
 `axeyum-profile-<pid>.jsonl` file per process. Every record carries the SHA-256
 of the exact bytes produced by the existing SMT-LIB capture renderer, a
@@ -164,6 +164,15 @@ term-bit lift-map writes, and symbol-input allocation. Together with
 work-per-added-node analysis without placing a wall-clock read inside every
 AIG operation. The maps are diagnostic only and do not select a lowering or
 solving policy.
+
+V5 adds the exact per-check `replay_sat_cache` boundary selected by ADR-0192.
+It records enablement and fixed per-path bounds, counter deltas for the one
+check, and the owning solver's current entry/value/bit gauges. An enabled
+complete record partitions into exactly one hit, miss, or replay failure; a
+miss further partitions into insertion or one declined-result class. These
+counters explain work avoided by exact duplicate reuse without conflating it
+with prefix/delta lowering. Axeyum's summarizer rejects incomplete fields,
+policy drift, invalid partitions, and gauges beyond their independent bounds.
 
 ADR-0175 accepts the first v4-selected AIG change at Axeyum `6779db6a`.
 On Dptf, 39.61% of primitive AND requests reach the old ordered unique table

@@ -345,12 +345,15 @@ pub struct WarmAxeyumCheckProfile {
     pub aig_construction: BTreeMap<&'static str, u64>,
     /// Per-check term-memo, literal-copy, and lift-map work.
     pub lowering_work: BTreeMap<&'static str, u64>,
+    /// Per-check replay-cache traffic plus current per-path gauges.
+    pub replay_sat_cache: BTreeMap<&'static str, u64>,
 }
 
 struct WarmProfileContext {
     profile: WarmAxeyumCheckProfile,
     total_started: Instant,
     solver_before: IncrementalBvStats,
+    replay_sat_cache_before: ReplayCheckedSatCacheStats,
 }
 
 impl AxeyumCheckProfile {
@@ -784,7 +787,7 @@ impl SnapshotIncrementalAxeyumSolver {
         let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
         Some(WarmProfileContext {
             profile: WarmAxeyumCheckProfile {
-                schema: "glaurung-axeyum-warm-profile-v4",
+                schema: "glaurung-axeyum-warm-profile-v5",
                 process_id: std::process::id(),
                 sequence: None,
                 query_hash,
@@ -821,9 +824,11 @@ impl SnapshotIncrementalAxeyumSolver {
                 cnf_gate_mix: BTreeMap::new(),
                 aig_construction: BTreeMap::new(),
                 lowering_work: BTreeMap::new(),
+                replay_sat_cache: BTreeMap::new(),
             },
             total_started: Instant::now(),
             solver_before: self.solver.stats(),
+            replay_sat_cache_before: self.solver.replay_checked_sat_cache_stats(),
         })
     }
 
@@ -853,6 +858,11 @@ impl SnapshotIncrementalAxeyumSolver {
         context.profile.cnf_gate_mix = cnf_gate_mix(delta.cnf_gate_mix);
         context.profile.aig_construction = aig_construction(delta.aig_construction);
         context.profile.lowering_work = lowering_work(delta.lowering_work);
+        context.profile.replay_sat_cache = replay_sat_cache_profile(
+            self.replay_sat_cache_policy,
+            context.replay_sat_cache_before,
+            self.solver.replay_checked_sat_cache_stats(),
+        );
         context.profile.arena_terms = count(self.arena.len());
         context.profile.outcome = result_name(&result);
         context.profile.complete = !matches!(&result, SolveResult::Error(_));
@@ -1004,6 +1014,67 @@ fn lowering_work(stats: IncrementalLoweringStats) -> BTreeMap<&'static str, u64>
         ("memoized_terms", stats.memoized_terms),
         ("term_bit_bindings", stats.term_bit_bindings),
         ("symbol_bit_inputs", stats.symbol_bit_inputs),
+    ])
+}
+
+fn replay_sat_cache_profile(
+    policy: Option<ReplayCheckedSatCachePolicy>,
+    before: ReplayCheckedSatCacheStats,
+    after: ReplayCheckedSatCacheStats,
+) -> BTreeMap<&'static str, u64> {
+    BTreeMap::from([
+        ("enabled", u64::from(policy.is_some())),
+        (
+            "max_entries",
+            policy.map_or(0, |policy| count(policy.max_entries)),
+        ),
+        (
+            "max_model_values",
+            policy.map_or(0, |policy| count(policy.max_model_values)),
+        ),
+        (
+            "max_model_bits",
+            policy.map_or(0, |policy| count(policy.max_model_bits)),
+        ),
+        ("hits", after.hits.saturating_sub(before.hits)),
+        ("misses", after.misses.saturating_sub(before.misses)),
+        (
+            "insertions",
+            after.insertions.saturating_sub(before.insertions),
+        ),
+        (
+            "evictions",
+            after.evictions.saturating_sub(before.evictions),
+        ),
+        (
+            "replay_failures",
+            after.replay_failures.saturating_sub(before.replay_failures),
+        ),
+        (
+            "declined_unsat",
+            after.declined_unsat.saturating_sub(before.declined_unsat),
+        ),
+        (
+            "declined_unknown",
+            after
+                .declined_unknown
+                .saturating_sub(before.declined_unknown),
+        ),
+        (
+            "declined_oversized_models",
+            after
+                .declined_oversized_models
+                .saturating_sub(before.declined_oversized_models),
+        ),
+        (
+            "declined_non_scalar_models",
+            after
+                .declined_non_scalar_models
+                .saturating_sub(before.declined_non_scalar_models),
+        ),
+        ("entries", after.entries),
+        ("model_values", after.model_values),
+        ("model_bits", after.model_bits),
     ])
 }
 
@@ -2301,6 +2372,33 @@ mod tests {
         assert_eq!(work.len(), 11);
         assert_eq!(work["operand_bits_copied"], 64);
         assert_eq!(work["term_bit_bindings"], 33);
+    }
+
+    #[test]
+    fn warm_profile_exports_exact_replay_sat_cache_delta() {
+        let policy = Some(ReplayCheckedSatCachePolicy::new(64, 4_096, 262_144));
+        let mut before = ReplayCheckedSatCacheStats::default();
+        before.misses = 4;
+        before.insertions = 3;
+        before.entries = 3;
+        before.model_values = 12;
+        before.model_bits = 96;
+        let mut after = before;
+        after.hits = 1;
+
+        let cache = replay_sat_cache_profile(policy, before, after);
+
+        assert_eq!(cache.len(), 16);
+        assert_eq!(cache["enabled"], 1);
+        assert_eq!(cache["max_entries"], 64);
+        assert_eq!(cache["max_model_values"], 4_096);
+        assert_eq!(cache["max_model_bits"], 262_144);
+        assert_eq!(cache["hits"], 1);
+        assert_eq!(cache["misses"], 0);
+        assert_eq!(cache["insertions"], 0);
+        assert_eq!(cache["entries"], 3);
+        assert_eq!(cache["model_values"], 12);
+        assert_eq!(cache["model_bits"], 96);
     }
 
     #[test]
