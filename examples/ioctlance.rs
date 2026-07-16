@@ -427,6 +427,7 @@ fn main() {
             );
             let warm = glaurung::symbolic::solver::axeyum_backend::warm_reuse_stats();
             let paths = glaurung::symbolic::solver::axeyum_backend::warm_path_reuse_stats();
+            let auto = glaurung::symbolic::solver::axeyum_backend::auto_lineage_reuse_stats();
             if warm.checks > 0
                 || paths.path_limit_fallbacks > 0
                 || paths.assertion_limit_fallbacks > 0
@@ -447,6 +448,12 @@ fn main() {
                     paths.assertion_limit_fallbacks,
                     paths.max_live_paths,
                     paths.max_assertions_per_path,
+                );
+            }
+            if auto.probes > 0 || auto.activations > 0 {
+                eprintln!(
+                    "[axeyum-auto] probes={} activations={}",
+                    auto.probes, auto.activations,
                 );
             }
         }

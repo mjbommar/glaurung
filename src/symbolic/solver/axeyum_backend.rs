@@ -15,7 +15,7 @@
 //! See `docs/axeyum-integration/` (esp. `02-interface-mapping.md`).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -61,6 +61,8 @@ static WARM_PATHS_LIVE: AtomicU64 = AtomicU64::new(0);
 static WARM_PATHS_PEAK_LIVE: AtomicU64 = AtomicU64::new(0);
 static WARM_PATH_LIMIT_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 static WARM_ASSERTION_LIMIT_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+static WARM_AUTO_PROBES: AtomicU64 = AtomicU64::new(0);
+static WARM_AUTO_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 static WARM_REUSE_LIMITS: OnceLock<WarmReuseLimits> = OnceLock::new();
 
 thread_local! {
@@ -73,6 +75,10 @@ thread_local! {
     /// Each worker owns its map; no solver is shared across paths or threads.
     static LINEAGE_SOLVERS: RefCell<LineageIncrementalAxeyumSolver> =
         RefCell::new(LineageIncrementalAxeyumSolver::default());
+    /// Path IDs observed once by GQ9's opt-in auto policy. This set is the
+    /// constant-size-per-path admission probe; it retains no arena or solver.
+    static AUTO_LINEAGE_ADMISSION: RefCell<AutoLineageAdmission> =
+        RefCell::new(AutoLineageAdmission::default());
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +86,7 @@ enum WarmReusePolicy {
     Off,
     Snapshot,
     Lineage,
+    Auto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +118,7 @@ fn parse_warm_limit(value: Option<String>, default: u64) -> u64 {
 fn warm_reuse_policy() -> WarmReusePolicy {
     match std::env::var(WARM_REUSE_ENV) {
         Err(_) => WarmReusePolicy::Off,
+        Ok(value) if value.eq_ignore_ascii_case("auto") => WarmReusePolicy::Auto,
         Ok(value) if value.eq_ignore_ascii_case("lineage") => WarmReusePolicy::Lineage,
         Ok(_) => WarmReusePolicy::Snapshot,
     }
@@ -913,6 +921,23 @@ struct LineageIncrementalAxeyumSolver {
     paths: BTreeMap<u64, SnapshotIncrementalAxeyumSolver>,
 }
 
+/// Minimal GQ9 admission state: retain only IDs until a path proves reuse.
+#[derive(Debug, Default)]
+struct AutoLineageAdmission {
+    seen_once: BTreeSet<u64>,
+}
+
+impl AutoLineageAdmission {
+    /// Returns true from the second observation onward.
+    fn observe(&mut self, path_id: u64) -> bool {
+        !self.seen_once.insert(path_id)
+    }
+
+    fn remove(&mut self, path_id: u64) -> bool {
+        self.seen_once.remove(&path_id)
+    }
+}
+
 impl LineageIncrementalAxeyumSolver {
     fn has_path(&self, path_id: u64) -> bool {
         self.paths.contains_key(&path_id)
@@ -963,7 +988,7 @@ pub(crate) fn check_warm_thread_local(
             let result = solver.check_snapshot(pool, asserts);
             (result, before, solver.stats())
         }),
-        WarmReusePolicy::Lineage => {
+        policy @ (WarmReusePolicy::Lineage | WarmReusePolicy::Auto) => {
             let Some(path_id) = path_id else {
                 return AxeyumSolver::new().check(pool, asserts);
             };
@@ -974,6 +999,14 @@ pub(crate) fn check_warm_thread_local(
                 return AxeyumSolver::new().check(pool, asserts);
             }
             let exists = LINEAGE_SOLVERS.with(|lineage| lineage.borrow().has_path(path_id));
+            if policy == WarmReusePolicy::Auto && !exists {
+                let repeated = AUTO_LINEAGE_ADMISSION
+                    .with(|admission| admission.borrow_mut().observe(path_id));
+                if !repeated {
+                    WARM_AUTO_PROBES.fetch_add(1, Ordering::Relaxed);
+                    return AxeyumSolver::new().check(pool, asserts);
+                }
+            }
             let reserved = if exists {
                 false
             } else if try_reserve_warm_path(limits.max_live_paths) {
@@ -990,6 +1023,12 @@ pub(crate) fn check_warm_thread_local(
             debug_assert_eq!(created, reserved);
             if created {
                 WARM_PATHS_CREATED.fetch_add(1, Ordering::Relaxed);
+                if policy == WarmReusePolicy::Auto {
+                    AUTO_LINEAGE_ADMISSION.with(|admission| {
+                        admission.borrow_mut().remove(path_id);
+                    });
+                    WARM_AUTO_ACTIVATIONS.fetch_add(1, Ordering::Relaxed);
+                }
             }
             (result, before, after)
         }
@@ -1066,9 +1105,15 @@ fn record_warm_delta(before: SnapshotReuseStats, after: SnapshotReuseStats) {
 
 /// Release retained mutable state when an explorer path becomes terminal.
 pub(crate) fn close_warm_path(path_id: u64) {
-    if warm_reuse_policy() != WarmReusePolicy::Lineage {
+    if !matches!(
+        warm_reuse_policy(),
+        WarmReusePolicy::Lineage | WarmReusePolicy::Auto
+    ) {
         return;
     }
+    AUTO_LINEAGE_ADMISSION.with(|admission| {
+        admission.borrow_mut().remove(path_id);
+    });
     let closed = LINEAGE_SOLVERS.with(|lineage| {
         let mut lineage = lineage.borrow_mut();
         lineage.close_path(path_id)
@@ -1100,6 +1145,15 @@ pub struct WarmPathReuseStats {
     pub assertion_limit_fallbacks: u64,
 }
 
+/// Process-wide GQ9 detected-reuse admission counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AutoLineageReuseStats {
+    /// First observations solved one-shot without retaining a solver.
+    pub probes: u64,
+    /// Repeated paths promoted to bounded lineage sessions.
+    pub activations: u64,
+}
+
 /// Returns process-wide lineage ownership counters.
 pub fn warm_path_reuse_stats() -> WarmPathReuseStats {
     let limits = warm_reuse_limits();
@@ -1112,6 +1166,14 @@ pub fn warm_path_reuse_stats() -> WarmPathReuseStats {
         peak_live_paths: WARM_PATHS_PEAK_LIVE.load(Ordering::Relaxed),
         path_limit_fallbacks: WARM_PATH_LIMIT_FALLBACKS.load(Ordering::Relaxed),
         assertion_limit_fallbacks: WARM_ASSERTION_LIMIT_FALLBACKS.load(Ordering::Relaxed),
+    }
+}
+
+/// Returns process-wide detected-reuse admission counters.
+pub fn auto_lineage_reuse_stats() -> AutoLineageReuseStats {
+    AutoLineageReuseStats {
+        probes: WARM_AUTO_PROBES.load(Ordering::Relaxed),
+        activations: WARM_AUTO_ACTIVATIONS.load(Ordering::Relaxed),
     }
 }
 
@@ -1774,6 +1836,19 @@ mod tests {
         assert!(!try_reserve_path_counter(&live, &peak, 1));
         assert_eq!(live.load(Ordering::Relaxed), 1);
         assert_eq!(peak.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn auto_lineage_admits_only_after_same_path_repeats() {
+        let mut admission = AutoLineageAdmission::default();
+
+        assert!(!admission.observe(11));
+        assert!(!admission.observe(12));
+        assert!(admission.observe(11));
+        assert!(admission.observe(11));
+        assert!(admission.remove(11));
+        assert!(!admission.observe(11));
+        assert!(!admission.remove(99));
     }
 
     #[test]

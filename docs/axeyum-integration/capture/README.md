@@ -223,6 +223,25 @@ separate solvers. Terminal paths release their sessions, and stateful restarts
 receive a fresh owner. A solve outside the explorer's explicit path context
 falls back to one-shot rather than guessing ownership.
 
+`GLAURUNG_AXEYUM_WARM_REUSE=auto` is GQ9's opt-in detected-reuse candidate.
+The first check on a path stays one-shot and retains only the explorer-owned
+path ID. A second check on that same live path initializes the existing bounded
+lineage solver from the current complete snapshot; subsequent checks reuse
+prefixes/deltas normally. Terminal paths remove unpromoted IDs as well as warm
+sessions. `[axeyum-auto] probes=... activations=...` separates first-check
+probes from promoted sessions. This candidate is not a default or performance
+claim; measure it against fixed off and `lineage` on exact-work streams.
+
+The first single-process calibration keeps exact findings and 100% agreement.
+On SurfacePen, off/auto/lineage Axeyum time is 1.995/1.154/1.062 seconds and RSS
+is 64,228/65,136/82,480 KiB; auto probes 358 paths and promotes 191. On
+fixed-budget NETwtw10, auto partitions all 28,356 checks into 10,687 first-path
+probes plus 17,669 warm checks, promotes 4,099 paths, and measures 19.595
+seconds / 216,016 KiB versus the clean lineage baseline's 18.751 seconds /
+257,632 KiB. These are calibration runs, not repeated acceptance evidence.
+Extend the versioned runner with auto-policy identity and repeat both families
+before changing the default.
+
 Run the same Z3-authoritative shadow stream with warm reuse enabled:
 
 ```sh
