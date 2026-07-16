@@ -174,6 +174,21 @@ counters explain work avoided by exact duplicate reuse without conflating it
 with prefix/delta lowering. Axeyum's summarizer rejects incomplete fields,
 policy drift, invalid partitions, and gauges beyond their independent bounds.
 
+The first v5 SurfacePen profile changes the residual priority: replay is
+447.046 ms / 38.82% of internal time because the incremental solver formerly
+created a new ground-evaluator memo for every original root. Axeyum ADR-0193
+and commit `d3d95299` share only same-assignment values within one replay and
+clear accumulated cross-root values at a fixed 4,096-entry threshold. On the
+identical 2,551-check profile, replay falls 87.78% to 54.643 ms and attributed
+total falls 33.51%, with every decision, cache counter, structure, and replay
+gate unchanged. A same-current-client causal three-process gate improves
+SurfacePen Axeyum 1,070.267 to 674.933 ms (-36.94%) and median RSS 78,888 to
+77,976 KiB (-1.16%). The clean-Axeyum two-driver candidate keeps all 92,721
+checks agreed and measures NETwtw10 at 17.328 seconds / 0.333x Z3. Do not use
+it to overwrite the committed artifact yet: the older SurfacePen baseline has
+an unrelated/stale RSS control that fails by 6.52%, so a clean same-current
+two-driver baseline/candidate pair remains required.
+
 ADR-0175 accepts the first v4-selected AIG change at Axeyum `6779db6a`.
 On Dptf, 39.61% of primitive AND requests reach the old ordered unique table
 and 88.77% of those probes insert. A deterministic 70%-load open-addressed
