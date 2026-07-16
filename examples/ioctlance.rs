@@ -433,6 +433,8 @@ fn main() {
             let serial = glaurung::symbolic::solver::axeyum_backend::serial_sibling_reuse_stats();
             let cold_retry =
                 glaurung::symbolic::solver::axeyum_backend::warm_timeout_cold_retry_stats();
+            let continuation =
+                glaurung::symbolic::solver::axeyum_backend::warm_timeout_continuation_stats();
             let sat_cache = glaurung::symbolic::solver::axeyum_backend::replay_sat_cache_stats();
             if warm.checks > 0
                 || paths.path_limit_fallbacks > 0
@@ -482,6 +484,15 @@ fn main() {
                     cold_retry.recoveries,
                     cold_retry.unknowns,
                     cold_retry.errors,
+                );
+            }
+            if continuation.continuations > 0 {
+                eprintln!(
+                    "[axeyum-warm-timeout-continuation] continuations={} recoveries={} unknowns={} errors={}",
+                    continuation.continuations,
+                    continuation.recoveries,
+                    continuation.unknowns,
+                    continuation.errors,
                 );
             }
             if auto.probes > 0 || auto.activations > 0 {

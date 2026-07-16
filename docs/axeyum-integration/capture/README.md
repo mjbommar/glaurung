@@ -1020,6 +1020,31 @@ The dxgkrnl no-timeout control performs zero retries and preserves the exact
 17,712-query structural traffic, confirming that the opt-in branch is inert
 when the retained solver decides.
 
+ADR-018 tests the memory-safe alternative behind a separate explicit switch:
+
+```sh
+export GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE=1
+```
+
+It grants one synchronized retained solver a second `check` with a fresh
+250 ms deadline, retaining CNF/learned state and reusing already-translated
+temporary assumptions. The footer `[axeyum-warm-timeout-continuation]`
+partitions continuations into recovered decisions, repeated unknowns, and
+errors. Do not combine it with the cold-retry flag in a causal measurement.
+
+The first tcpip evidence keeps this candidate explicit/off. A 60-second run
+performs 14 continuations (6 recoveries, 8 repeated unknowns, 0 errors), reduces
+Axeyum nondecisions from 15 to 8, and stays inside the time/RSS alarms, but the
+wall-time tier has query drift. A 600-second control/candidate pair performs 14
+continuations (5 recoveries, 9 repeated unknowns, 0 errors), reduces
+nondecisions 14→9, changes Axeyum time +1.98% and RSS +0.034%, and remains free
+of SAT/UNSAT disagreements and warm resets. It also executes 19 more queries
+and reaches two additional high-confidence null-dereference findings before
+the common 400-second analysis deadline. All 780 control findings are retained,
+but the 782-finding candidate is not an exact-work comparison. Require a
+fixed-work or repeated gate before default admission; do not interpret the two
+extra findings as a solver semantic disagreement.
+
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-
 equivalent snapshot and loses the current serial-snapshot policy on SurfacePen

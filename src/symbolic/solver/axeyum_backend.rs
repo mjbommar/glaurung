@@ -49,6 +49,7 @@ pub(crate) const WARM_OWNER_TRANSFER_ENV: &str = "GLAURUNG_AXEYUM_WARM_OWNER_TRA
 pub(crate) const WARM_SERIAL_SIBLING_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE";
 pub(crate) const DIRECT_DELTA_ENV: &str = "GLAURUNG_AXEYUM_DIRECT_DELTA";
 pub(crate) const WARM_TIMEOUT_COLD_RETRY_ENV: &str = "GLAURUNG_AXEYUM_WARM_TIMEOUT_COLD_RETRY";
+pub(crate) const WARM_TIMEOUT_CONTINUE_ENV: &str = "GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE";
 const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING";
 pub(crate) const REPLAY_SAT_CACHE_ENV: &str = "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
@@ -78,6 +79,10 @@ static WARM_TIMEOUT_COLD_RETRIES: AtomicU64 = AtomicU64::new(0);
 static WARM_TIMEOUT_COLD_RECOVERIES: AtomicU64 = AtomicU64::new(0);
 static WARM_TIMEOUT_COLD_UNKNOWNS: AtomicU64 = AtomicU64::new(0);
 static WARM_TIMEOUT_COLD_ERRORS: AtomicU64 = AtomicU64::new(0);
+static WARM_TIMEOUT_CONTINUATIONS: AtomicU64 = AtomicU64::new(0);
+static WARM_TIMEOUT_CONTINUATION_RECOVERIES: AtomicU64 = AtomicU64::new(0);
+static WARM_TIMEOUT_CONTINUATION_UNKNOWNS: AtomicU64 = AtomicU64::new(0);
+static WARM_TIMEOUT_CONTINUATION_ERRORS: AtomicU64 = AtomicU64::new(0);
 static WARM_AUTO_PROBES: AtomicU64 = AtomicU64::new(0);
 static WARM_AUTO_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 static WARM_ADAPTIVE_PRESSURE_EVENTS: AtomicU64 = AtomicU64::new(0);
@@ -198,6 +203,37 @@ fn parse_warm_timeout_cold_retry(value: Option<&str>) -> bool {
         || value.is_some_and(|value| {
             value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("on")
         })
+}
+
+pub(crate) fn warm_timeout_continue_enabled() -> bool {
+    parse_warm_timeout_continue(std::env::var(WARM_TIMEOUT_CONTINUE_ENV).ok().as_deref())
+}
+
+fn parse_warm_timeout_continue(value: Option<&str>) -> bool {
+    matches!(value, Some("1"))
+        || value.is_some_and(|value| {
+            value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("on")
+        })
+}
+
+fn select_warm_timeout_continuation(
+    original: SolveResult,
+    continuation: SolveResult,
+) -> SolveResult {
+    match continuation {
+        decided @ (SolveResult::Sat(_) | SolveResult::Unsat) => {
+            WARM_TIMEOUT_CONTINUATION_RECOVERIES.fetch_add(1, Ordering::Relaxed);
+            decided
+        }
+        SolveResult::Unknown => {
+            WARM_TIMEOUT_CONTINUATION_UNKNOWNS.fetch_add(1, Ordering::Relaxed);
+            original
+        }
+        SolveResult::Error(_) | SolveResult::NoSolver => {
+            WARM_TIMEOUT_CONTINUATION_ERRORS.fetch_add(1, Ordering::Relaxed);
+            original
+        }
+    }
 }
 
 fn parse_direct_delta(value: Option<&str>) -> bool {
@@ -748,6 +784,7 @@ impl IncrementalAxeyumSolver {
         pool: &ExprPool,
         assumptions: &[Assert],
         profiling: bool,
+        continue_on_unknown: bool,
     ) -> (SolveResult, DirectTranslationMetrics, u64) {
         let translation_started = profiling.then(Instant::now);
         let translated = match self.translate(pool, assumptions) {
@@ -774,12 +811,22 @@ impl IncrementalAxeyumSolver {
             &translated.assertions,
         );
         let model_started = profiling.then(Instant::now);
-        let result = map_check_result(checked, &symbols);
-        (
-            result,
-            translation,
-            model_started.map_or(0, |started| nanos(started.elapsed())),
-        )
+        let mut result = map_check_result(checked, &symbols);
+        let mut model_extract_nanos = model_started.map_or(0, |started| nanos(started.elapsed()));
+        if continue_on_unknown && matches!(result, SolveResult::Unknown) {
+            WARM_TIMEOUT_CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
+            let checked = AxeyumIncrementalSolver::check_assuming(
+                &mut self.solver,
+                &self.arena,
+                &translated.assertions,
+            );
+            let model_started = profiling.then(Instant::now);
+            let continuation = map_check_result(checked, &symbols);
+            model_extract_nanos = model_extract_nanos
+                .saturating_add(model_started.map_or(0, |started| nanos(started.elapsed())));
+            result = select_warm_timeout_continuation(result, continuation);
+        }
+        (result, translation, model_extract_nanos)
     }
 }
 
@@ -830,7 +877,8 @@ impl IncrementalSolver for IncrementalAxeyumSolver {
     }
 
     fn check_assuming(&mut self, pool: &ExprPool, assumptions: &[Assert]) -> SolveResult {
-        self.check_assuming_measured(pool, assumptions, false).0
+        self.check_assuming_measured(pool, assumptions, false, false)
+            .0
     }
 }
 
@@ -1799,14 +1847,25 @@ impl DirectDeltaLineageAxeyumSolver {
         }
 
         if temporary.is_empty() {
-            let (result, model_extract_nanos) = path.solver.check_measured(profiling);
+            let (mut result, mut model_extract_nanos) = path.solver.check_measured(profiling);
+            if warm_timeout_continue_enabled() && matches!(result, SolveResult::Unknown) {
+                WARM_TIMEOUT_CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
+                let (continuation, continuation_model_extract_nanos) =
+                    path.solver.check_measured(profiling);
+                model_extract_nanos =
+                    model_extract_nanos.saturating_add(continuation_model_extract_nanos);
+                result = select_warm_timeout_continuation(result, continuation);
+            }
             metrics.model_extract_nanos = model_extract_nanos;
             path.active_prefix = persistent_prefix.clone();
             (result, metrics)
         } else {
-            let (result, translated, model_extract_nanos) = path
-                .solver
-                .check_assuming_measured(pool, temporary, profiling);
+            let (result, translated, model_extract_nanos) = path.solver.check_assuming_measured(
+                pool,
+                temporary,
+                profiling,
+                warm_timeout_continue_enabled(),
+            );
             metrics.temporary_translation = translated;
             metrics.model_extract_nanos = model_extract_nanos;
             self.stats.temporary_assumptions_translated = self
@@ -2398,6 +2457,19 @@ pub struct WarmTimeoutColdRetryStats {
     pub errors: u64,
 }
 
+/// Process-wide counters for the opt-in same-session timeout continuation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WarmTimeoutContinuationStats {
+    /// Synchronized warm `Unknown` checks granted one additional SAT call.
+    pub continuations: u64,
+    /// Continuations that recovered a SAT or UNSAT decision.
+    pub recoveries: u64,
+    /// Continuations that also returned `Unknown`.
+    pub unknowns: u64,
+    /// Continuation errors/no-solver results hidden behind the original `Unknown`.
+    pub errors: u64,
+}
+
 /// Returns process-wide lineage ownership counters.
 pub fn warm_path_reuse_stats() -> WarmPathReuseStats {
     let limits = warm_reuse_limits();
@@ -2448,6 +2520,16 @@ pub fn warm_timeout_cold_retry_stats() -> WarmTimeoutColdRetryStats {
         recoveries: WARM_TIMEOUT_COLD_RECOVERIES.load(Ordering::Relaxed),
         unknowns: WARM_TIMEOUT_COLD_UNKNOWNS.load(Ordering::Relaxed),
         errors: WARM_TIMEOUT_COLD_ERRORS.load(Ordering::Relaxed),
+    }
+}
+
+/// Returns traffic for the opt-in same-session timeout continuation.
+pub fn warm_timeout_continuation_stats() -> WarmTimeoutContinuationStats {
+    WarmTimeoutContinuationStats {
+        continuations: WARM_TIMEOUT_CONTINUATIONS.load(Ordering::Relaxed),
+        recoveries: WARM_TIMEOUT_CONTINUATION_RECOVERIES.load(Ordering::Relaxed),
+        unknowns: WARM_TIMEOUT_CONTINUATION_UNKNOWNS.load(Ordering::Relaxed),
+        errors: WARM_TIMEOUT_CONTINUATION_ERRORS.load(Ordering::Relaxed),
     }
 }
 
@@ -3645,6 +3727,16 @@ mod tests {
         }
         for value in [Some("on"), Some("true"), Some("TRUE"), Some("1")] {
             assert!(parse_warm_timeout_cold_retry(value));
+        }
+    }
+
+    #[test]
+    fn warm_timeout_continue_is_strictly_opt_in() {
+        for value in [None, Some("off"), Some("false"), Some("0"), Some("invalid")] {
+            assert!(!parse_warm_timeout_continue(value));
+        }
+        for value in [Some("on"), Some("true"), Some("TRUE"), Some("1")] {
+            assert!(parse_warm_timeout_continue(value));
         }
     }
 
