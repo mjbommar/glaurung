@@ -155,6 +155,22 @@ snapshots, retained prefix roots, added roots, popped roots, and error resets.
 Lineage mode also reports created, closed, current-live, and peak-live path
 sessions. These counters describe solver ownership and root traffic; process
 RSS remains the memory acceptance measurement.
+
+Lineage mode can also enforce explicit resource ceilings. Set
+`GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS` for a process-wide retained-session cap
+and `GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH` for a per-snapshot root cap.
+When either limit would be exceeded, that check runs through the ordinary
+one-shot Axeyum path; an over-limit retained path is closed before the one-shot
+check. Invalid limit values fail closed as zero. The footer exposes
+`path-cap-fallbacks` and `assertion-cap-fallbacks`; unset limits preserve the
+unbounded opt-in experiment.
+
+The focused Dptf smoke confirms the limits at the live boundary. A live-path
+cap of one holds `paths-peak=1`, retains 155 checks, and sends 406 checks
+one-shot; a cap of zero sends all 561 checks one-shot. An assertion cap of zero
+sends all 555 nonempty checks one-shot while allowing six empty snapshots. All
+three processes remain 561/561 agreed with Z3 and finish with zero live paths.
+
 Three alternating baseline/warm processes on 2026-07-15 each ran 13,126
 same-stream checks with 13,126 agreements, zero disagreements/unknown splits,
 identical findings, and zero warm resets. Median Axeyum time fell from 17.784

@@ -426,10 +426,13 @@ fn main() {
                 both_sat, model_diff, z3_unk, ax_unk, unk_split,
             );
             let warm = glaurung::symbolic::solver::axeyum_backend::warm_reuse_stats();
-            if warm.checks > 0 {
-                let paths = glaurung::symbolic::solver::axeyum_backend::warm_path_reuse_stats();
+            let paths = glaurung::symbolic::solver::axeyum_backend::warm_path_reuse_stats();
+            if warm.checks > 0
+                || paths.path_limit_fallbacks > 0
+                || paths.assertion_limit_fallbacks > 0
+            {
                 eprintln!(
-                    "[axeyum-warm] checks={} exact={} prefix-roots={} added={} popped={} resets={} paths-created={} paths-closed={} paths-live={} paths-peak={}",
+                    "[axeyum-warm] checks={} exact={} prefix-roots={} added={} popped={} resets={} paths-created={} paths-closed={} paths-live={} paths-peak={} path-cap-fallbacks={} assertion-cap-fallbacks={}",
                     warm.checks,
                     warm.exact_snapshot_reuses,
                     warm.prefix_assertions_reused,
@@ -440,6 +443,8 @@ fn main() {
                     paths.paths_closed,
                     paths.live_paths,
                     paths.peak_live_paths,
+                    paths.path_limit_fallbacks,
+                    paths.assertion_limit_fallbacks,
                 );
             }
         }

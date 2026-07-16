@@ -39,6 +39,8 @@ use crate::symbolic::solver::{pipe, Assert, Model, SolveResult, Solver};
 const SOLVE_TIMEOUT: Duration = Duration::from_millis(250);
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
+const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
+const WARM_MAX_ASSERTIONS_PER_PATH_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH";
 
 static PROFILE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -53,6 +55,9 @@ static WARM_PATHS_CREATED: AtomicU64 = AtomicU64::new(0);
 static WARM_PATHS_CLOSED: AtomicU64 = AtomicU64::new(0);
 static WARM_PATHS_LIVE: AtomicU64 = AtomicU64::new(0);
 static WARM_PATHS_PEAK_LIVE: AtomicU64 = AtomicU64::new(0);
+static WARM_PATH_LIMIT_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+static WARM_ASSERTION_LIMIT_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+static WARM_REUSE_LIMITS: OnceLock<WarmReuseLimits> = OnceLock::new();
 
 thread_local! {
     /// One retained snapshot adapter per explorer thread. Glaurung currently
@@ -71,6 +76,28 @@ enum WarmReusePolicy {
     Off,
     Snapshot,
     Lineage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WarmReuseLimits {
+    max_live_paths: u64,
+    max_assertions_per_path: u64,
+}
+
+fn warm_reuse_limits() -> WarmReuseLimits {
+    *WARM_REUSE_LIMITS.get_or_init(|| WarmReuseLimits {
+        max_live_paths: parse_warm_limit(std::env::var(WARM_MAX_LIVE_PATHS_ENV).ok()),
+        max_assertions_per_path: parse_warm_limit(
+            std::env::var(WARM_MAX_ASSERTIONS_PER_PATH_ENV).ok(),
+        ),
+    })
+}
+
+fn parse_warm_limit(value: Option<String>) -> u64 {
+    match value {
+        None => u64::MAX,
+        Some(value) => value.parse().unwrap_or(0),
+    }
 }
 
 fn warm_reuse_policy() -> WarmReusePolicy {
@@ -477,6 +504,10 @@ struct LineageIncrementalAxeyumSolver {
 }
 
 impl LineageIncrementalAxeyumSolver {
+    fn has_path(&self, path_id: u64) -> bool {
+        self.paths.contains_key(&path_id)
+    }
+
     fn check_path(
         &mut self,
         path_id: u64,
@@ -518,21 +549,64 @@ pub(crate) fn check_warm_thread_local(
             let Some(path_id) = path_id else {
                 return AxeyumSolver::new().check(pool, asserts);
             };
+            let limits = warm_reuse_limits();
+            if count(asserts.len()) > limits.max_assertions_per_path {
+                close_warm_path(path_id);
+                WARM_ASSERTION_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+                return AxeyumSolver::new().check(pool, asserts);
+            }
+            let exists = LINEAGE_SOLVERS.with(|lineage| lineage.borrow().has_path(path_id));
+            let reserved = if exists {
+                false
+            } else if try_reserve_warm_path(limits.max_live_paths) {
+                true
+            } else {
+                WARM_PATH_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+                return AxeyumSolver::new().check(pool, asserts);
+            };
             let (result, before, after, created) = LINEAGE_SOLVERS.with(|lineage| {
                 let mut lineage = lineage.borrow_mut();
                 let (result, before, after, created) = lineage.check_path(path_id, pool, asserts);
                 (result, before, after, created)
             });
+            debug_assert_eq!(created, reserved);
             if created {
                 WARM_PATHS_CREATED.fetch_add(1, Ordering::Relaxed);
-                let live = WARM_PATHS_LIVE.fetch_add(1, Ordering::Relaxed) + 1;
-                WARM_PATHS_PEAK_LIVE.fetch_max(live, Ordering::Relaxed);
             }
             (result, before, after)
         }
     };
     record_warm_delta(before, after);
     result
+}
+
+fn try_reserve_warm_path(limit: u64) -> bool {
+    try_reserve_path_counter(&WARM_PATHS_LIVE, &WARM_PATHS_PEAK_LIVE, limit)
+}
+
+fn try_reserve_path_counter(
+    live_counter: &AtomicU64,
+    peak_counter: &AtomicU64,
+    limit: u64,
+) -> bool {
+    let mut live = live_counter.load(Ordering::Relaxed);
+    loop {
+        if live >= limit {
+            return false;
+        }
+        match live_counter.compare_exchange_weak(
+            live,
+            live + 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => {
+                peak_counter.fetch_max(live + 1, Ordering::Relaxed);
+                return true;
+            }
+            Err(observed) => live = observed,
+        }
+    }
 }
 
 fn record_warm_delta(before: SnapshotReuseStats, after: SnapshotReuseStats) {
@@ -598,6 +672,10 @@ pub struct WarmPathReuseStats {
     pub live_paths: u64,
     /// Maximum simultaneously retained sessions observed in this process.
     pub peak_live_paths: u64,
+    /// Checks sent one-shot because the process-wide live-path cap was full.
+    pub path_limit_fallbacks: u64,
+    /// Checks sent one-shot because their assertion snapshot exceeded the cap.
+    pub assertion_limit_fallbacks: u64,
 }
 
 /// Returns process-wide lineage ownership counters.
@@ -607,6 +685,8 @@ pub fn warm_path_reuse_stats() -> WarmPathReuseStats {
         paths_closed: WARM_PATHS_CLOSED.load(Ordering::Relaxed),
         live_paths: WARM_PATHS_LIVE.load(Ordering::Relaxed),
         peak_live_paths: WARM_PATHS_PEAK_LIVE.load(Ordering::Relaxed),
+        path_limit_fallbacks: WARM_PATH_LIMIT_FALLBACKS.load(Ordering::Relaxed),
+        assertion_limit_fallbacks: WARM_ASSERTION_LIMIT_FALLBACKS.load(Ordering::Relaxed),
     }
 }
 
@@ -1248,6 +1328,20 @@ mod tests {
         assert!(lineage.close_path(11));
         assert!(!lineage.close_path(11));
         assert_eq!(lineage.paths.len(), 1);
+    }
+
+    #[test]
+    fn warm_resource_limits_fail_closed_and_reserve_atomically() {
+        assert_eq!(parse_warm_limit(None), u64::MAX);
+        assert_eq!(parse_warm_limit(Some("17".to_owned())), 17);
+        assert_eq!(parse_warm_limit(Some("invalid".to_owned())), 0);
+
+        let live = AtomicU64::new(0);
+        let peak = AtomicU64::new(0);
+        assert!(try_reserve_path_counter(&live, &peak, 1));
+        assert!(!try_reserve_path_counter(&live, &peak, 1));
+        assert_eq!(live.load(Ordering::Relaxed), 1);
+        assert_eq!(peak.load(Ordering::Relaxed), 1);
     }
 
     #[test]
