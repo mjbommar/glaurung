@@ -119,6 +119,20 @@ work-per-added-node analysis without placing a wall-clock read inside every
 AIG operation. The maps are diagnostic only and do not select a lowering or
 solving policy.
 
+ADR-0175 accepts the first v4-selected AIG change at Axeyum `6779db6a`.
+On Dptf, 39.61% of primitive AND requests reach the old ordered unique table
+and 88.77% of those probes insert. A deterministic 70%-load open-addressed
+table preserves every outcome, AIG/CNF total, gate-family counter, and
+lowering-work counter; profiled Dptf bit blast falls 40.989 to 26.196 ms
+(-36.09%). Three order-balanced unprofiled pairs on each established driver
+decide and agree 20,958/20,958 checks per policy with identical path/root
+traffic and no fallbacks or resets. The weighted three-driver Axeyum round
+falls 5.487 to 5.067 seconds (-7.66%), and the same-stream actual-client ratio
+improves 0.742x to 0.680x; per-driver median RSS changes -1.27%, -2.62%, and
++0.41%. The accepted-table v4 profile validates all 6,986 records and moves
+bit blast to 18.21%, behind CNF at 46.55% and SAT at 18.48%. Profiled timing
+remains diagnostic; the repeated unprofiled result is the performance claim.
+
 `GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING=1` enables ADR-0173's bounded,
 off-by-default positive internal AND-tree half-flattening candidate. V3 adds
 exact eligible nodes, applied halves, and immediate primitive clauses avoided;
