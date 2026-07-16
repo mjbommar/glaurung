@@ -277,14 +277,25 @@ direct producer smoke (three SAT, one UNSAT) and a six-check snapshot smoke
 both validate at 100% decided through Axeyum's strict v7 summarizer; the direct
 summary records two persistent roots and one temporary root translated/encoded
 across the exact extension/pop/assumption/reuse sequence.
+The first real SurfacePen attempt deliberately exercised direct deltas with the
+snapshot-only serial sibling lease and failed the correctness gate: 497/2,551
+same-stream verdicts disagreed with Z3. Root cause was exact, not solver
+unsoundness: sibling states inherited equal retain depths but had opposite last
+branch assertions, so depth-only retention kept the wrong sibling root. Direct
+mode now forces serial leasing off and falls back to exclusive LIFO owner
+transfer plus distinct sibling sessions. The identical stream then agrees
+2,551/2,551 with zero unknowns or replay failures. A pure policy test prevents
+the incompatible combination from reappearing.
 **Consequences:** Glaurung now drives the real P5 session from explicit path
 deltas behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`. The full query remains intact
 for the Z3 authority, ordered capture, and every one-shot fallback. The
 explorer advances its prefix marker only on an explicit backend
 acknowledgement, so admission fallback, a lost owner, or an operational error
 cannot cause a naked suffix to be asserted. The route is not a production
-default or a performance claim: the repeated ordered correctness/time/RSS gate
-remains mandatory.
+default or a performance claim. Its causal comparison is exclusive-transfer
+snapshot versus direct delta; production admission must additionally beat the
+current serial-snapshot policy or add a sound source-identity/COW sibling-prefix
+contract. Repeated ordered correctness/time/RSS gates remain mandatory.
 **Alternatives rejected:** adding default incremental methods to `Solver` would
 make one-shot emulation indistinguishable from retained state; storing one
 trait object inside cloned `State` would imply illegal mutable-session cloning;

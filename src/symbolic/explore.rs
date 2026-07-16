@@ -325,12 +325,19 @@ fn warm_owner_transfer_enabled() -> bool {
 fn warm_serial_sibling_reuse_enabled() -> bool {
     #[cfg(feature = "solver-axeyum")]
     {
-        crate::symbolic::solver::axeyum_backend::warm_serial_sibling_reuse_enabled()
+        effective_serial_sibling_reuse(
+            crate::symbolic::solver::axeyum_backend::warm_serial_sibling_reuse_enabled(),
+            crate::symbolic::solver::axeyum_backend::direct_delta_enabled(),
+        )
     }
     #[cfg(not(feature = "solver-axeyum"))]
     {
         false
     }
+}
+
+fn effective_serial_sibling_reuse(configured: bool, direct_delta: bool) -> bool {
+    configured && !direct_delta
 }
 
 fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
@@ -1838,6 +1845,14 @@ mod tests {
         assert_ne!(parent.warm_path_id, original_owner);
         assert_ne!(first.warm_path_id, parent.warm_path_id);
         assert_ne!(first.warm_path_id, next.warm_path_id);
+    }
+
+    #[test]
+    fn direct_delta_disables_snapshot_only_serial_sibling_leasing() {
+        assert!(effective_serial_sibling_reuse(true, false));
+        assert!(!effective_serial_sibling_reuse(true, true));
+        assert!(!effective_serial_sibling_reuse(false, false));
+        assert!(!effective_serial_sibling_reuse(false, true));
     }
 
     #[test]

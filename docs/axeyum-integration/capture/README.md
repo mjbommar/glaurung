@@ -772,6 +772,7 @@ opt-in below:
 ```sh
 GLAURUNG_AXEYUM_WARM_REUSE=lineage \
 GLAURUNG_AXEYUM_DIRECT_DELTA=1 \
+GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE=off \
 GLAURUNG_SHADOW_DIFF=1 \
 target/release/examples/ioctlance <driver>
 ```
@@ -787,10 +788,23 @@ mutable sessions; they inherit only the parent's confirmed depth, so their first
 check safely rematerializes. The full query is still emitted to the ordered
 trace and sent to the Z3 shadow authority.
 
+Direct mode intentionally disables serial sibling leasing even if the serial
+environment switch is left on. That accepted snapshot optimization computes a
+structural LCP from complete snapshots; the direct contract carries only an
+absolute depth. Two siblings can therefore have equal depth but opposite final
+branch roots. The first real combined attempt exposed exactly this hazard with
+497/2,551 SurfacePen verdict disagreements. After forcing the incompatible
+lease off, the same 2,551 checks all agree with Z3, with zero unknowns and replay
+failures. Direct comparisons must set serial reuse off explicitly so artifact
+policy identity matches effective behavior.
+
 This is functionality plumbing, not accepted performance evidence. Warm-profile
 v7 now attributes direct-session work, but repeated ordered driver runs must
-still prove equal verdicts/findings and improve both time and the bounded RSS
-policy. Until then, `GLAURUNG_AXEYUM_DIRECT_DELTA` stays unset by default.
+compare (a) against the topology-equivalent exclusive-transfer snapshot control
+to isolate snapshot-reconstruction cost and (b) against the current serial-
+snapshot production policy for actual admission. Until both correctness and the
+bounded time/RSS policy pass, `GLAURUNG_AXEYUM_DIRECT_DELTA` stays unset by
+default.
 
 The native path-owned control at `b9febbd`/`950cca4` completes that first
 bounded comparison. Three alternating rounds on `win10-vwififlt`,

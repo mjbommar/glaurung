@@ -148,13 +148,20 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
     `GLAURUNG_AXEYUM_DIRECT_DELTA=1` selects this route only under a path-owned
     warm policy. The accepted snapshot/adaptive route remains the default and
     rollback control.
+  - **Serial-lease incompatibility is fail-closed:** snapshot-era serial sibling
+    leasing may reuse one owner after computing a structural LCP from complete
+    snapshots. A direct marker carries depth, not assertion identity, so equal-
+    depth siblings can differ at their last root. Direct mode therefore
+    disables serial sibling leasing and uses exclusive LIFO owner transfer plus
+    distinct sibling owners until a source-identity/COW prefix contract lands.
   - **Direct profile tranche landed:** warm-profile v7 names snapshot versus
     direct entry and exactly partitions persistent/temporary query roots,
     translations, and root encodings. Strict producer smokes validate both
     modes against Axeyum's fail-closed summarizer.
-  - **Next:** run repeated ordered real-driver comparisons for verdict/finding
-    identity, translation and root traffic, total time, and RSS. Do not enable
-    direct deltas by default until those gates pass.
+  - **Next:** run repeated ordered real-driver comparisons against both the
+    topology-equivalent exclusive-transfer snapshot control and the faster
+    serial-snapshot production policy. Do not enable direct deltas by default
+    until correctness, time, and RSS gates pass.
   - Optional runtime hybrid: when both `solver-axeyum` and `solver-z3` are
     compiled in, try axeyum first and fall back to z3 on per-query
     timeout/`Unknown`.
