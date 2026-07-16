@@ -200,6 +200,8 @@ of real public QF_BV; not yet perf-parity with Z3." Warm incrementality
 (shared subterms blasted once, learned clauses retained) is the mitigation
 and fits glaurung's many-related-queries shape. The P5 incremental trait and a
 path-owned direct-delta adapter now exist, and the explorer can drive them
-behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`; the remaining gate is repeated ordered
-proof that this route preserves decisions/findings while improving time within
-the bounded RSS policy. See `05` R1.
+behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`. ADR-012's repeated ordered gate proves
+its correctness and a causal win over equivalent snapshot topology, but rejects
+production admission against serial snapshot on SurfacePen time and NETwtw10
+RSS. Source-identity/COW direct sibling sharing is the remaining structural
+gate. See `05` R1.

@@ -64,8 +64,9 @@ retained-session contract are landed on branch `sec/axeyum-backend`:
 - The ordered real-driver controls establish the honest performance boundary:
   cold one-shot Axeyum remains slower than Z3 on lifter formulas, while retained
   path lineage can amortize lowering and beat Z3. The direct-delta explorer
-  route is now wired behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`; repeated ordered
-  correctness/time/RSS acceptance is still pending.
+  route is wired and measured behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`. It wins
+  against equivalent snapshot topology but fails the serial-snapshot production
+  time/RSS gate, so ADR-012 keeps it opt-in.
 - Findings + full feedback: `FEEDBACK-LOG.md`.
 
 The earlier 12x one-shot claim was a fast-failure artifact caused by

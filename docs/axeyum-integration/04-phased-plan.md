@@ -158,10 +158,14 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
     direct entry and exactly partitions persistent/temporary query roots,
     translations, and root encodings. Strict producer smokes validate both
     modes against Axeyum's fail-closed summarizer.
-  - **Next:** run repeated ordered real-driver comparisons against both the
-    topology-equivalent exclusive-transfer snapshot control and the faster
-    serial-snapshot production policy. Do not enable direct deltas by default
-    until correctness, time, and RSS gates pass.
+  - **Repeated dual-control gate complete:** direct beats topology-equivalent
+    snapshot time/ratio on both held-out drivers with all alarms green, proving
+    removal of snapshot reconstruction pays. It fails production replacement:
+    SurfacePen time/ratio regress 7.83%/9.54%, and NETwtw10 RSS rises 16.73%
+    versus serial snapshot. Keep direct opt-in and serial snapshot default.
+  - **Next:** add sound source-identity/COW sibling-prefix sharing for direct
+    sessions, or find a topology/memory design that clears the same production
+    alarms. The current direct candidate is measured and deferred, not pending.
   - Optional runtime hybrid: when both `solver-axeyum` and `solver-z3` are
     compiled in, try axeyum first and fall back to z3 on per-query
     timeout/`Unknown`.

@@ -782,9 +782,32 @@ The one-process runner smokes are promising but not acceptance evidence.
 Against exclusive-transfer snapshot, direct SurfacePen improves Axeyum 439.0
 to 393.4 ms and ratio 9.25%, while RSS falls 2.25% and Z3 drift is 1.25%.
 An independent NETwtw10 direct smoke is 28,356/28,356 agreed at 10.640 seconds
-Axeyum versus 52.653 seconds Z3, 259,320 KiB RSS. Repeated paired artifacts are
-still required, and the current serial-snapshot SurfacePen control remains
-faster in the initial manual comparison.
+Axeyum versus 52.653 seconds Z3, 259,320 KiB RSS. The clean repeated result
+below supersedes these smokes.
+
+ADR-012 records the clean dual-control decision. Each artifact runs three
+SurfacePen and three NETwtw10 processes: 92,721 checks, 100% Z3 agreement, zero
+unknown splits/replay failures, identical findings, exact traffic, terminal
+zero gauges, and 4 GiB child limits.
+
+- Against exclusive-transfer snapshot, direct improves SurfacePen Axeyum
+  438.600→390.433 ms (-10.98%), ratio 11.61%, and RSS 0.05%. NETwtw10 improves
+  11.148→10.582 seconds (-5.08%) and ratio 4.84%, with RSS +1.21%. Z3 drift is
+  +0.71%/-0.25%; the causal comparator passes every alarm.
+- Against same-current serial snapshot, direct regresses SurfacePen Axeyum
+  362.067→390.433 ms (+7.83%) and ratio 9.54%; RSS rises 4.88%. NETwtw10 time
+  improves 10.868→10.582 seconds (-2.64%) and ratio 3.78%, but RSS rises
+  224,860→262,484 KiB (+16.73%). The production comparator rejects SurfacePen
+  time/ratio and NETwtw10 RSS.
+
+The committed artifacts are `lineage-direct-transfer-baseline-v1.json`
+(`b7585adf8d4caf62dd2989ac352018bcf64bbf145a7a63affc4bdd9293b55713`),
+`lineage-direct-candidate-v1.json`
+(`798c5dd2a6426592c84f255844b1cd7ceaf1d7fc488d3ff18c26d8ee1c832ceb`), and
+`lineage-direct-serial-baseline-v1.json`
+(`c9502152efa155a8d3f32c8a947ce7e75b45c2538b37d01a4bd95c6c8243ef47`).
+Direct entry is a proven causal win and remains an opt-in control; serial
+snapshot stays the production default.
 
 Three alternating baseline/warm processes on 2026-07-15 each ran 13,126
 same-stream checks with 13,126 agreements, zero disagreements/unknown splits,
@@ -832,13 +855,12 @@ lease off, the same 2,551 checks all agree with Z3, with zero unknowns and repla
 failures. Direct comparisons must set serial reuse off explicitly so artifact
 policy identity matches effective behavior.
 
-This is functionality plumbing, not accepted performance evidence. Warm-profile
-v7 now attributes direct-session work, but repeated ordered driver runs must
-compare (a) against the topology-equivalent exclusive-transfer snapshot control
-to isolate snapshot-reconstruction cost and (b) against the current serial-
-snapshot production policy for actual admission. Until both correctness and the
-bounded time/RSS policy pass, `GLAURUNG_AXEYUM_DIRECT_DELTA` stays unset by
-default.
+Warm-profile v7 and the repeated gate establish direct entry as a valid causal
+control, but ADR-012 rejects production admission. It wins against topology-
+equivalent snapshot and loses the current serial-snapshot policy on SurfacePen
+time and NETwtw10 RSS. `GLAURUNG_AXEYUM_DIRECT_DELTA` therefore stays unset by
+default; the next candidate needs source-identity/COW sibling-prefix sharing or
+another bounded topology and must repeat both comparisons.
 
 The native path-owned control at `b9febbd`/`950cca4` completes that first
 bounded comparison. Three alternating rounds on `win10-vwififlt`,
