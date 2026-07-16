@@ -36,7 +36,8 @@ use sha2::{Digest, Sha256};
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    pipe, Assert, IncrementalSolver, Model, SolveResult, Solver, WarmDeltaContext,
+    pipe, Assert, IncrementalSolver, Model, SolveResult, Solver, WarmAssertionPrefix,
+    WarmDeltaContext,
 };
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
@@ -1498,6 +1499,7 @@ struct DirectDeltaStats {
 struct DirectDeltaPath {
     solver: IncrementalAxeyumSolver,
     active_assertions: usize,
+    active_prefix: WarmAssertionPrefix,
 }
 
 /// Path-owned retained sessions driven by explicit absolute-prefix deltas.
@@ -1520,6 +1522,15 @@ struct DirectCheckMetrics {
     persistent_root_encodings: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DirectCheckInput<'a> {
+    complete_asserts: &'a [Assert],
+    persistent: &'a [Assert],
+    persistent_prefix: &'a WarmAssertionPrefix,
+    retain_assertions: usize,
+    temporary: &'a [Assert],
+}
+
 impl DirectDeltaLineageAxeyumSolver {
     fn has_path(&self, path_id: u64) -> bool {
         self.paths.contains_key(&path_id)
@@ -1529,11 +1540,15 @@ impl DirectDeltaLineageAxeyumSolver {
         &mut self,
         path_id: u64,
         pool: &ExprPool,
-        complete_asserts: &[Assert],
-        persistent: &[Assert],
-        retain_assertions: usize,
-        temporary: &[Assert],
+        input: DirectCheckInput<'_>,
     ) -> (SolveResult, bool, Option<ReplayCheckedSatCacheStats>) {
+        let DirectCheckInput {
+            complete_asserts,
+            persistent,
+            persistent_prefix,
+            retain_assertions,
+            temporary,
+        } = input;
         debug_assert_eq!(complete_asserts.len(), persistent.len() + temporary.len());
         let profiling = profile_output_dir().is_some();
         self.stats.checks = self.stats.checks.saturating_add(1);
@@ -1546,6 +1561,7 @@ impl DirectDeltaLineageAxeyumSolver {
                 DirectDeltaPath {
                     solver: IncrementalAxeyumSolver::new_path_owned(profiling),
                     active_assertions: 0,
+                    active_prefix: WarmAssertionPrefix::default(),
                 },
             );
         }
@@ -1564,7 +1580,25 @@ impl DirectDeltaLineageAxeyumSolver {
         } else {
             None
         };
-        let effective_retain = if created { 0 } else { retain_assertions };
+        if persistent_prefix.depth() != persistent.len() || retain_assertions > persistent.len() {
+            let result = SolveResult::Error(format!(
+                "axeyum direct-delta source depth {}, retain {retain_assertions}, persistent {}",
+                persistent_prefix.depth(),
+                persistent.len()
+            ));
+            let removed_cache = self.close_path(path_id);
+            self.stats.resets_after_error = self.stats.resets_after_error.saturating_add(1);
+            return (result, false, removed_cache);
+        }
+        let effective_retain = if created {
+            0
+        } else {
+            self.paths
+                .get(&path_id)
+                .expect("direct path exists while deriving source LCP")
+                .active_prefix
+                .common_depth(persistent_prefix)
+        };
         let mut profile = profile_before.and_then(|(solver_before, cache_before, _)| {
             start_warm_profile(
                 true,
@@ -1593,21 +1627,15 @@ impl DirectDeltaLineageAxeyumSolver {
 
         let exact_reuse = !created
             && self.paths.get(&path_id).is_some_and(|path| {
-                retain_assertions == path.active_assertions
-                    && retain_assertions == persistent.len()
+                effective_retain == path.active_assertions
+                    && effective_retain == persistent.len()
                     && temporary.is_empty()
             });
 
         let added_before = self.stats.assertions_added;
         let popped_before = self.stats.assertions_popped;
-        let (result, metrics) = self.transition_and_check(
-            path_id,
-            pool,
-            persistent,
-            effective_retain,
-            temporary,
-            profiling,
-        );
+        let (result, metrics) =
+            self.transition_and_check(path_id, pool, input, effective_retain, profiling);
         if let Some(profile) = &mut profile {
             profile.profile.assertions_added =
                 self.stats.assertions_added.saturating_sub(added_before);
@@ -1668,7 +1696,7 @@ impl DirectDeltaLineageAxeyumSolver {
             self.stats.prefix_assertions_reused = self
                 .stats
                 .prefix_assertions_reused
-                .saturating_add(count(retain_assertions));
+                .saturating_add(count(effective_retain));
             if exact_reuse {
                 self.stats.exact_reuses = self.stats.exact_reuses.saturating_add(1);
             }
@@ -1684,11 +1712,16 @@ impl DirectDeltaLineageAxeyumSolver {
         &mut self,
         path_id: u64,
         pool: &ExprPool,
-        persistent: &[Assert],
+        input: DirectCheckInput<'_>,
         retain_assertions: usize,
-        temporary: &[Assert],
         profiling: bool,
     ) -> (SolveResult, DirectCheckMetrics) {
+        let DirectCheckInput {
+            persistent,
+            persistent_prefix,
+            temporary,
+            ..
+        } = input;
         let mut metrics = DirectCheckMetrics::default();
         let path = self
             .paths
@@ -1752,6 +1785,7 @@ impl DirectDeltaLineageAxeyumSolver {
         if temporary.is_empty() {
             let (result, model_extract_nanos) = path.solver.check_measured(profiling);
             metrics.model_extract_nanos = model_extract_nanos;
+            path.active_prefix = persistent_prefix.clone();
             (result, metrics)
         } else {
             let (result, translated, model_extract_nanos) = path
@@ -1763,6 +1797,7 @@ impl DirectDeltaLineageAxeyumSolver {
                 .stats
                 .temporary_assumptions_translated
                 .saturating_add(translated.roots);
+            path.active_prefix = persistent_prefix.clone();
             (result, metrics)
         }
     }
@@ -1979,7 +2014,9 @@ fn check_warm_thread_local_selected(
             };
             let direct = direct_delta_requested && delta.is_some();
             if direct {
-                let delta = delta.expect("direct mode requires an explicit delta");
+                let delta = delta
+                    .as_ref()
+                    .expect("direct mode requires an explicit delta");
                 if delta.retain_assertions > delta.persistent_assertions
                     || delta.persistent_assertions > asserts.len()
                 {
@@ -2066,7 +2103,9 @@ fn check_warm_thread_local_selected(
                 }
             };
             if direct {
-                let delta = delta.expect("direct mode requires an explicit delta");
+                let delta = delta
+                    .as_ref()
+                    .expect("direct mode requires an explicit delta");
                 let persistent = &asserts[..delta.persistent_assertions];
                 let temporary = &asserts[delta.persistent_assertions..];
                 let (
@@ -2086,10 +2125,13 @@ fn check_warm_thread_local_selected(
                     let (result, synced, removed_cache) = lineage.check_path(
                         path_id,
                         pool,
-                        asserts,
-                        persistent,
-                        delta.retain_assertions,
-                        temporary,
+                        DirectCheckInput {
+                            complete_asserts: asserts,
+                            persistent,
+                            persistent_prefix: &delta.persistent_prefix,
+                            retain_assertions: delta.retain_assertions,
+                            temporary,
+                        },
                     );
                     (
                         result,
@@ -2905,6 +2947,22 @@ mod tests {
         p.intern(Expr::Cmp { op, a, b, width: w })
     }
 
+    fn direct_input<'a>(
+        complete_asserts: &'a [Assert],
+        persistent: &'a [Assert],
+        persistent_prefix: &'a WarmAssertionPrefix,
+        retain_assertions: usize,
+        temporary: &'a [Assert],
+    ) -> DirectCheckInput<'a> {
+        DirectCheckInput {
+            complete_asserts,
+            persistent,
+            persistent_prefix,
+            retain_assertions,
+            temporary,
+        }
+    }
+
     /// Assert `pred` (a BV1) is true; expect Sat if the predicate genuinely
     /// holds, Unsat if it does not. Takes `&ExprPool` so callers can build
     /// `pred` with `&mut p` first, then check.
@@ -3144,15 +3202,22 @@ mod tests {
 
         let owner = 23;
         let mut lineage = DirectDeltaLineageAxeyumSolver::default();
+        let mut base_prefix = WarmAssertionPrefix::default();
+        base_prefix.push();
+        let mut left_prefix = base_prefix.clone();
+        left_prefix.push();
         assert!(matches!(
             lineage
                 .check_path(
                     owner,
                     &root,
-                    &[(below_six, true)],
-                    &[(below_six, true)],
-                    0,
-                    &[],
+                    direct_input(
+                        &[(below_six, true)],
+                        &[(below_six, true)],
+                        &base_prefix,
+                        0,
+                        &[],
+                    ),
                 )
                 .0,
             SolveResult::Sat(_)
@@ -3161,10 +3226,13 @@ mod tests {
             .check_path(
                 owner,
                 &left,
-                &[(below_six, true), (x_is_five, true)],
-                &[(below_six, true), (x_is_five, true)],
-                1,
-                &[],
+                direct_input(
+                    &[(below_six, true), (x_is_five, true)],
+                    &[(below_six, true), (x_is_five, true)],
+                    &left_prefix,
+                    1,
+                    &[],
+                ),
             )
             .0
         {
@@ -3180,10 +3248,13 @@ mod tests {
                 .check_path(
                     owner,
                     &right,
-                    &[(below_six, true), (x_is_seven, true)],
-                    &[(below_six, true)],
-                    1,
-                    &[(x_is_seven, true)],
+                    direct_input(
+                        &[(below_six, true), (x_is_seven, true)],
+                        &[(below_six, true)],
+                        &base_prefix,
+                        1,
+                        &[(x_is_seven, true)],
+                    ),
                 )
                 .0,
             SolveResult::Unsat
@@ -3193,10 +3264,13 @@ mod tests {
                 .check_path(
                     owner,
                     &right,
-                    &[(below_six, true)],
-                    &[(below_six, true)],
-                    1,
-                    &[],
+                    direct_input(
+                        &[(below_six, true)],
+                        &[(below_six, true)],
+                        &base_prefix,
+                        1,
+                        &[],
+                    ),
                 )
                 .0,
             SolveResult::Sat(_)
@@ -3218,6 +3292,74 @@ mod tests {
     }
 
     #[test]
+    fn direct_delta_lineage_rewinds_stale_equal_depth_sibling_by_source_identity() {
+        let mut root = ExprPool::new();
+        let x = root.fresh_symbol(Width::W32);
+        let ten = c(&mut root, 10, Width::W32);
+        let below_ten = cmp(&mut root, CmpOp::Ult, x, ten, Width::W32);
+
+        let mut left = root.clone();
+        let five = c(&mut left, 5, Width::W32);
+        let x_is_five = cmp(&mut left, CmpOp::Eq, x, five, Width::W32);
+        let mut right = root.clone();
+        let seven = c(&mut right, 7, Width::W32);
+        let x_is_seven = cmp(&mut right, CmpOp::Eq, x, seven, Width::W32);
+
+        let mut base_prefix = WarmAssertionPrefix::default();
+        base_prefix.push();
+        let mut left_prefix = base_prefix.clone();
+        left_prefix.push();
+        let mut right_prefix = base_prefix.clone();
+        right_prefix.push();
+
+        let owner = 31;
+        let mut lineage = DirectDeltaLineageAxeyumSolver::default();
+        match lineage
+            .check_path(
+                owner,
+                &left,
+                direct_input(
+                    &[(below_ten, true), (x_is_five, true)],
+                    &[(below_ten, true), (x_is_five, true)],
+                    &left_prefix,
+                    0,
+                    &[],
+                ),
+            )
+            .0
+        {
+            SolveResult::Sat(model) => assert_eq!(model.values.get(&0), Some(&5)),
+            other => panic!("expected left sibling SAT model, got {other:?}"),
+        }
+
+        // This marker is stale: the queued right sibling believes its complete
+        // two-root prefix is retained, while the one mutable owner currently
+        // contains the left sibling. Source ancestry, not depth, must rewind to
+        // the one-root parent before asserting the right branch.
+        match lineage
+            .check_path(
+                owner,
+                &right,
+                direct_input(
+                    &[(below_ten, true), (x_is_seven, true)],
+                    &[(below_ten, true), (x_is_seven, true)],
+                    &right_prefix,
+                    2,
+                    &[],
+                ),
+            )
+            .0
+        {
+            SolveResult::Sat(model) => assert_eq!(model.values.get(&0), Some(&7)),
+            other => panic!("expected source-rewound right sibling SAT model, got {other:?}"),
+        }
+
+        assert_eq!(left_prefix.common_depth(&right_prefix), 1);
+        assert_eq!(lineage.stats().assertions_popped, 1);
+        assert_eq!(lineage.stats().assertions_added, 3);
+    }
+
+    #[test]
     fn direct_delta_lineage_fails_closed_on_impossible_prefix() {
         let mut pool = ExprPool::new();
         let x = pool.fresh_symbol(Width::W8);
@@ -3226,14 +3368,23 @@ mod tests {
         let assertion = (x_is_one, true);
         let owner = 29;
         let mut lineage = DirectDeltaLineageAxeyumSolver::default();
+        let mut prefix = WarmAssertionPrefix::default();
+        prefix.push();
 
         assert!(
             lineage
-                .check_path(owner, &pool, &[assertion], &[assertion], 0, &[])
+                .check_path(
+                    owner,
+                    &pool,
+                    direct_input(&[assertion], &[assertion], &prefix, 0, &[]),
+                )
                 .1
         );
-        let (invalid, synced, _) =
-            lineage.check_path(owner, &pool, &[assertion], &[assertion], 2, &[]);
+        let (invalid, synced, _) = lineage.check_path(
+            owner,
+            &pool,
+            direct_input(&[assertion], &[assertion], &prefix, 2, &[]),
+        );
         assert!(!synced);
         assert!(matches!(invalid, SolveResult::Error(_)));
         assert!(!lineage.paths.contains_key(&owner));
@@ -3243,7 +3394,11 @@ mod tests {
         // refers to the lost owner.
         assert!(
             lineage
-                .check_path(owner, &pool, &[assertion], &[assertion], 1, &[])
+                .check_path(
+                    owner,
+                    &pool,
+                    direct_input(&[assertion], &[assertion], &prefix, 1, &[]),
+                )
                 .1
         );
         assert_eq!(
@@ -3433,8 +3588,15 @@ mod tests {
         let x_is_five = cmp(&mut pool, CmpOp::Eq, x, five, Width::W32);
         let x_is_seven = cmp(&mut pool, CmpOp::Eq, x, seven, Width::W32);
         let owner = 0xd1ec_7de1_7a_u64;
+        let mut base_prefix = WarmAssertionPrefix::default();
+        base_prefix.push();
+        let mut left_prefix = base_prefix.clone();
+        left_prefix.push();
 
-        let check = |asserts: &[Assert], retain_assertions, persistent_assertions| {
+        let check = |asserts: &[Assert],
+                     retain_assertions,
+                     persistent_assertions,
+                     persistent_prefix: &WarmAssertionPrefix| {
             check_warm_thread_local_selected(
                 &pool,
                 asserts,
@@ -3442,6 +3604,7 @@ mod tests {
                 Some(WarmDeltaContext {
                     retain_assertions,
                     persistent_assertions,
+                    persistent_prefix: persistent_prefix.clone(),
                 }),
                 WarmReusePolicy::Lineage,
                 true,
@@ -3449,24 +3612,24 @@ mod tests {
         };
 
         assert!(matches!(
-            check(&[(below_six, true)], 0, 1),
+            check(&[(below_six, true)], 0, 1, &base_prefix),
             SolveResult::Sat(_)
         ));
         assert!(last_direct_delta_synced());
 
-        match check(&[(below_six, true), (x_is_five, true)], 1, 2) {
+        match check(&[(below_six, true), (x_is_five, true)], 1, 2, &left_prefix) {
             SolveResult::Sat(model) => assert_eq!(model.values.get(&0), Some(&5)),
             other => panic!("expected direct-delta SAT, got {other:?}"),
         }
         assert!(last_direct_delta_synced());
 
         assert_eq!(
-            check(&[(below_six, true), (x_is_seven, true)], 1, 1),
+            check(&[(below_six, true), (x_is_seven, true)], 1, 1, &base_prefix,),
             SolveResult::Unsat
         );
         assert!(last_direct_delta_synced());
         assert!(matches!(
-            check(&[(below_six, true)], 1, 1),
+            check(&[(below_six, true)], 1, 1, &base_prefix),
             SolveResult::Sat(_)
         ));
         assert!(last_direct_delta_synced());
@@ -3474,7 +3637,7 @@ mod tests {
         // Backend-local validation is fail-closed even if a caller bypasses
         // `solve_for_path_delta` and supplies an impossible partition.
         assert!(matches!(
-            check(&[(below_six, true)], 1, 2),
+            check(&[(below_six, true)], 1, 2, &left_prefix),
             SolveResult::Error(_)
         ));
         assert!(!last_direct_delta_synced());

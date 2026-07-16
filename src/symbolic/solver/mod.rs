@@ -77,7 +77,8 @@ pub trait IncrementalSolver {
     fn check_assuming(&mut self, pool: &ExprPool, assumptions: &[Assert]) -> SolveResult;
 }
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Default per-function solver budget: `(max_solves, max_timeouts)`. The explorer
@@ -107,14 +108,79 @@ thread_local! {
     /// Explicit persistent-prefix boundary for the opt-in direct-delta Axeyum
     /// path. `persistent_assertions` partitions the full query slice from any
     /// trailing one-shot assumptions.
-    static ACTIVE_WARM_DELTA: Cell<Option<WarmDeltaContext>> = const { Cell::new(None) };
+    static ACTIVE_WARM_DELTA: RefCell<Option<WarmDeltaContext>> = const { RefCell::new(None) };
+}
+
+/// Copy-on-write source ancestry for one explorer path's persistent assertions.
+///
+/// Every append creates a distinct node whose parent is the exact prior prefix;
+/// forks clone only the [`Arc`]. Pointer identity therefore proves shared source
+/// ancestry even when cloned expression pools later reuse the same [`ExprId`]
+/// for different nodes. No hash or depth is trusted as identity.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WarmAssertionPrefix(Option<Arc<WarmAssertionPrefixNode>>);
+
+#[derive(Debug)]
+struct WarmAssertionPrefixNode {
+    parent: Option<Arc<WarmAssertionPrefixNode>>,
+    depth: usize,
+}
+
+impl WarmAssertionPrefix {
+    /// Extend this path by one persistent source assertion.
+    pub(crate) fn push(&mut self) {
+        self.0 = Some(Arc::new(WarmAssertionPrefixNode {
+            parent: self.0.clone(),
+            depth: self.depth() + 1,
+        }));
+    }
+
+    /// Number of persistent source assertions represented by this prefix.
+    pub(crate) fn depth(&self) -> usize {
+        self.0.as_ref().map_or(0, |node| node.depth)
+    }
+
+    /// Exact common-ancestor depth of two source prefixes.
+    pub(crate) fn common_depth(&self, other: &Self) -> usize {
+        let mut left = self.0.clone();
+        let mut right = other.0.clone();
+        while node_depth(&left) > node_depth(&right) {
+            left = node_parent(left);
+        }
+        while node_depth(&right) > node_depth(&left) {
+            right = node_parent(right);
+        }
+        loop {
+            match (&left, &right) {
+                (Some(left), Some(right)) if Arc::ptr_eq(left, right) => return left.depth,
+                (Some(_), Some(_)) => {
+                    left = node_parent(left);
+                    right = node_parent(right);
+                }
+                _ => return 0,
+            }
+        }
+    }
+}
+
+fn node_depth(node: &Option<Arc<WarmAssertionPrefixNode>>) -> usize {
+    node.as_ref().map_or(0, |node| node.depth)
+}
+
+fn node_parent(node: Option<Arc<WarmAssertionPrefixNode>>) -> Option<Arc<WarmAssertionPrefixNode>> {
+    node.and_then(|node| node.parent.clone())
 }
 
 /// Explorer-to-backend direct-delta transition for one check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct WarmDeltaContext {
     pub(crate) retain_assertions: usize,
     pub(crate) persistent_assertions: usize,
+    pub(crate) persistent_prefix: WarmAssertionPrefix,
+}
+
+fn active_warm_delta() -> Option<WarmDeltaContext> {
+    ACTIVE_WARM_DELTA.with(|active| active.borrow().clone())
 }
 
 /// Backend-separated timing for one solver call.
@@ -417,7 +483,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                         pool,
                         asserts,
                         ACTIVE_WARM_PATH.with(Cell::get),
-                        ACTIVE_WARM_DELTA.with(Cell::get),
+                        active_warm_delta(),
                     )
                 } else {
                     axeyum_backend::AxeyumSolver::new().check(pool, asserts)
@@ -431,7 +497,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                         pool,
                         asserts,
                         ACTIVE_WARM_PATH.with(Cell::get),
-                        ACTIVE_WARM_DELTA.with(Cell::get),
+                        active_warm_delta(),
                     )
                 } else {
                     axeyum_backend::AxeyumSolver::new().check(pool, asserts)
@@ -507,7 +573,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             pool,
             asserts,
             ACTIVE_WARM_PATH.with(Cell::get),
-            ACTIVE_WARM_DELTA.with(Cell::get),
+            active_warm_delta(),
         )
     } else {
         axeyum_backend::AxeyumSolver::new().check(pool, asserts)
@@ -563,6 +629,7 @@ pub(crate) fn solve_for_path_delta(
     path_id: u64,
     retain_assertions: usize,
     persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
 ) -> (SolveResult, bool) {
     if retain_assertions > persistent_assertions || persistent_assertions > asserts.len() {
         return (
@@ -573,12 +640,22 @@ pub(crate) fn solve_for_path_delta(
             false,
         );
     }
+    if persistent_prefix.depth() != persistent_assertions {
+        return (
+            SolveResult::Error(format!(
+                "invalid warm source prefix: depth {}, persistent {persistent_assertions}",
+                persistent_prefix.depth()
+            )),
+            false,
+        );
+    }
     let previous_path = ACTIVE_WARM_PATH.with(|active| active.replace(Some(path_id)));
     let previous_delta = ACTIVE_WARM_DELTA.with(|active| {
-        active.replace(Some(WarmDeltaContext {
+        active.borrow_mut().replace(WarmDeltaContext {
             retain_assertions,
             persistent_assertions,
-        }))
+            persistent_prefix: persistent_prefix.clone(),
+        })
     });
     #[cfg(feature = "solver-axeyum")]
     axeyum_backend::reset_direct_delta_sync();
@@ -587,7 +664,9 @@ pub(crate) fn solve_for_path_delta(
     let synced = axeyum_backend::last_direct_delta_synced();
     #[cfg(not(feature = "solver-axeyum"))]
     let synced = false;
-    ACTIVE_WARM_DELTA.with(|active| active.set(previous_delta));
+    ACTIVE_WARM_DELTA.with(|active| {
+        *active.borrow_mut() = previous_delta;
+    });
     ACTIVE_WARM_PATH.with(|active| active.set(previous_path));
     (result, synced)
 }

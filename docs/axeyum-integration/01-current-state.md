@@ -203,5 +203,6 @@ path-owned direct-delta adapter now exist, and the explorer can drive them
 behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`. ADR-012's repeated ordered gate proves
 its correctness and a causal win over equivalent snapshot topology, but rejects
 production admission against serial snapshot on SurfacePen time and NETwtw10
-RSS. Source-identity/COW direct sibling sharing is the remaining structural
-gate. See `05` R1.
+RSS. ADR-013 now lands exact copy-on-write source ancestry and restores safe
+serial sibling leasing for the direct candidate; repeated real-driver time/RSS
+admission is the remaining gate. See `05` R1.

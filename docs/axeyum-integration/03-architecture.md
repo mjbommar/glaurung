@@ -33,14 +33,17 @@ pub trait IncrementalSolver {
 `IncrementalAxeyumSolver` implements this contract by translating only delta
 roots and delegating to Axeyum's retained session trait. The explorer now
 tracks, per logical path owner, the absolute persistent-prefix depth last
-confirmed by that session. With `GLAURUNG_AXEYUM_DIRECT_DELTA=1` and a
-path-owned warm policy, persistent suffixes go directly to the retained
-session and probe-only assertions use `check_assuming`; the full assertion
-slice remains available to Z3, capture, and one-shot fallback. A fork inherits
-only the parent's confirmed prefix depth, never its mutable solver, and a
-restart or failed transition resets the marker. This route is opt-in until its
-ordered correctness, timing, and RSS gates pass; bounded snapshot/lineage
-remains the rollback control.
+confirmed by that session plus an immutable copy-on-write source-ancestry
+chain. With `GLAURUNG_AXEYUM_DIRECT_DELTA=1` and a path-owned warm policy,
+persistent suffixes go directly to the retained session and probe-only
+assertions use `check_assuming`; the full assertion slice remains available to
+Z3, capture, and one-shot fallback. Forks share only immutable ancestry. A
+serially leased mutable solver computes the exact shared ancestor by `Arc`
+identity before pop/push, so equal depths and cloned-pool `ExprId` collisions
+cannot substitute for source identity. Restarts and failed transitions reset
+the marker/ancestry. This route remains opt-in until its repeated ordered
+timing and RSS gates pass; bounded snapshot/lineage remains the rollback
+control.
 
 ## Module + crate layout
 

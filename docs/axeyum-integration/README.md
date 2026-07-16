@@ -58,7 +58,7 @@ retained-session contract are landed on branch `sec/axeyum-backend`:
   `AxeyumTextSolver` (bridge) + `prove_unsat` (DRAT). Feature
   `solver-axeyum`; `solve()` cascade z3 > axeyum > pipe.
 - `examples/axeyum_diff.rs` - z3-vs-axeyum differential + benchmark.
-- The native backend group is 41/41 green, including scopes, ephemeral
+- The native backend group is 42/42 green, including scopes, ephemeral
   assumptions, model lifting, proof replay, snapshot lineage, direct deltas,
   cache bounds, profiling, and fail-closed resource limits.
 - The ordered real-driver controls establish the honest performance boundary:
@@ -66,7 +66,9 @@ retained-session contract are landed on branch `sec/axeyum-backend`:
   path lineage can amortize lowering and beat Z3. The direct-delta explorer
   route is wired and measured behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`. It wins
   against equivalent snapshot topology but fails the serial-snapshot production
-  time/RSS gate, so ADR-012 keeps it opt-in.
+  time/RSS gate, so ADR-012 keeps it opt-in. ADR-013 adds exact copy-on-write
+  source ancestry and safely restores serial sibling leasing; the new candidate
+  still requires repeated production measurement.
 - Findings + full feedback: `FEEDBACK-LOG.md`.
 
 The earlier 12x one-shot claim was a fast-failure artifact caused by

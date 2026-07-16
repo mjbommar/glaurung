@@ -23,7 +23,7 @@ use crate::ir::types::{
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::ordered_trace::TracePath;
 use crate::symbolic::solver::{
-    last_solve_timing, solve_for_path_delta, Assert, Model, SolveResult,
+    last_solve_timing, solve_for_path_delta, Assert, Model, SolveResult, WarmAssertionPrefix,
 };
 use crate::symbolic::Symbolic;
 
@@ -336,8 +336,8 @@ fn warm_serial_sibling_reuse_enabled() -> bool {
     }
 }
 
-fn effective_serial_sibling_reuse(configured: bool, direct_delta: bool) -> bool {
-    configured && !direct_delta
+fn effective_serial_sibling_reuse(configured: bool, _direct_delta: bool) -> bool {
+    configured
 }
 
 fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
@@ -383,6 +383,10 @@ struct State {
     /// Absolute number of persistent constraints known synchronized in that
     /// owner. It advances only when the direct-delta backend confirms success.
     warm_retain_assertions: usize,
+    /// Exact copy-on-write ancestry of persistent source assertions. Unlike
+    /// expression IDs or depth, shared node identity cannot alias after pools
+    /// fork and independently intern different expressions.
+    warm_assertion_prefix: WarmAssertionPrefix,
 }
 
 /// Max times a single path may re-enter the same block before it is cut.
@@ -404,6 +408,7 @@ impl State {
             trace: TracePath::root(pc),
             warm_path_id: next_warm_path_id(),
             warm_retain_assertions: 0,
+            warm_assertion_prefix: WarmAssertionPrefix::default(),
         }
     }
 
@@ -423,6 +428,7 @@ impl State {
             trace: self.trace.as_ref().map(|trace| trace.fork(pc)),
             warm_path_id: next_warm_path_id(),
             warm_retain_assertions: self.warm_retain_assertions,
+            warm_assertion_prefix: self.warm_assertion_prefix.clone(),
         }
     }
 
@@ -460,6 +466,7 @@ impl State {
             trace.push_assert(&self.machine.dom.pool, assertion, role, location);
         }
         self.constraints.push(assertion);
+        self.warm_assertion_prefix.push();
     }
 
     /// Terminate this path in the ordered trace, if capture is active.
@@ -477,6 +484,7 @@ impl State {
         crate::symbolic::solver::axeyum_backend::close_warm_path(self.warm_path_id);
         self.warm_path_id = next_warm_path_id();
         self.warm_retain_assertions = 0;
+        self.warm_assertion_prefix = WarmAssertionPrefix::default();
         self.trace = TracePath::root(self.pc);
     }
 }
@@ -490,6 +498,7 @@ fn solve_traced(st: &mut State, purpose: &str, location: u64) -> SolveResult {
         st.warm_path_id,
         st.warm_retain_assertions,
         persistent,
+        &st.warm_assertion_prefix,
     );
     if synced {
         st.warm_retain_assertions = persistent;
@@ -529,6 +538,7 @@ fn solve_probe_traced(
         st.warm_path_id,
         st.warm_retain_assertions,
         persistent,
+        &st.warm_assertion_prefix,
     );
     if synced {
         st.warm_retain_assertions = persistent;
@@ -724,6 +734,7 @@ pub fn find_sinks_stateful(
                 st.taint = seed(&mut st.machine);
                 st.pc = lf.entry_va;
                 st.constraints.clear();
+                st.warm_assertion_prefix = WarmAssertionPrefix::default();
                 st.validated.clear();
                 st.tainted_reads.clear();
                 st.restart_trace();
@@ -1775,7 +1786,7 @@ mod tests {
         let one = machine.dom.constant(Width::W8, 1);
         let contradiction = machine.dom.cmp(CmpOp::Eq, &zero, &one, Width::W8);
         let mut state = State::root(machine, 0x1000, TaintSpec::new());
-        state.constraints.push((contradiction, true));
+        state.assert((contradiction, true), "test", state.pc);
 
         assert_eq!(eval_concrete(&mut state, value), None);
         let constraints_before = state.constraints.clone();
@@ -1848,11 +1859,37 @@ mod tests {
     }
 
     #[test]
-    fn direct_delta_disables_snapshot_only_serial_sibling_leasing() {
+    fn source_ancestry_allows_serial_sibling_leasing_for_direct_delta() {
         assert!(effective_serial_sibling_reuse(true, false));
-        assert!(!effective_serial_sibling_reuse(true, true));
+        assert!(effective_serial_sibling_reuse(true, true));
         assert!(!effective_serial_sibling_reuse(false, false));
         assert!(!effective_serial_sibling_reuse(false, true));
+    }
+
+    #[test]
+    fn warm_source_ancestry_shares_only_the_exact_fork_prefix() {
+        let machine = Machine::new(Symbolic::new());
+        let mut parent = State::root(machine, 0x1000, TaintSpec::new());
+        let base = parent.machine.dom.constant(Width::W1, 1);
+        parent.assert((base, true), "base", parent.pc);
+
+        let mut left = parent.fork(0x2000);
+        let mut right = parent.fork(0x3000);
+        // Both cloned pools may intern this identical expression to the same
+        // numeric ExprId. Distinct source appends must still be distinct nodes.
+        let left_branch = left.machine.dom.constant(Width::W1, 1);
+        let right_branch = right.machine.dom.constant(Width::W1, 1);
+        left.assert((left_branch, true), "left", left.pc);
+        right.assert((right_branch, true), "right", right.pc);
+
+        assert_eq!(parent.warm_assertion_prefix.depth(), 1);
+        assert_eq!(left.warm_assertion_prefix.depth(), 2);
+        assert_eq!(right.warm_assertion_prefix.depth(), 2);
+        assert_eq!(
+            left.warm_assertion_prefix
+                .common_depth(&right.warm_assertion_prefix),
+            1
+        );
     }
 
     #[test]

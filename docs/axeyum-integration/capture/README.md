@@ -752,9 +752,9 @@ smoke. It is not the repeated release gate. The exact traffic constants are
 schema-v1 acceptance identity; a deliberate Glaurung exploration change needs
 a new schema/evidence decision rather than silently comparing different work.
 
-The runner has a named first-class direct-delta policy. Its accepted topology
-is adaptive reuse plus exclusive owner transfer, with serial sibling leasing
-off:
+The runner's currently calibrated first-class direct-delta policy is the
+ADR-012 exclusive-transfer control: adaptive reuse plus owner transfer, with
+serial sibling leasing off:
 
 ```sh
 python3 docs/axeyum-integration/capture/lineage_gate.py run \
@@ -767,8 +767,8 @@ python3 docs/axeyum-integration/capture/lineage_gate.py run \
   --direct-delta on
 ```
 
-The validator has exact SurfacePen and NETwtw10 direct traffic contracts and
-rejects direct mode under any other topology. Build a topology-equivalent
+The validator has exact SurfacePen and NETwtw10 traffic contracts for this
+historical control and rejects uncalibrated direct topology. Build a topology-equivalent
 snapshot artifact with the same options except `--direct-delta off`, then use
 `--allow-direct-delta-enablement` for the causal snapshot-reconstruction test.
 For the actual production admission question, compare the current serial-
@@ -845,22 +845,32 @@ mutable sessions; they inherit only the parent's confirmed depth, so their first
 check safely rematerializes. The full query is still emitted to the ordered
 trace and sent to the Z3 shadow authority.
 
-Direct mode intentionally disables serial sibling leasing even if the serial
-environment switch is left on. That accepted snapshot optimization computes a
-structural LCP from complete snapshots; the direct contract carries only an
-absolute depth. Two siblings can therefore have equal depth but opposite final
-branch roots. The first real combined attempt exposed exactly this hazard with
-497/2,551 SurfacePen verdict disagreements. After forcing the incompatible
-lease off, the same 2,551 checks all agree with Z3, with zero unknowns and replay
-failures. Direct comparisons must set serial reuse off explicitly so artifact
-policy identity matches effective behavior.
+The first implementation intentionally disabled serial sibling leasing even if
+the serial environment switch was left on. Its direct contract carried only an
+absolute depth, so equal-depth siblings with opposite branch roots produced
+497/2,551 SurfacePen disagreements. Forcing exclusive ownership restored
+2,551/2,551 agreement and established the ADR-012 control above.
+
+ADR-013 replaces depth authority with exact immutable source ancestry. Each
+persistent append owns a node pointing to its prior prefix; forks share only
+the node `Arc`. A serial direct session computes the true common ancestor by
+node identity, pops to it, and translates only the target suffix. Cloned pools
+may reuse an `ExprId`, but independently appended sibling nodes cannot alias.
+The adapter and explorer tests are 42/42 and 12/12 green, including a stale
+equal-depth sibling that correctly changes the model from `x=5` to `x=7` after
+one pop. Direct+serial runtime functionality is now sound, but its exact real-
+driver traffic is not yet calibrated in this gate. Add that fail-closed policy
+identity from a one-process SurfacePen smoke before running the repeated
+SurfacePen/NETwtw10 production comparison.
 
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-
 equivalent snapshot and loses the current serial-snapshot policy on SurfacePen
 time and NETwtw10 RSS. `GLAURUNG_AXEYUM_DIRECT_DELTA` therefore stays unset by
 default; the next candidate needs source-identity/COW sibling-prefix sharing or
-another bounded topology and must repeat both comparisons.
+another bounded topology and must repeat both comparisons. ADR-013 supplies
+that next candidate; it does not supersede ADR-012 until those measurements
+clear every alarm.
 
 The native path-owned control at `b9febbd`/`950cca4` completes that first
 bounded comparison. Three alternating rounds on `win10-vwififlt`,

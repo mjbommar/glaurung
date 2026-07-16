@@ -148,12 +148,13 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
     `GLAURUNG_AXEYUM_DIRECT_DELTA=1` selects this route only under a path-owned
     warm policy. The accepted snapshot/adaptive route remains the default and
     rollback control.
-  - **Serial-lease incompatibility is fail-closed:** snapshot-era serial sibling
-    leasing may reuse one owner after computing a structural LCP from complete
-    snapshots. A direct marker carries depth, not assertion identity, so equal-
-    depth siblings can differ at their last root. Direct mode therefore
-    disables serial sibling leasing and uses exclusive LIFO owner transfer plus
-    distinct sibling owners until a source-identity/COW prefix contract lands.
+  - **Source-identity serial lease landed (ADR-013):** every persistent append
+    creates an immutable ancestry node; forks clone only its `Arc`. The direct
+    adapter compares the target and active chains by exact node identity,
+    rewinds to their real common ancestor, and translates only the target
+    suffix. Equal depths and cloned-pool `ExprId` collisions carry no authority.
+    One mutable solver remains worker-local and serially leased; no SAT state is
+    cloned or concurrently shared.
   - **Direct profile tranche landed:** warm-profile v7 names snapshot versus
     direct entry and exactly partitions persistent/temporary query roots,
     translations, and root encodings. Strict producer smokes validate both
@@ -163,9 +164,10 @@ Goal: exploit axeyum's incremental API and give a runtime escape hatch.
     removal of snapshot reconstruction pays. It fails production replacement:
     SurfacePen time/ratio regress 7.83%/9.54%, and NETwtw10 RSS rises 16.73%
     versus serial snapshot. Keep direct opt-in and serial snapshot default.
-  - **Next:** add sound source-identity/COW sibling-prefix sharing for direct
-    sessions, or find a topology/memory design that clears the same production
-    alarms. The current direct candidate is measured and deferred, not pending.
+  - **Next:** extend the fail-closed lineage gate with the source-prefix direct+
+    serial policy, calibrate exact traffic on a real SurfacePen smoke, then run
+    the repeated SurfacePen/NETwtw10 production comparison. Direct remains
+    opt-in until time, ratio, and RSS all clear.
   - Optional runtime hybrid: when both `solver-axeyum` and `solver-z3` are
     compiled in, try axeyum first and fall back to z3 on per-query
     timeout/`Unknown`.
