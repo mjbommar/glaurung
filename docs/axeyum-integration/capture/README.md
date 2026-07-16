@@ -97,7 +97,7 @@ target/release/examples/ioctlance \
 check. Without warm reuse it preserves the raw one-shot policy and writes the
 `glaurung-axeyum-native-profile-v1` schema. With snapshot or lineage reuse it
 selects Axeyum's profiling constructor and writes
-`glaurung-axeyum-warm-profile-v3` (v1/v2 remain accepted historical inputs).
+`glaurung-axeyum-warm-profile-v4` (v1/v2/v3 remain accepted historical inputs).
 Both use one
 `axeyum-profile-<pid>.jsonl` file per process. Every record carries the SHA-256
 of the exact bytes produced by the existing SMT-LIB capture renderer, a
@@ -107,6 +107,17 @@ prefix/add/pop root traffic, session creation, structural deltas, exact
 incremental CNF gate/root-family deltas, and explicit unattributed time. Query
 rendering/hash and JSON output are diagnostic overhead and are deliberately
 outside `total_nanos`.
+
+V4 adds two exact per-check maps for the next GQ5 attribution boundary. The
+five `aig_construction` counters partition every primitive AND request into a
+trivial simplification, absorption/consensus simplification, unique-table hit,
+or newly allocated AND node. The eleven `lowering_work` counters expose term
+memo lookup/reuse, newly retained terms, operand/root literal-vector copies,
+term-bit lift-map writes, and symbol-input allocation. Together with
+`bit_blast_nanos` and `aig_nodes_added`, these support cost-per-added-node and
+work-per-added-node analysis without placing a wall-clock read inside every
+AIG operation. The maps are diagnostic only and do not select a lowering or
+solving policy.
 
 `GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING=1` enables ADR-0173's bounded,
 off-by-default positive internal AND-tree half-flattening candidate. V3 adds

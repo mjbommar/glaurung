@@ -24,15 +24,16 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    CheckResult, IncrementalBvSolver, IncrementalBvStats, IncrementalCnfStats, SolverConfig,
-    UnsatProofOutcome, export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value,
+    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, AigConstructionStats,
+    CheckResult, IncrementalBvSolver, IncrementalBvStats, IncrementalCnfStats,
+    IncrementalLoweringStats, SolverConfig, UnsatProofOutcome,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{Assert, Model, SolveResult, Solver, pipe};
+use crate::symbolic::solver::{pipe, Assert, Model, SolveResult, Solver};
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
 /// and metering behave the same regardless of which backend is compiled in.
@@ -267,6 +268,10 @@ pub struct WarmAxeyumCheckProfile {
     pub cnf_clauses: u64,
     /// Per-check incremental CNF gate/root-family deltas.
     pub cnf_gate_mix: BTreeMap<&'static str, u64>,
+    /// Per-check primitive AIG construction classification.
+    pub aig_construction: BTreeMap<&'static str, u64>,
+    /// Per-check term-memo, literal-copy, and lift-map work.
+    pub lowering_work: BTreeMap<&'static str, u64>,
 }
 
 struct WarmProfileContext {
@@ -668,7 +673,7 @@ impl SnapshotIncrementalAxeyumSolver {
         let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
         Some(WarmProfileContext {
             profile: WarmAxeyumCheckProfile {
-                schema: "glaurung-axeyum-warm-profile-v3",
+                schema: "glaurung-axeyum-warm-profile-v4",
                 process_id: std::process::id(),
                 sequence: None,
                 query_hash,
@@ -703,6 +708,8 @@ impl SnapshotIncrementalAxeyumSolver {
                 cnf_variables: 0,
                 cnf_clauses: 0,
                 cnf_gate_mix: BTreeMap::new(),
+                aig_construction: BTreeMap::new(),
+                lowering_work: BTreeMap::new(),
             },
             total_started: Instant::now(),
             solver_before: self.solver.stats(),
@@ -733,6 +740,8 @@ impl SnapshotIncrementalAxeyumSolver {
         context.profile.cnf_variables = solver_after.cnf_variables;
         context.profile.cnf_clauses = solver_after.cnf_clauses;
         context.profile.cnf_gate_mix = cnf_gate_mix(delta.cnf_gate_mix);
+        context.profile.aig_construction = aig_construction(delta.aig_construction);
+        context.profile.lowering_work = lowering_work(delta.lowering_work);
         context.profile.arena_terms = count(self.arena.len());
         context.profile.outcome = result_name(&result);
         context.profile.complete = !matches!(&result, SolveResult::Error(_));
@@ -852,6 +861,38 @@ fn cnf_gate_mix(stats: IncrementalCnfStats) -> BTreeMap<&'static str, u64> {
             "reused_negative_root_definitions",
             stats.reused_negative_root_definitions,
         ),
+    ])
+}
+
+fn aig_construction(stats: AigConstructionStats) -> BTreeMap<&'static str, u64> {
+    BTreeMap::from([
+        ("and_requests", stats.and_requests),
+        (
+            "and_trivial_simplifications",
+            stats.and_trivial_simplifications,
+        ),
+        (
+            "and_absorption_simplifications",
+            stats.and_absorption_simplifications,
+        ),
+        ("and_structural_hash_hits", stats.and_structural_hash_hits),
+        ("and_nodes_created", stats.and_nodes_created),
+    ])
+}
+
+fn lowering_work(stats: IncrementalLoweringStats) -> BTreeMap<&'static str, u64> {
+    BTreeMap::from([
+        ("lower_calls", stats.lower_calls),
+        ("term_memo_lookups", stats.term_memo_lookups),
+        ("term_memo_hits", stats.term_memo_hits),
+        ("terms_lowered", stats.terms_lowered),
+        ("operand_vectors_copied", stats.operand_vectors_copied),
+        ("operand_bits_copied", stats.operand_bits_copied),
+        ("root_bits_copied", stats.root_bits_copied),
+        ("term_bit_bindings_written", stats.term_bit_bindings_written),
+        ("memoized_terms", stats.memoized_terms),
+        ("term_bit_bindings", stats.term_bit_bindings),
+        ("symbol_bit_inputs", stats.symbol_bit_inputs),
     ])
 }
 
@@ -1738,6 +1779,37 @@ mod tests {
         assert_eq!(mix["internal_positive_and_opportunities"], 0);
         assert_eq!(mix["internal_positive_and_immediate_clauses_avoided"], 0);
         assert_eq!(mix["tautological_root_clauses"], 0);
+    }
+
+    #[test]
+    fn warm_profile_exports_complete_aig_and_lowering_work() {
+        let aig = aig_construction(AigConstructionStats {
+            and_requests: 5,
+            and_trivial_simplifications: 1,
+            and_absorption_simplifications: 1,
+            and_structural_hash_hits: 1,
+            and_nodes_created: 2,
+        });
+        assert_eq!(aig.len(), 5);
+        assert_eq!(aig["and_requests"], 5);
+        assert_eq!(aig["and_nodes_created"], 2);
+
+        let work = lowering_work(IncrementalLoweringStats {
+            lower_calls: 1,
+            term_memo_lookups: 9,
+            term_memo_hits: 2,
+            terms_lowered: 4,
+            operand_vectors_copied: 6,
+            operand_bits_copied: 64,
+            root_bits_copied: 1,
+            term_bit_bindings_written: 33,
+            memoized_terms: 4,
+            term_bit_bindings: 33,
+            symbol_bit_inputs: 8,
+        });
+        assert_eq!(work.len(), 11);
+        assert_eq!(work["operand_bits_copied"], 64);
+        assert_eq!(work["term_bit_bindings"], 33);
     }
 
     #[test]
