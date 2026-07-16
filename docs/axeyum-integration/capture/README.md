@@ -169,6 +169,18 @@ but it can pay heavily to rebuild sibling prefixes and retain more memory. Run
 both against the ordered trace and publish same-stream p50/p95, memory, root
 traffic, and repeated variance before default enablement or verdict caching.
 
+The native path-owned control at `b9febbd`/`950cca4` completes that first
+bounded comparison. Three alternating rounds on `win10-vwififlt`,
+`sqfs-intel-DptfDevGen`, and `windows-update-intel-audio-IntcSST` execute 6,986
+checks per policy per round. All 41,916 combined checks agree with Z3, with zero
+unknown splits, warm resets, deadline hits, or finding changes. Weighted median
+Axeyum/Z3 is 2.093x for consecutive snapshot and 0.746x for explicit lineage;
+lineage cuts Axeyum time 65.5% and wins every live driver. It remains opt-in:
+median RSS rises 31.0%, 6.3%, and 15.8% on the three drivers respectively, and
+the largest observed high-water mark is 141,124 KiB. Bound live sessions,
+inherited-prefix construction, memory, and deterministic fallback before any
+automatic selection or cache work.
+
 ## Ordered lineage/scope/model trace v1
 
 `GLAURUNG_ORDERED_TRACE_DIR` enables the separate GQ7 functionality artifact.
