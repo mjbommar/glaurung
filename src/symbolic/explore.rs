@@ -731,7 +731,10 @@ fn process_block(
                 // callee is a dynamic thunk, e.g. WdfRequestRetrieveInputBuffer).
                 // Checked before callee resolution; args are still in registers here.
                 if let Some(summary) = call_site_summary(ins.va) {
-                    apply_summary(&mut st, ins.va, summary, sinks);
+                    if !apply_summary(&mut st, ins.va, summary, sinks) {
+                        st.end_trace("model-unavailable");
+                        return Vec::new();
+                    }
                     continue;
                 }
                 let callee: Option<u64> = match target {
@@ -743,7 +746,11 @@ fn process_block(
                         st.machine.dom.pool.collect_syms(tv, &mut syms);
                         if syms.is_empty() {
                             // Concrete function pointer (e.g. loaded from the IAT).
-                            Some(eval_concrete(&mut st, tv))
+                            let Some(callee) = eval_concrete(&mut st, tv) else {
+                                st.end_trace("model-unavailable");
+                                return Vec::new();
+                            };
+                            Some(callee)
                         } else {
                             let prov = st.taint.provenance_of(&st.machine.dom.pool, tv);
                             if !prov.is_empty() {
@@ -754,7 +761,12 @@ fn process_block(
                     }
                 };
                 match callee.and_then(|va| apis.get(&va).copied()) {
-                    Some(summary) => apply_summary(&mut st, ins.va, summary, sinks),
+                    Some(summary) => {
+                        if !apply_summary(&mut st, ins.va, summary, sinks) {
+                            st.end_trace("model-unavailable");
+                            return Vec::new();
+                        }
+                    }
                     // An unmodeled callee (a local helper, logging, etc.) is
                     // treated as opaque: havoc the return and continue, rather than
                     // ending the path. Ending here would cut off everything after a
@@ -774,7 +786,10 @@ fn process_block(
                     .machine
                     .regs
                     .read(&mut st.machine.dom, &VReg::phys("rsp"));
-                let rsp = eval_concrete(&mut st, rsp_v);
+                let Some(rsp) = eval_concrete(&mut st, rsp_v) else {
+                    st.end_trace("model-unavailable");
+                    return Vec::new();
+                };
                 if rsp != 0 {
                     let ret = st
                         .machine
@@ -830,7 +845,10 @@ fn process_block(
                 // so a deref of a freed pointer held in a global is caught.
                 if let Op::Load { addr, .. } | Op::Store { addr, .. } = other {
                     let av = st.machine.eval_addr(addr);
-                    uaf_check(&mut st, ins.va, av, sinks);
+                    if !uaf_check(&mut st, ins.va, av, sinks) {
+                        st.end_trace("model-unavailable");
+                        return Vec::new();
+                    }
                 }
                 match st.machine.step(other) {
                     Flow::Next => continue,
@@ -868,11 +886,12 @@ fn process_block(
 /// Concretize a symbolic address: solve the path condition for a model, evaluate
 /// the address expression under it, and bind `addr == chosen` so the path stays
 /// consistent (the "any" strategy; concretize-with-threshold for reads is a
-/// later refinement). Returns the concrete address.
-fn concretize_addr(st: &mut State, addr_val: ExprId) -> u64 {
+/// later refinement). Returns `None` when no satisfying model is available; in
+/// that case the caller must stop the path rather than inventing a value.
+fn concretize_addr(st: &mut State, addr_val: ExprId) -> Option<u64> {
     let model = match solve_traced(st, "address-concretization", st.pc) {
         SolveResult::Sat(m) => m.values,
-        _ => BTreeMap::new(),
+        _ => return None,
     };
     let mut c = Concrete;
     let a = eval_expr(&st.machine.dom.pool, addr_val, &model, &mut c);
@@ -892,7 +911,7 @@ fn concretize_addr(st: &mut State, addr_val: ExprId) -> u64 {
         .dom
         .cmp(CmpOp::Eq, &addr_val, &chosen, Width::W64);
     st.assert((eq, true), "concretization", st.pc);
-    a as u64
+    Some(a as u64)
 }
 
 /// If the attacker can drive `addr_val` to exactly `value` under the current path
@@ -932,9 +951,9 @@ fn arg_reg(n: u8) -> Option<&'static str> {
 /// see attacker taint that reached a high-numbered parameter, e.g. the
 /// attacker-controlled CreateDisposition (param 7) of `ZwCreateFile`, which the
 /// handler spills from the IRP system buffer into `[rsp+0x38]`.
-fn read_arg(st: &mut State, n: u8) -> ExprId {
+fn read_arg(st: &mut State, n: u8) -> Option<ExprId> {
     match arg_reg(n) {
-        Some(r) => st.machine.regs.read(&mut st.machine.dom, &VReg::phys(r)),
+        Some(r) => Some(st.machine.regs.read(&mut st.machine.dom, &VReg::phys(r))),
         None => {
             let rsp = st
                 .machine
@@ -945,10 +964,12 @@ fn read_arg(st: &mut State, n: u8) -> ExprId {
                 .dom
                 .constant(Width::W64, 0x20 + (n as u128 - 4) * 8);
             let addr = st.machine.dom.binop(BinOp::Add, &rsp, &off, Width::W64);
-            let a = concretize_addr(st, addr);
-            st.machine
-                .mem
-                .load(&mut st.machine.dom, a, 8, Endian::Little)
+            let a = concretize_addr(st, addr)?;
+            Some(
+                st.machine
+                    .mem
+                    .load(&mut st.machine.dom, a, 8, Endian::Little),
+            )
         }
     }
 }
@@ -956,10 +977,12 @@ fn read_arg(st: &mut State, n: u8) -> ExprId {
 /// Concretely evaluate `val` under a model of the current path *without* binding
 /// it (a read-only probe, unlike [`concretize_addr`]). Used by the lifecycle
 /// checks (free/UAF/stack) that only need a representative concrete value.
-fn eval_concrete(st: &mut State, val: ExprId) -> u64 {
+/// Returns `None` for UNSAT, unknown, unavailable, or failed solver results;
+/// none of those outcomes authorizes a model-driven exploration choice.
+fn eval_concrete(st: &mut State, val: ExprId) -> Option<u64> {
     let model = match solve_traced(st, "concrete-evaluation", st.pc) {
         SolveResult::Sat(m) => m.values,
-        _ => BTreeMap::new(),
+        _ => return None,
     };
     let mut c = Concrete;
     let value = eval_expr(&st.machine.dom.pool, val, &model, &mut c);
@@ -973,7 +996,7 @@ fn eval_concrete(st: &mut State, val: ExprId) -> u64 {
             st.pc,
         );
     }
-    value as u64
+    Some(value as u64)
 }
 
 /// A reaching witness for the current path: the empty model when there are no
@@ -1171,8 +1194,13 @@ fn is_validated(st: &State, addr: ExprId) -> bool {
 }
 
 /// Flag a [`SinkKind::UseAfterFree`] if `ptr` concretizes into a freed block.
-fn uaf_check(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) {
-    let a = eval_concrete(st, ptr);
+fn uaf_check(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) -> bool {
+    if !st.allocations.iter().any(|allocation| allocation.freed) {
+        return true;
+    }
+    let Some(a) = eval_concrete(st, ptr) else {
+        return false;
+    };
     let hit = st
         .allocations
         .iter()
@@ -1180,6 +1208,7 @@ fn uaf_check(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) {
     if hit {
         push_sink(st, va, SinkKind::UseAfterFree, ptr, Vec::new(), sinks);
     }
+    true
 }
 
 /// Stack window (bytes) around `rsp` within which a `memcpy` destination is
@@ -1188,23 +1217,37 @@ const STACK_WINDOW: u64 = 0x1_0000;
 
 /// Apply a callee summary, recording the attacker-controlled primitives it
 /// exposes, then modeling its return value.
-fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<Sink>) {
+fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<Sink>) -> bool {
     match summary {
         ApiSummary::CopyMemory => {
-            let dst = read_arg(st, 0);
-            let src = read_arg(st, 1);
-            let len = read_arg(st, 2);
-            uaf_check(st, va, dst, sinks);
-            uaf_check(st, va, src, sinks);
+            let Some(dst) = read_arg(st, 0) else {
+                return false;
+            };
+            let Some(src) = read_arg(st, 1) else {
+                return false;
+            };
+            let Some(len) = read_arg(st, 2) else {
+                return false;
+            };
+            if !uaf_check(st, va, dst, sinks) || !uaf_check(st, va, src, sinks) {
+                return false;
+            }
             record_access(st, va, dst, true, sinks);
             record_access(st, va, src, false, sinks);
-            stack_overflow_check(st, va, dst, len, sinks);
+            if !stack_overflow_check(st, va, dst, len, sinks) {
+                return false;
+            }
             havoc_rax(st);
         }
         ApiSummary::Alloc { size_arg } => {
-            let size_val = read_arg(st, size_arg);
+            let Some(size_val) = read_arg(st, size_arg) else {
+                return false;
+            };
             // Choose a concrete size in a sane range for the bump allocator.
-            let size = eval_concrete(st, size_val).clamp(1, 0x10_000);
+            let Some(size) = eval_concrete(st, size_val) else {
+                return false;
+            };
+            let size = size.clamp(1, 0x10_000);
             let base = st.heap_next;
             st.heap_next = st.heap_next.saturating_add((size + 0xF) & !0xF);
             st.allocations.push(Alloc {
@@ -1218,13 +1261,21 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
                 .write(&mut st.machine.dom, &VReg::phys("rax"), ret);
         }
         ApiSummary::Free { ptr_arg } => {
-            let ptr = read_arg(st, ptr_arg);
-            do_free(st, va, ptr, sinks);
+            let Some(ptr) = read_arg(st, ptr_arg) else {
+                return false;
+            };
+            if !do_free(st, va, ptr, sinks) {
+                return false;
+            }
             havoc_rax(st);
         }
         ApiSummary::Probe { addr_arg, len_arg } => {
-            let addr = read_arg(st, addr_arg);
-            let len = read_arg(st, len_arg);
+            let Some(addr) = read_arg(st, addr_arg) else {
+                return false;
+            };
+            let Some(len) = read_arg(st, len_arg) else {
+                return false;
+            };
             // A probe whose length can be zero validates nothing (bypassable).
             if witness_for_value(st, len, 0).is_some() {
                 let prov = st.taint.provenance_of(&st.machine.dom.pool, addr);
@@ -1239,13 +1290,19 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             havoc_rax(st);
         }
         ApiSummary::DangerousCall { args, kind } => {
-            dangerous_call(st, va, args, kind, sinks);
+            if !dangerous_call(st, va, args, kind, sinks) {
+                return false;
+            }
             havoc_rax(st);
         }
         ApiSummary::RetrieveBuffer { out_ptr_arg } => {
             // *arg[out_ptr_arg] := fresh SystemBuffer-tainted pointer.
-            let out_ptr = read_arg(st, out_ptr_arg);
-            let addr = eval_concrete(st, out_ptr);
+            let Some(out_ptr) = read_arg(st, out_ptr_arg) else {
+                return false;
+            };
+            let Some(addr) = eval_concrete(st, out_ptr) else {
+                return false;
+            };
             if addr != 0 {
                 let e = st.machine.dom.fresh(Width::W64);
                 if let Expr::Sym { id, .. } = st.machine.dom.pool.get(e) {
@@ -1259,6 +1316,7 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             havoc_rax(st); // returns NTSTATUS
         }
     }
+    true
 }
 
 /// Havoc the return register (`rax`) with a fresh symbol — the sound
@@ -1272,8 +1330,10 @@ fn havoc_rax(st: &mut State) {
 
 /// `ExFreePool(ptr)`: a second free of an already-freed block is a double-free;
 /// otherwise mark the matching live block freed.
-fn do_free(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) {
-    let a = eval_concrete(st, ptr);
+fn do_free(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) -> bool {
+    let Some(a) = eval_concrete(st, ptr) else {
+        return false;
+    };
     if let Some(al) = st.allocations.iter_mut().find(|al| al.base == a) {
         if al.freed {
             push_sink(st, va, SinkKind::DoubleFree, ptr, Vec::new(), sinks);
@@ -1281,29 +1341,41 @@ fn do_free(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) {
             al.freed = true;
         }
     }
+    true
 }
 
 /// Flag a [`SinkKind::StackOverflow`] when a `memcpy` destination is on the stack
 /// and the length is attacker-controlled (an unbounded copy onto the frame).
-fn stack_overflow_check(st: &mut State, va: u64, dst: ExprId, len: ExprId, sinks: &mut Vec<Sink>) {
+fn stack_overflow_check(
+    st: &mut State,
+    va: u64,
+    dst: ExprId,
+    len: ExprId,
+    sinks: &mut Vec<Sink>,
+) -> bool {
     let len_prov = st.taint.provenance_of(&st.machine.dom.pool, len);
     if len_prov.is_empty() {
-        return; // a fixed-length copy can't overflow under attacker control
+        return true; // a fixed-length copy can't overflow under attacker control
     }
     let rsp_v = st
         .machine
         .regs
         .read(&mut st.machine.dom, &VReg::phys("rsp"));
-    let rsp = eval_concrete(st, rsp_v);
+    let Some(rsp) = eval_concrete(st, rsp_v) else {
+        return false;
+    };
     if rsp == 0 {
-        return; // stack pointer not modeled on this path
+        return true; // stack pointer not modeled on this path
     }
-    let dst_a = eval_concrete(st, dst);
+    let Some(dst_a) = eval_concrete(st, dst) else {
+        return false;
+    };
     let lo = rsp.saturating_sub(STACK_WINDOW);
     let hi = rsp.saturating_add(STACK_WINDOW);
     if dst_a >= lo && dst_a <= hi {
         push_sink(st, va, SinkKind::StackOverflow, len, len_prov, sinks);
     }
+    true
 }
 
 /// Flag a [`SinkKind::IntegerOverflow`] when an attacker-tainted `add`/`sub`/`mul`
@@ -1378,11 +1450,19 @@ fn check_int_overflow(st: &mut State, va: u64, op: &Op, sinks: &mut Vec<Sink>) {
 
 /// A routine dangerous when any of `args` is attacker-tainted: aggregate the
 /// provenance of the tainted args and raise one `kind` sink.
-fn dangerous_call(st: &mut State, va: u64, args: &[u8], kind: SinkKind, sinks: &mut Vec<Sink>) {
+fn dangerous_call(
+    st: &mut State,
+    va: u64,
+    args: &[u8],
+    kind: SinkKind,
+    sinks: &mut Vec<Sink>,
+) -> bool {
     let mut prov: BTreeSet<String> = BTreeSet::new();
     let mut tainted_arg: Option<ExprId> = None;
     for &a in args {
-        let v = read_arg(st, a);
+        let Some(v) = read_arg(st, a) else {
+            return false;
+        };
         let p = st.taint.provenance_of(&st.machine.dom.pool, v);
         if !p.is_empty() {
             prov.extend(p);
@@ -1392,6 +1472,7 @@ fn dangerous_call(st: &mut State, va: u64, args: &[u8], kind: SinkKind, sinks: &
     if let Some(v) = tainted_arg {
         push_sink(st, va, kind, v, prov.into_iter().collect(), sinks);
     }
+    true
 }
 
 /// Execute a memory op whose address is symbolic by concretizing the address,
@@ -1403,7 +1484,7 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
             let av = st.machine.eval_addr(addr);
             let addr_tainted = !st.taint.provenance_of(&st.machine.dom.pool, av).is_empty();
             record_access(st, va, av, false, sinks);
-            let a = concretize_addr(st, av);
+            let a = concretize_addr(st, av)?;
             // Taint-through-memory: a load from an attacker-controlled pointer into
             // *uninitialized* memory yields fresh attacker data (mirrors a
             // fully-symbolic memory model). Mark the fresh symbol so values read
@@ -1433,7 +1514,7 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
         Op::Store { addr, src } => {
             let av = st.machine.eval_addr(addr);
             record_access(st, va, av, true, sinks);
-            let a = concretize_addr(st, av);
+            let a = concretize_addr(st, av)?;
             let w = Width::from_bytes(addr.size as u16);
             let v = st.machine.read(src, w);
             st.machine
@@ -1561,6 +1642,22 @@ mod tests {
             "symbolic-address store should be concretized, not halt the path; got {:?}",
             result
         );
+    }
+
+    #[test]
+    fn model_driven_choices_require_a_satisfying_model() {
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W64);
+        let zero = machine.dom.constant(Width::W8, 0);
+        let one = machine.dom.constant(Width::W8, 1);
+        let contradiction = machine.dom.cmp(CmpOp::Eq, &zero, &one, Width::W8);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        state.constraints.push((contradiction, true));
+
+        assert_eq!(eval_concrete(&mut state, value), None);
+        let constraints_before = state.constraints.clone();
+        assert_eq!(concretize_addr(&mut state, value), None);
+        assert_eq!(state.constraints, constraints_before);
     }
 
     #[test]
