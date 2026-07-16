@@ -27,7 +27,9 @@ class BuildCorpusTests(unittest.TestCase):
         (raw / "index.tsv").write_text("".join(rows), encoding="utf-8")
         return raw
 
-    def run_builder(self, raw: Path, out: Path) -> subprocess.CompletedProcess[str]:
+    def run_builder(
+        self, raw: Path, out: Path, *extra: str
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 sys.executable,
@@ -37,6 +39,7 @@ class BuildCorpusTests(unittest.TestCase):
                 "2",
                 "--source",
                 "test revision; driver fixture",
+                *extra,
             ],
             check=False,
             text=True,
@@ -59,6 +62,27 @@ class BuildCorpusTests(unittest.TestCase):
             self.assertEqual(len(capture["files"]), 2)
             self.assertNotIn("content_hash", capture["files"][0])
             self.assertIn("zero exclusions", capture["source"])
+
+    def test_single_validation_can_emit_separate_representative_and_full_packs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = self.make_raw(
+                root,
+                [
+                    (b"(set-logic QF_BV)\n(assert true)\n(check-sat)\n", "sat"),
+                    (b"(set-logic QF_BV)\n(assert false)\n(check-sat)\n", "unsat"),
+                ],
+            )
+            result = self.run_builder(
+                raw, root / "representative", "--full-out", str(root / "full")
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            representative = json.loads(
+                (root / "representative" / "capture-index-v1.json").read_text()
+            )
+            full = json.loads((root / "full" / "capture-index-v1.json").read_text())
+            self.assertEqual({row["tiers"][0] for row in representative["files"]}, {"representative"})
+            self.assertEqual({row["tiers"][0] for row in full["files"]}, {"full"})
 
     def test_rejects_conflicting_duplicate_verdict(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

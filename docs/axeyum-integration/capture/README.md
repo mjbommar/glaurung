@@ -52,12 +52,12 @@ query's **trusted verdict** (from the z3 oracle) and a structural `family`.
    revision=$(git rev-parse HEAD)
    source="Glaurung revision $revision; trusted solver-z3 capture; drivers win10-vwififlt, sqfs-intel-DptfDevGen, windows-update-intel-audio-IntcSST"
    python3 build_corpus.py /path/to/new-raw-corpus /path/to/representative-pack 6 \
-     --tier representative --source "$source"
-   python3 build_corpus.py /path/to/new-raw-corpus /path/to/full-pack 6 \
-     --tier full --source "$source"
+     --tier representative --full-out /path/to/full-pack --source "$source"
    ```
 
-   The output directory must be absent or empty. Files are hard-linked when
+   Both output directories must be absent or empty. `--full-out` emits the two
+   independent packs from one complete raw validation pass, avoiding duplicate
+   reads of a large access-controlled payload. Files are hard-linked when
    possible and copied only when the filesystem requires it. Run the focused
    fail-closed tests with `python3 -m unittest test_build_corpus.py`.
 

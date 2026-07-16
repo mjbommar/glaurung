@@ -138,13 +138,64 @@ def materialize(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def emit_pack(
+    out: Path,
+    rows: list[dict[str, object]],
+    tier: str,
+    name: str,
+    source: str,
+) -> None:
+    queries = out / "queries"
+    queries.mkdir(parents=True, exist_ok=True)
+    files = []
+    for row in rows:
+        query_hash = str(row["hash"])
+        relative = f"queries/{query_hash}.smt2"
+        materialize(Path(row["path"]), out / relative)
+        files.append(
+            {
+                "path": relative,
+                "expected": row["expected"],
+                "family": row["family"],
+                "tiers": [tier],
+            }
+        )
+
+    capture_index = {
+        "version": 1,
+        "name": name,
+        "source": source,
+        "logic": "QF_BV",
+        "files": files,
+    }
+    (out / "capture-index-v1.json").write_text(
+        json.dumps(capture_index, indent=2) + "\n", encoding="utf-8"
+    )
+
+    families = Counter(str(row["family"]) for row in rows)
+    verdicts = Counter(str(row["expected"]) for row in rows)
+    print(f"materialized tier={tier} queries={len(rows)} output={out}")
+    print("families:", " ".join(f"{key}={families[key]}" for key in sorted(families)))
+    print("verdicts:", " ".join(f"{key}={verdicts[key]}" for key in sorted(verdicts)))
+
+
+def require_empty_output(path: Path, label: str) -> None:
+    if path.exists() and any(path.iterdir()):
+        raise ValueError(f"{label} must be absent or empty: {path}")
+
+
 def build(args: argparse.Namespace) -> dict[str, int]:
     if args.rep_per_bucket <= 0:
         raise ValueError("rep_per_bucket must be positive")
     if not args.source.strip():
         raise ValueError("--source must be non-empty and identify revision plus drivers")
-    if args.out.exists() and any(args.out.iterdir()):
-        raise ValueError(f"output directory must be absent or empty: {args.out}")
+    require_empty_output(args.out, "output directory")
+    if args.full_out is not None:
+        if args.tier != "representative":
+            raise ValueError("--full-out requires --tier representative")
+        if args.full_out.resolve() == args.out.resolve():
+            raise ValueError("--full-out must differ from the representative output")
+        require_empty_output(args.full_out, "full output directory")
 
     rows, stats = load_raw(args.raw)
     representative = representative_hashes(rows, args.rep_per_bucket)
@@ -152,47 +203,18 @@ def build(args: argparse.Namespace) -> dict[str, int]:
     if not selected:
         raise ValueError(f"tier {args.tier!r} selected no queries")
 
-    queries = args.out / "queries"
-    queries.mkdir(parents=True, exist_ok=True)
-    files = []
-    for row in selected:
-        query_hash = str(row["hash"])
-        relative = f"queries/{query_hash}.smt2"
-        materialize(Path(row["path"]), args.out / relative)
-        files.append(
-            {
-                "path": relative,
-                "expected": row["expected"],
-                "family": row["family"],
-                "tiers": [args.tier],
-            }
-        )
-
     source = (
         f"{args.source}; strict raw reconciliation: {stats['index_rows']} index rows, "
         f"{stats['unique_queries']} unique hashes, {stats['duplicate_rows']} duplicate rows, "
         "zero verdict conflicts, zero exclusions"
     )
-    capture_index = {
-        "version": 1,
-        "name": args.name,
-        "source": source,
-        "logic": "QF_BV",
-        "files": files,
-    }
-    (args.out / "capture-index-v1.json").write_text(
-        json.dumps(capture_index, indent=2) + "\n", encoding="utf-8"
-    )
-
-    families = Counter(str(row["family"]) for row in selected)
-    verdicts = Counter(str(row["expected"]) for row in selected)
     print(
         f"validated raw capture: rows={stats['index_rows']} "
         f"unique={stats['unique_queries']} duplicates={stats['duplicate_rows']} conflicts=0"
     )
-    print(f"materialized tier={args.tier} queries={len(selected)} output={args.out}")
-    print("families:", " ".join(f"{key}={families[key]}" for key in sorted(families)))
-    print("verdicts:", " ".join(f"{key}={verdicts[key]}" for key in sorted(verdicts)))
+    emit_pack(args.out, selected, args.tier, args.name, source)
+    if args.full_out is not None:
+        emit_pack(args.full_out, rows, "full", args.name, source)
     return {**stats, "selected_queries": len(selected)}
 
 
@@ -202,6 +224,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("out", type=Path, help="new or empty capture-index pack directory")
     parser.add_argument("rep_per_bucket", type=int, nargs="?", default=6)
     parser.add_argument("--tier", choices=("representative", "full"), default="representative")
+    parser.add_argument(
+        "--full-out",
+        type=Path,
+        help="also emit a separate full pack after the same strict validation pass",
+    )
     parser.add_argument("--name", default="glaurung-qfbv-corrected-v2")
     parser.add_argument("--source", required=True, help="producer revision and exact driver set")
     return parser.parse_args()
