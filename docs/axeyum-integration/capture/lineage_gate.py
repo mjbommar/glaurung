@@ -698,7 +698,7 @@ def main() -> int:
     run.add_argument(
         "--warm-reuse", choices=("adaptive", "auto", "lineage"), default="lineage"
     )
-    run.add_argument("--replay-sat-cache", choices=("off", "on"), default="off")
+    run.add_argument("--replay-sat-cache", choices=("off", "on"), default="on")
     run.add_argument("--allow-dirty", action="store_true")
     validate = subparsers.add_parser("validate", help="validate one artifact")
     validate.add_argument("artifact")

@@ -327,16 +327,17 @@ Lineage mode also reports created, closed, current-live, and peak-live path
 sessions. These counters describe solver ownership and root traffic; process
 RSS remains the memory acceptance measurement.
 
-Axeyum's GQ8 replay-checked SAT cache is a separate experiment and remains
-off by default. Set `GLAURUNG_AXEYUM_REPLAY_SAT_CACHE=on` only with a
-path-owned `lineage`, `auto`, or `adaptive` warm policy. Each retained path
+Axeyum's GQ8 replay-checked SAT cache is enabled by default only inside a
+path-owned `lineage`, `auto`, or `adaptive` warm policy. Set
+`GLAURUNG_AXEYUM_REPLAY_SAT_CACHE=off` for the fixed control. Each retained path
 solver then owns an independent same-arena cache bounded to 64 exact entries,
 4,096 scalar model values, and 262,144 Bool/BV payload bits. Snapshot mode and
 all one-shot fallbacks remain cache-free; exact entries never cross paths,
 arenas, threads, or processes. Only SAT models are retained, every hit still
 passes Axeyum's original-term replay, and UNSAT, unknown, oversized, or
-non-scalar results are counted but not cached. Unset, `off`, `false`, `0`, and
-unrecognized values all select the conservative disabled policy.
+non-scalar results are counted but not cached. Unset selects the accepted
+bounded policy; `off`, `false`, `0`, and unrecognized values select the
+conservative disabled override.
 
 The `[axeyum-sat-cache]` footer records the selected per-path bounds, exact
 hits/misses, insertions, deterministic evictions, replay failures, each
@@ -355,9 +356,23 @@ python3 docs/axeyum-integration/capture/lineage_gate.py compare \
   --allow-replay-sat-cache-enablement
 ```
 
-This control is measurement infrastructure, not authorization to change the
-adaptive production default. Prefix extensions continue to reuse retained
-AIG/CNF/SAT state through GQ7 and are never treated as verdict-cache hits.
+The clean repeated adaptive-policy gate at Glaurung `d5475f6` and Axeyum
+`2b6e264c` executes 92,721 checks per cache policy with identical work and
+findings. Cache-on improves Axeyum time 1.16% on SurfacePen and 2.38% on
+NETwtw10, normalized ratio 0.67%/2.08%, and median RSS 6.88%/1.52%; absolute Z3
+drift stays below 0.50%. SurfacePen records 154 exact replay-checked hits and
+NETwtw10 2,464, repeated exactly in all three processes, with zero replay
+failures and zero terminal gauges. Every ordinary 3%/3%/5% plus 2% alarm
+passes, admitting the bounded path-owned default. Prefix extensions continue
+to reuse retained AIG/CNF/SAT state through GQ7 and are never treated as
+verdict-cache hits.
+
+The exact clean controls are committed as
+`lineage-adaptive-cache-off-v1.json` (SHA-256
+`95eefcb669f4f1a4c22109fcef8a40c6d0fb50476747627c1f43f132b6a8f132`)
+and `lineage-adaptive-cache-on-v1.json` (SHA-256
+`9c010538b579d36e20fdc02a92af8e6f02ea43887354ca55397256a19eba74e3`).
+Only the compact atomic artifacts are committed; child logs remain local.
 
 Lineage mode can also enforce explicit resource ceilings. Set
 `GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS` for a process-wide retained-session cap

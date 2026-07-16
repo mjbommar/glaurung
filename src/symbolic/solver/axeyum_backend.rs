@@ -164,9 +164,16 @@ fn replay_sat_cache_policy() -> Option<ReplayCheckedSatCachePolicy> {
 }
 
 fn parse_replay_sat_cache_policy(value: Option<&str>) -> Option<ReplayCheckedSatCachePolicy> {
-    let enabled = value.is_some_and(|value| {
-        value.eq_ignore_ascii_case("on") || value.eq_ignore_ascii_case("true") || value == "1"
-    });
+    let enabled = match value {
+        None => true,
+        Some(value) if value.eq_ignore_ascii_case("off") => false,
+        Some(value) if value.eq_ignore_ascii_case("false") => false,
+        Some("0") => false,
+        Some(value) if value.eq_ignore_ascii_case("on") => true,
+        Some(value) if value.eq_ignore_ascii_case("true") => true,
+        Some("1") => true,
+        Some(_) => false,
+    };
     enabled.then(|| {
         ReplayCheckedSatCachePolicy::new(
             DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
@@ -2196,16 +2203,16 @@ mod tests {
     }
 
     #[test]
-    fn replay_sat_cache_is_explicit_bounded_and_default_off() {
-        assert_eq!(parse_replay_sat_cache_policy(None), None);
-        for value in ["off", "false", "0", "invalid"] {
-            assert_eq!(parse_replay_sat_cache_policy(Some(value)), None);
-        }
+    fn replay_sat_cache_is_bounded_default_on_with_explicit_off() {
         let expected = Some(ReplayCheckedSatCachePolicy::new(
             DEFAULT_REPLAY_SAT_CACHE_ENTRIES,
             DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES,
             DEFAULT_REPLAY_SAT_CACHE_MODEL_BITS,
         ));
+        assert_eq!(parse_replay_sat_cache_policy(None), expected);
+        for value in ["off", "false", "0", "invalid"] {
+            assert_eq!(parse_replay_sat_cache_policy(Some(value)), None);
+        }
         for value in ["on", "true", "1"] {
             assert_eq!(parse_replay_sat_cache_policy(Some(value)), expected);
         }
