@@ -1,0 +1,15 @@
+{
+  "class_pairs": {
+    "sat/unknown": 1,
+    "unknown/sat": 42,
+    "unknown/unsat": 1,
+    "unsat/unknown": 8
+  },
+  "content_bytes": 126265069,
+  "decided_by": {
+    "axeyum": 43,
+    "z3": 9
+  },
+  "distinct_queries": 52,
+  "schema": "glaurung-shadow-split-summary-v1"
+}

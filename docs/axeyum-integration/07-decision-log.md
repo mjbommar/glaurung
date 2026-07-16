@@ -455,7 +455,7 @@ identity unstable and may expose incidental paths/details.
 
 ## ADR-016 - Enforce declared concat operand widths at every solver boundary
 
-**Status:** Accepted correctness fix; widened recapture pending.
+**Status:** Accepted correctness fix; repeated widened gate pending.
 **Context:** Strict replay of the 60-second `tcpip` shadow-split corpus reduces
 733 distinct Axeyum errors to an exact malformed shape. A `setcc` result is a
 one-bit expression stored into an eight-bit register slice; `Expr::Concat`
@@ -478,6 +478,18 @@ prove that a one-bit low child declared as eight bits becomes a 64-bit concat
 with value `0x1201`, and the combined-feature tests pass under the 4 GiB cap.
 The archived corpora contain 784 tcpip and four dxgkrnl distinct split formulas
 with byte-owning Axeyum manifests.
+The exact post-fix reruns then remove every adapter error and warm reset:
+`tcpip` falls from 977 to 55 split occurrences (52 distinct: 43 decided only by
+Axeyum, nine decided only by Z3) across 72,291 queries, while `dxgkrnl` falls
+from six to three occurrences (two distinct, both decided by Axeyum) across
+17,712 queries. SAT/UNSAT disagreements remain zero; Axeyum is 1.9x/2.7x faster
+in these single processes.
+Axeyum's independent cold manifest replay decides all nine Z3-decided residual
+tcpip formulas under a 30-second diagnostic cap (1 SAT / 8 UNSAT, 9/9 expected,
+no unsupported/errors). SAT search consumes 93.2% of their pipeline time and
+total p50/max are 213.7/399.0 ms. Under the production-equivalent 250 ms cap,
+5/9 decide and four return explicit `Unknown(Timeout)`, completing the
+error-versus-timeout attribution.
 **Consequences:** Every old capture containing this shape remains valuable as a
 bug reproducer but is not valid post-fix performance evidence. Rebuild and
 repeat tcpip/dxgkrnl before admitting either driver to the lineage gate; compare

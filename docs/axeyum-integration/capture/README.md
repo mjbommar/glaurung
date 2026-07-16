@@ -972,6 +972,30 @@ functional target is adapter/warm-session error attribution rather than SAT
 search. This corpus is diagnostic evidence and does not make `tcpip` a green
 lineage-gate `DriverSpec`.
 
+Glaurung `d60ed0f` enforces each concat child's declared half-width in the text,
+Z3, and Axeyum consumers. The exact 60-second rerun confirms the attribution:
+`tcpip` warm resets fall 925→0, Axeyum nondecisions 931→15, and split
+occurrences 977→55 across 72,291 queries. The 52 distinct residual formulas
+contain no errors: Axeyum decides 43 formulas where Z3 is unknown, while Z3
+decides nine formulas where Axeyum is unknown. Axeyum remains 1.9x faster at
+447,888 KiB RSS. `dxgkrnl` resets fall 2→0 and Axeyum nondecisions 2→0 across
+17,712 queries; its two distinct residual formulas are both Axeyum SAT versus
+Z3 unknown, and Axeyum is 2.7x faster at 341,732 KiB RSS. Both post-fix split
+packs are archived separately with strict indexes and Axeyum-generated
+manifests. Query topology changed after the soundness fix, so these one-process
+runs are functionality evidence rather than a causal performance comparison or
+DriverSpec admission.
+
+Axeyum's independent manifest runner resolves the remaining tcpip direction.
+With a 30-second diagnostic cap, cold `sat-bv` decides all nine Z3-decided
+formulas (1 SAT / 8 UNSAT) with 9/9 manifest agreement; SAT search is 93.2% of
+pipeline time, total p50/max are 213.7/399.0 ms. Repeating under Glaurung's
+250 ms per-check cap decides 5/9 and returns four explicit
+`Unknown(Timeout)` results. Thus the residual live Axeyum nondecisions are
+budgeted SAT-search timeouts, not unsupported syntax, translation failure, or
+wrong verdict. Keep them visible while evaluating warm-state SAT behavior or a
+sound fallback policy; do not relabel them agreement.
+
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-
 equivalent snapshot and loses the current serial-snapshot policy on SurfacePen
