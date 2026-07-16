@@ -361,19 +361,30 @@ pub struct WarmAxeyumCheckProfile {
     pub path_id: Option<u64>,
     /// Whether this check lazily created its retained path session.
     pub path_created: bool,
+    /// Retained-entry contract used for this check: `snapshot` or
+    /// `direct_delta`.
+    pub entry_mode: &'static str,
     /// Stable result class: `sat`, `unsat`, `unknown`, or `error`.
     pub outcome: &'static str,
     /// Whether translation and solving completed without an operational error.
     pub complete: bool,
     /// Number of Glaurung assertions in the complete snapshot.
     pub assertion_count: u64,
+    /// Persistent assertion roots in the complete query partition.
+    pub persistent_assertion_count: u64,
+    /// Trailing one-shot assumption roots in the complete query partition.
+    pub temporary_assumption_count: u64,
     /// Number of assertion roots retained as the common prefix.
     pub common_prefix_assertions: u64,
     /// Number of newly asserted roots.
     pub assertions_added: u64,
     /// Number of divergent roots popped before this check.
     pub assertions_popped: u64,
-    /// Number of distinct Glaurung expressions translated through the memo.
+    /// Persistent assertion roots translated during this check.
+    pub persistent_assertions_translated: u64,
+    /// Temporary assumption roots translated during this check.
+    pub temporary_assumptions_translated: u64,
+    /// Number of distinct Glaurung expressions translated during this check.
     pub translated_exprs: u64,
     /// Current retained Axeyum arena term count.
     pub arena_terms: u64,
@@ -405,6 +416,10 @@ pub struct WarmAxeyumCheckProfile {
     pub unattributed_nanos: u64,
     /// Newly encoded retained roots in this check.
     pub root_encodings: u64,
+    /// Newly encoded persistent roots in this check.
+    pub persistent_root_encodings: u64,
+    /// Newly encoded one-shot assumption roots in this check.
+    pub temporary_root_encodings: u64,
     /// Newly retained AIG nodes in this check.
     pub aig_nodes_added: u64,
     /// Newly retained CNF variables in this check.
@@ -624,15 +639,20 @@ impl Default for IncrementalAxeyumSolver {
 impl IncrementalAxeyumSolver {
     /// Create an empty raw-policy retained session.
     pub fn new() -> Self {
-        Self::with_cache_policy(None)
+        Self::with_cache_policy(None, false)
     }
 
-    fn new_path_owned() -> Self {
-        Self::with_cache_policy(replay_sat_cache_policy())
+    fn new_path_owned(profiling: bool) -> Self {
+        Self::with_cache_policy(replay_sat_cache_policy(), profiling)
     }
 
-    fn with_cache_policy(policy: Option<ReplayCheckedSatCachePolicy>) -> Self {
-        let mut solver = IncrementalBvSolver::with_config(config().with_preprocess(false));
+    fn with_cache_policy(policy: Option<ReplayCheckedSatCachePolicy>, profiling: bool) -> Self {
+        let solver_config = config().with_preprocess(false);
+        let mut solver = if profiling {
+            IncrementalBvSolver::with_config_and_profiling(solver_config)
+        } else {
+            IncrementalBvSolver::with_config(solver_config)
+        };
         if let Some(policy) = policy {
             solver
                 .enable_replay_checked_sat_cache(policy)
@@ -649,6 +669,14 @@ impl IncrementalAxeyumSolver {
         self.solver.replay_checked_sat_cache_stats()
     }
 
+    fn solver_stats(&self) -> IncrementalBvStats {
+        self.solver.stats()
+    }
+
+    fn arena_len(&self) -> usize {
+        self.arena.len()
+    }
+
     fn active_symbol_map(&self) -> Vec<(u32, SymbolId)> {
         self.symbol_frames.iter().flatten().copied().collect()
     }
@@ -660,13 +688,23 @@ impl IncrementalAxeyumSolver {
     ) -> Result<TranslatedQuery, IrError> {
         translate_query(pool, assertions, &mut self.arena)
     }
-}
 
-impl IncrementalSolver for IncrementalAxeyumSolver {
-    fn assert(&mut self, pool: &ExprPool, assertion: Assert) -> Result<(), String> {
+    fn assert_measured(
+        &mut self,
+        pool: &ExprPool,
+        assertion: Assert,
+        profiling: bool,
+    ) -> Result<DirectTranslationMetrics, String> {
+        let started = profiling.then(Instant::now);
         let translated = self
             .translate(pool, std::slice::from_ref(&assertion))
             .map_err(|error| format!("axeyum translate: {error}"))?;
+        let metrics = DirectTranslationMetrics {
+            nanos: started.map_or(0, |started| nanos(started.elapsed())),
+            roots: 1,
+            exprs: count(translated.exprs),
+            symbols: count(translated.sym_map.len()),
+        };
         let term = translated.assertions[0];
         AxeyumIncrementalSolver::assert(&mut self.solver, &self.arena, term)
             .map_err(|error| format!("axeyum assert: {error}"))?;
@@ -674,7 +712,80 @@ impl IncrementalSolver for IncrementalAxeyumSolver {
             .last_mut()
             .expect("base symbol frame is invariant")
             .extend(translated.sym_map);
-        Ok(())
+        Ok(metrics)
+    }
+
+    fn check_measured(&mut self, profiling: bool) -> (SolveResult, u64) {
+        let symbols = self.active_symbol_map();
+        let checked = AxeyumIncrementalSolver::check(&mut self.solver, &self.arena);
+        let started = profiling.then(Instant::now);
+        let result = map_check_result(checked, &symbols);
+        (
+            result,
+            started.map_or(0, |started| nanos(started.elapsed())),
+        )
+    }
+
+    fn check_assuming_measured(
+        &mut self,
+        pool: &ExprPool,
+        assumptions: &[Assert],
+        profiling: bool,
+    ) -> (SolveResult, DirectTranslationMetrics, u64) {
+        let translation_started = profiling.then(Instant::now);
+        let translated = match self.translate(pool, assumptions) {
+            Ok(translated) => translated,
+            Err(error) => {
+                return (
+                    SolveResult::Error(format!("axeyum translate: {error}")),
+                    DirectTranslationMetrics::default(),
+                    0,
+                );
+            }
+        };
+        let translation = DirectTranslationMetrics {
+            nanos: translation_started.map_or(0, |started| nanos(started.elapsed())),
+            roots: count(assumptions.len()),
+            exprs: count(translated.exprs),
+            symbols: count(translated.sym_map.len()),
+        };
+        let mut symbols = self.active_symbol_map();
+        symbols.extend(translated.sym_map);
+        let checked = AxeyumIncrementalSolver::check_assuming(
+            &mut self.solver,
+            &self.arena,
+            &translated.assertions,
+        );
+        let model_started = profiling.then(Instant::now);
+        let result = map_check_result(checked, &symbols);
+        (
+            result,
+            translation,
+            model_started.map_or(0, |started| nanos(started.elapsed())),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DirectTranslationMetrics {
+    nanos: u64,
+    roots: u64,
+    exprs: u64,
+    symbols: u64,
+}
+
+impl DirectTranslationMetrics {
+    fn add(&mut self, other: Self) {
+        self.nanos = self.nanos.saturating_add(other.nanos);
+        self.roots = self.roots.saturating_add(other.roots);
+        self.exprs = self.exprs.saturating_add(other.exprs);
+        self.symbols = self.symbols.saturating_add(other.symbols);
+    }
+}
+
+impl IncrementalSolver for IncrementalAxeyumSolver {
+    fn assert(&mut self, pool: &ExprPool, assertion: Assert) -> Result<(), String> {
+        self.assert_measured(pool, assertion, false).map(|_| ())
     }
 
     fn push(&mut self) -> Result<(), String> {
@@ -698,28 +809,11 @@ impl IncrementalSolver for IncrementalAxeyumSolver {
     }
 
     fn check(&mut self) -> SolveResult {
-        let symbols = self.active_symbol_map();
-        map_check_result(
-            AxeyumIncrementalSolver::check(&mut self.solver, &self.arena),
-            &symbols,
-        )
+        self.check_measured(false).0
     }
 
     fn check_assuming(&mut self, pool: &ExprPool, assumptions: &[Assert]) -> SolveResult {
-        let translated = match self.translate(pool, assumptions) {
-            Ok(translated) => translated,
-            Err(error) => return SolveResult::Error(format!("axeyum translate: {error}")),
-        };
-        let mut symbols = self.active_symbol_map();
-        symbols.extend(translated.sym_map);
-        map_check_result(
-            AxeyumIncrementalSolver::check_assuming(
-                &mut self.solver,
-                &self.arena,
-                &translated.assertions,
-            ),
-            &symbols,
-        )
+        self.check_assuming_measured(pool, assumptions, false).0
     }
 }
 
@@ -982,57 +1076,23 @@ impl SnapshotIncrementalAxeyumSolver {
         path_created: bool,
         session_create_nanos: u64,
     ) -> Option<WarmProfileContext> {
-        if !self.profiling {
-            return None;
-        }
-        let (script, _) = pipe::build_script(pool, asserts);
-        let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
-        Some(WarmProfileContext {
-            profile: WarmAxeyumCheckProfile {
-                schema: "glaurung-axeyum-warm-profile-v6",
-                process_id: std::process::id(),
-                sequence: None,
-                query_hash,
-                path_id,
-                path_created,
-                outcome: "error",
-                complete: false,
-                assertion_count: count(asserts.len()),
-                common_prefix_assertions: 0,
-                assertions_added: 0,
-                assertions_popped: 0,
-                translated_exprs: 0,
-                arena_terms: 0,
-                symbols: 0,
-                model_values: 0,
-                session_create_nanos,
-                translation_nanos: 0,
-                word_rewrite_nanos: 0,
-                bit_blast_nanos: 0,
-                cnf_encode_nanos: 0,
-                solve_nanos: 0,
-                model_lift_nanos: 0,
-                replay_nanos: 0,
-                model_extract_nanos: 0,
-                total_nanos: 0,
-                unattributed_nanos: 0,
-                root_encodings: 0,
-                aig_nodes_added: 0,
-                cnf_variables_added: 0,
-                cnf_clauses_added: 0,
-                aig_nodes: 0,
-                cnf_variables: 0,
-                cnf_clauses: 0,
-                cnf_gate_mix: BTreeMap::new(),
-                aig_construction: BTreeMap::new(),
-                lowering_work: BTreeMap::new(),
-                model_lift_work: BTreeMap::new(),
-                replay_sat_cache: BTreeMap::new(),
+        start_warm_profile(
+            self.profiling,
+            pool,
+            asserts,
+            path_id,
+            path_created,
+            session_create_nanos,
+            WarmProfileEntry {
+                mode: "snapshot",
+                persistent_assertions: asserts.len(),
+                temporary_assumptions: 0,
+                persistent_translated: asserts.len(),
+                temporary_translated: 0,
             },
-            total_started: Instant::now(),
-            solver_before: self.solver.stats(),
-            replay_sat_cache_before: self.solver.replay_checked_sat_cache_stats(),
-        })
+            self.solver.stats(),
+            self.solver.replay_checked_sat_cache_stats(),
+        )
     }
 
     fn finish_profile(
@@ -1041,57 +1101,165 @@ impl SnapshotIncrementalAxeyumSolver {
         solver_after: IncrementalBvStats,
         result: SolveResult,
     ) -> SolveResult {
-        let Some(mut context) = context else {
-            return result;
-        };
-        let delta = solver_after.delta_since(context.solver_before);
-        context.profile.word_rewrite_nanos = nanos(delta.word_rewrite);
-        context.profile.bit_blast_nanos = nanos(delta.bit_blast);
-        context.profile.cnf_encode_nanos = nanos(delta.cnf_encode);
-        context.profile.solve_nanos = nanos(delta.solve);
-        context.profile.model_lift_nanos = nanos(delta.model_lift);
-        context.profile.replay_nanos = nanos(delta.replay);
-        context.profile.root_encodings = delta.root_encodings;
-        context.profile.aig_nodes_added = delta.aig_nodes;
-        context.profile.cnf_variables_added = delta.cnf_variables;
-        context.profile.cnf_clauses_added = delta.cnf_clauses;
-        context.profile.aig_nodes = solver_after.aig_nodes;
-        context.profile.cnf_variables = solver_after.cnf_variables;
-        context.profile.cnf_clauses = solver_after.cnf_clauses;
-        context.profile.cnf_gate_mix = cnf_gate_mix(delta.cnf_gate_mix);
-        context.profile.aig_construction = aig_construction(delta.aig_construction);
-        context.profile.lowering_work = lowering_work(delta.lowering_work);
-        context.profile.model_lift_work = model_lift_work(delta.model_lift_work);
-        context.profile.replay_sat_cache = replay_sat_cache_profile(
-            self.replay_sat_cache_policy,
-            context.replay_sat_cache_before,
+        finish_warm_profile(
+            context,
+            solver_after,
             self.solver.replay_checked_sat_cache_stats(),
-        );
-        context.profile.arena_terms = count(self.arena.len());
-        context.profile.outcome = result_name(&result);
-        context.profile.complete = !matches!(&result, SolveResult::Error(_));
-        context.profile.total_nanos = nanos(context.total_started.elapsed())
-            .saturating_add(context.profile.session_create_nanos);
-        let attributed = context
-            .profile
-            .session_create_nanos
-            .saturating_add(context.profile.translation_nanos)
-            .saturating_add(context.profile.word_rewrite_nanos)
-            .saturating_add(context.profile.bit_blast_nanos)
-            .saturating_add(context.profile.cnf_encode_nanos)
-            .saturating_add(context.profile.solve_nanos)
-            .saturating_add(context.profile.model_lift_nanos)
-            .saturating_add(context.profile.replay_nanos)
-            .saturating_add(context.profile.model_extract_nanos);
-        context.profile.unattributed_nanos = context.profile.total_nanos.saturating_sub(attributed);
-        let Some(output_dir) = profile_output_dir() else {
-            return result;
-        };
-        if let Err(error) = write_profile_record(output_dir, &context.profile) {
-            return SolveResult::Error(error);
-        }
-        result
+            self.replay_sat_cache_policy,
+            self.arena.len(),
+            result,
+            None,
+        )
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WarmProfileEntry {
+    mode: &'static str,
+    persistent_assertions: usize,
+    temporary_assumptions: usize,
+    persistent_translated: usize,
+    temporary_translated: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_warm_profile(
+    profiling: bool,
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: Option<u64>,
+    path_created: bool,
+    session_create_nanos: u64,
+    entry: WarmProfileEntry,
+    solver_before: IncrementalBvStats,
+    replay_sat_cache_before: ReplayCheckedSatCacheStats,
+) -> Option<WarmProfileContext> {
+    if !profiling {
+        return None;
+    }
+    let (script, _) = pipe::build_script(pool, asserts);
+    let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
+    Some(WarmProfileContext {
+        profile: WarmAxeyumCheckProfile {
+            schema: "glaurung-axeyum-warm-profile-v7",
+            process_id: std::process::id(),
+            sequence: None,
+            query_hash,
+            path_id,
+            path_created,
+            entry_mode: entry.mode,
+            outcome: "error",
+            complete: false,
+            assertion_count: count(asserts.len()),
+            persistent_assertion_count: count(entry.persistent_assertions),
+            temporary_assumption_count: count(entry.temporary_assumptions),
+            common_prefix_assertions: 0,
+            assertions_added: 0,
+            assertions_popped: 0,
+            persistent_assertions_translated: count(entry.persistent_translated),
+            temporary_assumptions_translated: count(entry.temporary_translated),
+            translated_exprs: 0,
+            arena_terms: 0,
+            symbols: 0,
+            model_values: 0,
+            session_create_nanos,
+            translation_nanos: 0,
+            word_rewrite_nanos: 0,
+            bit_blast_nanos: 0,
+            cnf_encode_nanos: 0,
+            solve_nanos: 0,
+            model_lift_nanos: 0,
+            replay_nanos: 0,
+            model_extract_nanos: 0,
+            total_nanos: 0,
+            unattributed_nanos: 0,
+            root_encodings: 0,
+            persistent_root_encodings: 0,
+            temporary_root_encodings: 0,
+            aig_nodes_added: 0,
+            cnf_variables_added: 0,
+            cnf_clauses_added: 0,
+            aig_nodes: 0,
+            cnf_variables: 0,
+            cnf_clauses: 0,
+            cnf_gate_mix: BTreeMap::new(),
+            aig_construction: BTreeMap::new(),
+            lowering_work: BTreeMap::new(),
+            model_lift_work: BTreeMap::new(),
+            replay_sat_cache: BTreeMap::new(),
+        },
+        total_started: Instant::now(),
+        solver_before,
+        replay_sat_cache_before,
+    })
+}
+
+fn finish_warm_profile(
+    context: Option<WarmProfileContext>,
+    solver_after: IncrementalBvStats,
+    replay_sat_cache_after: ReplayCheckedSatCacheStats,
+    replay_sat_cache_policy: Option<ReplayCheckedSatCachePolicy>,
+    arena_terms: usize,
+    result: SolveResult,
+    root_partition: Option<(u64, u64)>,
+) -> SolveResult {
+    let Some(mut context) = context else {
+        return result;
+    };
+    let delta = solver_after.delta_since(context.solver_before);
+    context.profile.word_rewrite_nanos = nanos(delta.word_rewrite);
+    context.profile.bit_blast_nanos = nanos(delta.bit_blast);
+    context.profile.cnf_encode_nanos = nanos(delta.cnf_encode);
+    context.profile.solve_nanos = nanos(delta.solve);
+    context.profile.model_lift_nanos = nanos(delta.model_lift);
+    context.profile.replay_nanos = nanos(delta.replay);
+    context.profile.root_encodings = delta.root_encodings;
+    let (persistent_roots, temporary_roots) = root_partition.unwrap_or((delta.root_encodings, 0));
+    debug_assert_eq!(
+        delta.root_encodings,
+        persistent_roots.saturating_add(temporary_roots)
+    );
+    context.profile.persistent_root_encodings = persistent_roots;
+    context.profile.temporary_root_encodings = temporary_roots;
+    context.profile.aig_nodes_added = delta.aig_nodes;
+    context.profile.cnf_variables_added = delta.cnf_variables;
+    context.profile.cnf_clauses_added = delta.cnf_clauses;
+    context.profile.aig_nodes = solver_after.aig_nodes;
+    context.profile.cnf_variables = solver_after.cnf_variables;
+    context.profile.cnf_clauses = solver_after.cnf_clauses;
+    context.profile.cnf_gate_mix = cnf_gate_mix(delta.cnf_gate_mix);
+    context.profile.aig_construction = aig_construction(delta.aig_construction);
+    context.profile.lowering_work = lowering_work(delta.lowering_work);
+    context.profile.model_lift_work = model_lift_work(delta.model_lift_work);
+    context.profile.replay_sat_cache = replay_sat_cache_profile(
+        replay_sat_cache_policy,
+        context.replay_sat_cache_before,
+        replay_sat_cache_after,
+    );
+    context.profile.arena_terms = count(arena_terms);
+    context.profile.outcome = result_name(&result);
+    context.profile.complete = !matches!(&result, SolveResult::Error(_));
+    context.profile.total_nanos =
+        nanos(context.total_started.elapsed()).saturating_add(context.profile.session_create_nanos);
+    let attributed = context
+        .profile
+        .session_create_nanos
+        .saturating_add(context.profile.translation_nanos)
+        .saturating_add(context.profile.word_rewrite_nanos)
+        .saturating_add(context.profile.bit_blast_nanos)
+        .saturating_add(context.profile.cnf_encode_nanos)
+        .saturating_add(context.profile.solve_nanos)
+        .saturating_add(context.profile.model_lift_nanos)
+        .saturating_add(context.profile.replay_nanos)
+        .saturating_add(context.profile.model_extract_nanos);
+    context.profile.unattributed_nanos = context.profile.total_nanos.saturating_sub(attributed);
+    let Some(output_dir) = profile_output_dir() else {
+        return result;
+    };
+    if let Err(error) = write_profile_record(output_dir, &context.profile) {
+        return SolveResult::Error(error);
+    }
+    result
 }
 
 fn cnf_gate_mix(stats: IncrementalCnfStats) -> BTreeMap<&'static str, u64> {
@@ -1344,6 +1512,14 @@ struct DirectDeltaLineageAxeyumSolver {
     stats: DirectDeltaStats,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct DirectCheckMetrics {
+    persistent_translation: DirectTranslationMetrics,
+    temporary_translation: DirectTranslationMetrics,
+    model_extract_nanos: u64,
+    persistent_root_encodings: u64,
+}
+
 impl DirectDeltaLineageAxeyumSolver {
     fn has_path(&self, path_id: u64) -> bool {
         self.paths.contains_key(&path_id)
@@ -1353,21 +1529,66 @@ impl DirectDeltaLineageAxeyumSolver {
         &mut self,
         path_id: u64,
         pool: &ExprPool,
+        complete_asserts: &[Assert],
         persistent: &[Assert],
         retain_assertions: usize,
         temporary: &[Assert],
     ) -> (SolveResult, bool, Option<ReplayCheckedSatCacheStats>) {
+        debug_assert_eq!(complete_asserts.len(), persistent.len() + temporary.len());
+        let profiling = profile_output_dir().is_some();
         self.stats.checks = self.stats.checks.saturating_add(1);
         let created = !self.paths.contains_key(&path_id);
+        let create_started = (created && profiling).then(Instant::now);
         if created {
             self.stats.full_materializations = self.stats.full_materializations.saturating_add(1);
             self.paths.insert(
                 path_id,
                 DirectDeltaPath {
-                    solver: IncrementalAxeyumSolver::new_path_owned(),
+                    solver: IncrementalAxeyumSolver::new_path_owned(profiling),
                     active_assertions: 0,
                 },
             );
+        }
+        let session_create_nanos = create_started.map_or(0, |started| nanos(started.elapsed()));
+
+        let profile_before = if profiling {
+            let path = self
+                .paths
+                .get(&path_id)
+                .expect("direct path was materialized before profiling");
+            Some((
+                path.solver.solver_stats(),
+                path.solver.replay_sat_cache_stats(),
+                path.active_assertions,
+            ))
+        } else {
+            None
+        };
+        let effective_retain = if created { 0 } else { retain_assertions };
+        let mut profile = profile_before.and_then(|(solver_before, cache_before, _)| {
+            start_warm_profile(
+                true,
+                pool,
+                complete_asserts,
+                Some(path_id),
+                created,
+                session_create_nanos,
+                WarmProfileEntry {
+                    mode: "direct_delta",
+                    persistent_assertions: persistent.len(),
+                    temporary_assumptions: temporary.len(),
+                    persistent_translated: 0,
+                    temporary_translated: 0,
+                },
+                solver_before,
+                cache_before,
+            )
+        });
+        if let Some(profile) = &mut profile {
+            let (_, _, active_before) =
+                profile_before.expect("profile inputs exist when a profile was created");
+            profile.profile.common_prefix_assertions =
+                count(effective_retain.min(active_before).min(persistent.len()));
         }
 
         let exact_reuse = !created
@@ -1377,13 +1598,71 @@ impl DirectDeltaLineageAxeyumSolver {
                     && temporary.is_empty()
             });
 
-        let result = self.transition_and_check(
+        let added_before = self.stats.assertions_added;
+        let popped_before = self.stats.assertions_popped;
+        let (result, metrics) = self.transition_and_check(
             path_id,
             pool,
             persistent,
-            if created { 0 } else { retain_assertions },
+            effective_retain,
             temporary,
+            profiling,
         );
+        if let Some(profile) = &mut profile {
+            profile.profile.assertions_added =
+                self.stats.assertions_added.saturating_sub(added_before);
+            profile.profile.assertions_popped =
+                self.stats.assertions_popped.saturating_sub(popped_before);
+            profile.profile.persistent_assertions_translated = metrics.persistent_translation.roots;
+            profile.profile.temporary_assumptions_translated = metrics.temporary_translation.roots;
+            profile.profile.translation_nanos = metrics
+                .persistent_translation
+                .nanos
+                .saturating_add(metrics.temporary_translation.nanos);
+            profile.profile.translated_exprs = metrics
+                .persistent_translation
+                .exprs
+                .saturating_add(metrics.temporary_translation.exprs);
+            profile.profile.symbols = metrics
+                .persistent_translation
+                .symbols
+                .saturating_add(metrics.temporary_translation.symbols);
+            profile.profile.model_extract_nanos = metrics.model_extract_nanos;
+            if let SolveResult::Sat(model) = &result {
+                profile.profile.model_values = count(model.values.len());
+            }
+        }
+        let result = if profiling {
+            let (solver_before, _, _) =
+                profile_before.expect("profile inputs exist when profiling is enabled");
+            let (solver_after, cache_after, arena_terms) = {
+                let path = self
+                    .paths
+                    .get(&path_id)
+                    .expect("direct path remains live until profile completion");
+                (
+                    path.solver.solver_stats(),
+                    path.solver.replay_sat_cache_stats(),
+                    path.solver.arena_len(),
+                )
+            };
+            let total_root_encodings = solver_after
+                .root_encodings
+                .saturating_sub(solver_before.root_encodings);
+            let temporary_root_encodings =
+                total_root_encodings.saturating_sub(metrics.persistent_root_encodings);
+            finish_warm_profile(
+                profile,
+                solver_after,
+                cache_after,
+                replay_sat_cache_policy(),
+                arena_terms,
+                result,
+                Some((metrics.persistent_root_encodings, temporary_root_encodings)),
+            )
+        } else {
+            result
+        };
         let synced = !matches!(result, SolveResult::Error(_));
         if synced && !created {
             self.stats.prefix_assertions_reused = self
@@ -1408,24 +1687,36 @@ impl DirectDeltaLineageAxeyumSolver {
         persistent: &[Assert],
         retain_assertions: usize,
         temporary: &[Assert],
-    ) -> SolveResult {
+        profiling: bool,
+    ) -> (SolveResult, DirectCheckMetrics) {
+        let mut metrics = DirectCheckMetrics::default();
         let path = self
             .paths
             .get_mut(&path_id)
             .expect("direct path was materialized before transition");
         if retain_assertions > path.active_assertions || retain_assertions > persistent.len() {
-            return SolveResult::Error(format!(
-                "axeyum direct-delta prefix {retain_assertions} exceeds active {} or persistent {}",
-                path.active_assertions,
-                persistent.len()
-            ));
+            return (
+                SolveResult::Error(format!(
+                    "axeyum direct-delta prefix {retain_assertions} exceeds active {} or persistent {}",
+                    path.active_assertions,
+                    persistent.len()
+                )),
+                metrics,
+            );
         }
+
+        let root_encodings_before = profiling
+            .then(|| path.solver.solver_stats().root_encodings)
+            .unwrap_or(0);
 
         let pop_count = path.active_assertions - retain_assertions;
         for _ in 0..pop_count {
             if !path.solver.pop() {
-                return SolveResult::Error(
-                    "axeyum direct-delta scope underflow; session reset".to_string(),
+                return (
+                    SolveResult::Error(
+                        "axeyum direct-delta scope underflow; session reset".to_string(),
+                    ),
+                    metrics,
                 );
             }
             path.active_assertions -= 1;
@@ -1436,11 +1727,13 @@ impl DirectDeltaLineageAxeyumSolver {
         let suffix = &persistent[retain_assertions..];
         for &assertion in suffix {
             if let Err(error) = path.solver.push() {
-                return SolveResult::Error(error);
+                return (SolveResult::Error(error), metrics);
             }
-            if let Err(error) = path.solver.assert(pool, assertion) {
-                return SolveResult::Error(error);
-            }
+            let translated = match path.solver.assert_measured(pool, assertion, profiling) {
+                Ok(translated) => translated,
+                Err(error) => return (SolveResult::Error(error), metrics),
+            };
+            metrics.persistent_translation.add(translated);
             path.active_assertions += 1;
             self.stats.persistent_assertions_translated = self
                 .stats
@@ -1448,15 +1741,29 @@ impl DirectDeltaLineageAxeyumSolver {
                 .saturating_add(1);
             self.stats.assertions_added = self.stats.assertions_added.saturating_add(1);
         }
-        self.stats.temporary_assumptions_translated = self
-            .stats
-            .temporary_assumptions_translated
-            .saturating_add(count(temporary.len()));
+        if profiling {
+            metrics.persistent_root_encodings = path
+                .solver
+                .solver_stats()
+                .root_encodings
+                .saturating_sub(root_encodings_before);
+        }
 
         if temporary.is_empty() {
-            path.solver.check()
+            let (result, model_extract_nanos) = path.solver.check_measured(profiling);
+            metrics.model_extract_nanos = model_extract_nanos;
+            (result, metrics)
         } else {
-            path.solver.check_assuming(pool, temporary)
+            let (result, translated, model_extract_nanos) = path
+                .solver
+                .check_assuming_measured(pool, temporary, profiling);
+            metrics.temporary_translation = translated;
+            metrics.model_extract_nanos = model_extract_nanos;
+            self.stats.temporary_assumptions_translated = self
+                .stats
+                .temporary_assumptions_translated
+                .saturating_add(translated.roots);
+            (result, metrics)
         }
     }
 
@@ -1779,6 +2086,7 @@ fn check_warm_thread_local_selected(
                     let (result, synced, removed_cache) = lineage.check_path(
                         path_id,
                         pool,
+                        asserts,
                         persistent,
                         delta.retain_assertions,
                         temporary,
@@ -2838,7 +3146,14 @@ mod tests {
         let mut lineage = DirectDeltaLineageAxeyumSolver::default();
         assert!(matches!(
             lineage
-                .check_path(owner, &root, &[(below_six, true)], 0, &[])
+                .check_path(
+                    owner,
+                    &root,
+                    &[(below_six, true)],
+                    &[(below_six, true)],
+                    0,
+                    &[],
+                )
                 .0,
             SolveResult::Sat(_)
         ));
@@ -2846,6 +3161,7 @@ mod tests {
             .check_path(
                 owner,
                 &left,
+                &[(below_six, true), (x_is_five, true)],
                 &[(below_six, true), (x_is_five, true)],
                 1,
                 &[],
@@ -2864,6 +3180,7 @@ mod tests {
                 .check_path(
                     owner,
                     &right,
+                    &[(below_six, true), (x_is_seven, true)],
                     &[(below_six, true)],
                     1,
                     &[(x_is_seven, true)],
@@ -2873,7 +3190,14 @@ mod tests {
         );
         assert!(matches!(
             lineage
-                .check_path(owner, &right, &[(below_six, true)], 1, &[])
+                .check_path(
+                    owner,
+                    &right,
+                    &[(below_six, true)],
+                    &[(below_six, true)],
+                    1,
+                    &[],
+                )
                 .0,
             SolveResult::Sat(_)
         ));
@@ -2903,8 +3227,13 @@ mod tests {
         let owner = 29;
         let mut lineage = DirectDeltaLineageAxeyumSolver::default();
 
-        assert!(lineage.check_path(owner, &pool, &[assertion], 0, &[]).1);
-        let (invalid, synced, _) = lineage.check_path(owner, &pool, &[assertion], 2, &[]);
+        assert!(
+            lineage
+                .check_path(owner, &pool, &[assertion], &[assertion], 0, &[])
+                .1
+        );
+        let (invalid, synced, _) =
+            lineage.check_path(owner, &pool, &[assertion], &[assertion], 2, &[]);
         assert!(!synced);
         assert!(matches!(invalid, SolveResult::Error(_)));
         assert!(!lineage.paths.contains_key(&owner));
@@ -2912,7 +3241,11 @@ mod tests {
         // Missing state never applies a naked delta. It safely rematerializes
         // the complete persistent snapshot even when the caller's retain marker
         // refers to the lost owner.
-        assert!(lineage.check_path(owner, &pool, &[assertion], 1, &[]).1);
+        assert!(
+            lineage
+                .check_path(owner, &pool, &[assertion], &[assertion], 1, &[])
+                .1
+        );
         assert_eq!(
             lineage.stats(),
             DirectDeltaStats {

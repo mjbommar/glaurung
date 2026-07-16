@@ -270,14 +270,21 @@ ephemeral contradictory assumptions, synchronization acknowledgement, and
 invalid-partition teardown. Both warm explorer ownership tests pass: forked
 owners remain distinct while inheriting only the confirmed depth, and restart
 resets ownership and depth.
+Warm-profile v7 then makes the entry contract observable rather than
+overloading snapshot counters: `entry_mode` and exact persistent/temporary
+query, translation, and root-encoding partitions are mandatory. A four-check
+direct producer smoke (three SAT, one UNSAT) and a six-check snapshot smoke
+both validate at 100% decided through Axeyum's strict v7 summarizer; the direct
+summary records two persistent roots and one temporary root translated/encoded
+across the exact extension/pop/assumption/reuse sequence.
 **Consequences:** Glaurung now drives the real P5 session from explicit path
 deltas behind `GLAURUNG_AXEYUM_DIRECT_DELTA=1`. The full query remains intact
 for the Z3 authority, ordered capture, and every one-shot fallback. The
 explorer advances its prefix marker only on an explicit backend
 acknowledgement, so admission fallback, a lost owner, or an operational error
 cannot cause a naked suffix to be asserted. The route is not a production
-default or a performance claim: per-check direct-session profiling and the
-repeated ordered correctness/time/RSS gate remain mandatory.
+default or a performance claim: the repeated ordered correctness/time/RSS gate
+remains mandatory.
 **Alternatives rejected:** adding default incremental methods to `Solver` would
 make one-shot emulation indistinguishable from retained state; storing one
 trait object inside cloned `State` would imply illegal mutable-session cloning;

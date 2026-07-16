@@ -143,7 +143,7 @@ target/release/examples/ioctlance \
 check. Without warm reuse it preserves the raw one-shot policy and writes the
 `glaurung-axeyum-native-profile-v1` schema. With snapshot or lineage reuse it
 selects Axeyum's profiling constructor and writes
-`glaurung-axeyum-warm-profile-v6` (v1 through v5 remain accepted historical inputs).
+`glaurung-axeyum-warm-profile-v7` (v1 through v6 remain accepted historical inputs).
 Both use one
 `axeyum-profile-<pid>.jsonl` file per process. Every record carries the SHA-256
 of the exact bytes produced by the existing SMT-LIB capture renderer, a
@@ -182,6 +182,26 @@ arena symbols, and completed model values. The summarizer requires the exact
 field set, rejects nested time beyond `model_lift_nanos`, and validates the
 symbol/node count bounds. These diagnostics select no model policy and do not
 authorize skipping validation, completion, or original replay.
+
+V7 adds Axeyum ADR-0202's entry contract for first-class direct deltas. Every
+record names `entry_mode` as `snapshot` or `direct_delta` and partitions the
+complete query into persistent assertions and temporary assumptions. Separate
+counters report persistent and temporary roots translated in this check and
+persistent versus temporary root encodings. Snapshot mode must translate the
+complete persistent set and has zero temporary work. Direct mode must translate
+exactly the newly added persistent roots plus every temporary assumption;
+temporary root encoding may be zero on a replay-cache hit, but can never exceed
+the translated assumptions. The strict summarizer rejects invalid query/root
+partitions and reports entry-mode plus entry-structure totals, while retaining
+v1--v6 as historical formats.
+
+Two producer smokes establish the boundary before real-driver measurement. The
+four-check direct sequence validates with three SAT, one UNSAT, one owner,
+two persistent roots translated/encoded, one temporary root
+translated/encoded, one pop, and one exact cache hit. The six-check snapshot
+sequence validates with four SAT, two UNSAT, twelve complete persistent roots
+translated, six persistent roots encoded, and zero temporary work. These debug
+smokes prove schema/counter consistency, not performance.
 
 The first v6 SurfacePen lineage run decides and agrees on all 2,551 checks
 (2,282 SAT / 269 UNSAT), with zero unknown splits or replay failures. Of
@@ -285,7 +305,7 @@ python3 scripts/summarize-glaurung-warm-profile.py \
 The accepted adaptive production policy deliberately writes native one-shot
 records for bounded path-cap fallbacks into the same occurrence-ordered file.
 Do not split or delete them. ADR-0197's separate mixed summarizer delegates
-each record to the existing warm-v6 or native-v1 validator, validates the
+each record to the current warm-v7 or native-v1 validator, validates the
 global process/sequence order, and keeps retained, created-owner, and fallback
 costs separate:
 
@@ -767,11 +787,10 @@ mutable sessions; they inherit only the parent's confirmed depth, so their first
 check safely rematerializes. The full query is still emitted to the ordered
 trace and sent to the Z3 shadow authority.
 
-This is functionality plumbing, not accepted performance evidence. The
-existing warm JSONL profiler is snapshot-oriented; direct-session per-check
-profile export must land before stage-level attribution. Until repeated ordered
-driver runs prove equal verdicts/findings and improve both time and the bounded
-RSS policy, `GLAURUNG_AXEYUM_DIRECT_DELTA` stays unset by default.
+This is functionality plumbing, not accepted performance evidence. Warm-profile
+v7 now attributes direct-session work, but repeated ordered driver runs must
+still prove equal verdicts/findings and improve both time and the bounded RSS
+policy. Until then, `GLAURUNG_AXEYUM_DIRECT_DELTA` stays unset by default.
 
 The native path-owned control at `b9febbd`/`950cca4` completes that first
 bounded comparison. Three alternating rounds on `win10-vwififlt`,
