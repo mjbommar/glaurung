@@ -106,7 +106,7 @@ pub(crate) fn build_script(pool: &ExprPool, asserts: &[Assert]) -> (String, Vec<
 /// expected false means `e == 0` at `e`'s actual bit-vector width.
 pub(crate) fn assertion_line(pool: &ExprPool, assertion: Assert) -> String {
     let width = pool.width_of(assertion.0).bits();
-    let term = pool.render_smtlib(assertion.0);
+    let term = pool.render_smtlib_shared(assertion.0);
     let zero = format!("(_ bv0 {width})");
     if assertion.1 {
         format!("(assert (distinct {term} {zero}))\n")
@@ -196,6 +196,43 @@ mod tests {
         assert!(truthy.contains("(assert (distinct sym0_64 (_ bv0 64)))"));
         let (falsey, _) = build_script(&pool, &[(wide, false)]);
         assert!(falsey.contains("(assert (= sym0_64 (_ bv0 64)))"));
+    }
+
+    #[test]
+    fn script_generation_preserves_shared_expression_dags() {
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W64);
+        let one = pool.constant(Width::W64, 1);
+        let mut shared = pool.intern(Expr::Bin {
+            op: BinOp::Add,
+            a: x,
+            b: one,
+            width: Width::W64,
+        });
+        for _ in 0..24 {
+            shared = pool.intern(Expr::Bin {
+                op: BinOp::Xor,
+                a: shared,
+                b: shared,
+                width: Width::W64,
+            });
+        }
+
+        let (script, _) = build_script(&pool, &[(shared, true)]);
+        assert!(script.contains("(let ((g!"));
+        assert_eq!(script.matches("bvxor").count(), 24);
+        assert_eq!(script.matches("bvadd").count(), 1);
+        assert!(
+            script.len() < 4_096,
+            "shared DAG expanded: {} bytes",
+            script.len()
+        );
+
+        match PipeSolver::new().check(&pool, &[(shared, true)]) {
+            SolveResult::Unsat => {}
+            SolveResult::NoSolver => eprintln!("no solver binary on PATH - skipping"),
+            other => panic!("expected repeated self-xor to be unsat, got {other:?}"),
+        }
     }
 
     #[test]

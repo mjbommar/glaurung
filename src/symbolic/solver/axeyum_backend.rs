@@ -24,11 +24,11 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, AigConstructionStats,
-    CheckResult, IncrementalBvSolver, IncrementalBvStats, IncrementalCnfStats,
-    IncrementalLoweringStats, IncrementalModelLiftStats,
+    AigConstructionStats, CheckResult, IncrementalBvSolver, IncrementalBvStats,
+    IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
     IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy,
-    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome,
+    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome, export_qf_bv_unsat_proof,
+    solve_smtlib, solve_smtlib_get_value,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -36,8 +36,8 @@ use sha2::{Digest, Sha256};
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    pipe, Assert, IncrementalSolver, Model, SolveResult, Solver, WarmAssertionPrefix,
-    WarmDeltaContext,
+    Assert, IncrementalSolver, Model, SolveResult, Solver, WarmAssertionPrefix, WarmDeltaContext,
+    pipe,
 };
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
@@ -3163,6 +3163,22 @@ mod tests {
                 SolveResult::Sat(_)
             ));
         }
+    }
+
+    #[test]
+    fn text_bridge_accepts_shared_let_script() {
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W64);
+        let one = c(&mut pool, 1, Width::W64);
+        let mut shared = bin(&mut pool, BinOp::Add, x, one, Width::W64);
+        for _ in 0..24 {
+            shared = bin(&mut pool, BinOp::Xor, shared, shared, Width::W64);
+        }
+
+        assert_eq!(
+            AxeyumTextSolver::new().check(&pool, &[(shared, true)]),
+            SolveResult::Unsat
+        );
     }
 
     #[test]

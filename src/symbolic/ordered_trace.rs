@@ -562,7 +562,7 @@ impl Recorder {
             ));
             return;
         };
-        let rendered = pool.render_smtlib(expression);
+        let rendered = pool.render_smtlib_shared(expression);
         let width = pool.width_of(expression).bits();
         let expression_id = sha256(format!("{width}\0{rendered}").as_bytes());
         let mut symbols = BTreeMap::new();
@@ -934,7 +934,7 @@ fn sync_dir(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::types::{CmpOp, Width};
+    use crate::ir::types::{BinOp, CmpOp, Width};
     use crate::symbolic::expr::Expr;
     use crate::symbolic::solver::Model;
 
@@ -1135,5 +1135,71 @@ mod tests {
             status.success(),
             "validator rejected wide truthiness fixture"
         );
+    }
+
+    #[test]
+    fn publishes_shared_expression_dags_without_recursive_expansion() {
+        let output = tempfile::tempdir().expect("trace output");
+        let guard =
+            begin(output.path(), Path::new("shared-driver.sys"), b"driver").expect("start trace");
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W64);
+        let one = pool.constant(Width::W64, 1);
+        let mut shared = pool.intern(Expr::Bin {
+            op: BinOp::Add,
+            a: x,
+            b: one,
+            width: Width::W64,
+        });
+        for _ in 0..24 {
+            shared = pool.intern(Expr::Bin {
+                op: BinOp::Xor,
+                a: shared,
+                b: shared,
+                width: Width::W64,
+            });
+        }
+
+        let mut root = TracePath::root(0x1000).expect("root trace path");
+        root.push_assert(&pool, (shared, true), "shared-dag", 0x1000);
+        root.check(
+            &pool,
+            &[(shared, true)],
+            &SolveResult::Unsat,
+            "shared-dag",
+            shadow_timing(1),
+            0x1000,
+        );
+        root.end("completed", 0x1000);
+
+        let published = guard.finish("completed").expect("publish shared trace");
+        for store in ["assertions", "queries"] {
+            let entry = fs::read_dir(published.join(store))
+                .expect("read content store")
+                .next()
+                .expect("stored content")
+                .expect("content-store entry");
+            let bytes = fs::read(entry.path()).expect("read stored content");
+            assert!(
+                bytes.len() < 4_096,
+                "shared DAG expanded in {store}: {} bytes",
+                bytes.len()
+            );
+            assert!(
+                bytes
+                    .windows("(let ((g!".len())
+                    .any(|window| window == b"(let ((g!"),
+                "shared binding absent from {store}"
+            );
+        }
+
+        let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/axeyum-integration/capture/validate_ordered_trace.py");
+        let status = Command::new("python3")
+            .arg(validator)
+            .arg(&published)
+            .status()
+            .expect("run ordered-trace validator");
+        assert!(status.success(), "validator rejected shared-DAG fixture");
     }
 }
