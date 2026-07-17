@@ -275,16 +275,29 @@ fn main() {
             .and_then(|v| v.parse().ok())
             .unwrap_or(150),
     );
+    // A deterministic function-count boundary is the fixed-work alternative to
+    // the wall-clock deadline. Large-driver solver-policy comparisons set a
+    // generous deadline plus this limit so both processes attempt the same
+    // reachable-function prefix even when one policy consumes more solver time.
+    let max_analyzed_functions = std::env::var("IOCTLANCE_MAX_ANALYZED_FUNCTIONS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|limit| *limit > 0);
     let mut lines: Vec<String> = Vec::new();
     let mut raw = 0usize;
     let mut suppressed = 0usize;
     let mut analyzed = 0usize;
     let mut deadline_hit = false;
+    let mut work_limit_hit = false;
     let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
     for f in &funcs {
         let va = f.entry_point.value;
         if !reachable.contains(&va) {
             continue;
+        }
+        if max_analyzed_functions.is_some_and(|limit| analyzed >= limit) {
+            work_limit_hit = true;
+            break;
         }
         if t.elapsed() > deadline {
             deadline_hit = true;
@@ -377,7 +390,9 @@ fn main() {
         suppressed,
         analyzed,
         reachable.len(),
-        if deadline_hit {
+        if work_limit_hit {
+            " WORK-LIMIT-HIT (fixed reachable-function prefix complete)"
+        } else if deadline_hit {
             " DEADLINE-HIT (coverage bounded; raise IOCTLANCE_DEADLINE_SECS)"
         } else {
             ""

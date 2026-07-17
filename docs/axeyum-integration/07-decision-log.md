@@ -598,3 +598,9 @@ consistent with deadline-limited traversal reaching two additional sinks, but
 it is not an exact-output causal comparison. Keep the candidate off by default
 until a fixed-work or repeated gate can distinguish policy effect from traversal
 timing and require exact findings when the workload is identical.
+
+**Fixed-work follow-up:** `IOCTLANCE_MAX_ANALYZED_FUNCTIONS=N` now stops before
+opening reachable function `N+1` and reports `WORK-LIMIT-HIT`. The next tcpip
+pair uses `N=156` with a generous wall deadline as a safety backstop. Admission
+requires both processes to hit the work limit, not the deadline, and to preserve
+exact query traffic and finding hashes before resource deltas are scored.

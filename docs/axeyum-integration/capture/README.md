@@ -1045,6 +1045,22 @@ but the 782-finding candidate is not an exact-work comparison. Require a
 fixed-work or repeated gate before default admission; do not interpret the two
 extra findings as a solver semantic disagreement.
 
+For the exact-work retry, replace the global deadline as the stopping rule with
+a deterministic reachable-function prefix:
+
+```sh
+export IOCTLANCE_DEADLINE_SECS=3600
+export IOCTLANCE_MAX_ANALYZED_FUNCTIONS=156
+```
+
+`ioctlance` checks this positive limit before opening each reachable function
+and reports `WORK-LIMIT-HIT` after exactly that many attempted functions. The
+large deadline remains a safety backstop and must not fire in an admissible
+fixed-work artifact. Control and candidate must then match exact query traffic
+and finding hashes in addition to the existing verdict, reset, replay, time,
+and RSS gates. The value 156 reproduces the current tcpip coverage boundary; it
+is a calibration input, not a universal DriverSpec default.
+
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-
 equivalent snapshot and loses the current serial-snapshot policy on SurfacePen
