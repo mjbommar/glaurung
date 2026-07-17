@@ -210,10 +210,16 @@ pub(crate) fn warm_timeout_continue_enabled() -> bool {
 }
 
 fn parse_warm_timeout_continue(value: Option<&str>) -> bool {
-    matches!(value, Some("1"))
-        || value.is_some_and(|value| {
-            value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("on")
-        })
+    match value {
+        None => true,
+        Some(value) if value.eq_ignore_ascii_case("off") => false,
+        Some(value) if value.eq_ignore_ascii_case("false") => false,
+        Some("0") => false,
+        Some(value) if value.eq_ignore_ascii_case("on") => true,
+        Some(value) if value.eq_ignore_ascii_case("true") => true,
+        Some("1") => true,
+        Some(_) => false,
+    }
 }
 
 fn select_warm_timeout_continuation(
@@ -2457,7 +2463,7 @@ pub struct WarmTimeoutColdRetryStats {
     pub errors: u64,
 }
 
-/// Process-wide counters for the opt-in same-session timeout continuation.
+/// Process-wide counters for the bounded same-session timeout continuation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WarmTimeoutContinuationStats {
     /// Synchronized warm `Unknown` checks granted one additional SAT call.
@@ -2523,7 +2529,7 @@ pub fn warm_timeout_cold_retry_stats() -> WarmTimeoutColdRetryStats {
     }
 }
 
-/// Returns traffic for the opt-in same-session timeout continuation.
+/// Returns traffic for the bounded same-session timeout continuation.
 pub fn warm_timeout_continuation_stats() -> WarmTimeoutContinuationStats {
     WarmTimeoutContinuationStats {
         continuations: WARM_TIMEOUT_CONTINUATIONS.load(Ordering::Relaxed),
@@ -3747,8 +3753,9 @@ mod tests {
     }
 
     #[test]
-    fn warm_timeout_continue_is_strictly_opt_in() {
-        for value in [None, Some("off"), Some("false"), Some("0"), Some("invalid")] {
+    fn warm_timeout_continue_is_default_on_with_fail_closed_override() {
+        assert!(parse_warm_timeout_continue(None));
+        for value in [Some("off"), Some("false"), Some("0"), Some("invalid")] {
             assert!(!parse_warm_timeout_continue(value));
         }
         for value in [Some("on"), Some("true"), Some("TRUE"), Some("1")] {

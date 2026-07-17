@@ -1248,3 +1248,20 @@ gauge. Compare repeated control/candidate reports only when their identities
 and exact-work inputs match. Preserve honest `Unknown`/lost-decision counts and
 apply the established time, RSS, and variance alarms; a faster nondecision is
 not an acceptance result.
+
+The first complete native admission gate passed on 2026-07-17. Its trace has
+326,364 events, 71,136 checks, 50,687 unique queries, 10,515 public/native
+assertions, and 27,940 model reads. Independent replay report SHA-256 is
+`3a9a6b45b2b86148c197b4f20918b65093f249fcbf523a4347d91d63b72b3387`.
+Three interleaved fresh-process pairs preserved every exact-work and lifecycle
+counter with zero correctness/cleanup alarms. The candidate performed 29
+continuations, recovered 18 decisions, retained 11 honest `Unknown`s, and had
+zero continuation errors. Candidate p50 Axeyum time/RSS changed +2.027%/
++1.021%, and both policies' Axeyum-time CV stayed below 0.4%. Comparison
+artifact SHA-256 is
+`0f27afce0b691e977ebf9aa66b67f4bb8744e1c0cc3eb90c2f832b196d1adbc3`.
+
+ADR-020 therefore makes continuation default-on only after the caller has
+selected direct delta. Set `GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE=0` for the
+preserved control. Missing means on; `off`/`false`/`0` and unrecognized values
+fail closed to off. `GLAURUNG_AXEYUM_DIRECT_DELTA` remains separately opt-in.
