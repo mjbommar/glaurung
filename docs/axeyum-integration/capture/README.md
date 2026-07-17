@@ -1150,6 +1150,27 @@ query independently while the total includes shadow-wrapper work. A missing
 backend is represented by `null`; never use the combined total as a Z3-only
 baseline.
 
+New producers declare
+`check_measurement_schema: glaurung-ordered-check-measurement-v1` and pair each
+backend timing with `z3_outcome` / `axeyum_outcome`. They also record one exact
+`axeyum_execution` class: cold one-shot, snapshot warm, newly created or
+retained path warm, timeout cold retry, or a named missing-path/auto-probe/path-
+cap/assertion-cap fallback. The validator requires timing/outcome/execution
+presence to agree and rejects unnamed classes. Historical v1 traces remain
+structurally readable when the extension marker is absent, but they cannot
+enter ADR-0213's publication analysis.
+
+Axeyum's `scripts/analyze-glaurung-paired-traces.py` consumes at least five
+fixed-work repetitions. It requires identical ordered check identities and
+execution-class membership, rejects operational results and decided
+disagreements, and reports `{both-decided, z3-only, axeyum-only, neither}` per
+run. Its primary latency population contains only occurrences decided by both
+backends in every repetition. The scalar is the geometric mean of per-
+occurrence `z3_nanos / axeyum_nanos` ratios with a deterministic bootstrap 95%
+confidence interval; p50/p90/p95/p99, process-level CV, per-execution-class
+partitions, warm-hit rate, and optional CSV/PNG latency CDFs are separate
+outputs. It deliberately emits no ratio of sums.
+
 The validator fails on manifest/file hash drift, sequence gaps, missing path
 terminals, broken lineage, scope underflow/digest mismatch, assertion/query
 reconstruction mismatch, missing/unreferenced assertion bytes, inconsistent

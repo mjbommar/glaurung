@@ -114,6 +114,12 @@ def validate(root: pathlib.Path) -> dict[str, int]:
         fail("manifest schema is not glaurung-ordered-trace-v1")
     if manifest.get("version") != 1:
         fail("manifest version is not 1")
+    check_measurement_schema = manifest.get("check_measurement_schema")
+    if check_measurement_schema not in {
+        None,
+        "glaurung-ordered-check-measurement-v1",
+    }:
+        fail("invalid ordered-check measurement schema")
     native_replay = manifest.get("native_replay")
     if native_replay is not None and (
         not isinstance(native_replay, dict)
@@ -372,6 +378,9 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             backend_nanos = event.get("backend_nanos")
             z3_nanos = event.get("z3_nanos")
             axeyum_nanos = event.get("axeyum_nanos")
+            z3_outcome = event.get("z3_outcome")
+            axeyum_outcome = event.get("axeyum_outcome")
+            axeyum_execution = event.get("axeyum_execution")
             if not isinstance(backend_nanos, int) or backend_nanos < 0:
                 fail(f"invalid total backend timing for {check_id}")
             if z3_nanos is not None and (not isinstance(z3_nanos, int) or z3_nanos < 0):
@@ -383,6 +392,40 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             measured = (z3_nanos or 0) + (axeyum_nanos or 0)
             if measured > backend_nanos:
                 fail(f"per-backend timing exceeds total timing for {check_id}")
+            if check_measurement_schema is not None:
+                backend_outcomes = {"sat", "unsat", "unknown", "no-solver", "error"}
+                execution_classes = {
+                    "cold-one-shot",
+                    "warm-snapshot",
+                    "warm-created",
+                    "warm-retained",
+                    "warm-timeout-cold-retry",
+                    "fallback-missing-path",
+                    "fallback-auto-probe",
+                    "fallback-path-cap",
+                    "fallback-assertion-cap",
+                    "invalid-direct-delta",
+                }
+                if (z3_nanos is None) != (z3_outcome is None):
+                    fail(f"Z3 timing/outcome presence mismatch for {check_id}")
+                if (axeyum_nanos is None) != (axeyum_outcome is None):
+                    fail(f"Axeyum timing/outcome presence mismatch for {check_id}")
+                if z3_outcome is not None and z3_outcome not in backend_outcomes:
+                    fail(f"invalid Z3 outcome for {check_id}")
+                if axeyum_outcome is not None and axeyum_outcome not in backend_outcomes:
+                    fail(f"invalid Axeyum outcome for {check_id}")
+                if (axeyum_nanos is None) != (axeyum_execution is None):
+                    fail(f"Axeyum timing/execution presence mismatch for {check_id}")
+                if (
+                    axeyum_execution is not None
+                    and axeyum_execution not in execution_classes
+                ):
+                    fail(f"invalid Axeyum execution class for {check_id}")
+                authoritative = z3_outcome if z3_outcome is not None else axeyum_outcome
+                if authoritative == "no-solver":
+                    authoritative = "error"
+                if authoritative is not None and authoritative != outcome:
+                    fail(f"authoritative backend outcome mismatch for {check_id}")
             checks[check_id] = (outcome, path_id)
             observed_occurrences.setdefault(query_hash, []).append(
                 (check_id, path_id, event["event_seq"])

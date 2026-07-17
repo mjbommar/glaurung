@@ -24,11 +24,11 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    AigConstructionStats, CheckResult, IncrementalBvSolver, IncrementalBvStats,
-    IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
+    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, AigConstructionStats,
+    CheckResult, IncrementalBvSolver, IncrementalBvStats, IncrementalCnfStats,
+    IncrementalLoweringStats, IncrementalModelLiftStats,
     IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy,
-    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome, export_qf_bv_unsat_proof,
-    solve_smtlib, solve_smtlib_get_value,
+    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -36,8 +36,8 @@ use sha2::{Digest, Sha256};
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    Assert, IncrementalSolver, Model, SolveResult, Solver, WarmAssertionPrefix, WarmDeltaContext,
-    pipe,
+    pipe, Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, Solver,
+    WarmAssertionPrefix, WarmDeltaContext,
 };
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
@@ -2061,8 +2061,8 @@ pub(crate) fn check_warm_thread_local(
     asserts: &[Assert],
     path_id: Option<u64>,
     delta: Option<WarmDeltaContext>,
-) -> SolveResult {
-    let result = check_warm_thread_local_selected(
+) -> (SolveResult, AxeyumExecutionClass) {
+    let (result, execution) = check_warm_thread_local_selected(
         pool,
         asserts,
         path_id,
@@ -2074,11 +2074,11 @@ pub(crate) fn check_warm_thread_local(
         || !last_direct_delta_synced()
         || !warm_timeout_cold_retry_enabled()
     {
-        return result;
+        return (result, execution);
     }
 
     WARM_TIMEOUT_COLD_RETRIES.fetch_add(1, Ordering::Relaxed);
-    match AxeyumSolver::new().check(pool, asserts) {
+    let result = match AxeyumSolver::new().check(pool, asserts) {
         decided @ (SolveResult::Sat(_) | SolveResult::Unsat) => {
             WARM_TIMEOUT_COLD_RECOVERIES.fetch_add(1, Ordering::Relaxed);
             decided
@@ -2091,7 +2091,8 @@ pub(crate) fn check_warm_thread_local(
             WARM_TIMEOUT_COLD_ERRORS.fetch_add(1, Ordering::Relaxed);
             result
         }
-    }
+    };
+    (result, AxeyumExecutionClass::WarmTimeoutColdRetry)
 }
 
 fn check_warm_thread_local_selected(
@@ -2101,11 +2102,18 @@ fn check_warm_thread_local_selected(
     delta: Option<WarmDeltaContext>,
     policy: WarmReusePolicy,
     direct_delta_requested: bool,
-) -> SolveResult {
+) -> (SolveResult, AxeyumExecutionClass) {
     LAST_DIRECT_DELTA_SYNCED.with(|synced| synced.set(false));
+    let mut execution = AxeyumExecutionClass::ColdOneShot;
     let (result, before, after) = match policy {
-        WarmReusePolicy::Off => return AxeyumSolver::new().check(pool, asserts),
+        WarmReusePolicy::Off => {
+            return (
+                AxeyumSolver::new().check(pool, asserts),
+                AxeyumExecutionClass::ColdOneShot,
+            );
+        }
         WarmReusePolicy::Snapshot => WARM_SOLVER.with(|solver| {
+            execution = AxeyumExecutionClass::WarmSnapshot;
             let mut solver = solver.borrow_mut();
             let before = solver.stats();
             let result = solver.check_snapshot(pool, asserts);
@@ -2113,7 +2121,10 @@ fn check_warm_thread_local_selected(
         }),
         policy @ (WarmReusePolicy::Lineage | WarmReusePolicy::Auto | WarmReusePolicy::Adaptive) => {
             let Some(path_id) = path_id else {
-                return AxeyumSolver::new().check(pool, asserts);
+                return (
+                    AxeyumSolver::new().check(pool, asserts),
+                    AxeyumExecutionClass::FallbackMissingPath,
+                );
             };
             let direct = direct_delta_requested && delta.is_some();
             if direct {
@@ -2140,12 +2151,15 @@ fn check_warm_thread_local_selected(
                         WARM_PATHS_LIVE.fetch_sub(1, Ordering::Relaxed);
                     }
                     record_warm_delta(before, after);
-                    return SolveResult::Error(format!(
-                        "invalid axeyum direct delta: retain {}, persistent {}, total {}",
-                        delta.retain_assertions,
-                        delta.persistent_assertions,
-                        asserts.len()
-                    ));
+                    return (
+                        SolveResult::Error(format!(
+                            "invalid axeyum direct delta: retain {}, persistent {}, total {}",
+                            delta.retain_assertions,
+                            delta.persistent_assertions,
+                            asserts.len()
+                        )),
+                        AxeyumExecutionClass::InvalidDirectDelta,
+                    );
                 }
             }
             let limits = warm_reuse_limits();
@@ -2157,7 +2171,10 @@ fn check_warm_thread_local_selected(
                     close_warm_path(path_id);
                 }
                 WARM_ASSERTION_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
-                return AxeyumSolver::new().check(pool, asserts);
+                return (
+                    AxeyumSolver::new().check(pool, asserts),
+                    AxeyumExecutionClass::FallbackAssertionCap,
+                );
             }
             let exists = if direct {
                 DIRECT_DELTA_SOLVERS.with(|lineage| lineage.borrow().has_path(path_id))
@@ -2169,7 +2186,10 @@ fn check_warm_thread_local_selected(
                     .with(|admission| admission.borrow_mut().observe(path_id));
                 if !repeated {
                     WARM_AUTO_PROBES.fetch_add(1, Ordering::Relaxed);
-                    return AxeyumSolver::new().check(pool, asserts);
+                    return (
+                        AxeyumSolver::new().check(pool, asserts),
+                        AxeyumExecutionClass::FallbackAutoProbe,
+                    );
                 }
             }
             let reserved = if exists {
@@ -2198,12 +2218,23 @@ fn check_warm_thread_local_selected(
                         true
                     } else {
                         WARM_PATH_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
-                        return AxeyumSolver::new().check(pool, asserts);
+                        return (
+                            AxeyumSolver::new().check(pool, asserts),
+                            AxeyumExecutionClass::FallbackPathCap,
+                        );
                     }
                 } else {
                     WARM_PATH_LIMIT_FALLBACKS.fetch_add(1, Ordering::Relaxed);
-                    return AxeyumSolver::new().check(pool, asserts);
+                    return (
+                        AxeyumSolver::new().check(pool, asserts),
+                        AxeyumExecutionClass::FallbackPathCap,
+                    );
                 }
+            };
+            execution = if exists {
+                AxeyumExecutionClass::WarmRetained
+            } else {
+                AxeyumExecutionClass::WarmCreated
             };
             if direct {
                 let delta = delta
@@ -2289,7 +2320,7 @@ fn check_warm_thread_local_selected(
         }
     };
     record_warm_delta(before, after);
-    result
+    (result, execution)
 }
 
 fn adaptive_live_path_limit(configured: u64, pressure_events: u64) -> u64 {
@@ -3797,35 +3828,35 @@ mod tests {
             )
         };
 
-        assert!(matches!(
-            check(&[(below_six, true)], 0, 1, &base_prefix),
-            SolveResult::Sat(_)
-        ));
+        let (result, execution) = check(&[(below_six, true)], 0, 1, &base_prefix);
+        assert!(matches!(result, SolveResult::Sat(_)));
+        assert_eq!(execution, AxeyumExecutionClass::WarmCreated);
         assert!(last_direct_delta_synced());
 
-        match check(&[(below_six, true), (x_is_five, true)], 1, 2, &left_prefix) {
+        let (result, execution) =
+            check(&[(below_six, true), (x_is_five, true)], 1, 2, &left_prefix);
+        assert_eq!(execution, AxeyumExecutionClass::WarmRetained);
+        match result {
             SolveResult::Sat(model) => assert_eq!(model.values.get(&0), Some(&5)),
             other => panic!("expected direct-delta SAT, got {other:?}"),
         }
         assert!(last_direct_delta_synced());
 
-        assert_eq!(
-            check(&[(below_six, true), (x_is_seven, true)], 1, 1, &base_prefix,),
-            SolveResult::Unsat
-        );
+        let (result, execution) =
+            check(&[(below_six, true), (x_is_seven, true)], 1, 1, &base_prefix);
+        assert_eq!(result, SolveResult::Unsat);
+        assert_eq!(execution, AxeyumExecutionClass::WarmRetained);
         assert!(last_direct_delta_synced());
-        assert!(matches!(
-            check(&[(below_six, true)], 1, 1, &base_prefix),
-            SolveResult::Sat(_)
-        ));
+        let (result, execution) = check(&[(below_six, true)], 1, 1, &base_prefix);
+        assert!(matches!(result, SolveResult::Sat(_)));
+        assert_eq!(execution, AxeyumExecutionClass::WarmRetained);
         assert!(last_direct_delta_synced());
 
         // Backend-local validation is fail-closed even if a caller bypasses
         // `solve_for_path_delta` and supplies an impossible partition.
-        assert!(matches!(
-            check(&[(below_six, true)], 1, 2, &left_prefix),
-            SolveResult::Error(_)
-        ));
+        let (result, execution) = check(&[(below_six, true)], 1, 2, &left_prefix);
+        assert!(matches!(result, SolveResult::Error(_)));
+        assert_eq!(execution, AxeyumExecutionClass::InvalidDirectDelta);
         assert!(!last_direct_delta_synced());
         assert!(!DIRECT_DELTA_SOLVERS.with(|lineage| lineage.borrow().has_path(owner)));
     }

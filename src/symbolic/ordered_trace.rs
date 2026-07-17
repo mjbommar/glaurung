@@ -657,6 +657,9 @@ impl Recorder {
                 "backend_nanos": timing.total_nanos,
                 "z3_nanos": timing.z3_nanos,
                 "axeyum_nanos": timing.axeyum_nanos,
+                "z3_outcome": timing.z3_outcome.map(|outcome| outcome.as_str()),
+                "axeyum_outcome": timing.axeyum_outcome.map(|outcome| outcome.as_str()),
+                "axeyum_execution": timing.axeyum_execution.map(|class| class.as_str()),
                 "warm_replay": warm_replay,
                 "resource_counters": {},
             }),
@@ -895,6 +898,7 @@ impl Recorder {
             "analysis_configuration": trace_configuration(),
             "solver_features": solver_features(),
             "trusted_oracle": trusted_oracle(),
+            "check_measurement_schema": "glaurung-ordered-check-measurement-v1",
             "toolchain": command_output("rustc", &["--version"]),
             "host_identity": host_identity(),
             "worker_count": 1,
@@ -1070,13 +1074,16 @@ mod tests {
     use super::*;
     use crate::ir::types::{BinOp, CmpOp, Width};
     use crate::symbolic::expr::Expr;
-    use crate::symbolic::solver::{Model, WarmAssertionPrefix};
+    use crate::symbolic::solver::{AxeyumExecutionClass, Model, SolveOutcome, WarmAssertionPrefix};
 
-    fn shadow_timing(total_nanos: u64) -> SolveTiming {
+    fn shadow_timing(total_nanos: u64, outcome: SolveOutcome) -> SolveTiming {
         SolveTiming {
             total_nanos,
             z3_nanos: Some(total_nanos / 3),
             axeyum_nanos: Some(total_nanos / 2),
+            z3_outcome: Some(outcome),
+            axeyum_outcome: Some(outcome),
+            axeyum_execution: Some(AxeyumExecutionClass::WarmRetained),
         }
     }
 
@@ -1125,7 +1132,7 @@ mod tests {
             &[(equals, true)],
             &SolveResult::Sat(Model::default()),
             "branch-feasibility",
-            shadow_timing(11),
+            shadow_timing(11, SolveOutcome::Sat),
             Some(&WarmReplayCheck {
                 owner_id: 7,
                 requested_retain_assertions: 0,
@@ -1148,6 +1155,10 @@ mod tests {
         assert_eq!(manifest["native_replay"]["warm_check_count"], 1);
         assert_eq!(manifest["native_replay"]["warm_owner_share_count"], 1);
         assert_eq!(manifest["native_replay"]["warm_owner_release_count"], 3);
+        assert_eq!(
+            manifest["check_measurement_schema"],
+            "glaurung-ordered-check-measurement-v1"
+        );
         validate_with_reference_script(&published);
 
         let native = fs::read_dir(published.join("native-assertions"))
@@ -1202,7 +1213,7 @@ mod tests {
             &[(eq_one, true)],
             &sat,
             "branch-feasibility",
-            shadow_timing(11),
+            shadow_timing(11, SolveOutcome::Sat),
             None,
             0x1001,
         );
@@ -1213,7 +1224,7 @@ mod tests {
             &[(eq_one, true)],
             &sat,
             "repeated-check",
-            shadow_timing(7),
+            shadow_timing(7, SolveOutcome::Sat),
             None,
             0x1002,
         );
@@ -1226,7 +1237,7 @@ mod tests {
             &[(eq_one, true), (eq_two, true)],
             &SolveResult::Unsat,
             "value-witness",
-            shadow_timing(13),
+            shadow_timing(13, SolveOutcome::Unsat),
             None,
             0x2001,
         );
@@ -1280,6 +1291,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(checks.iter().all(|row| row["z3_nanos"].is_u64()));
         assert!(checks.iter().all(|row| row["axeyum_nanos"].is_u64()));
+        assert!(checks.iter().all(|row| row["z3_outcome"].is_string()));
+        assert!(checks.iter().all(|row| row["axeyum_outcome"].is_string()));
+        assert!(checks
+            .iter()
+            .all(|row| row["axeyum_execution"] == "warm-retained"));
         let assertions = rows
             .iter()
             .filter(|row| row["event"] == "assert")
@@ -1311,6 +1327,62 @@ mod tests {
     }
 
     #[test]
+    fn validator_rejects_tampered_check_measurement_class() {
+        let output = tempfile::tempdir().expect("trace output");
+        let guard =
+            begin(output.path(), Path::new("fixture-driver.sys"), b"driver").expect("start trace");
+        let mut pool = ExprPool::new();
+        let assertion = pool.fresh_symbol(Width::W1);
+        let mut root = TracePath::root(0x1000).expect("root trace path");
+        root.push_assert(&pool, (assertion, true), "fixture", 0x1000);
+        root.check(
+            &pool,
+            &[(assertion, true)],
+            &SolveResult::Sat(Model::default()),
+            "fixture",
+            shadow_timing(10, SolveOutcome::Sat),
+            None,
+            0x1000,
+        );
+        root.end("completed", 0x1000);
+        let published = guard.finish("completed").expect("publish trace");
+        validate_with_reference_script(&published);
+
+        let events_path = published.join("events-v1.ndjson");
+        let mut events = fs::read_to_string(&events_path)
+            .expect("event bytes")
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("event JSON"))
+            .collect::<Vec<_>>();
+        let check = events
+            .iter_mut()
+            .find(|event| event["event"] == "check")
+            .expect("check event");
+        check["axeyum_execution"] = json!("unnamed-fallback");
+        let events_bytes = events
+            .iter()
+            .map(|event| serde_json::to_string(event).expect("serialize event") + "\n")
+            .collect::<String>()
+            .into_bytes();
+        fs::write(&events_path, &events_bytes).expect("replace event bytes");
+
+        let manifest_path = published.join("trace-manifest-v1.json");
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("manifest bytes"))
+                .expect("manifest JSON");
+        manifest["events_sha256"] = json!(sha256(&events_bytes));
+        fs::write(
+            &manifest_path,
+            pretty_json_bytes(&manifest).expect("manifest bytes"),
+        )
+        .expect("replace manifest");
+        assert!(
+            !reference_validator_status(&published).success(),
+            "validator accepted an unnamed Axeyum execution class"
+        );
+    }
+
+    #[test]
     fn publishes_width_safe_truthiness_for_wide_assertion() {
         let output = tempfile::tempdir().expect("trace output");
         let guard =
@@ -1324,7 +1396,7 @@ mod tests {
             &[(wide, true)],
             &SolveResult::Sat(Model::default()),
             "wide-truthiness",
-            shadow_timing(1),
+            shadow_timing(1, SolveOutcome::Sat),
             None,
             0x1000,
         );
@@ -1388,7 +1460,7 @@ mod tests {
             &[(shared, true)],
             &SolveResult::Unsat,
             "shared-dag",
-            shadow_timing(1),
+            shadow_timing(1, SolveOutcome::Unsat),
             None,
             0x1000,
         );

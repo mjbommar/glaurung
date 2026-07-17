@@ -189,6 +189,9 @@ pub(crate) struct SolveTiming {
     pub(crate) total_nanos: u64,
     pub(crate) z3_nanos: Option<u64>,
     pub(crate) axeyum_nanos: Option<u64>,
+    pub(crate) z3_outcome: Option<SolveOutcome>,
+    pub(crate) axeyum_outcome: Option<SolveOutcome>,
+    pub(crate) axeyum_execution: Option<AxeyumExecutionClass>,
 }
 
 impl SolveTiming {
@@ -196,7 +199,76 @@ impl SolveTiming {
         total_nanos: 0,
         z3_nanos: None,
         axeyum_nanos: None,
+        z3_outcome: None,
+        axeyum_outcome: None,
+        axeyum_execution: None,
     };
+}
+
+/// Stable result class for one independently timed backend invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SolveOutcome {
+    Sat,
+    Unsat,
+    Unknown,
+    NoSolver,
+    Error,
+}
+
+impl SolveOutcome {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sat => "sat",
+            Self::Unsat => "unsat",
+            Self::Unknown => "unknown",
+            Self::NoSolver => "no-solver",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl From<&SolveResult> for SolveOutcome {
+    fn from(result: &SolveResult) -> Self {
+        match result {
+            SolveResult::Sat(_) => Self::Sat,
+            SolveResult::Unsat => Self::Unsat,
+            SolveResult::Unknown => Self::Unknown,
+            SolveResult::NoSolver => Self::NoSolver,
+            SolveResult::Error(_) => Self::Error,
+        }
+    }
+}
+
+/// Exact Axeyum execution population for one independently timed invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AxeyumExecutionClass {
+    ColdOneShot,
+    WarmSnapshot,
+    WarmCreated,
+    WarmRetained,
+    WarmTimeoutColdRetry,
+    FallbackMissingPath,
+    FallbackAutoProbe,
+    FallbackPathCap,
+    FallbackAssertionCap,
+    InvalidDirectDelta,
+}
+
+impl AxeyumExecutionClass {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ColdOneShot => "cold-one-shot",
+            Self::WarmSnapshot => "warm-snapshot",
+            Self::WarmCreated => "warm-created",
+            Self::WarmRetained => "warm-retained",
+            Self::WarmTimeoutColdRetry => "warm-timeout-cold-retry",
+            Self::FallbackMissingPath => "fallback-missing-path",
+            Self::FallbackAutoProbe => "fallback-auto-probe",
+            Self::FallbackPathCap => "fallback-path-cap",
+            Self::FallbackAssertionCap => "fallback-assertion-cap",
+            Self::InvalidDirectDelta => "invalid-direct-delta",
+        }
+    }
 }
 
 /// Timing for the immediately preceding [`solve`] call on this worker.
@@ -568,14 +640,14 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             // Time each backend on the SAME query for an apples-to-apples
             // comparison. Alternate order per call to cancel warm-cache bias.
             let z3_first = SHADOW_AGREE.load(Ordering::Relaxed) % 2 == 0;
-            let (rz, ra, z3_nanos, axeyum_nanos);
+            let (rz, ra, z3_nanos, axeyum_nanos, axeyum_execution);
             if z3_first {
                 let t = std::time::Instant::now();
                 rz = z3_backend::Z3Solver::new().check(pool, asserts);
                 z3_nanos = t.elapsed().as_nanos() as u64;
                 SHADOW_Z3_NANOS.fetch_add(z3_nanos, Ordering::Relaxed);
                 let t = std::time::Instant::now();
-                ra = if axeyum_backend::warm_reuse_enabled() {
+                (ra, axeyum_execution) = if axeyum_backend::warm_reuse_enabled() {
                     axeyum_backend::check_warm_thread_local(
                         pool,
                         asserts,
@@ -583,13 +655,16 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                         active_warm_delta(),
                     )
                 } else {
-                    axeyum_backend::AxeyumSolver::new().check(pool, asserts)
+                    (
+                        axeyum_backend::AxeyumSolver::new().check(pool, asserts),
+                        AxeyumExecutionClass::ColdOneShot,
+                    )
                 };
                 axeyum_nanos = t.elapsed().as_nanos() as u64;
                 SHADOW_AX_NANOS.fetch_add(axeyum_nanos, Ordering::Relaxed);
             } else {
                 let t = std::time::Instant::now();
-                ra = if axeyum_backend::warm_reuse_enabled() {
+                (ra, axeyum_execution) = if axeyum_backend::warm_reuse_enabled() {
                     axeyum_backend::check_warm_thread_local(
                         pool,
                         asserts,
@@ -597,7 +672,10 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                         active_warm_delta(),
                     )
                 } else {
-                    axeyum_backend::AxeyumSolver::new().check(pool, asserts)
+                    (
+                        axeyum_backend::AxeyumSolver::new().check(pool, asserts),
+                        AxeyumExecutionClass::ColdOneShot,
+                    )
                 };
                 axeyum_nanos = t.elapsed().as_nanos() as u64;
                 SHADOW_AX_NANOS.fetch_add(axeyum_nanos, Ordering::Relaxed);
@@ -654,6 +732,9 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     total_nanos: total_started.elapsed().as_nanos() as u64,
                     z3_nanos: Some(z3_nanos),
                     axeyum_nanos: Some(axeyum_nanos),
+                    z3_outcome: Some(SolveOutcome::from(&rz)),
+                    axeyum_outcome: Some(SolveOutcome::from(&ra)),
+                    axeyum_execution: Some(axeyum_execution),
                 });
             });
             return rz;
@@ -664,20 +745,24 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     // (pure-Rust default) > pipe (zero-dep fallback).
     let __solve_start = std::time::Instant::now();
     #[cfg(feature = "solver-z3")]
-    let result = z3_backend::Z3Solver::new().check(pool, asserts);
+    let (result, axeyum_execution) = (z3_backend::Z3Solver::new().check(pool, asserts), None);
     #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
-    let result = if axeyum_backend::warm_reuse_enabled() {
-        axeyum_backend::check_warm_thread_local(
+    let (result, axeyum_execution) = if axeyum_backend::warm_reuse_enabled() {
+        let (result, execution) = axeyum_backend::check_warm_thread_local(
             pool,
             asserts,
             ACTIVE_WARM_PATH.with(Cell::get),
             active_warm_delta(),
-        )
+        );
+        (result, Some(execution))
     } else {
-        axeyum_backend::AxeyumSolver::new().check(pool, asserts)
+        (
+            axeyum_backend::AxeyumSolver::new().check(pool, asserts),
+            Some(AxeyumExecutionClass::ColdOneShot),
+        )
     };
     #[cfg(all(not(feature = "solver-z3"), not(feature = "solver-axeyum")))]
-    let result = pipe::PipeSolver::new().check(pool, asserts);
+    let (result, axeyum_execution) = (pipe::PipeSolver::new().check(pool, asserts), None);
     let __elapsed = __solve_start.elapsed().as_nanos() as u64;
     LAST_SOLVE_TIMING.with(|timing| {
         timing.set(SolveTiming {
@@ -702,6 +787,27 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     None
                 }
             },
+            z3_outcome: {
+                #[cfg(feature = "solver-z3")]
+                {
+                    Some(SolveOutcome::from(&result))
+                }
+                #[cfg(not(feature = "solver-z3"))]
+                {
+                    None
+                }
+            },
+            axeyum_outcome: {
+                #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+                {
+                    Some(SolveOutcome::from(&result))
+                }
+                #[cfg(not(all(not(feature = "solver-z3"), feature = "solver-axeyum")))]
+                {
+                    None
+                }
+            },
+            axeyum_execution,
         });
     });
     TOTAL_SOLVE_COUNT.fetch_add(1, Ordering::Relaxed);
