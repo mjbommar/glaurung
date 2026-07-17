@@ -1195,3 +1195,52 @@ IntcSST run then published 7,840 events, 566 paths, 1,672 checks, 1,272 unique
 queries, and 838 model reads; all 1,672 same-stream Z3/Axeyum checks decided and
 agreed with zero unknown splits. These are Glaurung correctness and capture
 repairs, not Axeyum performance claims.
+
+## Native production-topology ordered replay
+
+New ordered traces also contain one deterministic
+`native-assertions/<pack-sha256>.json` expression-DAG pack per distinct native
+representation. Assert events bind each pack by SHA-256 while retaining the
+public SMT-LIB assertion as the authoritative cross-tool identity. Check events add a
+`warm_replay` object with the production owner, requested retain depth,
+persistent/temporary partition, source-prefix digest, and synchronization
+result. `warm_owner_share` and `warm_owner_release` events preserve the exact
+serial DFS lease lifecycle. The Python validator checks both stores, every
+native child reference, warm partition/digest fields, lifecycle balance, and
+manifest totals. Older traces without `native_replay` remain valid for the
+public consumer but cannot enter this native gate.
+
+After the public Axeyum trace consumer has produced its strict query/model-read
+report, run the native control in a fresh process:
+
+```sh
+export GLAURUNG_AXEYUM_WARM_REUSE=adaptive
+export GLAURUNG_AXEYUM_DIRECT_DELTA=1
+export GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE=1
+export GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER=0
+export GLAURUNG_AXEYUM_WARM_TIMEOUT_COLD_RETRY=0
+export GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE=0
+export GLAURUNG_AXEYUM_REPLAY_SAT_CACHE=1
+export GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS=9
+export GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH=512
+
+/usr/bin/time -v target/release/examples/ordered_native_replay \
+  "$trace" "$finding_sha256" "$offline_replay_sha256" \
+  /path/to/native-control-1.json
+```
+
+Repeat with only `GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE=1` changed for the
+candidate. The executable imports every native pack into one typed Glaurung
+pool, re-renders it, and requires its exact public assertion hash before any
+solve. It reconstructs source-prefix `Arc` identity across forks and replays
+the production share/release calls in event order. The report binds trace,
+finding, and offline-replay hashes and exposes verdict splits, exact root work,
+capacity fallbacks, serial leases, continuation traffic, cache traffic, and
+terminal gauges.
+
+Fail the gate on any SAT/UNSAT opposition, operational error, synchronization
+mismatch, warm reset, cache replay failure, or nonzero live path/owner/reference
+gauge. Compare repeated control/candidate reports only when their identities
+and exact-work inputs match. Preserve honest `Unknown`/lost-decision counts and
+apply the established time, RSS, and variance alarms; a faster nondecision is
+not an acceptance result.

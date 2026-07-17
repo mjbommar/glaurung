@@ -21,12 +21,13 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::symbolic::expr::{ExprId, ExprPool};
-use crate::symbolic::solver::{Assert, SolveResult, SolveTiming, pipe};
+use crate::symbolic::native_trace::NativeAssertionPack;
+use crate::symbolic::solver::{pipe, Assert, SolveResult, SolveTiming};
 
 const VERSION: u64 = 1;
 const WORKER_ID: &str = "worker-0";
@@ -106,6 +107,8 @@ fn begin(
         .map_err(|e| format!("create trace query store: {e}"))?;
     fs::create_dir(temp_dir.join("assertions"))
         .map_err(|e| format!("create trace assertion store: {e}"))?;
+    fs::create_dir(temp_dir.join("native-assertions"))
+        .map_err(|e| format!("create trace native assertion store: {e}"))?;
     let events_path = temp_dir.join("events-v1.ndjson");
     let events = BufWriter::new(
         File::create(&events_path).map_err(|e| format!("create {}: {e}", events_path.display()))?,
@@ -135,6 +138,10 @@ fn begin(
         ended_paths: BTreeSet::new(),
         query_index: BTreeMap::new(),
         assertion_ids: BTreeSet::new(),
+        native_assertion_ids: BTreeSet::new(),
+        warm_check_count: 0,
+        warm_owner_share_count: 0,
+        warm_owner_release_count: 0,
         error: None,
     };
     recorder.emit(
@@ -167,6 +174,48 @@ pub(crate) struct TracePath {
 struct ScopeRef {
     scope_id: String,
     constraint_id: String,
+}
+
+/// Exact direct-delta/source-owner inputs used by one production check.
+#[derive(Clone, Debug)]
+pub(crate) struct WarmReplayCheck {
+    pub(crate) owner_id: u64,
+    pub(crate) requested_retain_assertions: usize,
+    pub(crate) persistent_assertions: usize,
+    pub(crate) synchronized: bool,
+}
+
+/// Record one serial sibling lease expansion in observation order.
+pub(crate) fn warm_owner_share(owner_id: u64, children: u64) {
+    RECORDER.with(|slot| {
+        if let Some(recorder) = slot.borrow_mut().as_mut() {
+            recorder.warm_owner_share_count = recorder.warm_owner_share_count.saturating_add(1);
+            recorder.emit(
+                ANALYSIS_PATH_ID,
+                None,
+                "warm_owner_share",
+                json!({
+                    "owner_id": owner_id,
+                    "children": children,
+                }),
+            );
+        }
+    });
+}
+
+/// Record one path reference release for the production serial owner lease.
+pub(crate) fn warm_owner_release(owner_id: u64) {
+    RECORDER.with(|slot| {
+        if let Some(recorder) = slot.borrow_mut().as_mut() {
+            recorder.warm_owner_release_count = recorder.warm_owner_release_count.saturating_add(1);
+            recorder.emit(
+                ANALYSIS_PATH_ID,
+                None,
+                "warm_owner_release",
+                json!({ "owner_id": owner_id }),
+            );
+        }
+    });
 }
 
 impl TracePath {
@@ -238,11 +287,21 @@ impl TracePath {
         result: &SolveResult,
         purpose: &str,
         timing: SolveTiming,
+        warm_replay: Option<&WarmReplayCheck>,
         location: u64,
     ) -> Option<String> {
         RECORDER.with(|slot| {
             slot.borrow_mut().as_mut().map(|recorder| {
-                recorder.check(self, pool, assertions, result, purpose, timing, location)
+                recorder.check(
+                    self,
+                    pool,
+                    assertions,
+                    result,
+                    purpose,
+                    timing,
+                    warm_replay,
+                    location,
+                )
             })
         })
     }
@@ -319,6 +378,10 @@ struct Recorder {
     ended_paths: BTreeSet<String>,
     query_index: BTreeMap<String, QueryIndexEntry>,
     assertion_ids: BTreeSet<String>,
+    native_assertion_ids: BTreeSet<String>,
+    warm_check_count: u64,
+    warm_owner_share_count: u64,
+    warm_owner_release_count: u64,
     error: Option<String>,
 }
 
@@ -383,6 +446,15 @@ impl Recorder {
         self.next_scope += 1;
         let assertion_bytes = pipe::assertion_line(pool, assertion);
         let constraint_id = sha256(assertion_bytes.as_bytes());
+        let native_pack =
+            match NativeAssertionPack::capture(pool, assertion).and_then(|pack| pack.to_bytes()) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    self.fail(format!("capture native assertion {constraint_id}: {error}"));
+                    return;
+                }
+            };
+        let native_sha256 = sha256(&native_pack);
         let mut symbols = BTreeMap::new();
         pool.collect_syms(assertion.0, &mut symbols);
         let assertion_symbols = symbols
@@ -404,6 +476,30 @@ impl Recorder {
                     "write assertion {}: {error}",
                     assertion_path.display()
                 ));
+            }
+        }
+        let native_path = self
+            .temp_dir
+            .join("native-assertions")
+            .join(format!("{native_sha256}.json"));
+        if self.native_assertion_ids.insert(native_sha256.clone()) {
+            if let Err(error) = fs::write(&native_path, &native_pack) {
+                self.fail(format!(
+                    "write native assertion {}: {error}",
+                    native_path.display()
+                ));
+            }
+        } else {
+            match fs::read(&native_path) {
+                Ok(existing) if existing == native_pack => {}
+                Ok(_) => self.fail(format!(
+                    "native assertion content collision at {}",
+                    native_path.display()
+                )),
+                Err(error) => self.fail(format!(
+                    "read native assertion {}: {error}",
+                    native_path.display()
+                )),
             }
         }
         self.emit(
@@ -437,6 +533,8 @@ impl Recorder {
                 "constraint_id": constraint_id,
                 "assertion_sha256": sha256(assertion_bytes.as_bytes()),
                 "assertion_path": format!("assertions/{constraint_id}.smt2"),
+                "native_assertion_path": format!("native-assertions/{native_sha256}.json"),
+                "native_assertion_sha256": native_sha256,
                 "assertion_symbols": assertion_symbols,
                 "assertion_width": assertion_width,
                 "sort_validated": sort_valid,
@@ -475,6 +573,7 @@ impl Recorder {
         result: &SolveResult,
         purpose: &str,
         timing: SolveTiming,
+        warm_replay: Option<&WarmReplayCheck>,
         location: u64,
     ) -> String {
         if path.scopes.len() != assertions.len() {
@@ -502,6 +601,31 @@ impl Recorder {
             }
         }
         let event_seq = self.event_seq;
+        let warm_replay = warm_replay.map(|warm| {
+            if warm.persistent_assertions > assertions.len()
+                || warm.requested_retain_assertions > warm.persistent_assertions
+                || warm.persistent_assertions > path.scopes.len()
+            {
+                self.fail(format!(
+                    "invalid warm replay check on {}: retain {}, persistent {}, total {}",
+                    path.path_id,
+                    warm.requested_retain_assertions,
+                    warm.persistent_assertions,
+                    assertions.len()
+                ));
+            }
+            self.warm_check_count = self.warm_check_count.saturating_add(1);
+            json!({
+                "owner_id": warm.owner_id,
+                "requested_retain_assertions": warm.requested_retain_assertions,
+                "persistent_assertions": warm.persistent_assertions,
+                "temporary_assertions": assertions.len().saturating_sub(warm.persistent_assertions),
+                "synchronized": warm.synchronized,
+                "source_prefix_digest": scope_digest(
+                    &path.scopes[..warm.persistent_assertions.min(path.scopes.len())]
+                ),
+            })
+        });
         let entry = self
             .query_index
             .entry(content_hash.clone())
@@ -533,6 +657,7 @@ impl Recorder {
                 "backend_nanos": timing.total_nanos,
                 "z3_nanos": timing.z3_nanos,
                 "axeyum_nanos": timing.axeyum_nanos,
+                "warm_replay": warm_replay,
                 "resource_counters": {},
             }),
         );
@@ -779,6 +904,15 @@ impl Recorder {
             "path_count": self.started_paths.len(),
             "query_count": self.query_index.len(),
             "assertion_count": self.assertion_ids.len(),
+            "native_replay": {
+                "schema": "glaurung-native-ordered-replay-v1",
+                "native_assertion_schema": "glaurung-native-assertion-pack-v1",
+                "native_assertion_count": self.native_assertion_ids.len(),
+                "warm_check_count": self.warm_check_count,
+                "warm_owner_share_count": self.warm_owner_share_count,
+                "warm_owner_release_count": self.warm_owner_release_count,
+                "topology": "source-owner-serial-lease-v1",
+            },
             "events_sha256": events_sha256,
             "query_index_sha256": query_index_sha256,
             "access_classification": "restricted-driver-analysis",
@@ -936,7 +1070,7 @@ mod tests {
     use super::*;
     use crate::ir::types::{BinOp, CmpOp, Width};
     use crate::symbolic::expr::Expr;
-    use crate::symbolic::solver::Model;
+    use crate::symbolic::solver::{Model, WarmAssertionPrefix};
 
     fn shadow_timing(total_nanos: u64) -> SolveTiming {
         SolveTiming {
@@ -944,6 +1078,91 @@ mod tests {
             z3_nanos: Some(total_nanos / 3),
             axeyum_nanos: Some(total_nanos / 2),
         }
+    }
+
+    fn reference_validator_status(trace: &Path) -> std::process::ExitStatus {
+        let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/axeyum-integration/capture/validate_ordered_trace.py");
+        Command::new("python3")
+            .arg(validator)
+            .arg(trace)
+            .status()
+            .expect("run ordered-trace validator")
+    }
+
+    fn validate_with_reference_script(trace: &Path) {
+        assert!(
+            reference_validator_status(trace).success(),
+            "ordered-trace validator rejected fixture"
+        );
+    }
+
+    #[test]
+    fn publishes_source_owner_serial_lease_replay_inputs() {
+        let output = tempfile::tempdir().expect("trace output");
+        let guard =
+            begin(output.path(), Path::new("fixture-driver.sys"), b"driver").expect("start trace");
+
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W8);
+        let one = pool.intern(Expr::Const {
+            value: 1,
+            width: Width::W8,
+        });
+        let equals = pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: x,
+            b: one,
+            width: Width::W8,
+        });
+        let mut prefix = WarmAssertionPrefix::default();
+        prefix.push();
+
+        let mut root = TracePath::root(0x1000).expect("root trace path");
+        root.push_assert(&pool, (equals, true), "branch", 0x1001);
+        root.check(
+            &pool,
+            &[(equals, true)],
+            &SolveResult::Sat(Model::default()),
+            "branch-feasibility",
+            shadow_timing(11),
+            Some(&WarmReplayCheck {
+                owner_id: 7,
+                requested_retain_assertions: 0,
+                persistent_assertions: prefix.depth(),
+                synchronized: true,
+            }),
+            0x1001,
+        );
+        warm_owner_share(7, 2);
+        warm_owner_release(7);
+        warm_owner_release(7);
+        warm_owner_release(7);
+        root.end("completed", 0x1002);
+
+        let published = guard.finish("completed").expect("publish trace");
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(published.join("trace-manifest-v1.json")).expect("manifest bytes"),
+        )
+        .expect("manifest JSON");
+        assert_eq!(manifest["native_replay"]["warm_check_count"], 1);
+        assert_eq!(manifest["native_replay"]["warm_owner_share_count"], 1);
+        assert_eq!(manifest["native_replay"]["warm_owner_release_count"], 3);
+        validate_with_reference_script(&published);
+
+        let native = fs::read_dir(published.join("native-assertions"))
+            .expect("read native assertion store")
+            .next()
+            .expect("stored native assertion")
+            .expect("native assertion entry")
+            .path();
+        let mut bytes = fs::read(&native).expect("native assertion bytes");
+        bytes.push(b' ');
+        fs::write(&native, bytes).expect("tamper native assertion");
+        assert!(
+            !reference_validator_status(&published).success(),
+            "validator accepted a tampered native assertion pack"
+        );
     }
 
     #[test]
@@ -984,6 +1203,7 @@ mod tests {
             &sat,
             "branch-feasibility",
             shadow_timing(11),
+            None,
             0x1001,
         );
         root.model_choice(&pool, x, 1, true, "synthetic-model-choice-v1", 0x1001);
@@ -994,6 +1214,7 @@ mod tests {
             &sat,
             "repeated-check",
             shadow_timing(7),
+            None,
             0x1002,
         );
 
@@ -1006,6 +1227,7 @@ mod tests {
             &SolveResult::Unsat,
             "value-witness",
             shadow_timing(13),
+            None,
             0x2001,
         );
         child.pop(0x2001);
@@ -1072,13 +1294,11 @@ mod tests {
         )
         .expect("query-index JSON");
         assert_eq!(index["queries"].as_array().expect("queries").len(), 2);
-        assert!(
-            index["queries"]
-                .as_array()
-                .expect("queries")
-                .iter()
-                .any(|query| query["occurrences"].as_array().expect("occurrences").len() == 2)
-        );
+        assert!(index["queries"]
+            .as_array()
+            .expect("queries")
+            .iter()
+            .any(|query| query["occurrences"].as_array().expect("occurrences").len() == 2));
 
         let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("docs/axeyum-integration/capture/validate_ordered_trace.py");
@@ -1105,6 +1325,7 @@ mod tests {
             &SolveResult::Sat(Model::default()),
             "wide-truthiness",
             shadow_timing(1),
+            None,
             0x1000,
         );
         root.end("completed", 0x1000);
@@ -1168,6 +1389,7 @@ mod tests {
             &SolveResult::Unsat,
             "shared-dag",
             shadow_timing(1),
+            None,
             0x1000,
         );
         root.end("completed", 0x1000);

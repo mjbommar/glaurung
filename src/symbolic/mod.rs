@@ -14,6 +14,9 @@
 pub mod explore;
 pub mod expr;
 pub mod ioctl;
+pub(crate) mod native_trace;
+#[cfg(feature = "solver-axeyum")]
+pub mod ordered_replay;
 pub mod ordered_trace;
 pub mod solver;
 pub mod symdomain;

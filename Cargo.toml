@@ -130,6 +130,10 @@ name = "ioctl_scan"
 required-features = ["symbolic"]
 
 [[example]]
+name = "ordered_native_replay"
+required-features = ["solver-axeyum"]
+
+[[example]]
 name = "ioctlance"
 required-features = ["symbolic"]
 

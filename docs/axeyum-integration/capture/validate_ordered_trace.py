@@ -55,6 +55,52 @@ def load_json(path: pathlib.Path) -> object:
         fail(f"cannot read JSON {path}: {error}")
 
 
+def validate_native_assertion_pack(data: bytes, constraint: str) -> None:
+    try:
+        pack = json.loads(data)
+    except json.JSONDecodeError as error:
+        fail(f"invalid native assertion pack {constraint}: {error}")
+    if not isinstance(pack, dict) or (
+        pack.get("schema") != "glaurung-native-assertion-pack-v1"
+        or pack.get("version") != 1
+        or not isinstance(pack.get("expected"), bool)
+    ):
+        fail(f"invalid native assertion envelope for {constraint}")
+    nodes = pack.get("nodes")
+    root = pack.get("root")
+    if (
+        not isinstance(nodes, list)
+        or not nodes
+        or not isinstance(root, int)
+        or not 0 <= root < len(nodes)
+    ):
+        fail(f"invalid native assertion root for {constraint}")
+    child_fields = {
+        "const": (),
+        "sym": (),
+        "bin": ("a", "b"),
+        "un": ("a",),
+        "cmp": ("a", "b"),
+        "zext": ("a",),
+        "sext": ("a",),
+        "trunc": ("a",),
+        "extract": ("a",),
+        "concat": ("hi", "lo"),
+        "ite": ("condition", "then_value", "else_value"),
+    }
+    for ordinal, node in enumerate(nodes):
+        kind = node.get("kind") if isinstance(node, dict) else None
+        if kind not in child_fields:
+            fail(f"invalid native assertion node {ordinal} for {constraint}")
+        for field_name in child_fields[kind]:
+            child = node.get(field_name)
+            if not isinstance(child, int) or not 0 <= child < ordinal:
+                fail(
+                    f"non-topological native child {field_name}={child!r} "
+                    f"at {ordinal} for {constraint}"
+                )
+
+
 def validate(root: pathlib.Path) -> dict[str, int]:
     manifest_path = root / "trace-manifest-v1.json"
     events_path = root / "events-v1.ndjson"
@@ -68,6 +114,15 @@ def validate(root: pathlib.Path) -> dict[str, int]:
         fail("manifest schema is not glaurung-ordered-trace-v1")
     if manifest.get("version") != 1:
         fail("manifest version is not 1")
+    native_replay = manifest.get("native_replay")
+    if native_replay is not None and (
+        not isinstance(native_replay, dict)
+        or native_replay.get("schema") != "glaurung-native-ordered-replay-v1"
+        or native_replay.get("native_assertion_schema")
+        != "glaurung-native-assertion-pack-v1"
+        or native_replay.get("topology") != "source-owner-serial-lease-v1"
+    ):
+        fail("invalid native replay manifest extension")
     events_bytes = events_path.read_bytes()
     index_bytes = index_path.read_bytes()
     if sha256(events_bytes) != manifest.get("events_sha256"):
@@ -113,7 +168,10 @@ def validate(root: pathlib.Path) -> dict[str, int]:
     checks: dict[str, tuple[str, str]] = {}
     model_reads: dict[str, str] = {}
     assertion_ids: set[str] = set()
+    native_assertion_ids: set[str] = set()
     observed_occurrences: dict[str, list[tuple[str, str, int]]] = {}
+    warm_owner_references: dict[int, int] = {}
+    warm_check_count = warm_owner_share_count = warm_owner_release_count = 0
     next_event = next_process = next_worker = 0
     analysis_id = process_id = worker_id = None
     event_count = 0
@@ -233,6 +291,19 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                 b"(assert "
             ):
                 fail(f"assertion bytes do not match constraint ID on {path_id}")
+            if native_replay is not None:
+                native_path = event.get("native_assertion_path")
+                native_hash = event.get("native_assertion_sha256")
+                if native_path != f"native-assertions/{native_hash}.json":
+                    fail(
+                        f"non-canonical native assertion path on {path_id}: "
+                        f"{native_path!r}"
+                    )
+                native_bytes = (root / native_path).read_bytes()
+                if sha256(native_bytes) != event.get("native_assertion_sha256"):
+                    fail(f"native assertion hash mismatch on {path_id}")
+                validate_native_assertion_pack(native_bytes, constraint)
+                native_assertion_ids.add(native_hash)
             assertion_symbols = event.get("assertion_symbols")
             if not isinstance(assertion_symbols, list):
                 fail(f"missing assertion symbol declarations on {path_id}")
@@ -320,6 +391,53 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             state.last_model_read = None
             if outcome in {"unknown", "error"} and not event.get("outcome_detail"):
                 fail(f"unclassified {outcome} outcome for {check_id}")
+            warm_replay = event.get("warm_replay")
+            if warm_replay is not None:
+                if not isinstance(warm_replay, dict):
+                    fail(f"invalid warm replay metadata for {check_id}")
+                owner = warm_replay.get("owner_id")
+                retain = warm_replay.get("requested_retain_assertions")
+                persistent = warm_replay.get("persistent_assertions")
+                temporary = warm_replay.get("temporary_assertions")
+                synchronized = warm_replay.get("synchronized")
+                if (
+                    not isinstance(owner, int)
+                    or owner <= 0
+                    or not isinstance(retain, int)
+                    or not isinstance(persistent, int)
+                    or not isinstance(temporary, int)
+                    or not isinstance(synchronized, bool)
+                    or not 0 <= retain <= persistent <= len(complete)
+                    or temporary != len(complete) - persistent
+                ):
+                    fail(f"invalid warm replay counts for {check_id}")
+                if framed_digest(complete[:persistent]) != warm_replay.get(
+                    "source_prefix_digest"
+                ):
+                    fail(f"warm source-prefix digest mismatch for {check_id}")
+                warm_check_count += 1
+        elif kind == "warm_owner_share":
+            owner = event.get("owner_id")
+            children = event.get("children")
+            if (
+                path_id != "analysis"
+                or not isinstance(owner, int)
+                or owner <= 0
+                or not isinstance(children, int)
+                or children <= 0
+            ):
+                fail(f"invalid warm owner share on line {line_number}")
+            warm_owner_references[owner] = warm_owner_references.get(owner, 1) + children
+            warm_owner_share_count += 1
+        elif kind == "warm_owner_release":
+            owner = event.get("owner_id")
+            if path_id != "analysis" or not isinstance(owner, int) or owner <= 0:
+                fail(f"invalid warm owner release on line {line_number}")
+            if owner in warm_owner_references:
+                warm_owner_references[owner] -= 1
+                if warm_owner_references[owner] == 0:
+                    del warm_owner_references[owner]
+            warm_owner_release_count += 1
         elif kind == "model_read":
             read_id = event.get("model_read_id")
             check_id = event.get("check_id")
@@ -440,6 +558,22 @@ def validate(root: pathlib.Path) -> dict[str, int]:
         )
     if len(assertion_ids) != manifest.get("assertion_count"):
         fail("manifest assertion count mismatch")
+    if native_replay is not None:
+        stored_native = {
+            path.stem for path in (root / "native-assertions").glob("*.json")
+        }
+        if stored_native != native_assertion_ids:
+            fail("native assertion-store membership differs from assertion events")
+        if native_replay.get("native_assertion_count") != len(native_assertion_ids):
+            fail("native assertion manifest count mismatch")
+        if native_replay.get("warm_check_count") != warm_check_count:
+            fail("warm check manifest count mismatch")
+        if native_replay.get("warm_owner_share_count") != warm_owner_share_count:
+            fail("warm owner share manifest count mismatch")
+        if native_replay.get("warm_owner_release_count") != warm_owner_release_count:
+            fail("warm owner release manifest count mismatch")
+        if warm_owner_references:
+            fail(f"unterminated warm owner leases: {sorted(warm_owner_references.items())[:5]}")
     for query_hash, row in indexed.items():
         expected = [
             (entry.get("check_id"), entry.get("path_id"), entry.get("event_seq"))

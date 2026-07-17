@@ -21,7 +21,7 @@ use crate::ir::types::{
     BinOp, CallTarget, CmpOp, Endian, LlirBlock, LlirFunction, Op, VReg, Value, Width,
 };
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::ordered_trace::TracePath;
+use crate::symbolic::ordered_trace::{TracePath, WarmReplayCheck};
 use crate::symbolic::solver::{
     last_solve_timing, solve_for_path_delta, Assert, Model, SolveResult, WarmAssertionPrefix,
 };
@@ -341,12 +341,19 @@ fn effective_serial_sibling_reuse(configured: bool, _direct_delta: bool) -> bool
 }
 
 fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
+    crate::symbolic::ordered_trace::warm_owner_share(path_id, children);
     #[cfg(feature = "solver-axeyum")]
     crate::symbolic::solver::axeyum_backend::share_serial_warm_owner_with_children(
         path_id, children,
     );
     #[cfg(not(feature = "solver-axeyum"))]
     let _ = (path_id, children);
+}
+
+fn close_warm_owner(path_id: u64) {
+    crate::symbolic::ordered_trace::warm_owner_release(path_id);
+    #[cfg(feature = "solver-axeyum")]
+    crate::symbolic::solver::axeyum_backend::close_warm_path(path_id);
 }
 
 /// One in-flight path: a machine snapshot, its program counter, the path
@@ -471,8 +478,7 @@ impl State {
 
     /// Terminate this path in the ordered trace, if capture is active.
     fn end_trace(&mut self, reason: &str) {
-        #[cfg(feature = "solver-axeyum")]
-        crate::symbolic::solver::axeyum_backend::close_warm_path(self.warm_path_id);
+        close_warm_owner(self.warm_path_id);
         if let Some(trace) = &mut self.trace {
             trace.end(reason, self.pc);
         }
@@ -480,8 +486,7 @@ impl State {
 
     /// A stateful round is a new logical root even when it carries machine data.
     fn restart_trace(&mut self) {
-        #[cfg(feature = "solver-axeyum")]
-        crate::symbolic::solver::axeyum_backend::close_warm_path(self.warm_path_id);
+        close_warm_owner(self.warm_path_id);
         self.warm_path_id = next_warm_path_id();
         self.warm_retain_assertions = 0;
         self.warm_assertion_prefix = WarmAssertionPrefix::default();
@@ -492,6 +497,7 @@ impl State {
 /// Solve the current path condition and record the exact query occurrence.
 fn solve_traced(st: &mut State, purpose: &str, location: u64) -> SolveResult {
     let persistent = st.constraints.len();
+    let requested_retain_assertions = st.warm_retain_assertions;
     let (result, synced) = solve_for_path_delta(
         &st.machine.dom.pool,
         &st.constraints,
@@ -505,12 +511,19 @@ fn solve_traced(st: &mut State, purpose: &str, location: u64) -> SolveResult {
     }
     let timing = last_solve_timing();
     if let Some(trace) = &mut st.trace {
+        let warm_replay = WarmReplayCheck {
+            owner_id: st.warm_path_id,
+            requested_retain_assertions,
+            persistent_assertions: persistent,
+            synchronized: synced,
+        };
         trace.check(
             &st.machine.dom.pool,
             &st.constraints,
             &result,
             purpose,
             timing,
+            Some(&warm_replay),
             location,
         );
     }
@@ -532,6 +545,7 @@ fn solve_probe_traced(
     let mut probe = st.constraints.clone();
     probe.push(assertion);
     let persistent = st.constraints.len();
+    let requested_retain_assertions = st.warm_retain_assertions;
     let (result, synced) = solve_for_path_delta(
         &st.machine.dom.pool,
         &probe,
@@ -545,12 +559,19 @@ fn solve_probe_traced(
     }
     let timing = last_solve_timing();
     if let Some(trace) = &mut st.trace {
+        let warm_replay = WarmReplayCheck {
+            owner_id: st.warm_path_id,
+            requested_retain_assertions,
+            persistent_assertions: persistent,
+            synchronized: synced,
+        };
         trace.check(
             &st.machine.dom.pool,
             &probe,
             &result,
             purpose,
             timing,
+            Some(&warm_replay),
             location,
         );
         trace.pop(location);
