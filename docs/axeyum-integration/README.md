@@ -50,7 +50,7 @@ concentrated in performance and QF_BV coverage, not in wiring.
 
 ## Status
 
-**Implemented and green (2026-07-16).** P1 (text bridge), P2 (native
+**Implemented and green (2026-07-17).** P1 (text bridge), P2 (native
 term-translation backend), P3 (differential oracle), proofs (G3), and the P5
 retained-session contract are landed on branch `sec/axeyum-backend`:
 
@@ -68,17 +68,19 @@ retained-session contract are landed on branch `sec/axeyum-backend`:
   against equivalent snapshot topology but fails the serial-snapshot production
   time/RSS gate, so ADR-012 keeps it opt-in. ADR-013 adds exact copy-on-write
   source ancestry and safely restores serial sibling leasing; the new candidate
-  passes the strict repeated two-driver production gate and stays opt-in while
-  `tcpip`/`dxgkrnl` are added and an exclusive-control Z3-drift alarm is
-  resolved. Full-budget `tcpip` currently exposes 973 unknown splits; exact
-  shadow-split capture is landed to turn those into an actionable corpus.
+  passes the strict repeated two-driver production gate. The later exact tcpip
+  gate admits one bounded timeout continuation only inside separately selected
+  direct sessions. A complete `dxgkrnl` no-op replay is functionally exact but
+  fails the standard timing-variance gate, so ADR-021 keeps direct delta
+  opt-in. `win32k` is a system-service/callout frontend target, not zero-query
+  IOCTL solver evidence.
 - Findings + full feedback: `FEEDBACK-LOG.md`.
 
 The earlier 12x one-shot claim was a fast-failure artifact caused by
 width-invalid consumer terms; strict Axeyum checking exposed those soundness
 bugs. Current performance claims therefore require a 100% decided/agreed gate,
-original-model replay, and same-stream timing. Still pending: direct-delta P5
-acceptance and safe automatic policy, broader driver/variance coverage, and the
+original-model replay, and same-stream timing. Still pending: wider
+direct-delta P5 acceptance, broader stable driver coverage, and the
 AArch64/Android reachability endgame (P6).
 
 Placement note: this lives in glaurung because glaurung is the integrator;

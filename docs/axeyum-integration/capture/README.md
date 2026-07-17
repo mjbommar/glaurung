@@ -1265,3 +1265,47 @@ ADR-020 therefore makes continuation default-on only after the caller has
 selected direct delta. Set `GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE=0` for the
 preserved control. Missing means on; `off`/`false`/`0` and unrecognized values
 fail closed to off. `GLAURUNG_AXEYUM_DIRECT_DELTA` remains separately opt-in.
+
+For a wider driver where neither policy should continue, compare the same
+repeated reports with the explicit no-op expectation:
+
+```sh
+python3 /home/mjbommar/projects/personal/axeyum/scripts/compare-glaurung-native-replay.py \
+  --candidate-expectation noop \
+  --control-report /path/to/control-1.json \
+  --control-time /path/to/control-1.time \
+  --control-report /path/to/control-2.json \
+  --control-time /path/to/control-2.time \
+  --control-report /path/to/control-3.json \
+  --control-time /path/to/control-3.time \
+  --candidate-report /path/to/candidate-1.json \
+  --candidate-time /path/to/candidate-1.time \
+  --candidate-report /path/to/candidate-2.json \
+  --candidate-time /path/to/candidate-2.time \
+  --candidate-report /path/to/candidate-3.json \
+  --candidate-time /path/to/candidate-3.time \
+  --out /path/to/native-noop-comparison.json
+```
+
+This mode requires zero candidate continuations/recoveries and exact actual
+outcome plus replay-cache behavior within and across policies. It retains the
+default 3% time-regression, 5% RSS-regression, and 3% Axeyum-time-CV alarms.
+Do not replace the standard thresholds with diagnostic values after observing
+a run.
+
+The first `dxgkrnl.sys` no-op gate on 2026-07-17 is functionally exact but not
+admissible. Its validated trace contains 85,449 events, 17,400 checks, 13,577
+unique queries, and 8,816 model reads; independent replay passes. All six
+ordinary-core reports match work, outcomes, cache traffic, and lifecycle with
+zero continuations and correctness alarms. Control/candidate time CV is
+14.430%/8.306%, however, so the standard comparator rejects it. A relaxed 20%
+result is diagnostic only. Slower-core calibration changes actual timeout
+outcomes and is rejected by the exact no-op check. Keep direct delta opt-in and
+rerun only under a quieter predeclared environment or on another valid
+no-timeout IOCTL driver.
+
+`win32k.sys` is not an alternate IOCTL control. The real fixture imports
+service-table and Win32-callout registration but exposes no WDM/KMDF dispatch
+roots to this frontend, hence zero solver queries. Route it through a future
+system-service/callout frontend; never count missing frontend coverage as
+solver success or force synthetic IRP roots into a real-driver claim.
