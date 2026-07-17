@@ -8,7 +8,7 @@
 //!   directly into `axeyum-ir` terms and solves with
 //!   `IncrementalBvSolver`, returning the model straight out of
 //!   `CheckResult::Sat`. This is the real backend.
-//! - [`AxeyumTextSolver`] (P1, text bridge): renders the query to SMT-LIB2
+//! - `AxeyumTextSolver` (P1, `solver-axeyum-text` text bridge): renders the query to SMT-LIB2
 //!   via [`super::pipe::build_script`] and calls axeyum's `solve_smtlib`.
 //!   Kept as a cross-check / reference and a zero-translation fallback.
 //!
@@ -24,20 +24,21 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    AigConstructionStats, CheckResult, IncrementalBvSolver, IncrementalBvStats,
-    IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
+    export_qf_bv_unsat_proof, AigConstructionStats, CheckResult, IncrementalBvSolver,
+    IncrementalBvStats, IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
     IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy,
-    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome, export_qf_bv_unsat_proof,
-    solve_smtlib, solve_smtlib_get_value,
+    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome,
 };
+#[cfg(feature = "solver-axeyum-text")]
+use axeyum_solver::{solve_smtlib, solve_smtlib_get_value};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, Solver,
-    WarmAssertionPrefix, WarmDeltaContext, pipe,
+    pipe, Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, Solver,
+    WarmAssertionPrefix, WarmDeltaContext,
 };
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
@@ -3091,15 +3092,18 @@ impl<'a> Translator<'a> {
 // ---------------------------------------------------------------------------
 
 /// The in-process SMT-LIB2 text-bridge backend (P1).
+#[cfg(feature = "solver-axeyum-text")]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AxeyumTextSolver;
 
+#[cfg(feature = "solver-axeyum-text")]
 impl AxeyumTextSolver {
     pub fn new() -> Self {
         Self
     }
 }
 
+#[cfg(feature = "solver-axeyum-text")]
 impl Solver for AxeyumTextSolver {
     fn check(&mut self, pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
         let (script, names) = pipe::build_script(pool, asserts);
@@ -3117,6 +3121,7 @@ impl Solver for AxeyumTextSolver {
 
 /// Recover the assignment via `get-value` (a second solve on a Sat -- a text
 /// bridge inefficiency; the native backend avoids it).
+#[cfg(feature = "solver-axeyum-text")]
 fn extract_model(script: &str, names: &[(u32, String)], cfg: &SolverConfig) -> Model {
     let mut values = BTreeMap::new();
     if names.is_empty() {
@@ -3230,6 +3235,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "solver-axeyum-text")]
     fn text_bridge_accepts_shared_let_script() {
         let mut pool = ExprPool::new();
         let x = pool.fresh_symbol(Width::W64);
@@ -4391,6 +4397,7 @@ mod tests {
     // ---- text bridge still works -----------------------------------------
 
     #[test]
+    #[cfg(feature = "solver-axeyum-text")]
     fn text_bridge_solves_add_eq() {
         let mut p = ExprPool::new();
         let x = p.fresh_symbol(Width::W32);
@@ -4405,6 +4412,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "solver-axeyum-text")]
     fn text_bridge_wide_assertion_uses_truthiness() {
         let mut pool = ExprPool::new();
         let wide = pool.fresh_symbol(Width::W64);
