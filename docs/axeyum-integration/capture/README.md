@@ -1061,6 +1061,23 @@ and finding hashes in addition to the existing verdict, reset, replay, time,
 and RSS gates. The value 156 reproduces the current tcpip coverage boundary; it
 is a calibration input, not a universal DriverSpec default.
 
+The first fixed-156 tcpip pair proves that function-count equality is necessary
+but insufficient for exact policy comparison. Both processes report
+`analyzed=156/338 WORK-LIMIT-HIT` and avoid the 3,600-second safety deadline.
+The control executes 70,592 queries, reports 47 Z3 / 11 Axeyum nondecisions,
+and emits 782 findings. The continuation candidate executes 70,768 queries,
+reports 46 Z3 / 8 Axeyum nondecisions, and emits 783 findings. Only 781 findings
+are shared; control has one unique double fetch, while candidate has one unique
+read and one unique null dereference. Thus a single borderline Z3 timeout can
+still steer different paths inside the same function prefix.
+
+The candidate itself is resource-safe in this pair: 11 continuations = 3
+recoveries + 8 repeated unknowns + 0 errors, Axeyum time +1.47%, RSS +0.18%,
+and zero SAT/UNSAT disagreements, resets, or replay failures. Those deltas are
+descriptive only because work differs. The next gate must capture one ordered,
+Z3-authoritative occurrence stream and replay control/candidate over the exact
+same queries; another live pair cannot satisfy exact traffic/finding identity.
+
 Warm-profile v7 and the repeated gate establish direct entry as a valid causal
 control, but ADR-012 rejects production admission. It wins against topology-
 equivalent snapshot and loses the current serial-snapshot policy on SurfacePen

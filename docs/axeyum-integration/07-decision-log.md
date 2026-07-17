@@ -604,3 +604,20 @@ opening reachable function `N+1` and reports `WORK-LIMIT-HIT`. The next tcpip
 pair uses `N=156` with a generous wall deadline as a safety backstop. Admission
 requires both processes to hit the work limit, not the deadline, and to preserve
 exact query traffic and finding hashes before resource deltas are scored.
+
+Both fixed-work processes hit 156/338 functions and never hit the 3,600-second
+safety deadline, but the gate still rejects the live comparison. Control runs
+70,592 queries with 47 Z3 / 11 Axeyum nondecisions and 782 findings; continuation
+runs 70,768 queries with 46 Z3 / 8 Axeyum nondecisions and 783 findings. Their
+finding sets have 781 shared rows, one control-only double fetch, and two
+candidate-only read/null-deref rows. The candidate's 11 continuations partition
+as 3 recoveries + 8 repeated unknowns + 0 errors. Axeyum time changes
+133,279.7→135,233.6 ms (+1.47%) and RSS 440,280→441,088 KiB (+0.18%), inside
+the alarms, with zero SAT/UNSAT disagreements, resets, or replay failures.
+
+The function boundary removes global deadline drift but cannot remove
+authoritative Z3 timeout steering: 47 versus 46 bounded Z3 nondecisions change
+the worklist within the identical function prefix. Do not repeat live
+exploration as if it were exact. Capture one ordered authoritative query stream
+and replay both timeout policies over those exact occurrences; continuation
+remains explicit/off until that gate exists.
