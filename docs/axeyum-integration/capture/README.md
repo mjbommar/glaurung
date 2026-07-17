@@ -1160,6 +1160,19 @@ presence to agree and rejects unnamed classes. Historical v1 traces remain
 structurally readable when the extension marker is absent, but they cannot
 enter ADR-0213's publication analysis.
 
+The off-by-default fair control declares
+`check_measurement_schema: glaurung-ordered-check-measurement-v2`. It adds four
+explicit timing/outcome pairs: `z3_cold_*`, `z3_warm_*`, `axeyum_cold_*`, and
+`axeyum_warm_*`, plus `z3_warm_execution` and
+`axeyum_warm_execution`. The old `z3_*` fields must equal the cold-Z3 cell and
+the old `axeyum_*` fields must equal the warm-Axeyum cell; the validator checks
+those aliases rather than allowing two populations to drift under one name.
+Both warm cells consume the ordered trace's same source owner, serial lease,
+persistent prefix, and temporary-assumption partition. Cold Z3 remains the
+authoritative `outcome`. The four-cell order rotates deterministically by
+check occurrence, and the sum of their measured times may not exceed
+`backend_nanos`.
+
 Axeyum's `scripts/analyze-glaurung-paired-traces.py` consumes at least five
 fixed-work repetitions. It requires identical ordered check identities and
 execution-class membership, rejects operational results and decided
@@ -1170,6 +1183,14 @@ occurrence `z3_nanos / axeyum_nanos` ratios with a deterministic bootstrap 95%
 confidence interval; p50/p90/p95/p99, process-level CV, per-execution-class
 partitions, warm-hit rate, and optional CSV/PNG latency CDFs are separate
 outputs. It deliberately emits no ratio of sums.
+
+For v2 traces the analyzer additionally reports four fixed-work paired
+contrasts: cold Z3/Axeyum, warm Z3/Axeyum, Z3 cold/warm, and Axeyum cold/warm.
+Each contrast independently restricts its population to occurrences decided
+by both named cells in every repetition and uses the same per-occurrence
+geomean/bootstrap discipline. The legacy primary population remains the
+explicit cold-Z3/warm-Axeyum alias for continuity; it must not be presented as
+the fair warm-vs-warm result.
 
 The validator fails on manifest/file hash drift, sequence gaps, missing path
 terminals, broken lineage, scope underflow/digest mismatch, assertion/query

@@ -118,6 +118,7 @@ def validate(root: pathlib.Path) -> dict[str, int]:
     if check_measurement_schema not in {
         None,
         "glaurung-ordered-check-measurement-v1",
+        "glaurung-ordered-check-measurement-v2",
     }:
         fail("invalid ordered-check measurement schema")
     native_replay = manifest.get("native_replay")
@@ -426,6 +427,52 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                     authoritative = "error"
                 if authoritative is not None and authoritative != outcome:
                     fail(f"authoritative backend outcome mismatch for {check_id}")
+                if check_measurement_schema == "glaurung-ordered-check-measurement-v2":
+                    fair_cells = (
+                        "z3_cold",
+                        "z3_warm",
+                        "axeyum_cold",
+                        "axeyum_warm",
+                    )
+                    for cell in fair_cells:
+                        cell_nanos = event.get(f"{cell}_nanos")
+                        cell_outcome = event.get(f"{cell}_outcome")
+                        if not isinstance(cell_nanos, int) or cell_nanos < 0:
+                            fail(f"invalid {cell} timing for {check_id}")
+                        if cell_outcome not in backend_outcomes:
+                            fail(f"invalid {cell} outcome for {check_id}")
+                    fair_measured = sum(event[f"{cell}_nanos"] for cell in fair_cells)
+                    if fair_measured > backend_nanos:
+                        fail(f"four-cell timing exceeds total timing for {check_id}")
+                    z3_execution = event.get("z3_warm_execution")
+                    if z3_execution not in {
+                        "warm-created",
+                        "warm-retained",
+                        "fallback-missing-delta",
+                        "invalid-direct-delta",
+                    }:
+                        fail(f"invalid warm Z3 execution class for {check_id}")
+                    if event.get("axeyum_warm_execution") not in execution_classes:
+                        fail(f"invalid warm Axeyum execution class for {check_id}")
+                    aliases = (
+                        (z3_nanos, event["z3_cold_nanos"], "Z3 timing"),
+                        (axeyum_nanos, event["axeyum_warm_nanos"], "Axeyum timing"),
+                        (z3_outcome, event["z3_cold_outcome"], "Z3 outcome"),
+                        (axeyum_outcome, event["axeyum_warm_outcome"], "Axeyum outcome"),
+                        (
+                            axeyum_execution,
+                            event["axeyum_warm_execution"],
+                            "Axeyum execution",
+                        ),
+                    )
+                    for alias, explicit, label in aliases:
+                        if alias != explicit:
+                            fail(f"{label} alias mismatch for {check_id}")
+                    authoritative = event["z3_cold_outcome"]
+                    if authoritative == "no-solver":
+                        authoritative = "error"
+                    if authoritative != outcome:
+                        fail(f"cold Z3 outcome mismatch for {check_id}")
             checks[check_id] = (outcome, path_id)
             observed_occurrences.setdefault(query_hash, []).append(
                 (check_id, path_id, event["event_seq"])

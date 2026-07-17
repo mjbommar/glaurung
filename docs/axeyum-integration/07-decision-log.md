@@ -788,3 +788,78 @@ ADR-0213 gates.
 unknown counters; infer fallback rows from end-of-run totals; silently
 reinterpret historical v1; use all observations in the latency ratio even when
 one backend did not decide; or publish a ratio of sums with a caveat.
+
+## ADR-023 - Add a topology-equivalent four-cell solver control
+
+**Status:** Accepted.
+**Context:** ADR-022 makes the existing cold-Z3/warm-Axeyum population
+statistically auditable, but it does not remove the reviewer checklist's most
+important baseline objection. A fresh Z3 solver and a retained Axeyum lineage
+conflate solver choice with session reuse. Re-labeling the old shadow numbers
+would preserve that confound.
+**Decision:** Add the off-by-default `GLAURUNG_FAIR_SHADOW` diagnostic. For
+every authoritative cold-Z3 query, time four independently named cells in a
+deterministically rotating order: Z3 cold, Z3 persistent direct-lineage,
+Axeyum cold, and Axeyum persistent direct-lineage. Both warm cells use the same
+explorer owner, serial sibling lease, exact source-prefix LCP, one-scope-per-
+root push/pop discipline, and temporary-assumption boundary. Z3 implements the
+existing `IncrementalSolver` contract with a retained native context/solver;
+Axeyum bypasses product admission policy only for this diagnostic and forces
+the already checked direct-lineage topology. Cold Z3 remains authoritative, so
+all four cells observe one query stream. Rotate cell order by ordered check
+occurrence to reduce systematic cache/order bias. Publish the four timings,
+outcomes, and both warm execution classes under the additive
+`glaurung-ordered-check-measurement-v2` marker; preserve v1 fields as explicit
+cold-Z3/warm-Axeyum aliases.
+**Evidence:** Real Z3 incremental tests cover push/pop depth, persistent model
+lifting, temporary assumptions, and post-assumption restoration. A lineage
+test switches between equal-depth cloned sibling pools and proves rewind by
+source identity rather than numeric expression ID, then proves a contradictory
+temporary assumption does not persist. The ordered-trace validator requires
+all four v2 cells, checks their total-time bound, validates closed execution
+vocabularies, and checks the legacy aliases. A real DptfDevGen smoke published
+227 checks under v2; all four cells decided identically, both warm populations
+were 7 created plus 220 retained, no fallback occurred, and the independent
+trace validator accepted the artifact.
+**Consequences:** The old ADR-022 evidence remains a mechanism/control result,
+not a paper speedup. Publication comparisons can now report cold-vs-cold,
+warm-vs-warm, and each backend's incremental benefit from the same fixed-work
+traces. Four checks consume more of any wall/solver budget than two; production
+runs must predeclare a bound large enough to preserve fixed work. This control
+does not admit Axeyum direct delta as a product default. A neutral third-party
+solver, timeout-sensitive driver, and authoritative finding parity remain open
+ADR-0213 gates.
+**Alternatives rejected:** compare warm Axeyum only with fresh Z3; infer a warm
+Z3 result from cold timing; reuse expression IDs across cloned pools as
+lineage identity; let one backend use snapshots while the other consumes
+deltas; run the cells in a fixed order; or replace v1 semantics in place.
+
+## ADR-024 - Preserve full-width values in the native Z3 adapter
+
+**Status:** Accepted.
+**Context:** The benchmark review exposed a concrete correctness defect in the
+consumer adapter: `Expr::Const` and model projection narrowed every value
+through `u64`, even though Glaurung's IR supports 128-bit scalar bit-vectors.
+Z3 accepted the well-sorted but truncated term, so differential agreement could
+silently grade the wrong formula. The fair baseline must not retain that known
+oracle defect.
+**Decision:** Keep the IR strict and preserve its full scalar width. Construct
+bit-vector numerals wider than 64 bits through Z3's decimal numeral API rather
+than an integer cast. Lift evaluated models through an exact u128 parser for
+Z3 hexadecimal, binary, and indexed decimal numeral forms. Retain the cheap
+native `u64` route at widths up to 64 bits. Do not coerce, mask, or downgrade a
+malformed value to make the native backend accept it.
+**Evidence:** A real W128 regression constrains a symbol to a value with bit
+100 and nonzero low bits, then requires the lifted Glaurung model to contain
+the exact u128. It fails on the old adapter by returning only the low 64 bits
+and passes after the change. The existing Z3, Axeyum, concat-width, direct-
+delta, timeout, and ordered-trace suites remain green.
+**Consequences:** Z3 can again serve as an adapter oracle for Glaurung's full
+scalar width range, subject to the rest of the stated TCB. Historical
+primitive results containing the truncation are stale and must be regenerated;
+they are evidence that strict typing found a consumer bug, not evidence of a
+Z3-core failure.
+**Alternatives rejected:** scope all comparisons to at most 64 bits while
+leaving the defect; truncate both backends for apparent parity; represent a
+128-bit scalar as two unrelated symbols; or classify the wrong UNSAT as a Z3
+solver bug.

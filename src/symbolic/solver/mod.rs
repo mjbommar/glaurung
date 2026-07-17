@@ -192,16 +192,36 @@ pub(crate) struct SolveTiming {
     pub(crate) z3_outcome: Option<SolveOutcome>,
     pub(crate) axeyum_outcome: Option<SolveOutcome>,
     pub(crate) axeyum_execution: Option<AxeyumExecutionClass>,
+    pub(crate) z3_cold_nanos: Option<u64>,
+    pub(crate) z3_warm_nanos: Option<u64>,
+    pub(crate) axeyum_cold_nanos: Option<u64>,
+    pub(crate) axeyum_warm_nanos: Option<u64>,
+    pub(crate) z3_cold_outcome: Option<SolveOutcome>,
+    pub(crate) z3_warm_outcome: Option<SolveOutcome>,
+    pub(crate) axeyum_cold_outcome: Option<SolveOutcome>,
+    pub(crate) axeyum_warm_outcome: Option<SolveOutcome>,
+    pub(crate) z3_warm_execution: Option<Z3ExecutionClass>,
+    pub(crate) axeyum_warm_execution: Option<AxeyumExecutionClass>,
 }
 
 impl SolveTiming {
-    const ZERO: Self = Self {
+    pub(crate) const ZERO: Self = Self {
         total_nanos: 0,
         z3_nanos: None,
         axeyum_nanos: None,
         z3_outcome: None,
         axeyum_outcome: None,
         axeyum_execution: None,
+        z3_cold_nanos: None,
+        z3_warm_nanos: None,
+        axeyum_cold_nanos: None,
+        axeyum_warm_nanos: None,
+        z3_cold_outcome: None,
+        z3_warm_outcome: None,
+        axeyum_cold_outcome: None,
+        axeyum_warm_outcome: None,
+        z3_warm_execution: None,
+        axeyum_warm_execution: None,
     };
 }
 
@@ -271,9 +291,41 @@ impl AxeyumExecutionClass {
     }
 }
 
+/// Exact persistent-session population for the fair-shadow Z3 warm cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Z3ExecutionClass {
+    WarmCreated,
+    WarmRetained,
+    FallbackMissingDelta,
+    InvalidDirectDelta,
+}
+
+impl Z3ExecutionClass {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::WarmCreated => "warm-created",
+            Self::WarmRetained => "warm-retained",
+            Self::FallbackMissingDelta => "fallback-missing-delta",
+            Self::InvalidDirectDelta => "invalid-direct-delta",
+        }
+    }
+}
+
 /// Timing for the immediately preceding [`solve`] call on this worker.
 pub(crate) fn last_solve_timing() -> SolveTiming {
     LAST_SOLVE_TIMING.with(Cell::get)
+}
+
+/// Whether the opt-in four-cell cold/warm diagnostic is active.
+pub(crate) fn fair_shadow_enabled() -> bool {
+    #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+    {
+        std::env::var_os("GLAURUNG_FAIR_SHADOW").is_some()
+    }
+    #[cfg(not(all(feature = "solver-z3", feature = "solver-axeyum")))]
+    {
+        false
+    }
 }
 
 /// Set (or clear) the per-thread per-function wall-clock budget.
@@ -556,6 +608,8 @@ static SHADOW_DISAGREE: AtomicU64 = AtomicU64::new(0);
 static SHADOW_Z3_NANOS: AtomicU64 = AtomicU64::new(0);
 #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
 static SHADOW_AX_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static FAIR_SHADOW_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 // Model-divergence counters: of the queries where BOTH backends return Sat,
 // how many returned a DIFFERENT satisfying model. This directly measures the
 // mechanism behind finding divergence (model-based concretization), distinct
@@ -636,6 +690,119 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     // return z3 authoritatively. Diagnostic only (env-gated).
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     {
+        if fair_shadow_enabled() {
+            let rotation = FAIR_SHADOW_SEQUENCE.fetch_add(1, Ordering::Relaxed) % 4;
+            let mut z3_cold = None;
+            let mut z3_warm = None;
+            let mut axeyum_cold = None;
+            let mut axeyum_warm = None;
+            let mut z3_cold_nanos = 0;
+            let mut z3_warm_nanos = 0;
+            let mut axeyum_cold_nanos = 0;
+            let mut axeyum_warm_nanos = 0;
+            let mut z3_warm_execution = None;
+            let mut axeyum_warm_execution = None;
+            for offset in 0..4 {
+                match (rotation + offset) % 4 {
+                    0 => {
+                        let started = std::time::Instant::now();
+                        z3_cold = Some(z3_backend::Z3Solver::new().check(pool, asserts));
+                        z3_cold_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    1 => {
+                        let started = std::time::Instant::now();
+                        let (result, execution) = z3_backend::check_warm_thread_local(
+                            pool,
+                            asserts,
+                            ACTIVE_WARM_PATH.with(Cell::get),
+                            active_warm_delta(),
+                        );
+                        z3_warm = Some(result);
+                        z3_warm_execution = Some(execution);
+                        z3_warm_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    2 => {
+                        let started = std::time::Instant::now();
+                        axeyum_cold =
+                            Some(axeyum_backend::AxeyumSolver::new().check(pool, asserts));
+                        axeyum_cold_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    _ => {
+                        let started = std::time::Instant::now();
+                        let (result, execution) = axeyum_backend::check_fair_warm_thread_local(
+                            pool,
+                            asserts,
+                            ACTIVE_WARM_PATH.with(Cell::get),
+                            active_warm_delta(),
+                        );
+                        axeyum_warm = Some(result);
+                        axeyum_warm_execution = Some(execution);
+                        axeyum_warm_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                }
+            }
+            let rz = z3_cold.expect("fair-shadow rotation runs cold Z3 exactly once");
+            let rzw = z3_warm.expect("fair-shadow rotation runs warm Z3 exactly once");
+            let rac = axeyum_cold.expect("fair-shadow rotation runs cold Axeyum exactly once");
+            let raw = axeyum_warm.expect("fair-shadow rotation runs warm Axeyum exactly once");
+
+            let same = matches!(
+                (&rz, &raw),
+                (SolveResult::Sat(_), SolveResult::Sat(_))
+                    | (SolveResult::Unsat, SolveResult::Unsat)
+            );
+            let nondecided = [&rz, &raw]
+                .into_iter()
+                .any(|result| matches!(result, SolveResult::Unknown | SolveResult::Error(_)));
+            if same || nondecided {
+                SHADOW_AGREE.fetch_add(1, Ordering::Relaxed);
+            } else {
+                SHADOW_DISAGREE.fetch_add(1, Ordering::Relaxed);
+            }
+            if let (SolveResult::Sat(z3_model), SolveResult::Sat(axeyum_model)) = (&rz, &raw) {
+                SHADOW_BOTH_SAT.fetch_add(1, Ordering::Relaxed);
+                if z3_model.values != axeyum_model.values {
+                    SHADOW_MODEL_DIFF.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            let z3_nondecided = matches!(rz, SolveResult::Unknown | SolveResult::Error(_));
+            let axeyum_nondecided = matches!(raw, SolveResult::Unknown | SolveResult::Error(_));
+            if z3_nondecided {
+                SHADOW_Z3_UNK.fetch_add(1, Ordering::Relaxed);
+            }
+            if axeyum_nondecided {
+                SHADOW_AX_UNK.fetch_add(1, Ordering::Relaxed);
+            }
+            if z3_nondecided != axeyum_nondecided {
+                SHADOW_UNK_SPLIT.fetch_add(1, Ordering::Relaxed);
+            }
+            SHADOW_Z3_NANOS.fetch_add(z3_cold_nanos, Ordering::Relaxed);
+            SHADOW_AX_NANOS.fetch_add(axeyum_warm_nanos, Ordering::Relaxed);
+            maybe_dump_shadow_split(pool, asserts, &rz, &raw);
+            LAST_SOLVE_TIMING.with(|timing| {
+                timing.set(SolveTiming {
+                    total_nanos: total_started.elapsed().as_nanos() as u64,
+                    // Backward-compatible aliases retain the original paired
+                    // population: cold Z3 versus selected warm Axeyum.
+                    z3_nanos: Some(z3_cold_nanos),
+                    axeyum_nanos: Some(axeyum_warm_nanos),
+                    z3_outcome: Some(SolveOutcome::from(&rz)),
+                    axeyum_outcome: Some(SolveOutcome::from(&raw)),
+                    axeyum_execution: axeyum_warm_execution,
+                    z3_cold_nanos: Some(z3_cold_nanos),
+                    z3_warm_nanos: Some(z3_warm_nanos),
+                    axeyum_cold_nanos: Some(axeyum_cold_nanos),
+                    axeyum_warm_nanos: Some(axeyum_warm_nanos),
+                    z3_cold_outcome: Some(SolveOutcome::from(&rz)),
+                    z3_warm_outcome: Some(SolveOutcome::from(&rzw)),
+                    axeyum_cold_outcome: Some(SolveOutcome::from(&rac)),
+                    axeyum_warm_outcome: Some(SolveOutcome::from(&raw)),
+                    z3_warm_execution,
+                    axeyum_warm_execution,
+                });
+            });
+            return rz;
+        }
         if std::env::var_os("GLAURUNG_SHADOW_DIFF").is_some() {
             // Time each backend on the SAME query for an apples-to-apples
             // comparison. Alternate order per call to cancel warm-cache bias.
@@ -735,6 +902,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     z3_outcome: Some(SolveOutcome::from(&rz)),
                     axeyum_outcome: Some(SolveOutcome::from(&ra)),
                     axeyum_execution: Some(axeyum_execution),
+                    ..SolveTiming::ZERO
                 });
             });
             return rz;
@@ -808,6 +976,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                 }
             },
             axeyum_execution,
+            ..SolveTiming::ZERO
         });
     });
     TOTAL_SOLVE_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -878,8 +1047,8 @@ pub(crate) fn solve_for_path_delta(
 #[cfg(all(test, feature = "solver-z3"))]
 mod capture_tests {
     use super::{
-        append_capture_index, publish_query_file, publish_shadow_split_bytes, shadow_result_class,
-        should_capture_shadow_split, SolveResult,
+        SolveResult, append_capture_index, publish_query_file, publish_shadow_split_bytes,
+        shadow_result_class, should_capture_shadow_split,
     };
 
     #[test]
@@ -896,13 +1065,13 @@ mod capture_tests {
             std::fs::read(directory.path().join(format!("{hash}.smt2"))).unwrap(),
             b"first"
         );
-        assert!(std::fs::read_dir(directory.path())
-            .unwrap()
-            .all(|entry| !entry
+        assert!(std::fs::read_dir(directory.path()).unwrap().all(|entry| {
+            !entry
                 .unwrap()
                 .file_name()
                 .to_string_lossy()
-                .ends_with(".tmp")));
+                .ends_with(".tmp")
+        }));
     }
 
     #[test]

@@ -24,11 +24,11 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    export_qf_bv_unsat_proof, solve_smtlib, solve_smtlib_get_value, AigConstructionStats,
-    CheckResult, IncrementalBvSolver, IncrementalBvStats, IncrementalCnfStats,
-    IncrementalLoweringStats, IncrementalModelLiftStats,
+    AigConstructionStats, CheckResult, IncrementalBvSolver, IncrementalBvStats,
+    IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
     IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy,
-    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome,
+    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome, export_qf_bv_unsat_proof,
+    solve_smtlib, solve_smtlib_get_value,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -36,8 +36,8 @@ use sha2::{Digest, Sha256};
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    pipe, Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, Solver,
-    WarmAssertionPrefix, WarmDeltaContext,
+    Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, Solver,
+    WarmAssertionPrefix, WarmDeltaContext, pipe,
 };
 
 /// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
@@ -2095,6 +2095,24 @@ pub(crate) fn check_warm_thread_local(
     (result, AxeyumExecutionClass::WarmTimeoutColdRetry)
 }
 
+/// Run the fixed direct-lineage Axeyum cell used only by fair-shadow
+/// diagnostics, independent of the product-path admission policy.
+pub(crate) fn check_fair_warm_thread_local(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: Option<u64>,
+    delta: Option<WarmDeltaContext>,
+) -> (SolveResult, AxeyumExecutionClass) {
+    check_warm_thread_local_selected(
+        pool,
+        asserts,
+        path_id,
+        delta,
+        WarmReusePolicy::Lineage,
+        true,
+    )
+}
+
 fn check_warm_thread_local_selected(
     pool: &ExprPool,
     asserts: &[Assert],
@@ -2411,6 +2429,15 @@ pub(crate) fn close_warm_path(path_id: u64) {
     AUTO_LINEAGE_ADMISSION.with(|admission| {
         admission.borrow_mut().remove(path_id);
     });
+    close_retained_lineage_paths(path_id);
+}
+
+/// Release the fixed fair-shadow Axeyum session even when the product warm
+/// policy is disabled.
+pub(crate) fn close_fair_warm_path(path_id: u64) {
+    if !release_serial_warm_owner(path_id) {
+        return;
+    }
     close_retained_lineage_paths(path_id);
 }
 

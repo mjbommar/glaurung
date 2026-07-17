@@ -20,12 +20,12 @@ use crate::exec::{Concrete, Flow, Halt, Machine};
 use crate::ir::types::{
     BinOp, CallTarget, CmpOp, Endian, LlirBlock, LlirFunction, Op, VReg, Value, Width,
 };
+use crate::symbolic::Symbolic;
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::ordered_trace::{TracePath, WarmReplayCheck};
 use crate::symbolic::solver::{
-    last_solve_timing, solve_for_path_delta, Assert, Model, SolveResult, WarmAssertionPrefix,
+    Assert, Model, SolveResult, WarmAssertionPrefix, last_solve_timing, solve_for_path_delta,
 };
-use crate::symbolic::Symbolic;
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -312,6 +312,9 @@ fn next_warm_path_id() -> u64 {
 }
 
 fn warm_owner_transfer_enabled() -> bool {
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        return true;
+    }
     #[cfg(feature = "solver-axeyum")]
     {
         crate::symbolic::solver::axeyum_backend::warm_owner_transfer_enabled()
@@ -323,6 +326,9 @@ fn warm_owner_transfer_enabled() -> bool {
 }
 
 fn warm_serial_sibling_reuse_enabled() -> bool {
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        return true;
+    }
     #[cfg(feature = "solver-axeyum")]
     {
         effective_serial_sibling_reuse(
@@ -346,6 +352,12 @@ fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
     crate::symbolic::solver::axeyum_backend::share_serial_warm_owner_with_children(
         path_id, children,
     );
+    #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::z3_backend::share_serial_warm_owner_with_children(
+            path_id, children,
+        );
+    }
     #[cfg(not(feature = "solver-axeyum"))]
     let _ = (path_id, children);
 }
@@ -353,7 +365,15 @@ fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
 fn close_warm_owner(path_id: u64) {
     crate::symbolic::ordered_trace::warm_owner_release(path_id);
     #[cfg(feature = "solver-axeyum")]
-    crate::symbolic::solver::axeyum_backend::close_warm_path(path_id);
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::axeyum_backend::close_fair_warm_path(path_id);
+    } else {
+        crate::symbolic::solver::axeyum_backend::close_warm_path(path_id);
+    }
+    #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::z3_backend::close_warm_path(path_id);
+    }
 }
 
 /// One in-flight path: a machine snapshot, its program counter, the path
@@ -1935,7 +1955,7 @@ mod tests {
     /// *solver* budget is what stops it — proving the safety cap engages.
     #[test]
     fn solver_budget_bails_on_runaway_exploration() {
-        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
+        use crate::symbolic::solver::{DEFAULT_SOLVER_BUDGET, set_solver_budget, solver_meter};
         let lf = func(vec![
             (
                 0x1000,
@@ -1983,7 +2003,7 @@ mod tests {
     /// at its source. Without it, the loop would fork up to the state cap.
     #[test]
     fn loop_bound_cuts_runaway_path() {
-        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
+        use crate::symbolic::solver::{DEFAULT_SOLVER_BUDGET, set_solver_budget, solver_meter};
         let lf = func(vec![
             (
                 0x1000,
