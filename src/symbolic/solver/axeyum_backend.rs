@@ -1631,7 +1631,7 @@ struct RetainedCnfSnapshotMetadata<'a> {
     sequence: u64,
     query_hash: &'a str,
     path_id: u64,
-    outcome: &'static str,
+    outcome: &'a str,
     variable_count: u64,
     clause_count: u64,
     dimacs_sha256: String,
@@ -1744,6 +1744,15 @@ impl DirectDeltaLineageAxeyumSolver {
         let popped_before = self.stats.assertions_popped;
         let (mut result, metrics) =
             self.transition_and_check(path_id, pool, input, effective_retain, profiling);
+        let replay_cache_hit = profile_before.is_some_and(|(_, cache_before, _)| {
+            self.paths
+                .get(&path_id)
+                .expect("direct path remains live after a successful transition")
+                .solver
+                .replay_sat_cache_stats()
+                .hits
+                > cache_before.hits
+        });
         if let Some(profile) = &mut profile {
             profile.profile.assertions_added =
                 self.stats.assertions_added.saturating_sub(added_before);
@@ -1768,7 +1777,13 @@ impl DirectDeltaLineageAxeyumSolver {
                 profile.profile.model_values = count(model.values.len());
             }
         }
-        if matches!(result, SolveResult::Unsat) {
+        if let Some(outcome) = match &result {
+            SolveResult::Sat(_) => Some("sat"),
+            SolveResult::Unsat => Some("unsat"),
+            _ => None,
+        }
+        .filter(|_| !replay_cache_hit)
+        {
             if let Some(output_dir) = cnf_snapshot_output_dir() {
                 let query_hash = profile
                     .as_ref()
@@ -1782,9 +1797,15 @@ impl DirectDeltaLineageAxeyumSolver {
                     .profiled_last_cnf_snapshot();
                 match snapshot.and_then(|snapshot| {
                     let snapshot = snapshot.ok_or_else(|| {
-                        "axeyum retained CNF snapshot missing after UNSAT check".to_string()
+                        "axeyum retained CNF snapshot missing after solver decision".to_string()
                     })?;
-                    write_retained_cnf_snapshot(output_dir, query_hash, path_id, &snapshot)
+                    write_retained_cnf_snapshot(
+                        output_dir,
+                        query_hash,
+                        path_id,
+                        outcome,
+                        &snapshot,
+                    )
                 }) {
                     Ok(()) => {}
                     Err(error) => result = SolveResult::Error(error),
@@ -2864,6 +2885,7 @@ fn write_retained_cnf_snapshot(
     output_dir: &Path,
     query_hash: &str,
     path_id: u64,
+    outcome: &str,
     snapshot: &RetainedCnfSnapshot,
 ) -> Result<(), String> {
     std::fs::create_dir_all(output_dir).map_err(|error| {
@@ -2875,7 +2897,7 @@ fn write_retained_cnf_snapshot(
     let sequence = CNF_SNAPSHOT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let process_id = std::process::id();
     let hash = query_hash.strip_prefix("sha256:").unwrap_or(query_hash);
-    let stem = format!("retained-unsat-{process_id}-{sequence:06}-{hash}");
+    let stem = format!("retained-{outcome}-{process_id}-{sequence:06}-{hash}");
     let cnf_path = output_dir.join(format!("{stem}.cnf"));
     let metadata_path = output_dir.join(format!("{stem}.json"));
     std::fs::write(&cnf_path, snapshot.dimacs.as_bytes())
@@ -2886,7 +2908,7 @@ fn write_retained_cnf_snapshot(
         sequence,
         query_hash,
         path_id,
-        outcome: "unsat",
+        outcome,
         variable_count: snapshot.variable_count,
         clause_count: snapshot.clause_count,
         dimacs_sha256: hex::encode(Sha256::digest(snapshot.dimacs.as_bytes())),
@@ -4125,6 +4147,7 @@ mod tests {
             output.path(),
             &format!("sha256:{}", "a".repeat(64)),
             17,
+            "unsat",
             &snapshot,
         )
         .unwrap();

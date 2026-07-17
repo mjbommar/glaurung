@@ -163,13 +163,16 @@ GLAURUNG_FAIR_SHADOW=1 \
 target/release/examples/ioctlance /path/to/driver.sys
 ```
 
-On every direct-delta Axeyum `unsat`, the opt-in hook writes one DIMACS file
-and one `glaurung-axeyum-retained-cnf-snapshot-v1` metadata file. The DIMACS
+On every direct-delta Axeyum check decided by the retained SAT core, the opt-in
+hook writes one DIMACS file and one
+`glaurung-axeyum-retained-cnf-snapshot-v1` metadata file. Replay-checked SAT
+cache hits do not enter the SAT core and therefore do not emit a snapshot. The
+DIMACS
 contains the complete persistent input-clause database plus the exact active
 frame and one-shot selector assumptions materialized as positive unit clauses.
 It deliberately excludes opaque learned clauses, so fresh independent cores
 can consume one byte-identical stable problem. Snapshot filenames include the
-process ID and a process-local sequence; metadata binds the query hash, path,
+process ID, outcome, and a process-local sequence; metadata binds the query hash, path,
 variable/clause counts, and DIMACS SHA-256. Any snapshot/export failure changes
 the opt-in diagnostic check to an operational error rather than silently
 dropping evidence. Snapshot rendering and I/O invalidate outer timing, just as
