@@ -154,6 +154,27 @@ incremental CNF gate/root-family deltas, and explicit unattributed time. Query
 rendering/hash and JSON output are diagnostic overhead and are deliberately
 outside `total_nanos`.
 
+For an exact retained-CNF core control, add a separate snapshot directory:
+
+```sh
+GLAURUNG_AXEYUM_CNF_SNAPSHOT_DIR="$profile_dir/cnf" \
+GLAURUNG_AXEYUM_PROFILE_DIR="$profile_dir/profiles" \
+GLAURUNG_FAIR_SHADOW=1 \
+target/release/examples/ioctlance /path/to/driver.sys
+```
+
+On every direct-delta Axeyum `unsat`, the opt-in hook writes one DIMACS file
+and one `glaurung-axeyum-retained-cnf-snapshot-v1` metadata file. The DIMACS
+contains the complete persistent input-clause database plus the exact active
+frame and one-shot selector assumptions materialized as positive unit clauses.
+It deliberately excludes opaque learned clauses, so fresh independent cores
+can consume one byte-identical stable problem. Snapshot filenames include the
+process ID and a process-local sequence; metadata binds the query hash, path,
+variable/clause counts, and DIMACS SHA-256. Any snapshot/export failure changes
+the opt-in diagnostic check to an operational error rather than silently
+dropping evidence. Snapshot rendering and I/O invalidate outer timing, just as
+profile rendering does.
+
 V4 adds two exact per-check maps for the next GQ5 attribution boundary. The
 five `aig_construction` counters partition every primitive AND request into a
 trivial simplification, absorption/consensus simplification, unique-table hit,

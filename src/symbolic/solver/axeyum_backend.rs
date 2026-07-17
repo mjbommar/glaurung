@@ -45,6 +45,7 @@ use crate::symbolic::solver::{
 /// and metering behave the same regardless of which backend is compiled in.
 const SOLVE_TIMEOUT: Duration = Duration::from_millis(250);
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
+const CNF_SNAPSHOT_DIR_ENV: &str = "GLAURUNG_AXEYUM_CNF_SNAPSHOT_DIR";
 pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
 pub(crate) const WARM_OWNER_TRANSFER_ENV: &str = "GLAURUNG_AXEYUM_WARM_OWNER_TRANSFER";
 pub(crate) const WARM_SERIAL_SIBLING_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_SERIAL_SIBLING_REUSE";
@@ -62,8 +63,10 @@ const DEFAULT_REPLAY_SAT_CACHE_MODEL_VALUES: usize = 4_096;
 const DEFAULT_REPLAY_SAT_CACHE_MODEL_BITS: usize = 262_144;
 
 static PROFILE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+static CNF_SNAPSHOT_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static PROFILE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static CNF_SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static WARM_CHECKS: AtomicU64 = AtomicU64::new(0);
 static WARM_EXACT_REUSES: AtomicU64 = AtomicU64::new(0);
 static WARM_PREFIX_REUSES: AtomicU64 = AtomicU64::new(0);
@@ -731,6 +734,19 @@ impl IncrementalAxeyumSolver {
 
     fn solver_stats(&self) -> IncrementalBvStats {
         self.solver.stats()
+    }
+
+    fn profiled_last_cnf_snapshot(&self) -> Result<Option<RetainedCnfSnapshot>, String> {
+        self.solver
+            .profiled_last_cnf_snapshot()
+            .map(|snapshot| {
+                snapshot.map(|formula| RetainedCnfSnapshot {
+                    variable_count: count(formula.variable_count()),
+                    clause_count: count(formula.clauses().len()),
+                    dimacs: formula.to_dimacs(),
+                })
+            })
+            .map_err(|error| format!("axeyum retained CNF snapshot: {error}"))
     }
 
     fn arena_len(&self) -> usize {
@@ -1602,6 +1618,27 @@ struct DirectCheckInput<'a> {
     temporary: &'a [Assert],
 }
 
+struct RetainedCnfSnapshot {
+    variable_count: u64,
+    clause_count: u64,
+    dimacs: String,
+}
+
+#[derive(Serialize)]
+struct RetainedCnfSnapshotMetadata<'a> {
+    schema: &'static str,
+    process_id: u32,
+    sequence: u64,
+    query_hash: &'a str,
+    path_id: u64,
+    outcome: &'static str,
+    variable_count: u64,
+    clause_count: u64,
+    dimacs_sha256: String,
+    learned_clauses_included: bool,
+    active_assumptions_materialized_as_units: bool,
+}
+
 impl DirectDeltaLineageAxeyumSolver {
     fn has_path(&self, path_id: u64) -> bool {
         self.paths.contains_key(&path_id)
@@ -1621,7 +1658,7 @@ impl DirectDeltaLineageAxeyumSolver {
             temporary,
         } = input;
         debug_assert_eq!(complete_asserts.len(), persistent.len() + temporary.len());
-        let profiling = profile_output_dir().is_some();
+        let profiling = diagnostics_enabled();
         self.stats.checks = self.stats.checks.saturating_add(1);
         let created = !self.paths.contains_key(&path_id);
         let create_started = (created && profiling).then(Instant::now);
@@ -1705,7 +1742,7 @@ impl DirectDeltaLineageAxeyumSolver {
 
         let added_before = self.stats.assertions_added;
         let popped_before = self.stats.assertions_popped;
-        let (result, metrics) =
+        let (mut result, metrics) =
             self.transition_and_check(path_id, pool, input, effective_retain, profiling);
         if let Some(profile) = &mut profile {
             profile.profile.assertions_added =
@@ -1729,6 +1766,29 @@ impl DirectDeltaLineageAxeyumSolver {
             profile.profile.model_extract_nanos = metrics.model_extract_nanos;
             if let SolveResult::Sat(model) = &result {
                 profile.profile.model_values = count(model.values.len());
+            }
+        }
+        if matches!(result, SolveResult::Unsat) {
+            if let Some(output_dir) = cnf_snapshot_output_dir() {
+                let query_hash = profile
+                    .as_ref()
+                    .map(|context| context.profile.query_hash.as_str())
+                    .expect("CNF snapshot diagnostics create a warm profile context");
+                let snapshot = self
+                    .paths
+                    .get(&path_id)
+                    .expect("direct path remains live until CNF snapshot completion")
+                    .solver
+                    .profiled_last_cnf_snapshot();
+                match snapshot.and_then(|snapshot| {
+                    let snapshot = snapshot.ok_or_else(|| {
+                        "axeyum retained CNF snapshot missing after UNSAT check".to_string()
+                    })?;
+                    write_retained_cnf_snapshot(output_dir, query_hash, path_id, &snapshot)
+                }) {
+                    Ok(()) => {}
+                    Err(error) => result = SolveResult::Error(error),
+                }
             }
         }
         let result = if profiling {
@@ -2788,6 +2848,59 @@ fn profile_output_dir() -> Option<&'static Path> {
     PROFILE_DIR
         .get_or_init(|| std::env::var_os(PROFILE_DIR_ENV).map(PathBuf::from))
         .as_deref()
+}
+
+fn cnf_snapshot_output_dir() -> Option<&'static Path> {
+    CNF_SNAPSHOT_DIR
+        .get_or_init(|| std::env::var_os(CNF_SNAPSHOT_DIR_ENV).map(PathBuf::from))
+        .as_deref()
+}
+
+fn diagnostics_enabled() -> bool {
+    profile_output_dir().is_some() || cnf_snapshot_output_dir().is_some()
+}
+
+fn write_retained_cnf_snapshot(
+    output_dir: &Path,
+    query_hash: &str,
+    path_id: u64,
+    snapshot: &RetainedCnfSnapshot,
+) -> Result<(), String> {
+    std::fs::create_dir_all(output_dir).map_err(|error| {
+        format!(
+            "create {CNF_SNAPSHOT_DIR_ENV} directory {}: {error}",
+            output_dir.display()
+        )
+    })?;
+    let sequence = CNF_SNAPSHOT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let process_id = std::process::id();
+    let hash = query_hash.strip_prefix("sha256:").unwrap_or(query_hash);
+    let stem = format!("retained-unsat-{process_id}-{sequence:06}-{hash}");
+    let cnf_path = output_dir.join(format!("{stem}.cnf"));
+    let metadata_path = output_dir.join(format!("{stem}.json"));
+    std::fs::write(&cnf_path, snapshot.dimacs.as_bytes())
+        .map_err(|error| format!("write retained CNF {}: {error}", cnf_path.display()))?;
+    let metadata = RetainedCnfSnapshotMetadata {
+        schema: "glaurung-axeyum-retained-cnf-snapshot-v1",
+        process_id,
+        sequence,
+        query_hash,
+        path_id,
+        outcome: "unsat",
+        variable_count: snapshot.variable_count,
+        clause_count: snapshot.clause_count,
+        dimacs_sha256: hex::encode(Sha256::digest(snapshot.dimacs.as_bytes())),
+        learned_clauses_included: false,
+        active_assumptions_materialized_as_units: true,
+    };
+    let encoded = serde_json::to_vec_pretty(&metadata)
+        .map_err(|error| format!("serialize retained CNF metadata: {error}"))?;
+    std::fs::write(&metadata_path, encoded).map_err(|error| {
+        format!(
+            "write retained CNF metadata {}: {error}",
+            metadata_path.display()
+        )
+    })
 }
 
 fn write_profile_record<T: Serialize>(output_dir: &Path, profile: &T) -> Result<(), String> {
@@ -3998,6 +4111,50 @@ mod tests {
         assert_eq!(mix["internal_positive_and_opportunities"], 0);
         assert_eq!(mix["internal_positive_and_immediate_clauses_avoided"], 0);
         assert_eq!(mix["tautological_root_clauses"], 0);
+    }
+
+    #[test]
+    fn retained_cnf_snapshot_writer_binds_dimacs_and_metadata() {
+        let output = tempfile::tempdir().unwrap();
+        let snapshot = RetainedCnfSnapshot {
+            variable_count: 1,
+            clause_count: 2,
+            dimacs: "p cnf 1 2\n1 0\n-1 0\n".to_string(),
+        };
+        write_retained_cnf_snapshot(
+            output.path(),
+            &format!("sha256:{}", "a".repeat(64)),
+            17,
+            &snapshot,
+        )
+        .unwrap();
+
+        let mut paths = std::fs::read_dir(output.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        paths.sort();
+        assert_eq!(paths.len(), 2);
+        let cnf = paths
+            .iter()
+            .find(|path| path.extension().is_some_and(|extension| extension == "cnf"))
+            .unwrap();
+        let metadata = paths
+            .iter()
+            .find(|path| path.extension().is_some_and(|extension| extension == "json"))
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(cnf).unwrap(), snapshot.dimacs);
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(metadata).unwrap()).unwrap();
+        assert_eq!(metadata["path_id"], 17);
+        assert_eq!(metadata["variable_count"], 1);
+        assert_eq!(metadata["clause_count"], 2);
+        assert_eq!(metadata["learned_clauses_included"], false);
+        assert_eq!(metadata["active_assumptions_materialized_as_units"], true);
+        assert_eq!(
+            metadata["dimacs_sha256"],
+            hex::encode(Sha256::digest(snapshot.dimacs.as_bytes()))
+        );
     }
 
     #[test]
