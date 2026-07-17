@@ -29,6 +29,7 @@ use crate::symbolic::solver::{
 const TRACE_SCHEMA: &str = "glaurung-ordered-trace-v1";
 const NATIVE_REPLAY_SCHEMA: &str = "glaurung-native-ordered-replay-v1";
 const TOPOLOGY: &str = "source-owner-serial-lease-v1";
+const AXEYUM_SOURCE_REPO_ENV: &str = "GLAURUNG_AXEYUM_SOURCE_REPO";
 
 #[derive(Clone)]
 struct Scope {
@@ -127,11 +128,24 @@ pub fn replay_to_report(
     }
     let trace_revision = string(&manifest["source"]["revision"], "source revision")?;
     let replay_revision = git_revision()?;
-    if trace_revision != replay_revision {
+    if trace_revision != replay_revision && !git_is_ancestor(&trace_revision, &replay_revision)? {
         return Err(format!(
-            "trace/replay Glaurung revision mismatch: {trace_revision} != {replay_revision}"
+            "trace Glaurung revision {trace_revision} is not the replay revision {replay_revision} or its ancestor"
         ));
     }
+    let axeyum_repo = std::env::var(AXEYUM_SOURCE_REPO_ENV)
+        .map(PathBuf::from)
+        .map_err(|_| format!("native replay requires {AXEYUM_SOURCE_REPO_ENV}"))?;
+    let axeyum_source = git_source_identity(&axeyum_repo)?;
+    if axeyum_source["tracked_dirty"] != false {
+        return Err("native replay requires a tracked-clean Axeyum source tree".into());
+    }
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("resolve native replay executable: {error}"))?;
+    let executable_sha256 =
+        sha256(fs::read(&executable).map_err(|error| {
+            format!("read replay executable {}: {error}", executable.display())
+        })?);
 
     let events_bytes = fs::read(&events_path)
         .map_err(|error| format!("read {}: {error}", events_path.display()))?;
@@ -384,6 +398,12 @@ pub fn replay_to_report(
             "finding_sha256": finding_sha256,
             "offline_replay_sha256": offline_replay_sha256,
         },
+        "implementation": {
+            "replay_executable": executable.display().to_string(),
+            "replay_executable_sha256": executable_sha256,
+            "glaurung_replay_revision": replay_revision,
+            "axeyum_source": axeyum_source,
+        },
         "configuration": runtime_configuration(),
         "outcomes": {
             "recorded_sat": counts.recorded_sat,
@@ -530,6 +550,7 @@ fn runtime_configuration() -> Value {
         "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE",
         "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS",
         "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH",
+        AXEYUM_SOURCE_REPO_ENV,
     ];
     Value::Object(
         names
@@ -557,17 +578,52 @@ fn scope_digest(scopes: &[Scope]) -> String {
 }
 
 fn git_revision() -> Result<String, String> {
-    let output = Command::new("git")
+    git_output(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &["rev-parse", "HEAD"],
+    )
+}
+
+fn git_is_ancestor(ancestor: &str, descendant: &str) -> Result<bool, String> {
+    let status = Command::new("git")
         .arg("-c")
         .arg("safe.directory=*")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
-        .args(["rev-parse", "HEAD"])
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .status()
+        .map_err(|error| format!("run git merge-base: {error}"))?;
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        other => Err(format!("git merge-base failed with status {other:?}")),
+    }
+}
+
+fn git_source_identity(repo: &Path) -> Result<Value, String> {
+    let revision = git_output(repo, &["rev-parse", "HEAD"])?;
+    let tracked_status = git_output(repo, &["status", "--porcelain=v1", "--untracked-files=no"])?;
+    Ok(json!({
+        "repository": repo.display().to_string(),
+        "revision": revision,
+        "tracked_dirty": !tracked_status.is_empty(),
+        "tracked_status_sha256": sha256(tracked_status.as_bytes()),
+    }))
+}
+
+fn git_output(repo: &Path, arguments: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-c")
+        .arg("safe.directory=*")
+        .arg("-C")
+        .arg(repo)
+        .args(arguments)
         .output()
-        .map_err(|error| format!("run git rev-parse: {error}"))?;
+        .map_err(|error| format!("run git {}: {error}", arguments.join(" ")))?;
     if !output.status.success() {
         return Err(format!(
-            "git rev-parse failed: {}",
+            "git {} failed: {}",
+            arguments.join(" "),
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }

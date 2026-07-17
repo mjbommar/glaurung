@@ -1223,6 +1223,7 @@ export GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE=0
 export GLAURUNG_AXEYUM_REPLAY_SAT_CACHE=1
 export GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS=9
 export GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH=512
+export GLAURUNG_AXEYUM_SOURCE_REPO=/home/mjbommar/projects/personal/axeyum
 
 /usr/bin/time -v target/release/examples/ordered_native_replay \
   "$trace" "$finding_sha256" "$offline_replay_sha256" \
@@ -1236,7 +1237,10 @@ solve. It reconstructs source-prefix `Arc` identity across forks and replays
 the production share/release calls in event order. The report binds trace,
 finding, and offline-replay hashes and exposes verdict splits, exact root work,
 capacity fallbacks, serial leases, continuation traffic, cache traffic, and
-terminal gauges.
+terminal gauges. It also hashes its own executable and requires a tracked-clean
+Axeyum source tree, recording that revision and status identity. A replay build
+may be a descendant of the clean trace-producer revision so reporting/gate
+hardening does not force an otherwise identical expensive recapture.
 
 Fail the gate on any SAT/UNSAT opposition, operational error, synchronization
 mismatch, warm reset, cache replay failure, or nonzero live path/owner/reference
