@@ -32,6 +32,49 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+const CANONICAL_MODEL_CHOICE_ENV: &str = "GLAURUNG_CANONICAL_MODEL_CHOICE";
+const ANY_MODEL_CHOICE_POLICY: &str = "glaurung-any-model-v1";
+const MIN_UNSIGNED_MODEL_CHOICE_POLICY: &str = "glaurung-min-unsigned-v1";
+
+static CANONICAL_MODEL_CHOICE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_COMPLETED: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_PROBES: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_INCONCLUSIVE: AtomicU64 = AtomicU64::new(0);
+
+/// Process-wide accounting for backend-independent model choices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalModelChoiceStats {
+    /// Active model-selection policy.
+    pub policy: &'static str,
+    /// Expressions for which unsigned minimization was requested.
+    pub attempts: u64,
+    /// Attempts that produced and rechecked a minimum.
+    pub completed: u64,
+    /// Temporary solver checks issued by the minimizer.
+    pub probes: u64,
+    /// Attempts that failed closed because no checked minimum was available.
+    pub inconclusive: u64,
+}
+
+fn canonical_model_choice_enabled() -> bool {
+    std::env::var_os(CANONICAL_MODEL_CHOICE_ENV).is_some()
+}
+
+/// Return the active canonical-model policy and its process-wide counters.
+pub fn canonical_model_choice_stats() -> CanonicalModelChoiceStats {
+    CanonicalModelChoiceStats {
+        policy: if canonical_model_choice_enabled() {
+            MIN_UNSIGNED_MODEL_CHOICE_POLICY
+        } else {
+            ANY_MODEL_CHOICE_POLICY
+        },
+        attempts: CANONICAL_MODEL_CHOICE_ATTEMPTS.load(Ordering::Relaxed),
+        completed: CANONICAL_MODEL_CHOICE_COMPLETED.load(Ordering::Relaxed),
+        probes: CANONICAL_MODEL_CHOICE_PROBES.load(Ordering::Relaxed),
+        inconclusive: CANONICAL_MODEL_CHOICE_INCONCLUSIVE.load(Ordering::Relaxed),
+    }
+}
+
 thread_local! {
     /// Per-function wall-clock deadline, set by [`run_worklist`] and checked
     /// *per instruction* so a single block built from huge (obfuscated)
@@ -599,6 +642,78 @@ fn solve_probe_traced(
     result
 }
 
+/// Select the least unsigned value of `value` under the current path condition.
+///
+/// Every bound is a temporary assertion, so the search cannot mutate the path.
+/// The final equality probe both rechecks the selected value and leaves an
+/// immediately preceding SAT event for ordered model-choice tracing. Widths
+/// above 128 bits cannot be represented by this engine's concrete value type
+/// and therefore fail closed.
+fn minimize_unsigned_value(
+    st: &mut State,
+    value: ExprId,
+    purpose: &str,
+    location: u64,
+) -> Option<u128> {
+    CANONICAL_MODEL_CHOICE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+    let width = st.machine.dom.pool.width_of(value);
+    let bits = width.bits();
+    if bits == 0 || bits > 128 {
+        CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+
+    let mut low = 0u128;
+    let mut high = if bits == 128 {
+        u128::MAX
+    } else {
+        (1u128 << bits) - 1
+    };
+    while low < high {
+        let midpoint = low + ((high - low) >> 1);
+        let bound = st.machine.dom.constant(width, midpoint);
+        let at_most = st.machine.dom.cmp(CmpOp::Ule, &value, &bound, width);
+        CANONICAL_MODEL_CHOICE_PROBES.fetch_add(1, Ordering::Relaxed);
+        match solve_probe_traced(
+            st,
+            (at_most, true),
+            purpose,
+            "canonical-model-choice-bound",
+            location,
+        ) {
+            SolveResult::Sat(_) => high = midpoint,
+            SolveResult::Unsat => low = midpoint + 1,
+            SolveResult::Unknown | SolveResult::NoSolver | SolveResult::Error(_) => {
+                CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+        }
+    }
+
+    let selected = st.machine.dom.constant(width, low);
+    let equal = st.machine.dom.cmp(CmpOp::Eq, &value, &selected, width);
+    CANONICAL_MODEL_CHOICE_PROBES.fetch_add(1, Ordering::Relaxed);
+    match solve_probe_traced(
+        st,
+        (equal, true),
+        purpose,
+        "canonical-model-choice-final",
+        location,
+    ) {
+        SolveResult::Sat(_) => {
+            CANONICAL_MODEL_CHOICE_COMPLETED.fetch_add(1, Ordering::Relaxed);
+            Some(low)
+        }
+        SolveResult::Unsat
+        | SolveResult::Unknown
+        | SolveResult::NoSolver
+        | SolveResult::Error(_) => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
 /// Search for an input that reaches `target`, starting from `lf`'s entry with the
 /// machine seeded by `seed` (e.g. marking argument registers symbolic). Returns
 /// the solver result for the first path that reaches `target`:
@@ -1064,21 +1179,24 @@ fn process_block(
 /// later refinement). Returns `None` when no satisfying model is available; in
 /// that case the caller must stop the path rather than inventing a value.
 fn concretize_addr(st: &mut State, addr_val: ExprId) -> Option<u64> {
-    let model = match solve_traced(st, "address-concretization", st.pc) {
-        SolveResult::Sat(m) => m.values,
-        _ => return None,
-    };
-    let mut c = Concrete;
-    let a = eval_expr(&st.machine.dom.pool, addr_val, &model, &mut c);
-    if let Some(trace) = &mut st.trace {
-        trace.model_choice(
-            &st.machine.dom.pool,
-            addr_val,
-            a,
-            true,
+    let (a, policy) = if canonical_model_choice_enabled() {
+        (
+            minimize_unsigned_value(st, addr_val, "canonical-address-minimize", st.pc)?,
+            MIN_UNSIGNED_MODEL_CHOICE_POLICY,
+        )
+    } else {
+        let model = match solve_traced(st, "address-concretization", st.pc) {
+            SolveResult::Sat(m) => m.values,
+            _ => return None,
+        };
+        let mut c = Concrete;
+        (
+            eval_expr(&st.machine.dom.pool, addr_val, &model, &mut c),
             "glaurung-any-address-v1",
-            st.pc,
-        );
+        )
+    };
+    if let Some(trace) = &mut st.trace {
+        trace.model_choice(&st.machine.dom.pool, addr_val, a, true, policy, st.pc);
     }
     let chosen = st.machine.dom.constant(Width::W64, a);
     let eq = st
@@ -1155,21 +1273,24 @@ fn read_arg(st: &mut State, n: u8) -> Option<ExprId> {
 /// Returns `None` for UNSAT, unknown, unavailable, or failed solver results;
 /// none of those outcomes authorizes a model-driven exploration choice.
 fn eval_concrete(st: &mut State, val: ExprId) -> Option<u64> {
-    let model = match solve_traced(st, "concrete-evaluation", st.pc) {
-        SolveResult::Sat(m) => m.values,
-        _ => return None,
-    };
-    let mut c = Concrete;
-    let value = eval_expr(&st.machine.dom.pool, val, &model, &mut c);
-    if let Some(trace) = &mut st.trace {
-        trace.model_choice(
-            &st.machine.dom.pool,
-            val,
-            value,
-            true,
+    let (value, policy) = if canonical_model_choice_enabled() {
+        (
+            minimize_unsigned_value(st, val, "canonical-representative-minimize", st.pc)?,
+            MIN_UNSIGNED_MODEL_CHOICE_POLICY,
+        )
+    } else {
+        let model = match solve_traced(st, "concrete-evaluation", st.pc) {
+            SolveResult::Sat(m) => m.values,
+            _ => return None,
+        };
+        let mut c = Concrete;
+        (
+            eval_expr(&st.machine.dom.pool, val, &model, &mut c),
             "glaurung-representative-value-v1",
-            st.pc,
-        );
+        )
+    };
+    if let Some(trace) = &mut st.trace {
+        trace.model_choice(&st.machine.dom.pool, val, value, true, policy, st.pc);
     }
     Some(value as u64)
 }
@@ -1832,6 +1953,46 @@ mod tests {
         assert_eq!(eval_concrete(&mut state, value), None);
         let constraints_before = state.constraints.clone();
         assert_eq!(concretize_addr(&mut state, value), None);
+        assert_eq!(state.constraints, constraints_before);
+    }
+
+    #[test]
+    fn unsigned_model_choice_minimizes_the_expression_without_persisting_probes() {
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W8);
+        let five = machine.dom.constant(Width::W8, 5);
+        let ten = machine.dom.constant(Width::W8, 10);
+        let at_least_five = machine.dom.cmp(CmpOp::Ule, &five, &value, Width::W8);
+        let at_most_ten = machine.dom.cmp(CmpOp::Ule, &value, &ten, Width::W8);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        state.assert((at_least_five, true), "test", state.pc);
+        state.assert((at_most_ten, true), "test", state.pc);
+        let constraints_before = state.constraints.clone();
+        let location = state.pc;
+
+        assert_eq!(
+            minimize_unsigned_value(&mut state, value, "test-minimize", location),
+            Some(5)
+        );
+        assert_eq!(state.constraints, constraints_before);
+    }
+
+    #[test]
+    fn unsigned_model_choice_fails_closed_on_an_infeasible_path() {
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W8);
+        let zero = machine.dom.constant(Width::W8, 0);
+        let one = machine.dom.constant(Width::W8, 1);
+        let contradiction = machine.dom.cmp(CmpOp::Eq, &zero, &one, Width::W8);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        state.assert((contradiction, true), "test", state.pc);
+        let constraints_before = state.constraints.clone();
+        let location = state.pc;
+
+        assert_eq!(
+            minimize_unsigned_value(&mut state, value, "test-minimize", location),
+            None
+        );
         assert_eq!(state.constraints, constraints_before);
     }
 

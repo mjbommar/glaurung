@@ -22,8 +22,9 @@ pub mod solver;
 pub mod symdomain;
 
 pub use explore::{
-    find_input_reaching, find_sinks, find_sinks_stateful, set_call_site_summaries, ApiSummary,
-    CallModel, Severity, Sink, SinkKind, TaintSpec,
+    ApiSummary, CallModel, CanonicalModelChoiceStats, Severity, Sink, SinkKind, TaintSpec,
+    canonical_model_choice_stats, find_input_reaching, find_sinks, find_sinks_stateful,
+    set_call_site_summaries,
 };
 pub use expr::{Expr, ExprId, ExprPool};
 pub use ioctl::{

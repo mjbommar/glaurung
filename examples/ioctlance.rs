@@ -19,9 +19,9 @@ use glaurung::core::binary::Arch;
 use glaurung::ir::lift_function::lift_function_from_bytes;
 use glaurung::ir::types::{CallTarget, LlirFunction, Op, Value};
 use glaurung::symbolic::{
-    ApiSummary, SinkKind, driver_api_model, find_function_sinks_with_apis,
-    find_function_stateful_sinks, find_ioctl_sinks_with_apis, set_call_site_summaries,
-    set_solver_budget, set_time_budget,
+    ApiSummary, SinkKind, canonical_model_choice_stats, driver_api_model,
+    find_function_sinks_with_apis, find_function_stateful_sinks, find_ioctl_sinks_with_apis,
+    set_call_site_summaries, set_solver_budget, set_time_budget,
 };
 
 fn kind_str(k: SinkKind) -> &'static str {
@@ -399,6 +399,15 @@ fn main() {
         },
     );
     eprintln!("[by-kind] {:?}", by_kind);
+    let canonical = canonical_model_choice_stats();
+    eprintln!(
+        "[canonical-model-choice] policy={} attempts={} completed={} probes={} inconclusive={}",
+        canonical.policy,
+        canonical.attempts,
+        canonical.completed,
+        canonical.probes,
+        canonical.inconclusive,
+    );
     // Benchmark footer: solver-only cost across the whole run (isolates the
     // solver from lifting/CFG), for the z3-vs-axeyum comparison.
     let (n_solves, solve_ns) = glaurung::symbolic::total_solver_stats();
