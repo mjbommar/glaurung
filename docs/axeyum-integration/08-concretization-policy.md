@@ -1,6 +1,7 @@
 # 08 - Concretization policy
 
-Status: A0 accepted on `axeyum-concretization-policy-a0` at `34c26c2`
+Status: A0 accepted on `axeyum-concretization-policy-a0` at `07ea0c1`;
+taint-provenance correction accepted at `845239f`
 (2026-07-18).
 
 ## Why this is one policy seam
@@ -66,15 +67,25 @@ A0 must preserve the default explorer behavior. The contract tests pin:
 - read-only representative selection versus address equality binding;
 - fail-closed behavior for infeasible paths and unsupported widths.
 
-The release acceptance gate compared the pre-A0 `e98c090`
+The original release acceptance gate compared the pre-A0 `e98c090`
 `ioctlance` binary with the A0 candidate under default AnyModel on the same
 tcpip input and 15-of-338 fixed-work boundary. Both clean A0 repetitions emit
 126 findings with ordered-finding SHA-256
 `a67d7bca28602ab20bbc46d9a5d42705463bd340067dc8e6ec660b35d58ba265`,
 exactly 2,991 solves, and the unchanged zeroed `glaurung-any-model-v1` counters.
 Those fields match all three accepted pre-A0 repetitions byte for byte. The
-known two Z3-only findings also remain; A0 preserves the rejected arbitrary-
-model divergence rather than selecting a favorable result.
+known two Z3-only raw diagnostics also remain; A0 preserves the rejected
+arbitrary-model divergence rather than selecting a favorable result.
+
+That byte-for-byte gate subsequently exposed an independent analyzer defect:
+uninitialized loads collapsed exact address provenance to `*attacker`. The
+accepted correction at `845239f` intentionally changes taint labels while
+leaving the A0 selection seam intact. The two raw Z3-only rows are now
+`**Arg0`, and both authority outputs have zero high-confidence findings on this
+15-function slice. See
+[`09-taint-provenance-and-finding-labels.md`](09-taint-provenance-and-finding-labels.md).
+Pre-correction ordered hashes remain valid A0 compatibility evidence but are
+not the baseline for a finding-coverage claim.
 
 A one-function production exercise then selects minimum unsigned through the
 preferred and legacy variables separately. Both emit identical finding output,
@@ -110,6 +121,8 @@ collapsing a set or a symbolic address to one value.
   deterministic set and account for the resulting work.
 - A2 must change the memory model so an address can remain symbolic.
 
-The next experiment is therefore a preregistered policy sweep, not another
-one-off canonical algorithm. Symbolic memory remains conditional on measured
-coverage headroom after that sweep.
+The next experiment is therefore a preregistered policy sweep over a corrected
+baseline, not another one-off canonical algorithm. Its coverage gate must use a
+nonzero labeled finding population and report raw, confidence-gated, and
+validated partitions separately. Symbolic memory remains conditional on
+measured validated-coverage headroom after that sweep.
