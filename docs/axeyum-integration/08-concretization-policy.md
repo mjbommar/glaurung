@@ -1,6 +1,7 @@
 # 08 - Concretization policy
 
-Status: A0 implemented on `axeyum-concretization-policy-a0` (2026-07-18).
+Status: A0 accepted on `axeyum-concretization-policy-a0` at `34c26c2`
+(2026-07-18).
 
 ## Why this is one policy seam
 
@@ -65,10 +66,38 @@ A0 must preserve the default explorer behavior. The contract tests pin:
 - read-only representative selection versus address equality binding;
 - fail-closed behavior for infeasible paths and unsupported widths.
 
-The release acceptance gate additionally compares the pre-A0 `e98c090`
+The release acceptance gate compared the pre-A0 `e98c090`
 `ioctlance` binary with the A0 candidate under default AnyModel on the same
-fixed input and work boundary. Finding rows, finding-kind counts, solve counts,
-and policy counters must match exactly; elapsed-time fields are not compared.
+tcpip input and 15-of-338 fixed-work boundary. Both clean A0 repetitions emit
+126 findings with ordered-finding SHA-256
+`a67d7bca28602ab20bbc46d9a5d42705463bd340067dc8e6ec660b35d58ba265`,
+exactly 2,991 solves, and the unchanged zeroed `glaurung-any-model-v1` counters.
+Those fields match all three accepted pre-A0 repetitions byte for byte. The
+known two Z3-only findings also remain; A0 preserves the rejected arbitrary-
+model divergence rather than selecting a favorable result.
+
+A one-function production exercise then selects minimum unsigned through the
+preferred and legacy variables separately. Both emit identical finding output,
+13/13 completed choices, 858 probes, 869 total solves, and zero inconclusive,
+unsupported, unknown, no-solver, error, or final-UNSAT choice. Only elapsed
+solver time differs, as expected.
+
+## Validation status
+
+- All six policy-contract and all 17 explorer tests pass with
+  `solver-axeyum`.
+- `cargo check --features solver-z3,solver-axeyum --all-targets` passes.
+- `cargo doc --features solver-axeyum --no-deps` completes; its 23 warnings are
+  inherited broken/private-link and HTML-tag warnings outside this module.
+- The complete `cargo test --features solver-axeyum --no-fail-fast` run passes
+  977/979 library tests, every integration test, and doctests. The two failures
+  are existing WinAPI prototype-rendering assertions and reproduce unchanged on
+  untouched base `e98c090`.
+- The new module passes a direct `rustfmt --check`, and a filtered strict Clippy
+  run reports no diagnostic in `concretization.rs` or the changed explorer
+  seam. Repository-wide format and `-D warnings` gates remain red on the
+  historical base because of unrelated pre-existing drift; A0 does not rewrite
+  those files merely to create a green-looking branch.
 
 ## What A0 does not claim
 
