@@ -148,7 +148,7 @@ pub enum Severity {
 /// sink whose address touches no marked symbol is *not* a controlled primitive.
 #[derive(Debug, Clone, Default)]
 pub struct TaintSpec {
-    labels: BTreeMap<u32, String>,
+    labels: BTreeMap<u32, BTreeSet<String>>,
 }
 
 impl TaintSpec {
@@ -157,13 +157,22 @@ impl TaintSpec {
     }
 
     /// Mark symbol `sym_id` as attacker-controlled input named `label`.
+    ///
+    /// A value derived from more than one attacker source retains every source;
+    /// adding a label never overwrites provenance already attached to the symbol.
     pub fn mark(&mut self, sym_id: u32, label: impl Into<String>) {
-        self.labels.insert(sym_id, label.into());
+        self.labels.entry(sym_id).or_default().insert(label.into());
     }
 
-    /// The label for a symbol, if it is attacker-controlled.
+    /// The first stable label for a symbol, if it is attacker-controlled.
+    ///
+    /// Use sink provenance rather than this compatibility accessor when every
+    /// source matters; symbols may carry multiple labels.
     pub fn label(&self, sym_id: u32) -> Option<&str> {
-        self.labels.get(&sym_id).map(String::as_str)
+        self.labels
+            .get(&sym_id)
+            .and_then(|labels| labels.first())
+            .map(String::as_str)
     }
 
     /// The distinct attacker-input labels an expression's free symbols carry.
@@ -171,7 +180,9 @@ impl TaintSpec {
         let mut syms = BTreeMap::new();
         pool.collect_syms(root, &mut syms);
         syms.keys()
-            .filter_map(|id| self.label(*id).map(str::to_string))
+            .filter_map(|id| self.labels.get(id))
+            .flatten()
+            .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -1938,7 +1949,8 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
     match op {
         Op::Load { dst, addr } => {
             let av = st.machine.eval_addr(addr);
-            let addr_tainted = !st.taint.provenance_of(&st.machine.dom.pool, av).is_empty();
+            let address_provenance = st.taint.provenance_of(&st.machine.dom.pool, av);
+            let addr_tainted = !address_provenance.is_empty();
             record_access(st, va, av, false, sinks);
             let a = concretize_addr(st, av)?;
             // Taint-through-memory: a load from an attacker-controlled pointer into
@@ -1953,7 +1965,9 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
                 let w = Width::from_bytes(addr.size as u16);
                 let fresh = st.machine.dom.fresh(w);
                 if let Expr::Sym { id, .. } = *st.machine.dom.pool.get(fresh) {
-                    st.taint.mark(id, "*attacker");
+                    for source in &address_provenance {
+                        st.taint.mark(id, format!("*{source}"));
+                    }
                 }
                 st.machine
                     .mem
@@ -2097,6 +2111,55 @@ mod tests {
             matches!(result, SolveResult::Sat(_)),
             "symbolic-address store should be concretized, not halt the path; got {:?}",
             result
+        );
+    }
+
+    #[test]
+    fn taint_through_uninitialized_memory_preserves_every_address_source() {
+        use crate::ir::types::MemOp;
+
+        let mut machine = Machine::new(Symbolic::new());
+        let base = machine.dom.fresh(Width::W64);
+        let index = machine.dom.fresh(Width::W64);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rdi"), base);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rsi"), index);
+
+        let mut taint = TaintSpec::new();
+        let Expr::Sym { id: base_id, .. } = *machine.dom.pool.get(base) else {
+            panic!("fresh base must be a symbol");
+        };
+        let Expr::Sym { id: index_id, .. } = *machine.dom.pool.get(index) else {
+            panic!("fresh index must be a symbol");
+        };
+        taint.mark(base_id, "Arg0");
+        taint.mark(index_id, "SystemBuffer");
+
+        let mut state = State::root(machine, 0x1000, taint);
+        let op = Op::Load {
+            dst: VReg::phys("rax"),
+            addr: MemOp::plain(
+                Some(VReg::phys("rdi")),
+                Some(VReg::phys("rsi")),
+                1,
+                0,
+                8,
+            ),
+        };
+        let mut sinks = Vec::new();
+        assert_eq!(symbolic_mem_op(&mut state, &op, 0x1000, &mut sinks), Some(()));
+
+        let loaded = state
+            .machine
+            .regs
+            .read(&mut state.machine.dom, &VReg::phys("rax"));
+        assert_eq!(
+            state.taint.provenance_of(&state.machine.dom.pool, loaded),
+            vec!["*Arg0".to_string(), "*SystemBuffer".to_string()],
+            "taint-through-memory must not launder generic ArgN provenance into a high-confidence attacker label",
         );
     }
 
