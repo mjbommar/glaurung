@@ -11,6 +11,7 @@
 //! layer (SMT-LIB pipe / optional native Z3·Bitwuzla) and state forking /
 //! exploration land in subsequent Phase-4/Phase-5 increments.
 
+pub mod concretization;
 pub mod explore;
 pub mod expr;
 pub mod ioctl;
@@ -21,6 +22,12 @@ pub mod ordered_trace;
 pub mod solver;
 pub mod symdomain;
 
+pub use concretization::{
+    BuiltinConcretizationPolicy, CONCRETIZATION_POLICY_ENV, ConcretizationChoice,
+    ConcretizationConfigError, ConcretizationPolicy, ConcretizationRequest, ConcretizationSite,
+    GREATEST_UNSIGNED_POLICY_ID, LEAST_UNSIGNED_POLICY_ID, LEGACY_CANONICAL_MODEL_CHOICE_ENV,
+    UnsignedExtremum, active_concretization_policy, resolve_concretization_policy,
+};
 pub use explore::{
     ApiSummary, CallModel, CanonicalModelChoiceStats, Severity, Sink, SinkKind, TaintSpec,
     canonical_model_choice_stats, find_input_reaching, find_sinks, find_sinks_stateful,
