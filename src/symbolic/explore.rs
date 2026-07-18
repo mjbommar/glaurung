@@ -38,6 +38,7 @@ const MIN_UNSIGNED_MODEL_CHOICE_POLICY: &str = "glaurung-min-unsigned-v1";
 
 static CANONICAL_MODEL_CHOICE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_COMPLETED: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_INFEASIBLE: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_PROBES: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_INCONCLUSIVE: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_UNSUPPORTED_WIDTH: AtomicU64 = AtomicU64::new(0);
@@ -55,6 +56,8 @@ pub struct CanonicalModelChoiceStats {
     pub attempts: u64,
     /// Attempts that produced and rechecked a minimum.
     pub completed: u64,
+    /// Attempts made on a path that was already infeasible.
+    pub infeasible: u64,
     /// Temporary solver checks issued by the minimizer.
     pub probes: u64,
     /// Attempts that failed closed because no checked minimum was available.
@@ -85,6 +88,7 @@ pub fn canonical_model_choice_stats() -> CanonicalModelChoiceStats {
         },
         attempts: CANONICAL_MODEL_CHOICE_ATTEMPTS.load(Ordering::Relaxed),
         completed: CANONICAL_MODEL_CHOICE_COMPLETED.load(Ordering::Relaxed),
+        infeasible: CANONICAL_MODEL_CHOICE_INFEASIBLE.load(Ordering::Relaxed),
         probes: CANONICAL_MODEL_CHOICE_PROBES.load(Ordering::Relaxed),
         inconclusive: CANONICAL_MODEL_CHOICE_INCONCLUSIVE.load(Ordering::Relaxed),
         unsupported_width: CANONICAL_MODEL_CHOICE_UNSUPPORTED_WIDTH.load(Ordering::Relaxed),
@@ -682,6 +686,30 @@ fn minimize_unsigned_value(
         CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
         CANONICAL_MODEL_CHOICE_UNSUPPORTED_WIDTH.fetch_add(1, Ordering::Relaxed);
         return None;
+    }
+
+    CANONICAL_MODEL_CHOICE_PROBES.fetch_add(1, Ordering::Relaxed);
+    match solve_traced(st, "canonical-model-choice-feasibility", location) {
+        SolveResult::Sat(_) => {}
+        SolveResult::Unsat => {
+            CANONICAL_MODEL_CHOICE_INFEASIBLE.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        SolveResult::Unknown => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        SolveResult::NoSolver => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_NO_SOLVER.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        SolveResult::Error(_) => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_ERROR.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
     }
 
     let mut low = 0u128;
@@ -2041,8 +2069,7 @@ mod tests {
         );
         assert_eq!(state.constraints, constraints_before);
         let after = canonical_model_choice_stats();
-        assert!(after.inconclusive > before.inconclusive);
-        assert!(after.final_unsat > before.final_unsat);
+        assert!(after.infeasible > before.infeasible);
     }
 
     #[test]

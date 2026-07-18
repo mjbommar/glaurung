@@ -401,10 +401,11 @@ fn main() {
     eprintln!("[by-kind] {:?}", by_kind);
     let canonical = canonical_model_choice_stats();
     eprintln!(
-        "[canonical-model-choice] policy={} attempts={} completed={} probes={} inconclusive={} unsupported_width={} unknown={} no_solver={} error={} final_unsat={}",
+        "[canonical-model-choice] policy={} attempts={} completed={} infeasible={} probes={} inconclusive={} unsupported_width={} unknown={} no_solver={} error={} final_unsat={}",
         canonical.policy,
         canonical.attempts,
         canonical.completed,
+        canonical.infeasible,
         canonical.probes,
         canonical.inconclusive,
         canonical.unsupported_width,
