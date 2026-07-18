@@ -33,8 +33,8 @@ pub use ioctl::{
     seed_tainted_args, IrpSeed,
 };
 pub use solver::{
-    reset_total_solver_stats, set_solver_budget, set_time_budget, solve, solver_budget,
-    solver_meter, time_budget, total_solver_stats, Model, SolveResult, Solver,
+    check_timeout_ms, reset_total_solver_stats, set_solver_budget, set_time_budget, solve,
+    solver_budget, solver_meter, time_budget, total_solver_stats, Model, SolveResult, Solver,
     DEFAULT_SOLVER_BUDGET,
 };
 pub use symdomain::Symbolic;

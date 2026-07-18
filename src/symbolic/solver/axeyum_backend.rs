@@ -37,13 +37,9 @@ use sha2::{Digest, Sha256};
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    pipe, Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, Solver,
-    WarmAssertionPrefix, WarmDeltaContext,
+    Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, Solver,
+    WarmAssertionPrefix, WarmDeltaContext, check_timeout, pipe,
 };
-
-/// Per-solve timeout, matching the z3 backend's 250 ms budget so coverage
-/// and metering behave the same regardless of which backend is compiled in.
-const SOLVE_TIMEOUT: Duration = Duration::from_millis(250);
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 const CNF_SNAPSHOT_DIR_ENV: &str = "GLAURUNG_AXEYUM_CNF_SNAPSHOT_DIR";
 pub(crate) const WARM_REUSE_ENV: &str = "GLAURUNG_AXEYUM_WARM_REUSE";
@@ -328,7 +324,7 @@ fn config() -> SolverConfig {
     let internal_and_flattening = std::env::var(INTERNAL_AND_FLATTENING_ENV)
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on"));
     SolverConfig::new()
-        .with_timeout(SOLVE_TIMEOUT)
+        .with_timeout(check_timeout())
         .with_incremental_positive_and_flattening(internal_and_flattening)
 }
 
@@ -577,7 +573,7 @@ impl AxeyumSolver {
             sequence: None,
             query_hash,
             word_policy: "raw",
-            timeout_ms: u64::try_from(SOLVE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+            timeout_ms: u64::try_from(check_timeout().as_millis()).unwrap_or(u64::MAX),
             outcome: "error",
             complete: false,
             assertion_count,

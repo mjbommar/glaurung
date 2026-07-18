@@ -78,7 +78,7 @@ pub trait IncrementalSolver {
 }
 
 use std::cell::{Cell, RefCell};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 /// Default per-function solver budget: `(max_solves, max_timeouts)`. The explorer
@@ -87,6 +87,41 @@ use std::time::Duration;
 /// individual solves) does not. The timeout count is the obfuscation signal: a
 /// function whose formulas keep timing out is abandoned cheaply.
 pub const DEFAULT_SOLVER_BUDGET: (u64, u64) = (6000, 24);
+/// Default per-check solver wall used by every in-process backend.
+pub const DEFAULT_CHECK_TIMEOUT_MS: u64 = 250;
+const MAX_CHECK_TIMEOUT_MS: u64 = 60_000;
+const CHECK_TIMEOUT_ENV: &str = "GLAURUNG_CHECK_TIMEOUT_MS";
+static CHECK_TIMEOUT: OnceLock<Duration> = OnceLock::new();
+
+fn parse_check_timeout_ms(value: Option<&str>) -> Result<u64, String> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_CHECK_TIMEOUT_MS);
+    };
+    let milliseconds = value.parse::<u64>().map_err(|_| {
+        format!("{CHECK_TIMEOUT_ENV} must be an integer from 1 to {MAX_CHECK_TIMEOUT_MS}")
+    })?;
+    if !(1..=MAX_CHECK_TIMEOUT_MS).contains(&milliseconds) {
+        return Err(format!(
+            "{CHECK_TIMEOUT_ENV} must be an integer from 1 to {MAX_CHECK_TIMEOUT_MS}"
+        ));
+    }
+    Ok(milliseconds)
+}
+
+/// Effective process-wide per-check timeout shared by native solver backends.
+pub fn check_timeout() -> Duration {
+    *CHECK_TIMEOUT.get_or_init(|| {
+        let configured = std::env::var(CHECK_TIMEOUT_ENV).ok();
+        let milliseconds =
+            parse_check_timeout_ms(configured.as_deref()).unwrap_or_else(|error| panic!("{error}"));
+        Duration::from_millis(milliseconds)
+    })
+}
+
+/// Effective process-wide per-check timeout in milliseconds.
+pub fn check_timeout_ms() -> u64 {
+    u64::try_from(check_timeout().as_millis()).unwrap_or(u64::MAX)
+}
 
 thread_local! {
     /// Per-thread solver-call meter, reset before each function run.
@@ -1042,6 +1077,24 @@ pub(crate) fn solve_for_path_delta(
     });
     ACTIVE_WARM_PATH.with(|active| active.set(previous_path));
     (result, synced)
+}
+
+#[cfg(test)]
+mod timeout_configuration_tests {
+    use super::{DEFAULT_CHECK_TIMEOUT_MS, parse_check_timeout_ms};
+
+    #[test]
+    fn check_timeout_defaults_and_accepts_a_bounded_override() {
+        assert_eq!(parse_check_timeout_ms(None), Ok(DEFAULT_CHECK_TIMEOUT_MS));
+        assert_eq!(parse_check_timeout_ms(Some("1000")), Ok(1000));
+    }
+
+    #[test]
+    fn check_timeout_rejects_invalid_or_unbounded_overrides() {
+        for value in ["", "zero", "0", "60001"] {
+            assert!(parse_check_timeout_ms(Some(value)).is_err(), "{value}");
+        }
+    }
 }
 
 #[cfg(all(test, feature = "solver-z3"))]

@@ -15,7 +15,7 @@ use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
     Assert, IncrementalSolver, Model, SolveResult, Solver, WarmAssertionPrefix, WarmDeltaContext,
-    Z3ExecutionClass,
+    Z3ExecutionClass, check_timeout,
 };
 
 thread_local! {
@@ -30,11 +30,11 @@ thread_local! {
     static SERIAL_OWNER_LEASES: RefCell<BTreeMap<u64, u64>> = const { RefCell::new(BTreeMap::new()) };
 }
 
-const CHECK_TIMEOUT_MS: u32 = 250;
-
 fn configure_solver(ctx: &Context, solver: &Z3Native<'_>) {
     let mut params = z3::Params::new(ctx);
-    params.set_u32("timeout", CHECK_TIMEOUT_MS);
+    let timeout_ms =
+        u32::try_from(check_timeout().as_millis()).expect("validated check timeout fits in u32");
+    params.set_u32("timeout", timeout_ms);
     solver.set_params(&params);
 }
 

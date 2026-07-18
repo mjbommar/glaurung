@@ -19,7 +19,7 @@ use glaurung::core::binary::Arch;
 use glaurung::ir::lift_function::lift_function_from_bytes;
 use glaurung::ir::types::{CallTarget, LlirFunction, Op, Value};
 use glaurung::symbolic::{
-    ApiSummary, SinkKind, canonical_model_choice_stats, driver_api_model,
+    ApiSummary, SinkKind, canonical_model_choice_stats, check_timeout_ms, driver_api_model,
     find_function_sinks_with_apis, find_function_stateful_sinks, find_ioctl_sinks_with_apis,
     set_call_site_summaries, set_solver_budget, set_time_budget,
 };
@@ -412,7 +412,7 @@ fn main() {
     // solver from lifting/CFG), for the z3-vs-axeyum comparison.
     let (n_solves, solve_ns) = glaurung::symbolic::total_solver_stats();
     eprintln!(
-        "[solver] backend={} solves={} solver_time={:.1}ms avg={:.1}us/solve",
+        "[solver] backend={} solves={} solver_time={:.1}ms avg={:.1}us/solve check_timeout_ms={}",
         if cfg!(feature = "solver-z3") {
             "z3"
         } else if cfg!(feature = "solver-axeyum") {
@@ -427,6 +427,7 @@ fn main() {
         } else {
             0.0
         },
+        check_timeout_ms(),
     );
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     {
