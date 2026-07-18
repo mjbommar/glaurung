@@ -59,6 +59,53 @@ fn is_attacker_real(taint: &[String]) -> bool {
     })
 }
 
+fn format_finding_output(finding: &str, high_confidence: bool, annotate: bool) -> String {
+    if !annotate {
+        return finding.to_string();
+    }
+    format!(
+        "{finding}\tconfidence={}",
+        if high_confidence {
+            "high"
+        } else {
+            "diagnostic"
+        }
+    )
+}
+
+#[cfg(test)]
+mod confidence_tests {
+    use super::{format_finding_output, is_attacker_real};
+
+    #[test]
+    fn generic_argument_provenance_stays_diagnostic_at_every_dereference_depth() {
+        for taint in ["Arg0", "*Arg1", "***Arg12"] {
+            assert!(
+                !is_attacker_real(&[taint.to_string()]),
+                "{taint} must remain generic parameter provenance"
+            );
+        }
+        assert!(is_attacker_real(&[
+            "**Arg0".to_string(),
+            "*SystemBuffer".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn confidence_annotation_is_opt_in_and_preserves_finding_bytes() {
+        let finding = "double-fetch va=0x1234 taint=[\"**Arg0\"]";
+        assert_eq!(format_finding_output(finding, true, false), finding);
+        assert_eq!(
+            format_finding_output(finding, true, true),
+            format!("{finding}\tconfidence=high")
+        );
+        assert_eq!(
+            format_finding_output(finding, false, true),
+            format!("{finding}\tconfidence=diagnostic")
+        );
+    }
+}
+
 /// Write-class primitives -- a write-what-where / UAF / overflow is worth
 /// surfacing even when only ArgN-tainted, because the engine's intra-procedural
 /// model loses IRP-content taint across the dispatcher->handler call. Reads and
@@ -263,6 +310,7 @@ fn main() {
 
     // 3) Symbolic sinks, only over dispatch-reachable functions.
     let show_all = std::env::var_os("IOCTLANCE_ALL").is_some();
+    let annotate_confidence = std::env::var_os("IOCTLANCE_ANNOTATE_CONFIDENCE").is_some();
     let t = std::time::Instant::now();
     // Global per-driver wall-clock budget. A batch analysis tool must never hang on a
     // single driver: a KMDF driver with thousands of address-taken callbacks can seed a
@@ -283,8 +331,9 @@ fn main() {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|limit| *limit > 0);
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines: Vec<(String, bool)> = Vec::new();
     let mut raw = 0usize;
+    let mut high_confidence = 0usize;
     let mut suppressed = 0usize;
     let mut analyzed = 0usize;
     let mut deadline_hit = false;
@@ -353,10 +402,17 @@ fn main() {
             } else {
                 "callee"
             };
-            // Precision gate: keep genuine attacker-tainted sinks and write-class
-            // primitives in handlers; drop bare ArgN read/null-deref noise.
-            if !show_all && !is_high_confidence(s.kind, &s.tainted_by, role) {
+            // Classify every raw row even when IOCTLANCE_ALL asks us to emit the
+            // diagnostic population. This keeps the footer honest and lets the
+            // authority harness partition one execution without re-running an
+            // expensive model-selection policy.
+            let finding_is_high_confidence = is_high_confidence(s.kind, &s.tainted_by, role);
+            if finding_is_high_confidence {
+                high_confidence += 1;
+            } else {
                 suppressed += 1;
+            }
+            if !show_all && !finding_is_high_confidence {
                 continue;
             }
             *by_kind.entry(kind_str(s.kind)).or_insert(0) += 1;
@@ -368,17 +424,20 @@ fn main() {
                     glaurung::symbolic::Severity::Constrained => 1,
                 },
             );
-            lines.push(format!(
-                "{}{}\t  {:>16}  va={:#010x}  [{}] fn={} @ {:#x}  sev={:?}  taint={:?}",
-                rank.0,
-                rank.1,
-                kind_str(s.kind),
-                s.va,
-                role,
-                f.name,
-                va,
-                s.severity,
-                s.tainted_by,
+            lines.push((
+                format!(
+                    "{}{}\t  {:>16}  va={:#010x}  [{}] fn={} @ {:#x}  sev={:?}  taint={:?}",
+                    rank.0,
+                    rank.1,
+                    kind_str(s.kind),
+                    s.va,
+                    role,
+                    f.name,
+                    va,
+                    s.severity,
+                    s.tainted_by,
+                ),
+                finding_is_high_confidence,
             ));
         }
     }
@@ -386,7 +445,7 @@ fn main() {
         "[symbolic] {:?}  raw={} high-confidence={} suppressed={} (ArgN pointer-deref noise)  analyzed={}/{}{}",
         t.elapsed(),
         raw,
-        lines.len(),
+        high_confidence,
         suppressed,
         analyzed,
         reachable.len(),
@@ -398,6 +457,12 @@ fn main() {
             ""
         },
     );
+    if annotate_confidence {
+        eprintln!(
+            "[finding-confidence] schema=glaurung-ioctlance-confidence-v1 high={} diagnostic={}",
+            high_confidence, suppressed
+        );
+    }
     eprintln!("[by-kind] {:?}", by_kind);
     let canonical = canonical_model_choice_stats();
     eprintln!(
@@ -552,9 +617,13 @@ fn main() {
             }
         }
     }
-    lines.sort();
-    for l in &lines {
-        println!("{}", l.splitn(2, '\t').nth(1).unwrap_or(l));
+    lines.sort_by(|left, right| left.0.cmp(&right.0));
+    for (line, finding_is_high_confidence) in &lines {
+        let finding = line.split_once('\t').map_or(line.as_str(), |(_, row)| row);
+        println!(
+            "{}",
+            format_finding_output(finding, *finding_is_high_confidence, annotate_confidence)
+        );
     }
     if let Some(trace) = ordered_trace {
         let published = trace
