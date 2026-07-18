@@ -35,6 +35,7 @@ use std::time::Instant;
 const CANONICAL_MODEL_CHOICE_ENV: &str = "GLAURUNG_CANONICAL_MODEL_CHOICE";
 const ANY_MODEL_CHOICE_POLICY: &str = "glaurung-any-model-v1";
 const MIN_UNSIGNED_MODEL_CHOICE_POLICY: &str = "glaurung-min-unsigned-v1";
+const MAX_UNSIGNED_MODEL_CHOICE_POLICY: &str = "glaurung-max-unsigned-v1";
 
 static CANONICAL_MODEL_CHOICE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_COMPLETED: AtomicU64 = AtomicU64::new(0);
@@ -46,6 +47,59 @@ static CANONICAL_MODEL_CHOICE_UNKNOWN: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_NO_SOLVER: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_ERROR: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_FINAL_UNSAT: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CanonicalModelChoicePolicy {
+    Any,
+    MinimumUnsigned,
+    MaximumUnsigned,
+}
+
+impl CanonicalModelChoicePolicy {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Any => ANY_MODEL_CHOICE_POLICY,
+            Self::MinimumUnsigned => MIN_UNSIGNED_MODEL_CHOICE_POLICY,
+            Self::MaximumUnsigned => MAX_UNSIGNED_MODEL_CHOICE_POLICY,
+        }
+    }
+
+    fn extremum(self) -> Option<UnsignedExtremum> {
+        match self {
+            Self::Any => None,
+            Self::MinimumUnsigned => Some(UnsignedExtremum::Minimum),
+            Self::MaximumUnsigned => Some(UnsignedExtremum::Maximum),
+        }
+    }
+}
+
+fn canonical_model_choice_policy_from_value(
+    value: Option<&std::ffi::OsStr>,
+) -> CanonicalModelChoicePolicy {
+    let Some(value) = value else {
+        return CanonicalModelChoicePolicy::Any;
+    };
+    let value = value
+        .to_str()
+        .unwrap_or_else(|| panic!("invalid non-Unicode {CANONICAL_MODEL_CHOICE_ENV} value"));
+    match value {
+        "" | "1" | "true" | "min-unsigned" | MIN_UNSIGNED_MODEL_CHOICE_POLICY => {
+            CanonicalModelChoicePolicy::MinimumUnsigned
+        }
+        "max-unsigned" | MAX_UNSIGNED_MODEL_CHOICE_POLICY => {
+            CanonicalModelChoicePolicy::MaximumUnsigned
+        }
+        other => panic!(
+            "invalid {CANONICAL_MODEL_CHOICE_ENV}={other:?}; expected min-unsigned or max-unsigned"
+        ),
+    }
+}
+
+fn canonical_model_choice_policy() -> CanonicalModelChoicePolicy {
+    canonical_model_choice_policy_from_value(
+        std::env::var_os(CANONICAL_MODEL_CHOICE_ENV).as_deref(),
+    )
+}
 
 /// Process-wide accounting for backend-independent model choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,18 +128,10 @@ pub struct CanonicalModelChoiceStats {
     pub final_unsat: u64,
 }
 
-fn canonical_model_choice_enabled() -> bool {
-    std::env::var_os(CANONICAL_MODEL_CHOICE_ENV).is_some()
-}
-
 /// Return the active canonical-model policy and its process-wide counters.
 pub fn canonical_model_choice_stats() -> CanonicalModelChoiceStats {
     CanonicalModelChoiceStats {
-        policy: if canonical_model_choice_enabled() {
-            MIN_UNSIGNED_MODEL_CHOICE_POLICY
-        } else {
-            ANY_MODEL_CHOICE_POLICY
-        },
+        policy: canonical_model_choice_policy().name(),
         attempts: CANONICAL_MODEL_CHOICE_ATTEMPTS.load(Ordering::Relaxed),
         completed: CANONICAL_MODEL_CHOICE_COMPLETED.load(Ordering::Relaxed),
         infeasible: CANONICAL_MODEL_CHOICE_INFEASIBLE.load(Ordering::Relaxed),
@@ -666,18 +712,25 @@ fn solve_probe_traced(
     result
 }
 
-/// Select the least unsigned value of `value` under the current path condition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnsignedExtremum {
+    Minimum,
+    Maximum,
+}
+
+/// Select an unsigned extremum of `value` under the current path condition.
 ///
 /// Every bound is a temporary assertion, so the search cannot mutate the path.
 /// The final equality probe both rechecks the selected value and leaves an
 /// immediately preceding SAT event for ordered model-choice tracing. Widths
 /// above 128 bits cannot be represented by this engine's concrete value type
 /// and therefore fail closed.
-fn minimize_unsigned_value(
+fn select_unsigned_extremum(
     st: &mut State,
     value: ExprId,
     purpose: &str,
     location: u64,
+    extremum: UnsignedExtremum,
 ) -> Option<u128> {
     CANONICAL_MODEL_CHOICE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
     let width = st.machine.dom.pool.width_of(value);
@@ -719,19 +772,36 @@ fn minimize_unsigned_value(
         (1u128 << bits) - 1
     };
     while low < high {
-        let midpoint = low + ((high - low) >> 1);
+        let distance = high - low;
+        let midpoint = match extremum {
+            UnsignedExtremum::Minimum => low + (distance >> 1),
+            UnsignedExtremum::Maximum => low + (distance >> 1) + (distance & 1),
+        };
         let bound = st.machine.dom.constant(width, midpoint);
-        let at_most = st.machine.dom.cmp(CmpOp::Ule, &value, &bound, width);
+        let probe = match extremum {
+            UnsignedExtremum::Minimum => {
+                st.machine.dom.cmp(CmpOp::Ule, &value, &bound, width)
+            }
+            UnsignedExtremum::Maximum => {
+                st.machine.dom.cmp(CmpOp::Ule, &bound, &value, width)
+            }
+        };
         CANONICAL_MODEL_CHOICE_PROBES.fetch_add(1, Ordering::Relaxed);
         match solve_probe_traced(
             st,
-            (at_most, true),
+            (probe, true),
             purpose,
             "canonical-model-choice-bound",
             location,
         ) {
-            SolveResult::Sat(_) => high = midpoint,
-            SolveResult::Unsat => low = midpoint + 1,
+            SolveResult::Sat(_) => match extremum {
+                UnsignedExtremum::Minimum => high = midpoint,
+                UnsignedExtremum::Maximum => low = midpoint,
+            },
+            SolveResult::Unsat => match extremum {
+                UnsignedExtremum::Minimum => low = midpoint + 1,
+                UnsignedExtremum::Maximum => high = midpoint - 1,
+            },
             SolveResult::Unknown => {
                 CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
                 CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
@@ -785,6 +855,38 @@ fn minimize_unsigned_value(
             None
         }
     }
+}
+
+#[cfg(test)]
+fn minimize_unsigned_value(
+    st: &mut State,
+    value: ExprId,
+    purpose: &str,
+    location: u64,
+) -> Option<u128> {
+    select_unsigned_extremum(
+        st,
+        value,
+        purpose,
+        location,
+        UnsignedExtremum::Minimum,
+    )
+}
+
+#[cfg(test)]
+fn maximize_unsigned_value(
+    st: &mut State,
+    value: ExprId,
+    purpose: &str,
+    location: u64,
+) -> Option<u128> {
+    select_unsigned_extremum(
+        st,
+        value,
+        purpose,
+        location,
+        UnsignedExtremum::Maximum,
+    )
 }
 
 /// Search for an input that reaches `target`, starting from `lf`'s entry with the
@@ -1252,11 +1354,16 @@ fn process_block(
 /// later refinement). Returns `None` when no satisfying model is available; in
 /// that case the caller must stop the path rather than inventing a value.
 fn concretize_addr(st: &mut State, addr_val: ExprId) -> Option<u64> {
-    let (a, policy) = if canonical_model_choice_enabled() {
-        (
-            minimize_unsigned_value(st, addr_val, "canonical-address-minimize", st.pc)?,
-            MIN_UNSIGNED_MODEL_CHOICE_POLICY,
-        )
+    let model_choice = canonical_model_choice_policy();
+    let (a, policy) = if let Some(extremum) = model_choice.extremum() {
+        let selected = select_unsigned_extremum(
+            st,
+            addr_val,
+            "canonical-address-extremum",
+            st.pc,
+            extremum,
+        )?;
+        (selected, model_choice.name())
     } else {
         let model = match solve_traced(st, "address-concretization", st.pc) {
             SolveResult::Sat(m) => m.values,
@@ -1346,11 +1453,16 @@ fn read_arg(st: &mut State, n: u8) -> Option<ExprId> {
 /// Returns `None` for UNSAT, unknown, unavailable, or failed solver results;
 /// none of those outcomes authorizes a model-driven exploration choice.
 fn eval_concrete(st: &mut State, val: ExprId) -> Option<u64> {
-    let (value, policy) = if canonical_model_choice_enabled() {
-        (
-            minimize_unsigned_value(st, val, "canonical-representative-minimize", st.pc)?,
-            MIN_UNSIGNED_MODEL_CHOICE_POLICY,
-        )
+    let model_choice = canonical_model_choice_policy();
+    let (value, policy) = if let Some(extremum) = model_choice.extremum() {
+        let selected = select_unsigned_extremum(
+            st,
+            val,
+            "canonical-representative-extremum",
+            st.pc,
+            extremum,
+        )?;
+        (selected, model_choice.name())
     } else {
         let model = match solve_traced(st, "concrete-evaluation", st.pc) {
             SolveResult::Sat(m) => m.values,
@@ -2048,6 +2160,55 @@ mod tests {
             Some(5)
         );
         assert_eq!(state.constraints, constraints_before);
+    }
+
+    #[test]
+    fn unsigned_model_choice_maximizes_the_expression_without_persisting_probes() {
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W8);
+        let five = machine.dom.constant(Width::W8, 5);
+        let ten = machine.dom.constant(Width::W8, 10);
+        let at_least_five = machine.dom.cmp(CmpOp::Ule, &five, &value, Width::W8);
+        let at_most_ten = machine.dom.cmp(CmpOp::Ule, &value, &ten, Width::W8);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        state.assert((at_least_five, true), "test", state.pc);
+        state.assert((at_most_ten, true), "test", state.pc);
+        let constraints_before = state.constraints.clone();
+        let location = state.pc;
+
+        assert_eq!(
+            maximize_unsigned_value(&mut state, value, "test-maximize", location),
+            Some(10)
+        );
+        assert_eq!(state.constraints, constraints_before);
+    }
+
+    #[test]
+    fn canonical_model_choice_policy_parser_preserves_legacy_min_and_names_max() {
+        use std::ffi::OsStr;
+
+        assert_eq!(
+            canonical_model_choice_policy_from_value(None),
+            CanonicalModelChoicePolicy::Any
+        );
+        for value in ["1", "min-unsigned", "glaurung-min-unsigned-v1"] {
+            assert_eq!(
+                canonical_model_choice_policy_from_value(Some(OsStr::new(value))),
+                CanonicalModelChoicePolicy::MinimumUnsigned
+            );
+        }
+        for value in ["max-unsigned", "glaurung-max-unsigned-v1"] {
+            assert_eq!(
+                canonical_model_choice_policy_from_value(Some(OsStr::new(value))),
+                CanonicalModelChoicePolicy::MaximumUnsigned
+            );
+        }
+        assert!(
+            std::panic::catch_unwind(|| canonical_model_choice_policy_from_value(Some(
+                OsStr::new("not-a-policy")
+            )))
+            .is_err()
+        );
     }
 
     #[test]
