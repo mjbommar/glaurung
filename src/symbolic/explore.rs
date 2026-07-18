@@ -36,6 +36,8 @@ const CANONICAL_MODEL_CHOICE_ENV: &str = "GLAURUNG_CANONICAL_MODEL_CHOICE";
 const ANY_MODEL_CHOICE_POLICY: &str = "glaurung-any-model-v1";
 const MIN_UNSIGNED_MODEL_CHOICE_POLICY: &str = "glaurung-min-unsigned-v1";
 const MAX_UNSIGNED_MODEL_CHOICE_POLICY: &str = "glaurung-max-unsigned-v1";
+const SITE_HASH_ZERO_MODEL_CHOICE_POLICY: &str = "glaurung-site-hash-0-v1";
+const SITE_HASH_ONE_MODEL_CHOICE_POLICY: &str = "glaurung-site-hash-1-v1";
 
 static CANONICAL_MODEL_CHOICE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_COMPLETED: AtomicU64 = AtomicU64::new(0);
@@ -53,6 +55,8 @@ enum CanonicalModelChoicePolicy {
     Any,
     MinimumUnsigned,
     MaximumUnsigned,
+    SiteHashZero,
+    SiteHashOne,
 }
 
 impl CanonicalModelChoicePolicy {
@@ -61,15 +65,43 @@ impl CanonicalModelChoicePolicy {
             Self::Any => ANY_MODEL_CHOICE_POLICY,
             Self::MinimumUnsigned => MIN_UNSIGNED_MODEL_CHOICE_POLICY,
             Self::MaximumUnsigned => MAX_UNSIGNED_MODEL_CHOICE_POLICY,
+            Self::SiteHashZero => SITE_HASH_ZERO_MODEL_CHOICE_POLICY,
+            Self::SiteHashOne => SITE_HASH_ONE_MODEL_CHOICE_POLICY,
         }
     }
 
-    fn extremum(self) -> Option<UnsignedExtremum> {
+    fn extremum(self, purpose: &str, location: u64) -> Option<UnsignedExtremum> {
         match self {
             Self::Any => None,
             Self::MinimumUnsigned => Some(UnsignedExtremum::Minimum),
             Self::MaximumUnsigned => Some(UnsignedExtremum::Maximum),
+            Self::SiteHashZero => Some(site_hash_extremum(purpose, location, false)),
+            Self::SiteHashOne => Some(site_hash_extremum(purpose, location, true)),
         }
+    }
+}
+
+/// Choose a stable mixed extremum from source-level choice-site identity.
+///
+/// The hash deliberately excludes expression IDs, solver models, and process
+/// order. The paired schedule flips every decision, so each site is minimized
+/// by one policy and maximized by the other. This does not enumerate all model
+/// combinations; it supplies two reproducible mixed corners beside all-min and
+/// all-max exploration.
+fn site_hash_extremum(purpose: &str, location: u64, complement: bool) -> UnsignedExtremum {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut hash = FNV_OFFSET;
+    for byte in purpose.bytes().chain(location.to_le_bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    let choose_maximum = ((hash >> 63) != 0) ^ complement;
+    if choose_maximum {
+        UnsignedExtremum::Maximum
+    } else {
+        UnsignedExtremum::Minimum
     }
 }
 
@@ -89,8 +121,14 @@ fn canonical_model_choice_policy_from_value(
         "max-unsigned" | MAX_UNSIGNED_MODEL_CHOICE_POLICY => {
             CanonicalModelChoicePolicy::MaximumUnsigned
         }
+        "site-hash-0" | SITE_HASH_ZERO_MODEL_CHOICE_POLICY => {
+            CanonicalModelChoicePolicy::SiteHashZero
+        }
+        "site-hash-1" | SITE_HASH_ONE_MODEL_CHOICE_POLICY => {
+            CanonicalModelChoicePolicy::SiteHashOne
+        }
         other => panic!(
-            "invalid {CANONICAL_MODEL_CHOICE_ENV}={other:?}; expected min-unsigned or max-unsigned"
+            "invalid {CANONICAL_MODEL_CHOICE_ENV}={other:?}; expected min-unsigned, max-unsigned, site-hash-0, or site-hash-1"
         ),
     }
 }
@@ -106,9 +144,9 @@ fn canonical_model_choice_policy() -> CanonicalModelChoicePolicy {
 pub struct CanonicalModelChoiceStats {
     /// Active model-selection policy.
     pub policy: &'static str,
-    /// Expressions for which unsigned minimization was requested.
+    /// Expressions for which an unsigned extremum was requested.
     pub attempts: u64,
-    /// Attempts that produced and rechecked a minimum.
+    /// Attempts that produced and rechecked an extremum.
     pub completed: u64,
     /// Attempts made on a path that was already infeasible.
     pub infeasible: u64,
@@ -1355,14 +1393,9 @@ fn process_block(
 /// that case the caller must stop the path rather than inventing a value.
 fn concretize_addr(st: &mut State, addr_val: ExprId) -> Option<u64> {
     let model_choice = canonical_model_choice_policy();
-    let (a, policy) = if let Some(extremum) = model_choice.extremum() {
-        let selected = select_unsigned_extremum(
-            st,
-            addr_val,
-            "canonical-address-extremum",
-            st.pc,
-            extremum,
-        )?;
+    let purpose = "canonical-address-extremum";
+    let (a, policy) = if let Some(extremum) = model_choice.extremum(purpose, st.pc) {
+        let selected = select_unsigned_extremum(st, addr_val, purpose, st.pc, extremum)?;
         (selected, model_choice.name())
     } else {
         let model = match solve_traced(st, "address-concretization", st.pc) {
@@ -1454,14 +1487,9 @@ fn read_arg(st: &mut State, n: u8) -> Option<ExprId> {
 /// none of those outcomes authorizes a model-driven exploration choice.
 fn eval_concrete(st: &mut State, val: ExprId) -> Option<u64> {
     let model_choice = canonical_model_choice_policy();
-    let (value, policy) = if let Some(extremum) = model_choice.extremum() {
-        let selected = select_unsigned_extremum(
-            st,
-            val,
-            "canonical-representative-extremum",
-            st.pc,
-            extremum,
-        )?;
+    let purpose = "canonical-representative-extremum";
+    let (value, policy) = if let Some(extremum) = model_choice.extremum(purpose, st.pc) {
+        let selected = select_unsigned_extremum(st, val, purpose, st.pc, extremum)?;
         (selected, model_choice.name())
     } else {
         let model = match solve_traced(st, "concrete-evaluation", st.pc) {
@@ -2203,12 +2231,57 @@ mod tests {
                 CanonicalModelChoicePolicy::MaximumUnsigned
             );
         }
+        for value in ["site-hash-0", "glaurung-site-hash-0-v1"] {
+            assert_eq!(
+                canonical_model_choice_policy_from_value(Some(OsStr::new(value))),
+                CanonicalModelChoicePolicy::SiteHashZero
+            );
+        }
+        for value in ["site-hash-1", "glaurung-site-hash-1-v1"] {
+            assert_eq!(
+                canonical_model_choice_policy_from_value(Some(OsStr::new(value))),
+                CanonicalModelChoicePolicy::SiteHashOne
+            );
+        }
         assert!(
             std::panic::catch_unwind(|| canonical_model_choice_policy_from_value(Some(
                 OsStr::new("not-a-policy")
             )))
             .is_err()
         );
+    }
+
+    #[test]
+    fn site_hash_model_choice_policies_are_stable_complementary_and_mixed() {
+        let sites = [
+            ("canonical-address-extremum", 0x1c0001a54),
+            ("canonical-address-extremum", 0x1c009bb90),
+            ("canonical-representative-extremum", 0x1c0002234),
+            ("canonical-representative-extremum", 0x1c007a7d0),
+        ];
+        let zero = sites.map(|(purpose, location)| {
+            CanonicalModelChoicePolicy::SiteHashZero
+                .extremum(purpose, location)
+                .expect("site-hash policy selects an extremum")
+        });
+        let one = sites.map(|(purpose, location)| {
+            CanonicalModelChoicePolicy::SiteHashOne
+                .extremum(purpose, location)
+                .expect("site-hash policy selects an extremum")
+        });
+
+        assert_eq!(
+            zero,
+            [
+                UnsignedExtremum::Maximum,
+                UnsignedExtremum::Maximum,
+                UnsignedExtremum::Minimum,
+                UnsignedExtremum::Minimum,
+            ]
+        );
+        for (zero, one) in zero.into_iter().zip(one) {
+            assert_ne!(zero, one);
+        }
     }
 
     #[test]
