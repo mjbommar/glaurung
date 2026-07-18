@@ -401,12 +401,17 @@ fn main() {
     eprintln!("[by-kind] {:?}", by_kind);
     let canonical = canonical_model_choice_stats();
     eprintln!(
-        "[canonical-model-choice] policy={} attempts={} completed={} probes={} inconclusive={}",
+        "[canonical-model-choice] policy={} attempts={} completed={} probes={} inconclusive={} unsupported_width={} unknown={} no_solver={} error={} final_unsat={}",
         canonical.policy,
         canonical.attempts,
         canonical.completed,
         canonical.probes,
         canonical.inconclusive,
+        canonical.unsupported_width,
+        canonical.unknown,
+        canonical.no_solver,
+        canonical.error,
+        canonical.final_unsat,
     );
     // Benchmark footer: solver-only cost across the whole run (isolates the
     // solver from lifting/CFG), for the z3-vs-axeyum comparison.

@@ -40,6 +40,11 @@ static CANONICAL_MODEL_CHOICE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_COMPLETED: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_PROBES: AtomicU64 = AtomicU64::new(0);
 static CANONICAL_MODEL_CHOICE_INCONCLUSIVE: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_UNSUPPORTED_WIDTH: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_UNKNOWN: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_NO_SOLVER: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_ERROR: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_FINAL_UNSAT: AtomicU64 = AtomicU64::new(0);
 
 /// Process-wide accounting for backend-independent model choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +59,16 @@ pub struct CanonicalModelChoiceStats {
     pub probes: u64,
     /// Attempts that failed closed because no checked minimum was available.
     pub inconclusive: u64,
+    /// Attempts whose expression exceeded the concrete-value representation.
+    pub unsupported_width: u64,
+    /// Attempts stopped by a solver `unknown` result.
+    pub unknown: u64,
+    /// Attempts stopped because no solver was available.
+    pub no_solver: u64,
+    /// Attempts stopped by a backend error.
+    pub error: u64,
+    /// Attempts whose final equality unexpectedly returned UNSAT.
+    pub final_unsat: u64,
 }
 
 fn canonical_model_choice_enabled() -> bool {
@@ -72,6 +87,11 @@ pub fn canonical_model_choice_stats() -> CanonicalModelChoiceStats {
         completed: CANONICAL_MODEL_CHOICE_COMPLETED.load(Ordering::Relaxed),
         probes: CANONICAL_MODEL_CHOICE_PROBES.load(Ordering::Relaxed),
         inconclusive: CANONICAL_MODEL_CHOICE_INCONCLUSIVE.load(Ordering::Relaxed),
+        unsupported_width: CANONICAL_MODEL_CHOICE_UNSUPPORTED_WIDTH.load(Ordering::Relaxed),
+        unknown: CANONICAL_MODEL_CHOICE_UNKNOWN.load(Ordering::Relaxed),
+        no_solver: CANONICAL_MODEL_CHOICE_NO_SOLVER.load(Ordering::Relaxed),
+        error: CANONICAL_MODEL_CHOICE_ERROR.load(Ordering::Relaxed),
+        final_unsat: CANONICAL_MODEL_CHOICE_FINAL_UNSAT.load(Ordering::Relaxed),
     }
 }
 
@@ -660,6 +680,7 @@ fn minimize_unsigned_value(
     let bits = width.bits();
     if bits == 0 || bits > 128 {
         CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+        CANONICAL_MODEL_CHOICE_UNSUPPORTED_WIDTH.fetch_add(1, Ordering::Relaxed);
         return None;
     }
 
@@ -683,8 +704,19 @@ fn minimize_unsigned_value(
         ) {
             SolveResult::Sat(_) => high = midpoint,
             SolveResult::Unsat => low = midpoint + 1,
-            SolveResult::Unknown | SolveResult::NoSolver | SolveResult::Error(_) => {
+            SolveResult::Unknown => {
                 CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+                CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            SolveResult::NoSolver => {
+                CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+                CANONICAL_MODEL_CHOICE_NO_SOLVER.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            SolveResult::Error(_) => {
+                CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+                CANONICAL_MODEL_CHOICE_ERROR.fetch_add(1, Ordering::Relaxed);
                 return None;
             }
         }
@@ -704,11 +736,24 @@ fn minimize_unsigned_value(
             CANONICAL_MODEL_CHOICE_COMPLETED.fetch_add(1, Ordering::Relaxed);
             Some(low)
         }
-        SolveResult::Unsat
-        | SolveResult::Unknown
-        | SolveResult::NoSolver
-        | SolveResult::Error(_) => {
+        SolveResult::Unsat => {
             CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_FINAL_UNSAT.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+        SolveResult::Unknown => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+        SolveResult::NoSolver => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_NO_SOLVER.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+        SolveResult::Error(_) => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_ERROR.fetch_add(1, Ordering::Relaxed);
             None
         }
     }
@@ -1979,6 +2024,7 @@ mod tests {
 
     #[test]
     fn unsigned_model_choice_fails_closed_on_an_infeasible_path() {
+        let before = canonical_model_choice_stats();
         let mut machine = Machine::new(Symbolic::new());
         let value = machine.dom.fresh(Width::W8);
         let zero = machine.dom.constant(Width::W8, 0);
@@ -1994,6 +2040,26 @@ mod tests {
             None
         );
         assert_eq!(state.constraints, constraints_before);
+        let after = canonical_model_choice_stats();
+        assert!(after.inconclusive > before.inconclusive);
+        assert!(after.final_unsat > before.final_unsat);
+    }
+
+    #[test]
+    fn unsigned_model_choice_fails_closed_above_the_concrete_value_width() {
+        let before = canonical_model_choice_stats();
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W256);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        let location = state.pc;
+
+        assert_eq!(
+            minimize_unsigned_value(&mut state, value, "test-minimize", location),
+            None
+        );
+        let after = canonical_model_choice_stats();
+        assert!(after.inconclusive > before.inconclusive);
+        assert!(after.unsupported_width > before.unsupported_width);
     }
 
     #[test]
