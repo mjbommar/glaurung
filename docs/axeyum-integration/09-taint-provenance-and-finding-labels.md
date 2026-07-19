@@ -1,7 +1,7 @@
 # 09 - Taint provenance and finding labels
 
-Status: accepted correction on `axeyum-concretization-policy-a0` at `845239f`
-(2026-07-18).
+Status: accepted correction and machine-readable confidence partition on
+`axeyum-concretization-policy-a0` at `931d8a8` (2026-07-18).
 
 ## Why raw sinks are not a coverage oracle
 
@@ -87,3 +87,39 @@ the arbitrary-model raw union as ground truth.
 Boundary-set or diverse enumeration remains a configuration sweep under the A0
 contract. Symbolic memory remains the only architectural item and starts only
 if the corrected, labeled sweep leaves measured headroom.
+
+## Machine-readable confidence partition
+
+`IOCTLANCE_ALL=1` historically exposed the complete raw population but gave a
+consumer no reliable way to distinguish rows that normal ioctlance output
+would accept from rows retained only for diagnostics. Counting the raw lines
+or scraping taint strings would duplicate producer policy in every benchmark
+harness and could silently drift when the policy changed.
+
+`IOCTLANCE_ANNOTATE_CONFIDENCE=1` now appends one producer-owned annotation to
+each already-sorted finding line:
+
+```text
+confidence=high
+confidence=diagnostic
+```
+
+The annotation is opt-in and applied only when printing, so output is
+byte-for-byte unchanged for every legacy invocation. An annotated run also
+ends with an exhaustive footer:
+
+```text
+[finding-confidence] schema=glaurung-ioctlance-confidence-v1 high=N diagnostic=M
+```
+
+The two counts partition the emitted population. With `IOCTLANCE_ALL=1`, the
+ordinary `[ioctlance] high-confidence=` field reports the actual accepted
+count, while `suppressed=` reports the diagnostic population that a normal run
+would omit. Consumers can therefore reject missing, mixed, unknown, or
+non-exhaustive annotations instead of guessing.
+
+Two focused tests keep nested `ArgN` ancestry diagnostic and prove that adding
+either annotation leaves the underlying finding bytes unchanged. The Axeyum
+authority harness consumes this schema as two explicit populations while
+retaining the annotation-free raw line for historical hashes and set
+comparisons.

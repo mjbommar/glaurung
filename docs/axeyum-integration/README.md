@@ -89,12 +89,15 @@ Placement note: this lives in glaurung because glaurung is the integrator;
 Axeyum supplies the additive retained-session contract, while ownership,
 ordered capture, and production admission remain Glaurung responsibilities.
 
-The A0 concretization refactor and provenance correction are isolated on branch
-`axeyum-concretization-policy-a0` at `845239f`: `AnyModel` remains the default, all accepted
+The A0 concretization refactor, provenance correction, and machine-readable
+finding-confidence partition are isolated on branch
+`axeyum-concretization-policy-a0` at `931d8a8`: `AnyModel` remains the default, all accepted
 least/greatest/site-hash policies implement one `ConcretizationPolicy` seam,
 and the preferred `GLAURUNG_CONCRETIZATION_POLICY` config coexists with the
 legacy experiment variable. Boundary-set forking is A3 execution work;
 deferred symbolic memory is the separate, conditional A2 architecture project.
 Policy sweeps must report raw diagnostics separately from confidence-gated and
 validated findings; the first-15 tcpip slice now has zero high-confidence rows
-under both authorities after exact taint provenance is preserved.
+under both authorities after exact taint provenance is preserved. Opt-in
+`IOCTLANCE_ANNOTATE_CONFIDENCE=1` supplies an exhaustive versioned partition
+without changing legacy finding bytes.
