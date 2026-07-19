@@ -126,3 +126,31 @@ baseline, not another one-off canonical algorithm. Its coverage gate must use a
 nonzero labeled finding population and report raw, confidence-gated, and
 validated partitions separately. Symbolic memory remains conditional on
 measured validated-coverage headroom after that sweep.
+
+## Policy-robust detector semantics
+
+The first preregistered sweep attempts exposed two distinct limits. Minimum
+unsigned made the former AnyModel-complete usbprint boundary exceed its fixed
+resource limit. Maximum unsigned retained all 14 expected source-backed
+positive rows but added one false `StackOverflow` classification at the
+attacker-pointer `RtlCopyMemory` in `test_physical_memory.sys`.
+
+The old stack check concretized `dst` and `rsp` separately and treated numeric
+proximity within 64 KiB as proof that `dst` denoted a stack object. Under
+maximum, unrelated free symbols can acquire adjacent witnesses even though the
+destination was loaded from `SystemBuffer`. This is a detector-classification
+artifact, not validated coverage.
+
+The corrected check requires structural evidence first: the destination and
+current stack pointer must be the same expression or share symbolic ancestry.
+Only then may the bounded numeric window refine the stack-overflow result. An
+attacker-controlled destination remains correctly reported by the existing
+arbitrary-read/write/null detectors, but cannot become a stack object merely
+because one model places it nearby. The regression fixes both sides of the
+contract: a constrained attacker pointer next to `rsp` is not stack storage,
+while `dst = rsp` with attacker-controlled length remains a stack overflow.
+
+The stopped sweep prefix remains rejected evidence. Rebuild both sole-authority
+binaries and rerun the exact source-backed maximum control before preregistering
+a corrected five-policy sweep; do not continue the unobserved site-hash cells
+from the failed campaign.

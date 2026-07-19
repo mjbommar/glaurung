@@ -1060,8 +1060,8 @@ mod tests {
             },
             Op::Assign {
                 dst: VReg::phys("rcx"),
-                src: Value::Const(0x1F8000),
-            }, // dst on the stack
+                src: Value::Reg(VReg::phys("rsp")),
+            }, // dst is structurally the stack pointer
             load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
             load("r8", "r10", SL_INPUT_LEN as i64, 4), // len = InputBufferLength (attacker, arg2)
             call(MEMCPY),

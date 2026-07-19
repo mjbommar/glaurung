@@ -1858,6 +1858,22 @@ fn do_free(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) -> bool 
 
 /// Flag a [`SinkKind::StackOverflow`] when a `memcpy` destination is on the stack
 /// and the length is attacker-controlled (an unbounded copy onto the frame).
+fn shares_symbolic_origin(pool: &ExprPool, lhs: ExprId, rhs: ExprId) -> bool {
+    if lhs == rhs {
+        return true;
+    }
+    let mut lhs_symbols = BTreeMap::new();
+    pool.collect_syms(lhs, &mut lhs_symbols);
+    if lhs_symbols.is_empty() {
+        return false;
+    }
+    let mut rhs_symbols = BTreeMap::new();
+    pool.collect_syms(rhs, &mut rhs_symbols);
+    lhs_symbols
+        .keys()
+        .any(|symbol| rhs_symbols.contains_key(symbol))
+}
+
 fn stack_overflow_check(
     st: &mut State,
     va: u64,
@@ -1873,6 +1889,9 @@ fn stack_overflow_check(
         .machine
         .regs
         .read(&mut st.machine.dom, &VReg::phys("rsp"));
+    if !shares_symbolic_origin(&st.machine.dom.pool, dst, rsp_v) {
+        return true;
+    }
     let Some(rsp) = eval_concrete(st, rsp_v) else {
         return false;
     };
@@ -2209,6 +2228,52 @@ mod tests {
             state.taint.provenance_of(&state.machine.dom.pool, loaded),
             vec!["*Arg0".to_string(), "*SystemBuffer".to_string()],
             "taint-through-memory must not launder generic ArgN provenance into a high-confidence attacker label",
+        );
+    }
+
+    #[test]
+    fn attacker_pointer_constrained_near_rsp_is_not_structural_stack_storage() {
+        let mut machine = Machine::new(Symbolic::new());
+        let rsp = machine.dom.fresh(Width::W64);
+        let dst = machine.dom.fresh(Width::W64);
+        let len = machine.dom.fresh(Width::W64);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rsp"), rsp);
+
+        let Expr::Sym { id: dst_id, .. } = *machine.dom.pool.get(dst) else {
+            panic!("fresh destination must be a symbol");
+        };
+        let Expr::Sym { id: len_id, .. } = *machine.dom.pool.get(len) else {
+            panic!("fresh length must be a symbol");
+        };
+        let mut taint = TaintSpec::new();
+        taint.mark(dst_id, "*SystemBuffer");
+        taint.mark(len_id, "*SystemBuffer");
+
+        let stack_value = machine.dom.constant(Width::W64, 0x20_0000);
+        let adjacent_value = machine.dom.constant(Width::W64, 0x1f_8000);
+        let rsp_fixed = machine
+            .dom
+            .cmp(CmpOp::Eq, &rsp, &stack_value, Width::W64);
+        let dst_fixed = machine
+            .dom
+            .cmp(CmpOp::Eq, &dst, &adjacent_value, Width::W64);
+        let mut state = State::root(machine, 0x1000, taint);
+        state.assert((rsp_fixed, true), "test", state.pc);
+        state.assert((dst_fixed, true), "test", state.pc);
+        let mut sinks = Vec::new();
+
+        assert!(stack_overflow_check(
+            &mut state,
+            0x1010,
+            dst,
+            len,
+            &mut sinks,
+        ));
+        assert!(
+            sinks.iter().all(|sink| sink.kind != SinkKind::StackOverflow),
+            "numeric proximity under one model does not make an attacker pointer a stack object: {sinks:?}",
         );
     }
 
