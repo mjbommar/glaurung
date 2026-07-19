@@ -1889,7 +1889,13 @@ fn stack_overflow_check(
         .machine
         .regs
         .read(&mut st.machine.dom, &VReg::phys("rsp"));
-    if !shares_symbolic_origin(&st.machine.dom.pool, dst, rsp_v) {
+    let rbp_v = st
+        .machine
+        .regs
+        .read(&mut st.machine.dom, &VReg::phys("rbp"));
+    if !shares_symbolic_origin(&st.machine.dom.pool, dst, rsp_v)
+        && !shares_symbolic_origin(&st.machine.dom.pool, dst, rbp_v)
+    {
         return true;
     }
     let Some(rsp) = eval_concrete(st, rsp_v) else {
@@ -2274,6 +2280,50 @@ mod tests {
         assert!(
             sinks.iter().all(|sink| sink.kind != SinkKind::StackOverflow),
             "numeric proximity under one model does not make an attacker pointer a stack object: {sinks:?}",
+        );
+    }
+
+    #[test]
+    fn frame_pointer_destination_is_structural_stack_storage() {
+        let mut machine = Machine::new(Symbolic::new());
+        let rsp = machine.dom.fresh(Width::W64);
+        let rbp = machine.dom.fresh(Width::W64);
+        let len = machine.dom.fresh(Width::W64);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rsp"), rsp);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rbp"), rbp);
+
+        let Expr::Sym { id: len_id, .. } = *machine.dom.pool.get(len) else {
+            panic!("fresh length must be a symbol");
+        };
+        let mut taint = TaintSpec::new();
+        taint.mark(len_id, "InputBufferLength");
+
+        let frame_value = machine.dom.constant(Width::W64, 0x20_0000);
+        let rsp_fixed = machine
+            .dom
+            .cmp(CmpOp::Eq, &rsp, &frame_value, Width::W64);
+        let rbp_fixed = machine
+            .dom
+            .cmp(CmpOp::Eq, &rbp, &frame_value, Width::W64);
+        let mut state = State::root(machine, 0x1000, taint);
+        state.assert((rsp_fixed, true), "test", state.pc);
+        state.assert((rbp_fixed, true), "test", state.pc);
+        let mut sinks = Vec::new();
+
+        assert!(stack_overflow_check(
+            &mut state,
+            0x1010,
+            rbp,
+            len,
+            &mut sinks,
+        ));
+        assert!(
+            sinks.iter().any(|sink| sink.kind == SinkKind::StackOverflow),
+            "an rbp-derived destination with attacker length is stack storage: {sinks:?}",
         );
     }
 

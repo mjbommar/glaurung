@@ -142,7 +142,8 @@ destination was loaded from `SystemBuffer`. This is a detector-classification
 artifact, not validated coverage.
 
 The corrected check requires structural evidence first: the destination and
-current stack pointer must be the same expression or share symbolic ancestry.
+current stack or frame pointer must be the same expression or share symbolic
+ancestry.
 Only then may the bounded numeric window refine the stack-overflow result. An
 attacker-controlled destination remains correctly reported by the existing
 arbitrary-read/write/null detectors, but cannot become a stack object merely

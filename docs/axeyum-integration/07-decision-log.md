@@ -1070,9 +1070,9 @@ all 14 expected rows but added `StackOverflow` at the arbitrary-pointer
 `TargetAddress` is loaded from METHOD_BUFFERED user content, not a local stack
 object. The detector had separately concretized `dst` and `rsp` and interpreted
 proximity within 64 KiB as semantic stack membership.
-**Decision:** Require the destination and current stack pointer to be the same
-expression or share at least one symbolic ancestor before applying the existing
-bounded proximity check. Keep attacker-controlled destinations classified by
+**Decision:** Require the destination and current stack or frame pointer to be
+the same expression or share at least one symbolic ancestor before applying the
+existing bounded proximity check. Keep attacker-controlled destinations classified by
 the independent arbitrary-read/write/null detectors. Do not let any
 concretization policy manufacture a memory-region label from unrelated scalar
 witnesses.
@@ -1080,8 +1080,11 @@ witnesses.
 internal `rsp` symbols to adjacent concrete values; it reproduces the false
 stack sink before the change and emits none afterward. The existing positive
 control now models `dst = rsp` structurally and continues to emit
-`StackOverflow` for attacker-controlled length. Both focused solver-z3 tests
-pass. A dual-backend library run passes 991/993 tests; the two remaining WinAPI
+`StackOverflow` for attacker-controlled length. A first `rsp`-only candidate
+then failed the real source-backed control at the genuine `[rbp-0x70]` fixture;
+the added frame-pointer regression failed before `rbp` ancestry was admitted and
+passes afterward. All three focused solver-z3 tests pass. A dual-backend library
+run passes 991/993 tests; the two remaining WinAPI
 signature-render failures are outside the changed symbolic/IOCTL files and are
 baselined separately.
 **Consequences:** Policy selection remains a cheap A0 configuration surface,
