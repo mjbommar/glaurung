@@ -20,8 +20,9 @@ use glaurung::ir::lift_function::lift_function_from_bytes;
 use glaurung::ir::types::{CallTarget, LlirFunction, Op, Value};
 use glaurung::symbolic::{
     ApiSummary, SinkKind, canonical_model_choice_stats, check_timeout_ms, driver_api_model,
-    find_function_sinks_with_apis, find_function_stateful_sinks, find_ioctl_sinks_with_apis,
-    set_call_site_summaries, set_solver_budget, set_time_budget,
+    exploration_limit_stats, find_function_sinks_with_apis, find_function_stateful_sinks,
+    find_ioctl_sinks_with_apis, reset_exploration_limit_stats, set_call_site_summaries,
+    set_solver_budget, set_time_budget,
 };
 
 fn kind_str(k: SinkKind) -> &'static str {
@@ -207,6 +208,7 @@ fn reach_hops() -> usize {
 }
 
 fn main() {
+    reset_exploration_limit_stats();
     let path = std::env::args()
         .nth(1)
         .expect("usage: ioctlance <driver.sys>");
@@ -478,6 +480,16 @@ fn main() {
         canonical.no_solver,
         canonical.error,
         canonical.final_unsat,
+    );
+    let limits = exploration_limit_stats();
+    eprintln!(
+        "[exploration-limits] runs={} completed={} state_budget={} solve_budget={} timeout_budget={} deadline={}",
+        limits.runs,
+        limits.completed,
+        limits.state_budget,
+        limits.solve_budget,
+        limits.timeout_budget,
+        limits.deadline,
     );
     // Benchmark footer: solver-only cost across the whole run (isolates the
     // solver from lifting/CFG), for the z3-vs-axeyum comparison.

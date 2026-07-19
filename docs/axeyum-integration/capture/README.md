@@ -1085,6 +1085,16 @@ and finding hashes in addition to the existing verdict, reset, replay, time,
 and RSS gates. The value 156 reproduces the current tcpip coverage boundary; it
 is a calibration input, not a universal DriverSpec default.
 
+Function-count equality does not prove that each selected function exhausted
+its symbolic worklist. The `[exploration-limits]` footer therefore partitions
+every worklist as `completed`, `state_budget`, `solve_budget`,
+`timeout_budget`, or `deadline`. State and solve ceilings are deterministic
+work bounds when their counts reproduce exactly. A nonzero per-function
+`deadline` or timeout-derived stop is wall-clock-sensitive partial work and
+invalidates a fixed-work comparison even when the outer footer still says
+`WORK-LIMIT-HIT`. Evidence harnesses must retain and compare this partition;
+they must never infer inner completion from `analyzed=N/M` alone.
+
 The first fixed-156 tcpip pair proves that function-count equality is necessary
 but insufficient for exact policy comparison. Both processes report
 `analyzed=156/338 WORK-LIMIT-HIT` and avoid the 3,600-second safety deadline.

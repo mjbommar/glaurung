@@ -74,6 +74,36 @@ pub struct CanonicalModelChoiceStats {
     pub final_unsat: u64,
 }
 
+/// Process-local accounting for how symbolic worklists finish.
+///
+/// A function can be counted as selected by a caller while its internal
+/// exploration is only partial. Keeping these stop classes explicit prevents a
+/// wall-clock safety cutoff from being mistaken for deterministic fixed work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExplorationLimitStats {
+    /// Worklists started by this process.
+    pub runs: u64,
+    /// Worklists that exhausted all reachable states under the path semantics.
+    pub completed: u64,
+    /// Worklists stopped by their state-count ceiling.
+    pub state_budget: u64,
+    /// Worklists stopped by their solver-call ceiling.
+    pub solve_budget: u64,
+    /// Worklists stopped by their solver-unknown/timeout ceiling.
+    pub timeout_budget: u64,
+    /// Worklists stopped by their per-function wall-clock safety deadline.
+    pub deadline: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorklistStop {
+    Complete,
+    StateBudget,
+    SolveBudget,
+    TimeoutBudget,
+    Deadline,
+}
+
 /// Return the active canonical-model policy and its process-wide counters.
 pub fn canonical_model_choice_stats() -> CanonicalModelChoiceStats {
     CanonicalModelChoiceStats {
@@ -98,6 +128,22 @@ thread_local! {
     /// are not enough when one block takes minutes.
     static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
 
+    /// Set only when [`process_block`] observes the per-function deadline. This
+    /// distinguishes an interrupted final state from a naturally exhausted
+    /// worklist whose last instruction happened to finish near the deadline.
+    static DEADLINE_OBSERVED: Cell<bool> = const { Cell::new(false) };
+
+    /// Process-thread accounting used by the single-threaded analysis examples.
+    static EXPLORATION_LIMIT_STATS: Cell<ExplorationLimitStats> =
+        const { Cell::new(ExplorationLimitStats {
+            runs: 0,
+            completed: 0,
+            state_budget: 0,
+            solve_budget: 0,
+            timeout_budget: 0,
+            deadline: 0,
+        }) };
+
     /// Summaries keyed by CALL-INSTRUCTION VA (not callee VA). Used for indirect
     /// calls whose callee cannot be resolved statically — notably KMDF WDF
     /// function-table calls (`mov rax,[WdfFunctions+idx*8]; call *[thunk]`), which
@@ -107,6 +153,31 @@ thread_local! {
     /// buffer as `SystemBuffer` (the KMDF analogue of IRP.AssociatedIrp.SystemBuffer).
     static CALL_SITE_SUMMARIES: RefCell<BTreeMap<u64, ApiSummary>> =
         const { RefCell::new(BTreeMap::new()) };
+}
+
+/// Return cumulative worklist stop accounting for this analysis thread.
+pub fn exploration_limit_stats() -> ExplorationLimitStats {
+    EXPLORATION_LIMIT_STATS.with(Cell::get)
+}
+
+/// Clear cumulative worklist stop accounting before a new top-level analysis.
+pub fn reset_exploration_limit_stats() {
+    EXPLORATION_LIMIT_STATS.with(|stats| stats.set(ExplorationLimitStats::default()));
+}
+
+fn record_worklist_stop(stop: WorklistStop) {
+    EXPLORATION_LIMIT_STATS.with(|stats| {
+        let mut next = stats.get();
+        next.runs += 1;
+        match stop {
+            WorklistStop::Complete => next.completed += 1,
+            WorklistStop::StateBudget => next.state_budget += 1,
+            WorklistStop::SolveBudget => next.solve_budget += 1,
+            WorklistStop::TimeoutBudget => next.timeout_budget += 1,
+            WorklistStop::Deadline => next.deadline += 1,
+        }
+        stats.set(next);
+    });
 }
 
 fn deadline_passed() -> bool {
@@ -947,7 +1018,7 @@ pub fn find_sinks(
 
     let mut machine = Machine::new(Symbolic::new());
     let taint = seed(&mut machine);
-    let (sinks, _) = run_worklist(
+    let (sinks, _, _) = run_worklist(
         &blocks,
         State::root(machine, lf.entry_va, taint),
         apis,
@@ -988,16 +1059,18 @@ fn run_worklist(
     root: State,
     apis: &CallModel,
     max_states: usize,
-) -> (Vec<Sink>, Option<State>) {
+) -> (Vec<Sink>, Option<State>, WorklistStop) {
     use crate::symbolic::solver::{reset_solver_meter, solver_budget, solver_meter, time_budget};
     reset_solver_meter();
     let (max_solves, max_timeouts) = solver_budget();
     let deadline = time_budget().map(|d| Instant::now() + d);
     DEADLINE.with(|c| c.set(deadline)); // checked per-instruction in process_block
+    DEADLINE_OBSERVED.with(|observed| observed.set(false));
     let mut work = vec![root];
     let mut explored = 0usize;
     let mut out = Vec::new();
     let mut best: Option<State> = None;
+    let mut stop = WorklistStop::Complete;
 
     while let Some(mut st) = work.pop() {
         if explored >= max_states {
@@ -1005,32 +1078,51 @@ fn run_worklist(
             for pending in &mut work {
                 pending.end_trace("state-budget");
             }
+            stop = WorklistStop::StateBudget;
             break;
         }
         let (solves, timeouts) = solver_meter();
-        if solves >= max_solves || timeouts >= max_timeouts {
+        if solves >= max_solves {
             st.end_trace("solver-budget");
             for pending in &mut work {
                 pending.end_trace("solver-budget");
             }
+            stop = WorklistStop::SolveBudget;
             break; // solver budget spent: bail with partial findings
+        }
+        if timeouts >= max_timeouts {
+            st.end_trace("timeout-budget");
+            for pending in &mut work {
+                pending.end_trace("timeout-budget");
+            }
+            stop = WorklistStop::TimeoutBudget;
+            break;
         }
         if deadline.is_some_and(|dl| std::time::Instant::now() >= dl) {
             st.end_trace("deadline");
             for pending in &mut work {
                 pending.end_trace("deadline");
             }
+            stop = WorklistStop::Deadline;
             break; // wall-clock budget spent: bail with partial findings
         }
         explored += 1;
         let mut sinks = Vec::new();
         let succs = process_block(blocks, st, apis, &mut sinks, &mut best);
         out.append(&mut sinks);
+        if DEADLINE_OBSERVED.with(Cell::get) {
+            for pending in &mut work {
+                pending.end_trace("deadline");
+            }
+            stop = WorklistStop::Deadline;
+            break;
+        }
         for s in succs {
             work.push(s);
         }
     }
-    (out, best)
+    record_worklist_stop(stop);
+    (out, best, stop)
 }
 
 /// Stateful, multi-invocation exploration: run the handler `rounds` times,
@@ -1074,7 +1166,7 @@ pub fn find_sinks_stateful(
             }
         };
 
-        let (sinks, best) = run_worklist(&blocks, root, apis, max_states);
+        let (sinks, best, _) = run_worklist(&blocks, root, apis, max_states);
         for s in sinks {
             if seen.insert((s.va, s.kind as u8)) {
                 out.push(s);
@@ -1118,6 +1210,7 @@ fn process_block(
         // Per-instruction wall-clock guard: a block built from huge obfuscated
         // expressions can take a long time in a single op, so bail mid-block.
         if deadline_passed() {
+            DEADLINE_OBSERVED.with(|observed| observed.set(true));
             consider_terminal(&st, best);
             st.end_trace("deadline");
             return Vec::new();
@@ -2713,6 +2806,36 @@ mod tests {
             "should bail near the 40-solve budget, did {solves}"
         );
         assert!(sinks.is_empty(), "no attacker memory ops in the loop");
+    }
+
+    #[test]
+    fn worklist_reports_a_per_function_deadline_stop() {
+        use std::time::Duration;
+
+        use crate::symbolic::solver::set_time_budget;
+
+        let lf = func(vec![(0x1000, vec![Op::Return], 0x1004)]);
+        let blocks: HashMap<u64, LlirBlock> = lf
+            .blocks
+            .iter()
+            .map(|block| (block.start_va, block.clone()))
+            .collect();
+        let root = State::root(Machine::new(Symbolic::new()), lf.entry_va, TaintSpec::new());
+
+        reset_exploration_limit_stats();
+        set_time_budget(Some(Duration::ZERO));
+        let (_, _, stop) = run_worklist(&blocks, root, &CallModel::new(), 1);
+        set_time_budget(None);
+
+        assert_eq!(stop, WorklistStop::Deadline);
+        assert_eq!(
+            exploration_limit_stats(),
+            ExplorationLimitStats {
+                runs: 1,
+                deadline: 1,
+                ..ExplorationLimitStats::default()
+            }
+        );
     }
 
     /// The per-path loop bound alone (with the *default*, huge solver budget)

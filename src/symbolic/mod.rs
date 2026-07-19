@@ -29,8 +29,9 @@ pub use concretization::{
     UnsignedExtremum, active_concretization_policy, resolve_concretization_policy,
 };
 pub use explore::{
-    ApiSummary, CallModel, CanonicalModelChoiceStats, Severity, Sink, SinkKind, TaintSpec,
-    canonical_model_choice_stats, find_input_reaching, find_sinks, find_sinks_stateful,
+    ApiSummary, CallModel, CanonicalModelChoiceStats, ExplorationLimitStats, Severity, Sink,
+    SinkKind, TaintSpec, canonical_model_choice_stats, exploration_limit_stats,
+    find_input_reaching, find_sinks, find_sinks_stateful, reset_exploration_limit_stats,
     set_call_site_summaries,
 };
 pub use expr::{Expr, ExprId, ExprPool};
