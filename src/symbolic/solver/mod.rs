@@ -1081,7 +1081,7 @@ pub(crate) fn solve_for_path_delta(
 
 #[cfg(test)]
 mod timeout_configuration_tests {
-    use super::{DEFAULT_CHECK_TIMEOUT_MS, parse_check_timeout_ms};
+    use super::{parse_check_timeout_ms, DEFAULT_CHECK_TIMEOUT_MS};
 
     #[test]
     fn check_timeout_defaults_and_accepts_a_bounded_override() {
@@ -1100,8 +1100,8 @@ mod timeout_configuration_tests {
 #[cfg(all(test, feature = "solver-z3"))]
 mod capture_tests {
     use super::{
-        SolveResult, append_capture_index, publish_query_file, publish_shadow_split_bytes,
-        shadow_result_class, should_capture_shadow_split,
+        append_capture_index, publish_query_file, publish_shadow_split_bytes, shadow_result_class,
+        should_capture_shadow_split, SolveResult,
     };
 
     #[test]

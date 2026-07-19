@@ -8,14 +8,14 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use z3::ast::{Ast, BV, Bool};
+use z3::ast::{Ast, Bool, BV};
 use z3::{Config, Context, SatResult, Solver as Z3Native};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    Assert, IncrementalSolver, Model, SolveResult, Solver, WarmAssertionPrefix, WarmDeltaContext,
-    Z3ExecutionClass, check_timeout,
+    check_timeout, Assert, IncrementalSolver, Model, SolveResult, Solver, WarmAssertionPrefix,
+    WarmDeltaContext, Z3ExecutionClass,
 };
 
 thread_local! {
@@ -49,7 +49,11 @@ fn assertion_bool<'c>(
     // `!= 0` is width-safe even if a wider value reaches the solver.
     let zero = BV::from_u64(ctx, 0, bv.get_size());
     let is_true = bv._eq(&zero).not();
-    if expected { is_true } else { is_true.not() }
+    if expected {
+        is_true
+    } else {
+        is_true.not()
+    }
 }
 
 fn bv_from_u128<'c>(ctx: &'c Context, value: u128, bits: u32) -> BV<'c> {

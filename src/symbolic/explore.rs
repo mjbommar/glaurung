@@ -16,20 +16,20 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::exec::domain::{BranchDecision, Domain};
-use crate::exec::{Concrete, Flow, Halt, Machine};
+use crate::exec::{Concrete, Flow, Halt, Machine, RegArch};
 use crate::ir::types::{
     BinOp, CallTarget, CmpOp, Endian, LlirBlock, LlirFunction, Op, VReg, Value, Width,
 };
-use crate::symbolic::Symbolic;
 use crate::symbolic::concretization::{
-    ConcretizationChoice, ConcretizationPolicy, ConcretizationRequest, ConcretizationSite,
-    UnsignedExtremum, active_concretization_policy,
+    active_concretization_policy, ConcretizationChoice, ConcretizationPolicy,
+    ConcretizationRequest, ConcretizationSite, UnsignedExtremum,
 };
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::ordered_trace::{TracePath, WarmReplayCheck};
 use crate::symbolic::solver::{
-    Assert, Model, SolveResult, WarmAssertionPrefix, last_solve_timing, solve_for_path_delta,
+    last_solve_timing, solve_for_path_delta, Assert, Model, SolveResult, WarmAssertionPrefix,
 };
+use crate::symbolic::Symbolic;
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -95,6 +95,70 @@ pub struct ExplorationLimitStats {
     pub deadline: u64,
 }
 
+/// Process-local accounting for terminal symbolic paths.
+///
+/// Exhausting a worklist is not enough to establish complete execution: every
+/// path may have stopped at an unsupported intrinsic, residual unknown, or
+/// unavailable model.  This partition makes those semantic stops visible to
+/// evidence producers instead of collapsing them into `completed` worklists.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExecutionPathStats {
+    /// Paths that reached an architectural return.
+    pub returned: u64,
+    /// Paths that reached an architectural trap instruction.
+    pub traps: BTreeMap<String, u64>,
+    /// Paths that transferred outside the admitted CFG.
+    pub off_cfg: u64,
+    /// Paths cut by the deterministic per-block visit ceiling.
+    pub loop_limit: u64,
+    /// Paths stopped because a required concrete model was unavailable.
+    pub model_unavailable: u64,
+    /// Paths stopped because a symbolic memory address could not be resolved.
+    pub unresolved_symbolic_memory: u64,
+    /// Unregistered non-trap intrinsics reached by execution.
+    pub unsupported_intrinsics: BTreeMap<String, u64>,
+    /// Residual unknown operations reached by execution.
+    pub residual_unknowns: BTreeMap<String, u64>,
+    /// Paths that unexpectedly requested an interpreter fork.
+    pub unexpected_fork: u64,
+    /// Paths stopped by an interpreter instruction budget.
+    pub budget_exhausted: u64,
+    /// Unexpected interpreter flow outcomes after frontend normalization.
+    pub unexpected_flow: u64,
+    /// Dynamic calls that used the explorer's implicit return-value havoc
+    /// fallback instead of a registered callee summary.
+    pub unmodeled_calls: BTreeMap<u64, u64>,
+    /// Exact terminal instruction/PC sites, partitioned by stable stop reason.
+    pub stop_sites: BTreeMap<u64, BTreeMap<String, u64>>,
+    /// Dynamic memory-access counts by instruction VA.
+    pub memory_access_sites: BTreeMap<u64, u64>,
+    /// Dynamic accesses whose address was concretely inside the first page.
+    pub low_page_access_sites: BTreeMap<u64, u64>,
+    /// Concrete dynamic addresses observed at each memory-access instruction.
+    pub concrete_access_addresses: BTreeMap<u64, BTreeMap<u64, u64>>,
+}
+
+impl ExecutionPathStats {
+    /// Number of semantic/infrastructure stops that make execution incomplete.
+    pub fn incomplete_stops(&self) -> u64 {
+        self.off_cfg
+            + self.loop_limit
+            + self.model_unavailable
+            + self.unresolved_symbolic_memory
+            + self.unsupported_intrinsics.values().sum::<u64>()
+            + self.residual_unknowns.values().sum::<u64>()
+            + self.unexpected_fork
+            + self.budget_exhausted
+            + self.unexpected_flow
+            + self.unmodeled_calls.values().sum::<u64>()
+    }
+
+    /// Number of paths that ended with modeled architectural control flow.
+    pub fn modeled_terminal_paths(&self) -> u64 {
+        self.returned + self.traps.values().sum::<u64>()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WorklistStop {
     Complete,
@@ -144,6 +208,10 @@ thread_local! {
             deadline: 0,
         }) };
 
+    /// Terminal-path accounting for the current analysis thread.
+    static EXECUTION_PATH_STATS: RefCell<ExecutionPathStats> =
+        RefCell::new(ExecutionPathStats::default());
+
     /// Summaries keyed by CALL-INSTRUCTION VA (not callee VA). Used for indirect
     /// calls whose callee cannot be resolved statically — notably KMDF WDF
     /// function-table calls (`mov rax,[WdfFunctions+idx*8]; call *[thunk]`), which
@@ -163,6 +231,69 @@ pub fn exploration_limit_stats() -> ExplorationLimitStats {
 /// Clear cumulative worklist stop accounting before a new top-level analysis.
 pub fn reset_exploration_limit_stats() {
     EXPLORATION_LIMIT_STATS.with(|stats| stats.set(ExplorationLimitStats::default()));
+}
+
+/// Return cumulative terminal-path accounting for this analysis thread.
+pub fn execution_path_stats() -> ExecutionPathStats {
+    EXECUTION_PATH_STATS.with(|stats| stats.borrow().clone())
+}
+
+/// Clear cumulative terminal-path accounting before a new top-level analysis.
+pub fn reset_execution_path_stats() {
+    EXECUTION_PATH_STATS.with(|stats| *stats.borrow_mut() = ExecutionPathStats::default());
+}
+
+fn record_path_stat(update: impl FnOnce(&mut ExecutionPathStats)) {
+    EXECUTION_PATH_STATS.with(|stats| update(&mut stats.borrow_mut()));
+}
+
+fn record_named(counter: &mut BTreeMap<String, u64>, name: &str) {
+    *counter.entry(name.to_string()).or_default() += 1;
+}
+
+fn record_stop_site(stats: &mut ExecutionPathStats, va: u64, reason: impl Into<String>) {
+    *stats
+        .stop_sites
+        .entry(va)
+        .or_default()
+        .entry(reason.into())
+        .or_default() += 1;
+}
+
+fn is_architectural_trap(name: &str) -> bool {
+    matches!(
+        name,
+        "brk" | "hlt" | "svc" | "hvc" | "smc" | "udf" | "dcps1" | "dcps2" | "dcps3"
+    )
+}
+
+fn record_execution_halt(va: u64, halt: &Halt) {
+    record_path_stat(|stats| match halt {
+        Halt::UnsupportedIntrinsic(name) if is_architectural_trap(name) => {
+            record_named(&mut stats.traps, name);
+            record_stop_site(stats, va, format!("trap:{name}"));
+        }
+        Halt::UnsupportedIntrinsic(name) => {
+            record_named(&mut stats.unsupported_intrinsics, name);
+            record_stop_site(stats, va, format!("unsupported-intrinsic:{name}"));
+        }
+        Halt::ResidualUnknown(mnemonic) => {
+            record_named(&mut stats.residual_unknowns, mnemonic);
+            record_stop_site(stats, va, format!("residual-unknown:{mnemonic}"));
+        }
+        Halt::UnexpectedFork => {
+            stats.unexpected_fork += 1;
+            record_stop_site(stats, va, "unexpected-fork");
+        }
+        Halt::UnresolvedAddress => {
+            stats.unresolved_symbolic_memory += 1;
+            record_stop_site(stats, va, "unresolved-symbolic-memory");
+        }
+        Halt::BudgetExhausted => {
+            stats.budget_exhausted += 1;
+            record_stop_site(stats, va, "budget-exhausted");
+        }
+    });
 }
 
 fn record_worklist_stop(stop: WorklistStop) {
@@ -353,6 +484,8 @@ pub enum SinkKind {
     /// a platform reset (unauth DoS); general access enables firmware / PCI-config
     /// manipulation. (IOCTLance "arbitrary out".)
     PortAccess,
+    /// A signed scalar reaches a fixed-size table outside its valid index range.
+    OutOfBoundsIndex,
 }
 
 /// A summary for a known callee, letting the explorer detect attacker-controlled
@@ -362,6 +495,9 @@ pub enum SinkKind {
 /// engine stays import-agnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiSummary {
+    /// An explicitly accepted opaque callee: preserve memory and path state,
+    /// but conservatively havoc its return register.
+    HavocReturn,
     /// `memcpy` / `RtlCopyMemory` / `memmove` with the MS x64 ABI
     /// `(dst = rcx, src = rdx, len = r8)`: `dst` is written and `src` is read,
     /// so an attacker-derived `dst`/`src` is a controlled write/read primitive.
@@ -391,6 +527,14 @@ pub enum ApiSummary {
     /// — the KMDF analogue of seeding `IRP.AssociatedIrp.SystemBuffer`. Used via the
     /// call-site-keyed map (the WDF callee is a dynamic function-table thunk).
     RetrieveBuffer { out_ptr_arg: u8 },
+    /// A callee that indexes a fixed-size table with a signed scalar argument.
+    /// Reaching it with an index outside `[min, max]` is an out-of-bounds sink.
+    BoundedSignedIndex {
+        index_arg: u8,
+        width: Width,
+        min: i64,
+        max: i64,
+    },
 }
 
 /// Maps a call-target VA to its [`ApiSummary`]. Populated by the analysis layer
@@ -846,12 +990,8 @@ fn select_unsigned_extremum(
         };
         let bound = st.machine.dom.constant(width, midpoint);
         let probe = match extremum {
-            UnsignedExtremum::Minimum => {
-                st.machine.dom.cmp(CmpOp::Ule, &value, &bound, width)
-            }
-            UnsignedExtremum::Maximum => {
-                st.machine.dom.cmp(CmpOp::Ule, &bound, &value, width)
-            }
+            UnsignedExtremum::Minimum => st.machine.dom.cmp(CmpOp::Ule, &value, &bound, width),
+            UnsignedExtremum::Maximum => st.machine.dom.cmp(CmpOp::Ule, &bound, &value, width),
         };
         CANONICAL_MODEL_CHOICE_PROBES.fetch_add(1, Ordering::Relaxed);
         match solve_probe_traced(
@@ -931,13 +1071,7 @@ fn minimize_unsigned_value(
     purpose: &str,
     location: u64,
 ) -> Option<u128> {
-    select_unsigned_extremum(
-        st,
-        value,
-        purpose,
-        location,
-        UnsignedExtremum::Minimum,
-    )
+    select_unsigned_extremum(st, value, purpose, location, UnsignedExtremum::Minimum)
 }
 
 #[cfg(test)]
@@ -947,13 +1081,7 @@ fn maximize_unsigned_value(
     purpose: &str,
     location: u64,
 ) -> Option<u128> {
-    select_unsigned_extremum(
-        st,
-        value,
-        purpose,
-        location,
-        UnsignedExtremum::Maximum,
-    )
+    select_unsigned_extremum(st, value, purpose, location, UnsignedExtremum::Maximum)
 }
 
 /// Search for an input that reaches `target`, starting from `lf`'s entry with the
@@ -1013,10 +1141,23 @@ pub fn find_sinks(
     apis: &CallModel,
     max_states: usize,
 ) -> Vec<Sink> {
+    find_sinks_with_arch(lf, RegArch::X86_64, seed, apis, max_states)
+}
+
+/// Architecture-explicit variant of [`find_sinks`]. The original API remains
+/// the MS-x64 default; Linux AArch64 frontends must opt into AAPCS64 register
+/// and return semantics rather than writing AArch64 names into an x64 machine.
+pub fn find_sinks_with_arch(
+    lf: &LlirFunction,
+    arch: RegArch,
+    seed: impl FnOnce(&mut Machine<Symbolic>) -> TaintSpec,
+    apis: &CallModel,
+    max_states: usize,
+) -> Vec<Sink> {
     let blocks: HashMap<u64, LlirBlock> =
         lf.blocks.iter().map(|b| (b.start_va, b.clone())).collect();
 
-    let mut machine = Machine::new(Symbolic::new());
+    let mut machine = Machine::new_with_arch(Symbolic::new(), arch);
     let taint = seed(&mut machine);
     let (sinks, _, _) = run_worklist(
         &blocks,
@@ -1191,6 +1332,10 @@ fn process_block(
 ) -> Vec<State> {
     let Some(block) = blocks.get(&st.pc).cloned() else {
         consider_terminal(&st, best); // ran off the known CFG
+        record_path_stat(|stats| {
+            stats.off_cfg += 1;
+            record_stop_site(stats, st.pc, "off-cfg");
+        });
         st.end_trace("off-cfg");
         return Vec::new();
     };
@@ -1202,6 +1347,10 @@ fn process_block(
     *visits += 1;
     if *visits > MAX_BLOCK_VISITS {
         consider_terminal(&st, best);
+        record_path_stat(|stats| {
+            stats.loop_limit += 1;
+            record_stop_site(stats, st.pc, "loop-limit");
+        });
         st.end_trace("loop-limit");
         return Vec::new();
     }
@@ -1286,6 +1435,10 @@ fn process_block(
                 // Checked before callee resolution; args are still in registers here.
                 if let Some(summary) = call_site_summary(ins.va) {
                     if !apply_summary(&mut st, ins.va, summary, sinks) {
+                        record_path_stat(|stats| {
+                            stats.model_unavailable += 1;
+                            record_stop_site(stats, ins.va, "model-unavailable");
+                        });
                         st.end_trace("model-unavailable");
                         return Vec::new();
                     }
@@ -1301,6 +1454,10 @@ fn process_block(
                         if syms.is_empty() {
                             // Concrete function pointer (e.g. loaded from the IAT).
                             let Some(callee) = eval_concrete(&mut st, tv) else {
+                                record_path_stat(|stats| {
+                                    stats.model_unavailable += 1;
+                                    record_stop_site(stats, ins.va, "model-unavailable");
+                                });
                                 st.end_trace("model-unavailable");
                                 return Vec::new();
                             };
@@ -1317,6 +1474,10 @@ fn process_block(
                 match callee.and_then(|va| apis.get(&va).copied()) {
                     Some(summary) => {
                         if !apply_summary(&mut st, ins.va, summary, sinks) {
+                            record_path_stat(|stats| {
+                                stats.model_unavailable += 1;
+                                record_stop_site(stats, ins.va, "model-unavailable");
+                            });
                             st.end_trace("model-unavailable");
                             return Vec::new();
                         }
@@ -1325,36 +1486,48 @@ fn process_block(
                     // treated as opaque: havoc the return and continue, rather than
                     // ending the path. Ending here would cut off everything after a
                     // `DbgPrint`/helper call — including the bug.
-                    None => havoc_rax(&mut st),
+                    None => {
+                        record_path_stat(|stats| {
+                            *stats.unmodeled_calls.entry(ins.va).or_default() += 1;
+                        });
+                        havoc_return(&mut st);
+                    }
                 }
                 continue;
             }
             Op::Return => {
-                // Controllable-PC check: `ret` pops the saved return address from
-                // [rsp]. If a stack-buffer overflow (or any attacker write) has made
-                // that slot attacker-controlled, this is the classic
-                // stack-overflow -> hijacked-return primitive (ioctlance reports it
-                // as "Buffer Overflow - Controllable PC"). Mirrors the Shellcode
-                // check on attacker-controlled indirect-call targets.
-                let rsp_v = st
-                    .machine
-                    .regs
-                    .read(&mut st.machine.dom, &VReg::phys("rsp"));
-                let Some(rsp) = eval_concrete(&mut st, rsp_v) else {
-                    st.end_trace("model-unavailable");
-                    return Vec::new();
-                };
-                if rsp != 0 {
-                    let ret = st
+                if st.machine.regs.arch() == RegArch::X86_64 {
+                    // MS x64 `ret` pops [rsp]. AArch64 returns through x30 and
+                    // needs separate spill/reload provenance; treating [sp] as
+                    // the return slot would be a false detector.
+                    let rsp_v = st
                         .machine
-                        .mem
-                        .load(&mut st.machine.dom, rsp, 8, Endian::Little);
-                    let prov = st.taint.provenance_of(&st.machine.dom.pool, ret);
-                    if !prov.is_empty() {
-                        push_sink(&mut st, ins.va, SinkKind::StackOverflow, ret, prov, sinks);
+                        .regs
+                        .read(&mut st.machine.dom, &VReg::phys("rsp"));
+                    let Some(rsp) = eval_concrete(&mut st, rsp_v) else {
+                        record_path_stat(|stats| {
+                            stats.model_unavailable += 1;
+                            record_stop_site(stats, ins.va, "model-unavailable");
+                        });
+                        st.end_trace("model-unavailable");
+                        return Vec::new();
+                    };
+                    if rsp != 0 {
+                        let ret = st
+                            .machine
+                            .mem
+                            .load(&mut st.machine.dom, rsp, 8, Endian::Little);
+                        let prov = st.taint.provenance_of(&st.machine.dom.pool, ret);
+                        if !prov.is_empty() {
+                            push_sink(&mut st, ins.va, SinkKind::StackOverflow, ret, prov, sinks);
+                        }
                     }
                 }
                 consider_terminal(&st, best);
+                record_path_stat(|stats| {
+                    stats.returned += 1;
+                    record_stop_site(stats, ins.va, "return");
+                });
                 st.end_trace("return");
                 return Vec::new();
             }
@@ -1397,12 +1570,44 @@ fn process_block(
                 // Use-after-free is temporal, not address-symbolic: check every
                 // load/store target (concrete or symbolic) against freed blocks,
                 // so a deref of a freed pointer held in a global is caught.
-                if let Op::Load { addr, .. } | Op::Store { addr, .. } = other {
+                if let Op::Load { addr, .. } = other {
                     let av = st.machine.eval_addr(addr);
+                    record_access(&mut st, ins.va, av, false, sinks);
                     if !uaf_check(&mut st, ins.va, av, sinks) {
+                        record_path_stat(|stats| {
+                            stats.model_unavailable += 1;
+                            record_stop_site(stats, ins.va, "model-unavailable");
+                        });
                         st.end_trace("model-unavailable");
                         return Vec::new();
                     }
+                } else if let Op::Store { addr, .. } = other {
+                    let av = st.machine.eval_addr(addr);
+                    record_access(&mut st, ins.va, av, true, sinks);
+                    if !uaf_check(&mut st, ins.va, av, sinks) {
+                        record_path_stat(|stats| {
+                            stats.model_unavailable += 1;
+                            record_stop_site(stats, ins.va, "model-unavailable");
+                        });
+                        st.end_trace("model-unavailable");
+                        return Vec::new();
+                    }
+                }
+                // Route every memory operation through the same handler. A
+                // symbol-free address DAG is concrete without a solver, but it
+                // must still receive taint-through-memory semantics for marked
+                // regions such as WDM SystemBuffer.
+                if matches!(other, Op::Load { .. } | Op::Store { .. }) {
+                    if execute_memory_op(&mut st, other).is_none() {
+                        consider_terminal(&st, best);
+                        record_path_stat(|stats| {
+                            stats.unresolved_symbolic_memory += 1;
+                            record_stop_site(stats, ins.va, "unresolved-symbolic-memory");
+                        });
+                        st.end_trace("unresolved-symbolic-memory");
+                        return Vec::new();
+                    }
+                    continue;
                 }
                 match st.machine.step(other) {
                     Flow::Next => continue,
@@ -1413,18 +1618,33 @@ fn process_block(
                     // A load/store through a symbolic address: concretize it and
                     // execute the op manually, then continue the path.
                     Flow::Halt(Halt::UnresolvedAddress) => {
-                        if symbolic_mem_op(&mut st, other, ins.va, sinks).is_none() {
+                        if execute_memory_op(&mut st, other).is_none() {
                             consider_terminal(&st, best);
+                            record_path_stat(|stats| {
+                                stats.unresolved_symbolic_memory += 1;
+                                record_stop_site(stats, ins.va, "unresolved-symbolic-memory");
+                            });
                             st.end_trace("unresolved-symbolic-memory");
                             return Vec::new();
                         }
                         continue;
                     }
-                    // Branch shouldn't occur (CondJump handled above); other
-                    // halts / return / call end the path.
-                    _ => {
+                    Flow::Halt(halt) => {
                         consider_terminal(&st, best);
+                        record_execution_halt(ins.va, &halt);
                         st.end_trace("execution-halt");
+                        return Vec::new();
+                    }
+                    // These operation kinds are normalized and handled before
+                    // `Machine::step`; seeing their flow here is a frontend or
+                    // executor contract violation, not a successful path end.
+                    Flow::Branch { .. } | Flow::Call(_) | Flow::Return => {
+                        consider_terminal(&st, best);
+                        record_path_stat(|stats| {
+                            stats.unexpected_flow += 1;
+                            record_stop_site(stats, ins.va, "unexpected-execution-flow");
+                        });
+                        st.end_trace("unexpected-execution-flow");
                         return Vec::new();
                     }
                 }
@@ -1515,13 +1735,26 @@ fn witness_for_value(st: &mut State, addr_val: ExprId, value: u128) -> Option<Mo
 /// The MS x64 integer argument register for parameter index `n` (0-based).
 /// Only the first four parameters are register-passed; index >=4 lives on the
 /// stack (see [`read_arg`]).
-fn arg_reg(n: u8) -> Option<&'static str> {
-    match n {
-        0 => Some("rcx"),
-        1 => Some("rdx"),
-        2 => Some("r8"),
-        3 => Some("r9"),
-        _ => None,
+fn arg_reg(arch: RegArch, n: u8) -> Option<&'static str> {
+    match arch {
+        RegArch::X86_64 => match n {
+            0 => Some("rcx"),
+            1 => Some("rdx"),
+            2 => Some("r8"),
+            3 => Some("r9"),
+            _ => None,
+        },
+        RegArch::AArch64 => match n {
+            0 => Some("x0"),
+            1 => Some("x1"),
+            2 => Some("x2"),
+            3 => Some("x3"),
+            4 => Some("x4"),
+            5 => Some("x5"),
+            6 => Some("x6"),
+            7 => Some("x7"),
+            _ => None,
+        },
     }
 }
 
@@ -1533,18 +1766,20 @@ fn arg_reg(n: u8) -> Option<&'static str> {
 /// attacker-controlled CreateDisposition (param 7) of `ZwCreateFile`, which the
 /// handler spills from the IRP system buffer into `[rsp+0x38]`.
 fn read_arg(st: &mut State, n: u8) -> Option<ExprId> {
-    match arg_reg(n) {
+    let arch = st.machine.regs.arch();
+    match arg_reg(arch, n) {
         Some(r) => Some(st.machine.regs.read(&mut st.machine.dom, &VReg::phys(r))),
         None => {
-            let rsp = st
+            let (stack_register, stack_offset) = match arch {
+                RegArch::X86_64 => ("rsp", 0x20 + (n as u128 - 4) * 8),
+                RegArch::AArch64 => ("sp", (n as u128 - 8) * 8),
+            };
+            let stack = st
                 .machine
                 .regs
-                .read(&mut st.machine.dom, &VReg::phys("rsp"));
-            let off = st
-                .machine
-                .dom
-                .constant(Width::W64, 0x20 + (n as u128 - 4) * 8);
-            let addr = st.machine.dom.binop(BinOp::Add, &rsp, &off, Width::W64);
+                .read(&mut st.machine.dom, &VReg::phys(stack_register));
+            let off = st.machine.dom.constant(Width::W64, stack_offset);
+            let addr = st.machine.dom.binop(BinOp::Add, &stack, &off, Width::W64);
             let a = concretize_addr(st, addr)?;
             Some(
                 st.machine
@@ -1552,6 +1787,35 @@ fn read_arg(st: &mut State, n: u8) -> Option<ExprId> {
                     .load(&mut st.machine.dom, a, 8, Endian::Little),
             )
         }
+    }
+}
+
+fn read_arg_with_width(st: &mut State, n: u8, width: Width) -> Option<ExprId> {
+    if st.machine.regs.arch() == RegArch::AArch64 && width == Width::W32 {
+        let register = match n {
+            0 => "w0",
+            1 => "w1",
+            2 => "w2",
+            3 => "w3",
+            4 => "w4",
+            5 => "w5",
+            6 => "w6",
+            7 => "w7",
+            _ => return None,
+        };
+        return Some(
+            st.machine
+                .regs
+                .read(&mut st.machine.dom, &VReg::phys(register)),
+        );
+    }
+    read_arg(st, n)
+}
+
+fn witness_for_predicate(st: &mut State, predicate: ExprId) -> Option<Model> {
+    match solve_probe_traced(st, (predicate, true), "predicate-witness", "other", st.pc) {
+        SolveResult::Sat(model) => Some(model),
+        _ => None,
     }
 }
 
@@ -1722,27 +1986,92 @@ fn push_sink(
     }
 }
 
+fn path_provenance(st: &State) -> Vec<String> {
+    let mut symbols = BTreeMap::new();
+    for (constraint, _) in &st.constraints {
+        st.machine.dom.pool.collect_syms(*constraint, &mut symbols);
+    }
+    symbols
+        .keys()
+        .filter_map(|id| st.taint.labels.get(id))
+        .flatten()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Record the sink(s) for a memory access at `va` through `addr_val`. Emits a
 /// controlled read/write (severity from the sentinel test), a double-fetch if the
-/// same attacker pointer was read before, a null-deref if the pointer can be NULL
-/// on this path, and a use-after-free if it lands in a freed block. An address
-/// touching no attacker input — or one already validated by a probe — is not a
-/// primitive and is skipped (the precision gate).
+/// same attacker pointer was read before, and a null-page dereference when either
+/// the address or the reaching path is attacker-controlled. This last distinction
+/// covers command-selected dereferences of an internal NULL field: the pointer is
+/// not tainted, but attacker input controls whether it is dereferenced.
 fn record_access(st: &mut State, va: u64, addr_val: ExprId, write: bool, sinks: &mut Vec<Sink>) {
+    let concrete_address = st.machine.dom.as_u64(&addr_val);
+    let concrete_low_page = concrete_address.is_some_and(|address| address < 0x1000);
+    record_path_stat(|stats| {
+        *stats.memory_access_sites.entry(va).or_default() += 1;
+        if let Some(address) = concrete_address {
+            *stats
+                .concrete_access_addresses
+                .entry(va)
+                .or_default()
+                .entry(address)
+                .or_default() += 1;
+        }
+        if concrete_low_page {
+            *stats.low_page_access_sites.entry(va).or_default() += 1;
+        }
+    });
+
     // A deref entirely covered by a probed (validated) region is trusted.
     if is_validated(st, addr_val) {
         return;
     }
     let tainted_by = st.taint.provenance_of(&st.machine.dom.pool, addr_val);
-    if tainted_by.is_empty() {
-        return; // internally-symbolic address: not an attacker primitive
-    }
+    let path_tainted_by = path_provenance(st);
     // Solve the path condition once and reuse it for every sink at this access
     // (controlled R/W, double-fetch, null-deref) instead of re-solving per sink.
     let Some(reach) = reach_model(st) else {
         return; // path infeasible
     };
     let free_addr = freely_controllable(st, addr_val);
+
+    // Linux NULL-member dereferences are commonly a small nonzero address
+    // (`NULL + field_offset`), so treat the first page as the null page. For a
+    // symbolic address, retain the exact-zero witness used historically.
+    let null_witness = if concrete_low_page || free_addr {
+        Some(reach.clone())
+    } else if tainted_by.is_empty() {
+        None
+    } else {
+        witness_for_value(st, addr_val, 0)
+    };
+    if let Some(witness) = null_witness {
+        let null_provenance = if tainted_by.is_empty() {
+            path_tainted_by
+        } else {
+            tainted_by.clone()
+        };
+        if !null_provenance.is_empty() {
+            sinks.push(Sink {
+                va,
+                kind: SinkKind::NullDeref,
+                witness,
+                severity: if free_addr {
+                    Severity::Arbitrary
+                } else {
+                    Severity::Constrained
+                },
+                tainted_by: null_provenance,
+            });
+        }
+    }
+
+    if tainted_by.is_empty() {
+        return; // no attacker control over the address itself
+    }
     let severity = if free_addr {
         Severity::Arbitrary
     } else {
@@ -1769,23 +2098,6 @@ fn record_access(st: &mut State, va: u64, addr_val: ExprId, write: bool, sinks: 
             witness: reach.clone(),
             severity,
             tainted_by: tainted_by.clone(),
-        });
-    }
-
-    // Null deref: trivially possible for a freely-controllable pointer (no solve);
-    // otherwise only if the path does not already guard it non-null.
-    let null_witness = if free_addr {
-        Some(reach)
-    } else {
-        witness_for_value(st, addr_val, 0)
-    };
-    if let Some(w) = null_witness {
-        sinks.push(Sink {
-            va,
-            kind: SinkKind::NullDeref,
-            witness: w,
-            severity: Severity::Arbitrary,
-            tainted_by,
         });
     }
 }
@@ -1824,6 +2136,7 @@ const STACK_WINDOW: u64 = 0x1_0000;
 /// exposes, then modeling its return value.
 fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<Sink>) -> bool {
     match summary {
+        ApiSummary::HavocReturn => havoc_return(st),
         ApiSummary::CopyMemory => {
             let Some(dst) = read_arg(st, 0) else {
                 return false;
@@ -1842,7 +2155,7 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             if !stack_overflow_check(st, va, dst, len, sinks) {
                 return false;
             }
-            havoc_rax(st);
+            havoc_return(st);
         }
         ApiSummary::Alloc { size_arg } => {
             let Some(size_val) = read_arg(st, size_arg) else {
@@ -1861,9 +2174,10 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
                 freed: false,
             });
             let ret = st.machine.dom.constant(Width::W64, base as u128);
+            let register = return_reg(st);
             st.machine
                 .regs
-                .write(&mut st.machine.dom, &VReg::phys("rax"), ret);
+                .write(&mut st.machine.dom, &VReg::phys(register), ret);
         }
         ApiSummary::Free { ptr_arg } => {
             let Some(ptr) = read_arg(st, ptr_arg) else {
@@ -1872,7 +2186,7 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             if !do_free(st, va, ptr, sinks) {
                 return false;
             }
-            havoc_rax(st);
+            havoc_return(st);
         }
         ApiSummary::Probe { addr_arg, len_arg } => {
             let Some(addr) = read_arg(st, addr_arg) else {
@@ -1892,13 +2206,13 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             for id in syms.keys() {
                 st.validated.insert(*id);
             }
-            havoc_rax(st);
+            havoc_return(st);
         }
         ApiSummary::DangerousCall { args, kind } => {
             if !dangerous_call(st, va, args, kind, sinks) {
                 return false;
             }
-            havoc_rax(st);
+            havoc_return(st);
         }
         ApiSummary::RetrieveBuffer { out_ptr_arg } => {
             // *arg[out_ptr_arg] := fresh SystemBuffer-tainted pointer.
@@ -1918,19 +2232,53 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
                     .mem
                     .store(&mut st.machine.dom, addr, &e, 8, Endian::Little);
             }
-            havoc_rax(st); // returns NTSTATUS
+            havoc_return(st); // returns a status/value
+        }
+        ApiSummary::BoundedSignedIndex {
+            index_arg,
+            width,
+            min,
+            max,
+        } => {
+            let Some(index) = read_arg_with_width(st, index_arg, width) else {
+                return false;
+            };
+            let min_value = st.machine.dom.constant(width, min as u128);
+            let max_value = st.machine.dom.constant(width, max as u128);
+            let below = st.machine.dom.cmp(CmpOp::Slt, &index, &min_value, width);
+            let above = st.machine.dom.cmp(CmpOp::Slt, &max_value, &index, width);
+            let outside = st.machine.dom.binop(BinOp::Or, &below, &above, Width::W1);
+            if let Some(witness) = witness_for_predicate(st, outside) {
+                let tainted_by = st.taint.provenance_of(&st.machine.dom.pool, index);
+                sinks.push(Sink {
+                    va,
+                    kind: SinkKind::OutOfBoundsIndex,
+                    witness,
+                    severity: Severity::Constrained,
+                    tainted_by,
+                });
+            }
+            havoc_return(st);
         }
     }
     true
 }
 
-/// Havoc the return register (`rax`) with a fresh symbol — the sound
+fn return_reg(st: &State) -> &'static str {
+    match st.machine.regs.arch() {
+        RegArch::X86_64 => "rax",
+        RegArch::AArch64 => "x0",
+    }
+}
+
+/// Havoc the architecture's return register with a fresh symbol — the sound
 /// over-approximation for a summarized callee whose result we don't model.
-fn havoc_rax(st: &mut State) {
+fn havoc_return(st: &mut State) {
+    let register = return_reg(st);
     let ret = st.machine.dom.fresh(Width::W64);
     st.machine
         .regs
-        .write(&mut st.machine.dom, &VReg::phys("rax"), ret);
+        .write(&mut st.machine.dom, &VReg::phys(register), ret);
 }
 
 /// `ExFreePool(ptr)`: a second free of an already-freed block is a double-free;
@@ -2031,14 +2379,18 @@ fn stack_overflow_check(
     if len_prov.is_empty() {
         return true; // a fixed-length copy can't overflow under attacker control
     }
+    let (stack_register, frame_register) = match st.machine.regs.arch() {
+        RegArch::X86_64 => ("rsp", "rbp"),
+        RegArch::AArch64 => ("sp", "x29"),
+    };
     let rsp_v = st
         .machine
         .regs
-        .read(&mut st.machine.dom, &VReg::phys("rsp"));
+        .read(&mut st.machine.dom, &VReg::phys(stack_register));
     let rbp_v = st
         .machine
         .regs
-        .read(&mut st.machine.dom, &VReg::phys("rbp"));
+        .read(&mut st.machine.dom, &VReg::phys(frame_register));
     if !shares_structural_origin(&st.machine.dom.pool, dst, rsp_v)
         && !shares_structural_origin(&st.machine.dom.pool, dst, rbp_v)
     {
@@ -2158,15 +2510,14 @@ fn dangerous_call(
     true
 }
 
-/// Execute a memory op whose address is symbolic by concretizing the address,
-/// recording any attacker-controlled access as a sink first. Returns `Some(())`
-/// when handled.
-fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> Option<()> {
+/// Execute a memory op through the symbolic explorer's single address and taint
+/// policy. Symbol-free addresses avoid a solver, while symbolic addresses use
+/// the configured concretization policy. Returns `Some(())` when handled.
+fn execute_memory_op(st: &mut State, op: &Op) -> Option<()> {
     match op {
         Op::Load { dst, addr } => {
             let av = st.machine.eval_addr(addr);
             let address_provenance = st.taint.provenance_of(&st.machine.dom.pool, av);
-            record_access(st, va, av, false, sinks);
             let a = concretize_addr(st, av)?;
             // Taint-through-memory: a load from an attacker-controlled pointer into
             // *uninitialized* memory yields fresh attacker data (mirrors a
@@ -2203,7 +2554,6 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
         }
         Op::Store { addr, src } => {
             let av = st.machine.eval_addr(addr);
-            record_access(st, va, av, true, sinks);
             let a = concretize_addr(st, av)?;
             let w = Width::from_bytes(addr.size as u16);
             let v = st.machine.read(src, w);
@@ -2361,16 +2711,9 @@ mod tests {
         let mut state = State::root(machine, 0x1000, taint);
         let op = Op::Load {
             dst: VReg::phys("rax"),
-            addr: MemOp::plain(
-                Some(VReg::phys("rdi")),
-                Some(VReg::phys("rsi")),
-                1,
-                0,
-                8,
-            ),
+            addr: MemOp::plain(Some(VReg::phys("rdi")), Some(VReg::phys("rsi")), 1, 0, 8),
         };
-        let mut sinks = Vec::new();
-        assert_eq!(symbolic_mem_op(&mut state, &op, 0x1000, &mut sinks), Some(()));
+        assert_eq!(execute_memory_op(&mut state, &op), Some(()));
 
         let loaded = state
             .machine
@@ -2405,9 +2748,7 @@ mod tests {
 
         let stack_value = machine.dom.constant(Width::W64, 0x20_0000);
         let adjacent_value = machine.dom.constant(Width::W64, 0x1f_8000);
-        let rsp_fixed = machine
-            .dom
-            .cmp(CmpOp::Eq, &rsp, &stack_value, Width::W64);
+        let rsp_fixed = machine.dom.cmp(CmpOp::Eq, &rsp, &stack_value, Width::W64);
         let dst_fixed = machine
             .dom
             .cmp(CmpOp::Eq, &dst, &adjacent_value, Width::W64);
@@ -2417,11 +2758,7 @@ mod tests {
         let mut sinks = Vec::new();
 
         assert!(stack_overflow_check(
-            &mut state,
-            0x1010,
-            dst,
-            len,
-            &mut sinks,
+            &mut state, 0x1010, dst, len, &mut sinks,
         ));
         assert!(
             sinks.iter().all(|sink| sink.kind != SinkKind::StackOverflow),
@@ -2439,9 +2776,7 @@ mod tests {
         let eight = machine.dom.constant(Width::W64, 8);
         let rbp = machine.dom.binop(BinOp::Sub, &zero, &eight, Width::W64);
         let frame_size = machine.dom.constant(Width::W64, 0x90);
-        let rsp = machine
-            .dom
-            .binop(BinOp::Sub, &rbp, &frame_size, Width::W64);
+        let rsp = machine.dom.binop(BinOp::Sub, &rbp, &frame_size, Width::W64);
         let local_offset = machine.dom.constant(Width::W64, 0x70);
         let dst = machine
             .dom
@@ -2464,14 +2799,12 @@ mod tests {
         let mut sinks = Vec::new();
 
         assert!(stack_overflow_check(
-            &mut state,
-            0x1010,
-            dst,
-            len,
-            &mut sinks,
+            &mut state, 0x1010, dst, len, &mut sinks,
         ));
         assert!(
-            sinks.iter().any(|sink| sink.kind == SinkKind::StackOverflow),
+            sinks
+                .iter()
+                .any(|sink| sink.kind == SinkKind::StackOverflow),
             "an rbp-derived destination with attacker length is stack storage: {sinks:?}",
         );
     }
@@ -2500,18 +2833,14 @@ mod tests {
         let representative = representative_machine.dom.fresh(Width::W8);
         let five = representative_machine.dom.constant(Width::W8, 5);
         let ten = representative_machine.dom.constant(Width::W8, 10);
-        let at_least_five = representative_machine.dom.cmp(
-            CmpOp::Ule,
-            &five,
-            &representative,
-            Width::W8,
-        );
-        let at_most_ten = representative_machine.dom.cmp(
-            CmpOp::Ule,
-            &representative,
-            &ten,
-            Width::W8,
-        );
+        let at_least_five =
+            representative_machine
+                .dom
+                .cmp(CmpOp::Ule, &five, &representative, Width::W8);
+        let at_most_ten =
+            representative_machine
+                .dom
+                .cmp(CmpOp::Ule, &representative, &ten, Width::W8);
         let mut representative_state =
             State::root(representative_machine, 0x1000, TaintSpec::new());
         representative_state.assert((at_least_five, true), "test", 0x1000);
@@ -2527,8 +2856,7 @@ mod tests {
             Some(5),
         );
         assert_eq!(
-            representative_state.constraints,
-            representative_constraints,
+            representative_state.constraints, representative_constraints,
             "read-only representative selection must not bind the path",
         );
 
@@ -2536,14 +2864,12 @@ mod tests {
         let address = address_machine.dom.fresh(Width::W64);
         let low = address_machine.dom.constant(Width::W64, 0x1000);
         let high = address_machine.dom.constant(Width::W64, 0x2000);
-        let at_least_low =
-            address_machine
-                .dom
-                .cmp(CmpOp::Ule, &low, &address, Width::W64);
-        let at_most_high =
-            address_machine
-                .dom
-                .cmp(CmpOp::Ule, &address, &high, Width::W64);
+        let at_least_low = address_machine
+            .dom
+            .cmp(CmpOp::Ule, &low, &address, Width::W64);
+        let at_most_high = address_machine
+            .dom
+            .cmp(CmpOp::Ule, &address, &high, Width::W64);
         let mut address_state = State::root(address_machine, 0x2000, TaintSpec::new());
         address_state.assert((at_least_low, true), "test", 0x2000);
         address_state.assert((at_most_high, true), "test", 0x2000);
@@ -2765,7 +3091,7 @@ mod tests {
     /// *solver* budget is what stops it — proving the safety cap engages.
     #[test]
     fn solver_budget_bails_on_runaway_exploration() {
-        use crate::symbolic::solver::{DEFAULT_SOLVER_BUDGET, set_solver_budget, solver_meter};
+        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
         let lf = func(vec![
             (
                 0x1000,
@@ -2838,12 +3164,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn completed_worklist_still_reports_unsupported_semantic_stop() {
+        let lf = func(vec![(
+            0x1000,
+            vec![Op::Intrinsic {
+                name: "unmodeled_vector_op".into(),
+                ins: Vec::new(),
+                outs: Vec::new(),
+                reads_mem: false,
+                writes_mem: false,
+            }],
+            0x1004,
+        )]);
+
+        reset_exploration_limit_stats();
+        reset_execution_path_stats();
+        let _ = find_sinks(&lf, |_| TaintSpec::new(), &CallModel::new(), 8);
+
+        assert_eq!(exploration_limit_stats().completed, 1);
+        assert_eq!(
+            execution_path_stats(),
+            ExecutionPathStats {
+                unsupported_intrinsics: BTreeMap::from([("unmodeled_vector_op".to_string(), 1,)]),
+                stop_sites: BTreeMap::from([(
+                    0x1000,
+                    BTreeMap::from([("unsupported-intrinsic:unmodeled_vector_op".to_string(), 1,)]),
+                )]),
+                ..ExecutionPathStats::default()
+            }
+        );
+        assert_eq!(execution_path_stats().incomplete_stops(), 1);
+    }
+
+    #[test]
+    fn architectural_trap_is_a_modeled_terminal_not_an_unsupported_stop() {
+        let lf = func(vec![(
+            0x1000,
+            vec![Op::Intrinsic {
+                name: "brk".into(),
+                ins: Vec::new(),
+                outs: Vec::new(),
+                reads_mem: false,
+                writes_mem: false,
+            }],
+            0x1004,
+        )]);
+
+        reset_execution_path_stats();
+        let _ = find_sinks(&lf, |_| TaintSpec::new(), &CallModel::new(), 8);
+
+        let stats = execution_path_stats();
+        assert_eq!(stats.traps, BTreeMap::from([("brk".to_string(), 1)]));
+        assert_eq!(
+            stats.stop_sites,
+            BTreeMap::from([(0x1000, BTreeMap::from([("trap:brk".to_string(), 1)]))])
+        );
+        assert!(stats.unsupported_intrinsics.is_empty());
+        assert_eq!(stats.incomplete_stops(), 0);
+        assert_eq!(stats.modeled_terminal_paths(), 1);
+    }
+
     /// The per-path loop bound alone (with the *default*, huge solver budget)
     /// stops a self-looping function quickly — bounding symbolic expression growth
     /// at its source. Without it, the loop would fork up to the state cap.
     #[test]
     fn loop_bound_cuts_runaway_path() {
-        use crate::symbolic::solver::{DEFAULT_SOLVER_BUDGET, set_solver_budget, solver_meter};
+        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
         let lf = func(vec![
             (
                 0x1000,

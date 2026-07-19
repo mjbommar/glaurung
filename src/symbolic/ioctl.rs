@@ -13,10 +13,11 @@
 
 use std::collections::BTreeMap;
 
-use crate::exec::{Domain, Machine};
+use crate::exec::{Domain, Machine, RegArch};
 use crate::ir::types::{Endian, LlirFunction, VReg, Width};
 use crate::symbolic::explore::{
-    find_sinks, find_sinks_stateful, ApiSummary, CallModel, Sink, SinkKind, TaintSpec,
+    find_sinks, find_sinks_stateful, find_sinks_with_arch, ApiSummary, CallModel, Sink, SinkKind,
+    TaintSpec,
 };
 use crate::symbolic::{Expr, Symbolic};
 
@@ -41,6 +42,125 @@ const SYSTEM_BUFFER: u64 = 0x4_0000_0000;
 // I/O-manager allocation as content-tainted; actual bounds remain a separate
 // length-aware memory-safety analysis rather than pointer-control taint.
 const SYSTEM_BUFFER_MAX_LEN: u64 = u32::MAX as u64 + 1;
+
+// Linux AArch64 `file_operations::unlocked_ioctl` execution environment.
+const LINUX_FILE: u64 = 0x5_0000_0000;
+const LINUX_STACK: u64 = 0x6_0000_0000;
+const LINUX_PCI_ENDPOINT_TEST: u64 = 0x5_1000_0000;
+const LINUX_PCI_DEVICE: u64 = 0x5_2000_0000;
+
+/// A named, reviewable kernel-object precondition for a Linux ioctl run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxIoctlEnvironment {
+    /// Only the generic AAPCS64 file/cmd/arg and stack contract.
+    Generic,
+    /// Valid `file->private_data`, enclosing `pci_endpoint_test`, and non-AM654
+    /// `pci_dev` for the registered PCI endpoint-test CVE row.
+    PciEndpointTest,
+}
+
+impl LinuxIoctlEnvironment {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Generic => "generic",
+            Self::PciEndpointTest => "pci-endpoint-test",
+        }
+    }
+}
+
+/// Attacker-controlled inputs of Linux's AAPCS64 ioctl handler ABI:
+/// `x0 = struct file *`, `w1 = cmd`, `x2 = arg`.
+#[derive(Debug, Clone, Copy)]
+pub struct LinuxIoctlSeed {
+    pub cmd_sym: u32,
+    pub arg_sym: u32,
+}
+
+impl LinuxIoctlSeed {
+    pub fn taint_spec(&self) -> TaintSpec {
+        let mut taint = TaintSpec::new();
+        taint.mark(self.cmd_sym, "IoctlCmd");
+        taint.mark(self.arg_sym, "IoctlArg");
+        taint
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum LinuxIoctlSeedError {
+    #[error("Linux ioctl seeding requires an AArch64 machine, found {0:?}")]
+    WrongArchitecture(RegArch),
+}
+
+/// Seed one Linux AArch64 `unlocked_ioctl` invocation without reusing the
+/// Windows IRP model. The kernel-owned `struct file *` and stack/frame pointers
+/// are deterministic concrete environment values; the 32-bit command and
+/// 64-bit user argument retain distinct symbolic widths and provenance.
+pub fn seed_linux_ioctl(
+    machine: &mut Machine<Symbolic>,
+) -> Result<LinuxIoctlSeed, LinuxIoctlSeedError> {
+    if machine.regs.arch() != RegArch::AArch64 {
+        return Err(LinuxIoctlSeedError::WrongArchitecture(machine.regs.arch()));
+    }
+    Ok(seed_linux_ioctl_aarch64(machine))
+}
+
+fn seed_linux_ioctl_aarch64(machine: &mut Machine<Symbolic>) -> LinuxIoctlSeed {
+    let file = machine.dom.constant(Width::W64, LINUX_FILE as u128);
+    machine
+        .regs
+        .write(&mut machine.dom, &VReg::phys("x0"), file);
+
+    let cmd = machine.dom.fresh(Width::W32);
+    let cmd_sym = match machine.dom.pool.get(cmd) {
+        Expr::Sym { id, .. } => *id,
+        _ => unreachable!("fresh() returns a Sym"),
+    };
+    machine.regs.write(&mut machine.dom, &VReg::phys("w1"), cmd);
+
+    let arg = machine.dom.fresh(Width::W64);
+    let arg_sym = match machine.dom.pool.get(arg) {
+        Expr::Sym { id, .. } => *id,
+        _ => unreachable!("fresh() returns a Sym"),
+    };
+    machine.regs.write(&mut machine.dom, &VReg::phys("x2"), arg);
+
+    for register in ["sp", "x29"] {
+        let value = machine.dom.constant(Width::W64, LINUX_STACK as u128);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys(register), value);
+    }
+    LinuxIoctlSeed { cmd_sym, arg_sym }
+}
+
+fn seed_linux_ioctl_environment(
+    machine: &mut Machine<Symbolic>,
+    environment: LinuxIoctlEnvironment,
+) {
+    match environment {
+        LinuxIoctlEnvironment::Generic => {}
+        LinuxIoctlEnvironment::PciEndpointTest => {
+            // `file->private_data` is the embedded `miscdevice` at test+0x90;
+            // `to_endpoint_test()` subtracts that offset. The AArch64 object
+            // reads `test->pdev` at +0 and `pdev->device` at +0x3e.
+            store_const(
+                machine,
+                LINUX_FILE + 0x18,
+                LINUX_PCI_ENDPOINT_TEST + 0x90,
+                Width::W64,
+            );
+            store_const(
+                machine,
+                LINUX_PCI_ENDPOINT_TEST,
+                LINUX_PCI_DEVICE,
+                Width::W64,
+            );
+            // Any non-AM654 device keeps BAR_0 out of the target-specific
+            // exclusion while retaining a valid `pci_dev` object.
+            store_const(machine, LINUX_PCI_DEVICE + 0x3e, 0, Width::W16);
+        }
+    }
+}
 
 /// The free-symbol ids of the attacker-controlled IRP fields, so a witness
 /// [`Model`](crate::symbolic::Model) can be interpreted (e.g. which value of the
@@ -163,6 +283,55 @@ fn seed_iat(m: &mut Machine<Symbolic>, apis: &CallModel) {
 /// only).
 pub fn find_ioctl_sinks(lf: &LlirFunction, max_states: usize) -> Vec<Sink> {
     find_ioctl_sinks_with_apis(lf, &CallModel::new(), max_states)
+}
+
+/// Execute a Linux AArch64 `unlocked_ioctl` handler with the exact AAPCS64 seed
+/// and architecture-aware modeled-callee ABI. This does not reuse the WDM IRP
+/// environment or the MS x64 return-address detector.
+pub fn find_linux_ioctl_sinks_with_apis(
+    lf: &LlirFunction,
+    apis: &CallModel,
+    max_states: usize,
+) -> Vec<Sink> {
+    find_sinks_with_arch(
+        lf,
+        RegArch::AArch64,
+        |machine| seed_linux_ioctl_aarch64(machine).taint_spec(),
+        apis,
+        max_states,
+    )
+}
+
+/// Execute a Linux AArch64 `unlocked_ioctl` handler for one registered command.
+/// The argument remains symbolic and attacker-tainted; only `w1` is fixed. This
+/// is an environment selection for a preregistered CVE row, not a search-policy
+/// heuristic.
+pub fn find_linux_ioctl_sinks_for_command_with_apis(
+    lf: &LlirFunction,
+    command: u32,
+    environment: LinuxIoctlEnvironment,
+    apis: &CallModel,
+    max_states: usize,
+) -> Vec<Sink> {
+    find_sinks_with_arch(
+        lf,
+        RegArch::AArch64,
+        |machine| {
+            let seed = seed_linux_ioctl_aarch64(machine);
+            let command = machine.dom.constant(Width::W32, command as u128);
+            machine
+                .regs
+                .write(&mut machine.dom, &VReg::phys("w1"), command);
+            seed_linux_ioctl_environment(machine, environment);
+            seed.taint_spec()
+        },
+        apis,
+        max_states,
+    )
+}
+
+pub fn find_linux_ioctl_sinks(lf: &LlirFunction, max_states: usize) -> Vec<Sink> {
+    find_linux_ioctl_sinks_with_apis(lf, &CallModel::new(), max_states)
 }
 
 /// Mark the four integer-argument registers (`rcx`/`rdx`/`r8`/`r9`) as attacker
@@ -305,6 +474,51 @@ pub fn driver_api_model(imports: &BTreeMap<String, u64>) -> CallModel {
     model
 }
 
+/// Build the narrow Linux kernel-call model used by admitted AArch64 ioctl
+/// handlers. The frontend supplies deterministic target-VA to ELF-symbol names;
+/// unsupported calls remain conservative return-value havoc in the explorer.
+pub fn linux_driver_api_model(external_calls: &BTreeMap<u64, String>) -> CallModel {
+    let mut model = CallModel::new();
+    for (&va, name) in external_calls {
+        let summary = match name.as_str() {
+            // Synchronization is an explicit environment no-op for the
+            // single-threaded handler run; the return is conservatively havoced.
+            "mutex_lock" | "mutex_unlock" | "_printk" => ApiSummary::HavocReturn,
+            "__arch_copy_from_user" | "copy_from_user" | "copy_to_user" | "memcpy" | "memmove" => {
+                ApiSummary::CopyMemory
+            }
+            "__kmalloc_noprof" | "kmalloc" | "kzalloc" => ApiSummary::Alloc { size_arg: 0 },
+            "memdup_user" => ApiSummary::Alloc { size_arg: 1 },
+            "kfree" => ApiSummary::Free { ptr_arg: 0 },
+            _ => continue,
+        };
+        model.insert(va, summary);
+    }
+    model
+}
+
+/// Build the narrow same-object helper model used by admitted Linux handlers.
+/// Local helpers are never inferred by signature: each accepted symbol is an
+/// explicit environment contract for the corresponding driver family.
+pub fn linux_local_api_model(local_calls: &BTreeMap<u64, String>) -> CallModel {
+    let mut model = CallModel::new();
+    for (&va, name) in local_calls {
+        let summary = match name.as_str() {
+            // `enum pci_barno` has the valid signed range BAR_0..BAR_5. The
+            // vulnerable helper uses this argument as a fixed-table index.
+            "pci_endpoint_test_bar" => ApiSummary::BoundedSignedIndex {
+                index_arg: 1,
+                width: Width::W32,
+                min: 0,
+                max: 5,
+            },
+            _ => continue,
+        };
+        model.insert(va, summary);
+    }
+    model
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +526,211 @@ mod tests {
         BinOp, CallTarget, CmpOp, Flag, LlirBlock, LlirInstr, MemOp, Op, Value,
     };
     use crate::symbolic::explore::{ApiSummary, Severity, SinkKind};
+
+    #[test]
+    fn linux_ioctl_seed_uses_aapcs64_registers_and_precise_widths() {
+        let mut machine = Machine::new_with_arch(Symbolic::new(), crate::exec::RegArch::AArch64);
+        let seed = seed_linux_ioctl(&mut machine).expect("seed AArch64 ioctl ABI");
+
+        assert_eq!(machine.regs.arch(), crate::exec::RegArch::AArch64);
+        let x0 = machine.regs.read(&mut machine.dom, &VReg::phys("x0"));
+        assert_eq!(machine.dom.as_u64(&x0), Some(LINUX_FILE));
+
+        let w1 = machine.regs.read(&mut machine.dom, &VReg::phys("w1"));
+        let mut cmd_symbols = BTreeMap::new();
+        machine.dom.pool.collect_syms(w1, &mut cmd_symbols);
+        assert_eq!(cmd_symbols.get(&seed.cmd_sym), Some(&Width::W32));
+        assert_eq!(seed.taint_spec().label(seed.cmd_sym), Some("IoctlCmd"));
+
+        let x2 = machine.regs.read(&mut machine.dom, &VReg::phys("x2"));
+        let mut arg_symbols = BTreeMap::new();
+        machine.dom.pool.collect_syms(x2, &mut arg_symbols);
+        assert_eq!(arg_symbols.get(&seed.arg_sym), Some(&Width::W64));
+        assert_eq!(seed.taint_spec().label(seed.arg_sym), Some("IoctlArg"));
+
+        let sp = machine.regs.read(&mut machine.dom, &VReg::phys("sp"));
+        assert_eq!(machine.dom.as_u64(&sp), Some(LINUX_STACK));
+        let rcx = machine.regs.read(&mut machine.dom, &VReg::phys("rcx"));
+        assert_eq!(machine.dom.as_u64(&rcx), Some(0));
+    }
+
+    #[test]
+    fn linux_ioctl_explorer_uses_aapcs64_call_arguments() {
+        let lf = func(vec![(
+            0x1000,
+            vec![
+                Op::Call {
+                    target: CallTarget::Direct(0x9000),
+                },
+                Op::Return,
+            ],
+            0x1008,
+            vec![],
+        )]);
+        let mut apis = CallModel::new();
+        apis.insert(
+            0x9000,
+            ApiSummary::DangerousCall {
+                args: &[2],
+                kind: SinkKind::PhysicalMemory,
+            },
+        );
+
+        let sinks = find_linux_ioctl_sinks_with_apis(&lf, &apis, 32);
+        assert_eq!(sinks.len(), 1);
+        assert_eq!(sinks[0].kind, SinkKind::PhysicalMemory);
+        assert_eq!(sinks[0].tainted_by, vec!["IoctlArg".to_string()]);
+    }
+
+    #[test]
+    fn linux_ioctl_path_accounting_rejects_implicit_call_havoc() {
+        let lf = func(vec![(
+            0x1000,
+            vec![
+                Op::Call {
+                    target: CallTarget::Direct(0x9000),
+                },
+                Op::Return,
+            ],
+            0x1008,
+            vec![],
+        )]);
+
+        crate::symbolic::reset_execution_path_stats();
+        find_linux_ioctl_sinks(&lf, 32);
+        let implicit = crate::symbolic::execution_path_stats();
+        assert_eq!(implicit.unmodeled_calls.get(&0x1000), Some(&1));
+        assert_eq!(implicit.incomplete_stops(), 1);
+
+        let apis = CallModel::from([(0x9000, ApiSummary::HavocReturn)]);
+        crate::symbolic::reset_execution_path_stats();
+        find_linux_ioctl_sinks_with_apis(&lf, &apis, 32);
+        let explicit = crate::symbolic::execution_path_stats();
+        assert!(explicit.unmodeled_calls.is_empty());
+        assert_eq!(explicit.incomplete_stops(), 0);
+    }
+
+    #[test]
+    fn linux_ioctl_reports_path_controlled_null_page_deref() {
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("w1")),
+                        rhs: Value::Const(6),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x2000,
+                        inverted: false,
+                    },
+                ],
+                0x1008,
+                vec![0x1008, 0x2000],
+            ),
+            (0x1008, vec![Op::Return], 0x100c, vec![]),
+            (
+                0x2000,
+                vec![
+                    Op::Load {
+                        dst: VReg::phys("w8"),
+                        addr: MemOp::plain(None, None, 1, 0x20, 1),
+                    },
+                    Op::Return,
+                ],
+                0x2008,
+                vec![],
+            ),
+        ]);
+        let sinks = find_linux_ioctl_sinks(&lf, 32);
+        let null = sinks
+            .iter()
+            .find(|sink| sink.kind == SinkKind::NullDeref)
+            .expect("cmd-controlled low-page dereference");
+        assert_eq!(null.tainted_by, vec!["IoctlCmd".to_string()]);
+        assert_eq!(null.severity, Severity::Constrained);
+    }
+
+    #[test]
+    fn linux_driver_api_model_recognizes_usercopy_alloc_and_free() {
+        let calls = BTreeMap::from([
+            (0x1000, "__arch_copy_from_user".to_string()),
+            (0x2000, "memdup_user".to_string()),
+            (0x3000, "kfree".to_string()),
+            (0x4000, "mutex_lock".to_string()),
+            (0x5000, "_printk".to_string()),
+        ]);
+        let model = linux_driver_api_model(&calls);
+        assert_eq!(model.get(&0x1000), Some(&ApiSummary::CopyMemory));
+        assert_eq!(model.get(&0x2000), Some(&ApiSummary::Alloc { size_arg: 1 }));
+        assert_eq!(model.get(&0x3000), Some(&ApiSummary::Free { ptr_arg: 0 }));
+        assert_eq!(model.get(&0x4000), Some(&ApiSummary::HavocReturn));
+        assert_eq!(model.get(&0x5000), Some(&ApiSummary::HavocReturn));
+    }
+
+    #[test]
+    fn linux_local_api_model_recognizes_registered_pci_bar_helper_only() {
+        let calls = BTreeMap::from([
+            (0x1000, "pci_endpoint_test_bar".to_string()),
+            (0x2000, "unregistered_local_helper".to_string()),
+        ]);
+        let model = linux_local_api_model(&calls);
+        assert_eq!(
+            model.get(&0x1000),
+            Some(&ApiSummary::BoundedSignedIndex {
+                index_arg: 1,
+                width: Width::W32,
+                min: 0,
+                max: 5,
+            })
+        );
+        assert!(!model.contains_key(&0x2000));
+    }
+
+    #[test]
+    fn registered_command_preserves_symbolic_ioctl_argument_for_local_summary() {
+        let lf = func(vec![(
+            0x1000,
+            vec![
+                Op::Assign {
+                    dst: VReg::phys("w1"),
+                    src: Value::Reg(VReg::phys("w2")),
+                },
+                Op::Call {
+                    target: CallTarget::Direct(0x9000),
+                },
+                Op::Return,
+            ],
+            0x100c,
+            vec![],
+        )]);
+        let mut apis = CallModel::new();
+        apis.insert(
+            0x9000,
+            ApiSummary::BoundedSignedIndex {
+                index_arg: 1,
+                width: Width::W32,
+                min: 0,
+                max: 5,
+            },
+        );
+
+        let sinks = find_linux_ioctl_sinks_for_command_with_apis(
+            &lf,
+            0x5001,
+            LinuxIoctlEnvironment::Generic,
+            &apis,
+            32,
+        );
+        let sink = sinks
+            .iter()
+            .find(|sink| sink.kind == SinkKind::OutOfBoundsIndex)
+            .expect("symbolic ioctl arg can violate registered helper range");
+        assert_eq!(sink.tainted_by, vec!["IoctlArg".to_string()]);
+    }
 
     fn kinds(sinks: &[Sink]) -> std::collections::BTreeSet<&'static str> {
         sinks.iter().map(|s| kind_str(s.kind)).collect()
@@ -336,6 +755,7 @@ mod tests {
             SinkKind::ArbitraryMsrWrite => "wrmsr",
             SinkKind::ArbitraryMsrRead => "rdmsr",
             SinkKind::PortAccess => "portio",
+            SinkKind::OutOfBoundsIndex => "oob_index",
         }
     }
 

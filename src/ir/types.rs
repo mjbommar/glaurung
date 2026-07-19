@@ -64,6 +64,8 @@ pub enum Endian {
 /// * `O`   — overflow
 /// * `P`   — parity
 /// * `A`   — auxiliary carry
+/// * `Bit` — internal one-bit predicate for flag-preserving ISA branches such
+///           as AArch64 `tbz`/`tbnz`; it is not an architectural status flag
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Flag {
     Z,
@@ -75,6 +77,7 @@ pub enum Flag {
     O,
     P,
     A,
+    Bit,
 }
 
 /// A virtual register. Named physical registers carry the source-ISA name
@@ -494,6 +497,7 @@ impl fmt::Display for VReg {
                 Flag::O => write!(f, "%of"),
                 Flag::P => write!(f, "%pf"),
                 Flag::A => write!(f, "%af"),
+                Flag::Bit => write!(f, "%bitpred"),
             },
         }
     }
@@ -575,7 +579,8 @@ impl fmt::Display for Op {
             Op::Intrinsic {
                 name, ins, outs, ..
             } => {
-                let outs_s: Vec<String> = outs.iter().map(|(r, w)| format!("{}:{}", r, w)).collect();
+                let outs_s: Vec<String> =
+                    outs.iter().map(|(r, w)| format!("{}:{}", r, w)).collect();
                 let ins_s: Vec<String> = ins.iter().map(|v| v.to_string()).collect();
                 write!(
                     f,
@@ -691,7 +696,10 @@ mod tests {
         let intr = Op::Intrinsic {
             name: "cpuid".into(),
             ins: vec![Value::reg("eax")],
-            outs: vec![(VReg::phys("eax"), Width::W32), (VReg::phys("edx"), Width::W32)],
+            outs: vec![
+                (VReg::phys("eax"), Width::W32),
+                (VReg::phys("edx"), Width::W32),
+            ],
             reads_mem: false,
             writes_mem: false,
         };

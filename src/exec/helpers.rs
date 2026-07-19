@@ -19,7 +19,12 @@ use std::collections::HashMap;
 
 use crate::exec::domain::Domain;
 use crate::exec::interp::{Halt, Machine};
-use crate::ir::types::{BinOp, VReg, Value, Width};
+use crate::ir::types::{BinOp, CmpOp, Flag, VReg, Value, Width};
+
+/// Deterministic synthetic Linux `current`/SP_EL0 base for single-handler
+/// AArch64 execution. Unmapped task fields read as zero unless a harness seeds
+/// them explicitly.
+const AARCH64_SP_EL0_BASE: u64 = 0xffff_0000_0000_0000;
 
 /// A helper: executes one intrinsic against the machine, reading `ins` and
 /// writing `outs` (and/or fixed architectural registers). Returns `Err(halt)` to
@@ -80,12 +85,148 @@ impl<D: Domain> HelperRegistry<D> {
         r
     }
 
-    /// The default AArch64 helper set. Empty for now — AArch64 environment
-    /// intrinsics (`mrs`/`svc`/…) are added as the lifter emits richer
-    /// intrinsics; unmodelled ones halt cleanly until then.
+    /// The default AArch64 helper set used by the strict Linux handler seam.
+    /// PAC hints and barriers are no-ops in this single-threaded, code-integrity
+    /// model; SP_EL0 is a stable synthetic task base. Other environment
+    /// intrinsics continue to halt cleanly.
     pub fn default_aarch64() -> Self {
-        Self::empty()
+        let mut registry = Self::empty();
+        for name in ["paciasp", "autiasp", "dmb", "csdb"] {
+            registry.register(name, helper_aarch64_noop::<D>);
+        }
+        registry.register("mrs_sp_el0", helper_aarch64_sp_el0::<D>);
+        registry.register("aarch64_cmn32", helper_aarch64_cmn32::<D>);
+        registry.register("aarch64_cmn64", helper_aarch64_cmn64::<D>);
+        registry.register("aarch64_tst32", helper_aarch64_tst32::<D>);
+        registry.register("aarch64_tst64", helper_aarch64_tst64::<D>);
+        registry
     }
+}
+
+fn helper_aarch64_noop<D: Domain>(
+    _machine: &mut Machine<D>,
+    _ins: &[Value],
+    _outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    Ok(())
+}
+
+fn helper_aarch64_sp_el0<D: Domain>(
+    machine: &mut Machine<D>,
+    _ins: &[Value],
+    outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    if let Some((dst, width)) = outs.first() {
+        let value = machine.dom.constant(*width, AARCH64_SP_EL0_BASE as u128);
+        machine.regs.write(&mut machine.dom, dst, value);
+    }
+    Ok(())
+}
+
+fn write_aarch64_flag<D: Domain>(machine: &mut Machine<D>, flag: Flag, value: D::Val) {
+    machine
+        .regs
+        .write(&mut machine.dom, &VReg::Flag(flag), value);
+}
+
+fn helper_aarch64_cmn<D: Domain>(
+    machine: &mut Machine<D>,
+    ins: &[Value],
+    width: Width,
+) -> Result<(), Halt> {
+    if ins.len() < 2 {
+        return Ok(());
+    }
+    let lhs = machine.read(&ins[0], width);
+    let rhs = machine.read(&ins[1], width);
+    let sum = machine.dom.binop(BinOp::Add, &lhs, &rhs, width);
+    let zero = machine.dom.constant(width, 0);
+    let z = machine.dom.cmp(CmpOp::Eq, &sum, &zero, width);
+
+    // LLIR's C predicate means "lower". For ADDS/CMN, lower is carry-clear,
+    // which is equivalent to lhs <= modular_sum.
+    let lower = machine.dom.cmp(CmpOp::Ule, &lhs, &sum, width);
+    let ule = machine.dom.binop(BinOp::Or, &lower, &z, Width::W1);
+    let sign = machine.dom.extract(&sum, width.bits(), width.bits() - 1);
+    let lhs_sign = machine.dom.extract(&lhs, width.bits(), width.bits() - 1);
+    let rhs_sign = machine.dom.extract(&rhs, width.bits(), width.bits() - 1);
+    let same_input_sign = machine.dom.cmp(CmpOp::Eq, &lhs_sign, &rhs_sign, Width::W1);
+    let changed_sign = machine.dom.cmp(CmpOp::Ne, &sign, &lhs_sign, Width::W1);
+    let overflow = machine
+        .dom
+        .binop(BinOp::And, &same_input_sign, &changed_sign, Width::W1);
+    let slt = machine.dom.binop(BinOp::Xor, &sign, &overflow, Width::W1);
+    let sle = machine.dom.binop(BinOp::Or, &z, &slt, Width::W1);
+
+    write_aarch64_flag(machine, Flag::Z, z);
+    write_aarch64_flag(machine, Flag::C, lower);
+    write_aarch64_flag(machine, Flag::Ule, ule);
+    write_aarch64_flag(machine, Flag::S, sign);
+    write_aarch64_flag(machine, Flag::Slt, slt);
+    write_aarch64_flag(machine, Flag::Sle, sle);
+    write_aarch64_flag(machine, Flag::O, overflow);
+    Ok(())
+}
+
+fn helper_aarch64_cmn32<D: Domain>(
+    machine: &mut Machine<D>,
+    ins: &[Value],
+    _outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    helper_aarch64_cmn(machine, ins, Width::W32)
+}
+
+fn helper_aarch64_cmn64<D: Domain>(
+    machine: &mut Machine<D>,
+    ins: &[Value],
+    _outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    helper_aarch64_cmn(machine, ins, Width::W64)
+}
+
+fn helper_aarch64_tst<D: Domain>(
+    machine: &mut Machine<D>,
+    ins: &[Value],
+    width: Width,
+) -> Result<(), Halt> {
+    if ins.len() < 2 {
+        return Ok(());
+    }
+    let lhs = machine.read(&ins[0], width);
+    let rhs = machine.read(&ins[1], width);
+    let result = machine.dom.binop(BinOp::And, &lhs, &rhs, width);
+    let zero = machine.dom.constant(width, 0);
+    let z = machine.dom.cmp(CmpOp::Eq, &result, &zero, width);
+    let sign = machine.dom.extract(&result, width.bits(), width.bits() - 1);
+    let lower = machine.dom.constant(Width::W1, 1); // logical ops clear C
+    let overflow = machine.dom.constant(Width::W1, 0);
+    let ule = machine.dom.constant(Width::W1, 1); // lower || zero
+    let sle = machine.dom.binop(BinOp::Or, &z, &sign, Width::W1);
+
+    write_aarch64_flag(machine, Flag::Z, z);
+    write_aarch64_flag(machine, Flag::C, lower);
+    write_aarch64_flag(machine, Flag::Ule, ule);
+    write_aarch64_flag(machine, Flag::S, sign.clone());
+    write_aarch64_flag(machine, Flag::Slt, sign);
+    write_aarch64_flag(machine, Flag::Sle, sle);
+    write_aarch64_flag(machine, Flag::O, overflow);
+    Ok(())
+}
+
+fn helper_aarch64_tst32<D: Domain>(
+    machine: &mut Machine<D>,
+    ins: &[Value],
+    _outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    helper_aarch64_tst(machine, ins, Width::W32)
+}
+
+fn helper_aarch64_tst64<D: Domain>(
+    machine: &mut Machine<D>,
+    ins: &[Value],
+    _outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    helper_aarch64_tst(machine, ins, Width::W64)
 }
 
 /// `rdtsc`/`rdtscp`: edx:eax ← a virtual monotonic counter.
@@ -214,6 +355,8 @@ fn helper_div<D: Domain>(
 mod tests {
     use super::*;
     use crate::exec::concrete::Concrete;
+    use crate::exec::interp::Flow;
+    use crate::exec::state::RegArch;
     use crate::ir::types::Op;
 
     #[test]
@@ -243,11 +386,59 @@ mod tests {
 
     #[test]
     fn unregistered_intrinsic_still_halts() {
-        use crate::exec::interp::Flow;
         let mut m: Machine<Concrete> = Machine::new(Concrete);
         assert_eq!(
             m.step(&Op::opaque("vpbroadcastb")),
             Flow::Halt(Halt::UnsupportedIntrinsic("vpbroadcastb".into()))
         );
+    }
+
+    #[test]
+    fn aarch64_environment_helpers_are_deterministic_and_non_halting() {
+        let mut machine: Machine<Concrete> = Machine::new_with_arch(Concrete, RegArch::AArch64);
+        assert_eq!(machine.step(&Op::opaque("paciasp")), Flow::Next);
+        let mrs = Op::Intrinsic {
+            name: "mrs_sp_el0".to_string(),
+            ins: Vec::new(),
+            outs: vec![(VReg::phys("x8"), Width::W64)],
+            reads_mem: false,
+            writes_mem: false,
+        };
+        assert_eq!(machine.step(&mrs), Flow::Next);
+        assert_eq!(
+            machine.regs.read(&mut machine.dom, &VReg::phys("x8")),
+            AARCH64_SP_EL0_BASE as u128
+        );
+        assert_eq!(machine.step(&Op::opaque("dmb")), Flow::Next);
+    }
+
+    #[test]
+    fn aarch64_cmn_and_tst_helpers_write_branch_predicates() {
+        let mut machine: Machine<Concrete> = Machine::new_with_arch(Concrete, RegArch::AArch64);
+        let cmn = Op::Intrinsic {
+            name: "aarch64_cmn64".to_string(),
+            ins: vec![Value::Const(-1), Value::Const(1)],
+            outs: Vec::new(),
+            reads_mem: false,
+            writes_mem: false,
+        };
+        assert_eq!(machine.step(&cmn), Flow::Next);
+        assert_eq!(machine.regs.read(&mut machine.dom, &VReg::Flag(Flag::Z)), 1);
+        assert_eq!(machine.regs.read(&mut machine.dom, &VReg::Flag(Flag::C)), 0);
+        assert_eq!(
+            machine.regs.read(&mut machine.dom, &VReg::Flag(Flag::Ule)),
+            1
+        );
+
+        let tst = Op::Intrinsic {
+            name: "aarch64_tst64".to_string(),
+            ins: vec![Value::Const(8), Value::Const(8)],
+            outs: Vec::new(),
+            reads_mem: false,
+            writes_mem: false,
+        };
+        assert_eq!(machine.step(&tst), Flow::Next);
+        assert_eq!(machine.regs.read(&mut machine.dom, &VReg::Flag(Flag::Z)), 0);
+        assert_eq!(machine.regs.read(&mut machine.dom, &VReg::Flag(Flag::C)), 1);
     }
 }

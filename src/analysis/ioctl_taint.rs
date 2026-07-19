@@ -326,10 +326,7 @@ fn write_reg(state: &mut State, reg: &str, value: Taint) {
 }
 
 fn read_reg(state: &State, reg: &str) -> Taint {
-    state
-        .get(canon_reg(reg))
-        .copied()
-        .unwrap_or(Taint::Top)
+    state.get(canon_reg(reg)).copied().unwrap_or(Taint::Top)
 }
 
 /// In-place meet of `into` ← `into ∧ other`. Returns true when `into`
@@ -453,7 +450,12 @@ fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
             }
             None
         }
-        Op::Cmp { dst: _, op, lhs, rhs } => {
+        Op::Cmp {
+            dst: _,
+            op,
+            lhs,
+            rhs,
+        } => {
             // Recognise the patterns we use downstream:
             //
             //   1. Null check: `test R, R` (Cmp Eq, R, R) or `cmp R, 0`
@@ -473,7 +475,11 @@ fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
             };
             let val_is_self = matches!((subj, val), (Value::Reg(a), Value::Reg(b)) if vreg_canon(a) == vreg_canon(b));
             let val_is_zero = matches!(val, Value::Const(0));
-            let val_const = if let Value::Const(c) = val { Some(*c) } else { None };
+            let val_const = if let Value::Const(c) = val {
+                Some(*c)
+            } else {
+                None
+            };
 
             // Null check?
             if matches!(op, CmpOp::Eq) && subj_reg.is_some() && (val_is_self || val_is_zero) {
@@ -490,9 +496,7 @@ fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
                         let strict = matches!(op, CmpOp::Ult);
                         let _is_ule = matches!(op, CmpOp::Ule);
                         if matches!(op, CmpOp::Ult | CmpOp::Ule) {
-                            return Some(FlagInference::Length(LengthCheck {
-                                _strict: strict,
-                            }));
+                            return Some(FlagInference::Length(LengthCheck { _strict: strict }));
                         }
                     }
                 }
@@ -593,12 +597,26 @@ fn step_block(
         // same instruction).
         match &ins.op {
             Op::Load { addr, .. } => {
-                if let Some(f) = make_finding(state.borrow_state(), &local_nonnull, block.start_va, ins.va, addr, Access::Read) {
+                if let Some(f) = make_finding(
+                    state.borrow_state(),
+                    &local_nonnull,
+                    block.start_va,
+                    ins.va,
+                    addr,
+                    Access::Read,
+                ) {
                     findings.push(f);
                 }
             }
             Op::Store { addr, .. } => {
-                if let Some(f) = make_finding(state.borrow_state(), &local_nonnull, block.start_va, ins.va, addr, Access::Write) {
+                if let Some(f) = make_finding(
+                    state.borrow_state(),
+                    &local_nonnull,
+                    block.start_va,
+                    ins.va,
+                    addr,
+                    Access::Write,
+                ) {
                     findings.push(f);
                 }
             }
@@ -629,7 +647,11 @@ fn step_block(
     let mut edges: Vec<EdgeFact> = Vec::new();
     let last = block.instrs.last().map(|i| &i.op);
     match last {
-        Some(Op::CondJump { cond: _, target, inverted }) => {
+        Some(Op::CondJump {
+            cond: _,
+            target,
+            inverted,
+        }) => {
             // Any pending FlagInference from this block applies. The
             // lifter emits cmp/test → flag write → jcc reading that
             // flag in a contiguous sequence; the most recent inference
@@ -666,9 +688,7 @@ fn step_block(
                     for (reg, t) in &state {
                         if matches!(
                             t,
-                            Taint::SystemBuffer
-                                | Taint::UserBuffer
-                                | Taint::Type3InputBuffer
+                            Taint::SystemBuffer | Taint::UserBuffer | Taint::Type3InputBuffer
                         ) {
                             sb_regs.push(reg.clone());
                         }
@@ -695,12 +715,20 @@ fn step_block(
                 } else {
                     not_taken_nonnull.clone()
                 };
-                edges.push(EdgeFact { to_va: *s, state: state.clone(), nonnull: nn });
+                edges.push(EdgeFact {
+                    to_va: *s,
+                    state: state.clone(),
+                    nonnull: nn,
+                });
             }
         }
         _ => {
             for s in &block.succs {
-                edges.push(EdgeFact { to_va: *s, state: state.clone(), nonnull: local_nonnull.clone() });
+                edges.push(EdgeFact {
+                    to_va: *s,
+                    state: state.clone(),
+                    nonnull: local_nonnull.clone(),
+                });
             }
         }
     }
@@ -776,8 +804,8 @@ fn looks_like_irp_handler(lf: &LlirFunction) -> bool {
     // contain a `[reg + 0xB8]` load somewhere, so the strict gate
     // doesn't sacrifice recall.
     const GPR64_BASES: &[&str] = &[
-        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
-        "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12",
+        "r13", "r14", "r15",
     ];
     for block in &lf.blocks {
         for ins in &block.instrs {
@@ -857,7 +885,8 @@ pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult {
         let in_nn = block_nonnull[bi].clone();
 
         let mut local_findings: Vec<TaintFinding> = Vec::new();
-        let (_out_state, edges) = step_block(&lf.blocks[bi], &in_state, &in_nn, &mut local_findings);
+        let (_out_state, edges) =
+            step_block(&lf.blocks[bi], &in_state, &in_nn, &mut local_findings);
         // Replace findings for this block on every revisit. We index
         // findings by deref_va so duplicates from re-visits get
         // overwritten cleanly at the end.
@@ -877,8 +906,10 @@ pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult {
                 } else {
                     let cs = meet_into(&mut block_in[succ_idx], &ef.state);
                     let before = block_nonnull[succ_idx].clone();
-                    block_nonnull[succ_idx] =
-                        block_nonnull[succ_idx].intersection(&ef.nonnull).cloned().collect();
+                    block_nonnull[succ_idx] = block_nonnull[succ_idx]
+                        .intersection(&ef.nonnull)
+                        .cloned()
+                        .collect();
                     let cn = block_nonnull[succ_idx] != before;
                     (cs, cn)
                 };
@@ -935,12 +966,8 @@ pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult {
         block_nonnull[i] = stable_nonnull.clone();
         block_seeded[i] = true;
         let mut tmp: Vec<TaintFinding> = Vec::new();
-        let (_out_state, _edges) = step_block(
-            &lf.blocks[i],
-            &block_in[i],
-            &block_nonnull[i],
-            &mut tmp,
-        );
+        let (_out_state, _edges) =
+            step_block(&lf.blocks[i], &block_in[i], &block_nonnull[i], &mut tmp);
         for f in tmp {
             findings.push(f);
         }
@@ -1009,8 +1036,7 @@ fn choose_dispatcher_state(
             continue;
         }
         let mut tmp: Vec<TaintFinding> = Vec::new();
-        let (out_state, edges) =
-            step_block(block, &block_in[i], &block_nonnull[i], &mut tmp);
+        let (out_state, edges) = step_block(block, &block_in[i], &block_nonnull[i], &mut tmp);
         let score = ioctl_score(&out_state);
         if score == 0 {
             continue;
@@ -1030,8 +1056,7 @@ fn choose_dispatcher_state(
             best = Some((score, va, out_state, nn_union));
         }
     }
-    best
-        .map(|(_, _, s, n)| (s, n))
+    best.map(|(_, _, s, n)| (s, n))
         .unwrap_or_else(|| (State::new(), NonNull::new()))
 }
 
@@ -1051,7 +1076,12 @@ mod tests {
     }
 
     fn block(start: u64, end: u64, instrs: Vec<LlirInstr>, succs: Vec<u64>) -> LlirBlock {
-        LlirBlock { start_va: start, end_va: end, instrs, succs }
+        LlirBlock {
+            start_va: start,
+            end_va: end,
+            instrs,
+            succs,
+        }
     }
 
     /// Synthesise the usbprint.sys SystemBuffer dispatch shape:
@@ -1065,7 +1095,13 @@ mod tests {
             0x1010,
             vec![
                 // mov rsi, rdx  (rsi = Irp)
-                instr(0x1000, Op::Assign { dst: vr("rsi"), src: Value::Reg(vr("rdx")) }),
+                instr(
+                    0x1000,
+                    Op::Assign {
+                        dst: vr("rsi"),
+                        src: Value::Reg(vr("rdx")),
+                    },
+                ),
                 // mov rax, [rsi + 0xB8]  (rax = StackLoc; satisfies the
                 // looks_like_irp_handler gate)
                 instr(
@@ -1104,7 +1140,10 @@ mod tests {
             ],
             vec![],
         );
-        let lf = LlirFunction { entry_va: 0x1000, blocks: vec![entry, case] };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![entry, case],
+        };
         let res = analyze(&lf);
         assert_eq!(res.findings.len(), 1, "{:?}", res.findings);
         let f = &res.findings[0];
@@ -1144,7 +1183,10 @@ mod tests {
             ],
             vec![],
         );
-        let lf = LlirFunction { entry_va: 0x3000, blocks: vec![entry] };
+        let lf = LlirFunction {
+            entry_va: 0x3000,
+            blocks: vec![entry],
+        };
         let res = analyze(&lf);
         assert!(res.findings.is_empty(), "FP cluster: {:?}", res.findings);
     }
@@ -1197,12 +1239,7 @@ mod tests {
             ],
             vec![0x4100, 0x4020],
         );
-        let null_path = block(
-            0x4100,
-            0x4104,
-            vec![instr(0x4100, Op::Return)],
-            vec![],
-        );
+        let null_path = block(0x4100, 0x4104, vec![instr(0x4100, Op::Return)], vec![]);
         let safe_path = block(
             0x4020,
             0x4028,
@@ -1308,12 +1345,7 @@ mod tests {
             ],
             vec![],
         );
-        let error_path = block(
-            0x7100,
-            0x7104,
-            vec![instr(0x7100, Op::Return)],
-            vec![],
-        );
+        let error_path = block(0x7100, 0x7104, vec![instr(0x7100, Op::Return)], vec![]);
         let lf = LlirFunction {
             entry_va: 0x7000,
             blocks: vec![prologue, success_path, error_path],
@@ -1344,7 +1376,13 @@ mod tests {
                 0x6020,
                 vec![
                     // rbp = rdx  (some helper that passes through arg2)
-                    instr(0x6000, Op::Assign { dst: vr("rbp"), src: Value::Reg(vr("rdx")) }),
+                    instr(
+                        0x6000,
+                        Op::Assign {
+                            dst: vr("rbp"),
+                            src: Value::Reg(vr("rdx")),
+                        },
+                    ),
                     // rax = [rbp + 0x10]  (would be tagged SystemBuffer
                     // if disp were 0x18, but here it's just 0x10)
                     instr(

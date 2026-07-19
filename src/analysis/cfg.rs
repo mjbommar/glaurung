@@ -457,10 +457,9 @@ fn classify_ctrl_flow(mnemonic: &str, arch: BArch) -> (bool, bool, bool) {
 fn is_unconditional_branch_mnemonic(mnemonic: &str, arch: BArch) -> bool {
     let m = mnemonic.to_ascii_lowercase();
     match arch {
-        BArch::ARM | BArch::AArch64 => matches!(
-            m.as_str(),
-            "b" | "br" | "braa" | "braaz" | "brab" | "brabz"
-        ),
+        BArch::ARM | BArch::AArch64 => {
+            matches!(m.as_str(), "b" | "br" | "braa" | "braaz" | "brab" | "brabz")
+        }
         BArch::X86 | BArch::X86_64 => m == "jmp",
         // Preserve the historical (arch-agnostic) semantics for the remaining
         // architectures so this refactor is behaviour-preserving for them.
@@ -1055,7 +1054,10 @@ fn scan_aarch64_prologue_function_starts(
                     let start = match va.checked_sub(4) {
                         Some(prev)
                             if prev >= region.start
-                                && matches!(read_word(prev), Some(AARCH64_BTI_C | AARCH64_BTI_JC)) =>
+                                && matches!(
+                                    read_word(prev),
+                                    Some(AARCH64_BTI_C | AARCH64_BTI_JC)
+                                ) =>
                         {
                             prev
                         }

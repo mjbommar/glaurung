@@ -23,22 +23,26 @@ pub mod solver;
 pub mod symdomain;
 
 pub use concretization::{
-    BuiltinConcretizationPolicy, CONCRETIZATION_POLICY_ENV, ConcretizationChoice,
-    ConcretizationConfigError, ConcretizationPolicy, ConcretizationRequest, ConcretizationSite,
-    GREATEST_UNSIGNED_POLICY_ID, LEAST_UNSIGNED_POLICY_ID, LEGACY_CANONICAL_MODEL_CHOICE_ENV,
-    UnsignedExtremum, active_concretization_policy, resolve_concretization_policy,
+    active_concretization_policy, resolve_concretization_policy, BuiltinConcretizationPolicy,
+    ConcretizationChoice, ConcretizationConfigError, ConcretizationPolicy, ConcretizationRequest,
+    ConcretizationSite, UnsignedExtremum, CONCRETIZATION_POLICY_ENV, GREATEST_UNSIGNED_POLICY_ID,
+    LEAST_UNSIGNED_POLICY_ID, LEGACY_CANONICAL_MODEL_CHOICE_ENV,
 };
 pub use explore::{
-    ApiSummary, CallModel, CanonicalModelChoiceStats, ExplorationLimitStats, Severity, Sink,
-    SinkKind, TaintSpec, canonical_model_choice_stats, exploration_limit_stats,
-    find_input_reaching, find_sinks, find_sinks_stateful, reset_exploration_limit_stats,
-    set_call_site_summaries,
+    canonical_model_choice_stats, execution_path_stats, exploration_limit_stats,
+    find_input_reaching, find_sinks, find_sinks_stateful, find_sinks_with_arch,
+    reset_execution_path_stats, reset_exploration_limit_stats, set_call_site_summaries, ApiSummary,
+    CallModel, CanonicalModelChoiceStats, ExecutionPathStats, ExplorationLimitStats, Severity,
+    Sink, SinkKind, TaintSpec,
 };
 pub use expr::{Expr, ExprId, ExprPool};
 pub use ioctl::{
     driver_api_model, find_arbitrary_writes, find_function_sinks_with_apis,
-    find_function_stateful_sinks, find_ioctl_sinks, find_ioctl_sinks_with_apis, seed_irp,
-    seed_tainted_args, IrpSeed,
+    find_function_stateful_sinks, find_ioctl_sinks, find_ioctl_sinks_with_apis,
+    find_linux_ioctl_sinks, find_linux_ioctl_sinks_for_command_with_apis,
+    find_linux_ioctl_sinks_with_apis, linux_driver_api_model, linux_local_api_model, seed_irp,
+    seed_linux_ioctl, seed_tainted_args, IrpSeed, LinuxIoctlEnvironment, LinuxIoctlSeed,
+    LinuxIoctlSeedError,
 };
 pub use solver::{
     check_timeout_ms, reset_total_solver_stats, set_solver_budget, set_time_budget, solve,

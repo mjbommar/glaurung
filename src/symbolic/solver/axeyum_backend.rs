@@ -37,8 +37,8 @@ use sha2::{Digest, Sha256};
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, Solver,
-    WarmAssertionPrefix, WarmDeltaContext, check_timeout, pipe,
+    check_timeout, pipe, Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult,
+    Solver, WarmAssertionPrefix, WarmDeltaContext,
 };
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 const CNF_SNAPSHOT_DIR_ENV: &str = "GLAURUNG_AXEYUM_CNF_SNAPSHOT_DIR";
@@ -1795,13 +1795,7 @@ impl DirectDeltaLineageAxeyumSolver {
                     let snapshot = snapshot.ok_or_else(|| {
                         "axeyum retained CNF snapshot missing after solver decision".to_string()
                     })?;
-                    write_retained_cnf_snapshot(
-                        output_dir,
-                        query_hash,
-                        path_id,
-                        outcome,
-                        &snapshot,
-                    )
+                    write_retained_cnf_snapshot(output_dir, query_hash, path_id, outcome, &snapshot)
                 }) {
                     Ok(()) => {}
                     Err(error) => result = SolveResult::Error(error),
@@ -4160,7 +4154,10 @@ mod tests {
             .unwrap();
         let metadata = paths
             .iter()
-            .find(|path| path.extension().is_some_and(|extension| extension == "json"))
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
             .unwrap();
         assert_eq!(std::fs::read_to_string(cnf).unwrap(), snapshot.dimacs);
         let metadata: serde_json::Value =

@@ -39,6 +39,7 @@ fn flag_repr(f: Flag) -> &'static str {
         Flag::O => "%of",
         Flag::P => "%pf",
         Flag::A => "%af",
+        Flag::Bit => "%bitpred",
     }
 }
 
@@ -756,8 +757,7 @@ fn decompile_all_py(
         };
         let ssa = compute_ssa(&lf);
         let region = recover(&lf, &ssa);
-        let outer_name =
-            resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
+        let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
         reconstruct(&mut f);
         crate::ir::dce::prune_dead_flags(&mut f);

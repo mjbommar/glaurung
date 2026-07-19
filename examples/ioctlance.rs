@@ -12,17 +12,17 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use glaurung::analysis::cfg::{Budgets, analyze_functions_bytes};
+use glaurung::analysis::cfg::{analyze_functions_bytes, Budgets};
 use glaurung::analysis::ioctl_surface::map_ioctl_surface;
 use glaurung::analysis::pe_iat::pe_iat_map;
 use glaurung::core::binary::Arch;
 use glaurung::ir::lift_function::lift_function_from_bytes;
 use glaurung::ir::types::{CallTarget, LlirFunction, Op, Value};
 use glaurung::symbolic::{
-    ApiSummary, SinkKind, canonical_model_choice_stats, check_timeout_ms, driver_api_model,
-    exploration_limit_stats, find_function_sinks_with_apis, find_function_stateful_sinks,
-    find_ioctl_sinks_with_apis, reset_exploration_limit_stats, set_call_site_summaries,
-    set_solver_budget, set_time_budget,
+    canonical_model_choice_stats, check_timeout_ms, driver_api_model, exploration_limit_stats,
+    find_function_sinks_with_apis, find_function_stateful_sinks, find_ioctl_sinks_with_apis,
+    reset_exploration_limit_stats, set_call_site_summaries, set_solver_budget, set_time_budget,
+    ApiSummary, SinkKind,
 };
 
 fn kind_str(k: SinkKind) -> &'static str {
@@ -44,6 +44,7 @@ fn kind_str(k: SinkKind) -> &'static str {
         SinkKind::ArbitraryMsrWrite => "arbitrary-wrmsr",
         SinkKind::ArbitraryMsrRead => "arbitrary-rdmsr",
         SinkKind::PortAccess => "arbitrary-portio",
+        SinkKind::OutOfBoundsIndex => "out-of-bounds-index",
     }
 }
 
@@ -125,6 +126,7 @@ fn is_write_class(k: SinkKind) -> bool {
             | SinkKind::FormatString
             | SinkKind::ArbitraryMsrWrite
             | SinkKind::PortAccess
+            | SinkKind::OutOfBoundsIndex
     )
 }
 
