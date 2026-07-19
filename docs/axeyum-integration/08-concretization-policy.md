@@ -2,6 +2,7 @@
 
 Status: A0 accepted on `axeyum-concretization-policy-a0` at `07ea0c1`;
 taint-provenance correction accepted at `845239f`
+and policy-robust stack-region classification accepted at `0581f57`
 (2026-07-18).
 
 ## Why this is one policy seam
@@ -142,16 +143,20 @@ destination was loaded from `SystemBuffer`. This is a detector-classification
 artifact, not validated coverage.
 
 The corrected check requires structural evidence first: the destination and
-current stack or frame pointer must be the same expression or share symbolic
-ancestry.
+current stack or frame pointer must be the same expression, the destination
+must contain the non-leaf stack expression in its interned DAG, or the two
+expressions must share free-symbol ancestry.
 Only then may the bounded numeric window refine the stack-overflow result. An
 attacker-controlled destination remains correctly reported by the existing
 arbitrary-read/write/null detectors, but cannot become a stack object merely
 because one model places it nearby. The regression fixes both sides of the
 contract: a constrained attacker pointer next to `rsp` is not stack storage,
-while `dst = rsp` with attacker-controlled length remains a stack overflow.
+while the real constant-base `dst = rbp - 0x70` expression with
+attacker-controlled length remains a stack overflow.
 
-The stopped sweep prefix remains rejected evidence. Rebuild both sole-authority
-binaries and rerun the exact source-backed maximum control before preregistering
-a corrected five-policy sweep; do not continue the unobserved site-hash cells
-from the failed campaign.
+The accepted source-backed maximum control at `0581f57` restores all 14
+expected high-confidence rows with zero false negatives and zero unexpected
+high-confidence rows. Both authorities agree exactly in both repetitions. The
+stopped sweep prefix remains rejected evidence; preregister and rerun all five
+policies from the corrected revision rather than splicing the unobserved
+site-hash cells onto the failed campaign.
