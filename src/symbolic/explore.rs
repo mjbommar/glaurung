@@ -1858,8 +1858,61 @@ fn do_free(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) -> bool 
 
 /// Flag a [`SinkKind::StackOverflow`] when a `memcpy` destination is on the stack
 /// and the length is attacker-controlled (an unbounded copy onto the frame).
-fn shares_symbolic_origin(pool: &ExprPool, lhs: ExprId, rhs: ExprId) -> bool {
+fn expression_contains(pool: &ExprPool, root: ExprId, needle: ExprId) -> bool {
+    if root == needle {
+        return true;
+    }
+    // Constants and free symbols are too common to establish stack ancestry by
+    // DAG membership alone. Free-symbol sharing is handled separately below.
+    if matches!(pool.get(needle), Expr::Const { .. } | Expr::Sym { .. }) {
+        return false;
+    }
+    let mut pending = vec![root];
+    let mut seen = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        match *pool.get(id) {
+            Expr::Bin { a, b, .. } | Expr::Cmp { a, b, .. } => {
+                if a == needle || b == needle {
+                    return true;
+                }
+                pending.extend([a, b]);
+            }
+            Expr::Un { a, .. }
+            | Expr::ZExt { a, .. }
+            | Expr::SExt { a, .. }
+            | Expr::Trunc { a, .. }
+            | Expr::Extract { a, .. } => {
+                if a == needle {
+                    return true;
+                }
+                pending.push(a);
+            }
+            Expr::Concat { hi, lo, .. } => {
+                if hi == needle || lo == needle {
+                    return true;
+                }
+                pending.extend([hi, lo]);
+            }
+            Expr::Ite { c, t, e, .. } => {
+                if c == needle || t == needle || e == needle {
+                    return true;
+                }
+                pending.extend([c, t, e]);
+            }
+            Expr::Const { .. } | Expr::Sym { .. } => {}
+        }
+    }
+    false
+}
+
+fn shares_structural_origin(pool: &ExprPool, lhs: ExprId, rhs: ExprId) -> bool {
     if lhs == rhs {
+        return true;
+    }
+    if expression_contains(pool, lhs, rhs) {
         return true;
     }
     let mut lhs_symbols = BTreeMap::new();
@@ -1893,8 +1946,8 @@ fn stack_overflow_check(
         .machine
         .regs
         .read(&mut st.machine.dom, &VReg::phys("rbp"));
-    if !shares_symbolic_origin(&st.machine.dom.pool, dst, rsp_v)
-        && !shares_symbolic_origin(&st.machine.dom.pool, dst, rbp_v)
+    if !shares_structural_origin(&st.machine.dom.pool, dst, rsp_v)
+        && !shares_structural_origin(&st.machine.dom.pool, dst, rbp_v)
     {
         return true;
     }
@@ -2286,8 +2339,20 @@ mod tests {
     #[test]
     fn frame_pointer_destination_is_structural_stack_storage() {
         let mut machine = Machine::new(Symbolic::new());
-        let rsp = machine.dom.fresh(Width::W64);
-        let rbp = machine.dom.fresh(Width::W64);
+        // Mirror the real test_stack_overflow.sys expression shape: the executor
+        // starts from a modeled zero stack, then preserves the pre-allocation
+        // stack value in rbp while rsp moves down for the frame.
+        let zero = machine.dom.constant(Width::W64, 0);
+        let eight = machine.dom.constant(Width::W64, 8);
+        let rbp = machine.dom.binop(BinOp::Sub, &zero, &eight, Width::W64);
+        let frame_size = machine.dom.constant(Width::W64, 0x90);
+        let rsp = machine
+            .dom
+            .binop(BinOp::Sub, &rbp, &frame_size, Width::W64);
+        let local_offset = machine.dom.constant(Width::W64, 0x70);
+        let dst = machine
+            .dom
+            .binop(BinOp::Sub, &rbp, &local_offset, Width::W64);
         let len = machine.dom.fresh(Width::W64);
         machine
             .regs
@@ -2302,22 +2367,13 @@ mod tests {
         let mut taint = TaintSpec::new();
         taint.mark(len_id, "InputBufferLength");
 
-        let frame_value = machine.dom.constant(Width::W64, 0x20_0000);
-        let rsp_fixed = machine
-            .dom
-            .cmp(CmpOp::Eq, &rsp, &frame_value, Width::W64);
-        let rbp_fixed = machine
-            .dom
-            .cmp(CmpOp::Eq, &rbp, &frame_value, Width::W64);
         let mut state = State::root(machine, 0x1000, taint);
-        state.assert((rsp_fixed, true), "test", state.pc);
-        state.assert((rbp_fixed, true), "test", state.pc);
         let mut sinks = Vec::new();
 
         assert!(stack_overflow_check(
             &mut state,
             0x1010,
-            rbp,
+            dst,
             len,
             &mut sinks,
         ));
