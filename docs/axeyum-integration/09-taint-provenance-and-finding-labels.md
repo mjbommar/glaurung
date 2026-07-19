@@ -1,7 +1,7 @@
 # 09 - Taint provenance and finding labels
 
-Status: accepted correction and machine-readable confidence partition on
-`axeyum-concretization-policy-a0` at `931d8a8` (2026-07-18).
+Status: accepted provenance, confidence-partition, and WDM SystemBuffer-model
+corrections on `axeyum-concretization-policy-a0` (2026-07-18).
 
 ## Why raw sinks are not a coverage oracle
 
@@ -123,3 +123,52 @@ either annotation leaves the underlying finding bytes unchanged. The Axeyum
 authority harness consumes this schema as two explicit populations while
 retaining the annotation-free raw line for historical hashes and set
 comparisons.
+
+## WDM SystemBuffer address versus contents
+
+The first nonzero producer-confidence candidate exposed a second distinction
+that the labels alone did not encode. For a `METHOD_BUFFERED` request, Windows
+places an I/O-manager-owned kernel pointer in
+`Irp->AssociatedIrp.SystemBuffer`; the caller controls input bytes copied into
+that allocation, not the pointer value. Microsoft also specifies that the
+allocation is the larger of `InputBufferLength` and `OutputBufferLength`.
+
+The complete x64 Windows 11 `usbprint.sys` control initially reported five Z3
+versus four Axeyum high-confidence rows in `HPUsbIOCTLVendorGetCommand`:
+null-dereference rows at `0x140002762` and `0x140002770`, plus controlled reads
+at those addresses and `0x140002775`. Disassembly proves all five are ordinary
+reads at offsets 2, 1, and 0 after explicit `SystemBuffer != NULL` and
+`OutputBufferLength >= 3` guards. The dispatch jump table maps the call to
+IOCTL `0x0022003c`, which is `METHOD_BUFFERED` and `FILE_ANY_ACCESS`.
+
+An ordered trace explains the authority-only row without making it a driver
+bug. The old seed made the kernel pointer a free 64-bit attacker symbol. Z3
+selected `SystemBuffer + 2 = 1` at the first read, binding the synthetic base to
+`2^64 - 1`, so the next address `SystemBuffer + 1` wrapped to zero. Axeyum
+selected `SystemBuffer + 2 = 3` for the same query and did not reach that
+synthetic null. Both are valid AnyModel representatives of the invalid producer
+environment.
+
+The corrected WDM seed uses one concrete synthetic kernel address for
+SystemBuffer and a separate tainted-memory-region contract for its contents.
+An uninitialized load within that region still creates attacker-derived
+`*SystemBuffer` data, preserving downstream handle, physical-address, format,
+and indirect-call detection. The pointer itself no longer produces controlled
+read/write or null-dereference sinks. Real pointer-control regressions now use
+the raw `METHOD_NEITHER` `Type3InputBuffer` or `UserBuffer` sources.
+
+On the same complete 18-of-21 reachable-function boundary, both authorities now
+perform exactly 16,537 solves and emit 214 raw diagnostics, zero
+producer-confidence rows, and the same confidence partition. Their remaining
+one-row diagnostic difference is inside the CRT `memcpy` routine analyzed under
+generic `ArgN` entry taint: Z3 reaches aligned SIMD store `0x140009793`, while
+Axeyum reaches small-copy tail store `0x14000969a`. Neither row is an accepted
+driver finding.
+
+This correction does not implement length-aware SystemBuffer out-of-bounds
+detection: the region conservatively preserves input-content taint across the
+maximum 32-bit request span. A future bounds primitive must compare each access
+against the applicable input/output length rather than resurrecting pointer
+control. The KMDF retrieve-buffer summary also retains its older symbolic
+pointer abstraction and must receive the same address/content separation before
+KMDF `SystemBuffer` rows are accepted as independently validated positives.

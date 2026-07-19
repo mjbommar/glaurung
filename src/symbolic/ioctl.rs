@@ -34,6 +34,13 @@ const SL_TYPE3_BUFFER: u64 = 0x20; // Parameters.DeviceIoControl.Type3InputBuffe
 const DEVICE_OBJECT: u64 = 0x1_0000;
 const IRP: u64 = 0x2_0000;
 const STACK_LOC: u64 = 0x3_0000;
+// Windows owns the kernel VA for METHOD_BUFFERED requests. Keep it well away
+// from the synthetic IRP, stack-location, IAT, stack, and heap ranges.
+const SYSTEM_BUFFER: u64 = 0x4_0000_0000;
+// InputBufferLength and OutputBufferLength are 32-bit. Mark the maximum possible
+// I/O-manager allocation as content-tainted; actual bounds remain a separate
+// length-aware memory-safety analysis rather than pointer-control taint.
+const SYSTEM_BUFFER_MAX_LEN: u64 = u32::MAX as u64 + 1;
 
 /// The free-symbol ids of the attacker-controlled IRP fields, so a witness
 /// [`Model`](crate::symbolic::Model) can be interpreted (e.g. which value of the
@@ -41,7 +48,7 @@ const STACK_LOC: u64 = 0x3_0000;
 #[derive(Debug, Clone, Copy)]
 pub struct IrpSeed {
     pub ioctl_code_sym: u32,
-    pub system_buffer_sym: u32,
+    pub system_buffer_base: u64,
     pub input_len_sym: u32,
     pub output_len_sym: u32,
     pub type3_buffer_sym: u32,
@@ -54,7 +61,11 @@ impl IrpSeed {
     /// `SystemBuffer`") and undecorated internal symbols are not flagged.
     pub fn taint_spec(&self) -> TaintSpec {
         let mut t = TaintSpec::new();
-        t.mark(self.system_buffer_sym, "SystemBuffer");
+        t.mark_memory_region(
+            self.system_buffer_base,
+            SYSTEM_BUFFER_MAX_LEN,
+            "SystemBuffer",
+        );
         t.mark(self.user_buffer_sym, "UserBuffer");
         t.mark(self.type3_buffer_sym, "Type3InputBuffer");
         t.mark(self.ioctl_code_sym, "IoControlCode");
@@ -84,8 +95,10 @@ fn store_const(m: &mut Machine<Symbolic>, addr: u64, val: u64, width: Width) {
 }
 
 /// Seed a symbolic IRP for the dispatch routine: `rcx`=DeviceObject,
-/// `rdx`=Irp (both concrete), with the attacker-controlled IRP fields symbolic.
-/// The Irp→IO_STACK_LOCATION pointer is concrete so the handler can chase it.
+/// `rdx`=Irp (both concrete), with attacker-controlled scalar/request fields
+/// symbolic. The Irp→IO_STACK_LOCATION pointer and I/O-manager-owned
+/// `METHOD_BUFFERED` SystemBuffer pointer are concrete so the handler can chase
+/// them. SystemBuffer *contents* are marked attacker-controlled separately.
 pub fn seed_irp(m: &mut Machine<Symbolic>) -> IrpSeed {
     let dev = m.dom.constant(Width::W64, DEVICE_OBJECT as u128);
     m.regs.write(&mut m.dom, &VReg::phys("rcx"), dev);
@@ -95,7 +108,7 @@ pub fn seed_irp(m: &mut Machine<Symbolic>) -> IrpSeed {
     // IRP.Tail.Overlay.CurrentStackLocation → a concrete, chase-able pointer.
     store_const(m, IRP + IRP_STACK_LOCATION, STACK_LOC, Width::W64);
 
-    let system_buffer_sym = store_sym(m, IRP + IRP_SYSTEM_BUFFER, Width::W64);
+    store_const(m, IRP + IRP_SYSTEM_BUFFER, SYSTEM_BUFFER, Width::W64);
     let user_buffer_sym = store_sym(m, IRP + IRP_USER_BUFFER, Width::W64);
     let output_len_sym = store_sym(m, STACK_LOC + SL_OUTPUT_LEN, Width::W32);
     let input_len_sym = store_sym(m, STACK_LOC + SL_INPUT_LEN, Width::W32);
@@ -104,7 +117,7 @@ pub fn seed_irp(m: &mut Machine<Symbolic>) -> IrpSeed {
 
     IrpSeed {
         ioctl_code_sym,
-        system_buffer_sym,
+        system_buffer_base: SYSTEM_BUFFER,
         input_len_sym,
         output_len_sym,
         type3_buffer_sym,
@@ -356,13 +369,13 @@ mod tests {
         }
     }
 
-    /// A synthetic vulnerable IOCTL handler:
+    /// A synthetic vulnerable METHOD_NEITHER IOCTL handler:
     ///   stack = [Irp+0xB8]; code = [stack+0x18];
-    ///   if (code == 0x800) { buf = [Irp+0x18]; *buf = 0x41414141; }  // arb write
-    /// The engine must find the write and report the IOCTL code 0x800 as witness.
+    ///   if (code == 0x803) { buf = [stack+0x20]; *buf = 0x41414141; } // arb write
+    /// The engine must find the write and report the IOCTL code 0x803 as witness.
     #[test]
-    fn finds_arbitrary_write_with_ioctl_witness() {
-        const MAGIC: i64 = 0x800;
+    fn finds_method_neither_arbitrary_write_with_ioctl_witness() {
+        const MAGIC: i64 = 0x803;
         let lf = func(vec![
             // B0: load StackLoc + IoControlCode; branch on code == MAGIC
             (
@@ -391,7 +404,8 @@ mod tests {
             (
                 0x1020,
                 vec![
-                    load("rdi", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // SystemBuffer (symbolic ptr)
+                    load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
+                    load("rdi", "r10", SL_TYPE3_BUFFER as i64, 8),
                     Op::Store {
                         addr: MemOp::plain(Some(VReg::phys("rdi")), None, 1, 0, 8),
                         src: Value::Const(0x4141_4141),
@@ -410,17 +424,17 @@ mod tests {
         let writes = find_arbitrary_writes(&lf, 1000);
         assert_eq!(writes.len(), 1, "expected exactly one controlled write");
         let w = &writes[0];
-        assert_eq!(w.va, 0x1024, "store VA");
+        assert_eq!(w.va, 0x1028, "store VA");
         assert_eq!(
             w.witness.values.get(&seed.ioctl_code_sym).copied(),
             Some(MAGIC as u128),
             "witness must drive IoControlCode = {:#x}",
             MAGIC
         );
-        // The store goes through the unconstrained SystemBuffer pointer → the
-        // address is fully attacker-chosen (write-where), tagged with provenance.
+        // METHOD_NEITHER passes the raw caller pointer in Type3InputBuffer, so
+        // the address is fully attacker-chosen (write-where).
         assert_eq!(w.severity, Severity::Arbitrary, "expected write-where");
-        assert_eq!(w.tainted_by, vec!["SystemBuffer".to_string()]);
+        assert_eq!(w.tainted_by, vec!["Type3InputBuffer".to_string()]);
     }
 
     /// Positive control for the KMDF `WdfRequestRetrieveInputBuffer` model
@@ -520,17 +534,17 @@ mod tests {
     }
 
     /// End-to-end on **real x86-64 machine bytes** (not hand-built LLIR): lift a
-    /// tiny handler that reads the attacker-controlled SystemBuffer pointer and
-    /// writes through it, then confirm the symbolic engine flags the controlled
+    /// tiny METHOD_NEITHER handler that reads the caller-controlled UserBuffer
+    /// pointer and writes through it, then confirm the engine flags the controlled
     /// write. Proves the machine-code → lift → symbolic-detect pipeline.
     #[test]
-    fn finds_controlled_write_from_machine_bytes() {
+    fn finds_method_neither_controlled_write_from_machine_bytes() {
         use crate::ir::lift_x86::lift_bytes;
-        // mov rax, [rdx+0x18]      ; rax = IRP.SystemBuffer (symbolic)
-        // mov qword ptr [rax], 0x41414141   ; *SystemBuffer = ...  (controlled write)
+        // mov rax, [rdx+0x30]      ; rax = IRP.UserBuffer (caller pointer)
+        // mov qword ptr [rax], 0x41414141   ; *UserBuffer = ...  (controlled write)
         // ret
         let code: &[u8] = &[
-            0x48, 0x8B, 0x42, 0x18, // mov rax, [rdx+0x18]
+            0x48, 0x8B, 0x42, 0x30, // mov rax, [rdx+0x30]
             0x48, 0xC7, 0x00, 0x41, 0x41, 0x41, 0x41, // mov qword [rax], 0x41414141
             0xC3, // ret
         ];
@@ -549,20 +563,21 @@ mod tests {
         assert_eq!(
             writes.len(),
             1,
-            "expected the store through SystemBuffer to be flagged"
+            "expected the store through UserBuffer to be flagged"
         );
     }
 
-    /// A read *through* the attacker-controlled SystemBuffer pointer is both an
+    /// A read through a METHOD_NEITHER caller pointer is both an
     /// arbitrary-read primitive and (since the pointer is unconstrained) a
     /// null-deref. Both must be reported.
     #[test]
-    fn read_through_system_buffer_is_arbitrary_read_and_nulldef() {
+    fn read_through_type3_input_buffer_is_arbitrary_read_and_nulldef() {
         let lf = func(vec![(
             0x1000,
             vec![
-                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // rax = SystemBuffer
-                load("rbx", "rax", 0, 8),                        // rbx = *rax (symbolic addr)
+                load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
+                load("rax", "r10", SL_TYPE3_BUFFER as i64, 8),
+                load("rbx", "rax", 0, 8), // rbx = *rax (symbolic addr)
                 Op::Return,
             ],
             0x100C,
@@ -576,13 +591,83 @@ mod tests {
             .find(|s| s.kind == SinkKind::ControlledRead)
             .unwrap();
         assert_eq!(read.severity, Severity::Arbitrary);
-        assert_eq!(read.tainted_by, vec!["SystemBuffer".to_string()]);
+        assert_eq!(read.tainted_by, vec!["Type3InputBuffer".to_string()]);
         // No write sink for a pure read.
         assert!(find_arbitrary_writes(&lf, 1000).is_empty());
     }
 
-    /// A handler that null-checks the pointer before dereferencing
-    /// (`if (SystemBuffer == 0) return; *SystemBuffer = x;`) must NOT report a
+    /// Regression for the complete Windows 11 `usbprint.sys` authority control.
+    /// `AssociatedIrp.SystemBuffer` for a `METHOD_BUFFERED` request is an
+    /// I/O-manager-owned kernel pointer, not an attacker-selected address.  Once
+    /// the handler has rejected NULL and required at least three bytes, ordinary
+    /// reads at offsets 2, 1, and 0 are neither controlled-address reads nor
+    /// null dereferences.  Buffer *contents* remain attacker-controlled and are
+    /// covered independently by the taint-through-memory tests below.
+    #[test]
+    fn guarded_method_buffered_reads_are_not_pointer_control_findings() {
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
+                    load("r15", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                    load("edi", "r10", SL_OUTPUT_LEN as i64, 4),
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("r15")),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1030,
+                        inverted: false,
+                    },
+                ],
+                0x1018,
+                vec![0x1030, 0x1018],
+            ),
+            (
+                0x1018,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::C),
+                        op: CmpOp::Ult,
+                        lhs: Value::Reg(VReg::phys("edi")),
+                        rhs: Value::Const(3),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::C),
+                        target: 0x1030,
+                        inverted: false,
+                    },
+                ],
+                0x1020,
+                vec![0x1030, 0x1020],
+            ),
+            (
+                0x1020,
+                vec![
+                    load("eax", "r15", 2, 1),
+                    load("r8d", "r15", 1, 1),
+                    load("edx", "r15", 0, 1),
+                    Op::Return,
+                ],
+                0x1030,
+                vec![],
+            ),
+            (0x1030, vec![Op::Return], 0x1034, vec![]),
+        ]);
+
+        let sinks = find_ioctl_sinks(&lf, 1000);
+        assert!(
+            sinks.is_empty(),
+            "kernel-owned guarded SystemBuffer reads must not be pointer-control findings: {sinks:?}"
+        );
+    }
+
+    /// A handler that null-checks a METHOD_NEITHER pointer before dereferencing
+    /// (`if (Type3InputBuffer == 0) return; *Type3InputBuffer = x;`) must NOT report a
     /// null deref on the storing path — the path condition already guards it
     /// non-null — while still reporting the controlled write. This is the
     /// path-sensitive guard suppression our static `ioctl_taint` approximates and
@@ -593,7 +678,8 @@ mod tests {
             (
                 0x1000,
                 vec![
-                    load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                    load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
+                    load("rax", "r10", SL_TYPE3_BUFFER as i64, 8),
                     Op::Cmp {
                         dst: VReg::Flag(Flag::Z),
                         op: CmpOp::Eq,
@@ -634,16 +720,16 @@ mod tests {
     }
 
     /// The classic primitive that never appears as a raw symbolic store:
-    /// `memcpy(SystemBuffer, local, len)` — a controlled write hidden inside an
+    /// `memcpy(UserBuffer, local, len)` — a controlled write hidden inside an
     /// API call. With the callee VA modeled as `CopyMemory`, the engine must
     /// flag the attacker-controlled destination.
     #[test]
-    fn memcpy_to_system_buffer_is_detected_via_api_summary() {
+    fn memcpy_to_method_neither_user_buffer_is_detected_via_api_summary() {
         const MEMCPY_VA: u64 = 0x9000;
         let lf = func(vec![(
             0x1000,
             vec![
-                load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // dst = SystemBuffer
+                load("rcx", "rdx", IRP_USER_BUFFER as i64, 8), // dst = UserBuffer
                 Op::Assign {
                     dst: VReg::phys("rdx"),
                     src: Value::Const(0x60000),
@@ -676,7 +762,7 @@ mod tests {
         let w = writes[0];
         assert_eq!(w.va, 0x1008, "the call site VA");
         assert_eq!(w.severity, Severity::Arbitrary);
-        assert_eq!(w.tainted_by, vec!["SystemBuffer".to_string()]);
+        assert_eq!(w.tainted_by, vec!["UserBuffer".to_string()]);
         // The concrete `src` buffer is not attacker-derived → no read sink.
         assert!(!sinks.iter().any(|s| s.kind == SinkKind::ControlledRead));
     }
@@ -704,12 +790,15 @@ mod tests {
     fn tainted_handle_to_zwterminateprocess() {
         const API: u64 = 0x9000;
         let lf = handler_calling(
-            vec![load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], // arg0 = SystemBuffer
+            vec![
+                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rcx", "rax", 0, 8), // arg0 = attacker-controlled buffer content
+            ],
             API,
         );
         let sinks = find_ioctl_sinks_with_apis(&lf, &model("ZwTerminateProcess", API), 1000);
         assert_eq!(kinds(&sinks), ["proc_term"].into_iter().collect());
-        assert_eq!(sinks[0].tainted_by, vec!["SystemBuffer".to_string()]);
+        assert_eq!(sinks[0].tainted_by, vec!["*SystemBuffer".to_string()]);
     }
 
     /// The full real-MSVC pattern, end to end: a handle read from buffer contents
@@ -755,7 +844,8 @@ mod tests {
         const API: u64 = 0x9000;
         let lf = handler_calling(
             vec![
-                load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // arg0 = phys addr
+                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rcx", "rax", 0, 8), // arg0 = phys addr from buffer contents
                 load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
                 load("rdx", "r10", SL_INPUT_LEN as i64, 4), // arg1 = size
             ],
@@ -765,7 +855,7 @@ mod tests {
         assert_eq!(kinds(&sinks), ["phys_mem"].into_iter().collect());
         assert_eq!(
             sinks[0].tainted_by,
-            vec!["InputBufferLength".to_string(), "SystemBuffer".to_string()]
+            vec!["*SystemBuffer".to_string(), "InputBufferLength".to_string(),]
         );
     }
 
@@ -773,9 +863,15 @@ mod tests {
     #[test]
     fn tainted_path_to_zwcreatefile() {
         const API: u64 = 0x9000;
-        // rdx (arg1 = DesiredAccess) = SystemBuffer: an attacker-controlled file-op
-        // parameter. (arg0 is the output FileHandle and is no longer a trigger.)
-        let lf = handler_calling(vec![load("rdx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], API);
+        // rdx (arg1 = DesiredAccess) comes from SystemBuffer contents. (arg0 is
+        // the output FileHandle and is no longer a trigger.)
+        let lf = handler_calling(
+            vec![
+                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rdx", "rax", 0, 8),
+            ],
+            API,
+        );
         let sinks = find_ioctl_sinks_with_apis(&lf, &model("ZwCreateFile", API), 1000);
         assert_eq!(kinds(&sinks), ["file_op"].into_iter().collect());
     }
@@ -784,8 +880,14 @@ mod tests {
     #[test]
     fn tainted_format_string_to_sprintf() {
         const API: u64 = 0x9000;
-        // rdx (arg1 = format) = SystemBuffer.
-        let lf = handler_calling(vec![load("rdx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], API);
+        // rdx (arg1 = format) is a caller pointer read from SystemBuffer contents.
+        let lf = handler_calling(
+            vec![
+                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rdx", "rax", 0, 8),
+            ],
+            API,
+        );
         let sinks = find_ioctl_sinks_with_apis(&lf, &model("sprintf", API), 1000);
         assert_eq!(kinds(&sinks), ["format_string"].into_iter().collect());
     }
@@ -824,11 +926,12 @@ mod tests {
     /// An indirect call through an attacker-controlled function pointer is a
     /// control-flow hijack (shellcode).
     #[test]
-    fn indirect_call_through_attacker_pointer_is_shellcode() {
+    fn indirect_call_through_buffer_derived_pointer_is_shellcode() {
         let lf = func(vec![(
             0x1000,
             vec![
-                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // rax = attacker fn ptr
+                load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rax", "rcx", 0, 8), // rax = attacker fn ptr from contents
                 Op::Call {
                     target: CallTarget::Indirect(Value::Reg(VReg::phys("rax"))),
                 },

@@ -146,9 +146,17 @@ pub enum Severity {
 /// labelled with provenance (e.g. an address built from `SystemBuffer`).
 /// Symbols not present here are engine-internal (not attacker-controlled), so a
 /// sink whose address touches no marked symbol is *not* a controlled primitive.
+#[derive(Debug, Clone)]
+struct TaintedMemoryRegion {
+    base: u64,
+    end_exclusive: u64,
+    label: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TaintSpec {
     labels: BTreeMap<u32, BTreeSet<String>>,
+    memory_regions: Vec<TaintedMemoryRegion>,
 }
 
 impl TaintSpec {
@@ -162,6 +170,28 @@ impl TaintSpec {
     /// adding a label never overwrites provenance already attached to the symbol.
     pub fn mark(&mut self, sym_id: u32, label: impl Into<String>) {
         self.labels.entry(sym_id).or_default().insert(label.into());
+    }
+
+    /// Mark data loaded from a concrete memory interval as attacker-controlled
+    /// without claiming that the interval's base pointer is attacker-selected.
+    ///
+    /// This distinction is required for I/O-manager-owned buffers such as a
+    /// WDM `AssociatedIrp.SystemBuffer`: user input controls its contents, while
+    /// Windows chooses and validates the kernel address itself.
+    pub fn mark_memory_region(&mut self, base: u64, len: u64, label: impl Into<String>) {
+        let Some(end_exclusive) = base.checked_add(len) else {
+            return;
+        };
+        if base == end_exclusive {
+            return;
+        }
+        self.memory_regions.push(TaintedMemoryRegion {
+            base,
+            end_exclusive,
+            label: label.into(),
+        });
+        self.memory_regions
+            .sort_by(|left, right| (left.base, &left.label).cmp(&(right.base, &right.label)));
     }
 
     /// The first stable label for a symbol, if it is attacker-controlled.
@@ -183,6 +213,21 @@ impl TaintSpec {
             .filter_map(|id| self.labels.get(id))
             .flatten()
             .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Stable provenance for an access wholly contained in a marked concrete
+    /// memory region. Partial overlap is deliberately rejected.
+    fn memory_provenance(&self, addr: u64, size: u8) -> Vec<String> {
+        let Some(end_exclusive) = addr.checked_add(u64::from(size)) else {
+            return Vec::new();
+        };
+        self.memory_regions
+            .iter()
+            .filter(|region| addr >= region.base && end_exclusive <= region.end_exclusive)
+            .map(|region| region.label.clone())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -1950,7 +1995,6 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
         Op::Load { dst, addr } => {
             let av = st.machine.eval_addr(addr);
             let address_provenance = st.taint.provenance_of(&st.machine.dom.pool, av);
-            let addr_tainted = !address_provenance.is_empty();
             record_access(st, va, av, false, sinks);
             let a = concretize_addr(st, av)?;
             // Taint-through-memory: a load from an attacker-controlled pointer into
@@ -1961,23 +2005,28 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
             // detected. Detect "uninitialized" via the memory map, not the loaded
             // value, since an uninitialized multi-byte load is a `Concat` of zero
             // bytes (never a bare `Const`).
-            let val = if addr_tainted && !st.machine.mem.is_initialized(a, addr.size) {
-                let w = Width::from_bytes(addr.size as u16);
-                let fresh = st.machine.dom.fresh(w);
-                if let Expr::Sym { id, .. } = *st.machine.dom.pool.get(fresh) {
-                    for source in &address_provenance {
-                        st.taint.mark(id, format!("*{source}"));
+            let mut content_provenance = address_provenance.clone();
+            content_provenance.extend(st.taint.memory_provenance(a, addr.size));
+            content_provenance.sort();
+            content_provenance.dedup();
+            let val =
+                if !content_provenance.is_empty() && !st.machine.mem.is_initialized(a, addr.size) {
+                    let w = Width::from_bytes(addr.size as u16);
+                    let fresh = st.machine.dom.fresh(w);
+                    if let Expr::Sym { id, .. } = *st.machine.dom.pool.get(fresh) {
+                        for source in &content_provenance {
+                            st.taint.mark(id, format!("*{source}"));
+                        }
                     }
-                }
-                st.machine
-                    .mem
-                    .store(&mut st.machine.dom, a, &fresh, addr.size, addr.endian);
-                fresh
-            } else {
-                st.machine
-                    .mem
-                    .load(&mut st.machine.dom, a, addr.size, addr.endian)
-            };
+                    st.machine
+                        .mem
+                        .store(&mut st.machine.dom, a, &fresh, addr.size, addr.endian);
+                    fresh
+                } else {
+                    st.machine
+                        .mem
+                        .load(&mut st.machine.dom, a, addr.size, addr.endian)
+                };
             st.machine.regs.write(&mut st.machine.dom, dst, val);
             Some(())
         }
