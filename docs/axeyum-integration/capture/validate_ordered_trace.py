@@ -12,6 +12,18 @@ import sys
 from dataclasses import dataclass, field
 
 
+V3 = "glaurung-ordered-check-measurement-v3"
+V4 = "glaurung-ordered-check-measurement-v4"
+RESOURCE_SPECS = {
+    "z3_cold": ("z3", "z3-rlimit"),
+    "z3_warm": ("z3", "z3-rlimit"),
+    "axeyum_cold": ("axeyum", "axeyum-progress-checks"),
+    "axeyum_warm": ("axeyum", "axeyum-progress-checks"),
+    "bitwuzla_cold": ("bitwuzla", "bitwuzla-termination-polls"),
+    "bitwuzla_warm": ("bitwuzla", "bitwuzla-termination-polls"),
+}
+
+
 def fail(message: str) -> None:
     raise ValueError(message)
 
@@ -119,11 +131,12 @@ def validate(root: pathlib.Path) -> dict[str, int]:
         None,
         "glaurung-ordered-check-measurement-v1",
         "glaurung-ordered-check-measurement-v2",
-        "glaurung-ordered-check-measurement-v3",
+        V3,
+        V4,
     }:
         fail("invalid ordered-check measurement schema")
     neutral_backend = manifest.get("neutral_measurement_backend")
-    if check_measurement_schema == "glaurung-ordered-check-measurement-v3":
+    if check_measurement_schema in {V3, V4}:
         if (
             not isinstance(neutral_backend, dict)
             or neutral_backend.get("backend") != "bitwuzla"
@@ -131,9 +144,31 @@ def validate(root: pathlib.Path) -> dict[str, int]:
             or neutral_backend.get("authoritative_in_shadow_mode") is not False
             or neutral_backend.get("role") != "benchmark-only-neutral"
         ):
-            fail("invalid v3 neutral measurement backend identity")
+            fail("invalid neutral measurement backend identity")
     elif neutral_backend is not None:
-        fail("neutral measurement backend present outside v3")
+        fail("neutral measurement backend present outside v3/v4")
+    work_budgets = manifest.get("solver_work_budgets")
+    if check_measurement_schema == V4:
+        if not isinstance(work_budgets, dict):
+            fail("v4 manifest lacks solver_work_budgets")
+        if work_budgets.get("cross_backend_unit_equivalence") is not False:
+            fail("v4 work units claim cross-backend equivalence")
+        wall_cap = work_budgets.get("wall_safety_cap_ms")
+        if isinstance(wall_cap, bool) or not isinstance(wall_cap, int) or wall_cap <= 0:
+            fail("invalid v4 wall safety cap")
+        for backend, unit in (
+            ("z3", "z3-rlimit"),
+            ("axeyum", "axeyum-progress-checks"),
+            ("bitwuzla", "bitwuzla-termination-polls"),
+        ):
+            entry = work_budgets.get(backend)
+            if not isinstance(entry, dict) or entry.get("unit") != unit:
+                fail(f"invalid v4 {backend} work unit")
+            limit = entry.get("limit")
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+                fail(f"invalid v4 {backend} work limit")
+    elif work_budgets is not None:
+        fail("solver work budgets present outside v4")
     native_replay = manifest.get("native_replay")
     if native_replay is not None and (
         not isinstance(native_replay, dict)
@@ -442,7 +477,8 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                     fail(f"authoritative backend outcome mismatch for {check_id}")
                 if check_measurement_schema in {
                     "glaurung-ordered-check-measurement-v2",
-                    "glaurung-ordered-check-measurement-v3",
+                    V3,
+                    V4,
                 }:
                     fair_cells = [
                         "z3_cold",
@@ -450,7 +486,7 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                         "axeyum_cold",
                         "axeyum_warm",
                     ]
-                    if check_measurement_schema == "glaurung-ordered-check-measurement-v3":
+                    if check_measurement_schema in {V3, V4}:
                         fair_cells.extend(("bitwuzla_cold", "bitwuzla_warm"))
                     for cell in fair_cells:
                         cell_nanos = event.get(f"{cell}_nanos")
@@ -472,7 +508,7 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                         fail(f"invalid warm Z3 execution class for {check_id}")
                     if event.get("axeyum_warm_execution") not in execution_classes:
                         fail(f"invalid warm Axeyum execution class for {check_id}")
-                    if check_measurement_schema == "glaurung-ordered-check-measurement-v3":
+                    if check_measurement_schema in {V3, V4}:
                         if event.get("bitwuzla_warm_execution") not in {
                             "warm-created",
                             "warm-retained",
@@ -482,6 +518,35 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                             fail(
                                 f"invalid warm Bitwuzla execution class for {check_id}"
                             )
+                    if check_measurement_schema == V4:
+                        counters = event.get("resource_counters")
+                        if not isinstance(counters, dict) or set(counters) != set(
+                            RESOURCE_SPECS
+                        ):
+                            fail(f"invalid v4 resource counters for {check_id}")
+                        assert isinstance(work_budgets, dict)
+                        for cell, (backend, unit) in RESOURCE_SPECS.items():
+                            entry = counters.get(cell)
+                            expected_limit = work_budgets[backend]["limit"]
+                            if (
+                                not isinstance(entry, dict)
+                                or entry.get("unit") != unit
+                                or entry.get("limit") != expected_limit
+                            ):
+                                fail(f"invalid v4 {cell} resource identity for {check_id}")
+                            reason = entry.get("stop_reason")
+                            if reason not in {
+                                None,
+                                "resource-limit",
+                                "wall-timeout",
+                                "other",
+                            }:
+                                fail(f"invalid v4 {cell} stop reason for {check_id}")
+                            cell_outcome = event[f"{cell}_outcome"]
+                            if (cell_outcome == "unknown") != (reason is not None):
+                                fail(
+                                    f"v4 {cell} outcome/stop-reason mismatch for {check_id}"
+                                )
                     aliases = (
                         (z3_nanos, event["z3_cold_nanos"], "Z3 timing"),
                         (axeyum_nanos, event["axeyum_warm_nanos"], "Axeyum timing"),

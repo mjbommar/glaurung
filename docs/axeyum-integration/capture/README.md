@@ -1231,6 +1231,20 @@ at runtime and any version other than 0.9.1 fails closed. This feature is a
 measurement boundary, not a production backend candidate, and does not change
 solver authority or the default dependency surface.
 
+The deterministic-work extension declares
+`check_measurement_schema: glaurung-ordered-check-measurement-v4`. It preserves
+the complete v3 topology and adds a fail-closed `solver_work_budgets` manifest
+object plus six per-check `resource_counters` records. The three configured
+units remain deliberately distinct: `z3-rlimit`,
+`axeyum-progress-checks`, and `bitwuzla-termination-polls`; the manifest must
+set `cross_backend_unit_equivalence` to false. Each cold/warm record repeats its
+backend's positive limit and records only a typed stop reason (`resource-limit`,
+`wall-timeout`, or `other`), not a fabricated cross-solver consumed-work count.
+A decision requires a null stop reason and an `unknown` requires a non-null
+reason. Partial work-budget configuration, work limits outside six-cell mode,
+unit/limit drift, and outcome/reason mismatches reject publication. The ordinary
+v1--v3 schemas remain unchanged when no deterministic work limit is configured.
+
 Axeyum's `scripts/analyze-glaurung-paired-traces.py` consumes at least five
 fixed-work repetitions. It requires identical ordered check identities and
 execution-class membership, rejects operational results and decided

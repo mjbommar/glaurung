@@ -1425,6 +1425,89 @@ mod tests {
         validate_with_reference_script(&published);
     }
 
+    #[test]
+    fn reference_validator_accepts_v4_named_work_bounds() {
+        let timing = SolveTiming {
+            total_nanos: 200,
+            z3_nanos: Some(11),
+            axeyum_nanos: Some(14),
+            z3_outcome: Some(SolveOutcome::Sat),
+            axeyum_outcome: Some(SolveOutcome::Sat),
+            axeyum_execution: Some(AxeyumExecutionClass::WarmRetained),
+            z3_cold_nanos: Some(11),
+            z3_warm_nanos: Some(12),
+            axeyum_cold_nanos: Some(13),
+            axeyum_warm_nanos: Some(14),
+            bitwuzla_cold_nanos: Some(15),
+            bitwuzla_warm_nanos: Some(16),
+            z3_cold_outcome: Some(SolveOutcome::Sat),
+            z3_warm_outcome: Some(SolveOutcome::Sat),
+            axeyum_cold_outcome: Some(SolveOutcome::Sat),
+            axeyum_warm_outcome: Some(SolveOutcome::Sat),
+            bitwuzla_cold_outcome: Some(SolveOutcome::Sat),
+            bitwuzla_warm_outcome: Some(SolveOutcome::Sat),
+            z3_warm_execution: Some(Z3ExecutionClass::WarmRetained),
+            axeyum_warm_execution: Some(AxeyumExecutionClass::WarmRetained),
+            bitwuzla_warm_execution: Some(BitwuzlaExecutionClass::WarmRetained),
+            ..SolveTiming::ZERO
+        };
+        let budgets = SolverWorkBudgets {
+            z3_rlimit: Some(2),
+            axeyum_progress_checks: Some(3),
+            bitwuzla_termination_polls: Some(5),
+        };
+
+        let output = tempfile::tempdir().expect("trace output");
+        let guard =
+            begin(output.path(), Path::new("fixture-driver.sys"), b"driver").expect("start trace");
+        let pool = ExprPool::new();
+        let mut path = TracePath::root(0x1000).expect("root trace path");
+        path.check(
+            &pool,
+            &[],
+            &SolveResult::Sat(Model::default()),
+            "v4-fixture",
+            timing,
+            None,
+            0x1001,
+        );
+        path.end("completed", 0x1002);
+        let published = guard.finish("completed").expect("publish trace");
+
+        let events_path = published.join("events-v1.ndjson");
+        let events = fs::read_to_string(&events_path).expect("event bytes");
+        let mut rows = events
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("event JSON"))
+            .collect::<Vec<_>>();
+        let check = rows
+            .iter_mut()
+            .find(|row| row["event"] == "check")
+            .expect("check event");
+        check["resource_counters"] = resource_counter_record(timing, budgets);
+        let events = rows
+            .iter()
+            .map(|row| format!("{}\n", serde_json::to_string(row).expect("event JSON")))
+            .collect::<String>();
+        fs::write(&events_path, &events).expect("rewrite events");
+
+        let manifest_path = published.join("trace-manifest-v1.json");
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("manifest bytes"))
+                .expect("manifest JSON");
+        manifest["check_measurement_schema"] =
+            Value::String("glaurung-ordered-check-measurement-v4".into());
+        manifest["solver_work_budgets"] = work_budget_manifest(budgets);
+        manifest["events_sha256"] = Value::String(sha256(events.as_bytes()));
+        fs::write(
+            &manifest_path,
+            pretty_json_bytes(&manifest).expect("manifest bytes"),
+        )
+        .expect("rewrite manifest");
+
+        validate_with_reference_script(&published);
+    }
+
     fn reference_validator_status(trace: &Path) -> std::process::ExitStatus {
         let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("docs/axeyum-integration/capture/validate_ordered_trace.py");
