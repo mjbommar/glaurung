@@ -1207,6 +1207,30 @@ authoritative `outcome`. The four-cell order rotates deterministically by
 check occurrence, and the sum of their measured times may not exceed
 `backend_nanos`.
 
+The optional neutral extension declares
+`check_measurement_schema: glaurung-ordered-check-measurement-v3`. It preserves
+all v2 fields and aliases, then adds `bitwuzla_cold_*`,
+`bitwuzla_warm_*`, and `bitwuzla_warm_execution`. When the benchmark-only
+`solver-bitwuzla` feature is present, `GLAURUNG_FAIR_SHADOW` executes all six
+`{Z3, Axeyum, Bitwuzla} x {cold, warm}` cells in a cyclically rotated order.
+The Bitwuzla cold cell shares only the per-thread term manager, matching Z3's
+shared context plus fresh solver topology; its warm cell consumes the same
+source owner, exact prefix ancestry, scopes, and temporary-assumption boundary
+as the existing warm cells. Cold Z3 remains authoritative. The producer and
+validator reject partial neutral rows, mixed v2/v3 rows, invalid outcome or
+warm execution classes, and a six-cell timing sum greater than
+`backend_nanos`.
+
+The adapter binds the official Bitwuzla 0.9.1 C API directly. Builds must set
+`BITWUZLA_LIB_DIR`; `BITWUZLA_RUNTIME_LIB_DIRS` optionally embeds additional
+runtime search paths. The preregistration must also bind the libraries actually
+resolved by the measurement executable (for example, with `ldd` on Linux),
+including Bitwuzla's transitive arithmetic dependencies; an executable RUNPATH
+does not by itself prove their identity. The linked library reports its version
+at runtime and any version other than 0.9.1 fails closed. This feature is a
+measurement boundary, not a production backend candidate, and does not change
+solver authority or the default dependency surface.
+
 Axeyum's `scripts/analyze-glaurung-paired-traces.py` consumes at least five
 fixed-work repetitions. It requires identical ordered check identities and
 execution-class membership, rejects operational results and decided
@@ -1225,6 +1249,10 @@ by both named cells in every repetition and uses the same per-occurrence
 geomean/bootstrap discipline. The legacy primary population remains the
 explicit cold-Z3/warm-Axeyum alias for continuity; it must not be presented as
 the fair warm-vs-warm result.
+
+V3 traces require a separate preregistered six-cell analyzer extension before
+they can support a performance claim. A v2 analyzer may not silently ignore the
+Bitwuzla cells or relabel the legacy aliases as neutral comparisons.
 
 The validator fails on manifest/file hash drift, sequence gaps, missing path
 terminals, broken lineage, scope underflow/digest mismatch, assertion/query

@@ -1,17 +1,21 @@
-//! SMT solver layer — a pluggable [`Solver`] trait with two backends.
+//! SMT solver layer — a pluggable [`Solver`] trait with production backends
+//! plus an optional benchmark-only neutral cell.
 //!
 //! Per the corrected ADR-0005 (native-first), the preferred backend is the
 //! **in-process native [`z3_backend::Z3Solver`]** (feature `solver-z3`, links
 //! libz3) — keeping the engine self-contained rather than shelling out. The
 //! [`pipe::PipeSolver`] (SMT-LIB2 over a subprocess) is a zero-build fallback
-//! for environments without a linked solver. A future pure-Rust backend
-//! (bit-blast → SAT) can implement the same trait.
+//! for environments without a linked solver. The pure-Rust Axeyum backend is
+//! product-capable; the direct Bitwuzla C API is isolated behind
+//! `solver-bitwuzla` solely for topology-equivalent measurements.
 //!
 //! All backends consume the bit-vector [`ExprPool`](crate::symbolic::ExprPool):
 //! solving needs no Python and no external protocol when `solver-z3` is on.
 
 #[cfg(feature = "solver-axeyum")]
 pub mod axeyum_backend;
+#[cfg(feature = "solver-bitwuzla")]
+pub mod bitwuzla_backend;
 pub mod pipe;
 #[cfg(feature = "solver-z3")]
 pub mod z3_backend;
@@ -231,12 +235,17 @@ pub(crate) struct SolveTiming {
     pub(crate) z3_warm_nanos: Option<u64>,
     pub(crate) axeyum_cold_nanos: Option<u64>,
     pub(crate) axeyum_warm_nanos: Option<u64>,
+    pub(crate) bitwuzla_cold_nanos: Option<u64>,
+    pub(crate) bitwuzla_warm_nanos: Option<u64>,
     pub(crate) z3_cold_outcome: Option<SolveOutcome>,
     pub(crate) z3_warm_outcome: Option<SolveOutcome>,
     pub(crate) axeyum_cold_outcome: Option<SolveOutcome>,
     pub(crate) axeyum_warm_outcome: Option<SolveOutcome>,
+    pub(crate) bitwuzla_cold_outcome: Option<SolveOutcome>,
+    pub(crate) bitwuzla_warm_outcome: Option<SolveOutcome>,
     pub(crate) z3_warm_execution: Option<Z3ExecutionClass>,
     pub(crate) axeyum_warm_execution: Option<AxeyumExecutionClass>,
+    pub(crate) bitwuzla_warm_execution: Option<BitwuzlaExecutionClass>,
 }
 
 impl SolveTiming {
@@ -251,12 +260,17 @@ impl SolveTiming {
         z3_warm_nanos: None,
         axeyum_cold_nanos: None,
         axeyum_warm_nanos: None,
+        bitwuzla_cold_nanos: None,
+        bitwuzla_warm_nanos: None,
         z3_cold_outcome: None,
         z3_warm_outcome: None,
         axeyum_cold_outcome: None,
         axeyum_warm_outcome: None,
+        bitwuzla_cold_outcome: None,
+        bitwuzla_warm_outcome: None,
         z3_warm_execution: None,
         axeyum_warm_execution: None,
+        bitwuzla_warm_execution: None,
     };
 }
 
@@ -335,6 +349,26 @@ pub(crate) enum Z3ExecutionClass {
     InvalidDirectDelta,
 }
 
+/// Exact neutral Bitwuzla warm execution population for one fair-shadow cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BitwuzlaExecutionClass {
+    WarmCreated,
+    WarmRetained,
+    FallbackMissingDelta,
+    InvalidDirectDelta,
+}
+
+impl BitwuzlaExecutionClass {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::WarmCreated => "warm-created",
+            Self::WarmRetained => "warm-retained",
+            Self::FallbackMissingDelta => "fallback-missing-delta",
+            Self::InvalidDirectDelta => "invalid-direct-delta",
+        }
+    }
+}
+
 impl Z3ExecutionClass {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -351,7 +385,10 @@ pub(crate) fn last_solve_timing() -> SolveTiming {
     LAST_SOLVE_TIMING.with(Cell::get)
 }
 
-/// Whether the opt-in four-cell cold/warm diagnostic is active.
+/// Whether the opt-in fair cold/warm diagnostic is active.
+///
+/// It emits the legacy four cells without `solver-bitwuzla` and the neutral
+/// six-cell extension when all three in-process backends are compiled.
 pub(crate) fn fair_shadow_enabled() -> bool {
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     {
@@ -726,19 +763,34 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     {
         if fair_shadow_enabled() {
-            let rotation = FAIR_SHADOW_SEQUENCE.fetch_add(1, Ordering::Relaxed) % 4;
+            let cell_count = if cfg!(feature = "solver-bitwuzla") {
+                6
+            } else {
+                4
+            };
+            let rotation = FAIR_SHADOW_SEQUENCE.fetch_add(1, Ordering::Relaxed) % cell_count;
             let mut z3_cold = None;
             let mut z3_warm = None;
             let mut axeyum_cold = None;
             let mut axeyum_warm = None;
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_cold = None;
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_warm = None;
             let mut z3_cold_nanos = 0;
             let mut z3_warm_nanos = 0;
             let mut axeyum_cold_nanos = 0;
             let mut axeyum_warm_nanos = 0;
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_cold_nanos = 0;
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_warm_nanos = 0;
             let mut z3_warm_execution = None;
             let mut axeyum_warm_execution = None;
-            for offset in 0..4 {
-                match (rotation + offset) % 4 {
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_warm_execution = None;
+            for offset in 0..cell_count {
+                match (rotation + offset) % cell_count {
                     0 => {
                         let started = std::time::Instant::now();
                         z3_cold = Some(z3_backend::Z3Solver::new().check(pool, asserts));
@@ -762,7 +814,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                             Some(axeyum_backend::AxeyumSolver::new().check(pool, asserts));
                         axeyum_cold_nanos = started.elapsed().as_nanos() as u64;
                     }
-                    _ => {
+                    3 => {
                         let started = std::time::Instant::now();
                         let (result, execution) = axeyum_backend::check_fair_warm_thread_local(
                             pool,
@@ -774,12 +826,39 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                         axeyum_warm_execution = Some(execution);
                         axeyum_warm_nanos = started.elapsed().as_nanos() as u64;
                     }
+                    #[cfg(feature = "solver-bitwuzla")]
+                    4 => {
+                        let started = std::time::Instant::now();
+                        bitwuzla_cold =
+                            Some(bitwuzla_backend::BitwuzlaSolver::new().check(pool, asserts));
+                        bitwuzla_cold_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    #[cfg(feature = "solver-bitwuzla")]
+                    5 => {
+                        let started = std::time::Instant::now();
+                        let (result, execution) = bitwuzla_backend::check_warm_thread_local(
+                            pool,
+                            asserts,
+                            ACTIVE_WARM_PATH.with(Cell::get),
+                            active_warm_delta(),
+                        );
+                        bitwuzla_warm = Some(result);
+                        bitwuzla_warm_execution = Some(execution);
+                        bitwuzla_warm_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    _ => unreachable!("fair-shadow cell index is bounded"),
                 }
             }
             let rz = z3_cold.expect("fair-shadow rotation runs cold Z3 exactly once");
             let rzw = z3_warm.expect("fair-shadow rotation runs warm Z3 exactly once");
             let rac = axeyum_cold.expect("fair-shadow rotation runs cold Axeyum exactly once");
             let raw = axeyum_warm.expect("fair-shadow rotation runs warm Axeyum exactly once");
+            #[cfg(feature = "solver-bitwuzla")]
+            let rbc = bitwuzla_cold
+                .expect("neutral fair-shadow rotation runs cold Bitwuzla exactly once");
+            #[cfg(feature = "solver-bitwuzla")]
+            let rbw = bitwuzla_warm
+                .expect("neutral fair-shadow rotation runs warm Bitwuzla exactly once");
 
             let same = matches!(
                 (&rz, &raw),
@@ -828,12 +907,62 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     z3_warm_nanos: Some(z3_warm_nanos),
                     axeyum_cold_nanos: Some(axeyum_cold_nanos),
                     axeyum_warm_nanos: Some(axeyum_warm_nanos),
+                    bitwuzla_cold_nanos: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            Some(bitwuzla_cold_nanos)
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
+                    bitwuzla_warm_nanos: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            Some(bitwuzla_warm_nanos)
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
                     z3_cold_outcome: Some(SolveOutcome::from(&rz)),
                     z3_warm_outcome: Some(SolveOutcome::from(&rzw)),
                     axeyum_cold_outcome: Some(SolveOutcome::from(&rac)),
                     axeyum_warm_outcome: Some(SolveOutcome::from(&raw)),
+                    bitwuzla_cold_outcome: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            Some(SolveOutcome::from(&rbc))
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
+                    bitwuzla_warm_outcome: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            Some(SolveOutcome::from(&rbw))
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
                     z3_warm_execution,
                     axeyum_warm_execution,
+                    bitwuzla_warm_execution: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            bitwuzla_warm_execution
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
                 });
             });
             return rz;
@@ -1094,6 +1223,89 @@ mod timeout_configuration_tests {
         for value in ["", "zero", "0", "60001"] {
             assert!(parse_check_timeout_ms(Some(value)).is_err(), "{value}");
         }
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "solver-z3",
+    feature = "solver-axeyum",
+    feature = "solver-bitwuzla"
+))]
+mod neutral_fair_shadow_tests {
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::ir::types::{CmpOp, Width};
+    use crate::symbolic::expr::Expr;
+
+    static ENVIRONMENT: Mutex<()> = Mutex::new(());
+
+    struct FairShadowEnvironment;
+
+    impl FairShadowEnvironment {
+        fn enable() -> Self {
+            std::env::set_var("GLAURUNG_FAIR_SHADOW", "1");
+            Self
+        }
+    }
+
+    impl Drop for FairShadowEnvironment {
+        fn drop(&mut self) {
+            std::env::remove_var("GLAURUNG_FAIR_SHADOW");
+        }
+    }
+
+    #[test]
+    fn neutral_fair_shadow_executes_all_six_cells_on_one_delta() {
+        let _guard = ENVIRONMENT.lock().expect("environment lock");
+        let _environment = FairShadowEnvironment::enable();
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W32);
+        let one = pool.constant(Width::W32, 1);
+        let equals = pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: x,
+            b: one,
+            width: Width::W32,
+        });
+        let mut prefix = WarmAssertionPrefix::default();
+        prefix.push();
+        let path_id = u64::MAX - 17;
+
+        let (result, synchronized) =
+            solve_for_path_delta(&pool, &[(equals, true)], path_id, 0, 1, &prefix);
+        assert!(matches!(result, SolveResult::Sat(_)));
+        assert!(synchronized);
+        let timing = last_solve_timing();
+        for outcome in [
+            timing.z3_cold_outcome,
+            timing.z3_warm_outcome,
+            timing.axeyum_cold_outcome,
+            timing.axeyum_warm_outcome,
+            timing.bitwuzla_cold_outcome,
+            timing.bitwuzla_warm_outcome,
+        ] {
+            assert_eq!(outcome, Some(SolveOutcome::Sat));
+        }
+        for nanos in [
+            timing.z3_cold_nanos,
+            timing.z3_warm_nanos,
+            timing.axeyum_cold_nanos,
+            timing.axeyum_warm_nanos,
+            timing.bitwuzla_cold_nanos,
+            timing.bitwuzla_warm_nanos,
+        ] {
+            assert!(nanos.is_some());
+        }
+        assert_eq!(
+            timing.bitwuzla_warm_execution,
+            Some(BitwuzlaExecutionClass::WarmCreated)
+        );
+
+        axeyum_backend::close_fair_warm_path(path_id);
+        z3_backend::close_warm_path(path_id);
+        bitwuzla_backend::close_warm_path(path_id);
     }
 }
 

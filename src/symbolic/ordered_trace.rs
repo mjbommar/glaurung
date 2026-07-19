@@ -21,13 +21,13 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::symbolic::expr::{ExprId, ExprPool};
 use crate::symbolic::native_trace::NativeAssertionPack;
-use crate::symbolic::solver::{pipe, Assert, SolveResult, SolveTiming};
+use crate::symbolic::solver::{Assert, SolveResult, SolveTiming, pipe};
 
 const VERSION: u64 = 1;
 const WORKER_ID: &str = "worker-0";
@@ -140,7 +140,7 @@ fn begin(
         assertion_ids: BTreeSet::new(),
         native_assertion_ids: BTreeSet::new(),
         warm_check_count: 0,
-        four_cell_measurement: None,
+        measurement_cells: None,
         warm_owner_share_count: 0,
         warm_owner_release_count: 0,
         error: None,
@@ -381,7 +381,7 @@ struct Recorder {
     assertion_ids: BTreeSet<String>,
     native_assertion_ids: BTreeSet<String>,
     warm_check_count: u64,
-    four_cell_measurement: Option<bool>,
+    measurement_cells: Option<u8>,
     warm_owner_share_count: u64,
     warm_owner_release_count: u64,
     error: Option<String>,
@@ -590,14 +590,34 @@ impl Recorder {
             timing.z3_warm_execution.is_some(),
             timing.axeyum_warm_execution.is_some(),
         ];
-        let present = four_cell_fields.iter().filter(|present| **present).count();
-        let four_cell = present == four_cell_fields.len();
-        if present != 0 && !four_cell {
+        let neutral_fields = [
+            timing.bitwuzla_cold_nanos.is_some(),
+            timing.bitwuzla_warm_nanos.is_some(),
+            timing.bitwuzla_cold_outcome.is_some(),
+            timing.bitwuzla_warm_outcome.is_some(),
+            timing.bitwuzla_warm_execution.is_some(),
+        ];
+        let four_present = four_cell_fields.iter().filter(|present| **present).count();
+        let neutral_present = neutral_fields.iter().filter(|present| **present).count();
+        if four_present != 0 && four_present != four_cell_fields.len() {
             self.fail("partial four-cell check measurement");
         }
-        match self.four_cell_measurement {
-            None => self.four_cell_measurement = Some(four_cell),
-            Some(expected) if expected != four_cell => {
+        if neutral_present != 0 && neutral_present != neutral_fields.len() {
+            self.fail("partial neutral-cell check measurement");
+        }
+        if neutral_present != 0 && four_present != four_cell_fields.len() {
+            self.fail("neutral cells require the complete four-cell base");
+        }
+        let measurement_cells = if neutral_present == neutral_fields.len() {
+            6
+        } else if four_present == four_cell_fields.len() {
+            4
+        } else {
+            1
+        };
+        match self.measurement_cells {
+            None => self.measurement_cells = Some(measurement_cells),
+            Some(expected) if expected != measurement_cells => {
                 self.fail("mixed ordered-check measurement schemas")
             }
             Some(_) => {}
@@ -690,12 +710,17 @@ impl Recorder {
                 "z3_warm_nanos": timing.z3_warm_nanos,
                 "axeyum_cold_nanos": timing.axeyum_cold_nanos,
                 "axeyum_warm_nanos": timing.axeyum_warm_nanos,
+                "bitwuzla_cold_nanos": timing.bitwuzla_cold_nanos,
+                "bitwuzla_warm_nanos": timing.bitwuzla_warm_nanos,
                 "z3_cold_outcome": timing.z3_cold_outcome.map(|outcome| outcome.as_str()),
                 "z3_warm_outcome": timing.z3_warm_outcome.map(|outcome| outcome.as_str()),
                 "axeyum_cold_outcome": timing.axeyum_cold_outcome.map(|outcome| outcome.as_str()),
                 "axeyum_warm_outcome": timing.axeyum_warm_outcome.map(|outcome| outcome.as_str()),
+                "bitwuzla_cold_outcome": timing.bitwuzla_cold_outcome.map(|outcome| outcome.as_str()),
+                "bitwuzla_warm_outcome": timing.bitwuzla_warm_outcome.map(|outcome| outcome.as_str()),
                 "z3_warm_execution": timing.z3_warm_execution.map(|class| class.as_str()),
                 "axeyum_warm_execution": timing.axeyum_warm_execution.map(|class| class.as_str()),
+                "bitwuzla_warm_execution": timing.bitwuzla_warm_execution.map(|class| class.as_str()),
                 "warm_replay": warm_replay,
                 "resource_counters": {},
             }),
@@ -917,6 +942,11 @@ impl Recorder {
         let query_index_sha256 = sha256(&query_index_bytes);
 
         let source = source_identity()?;
+        let neutral_measurement_backend = if self.measurement_cells == Some(6) {
+            neutral_measurement_backend()
+        } else {
+            Value::Null
+        };
         let manifest = json!({
             "schema": "glaurung-ordered-trace-v1",
             "version": VERSION,
@@ -934,10 +964,11 @@ impl Recorder {
             "analysis_configuration": trace_configuration(),
             "solver_features": solver_features(),
             "trusted_oracle": trusted_oracle(),
-            "check_measurement_schema": if self.four_cell_measurement == Some(true) {
-                "glaurung-ordered-check-measurement-v2"
-            } else {
-                "glaurung-ordered-check-measurement-v1"
+            "neutral_measurement_backend": neutral_measurement_backend,
+            "check_measurement_schema": match self.measurement_cells {
+                Some(6) => "glaurung-ordered-check-measurement-v3",
+                Some(4) => "glaurung-ordered-check-measurement-v2",
+                _ => "glaurung-ordered-check-measurement-v1",
             },
             "toolchain": command_output("rustc", &["--version"]),
             "host_identity": host_identity(),
@@ -1070,8 +1101,26 @@ fn host_identity() -> Value {
 
 fn trace_configuration() -> BTreeMap<String, String> {
     std::env::vars()
-        .filter(|(key, _)| key.starts_with("GLAURUNG_") || key.starts_with("IOCTLANCE_"))
+        .filter(|(key, _)| {
+            key.starts_with("GLAURUNG_")
+                || key.starts_with("IOCTLANCE_")
+                || key.starts_with("BITWUZLA_")
+        })
         .collect()
+}
+
+fn neutral_measurement_backend() -> Value {
+    #[cfg(feature = "solver-bitwuzla")]
+    {
+        json!({
+            "backend": "bitwuzla",
+            "runtime_version": crate::symbolic::solver::bitwuzla_backend::BitwuzlaSolver::api_version(),
+            "authoritative_in_shadow_mode": false,
+            "role": "benchmark-only-neutral",
+        })
+    }
+    #[cfg(not(feature = "solver-bitwuzla"))]
+    Value::Null
 }
 
 fn solver_features() -> Vec<&'static str> {
@@ -1081,6 +1130,8 @@ fn solver_features() -> Vec<&'static str> {
         "solver-z3",
         #[cfg(feature = "solver-axeyum")]
         "solver-axeyum",
+        #[cfg(feature = "solver-bitwuzla")]
+        "solver-bitwuzla",
     ]
 }
 
@@ -1115,7 +1166,8 @@ mod tests {
     use crate::ir::types::{BinOp, CmpOp, Width};
     use crate::symbolic::expr::Expr;
     use crate::symbolic::solver::{
-        AxeyumExecutionClass, Model, SolveOutcome, WarmAssertionPrefix, Z3ExecutionClass,
+        AxeyumExecutionClass, BitwuzlaExecutionClass, Model, SolveOutcome, WarmAssertionPrefix,
+        Z3ExecutionClass,
     };
 
     fn shadow_timing(total_nanos: u64, outcome: SolveOutcome) -> SolveTiming {
@@ -1179,6 +1231,73 @@ mod tests {
         assert_eq!(
             manifest["check_measurement_schema"],
             "glaurung-ordered-check-measurement-v2"
+        );
+        assert_eq!(manifest["neutral_measurement_backend"], Value::Null);
+        validate_with_reference_script(&published);
+    }
+
+    #[test]
+    fn neutral_shadow_timing_names_all_six_cells() {
+        let timing = SolveTiming {
+            total_nanos: 200,
+            z3_nanos: Some(11),
+            axeyum_nanos: Some(14),
+            z3_outcome: Some(SolveOutcome::Sat),
+            axeyum_outcome: Some(SolveOutcome::Sat),
+            axeyum_execution: Some(AxeyumExecutionClass::WarmRetained),
+            z3_cold_nanos: Some(11),
+            z3_warm_nanos: Some(12),
+            axeyum_cold_nanos: Some(13),
+            axeyum_warm_nanos: Some(14),
+            bitwuzla_cold_nanos: Some(15),
+            bitwuzla_warm_nanos: Some(16),
+            z3_cold_outcome: Some(SolveOutcome::Sat),
+            z3_warm_outcome: Some(SolveOutcome::Sat),
+            axeyum_cold_outcome: Some(SolveOutcome::Sat),
+            axeyum_warm_outcome: Some(SolveOutcome::Sat),
+            bitwuzla_cold_outcome: Some(SolveOutcome::Sat),
+            bitwuzla_warm_outcome: Some(SolveOutcome::Sat),
+            z3_warm_execution: Some(Z3ExecutionClass::WarmRetained),
+            axeyum_warm_execution: Some(AxeyumExecutionClass::WarmRetained),
+            bitwuzla_warm_execution: Some(BitwuzlaExecutionClass::WarmRetained),
+            ..SolveTiming::ZERO
+        };
+
+        let output = tempfile::tempdir().expect("trace output");
+        let guard =
+            begin(output.path(), Path::new("fixture-driver.sys"), b"driver").expect("start trace");
+        let pool = ExprPool::new();
+        let mut path = TracePath::root(0x1000).expect("root trace path");
+        path.check(
+            &pool,
+            &[],
+            &SolveResult::Sat(Model::default()),
+            "neutral-fixture",
+            timing,
+            None,
+            0x1001,
+        );
+        path.end("completed", 0x1002);
+        let published = guard.finish("completed").expect("publish trace");
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(published.join("trace-manifest-v1.json")).expect("manifest bytes"),
+        )
+        .expect("manifest JSON");
+        assert_eq!(
+            manifest["check_measurement_schema"],
+            "glaurung-ordered-check-measurement-v3"
+        );
+        assert_eq!(
+            manifest["neutral_measurement_backend"]["backend"],
+            "bitwuzla"
+        );
+        assert_eq!(
+            manifest["neutral_measurement_backend"]["runtime_version"],
+            "0.9.1"
+        );
+        assert_eq!(
+            manifest["neutral_measurement_backend"]["authoritative_in_shadow_mode"],
+            false
         );
         validate_with_reference_script(&published);
     }
@@ -1389,9 +1508,11 @@ mod tests {
         assert!(checks.iter().all(|row| row["axeyum_nanos"].is_u64()));
         assert!(checks.iter().all(|row| row["z3_outcome"].is_string()));
         assert!(checks.iter().all(|row| row["axeyum_outcome"].is_string()));
-        assert!(checks
-            .iter()
-            .all(|row| row["axeyum_execution"] == "warm-retained"));
+        assert!(
+            checks
+                .iter()
+                .all(|row| row["axeyum_execution"] == "warm-retained")
+        );
         let assertions = rows
             .iter()
             .filter(|row| row["event"] == "assert")
@@ -1406,11 +1527,13 @@ mod tests {
         )
         .expect("query-index JSON");
         assert_eq!(index["queries"].as_array().expect("queries").len(), 2);
-        assert!(index["queries"]
-            .as_array()
-            .expect("queries")
-            .iter()
-            .any(|query| query["occurrences"].as_array().expect("occurrences").len() == 2));
+        assert!(
+            index["queries"]
+                .as_array()
+                .expect("queries")
+                .iter()
+                .any(|query| query["occurrences"].as_array().expect("occurrences").len() == 2)
+        );
 
         let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("docs/axeyum-integration/capture/validate_ordered_trace.py");

@@ -97,6 +97,10 @@ solver-z3 = ["symbolic", "dep:z3"]
 # dependency, wheel-shippable. Intended default once validated (ADR-002);
 # opt-in for now. Priority in solve(): solver-z3 > solver-axeyum > pipe.
 solver-axeyum = ["symbolic", "dep:axeyum-solver", "dep:axeyum-ir"]
+# Benchmark-only native Bitwuzla 0.9.1 cell. This direct C-API adapter is
+# intentionally not part of production backend selection; it exists only for
+# topology-equivalent cold/warm neutral measurements.
+solver-bitwuzla = ["symbolic"]
 # Legacy/reference SMT-LIB text bridge. This deliberately opts into axeyum's
 # full profile; production solver-axeyum remains on the minimal QF_BV surface.
 solver-axeyum-text = ["solver-axeyum", "axeyum-solver/full"]

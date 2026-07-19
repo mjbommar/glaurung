@@ -119,8 +119,21 @@ def validate(root: pathlib.Path) -> dict[str, int]:
         None,
         "glaurung-ordered-check-measurement-v1",
         "glaurung-ordered-check-measurement-v2",
+        "glaurung-ordered-check-measurement-v3",
     }:
         fail("invalid ordered-check measurement schema")
+    neutral_backend = manifest.get("neutral_measurement_backend")
+    if check_measurement_schema == "glaurung-ordered-check-measurement-v3":
+        if (
+            not isinstance(neutral_backend, dict)
+            or neutral_backend.get("backend") != "bitwuzla"
+            or neutral_backend.get("runtime_version") != "0.9.1"
+            or neutral_backend.get("authoritative_in_shadow_mode") is not False
+            or neutral_backend.get("role") != "benchmark-only-neutral"
+        ):
+            fail("invalid v3 neutral measurement backend identity")
+    elif neutral_backend is not None:
+        fail("neutral measurement backend present outside v3")
     native_replay = manifest.get("native_replay")
     if native_replay is not None and (
         not isinstance(native_replay, dict)
@@ -427,13 +440,18 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                     authoritative = "error"
                 if authoritative is not None and authoritative != outcome:
                     fail(f"authoritative backend outcome mismatch for {check_id}")
-                if check_measurement_schema == "glaurung-ordered-check-measurement-v2":
-                    fair_cells = (
+                if check_measurement_schema in {
+                    "glaurung-ordered-check-measurement-v2",
+                    "glaurung-ordered-check-measurement-v3",
+                }:
+                    fair_cells = [
                         "z3_cold",
                         "z3_warm",
                         "axeyum_cold",
                         "axeyum_warm",
-                    )
+                    ]
+                    if check_measurement_schema == "glaurung-ordered-check-measurement-v3":
+                        fair_cells.extend(("bitwuzla_cold", "bitwuzla_warm"))
                     for cell in fair_cells:
                         cell_nanos = event.get(f"{cell}_nanos")
                         cell_outcome = event.get(f"{cell}_outcome")
@@ -443,7 +461,7 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                             fail(f"invalid {cell} outcome for {check_id}")
                     fair_measured = sum(event[f"{cell}_nanos"] for cell in fair_cells)
                     if fair_measured > backend_nanos:
-                        fail(f"four-cell timing exceeds total timing for {check_id}")
+                        fail(f"fair-cell timing exceeds total timing for {check_id}")
                     z3_execution = event.get("z3_warm_execution")
                     if z3_execution not in {
                         "warm-created",
@@ -454,6 +472,16 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                         fail(f"invalid warm Z3 execution class for {check_id}")
                     if event.get("axeyum_warm_execution") not in execution_classes:
                         fail(f"invalid warm Axeyum execution class for {check_id}")
+                    if check_measurement_schema == "glaurung-ordered-check-measurement-v3":
+                        if event.get("bitwuzla_warm_execution") not in {
+                            "warm-created",
+                            "warm-retained",
+                            "fallback-missing-delta",
+                            "invalid-direct-delta",
+                        }:
+                            fail(
+                                f"invalid warm Bitwuzla execution class for {check_id}"
+                            )
                     aliases = (
                         (z3_nanos, event["z3_cold_nanos"], "Z3 timing"),
                         (axeyum_nanos, event["axeyum_warm_nanos"], "Axeyum timing"),

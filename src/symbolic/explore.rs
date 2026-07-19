@@ -688,6 +688,16 @@ fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
             path_id, children,
         );
     }
+    #[cfg(all(
+        feature = "solver-z3",
+        feature = "solver-axeyum",
+        feature = "solver-bitwuzla"
+    ))]
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::bitwuzla_backend::share_serial_warm_owner_with_children(
+            path_id, children,
+        );
+    }
     #[cfg(not(feature = "solver-axeyum"))]
     let _ = (path_id, children);
 }
@@ -703,6 +713,14 @@ fn close_warm_owner(path_id: u64) {
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     if crate::symbolic::solver::fair_shadow_enabled() {
         crate::symbolic::solver::z3_backend::close_warm_path(path_id);
+    }
+    #[cfg(all(
+        feature = "solver-z3",
+        feature = "solver-axeyum",
+        feature = "solver-bitwuzla"
+    ))]
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::bitwuzla_backend::close_warm_path(path_id);
     }
 }
 
