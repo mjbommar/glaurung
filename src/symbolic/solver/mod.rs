@@ -30,6 +30,27 @@ pub struct Model {
     pub values: BTreeMap<u32, u128>,
 }
 
+/// Stable reason class for a solver nondecision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SolveUnknownReason {
+    /// A backend-specific deterministic work limit was exhausted.
+    ResourceLimit,
+    /// The cooperative wall-clock safety cap was exhausted.
+    WallTimeout,
+    /// The backend declined for another reason.
+    Other,
+}
+
+impl SolveUnknownReason {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ResourceLimit => "resource-limit",
+            Self::WallTimeout => "wall-timeout",
+            Self::Other => "other",
+        }
+    }
+}
+
 /// The result of a solve attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolveResult {
@@ -37,8 +58,8 @@ pub enum SolveResult {
     Sat(Model),
     /// Unsatisfiable.
     Unsat,
-    /// The solver returned `unknown`.
-    Unknown,
+    /// The solver returned `unknown`, with a stable nondecision class.
+    Unknown(SolveUnknownReason),
     /// No solver backend was available (graceful no-op).
     NoSolver,
     /// The backend was available but errored (with a message).
@@ -96,6 +117,87 @@ pub const DEFAULT_CHECK_TIMEOUT_MS: u64 = 250;
 const MAX_CHECK_TIMEOUT_MS: u64 = 60_000;
 const CHECK_TIMEOUT_ENV: &str = "GLAURUNG_CHECK_TIMEOUT_MS";
 static CHECK_TIMEOUT: OnceLock<Duration> = OnceLock::new();
+const Z3_RLIMIT_ENV: &str = "GLAURUNG_Z3_RLIMIT";
+const AXEYUM_PROGRESS_CHECK_LIMIT_ENV: &str = "GLAURUNG_AXEYUM_PROGRESS_CHECK_LIMIT";
+const BITWUZLA_TERMINATION_POLL_LIMIT_ENV: &str = "GLAURUNG_BITWUZLA_TERMINATION_POLL_LIMIT";
+static SOLVER_WORK_BUDGETS: OnceLock<SolverWorkBudgets> = OnceLock::new();
+
+/// Backend-specific deterministic per-check work limits.
+///
+/// The three values intentionally retain distinct names and units. Equal
+/// numbers are not equal work across solvers; reproducibility is evaluated
+/// within one pinned backend, while verdict/finding parity is evaluated across
+/// backends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SolverWorkBudgets {
+    pub(crate) z3_rlimit: Option<u32>,
+    pub(crate) axeyum_progress_checks: Option<u64>,
+    pub(crate) bitwuzla_termination_polls: Option<u64>,
+}
+
+impl SolverWorkBudgets {
+    fn from_values(
+        z3_rlimit: Option<&str>,
+        axeyum_progress_checks: Option<&str>,
+        bitwuzla_termination_polls: Option<&str>,
+    ) -> Result<Self, String> {
+        let z3_rlimit = parse_solver_work_budget(Z3_RLIMIT_ENV, z3_rlimit, u64::from(u32::MAX))?
+            .map(|value| u32::try_from(value).expect("Z3 work budget was range-checked"));
+        Ok(Self {
+            z3_rlimit,
+            axeyum_progress_checks: parse_solver_work_budget(
+                AXEYUM_PROGRESS_CHECK_LIMIT_ENV,
+                axeyum_progress_checks,
+                u64::MAX,
+            )?,
+            bitwuzla_termination_polls: parse_solver_work_budget(
+                BITWUZLA_TERMINATION_POLL_LIMIT_ENV,
+                bitwuzla_termination_polls,
+                u64::MAX,
+            )?,
+        })
+    }
+
+    pub(crate) const fn is_complete(self) -> bool {
+        self.z3_rlimit.is_some()
+            && self.axeyum_progress_checks.is_some()
+            && self.bitwuzla_termination_polls.is_some()
+    }
+
+    pub(crate) const fn is_active(self) -> bool {
+        self.z3_rlimit.is_some()
+            || self.axeyum_progress_checks.is_some()
+            || self.bitwuzla_termination_polls.is_some()
+    }
+}
+
+fn parse_solver_work_budget(
+    name: &str,
+    value: Option<&str>,
+    maximum: u64,
+) -> Result<Option<u64>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let limit = value
+        .parse::<u64>()
+        .map_err(|_| format!("{name} must be an integer from 1 to {maximum}"))?;
+    if limit == 0 || limit > maximum {
+        return Err(format!("{name} must be an integer from 1 to {maximum}"));
+    }
+    Ok(Some(limit))
+}
+
+/// Effective process-wide deterministic work limits for the native backends.
+pub(crate) fn solver_work_budgets() -> SolverWorkBudgets {
+    *SOLVER_WORK_BUDGETS.get_or_init(|| {
+        let z3 = std::env::var(Z3_RLIMIT_ENV).ok();
+        let axeyum = std::env::var(AXEYUM_PROGRESS_CHECK_LIMIT_ENV).ok();
+        let bitwuzla = std::env::var(BITWUZLA_TERMINATION_POLL_LIMIT_ENV).ok();
+        SolverWorkBudgets::from_values(z3.as_deref(), axeyum.as_deref(), bitwuzla.as_deref())
+            .unwrap_or_else(|error| panic!("{error}"))
+    })
+}
 
 fn parse_check_timeout_ms(value: Option<&str>) -> Result<u64, String> {
     let Some(value) = value else {
@@ -243,6 +345,12 @@ pub(crate) struct SolveTiming {
     pub(crate) axeyum_warm_outcome: Option<SolveOutcome>,
     pub(crate) bitwuzla_cold_outcome: Option<SolveOutcome>,
     pub(crate) bitwuzla_warm_outcome: Option<SolveOutcome>,
+    pub(crate) z3_cold_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) z3_warm_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) axeyum_cold_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) axeyum_warm_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) bitwuzla_cold_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) bitwuzla_warm_unknown_reason: Option<SolveUnknownReason>,
     pub(crate) z3_warm_execution: Option<Z3ExecutionClass>,
     pub(crate) axeyum_warm_execution: Option<AxeyumExecutionClass>,
     pub(crate) bitwuzla_warm_execution: Option<BitwuzlaExecutionClass>,
@@ -268,10 +376,23 @@ impl SolveTiming {
         axeyum_warm_outcome: None,
         bitwuzla_cold_outcome: None,
         bitwuzla_warm_outcome: None,
+        z3_cold_unknown_reason: None,
+        z3_warm_unknown_reason: None,
+        axeyum_cold_unknown_reason: None,
+        axeyum_warm_unknown_reason: None,
+        bitwuzla_cold_unknown_reason: None,
+        bitwuzla_warm_unknown_reason: None,
         z3_warm_execution: None,
         axeyum_warm_execution: None,
         bitwuzla_warm_execution: None,
     };
+}
+
+const fn unknown_reason(result: &SolveResult) -> Option<SolveUnknownReason> {
+    match result {
+        SolveResult::Unknown(reason) => Some(*reason),
+        _ => None,
+    }
 }
 
 /// Stable result class for one independently timed backend invocation.
@@ -301,7 +422,7 @@ impl From<&SolveResult> for SolveOutcome {
         match result {
             SolveResult::Sat(_) => Self::Sat,
             SolveResult::Unsat => Self::Unsat,
-            SolveResult::Unknown => Self::Unknown,
+            SolveResult::Unknown(_) => Self::Unknown,
             SolveResult::NoSolver => Self::NoSolver,
             SolveResult::Error(_) => Self::Error,
         }
@@ -505,7 +626,7 @@ fn shadow_result_class(result: &SolveResult) -> &'static str {
     match result {
         SolveResult::Sat(_) => "sat",
         SolveResult::Unsat => "unsat",
-        SolveResult::Unknown => "unknown",
+        SolveResult::Unknown(_) => "unknown",
         SolveResult::NoSolver => "no-solver",
         SolveResult::Error(_) => "error",
     }
@@ -516,7 +637,7 @@ fn should_capture_shadow_split(z3: &SolveResult, axeyum: &SolveResult) -> bool {
         matches!(result, SolveResult::Sat(_) | SolveResult::Unsat)
     }
     fn nondecided(result: &SolveResult) -> bool {
-        matches!(result, SolveResult::Unknown | SolveResult::Error(_))
+        matches!(result, SolveResult::Unknown(_) | SolveResult::Error(_))
     }
 
     (decided(z3) && nondecided(axeyum)) || (nondecided(z3) && decided(axeyum))
@@ -867,7 +988,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             );
             let nondecided = [&rz, &raw]
                 .into_iter()
-                .any(|result| matches!(result, SolveResult::Unknown | SolveResult::Error(_)));
+                .any(|result| matches!(result, SolveResult::Unknown(_) | SolveResult::Error(_)));
             if same || nondecided {
                 SHADOW_AGREE.fetch_add(1, Ordering::Relaxed);
             } else {
@@ -879,8 +1000,8 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     SHADOW_MODEL_DIFF.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            let z3_nondecided = matches!(rz, SolveResult::Unknown | SolveResult::Error(_));
-            let axeyum_nondecided = matches!(raw, SolveResult::Unknown | SolveResult::Error(_));
+            let z3_nondecided = matches!(rz, SolveResult::Unknown(_) | SolveResult::Error(_));
+            let axeyum_nondecided = matches!(raw, SolveResult::Unknown(_) | SolveResult::Error(_));
             if z3_nondecided {
                 SHADOW_Z3_UNK.fetch_add(1, Ordering::Relaxed);
             }
@@ -951,6 +1072,30 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                             None
                         }
                     },
+                    z3_cold_unknown_reason: unknown_reason(&rz),
+                    z3_warm_unknown_reason: unknown_reason(&rzw),
+                    axeyum_cold_unknown_reason: unknown_reason(&rac),
+                    axeyum_warm_unknown_reason: unknown_reason(&raw),
+                    bitwuzla_cold_unknown_reason: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            unknown_reason(&rbc)
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
+                    bitwuzla_warm_unknown_reason: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            unknown_reason(&rbw)
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
                     z3_warm_execution,
                     axeyum_warm_execution,
                     bitwuzla_warm_execution: {
@@ -1015,8 +1160,8 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                 z3_nanos = t.elapsed().as_nanos() as u64;
                 SHADOW_Z3_NANOS.fetch_add(z3_nanos, Ordering::Relaxed);
             }
-            let unknown = matches!(rz, SolveResult::Unknown)
-                || matches!(ra, SolveResult::Unknown)
+            let unknown = matches!(rz, SolveResult::Unknown(_))
+                || matches!(ra, SolveResult::Unknown(_))
                 || matches!(rz, SolveResult::Error(_))
                 || matches!(ra, SolveResult::Error(_));
             let same = matches!(
@@ -1037,7 +1182,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             }
             // Diagnostic: print the first few axeyum non-decided reasons so
             // we know WHY (Unknown budget vs Error translation) it punts.
-            if matches!(ra, SolveResult::Unknown | SolveResult::Error(_))
+            if matches!(ra, SolveResult::Unknown(_) | SolveResult::Error(_))
                 && SHADOW_AX_UNK.load(Ordering::Relaxed) < 5
             {
                 eprintln!(
@@ -1046,8 +1191,8 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     ra
                 );
             }
-            let z3_unk = matches!(rz, SolveResult::Unknown | SolveResult::Error(_));
-            let ax_unk = matches!(ra, SolveResult::Unknown | SolveResult::Error(_));
+            let z3_unk = matches!(rz, SolveResult::Unknown(_) | SolveResult::Error(_));
+            let ax_unk = matches!(ra, SolveResult::Unknown(_) | SolveResult::Error(_));
             if z3_unk {
                 SHADOW_Z3_UNK.fetch_add(1, Ordering::Relaxed);
             }
@@ -1145,7 +1290,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     });
     TOTAL_SOLVE_COUNT.fetch_add(1, Ordering::Relaxed);
     TOTAL_SOLVE_NANOS.fetch_add(__elapsed, Ordering::Relaxed);
-    if matches!(result, SolveResult::Unknown) {
+    if matches!(result, SolveResult::Unknown(_)) {
         TIMEOUT_COUNT.with(|c| c.set(c.get() + 1));
     }
     #[cfg(feature = "solver-z3")]
@@ -1210,7 +1355,10 @@ pub(crate) fn solve_for_path_delta(
 
 #[cfg(test)]
 mod timeout_configuration_tests {
-    use super::{parse_check_timeout_ms, DEFAULT_CHECK_TIMEOUT_MS};
+    use super::{
+        DEFAULT_CHECK_TIMEOUT_MS, SolveUnknownReason, SolverWorkBudgets, parse_check_timeout_ms,
+        parse_solver_work_budget,
+    };
 
     #[test]
     fn check_timeout_defaults_and_accepts_a_bounded_override() {
@@ -1223,6 +1371,34 @@ mod timeout_configuration_tests {
         for value in ["", "zero", "0", "60001"] {
             assert!(parse_check_timeout_ms(Some(value)).is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn solver_work_budgets_name_backend_specific_units() {
+        let budgets = SolverWorkBudgets::from_values(Some("7"), Some("11"), Some("13"))
+            .expect("three positive backend budgets");
+        assert_eq!(budgets.z3_rlimit, Some(7));
+        assert_eq!(budgets.axeyum_progress_checks, Some(11));
+        assert_eq!(budgets.bitwuzla_termination_polls, Some(13));
+        assert!(budgets.is_complete());
+    }
+
+    #[test]
+    fn solver_work_budget_rejects_zero_invalid_and_u32_overflow() {
+        for value in ["", "zero", "0"] {
+            assert!(parse_solver_work_budget("TEST", Some(value), u64::MAX).is_err());
+        }
+        assert!(
+            SolverWorkBudgets::from_values(Some("4294967296"), Some("1"), Some("1")).is_err(),
+            "Z3 rlimit must fit the u32 parameter API"
+        );
+    }
+
+    #[test]
+    fn solver_unknown_reasons_keep_work_and_wall_exhaustion_distinct() {
+        assert_eq!(SolveUnknownReason::ResourceLimit.as_str(), "resource-limit");
+        assert_eq!(SolveUnknownReason::WallTimeout.as_str(), "wall-timeout");
+        assert_eq!(SolveUnknownReason::Other.as_str(), "other");
     }
 }
 
@@ -1312,8 +1488,8 @@ mod neutral_fair_shadow_tests {
 #[cfg(all(test, feature = "solver-z3"))]
 mod capture_tests {
     use super::{
-        append_capture_index, publish_query_file, publish_shadow_split_bytes, shadow_result_class,
-        should_capture_shadow_split, SolveResult,
+        SolveResult, SolveUnknownReason, append_capture_index, publish_query_file,
+        publish_shadow_split_bytes, shadow_result_class, should_capture_shadow_split,
     };
 
     #[test]
@@ -1357,7 +1533,7 @@ mod capture_tests {
     fn shadow_split_capture_requires_exactly_one_nondecided_backend() {
         let sat = SolveResult::Sat(Default::default());
         let unsat = SolveResult::Unsat;
-        let unknown = SolveResult::Unknown;
+        let unknown = SolveResult::Unknown(SolveUnknownReason::Other);
         let error = SolveResult::Error("diagnostic must not enter identity".to_string());
 
         assert!(should_capture_shadow_split(&sat, &unknown));

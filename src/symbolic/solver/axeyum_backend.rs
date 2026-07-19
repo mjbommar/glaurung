@@ -24,10 +24,11 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    export_qf_bv_unsat_proof, AigConstructionStats, CheckResult, IncrementalBvSolver,
-    IncrementalBvStats, IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
+    AigConstructionStats, CheckResult, IncrementalBvSolver, IncrementalBvStats,
+    IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
     IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy,
-    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome,
+    ReplayCheckedSatCacheStats, SolverConfig, UnknownKind, UnsatProofOutcome,
+    export_qf_bv_unsat_proof,
 };
 #[cfg(feature = "solver-axeyum-text")]
 use axeyum_solver::{solve_smtlib, solve_smtlib_get_value};
@@ -37,8 +38,9 @@ use sha2::{Digest, Sha256};
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    check_timeout, pipe, Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult,
-    Solver, WarmAssertionPrefix, WarmDeltaContext,
+    Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, SolveUnknownReason,
+    Solver, SolverWorkBudgets, WarmAssertionPrefix, WarmDeltaContext, check_timeout, pipe,
+    solver_work_budgets,
 };
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 const CNF_SNAPSHOT_DIR_ENV: &str = "GLAURUNG_AXEYUM_CNF_SNAPSHOT_DIR";
@@ -231,7 +233,7 @@ fn select_warm_timeout_continuation(
             WARM_TIMEOUT_CONTINUATION_RECOVERIES.fetch_add(1, Ordering::Relaxed);
             decided
         }
-        SolveResult::Unknown => {
+        SolveResult::Unknown(_) => {
             WARM_TIMEOUT_CONTINUATION_UNKNOWNS.fetch_add(1, Ordering::Relaxed);
             original
         }
@@ -321,11 +323,19 @@ fn parse_replay_sat_cache_policy(value: Option<&str>) -> Option<ReplayCheckedSat
 }
 
 fn config() -> SolverConfig {
+    config_with_work_budgets(solver_work_budgets())
+}
+
+fn config_with_work_budgets(work_budgets: SolverWorkBudgets) -> SolverConfig {
     let internal_and_flattening = std::env::var(INTERNAL_AND_FLATTENING_ENV)
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on"));
-    SolverConfig::new()
+    let config = SolverConfig::new()
         .with_timeout(check_timeout())
-        .with_incremental_positive_and_flattening(internal_and_flattening)
+        .with_incremental_positive_and_flattening(internal_and_flattening);
+    match work_budgets.axeyum_progress_checks {
+        Some(limit) => config.with_resource_limit(limit),
+        None => config,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -832,7 +842,12 @@ impl IncrementalAxeyumSolver {
         let model_started = profiling.then(Instant::now);
         let mut result = map_check_result(checked, &symbols);
         let mut model_extract_nanos = model_started.map_or(0, |started| nanos(started.elapsed()));
-        if continue_on_unknown && matches!(result, SolveResult::Unknown) {
+        if continue_on_unknown
+            && matches!(
+                result,
+                SolveResult::Unknown(SolveUnknownReason::WallTimeout)
+            )
+        {
             WARM_TIMEOUT_CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
             let checked = AxeyumIncrementalSolver::check_assuming(
                 &mut self.solver,
@@ -1926,7 +1941,12 @@ impl DirectDeltaLineageAxeyumSolver {
 
         if temporary.is_empty() {
             let (mut result, mut model_extract_nanos) = path.solver.check_measured(profiling);
-            if warm_timeout_continue_enabled() && matches!(result, SolveResult::Unknown) {
+            if warm_timeout_continue_enabled()
+                && matches!(
+                    result,
+                    SolveResult::Unknown(SolveUnknownReason::WallTimeout)
+                )
+            {
                 WARM_TIMEOUT_CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
                 let (continuation, continuation_model_extract_nanos) =
                     path.solver.check_measured(profiling);
@@ -2142,8 +2162,10 @@ pub(crate) fn check_warm_thread_local(
         warm_reuse_policy(),
         direct_delta_enabled(),
     );
-    if !matches!(result, SolveResult::Unknown)
-        || !last_direct_delta_synced()
+    if !matches!(
+        result,
+        SolveResult::Unknown(SolveUnknownReason::WallTimeout)
+    ) || !last_direct_delta_synced()
         || !warm_timeout_cold_retry_enabled()
     {
         return (result, execution);
@@ -2155,7 +2177,7 @@ pub(crate) fn check_warm_thread_local(
             WARM_TIMEOUT_COLD_RECOVERIES.fetch_add(1, Ordering::Relaxed);
             decided
         }
-        SolveResult::Unknown => {
+        SolveResult::Unknown(_) => {
             WARM_TIMEOUT_COLD_UNKNOWNS.fetch_add(1, Ordering::Relaxed);
             result
         }
@@ -2836,7 +2858,14 @@ fn map_check_result(
             SolveResult::Sat(Model { values })
         }
         Ok(CheckResult::Unsat) => SolveResult::Unsat,
-        Ok(CheckResult::Unknown(_)) => SolveResult::Unknown,
+        Ok(CheckResult::Unknown(reason)) => SolveResult::Unknown(match reason.kind {
+            UnknownKind::ResourceLimit
+            | UnknownKind::NodeBudget
+            | UnknownKind::MemoryLimit
+            | UnknownKind::EncodingBudget => SolveUnknownReason::ResourceLimit,
+            UnknownKind::Timeout => SolveUnknownReason::WallTimeout,
+            _ => SolveUnknownReason::Other,
+        }),
         Err(err) => SolveResult::Error(format!("axeyum check: {err}")),
     }
 }
@@ -2949,7 +2978,7 @@ fn result_name(result: &SolveResult) -> &'static str {
     match result {
         SolveResult::Sat(_) => "sat",
         SolveResult::Unsat => "unsat",
-        SolveResult::Unknown => "unknown",
+        SolveResult::Unknown(_) => "unknown",
         SolveResult::NoSolver => "no-solver",
         SolveResult::Error(_) => "error",
     }
@@ -3237,7 +3266,14 @@ impl Solver for AxeyumTextSolver {
             Ok(outcome) => match outcome.result {
                 CheckResult::Sat(_) => SolveResult::Sat(extract_model(&script, &names, &cfg)),
                 CheckResult::Unsat => SolveResult::Unsat,
-                CheckResult::Unknown(_) => SolveResult::Unknown,
+                CheckResult::Unknown(reason) => SolveResult::Unknown(match reason.kind {
+                    UnknownKind::ResourceLimit
+                    | UnknownKind::NodeBudget
+                    | UnknownKind::MemoryLimit
+                    | UnknownKind::EncodingBudget => SolveUnknownReason::ResourceLimit,
+                    UnknownKind::Timeout => SolveUnknownReason::WallTimeout,
+                    _ => SolveUnknownReason::Other,
+                }),
             },
             Err(e) => SolveResult::Error(e.to_string()),
         }
@@ -3266,6 +3302,16 @@ fn extract_model(script: &str, names: &[(u32, String)], cfg: &SolverConfig) -> M
 mod tests {
     use super::*;
     use crate::ir::types::Width;
+
+    #[test]
+    fn config_forwards_the_axeyum_progress_check_budget() {
+        let config = config_with_work_budgets(SolverWorkBudgets {
+            axeyum_progress_checks: Some(17),
+            ..SolverWorkBudgets::default()
+        });
+
+        assert_eq!(config.resource_limit, Some(17));
+    }
 
     // ---- helpers ----------------------------------------------------------
 

@@ -27,11 +27,78 @@ use uuid::Uuid;
 
 use crate::symbolic::expr::{ExprId, ExprPool};
 use crate::symbolic::native_trace::NativeAssertionPack;
-use crate::symbolic::solver::{Assert, SolveResult, SolveTiming, pipe};
+use crate::symbolic::solver::{
+    Assert, SolveResult, SolveTiming, SolverWorkBudgets, check_timeout_ms, pipe,
+    solver_work_budgets,
+};
 
 const VERSION: u64 = 1;
 const WORKER_ID: &str = "worker-0";
 const ANALYSIS_PATH_ID: &str = "analysis";
+
+fn check_measurement_schema(
+    measurement_cells: Option<u8>,
+    work_budgets: SolverWorkBudgets,
+) -> Result<&'static str, String> {
+    if work_budgets.is_active() {
+        if measurement_cells != Some(6) {
+            return Err(
+                "deterministic solver work limits require the complete six-cell measurement".into(),
+            );
+        }
+        if !work_budgets.is_complete() {
+            return Err(
+                "six-cell deterministic measurement requires Z3 rlimit, Axeyum progress-check, and Bitwuzla termination-poll limits"
+                    .into(),
+            );
+        }
+        return Ok("glaurung-ordered-check-measurement-v4");
+    }
+    Ok(match measurement_cells {
+        Some(6) => "glaurung-ordered-check-measurement-v3",
+        Some(4) => "glaurung-ordered-check-measurement-v2",
+        _ => "glaurung-ordered-check-measurement-v1",
+    })
+}
+
+fn resource_cell(
+    unit: &str,
+    limit: Option<u64>,
+    reason: Option<crate::symbolic::solver::SolveUnknownReason>,
+) -> Value {
+    json!({
+        "unit": unit,
+        "limit": limit,
+        "stop_reason": reason.map(|reason| reason.as_str()),
+    })
+}
+
+fn resource_counter_record(timing: SolveTiming, work_budgets: SolverWorkBudgets) -> Value {
+    if !work_budgets.is_complete() {
+        return json!({});
+    }
+    let z3_limit = work_budgets.z3_rlimit.map(u64::from);
+    let axeyum_limit = work_budgets.axeyum_progress_checks;
+    let bitwuzla_limit = work_budgets.bitwuzla_termination_polls;
+    json!({
+        "z3_cold": resource_cell("z3-rlimit", z3_limit, timing.z3_cold_unknown_reason),
+        "z3_warm": resource_cell("z3-rlimit", z3_limit, timing.z3_warm_unknown_reason),
+        "axeyum_cold": resource_cell("axeyum-progress-checks", axeyum_limit, timing.axeyum_cold_unknown_reason),
+        "axeyum_warm": resource_cell("axeyum-progress-checks", axeyum_limit, timing.axeyum_warm_unknown_reason),
+        "bitwuzla_cold": resource_cell("bitwuzla-termination-polls", bitwuzla_limit, timing.bitwuzla_cold_unknown_reason),
+        "bitwuzla_warm": resource_cell("bitwuzla-termination-polls", bitwuzla_limit, timing.bitwuzla_warm_unknown_reason),
+    })
+}
+
+fn work_budget_manifest(work_budgets: SolverWorkBudgets) -> Value {
+    json!({
+        "z3": {"unit": "z3-rlimit", "limit": work_budgets.z3_rlimit},
+        "axeyum": {"unit": "axeyum-progress-checks", "limit": work_budgets.axeyum_progress_checks},
+        "bitwuzla": {"unit": "bitwuzla-termination-polls", "limit": work_budgets.bitwuzla_termination_polls},
+        "cross_backend_unit_equivalence": false,
+        "wall_safety_cap_ms": check_timeout_ms(),
+    })
+}
 
 thread_local! {
     static RECORDER: RefCell<Option<Recorder>> = const { RefCell::new(None) };
@@ -722,7 +789,7 @@ impl Recorder {
                 "axeyum_warm_execution": timing.axeyum_warm_execution.map(|class| class.as_str()),
                 "bitwuzla_warm_execution": timing.bitwuzla_warm_execution.map(|class| class.as_str()),
                 "warm_replay": warm_replay,
-                "resource_counters": {},
+                "resource_counters": resource_counter_record(timing, solver_work_budgets()),
             }),
         );
         if outcome == "sat" {
@@ -942,12 +1009,14 @@ impl Recorder {
         let query_index_sha256 = sha256(&query_index_bytes);
 
         let source = source_identity()?;
+        let work_budgets = solver_work_budgets();
+        let measurement_schema = check_measurement_schema(self.measurement_cells, work_budgets)?;
         let neutral_measurement_backend = if self.measurement_cells == Some(6) {
             neutral_measurement_backend()
         } else {
             Value::Null
         };
-        let manifest = json!({
+        let mut manifest = json!({
             "schema": "glaurung-ordered-trace-v1",
             "version": VERSION,
             "analysis_id": self.analysis_id,
@@ -965,11 +1034,7 @@ impl Recorder {
             "solver_features": solver_features(),
             "trusted_oracle": trusted_oracle(),
             "neutral_measurement_backend": neutral_measurement_backend,
-            "check_measurement_schema": match self.measurement_cells {
-                Some(6) => "glaurung-ordered-check-measurement-v3",
-                Some(4) => "glaurung-ordered-check-measurement-v2",
-                _ => "glaurung-ordered-check-measurement-v1",
-            },
+            "check_measurement_schema": measurement_schema,
             "toolchain": command_output("rustc", &["--version"]),
             "host_identity": host_identity(),
             "worker_count": 1,
@@ -992,6 +1057,15 @@ impl Recorder {
             "query_index_sha256": query_index_sha256,
             "access_classification": "restricted-driver-analysis",
         });
+        if work_budgets.is_active() {
+            manifest
+                .as_object_mut()
+                .expect("trace manifest is an object")
+                .insert(
+                    "solver_work_budgets".into(),
+                    work_budget_manifest(work_budgets),
+                );
+        }
         let manifest_path = self.temp_dir.join("trace-manifest-v1.json");
         fs::write(&manifest_path, pretty_json_bytes(&manifest)?)
             .map_err(|e| format!("write {}: {e}", manifest_path.display()))?;
@@ -1033,7 +1107,7 @@ fn outcome(result: &SolveResult) -> (&'static str, Option<String>) {
     match result {
         SolveResult::Sat(_) => ("sat", None),
         SolveResult::Unsat => ("unsat", None),
-        SolveResult::Unknown => ("unknown", Some("backend-unknown".into())),
+        SolveResult::Unknown(reason) => ("unknown", Some(reason.as_str().into())),
         SolveResult::NoSolver => ("error", Some("no-solver-backend".into())),
         SolveResult::Error(message) => ("error", Some(message.clone())),
     }
@@ -1166,9 +1240,58 @@ mod tests {
     use crate::ir::types::{BinOp, CmpOp, Width};
     use crate::symbolic::expr::Expr;
     use crate::symbolic::solver::{
-        AxeyumExecutionClass, BitwuzlaExecutionClass, Model, SolveOutcome, WarmAssertionPrefix,
-        Z3ExecutionClass,
+        AxeyumExecutionClass, BitwuzlaExecutionClass, Model, SolveOutcome, SolveUnknownReason,
+        SolverWorkBudgets, WarmAssertionPrefix, Z3ExecutionClass,
     };
+
+    #[test]
+    fn work_bounded_measurement_schema_requires_all_six_named_limits() {
+        let partial = SolverWorkBudgets {
+            z3_rlimit: Some(1),
+            ..SolverWorkBudgets::default()
+        };
+        assert!(check_measurement_schema(Some(6), partial).is_err());
+        assert!(check_measurement_schema(Some(4), partial).is_err());
+
+        let complete = SolverWorkBudgets {
+            z3_rlimit: Some(2),
+            axeyum_progress_checks: Some(3),
+            bitwuzla_termination_polls: Some(5),
+        };
+        assert_eq!(
+            check_measurement_schema(Some(6), complete).expect("complete work-bound schema"),
+            "glaurung-ordered-check-measurement-v4"
+        );
+        assert_eq!(
+            check_measurement_schema(Some(6), SolverWorkBudgets::default())
+                .expect("unbounded neutral schema"),
+            "glaurung-ordered-check-measurement-v3"
+        );
+    }
+
+    #[test]
+    fn work_bound_records_keep_backend_units_and_stop_reasons_distinct() {
+        let budgets = SolverWorkBudgets {
+            z3_rlimit: Some(2),
+            axeyum_progress_checks: Some(3),
+            bitwuzla_termination_polls: Some(5),
+        };
+        let timing = SolveTiming {
+            z3_cold_unknown_reason: Some(SolveUnknownReason::ResourceLimit),
+            bitwuzla_warm_unknown_reason: Some(SolveUnknownReason::WallTimeout),
+            ..SolveTiming::ZERO
+        };
+        let counters = resource_counter_record(timing, budgets);
+
+        assert_eq!(counters["z3_cold"]["unit"], "z3-rlimit");
+        assert_eq!(counters["axeyum_warm"]["unit"], "axeyum-progress-checks");
+        assert_eq!(
+            counters["bitwuzla_cold"]["unit"],
+            "bitwuzla-termination-polls"
+        );
+        assert_eq!(counters["z3_cold"]["stop_reason"], "resource-limit");
+        assert_eq!(counters["bitwuzla_warm"]["stop_reason"], "wall-timeout");
+    }
 
     fn shadow_timing(total_nanos: u64, outcome: SolveOutcome) -> SolveTiming {
         SolveTiming {

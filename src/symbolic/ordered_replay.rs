@@ -493,7 +493,7 @@ fn classify(
             counts.actual_unsat = counts.actual_unsat.saturating_add(1);
             "unsat"
         }
-        SolveResult::Unknown => {
+        SolveResult::Unknown(_) => {
             counts.actual_unknown = counts.actual_unknown.saturating_add(1);
             "unknown"
         }

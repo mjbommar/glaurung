@@ -49,7 +49,7 @@ impl Solver for PipeSolver {
             return match first {
                 "sat" => SolveResult::Sat(parse_model(&out, &names)),
                 "unsat" => SolveResult::Unsat,
-                "unknown" => SolveResult::Unknown,
+                "unknown" => SolveResult::Unknown(super::SolveUnknownReason::Other),
                 other => SolveResult::Error(format!("unexpected solver output: {:?}", other)),
             };
         }

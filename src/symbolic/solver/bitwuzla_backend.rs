@@ -6,15 +6,18 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::ffi::c_void;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
+use std::time::{Duration, Instant};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    Assert, BitwuzlaExecutionClass, IncrementalSolver, Model, SolveResult, Solver,
-    WarmAssertionPrefix, WarmDeltaContext, check_timeout_ms,
+    Assert, BitwuzlaExecutionClass, IncrementalSolver, Model, SolveResult, SolveUnknownReason,
+    Solver, SolverWorkBudgets, WarmAssertionPrefix, WarmDeltaContext, check_timeout,
+    check_timeout_ms, solver_work_budgets,
 };
 
 const PINNED_API_VERSION: &str = "0.9.1";
@@ -99,6 +102,11 @@ unsafe extern "C" {
         count: u32,
         assumptions: *mut RawTerm,
     ) -> c_int;
+    fn bitwuzla_set_termination_callback(
+        solver: *mut NativeSolver,
+        callback: extern "C" fn(*mut c_void) -> i32,
+        state: *mut c_void,
+    );
     fn bitwuzla_get_value(solver: *mut NativeSolver, term: RawTerm) -> RawTerm;
     fn bitwuzla_mk_bv_sort(term_manager: *mut NativeTermManager, size: u64) -> RawSort;
     fn bitwuzla_sort_release(sort: RawSort);
@@ -146,6 +154,49 @@ unsafe extern "C" {
     ) -> RawTerm;
     fn bitwuzla_term_value_get_str_fmt(term: RawTerm, base: u8) -> *const c_char;
     fn bitwuzla_term_release(term: RawTerm);
+}
+
+struct TerminationBudget {
+    poll_limit: u64,
+    polls: u64,
+    wall_cap: Duration,
+    deadline: Instant,
+    reason: Option<SolveUnknownReason>,
+}
+
+impl TerminationBudget {
+    fn new(poll_limit: u64, wall_cap: Duration) -> Self {
+        Self {
+            poll_limit,
+            polls: 0,
+            wall_cap,
+            deadline: Instant::now() + wall_cap,
+            reason: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.polls = 0;
+        self.deadline = Instant::now() + self.wall_cap;
+        self.reason = None;
+    }
+}
+
+extern "C" fn termination_callback(state: *mut c_void) -> i32 {
+    // SAFETY: `NativeSession` registers a pointer to its stable boxed
+    // `TerminationBudget`, keeps the box alive for the solver lifetime, and
+    // deletes the solver before dropping the box.
+    let budget = unsafe { &mut *state.cast::<TerminationBudget>() };
+    if budget.polls >= budget.poll_limit {
+        budget.reason = Some(SolveUnknownReason::ResourceLimit);
+        return 1;
+    }
+    budget.polls += 1;
+    if Instant::now() >= budget.deadline {
+        budget.reason = Some(SolveUnknownReason::WallTimeout);
+        return 1;
+    }
+    0
 }
 
 thread_local! {
@@ -435,11 +486,19 @@ impl<'a> Translator<'a> {
 struct NativeSession {
     options: *mut NativeOptions,
     solver: *mut NativeSolver,
+    termination: Option<Box<TerminationBudget>>,
     symbol_terms: BTreeMap<(u32, Width), OwnedTerm>,
 }
 
 impl NativeSession {
     fn new(term_manager: *mut NativeTermManager) -> Result<Self, String> {
+        Self::new_with_work_budgets(term_manager, solver_work_budgets())
+    }
+
+    fn new_with_work_budgets(
+        term_manager: *mut NativeTermManager,
+        work_budgets: SolverWorkBudgets,
+    ) -> Result<Self, String> {
         let version = BitwuzlaSolver::api_version();
         if version != PINNED_API_VERSION {
             return Err(format!(
@@ -454,7 +513,9 @@ impl NativeSession {
         // SAFETY: Options are live and both enum values are pinned to 0.9.1.
         unsafe {
             bitwuzla_set_option(options, OPT_PRODUCE_MODELS, 1);
-            bitwuzla_set_option(options, OPT_TIME_LIMIT_PER, check_timeout_ms());
+            if work_budgets.bitwuzla_termination_polls.is_none() {
+                bitwuzla_set_option(options, OPT_TIME_LIMIT_PER, check_timeout_ms());
+            }
         }
         // SAFETY: The thread-confined term manager and options are live.
         let solver = unsafe { bitwuzla_new(term_manager, options) };
@@ -463,17 +524,43 @@ impl NativeSession {
             unsafe { bitwuzla_options_delete(options) };
             return Err("Bitwuzla returned a null solver".into());
         }
+        let mut termination = work_budgets
+            .bitwuzla_termination_polls
+            .map(|limit| Box::new(TerminationBudget::new(limit, check_timeout())));
+        if let Some(budget) = termination.as_deref_mut() {
+            // SAFETY: The solver is live. The callback state points into a
+            // stable box retained by this session until after solver deletion.
+            unsafe {
+                bitwuzla_set_termination_callback(
+                    solver,
+                    termination_callback,
+                    (budget as *mut TerminationBudget).cast(),
+                );
+            }
+        }
         Ok(Self {
             options,
             solver,
+            termination,
             symbol_terms: BTreeMap::new(),
         })
+    }
+
+    fn prepare_check(&mut self) {
+        if let Some(budget) = self.termination.as_deref_mut() {
+            budget.reset();
+        }
     }
 
     fn result(&mut self, result: c_int, symbols: &BTreeMap<u32, Width>) -> SolveResult {
         match result {
             RESULT_UNSAT => SolveResult::Unsat,
-            RESULT_UNKNOWN => SolveResult::Unknown,
+            RESULT_UNKNOWN => SolveResult::Unknown(
+                self.termination
+                    .as_ref()
+                    .and_then(|budget| budget.reason)
+                    .unwrap_or(SolveUnknownReason::Other),
+            ),
             RESULT_SAT => match self.model(symbols) {
                 Ok(model) => SolveResult::Sat(model),
                 Err(error) => SolveResult::Error(error),
@@ -576,6 +663,7 @@ impl Solver for BitwuzlaSolver {
                 pool.collect_syms(expression, &mut symbols);
             }
             drop(translator);
+            session.prepare_check();
             // SAFETY: Solver is live and fully configured.
             let result = unsafe { bitwuzla_check_sat(session.solver) };
             session.result(result, &symbols)
@@ -647,6 +735,9 @@ impl IncrementalSolver for IncrementalBitwuzlaSolver {
     }
 
     fn check(&mut self) -> SolveResult {
+        if let Some(budget) = self.session.termination.as_deref_mut() {
+            budget.reset();
+        }
         // SAFETY: Solver is live and fully configured.
         let result = unsafe { bitwuzla_check_sat(self.session.solver) };
         self.session.result(result, &self.active_symbols())
@@ -668,6 +759,9 @@ impl IncrementalSolver for IncrementalBitwuzlaSolver {
             Ok(count) => count,
             Err(_) => return SolveResult::Error("too many Bitwuzla assumptions".into()),
         };
+        if let Some(budget) = self.session.termination.as_deref_mut() {
+            budget.reset();
+        }
         // SAFETY: Solver and all assumption terms remain live for this call.
         let result = unsafe {
             bitwuzla_check_sat_assuming(
@@ -895,6 +989,52 @@ mod tests {
     use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
     use crate::symbolic::expr::{Expr, ExprPool};
     use crate::symbolic::solver::{IncrementalSolver, SolveResult, Solver, WarmAssertionPrefix};
+
+    #[test]
+    fn termination_budget_stops_on_its_named_poll_limit_and_resets() {
+        let mut budget = TerminationBudget::new(1, Duration::from_secs(60));
+
+        assert_eq!(
+            termination_callback((&mut budget as *mut TerminationBudget).cast()),
+            0
+        );
+        assert_eq!(
+            termination_callback((&mut budget as *mut TerminationBudget).cast()),
+            1
+        );
+        assert_eq!(budget.reason, Some(SolveUnknownReason::ResourceLimit));
+
+        budget.reset();
+        assert_eq!(
+            termination_callback((&mut budget as *mut TerminationBudget).cast()),
+            0
+        );
+        assert_eq!(budget.reason, None);
+    }
+
+    #[test]
+    fn native_session_classifies_callback_termination_as_resource_limit() {
+        with_term_manager(|term_manager| {
+            let mut session = NativeSession::new_with_work_budgets(
+                term_manager,
+                SolverWorkBudgets {
+                    bitwuzla_termination_polls: Some(0),
+                    ..SolverWorkBudgets::default()
+                },
+            )
+            .expect("Bitwuzla session");
+            session.prepare_check();
+            // SAFETY: The session is live and fully configured. A zero limit
+            // is injected only here so the first native poll deterministically
+            // exercises the callback classification path.
+            let result = unsafe { bitwuzla_check_sat(session.solver) };
+
+            assert_eq!(
+                session.result(result, &BTreeMap::new()),
+                SolveResult::Unknown(SolveUnknownReason::ResourceLimit)
+            );
+        });
+    }
 
     #[test]
     fn bitwuzla_adapter_reports_its_pinned_api_version() {

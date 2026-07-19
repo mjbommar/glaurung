@@ -171,7 +171,7 @@ fn verdict(r: &SolveResult) -> &'static str {
     match r {
         SolveResult::Sat(_) => "sat",
         SolveResult::Unsat => "unsat",
-        SolveResult::Unknown => "unknown",
+        SolveResult::Unknown(_) => "unknown",
         SolveResult::NoSolver => "nosolver",
         SolveResult::Error(_) => "error",
     }
