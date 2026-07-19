@@ -157,6 +157,9 @@ attacker-controlled length remains a stack overflow.
 The accepted source-backed maximum control at `0581f57` restores all 14
 expected high-confidence rows with zero false negatives and zero unexpected
 high-confidence rows. Both authorities agree exactly in both repetitions. The
+final dual-backend library suite at the documented corrected tree passes
+992/994 tests; only the same two independently baselined WinAPI
+prototype-rendering assertions fail. The
 stopped sweep prefix remains rejected evidence; preregister and rerun all five
 policies from the corrected revision rather than splicing the unobserved
 site-hash cells onto the failed campaign.

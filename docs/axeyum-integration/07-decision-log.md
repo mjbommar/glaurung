@@ -1094,9 +1094,9 @@ and passes afterward, while the independent attacker-pointer regression stays
 clean. The exact two-repetition maximum-policy control at `0581f57` then
 restored all 14 expected high-confidence rows with precision and recall 1.0,
 zero false negatives, zero unexpected rows, and exact Z3/Axeyum parity. The
-earlier dual-backend library run passed 991/993 tests; the two remaining WinAPI
-signature-render failures are outside the changed symbolic/IOCTL files and are
-baselined separately.
+final dual-backend library run passes 992/994 tests; the two remaining WinAPI
+signature-render failures are outside the changed symbolic/IOCTL files and
+reproduce on the untouched baseline.
 **Consequences:** Policy selection remains a cheap A0 configuration surface,
 but semantic detector facts must be model-robust. The failed v2 prefix remains
 rejected, and the unobserved site-hash cells cannot be spliced onto it. The
