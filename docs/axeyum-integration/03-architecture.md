@@ -145,15 +145,20 @@ Notes:
 
 ## Proof plumbing (Phase 3)
 
-On `Unsat`, axeyum can produce a DRAT proof. We thread it as optional
-side-evidence WITHOUT widening the `Solver` trait's return in v1: either
-(a) `AxeyumSolver` stashes the last proof on the struct for a caller that
-wants it, or (b) a separate `check_with_proof` method on the concrete type
-(not the trait). The reachability/verdict layer that consumes it (and,
-downstream, agentic-security-bot's citation requirement) can then attach
-"infeasible - DRAT-checked" to a negative reachability claim. Trait-level
-proof return is an ADR to revisit if more than one backend can produce
-proofs.
+`AxeyumSolver::prove_infeasible_path` is the concrete, off-trait proof front
+door. `InfeasiblePathVerdict::Infeasible` owns an
+`InfeasiblePathCertificate`, not a size-only diagnostic. The certificate
+retains standard DIMACS/DRAT and optional LRAT text and
+`recheck_for_path(pool, assertions)` retranslates the exact Glaurung path,
+requires byte-identical deterministic CNF, and rechecks the proof. Feasible,
+inconclusive, and error outcomes cannot be mistaken for infeasible.
+
+Proof generation is an explicit second pass with the existing 250 ms solver
+budget; it does not tax ordinary pruning. The generic `Solver` trait and other
+backends remain unchanged. `examples/axeyum_infeasible_path_proof.rs` writes one
+reproducible consumer bundle for external `drat-trim` checking. This certifies
+one path conjunction's CNF, not exhaustive CFG traversal, and the documented
+term-to-AIG-to-CNF reduction remains trusted.
 
 ## What explicitly does NOT change
 

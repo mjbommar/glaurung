@@ -9,7 +9,7 @@ implemented.
 
 ## ADR-001 - Depend on axeyum by path (dev) then git-rev (release)
 
-**Status:** Proposed.
+**Status:** Accepted.
 **Context:** All axeyum crates are `publish = false`; nothing is on
 crates.io. glaurung needs `axeyum-ir` + `axeyum-solver` (rest transitive).
 Both repos are the author's, both edition 2024 / rustc >= 1.88.
@@ -94,13 +94,16 @@ correctness milestone to a larger engine change).
 **Context:** Only axeyum can produce proofs today; the `Solver` trait
 returns `SolveResult` with no proof slot. Widening the trait for one
 backend is premature.
-**Decision:** Surface DRAT proofs via the concrete `AxeyumSolver` type
-(a `check_with_proof` method or a stashed last-proof), not via the shared
-`Solver` trait, in v1. Revisit a trait-level proof return only if a second
-backend gains proofs.
-**Consequences:** The reachability/verdict layer that wants "path
-infeasible, DRAT-checked" evidence calls the concrete type; the generic
-trait stays unchanged, so z3/pipe are unaffected.
+**Decision:** Surface DRAT proofs via
+`AxeyumSolver::prove_infeasible_path`, returning a concrete
+`InfeasiblePathVerdict` whose infeasible variant owns a source-recheckable
+certificate. Do not widen the shared `Solver` trait in v1. Revisit a trait-level
+proof return only if a second backend gains proofs.
+**Consequences:** A consumer that wants "path infeasible, DRAT-checked"
+evidence explicitly requests the bounded proof second pass and can persist its
+DIMACS/DRAT/LRAT. `recheck_for_path` binds it to the exact Glaurung assertions.
+The generic trait and ordinary pruning stay unchanged, so z3/pipe are
+unaffected.
 **Alternatives rejected:** adding an `Option<Proof>` to `SolveResult` now
 (pollutes every backend's return for one producer).
 

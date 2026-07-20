@@ -24,10 +24,10 @@ use std::time::{Duration, Instant};
 
 use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
-    export_qf_bv_unsat_proof, AigConstructionStats, CheckResult, IncrementalBvSolver,
+    export_qf_bv_unsat_proof_within, AigConstructionStats, CheckResult, IncrementalBvSolver,
     IncrementalBvStats, IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
     IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy,
-    ReplayCheckedSatCacheStats, SolverConfig, UnsatProofOutcome,
+    ReplayCheckedSatCacheStats, SolverConfig, UnsatProof, UnsatProofOutcome,
 };
 #[cfg(feature = "solver-axeyum-text")]
 use axeyum_solver::{solve_smtlib, solve_smtlib_get_value};
@@ -2838,63 +2838,130 @@ fn count(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
-/// Outcome of a proof-carrying unsat check ([`AxeyumSolver::prove_unsat`]).
+/// A source-recheckable certificate attached to an infeasible Glaurung path.
 #[derive(Debug)]
-pub enum ProofOutcome {
-    /// Unsat, with a DRAT proof that independently re-checked (RUP+RAT).
-    /// `drat_lines` is the size of the refutation.
-    ProvedRechecked { drat_lines: usize },
-    /// Unsat with a DRAT proof that FAILED its own re-check (should never
-    /// happen; surfaced rather than swallowed).
-    ProvedButRecheckFailed,
-    /// The query is satisfiable, so there is no unsat proof.
-    Satisfiable,
+pub struct InfeasiblePathCertificate {
+    proof: UnsatProof,
+}
+
+impl InfeasiblePathCertificate {
+    /// Standard DIMACS text consumed by the DRAT certificate.
+    #[must_use]
+    pub fn dimacs(&self) -> &str {
+        &self.proof.dimacs
+    }
+
+    /// Standard textual DRAT refutation.
+    #[must_use]
+    pub fn drat(&self) -> &str {
+        &self.proof.drat
+    }
+
+    /// Optional textual LRAT elaboration of the same refutation.
+    #[must_use]
+    pub fn lrat(&self) -> Option<&str> {
+        self.proof.lrat.as_deref()
+    }
+
+    /// Re-translate `asserts`, require byte-identical deterministic CNF, and
+    /// independently recheck the attached DRAT/LRAT certificate.
+    ///
+    /// This is stronger than checking the stored bytes alone: a proof exported
+    /// for one path cannot be rebound to a weakened or different Glaurung path.
+    pub fn recheck_for_path(&self, pool: &ExprPool, asserts: &[Assert]) -> Result<bool, String> {
+        let (arena, assert_terms) = translate_path(pool, asserts)
+            .map_err(|error| format!("translate path for certificate recheck: {error}"))?;
+        self.proof
+            .recheck_for_bool_terms(&arena, &assert_terms)
+            .map_err(|error| format!("recheck infeasible-path certificate: {error}"))
+    }
+}
+
+/// Proof-carrying feasibility verdict for one exact Glaurung path conjunction.
+#[derive(Debug)]
+pub enum InfeasiblePathVerdict {
+    /// The path is unsatisfiable and owns a source-bound checked certificate.
+    Infeasible(InfeasiblePathCertificate),
+    /// The path is satisfiable, so no infeasibility certificate exists.
+    Feasible,
     /// The proof core exhausted its budget without deciding.
     Inconclusive,
-    /// Translation or proof-export error.
+    /// Translation, export, or source-bound recheck failed.
     Error(String),
 }
 
 impl AxeyumSolver {
-    /// Produce a DRAT-checked certificate that `asserts` are unsatisfiable,
-    /// then independently re-check it. This is glaurung's proof-carrying
-    /// "path infeasible" evidence -- z3 cannot supply it. Kept off the
-    /// `Solver` trait (ADR-006): a concrete-type method, so the shared
-    /// trait and other backends are unaffected.
+    /// Decide one exact path conjunction and attach a source-bound DRAT-checked
+    /// certificate only when it is infeasible.
     ///
-    /// Scope: the DRAT certifies the CNF (clausal) layer; the term->AIG->CNF
-    /// reduction is trusted unless axeyum's end-to-end faithfulness miter is
-    /// additionally used.
-    pub fn prove_unsat(&self, pool: &ExprPool, asserts: &[Assert]) -> ProofOutcome {
-        let mut arena = TermArena::new();
-        let assert_terms: Vec<TermId> = {
-            let mut tr = Translator {
-                pool,
-                arena: &mut arena,
-                memo: HashMap::new(),
-                sym_map: Vec::new(),
-            };
-            let mut terms = Vec::with_capacity(asserts.len());
-            for (e, expected) in asserts {
-                match tr.translate_assert(*e, *expected) {
-                    Ok(t) => terms.push(t),
-                    Err(err) => return ProofOutcome::Error(format!("translate: {err}")),
+    /// This stays off the generic [`Solver`] trait (ADR-006), so ordinary
+    /// exploration and backends without proof production are unaffected.
+    /// The DRAT certifies the CNF layer; term-to-AIG-to-CNF remains the explicit
+    /// trusted reduction described by Axeyum's proof contract.
+    pub fn prove_infeasible_path(
+        &self,
+        pool: &ExprPool,
+        asserts: &[Assert],
+    ) -> InfeasiblePathVerdict {
+        self.prove_infeasible_path_before(pool, asserts, Some(Instant::now() + SOLVE_TIMEOUT))
+    }
+
+    fn prove_infeasible_path_before(
+        &self,
+        pool: &ExprPool,
+        asserts: &[Assert],
+        deadline: Option<Instant>,
+    ) -> InfeasiblePathVerdict {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return InfeasiblePathVerdict::Inconclusive;
+        }
+        let (arena, assert_terms) = match translate_path(pool, asserts) {
+            Ok(translated) => translated,
+            Err(error) => return InfeasiblePathVerdict::Error(format!("translate: {error}")),
+        };
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return InfeasiblePathVerdict::Inconclusive;
+        }
+        match export_qf_bv_unsat_proof_within(&arena, &assert_terms, deadline) {
+            Ok(UnsatProofOutcome::Proved(proof)) => {
+                match proof.recheck_for_bool_terms(&arena, &assert_terms) {
+                    Ok(true) => {
+                        InfeasiblePathVerdict::Infeasible(InfeasiblePathCertificate { proof })
+                    }
+                    Ok(false) => InfeasiblePathVerdict::Error(
+                        "proof did not rebind to the translated Glaurung path".to_string(),
+                    ),
+                    Err(error) => InfeasiblePathVerdict::Error(format!(
+                        "source-bound proof recheck failed: {error}"
+                    )),
                 }
             }
-            terms
-        };
-        match export_qf_bv_unsat_proof(&arena, &assert_terms) {
-            Ok(UnsatProofOutcome::Proved(proof)) => match proof.recheck() {
-                Ok(true) => ProofOutcome::ProvedRechecked {
-                    drat_lines: proof.drat.lines().count(),
-                },
-                Ok(false) | Err(_) => ProofOutcome::ProvedButRecheckFailed,
-            },
-            Ok(UnsatProofOutcome::Satisfiable) => ProofOutcome::Satisfiable,
-            Ok(UnsatProofOutcome::Inconclusive) => ProofOutcome::Inconclusive,
-            Err(err) => ProofOutcome::Error(err.to_string()),
+            Ok(UnsatProofOutcome::Satisfiable) => InfeasiblePathVerdict::Feasible,
+            Ok(UnsatProofOutcome::Inconclusive) => InfeasiblePathVerdict::Inconclusive,
+            Err(error) => InfeasiblePathVerdict::Error(error.to_string()),
         }
     }
+}
+
+fn translate_path(
+    pool: &ExprPool,
+    asserts: &[Assert],
+) -> Result<(TermArena, Vec<TermId>), IrError> {
+    let mut arena = TermArena::new();
+    let assert_terms = {
+        let mut translator = Translator {
+            pool,
+            arena: &mut arena,
+            memo: HashMap::new(),
+            sym_map: Vec::new(),
+        };
+        let mut terms = Vec::with_capacity(asserts.len());
+        for &(expression, expected) in asserts {
+            terms.push(translator.translate_assert(expression, expected)?);
+        }
+        terms
+    };
+    Ok((arena, assert_terms))
 }
 
 /// Translates glaurung's hash-consed BV IR into `axeyum-ir` terms, memoized
@@ -4325,8 +4392,10 @@ mod tests {
     // ---- proof-carrying unsat (G3) ---------------------------------------
 
     #[test]
-    fn prove_unsat_produces_rechecked_drat() {
-        // x == 5  AND  x == 6  is unsat; expect a DRAT proof that rechecks.
+    fn prove_infeasible_path_attaches_source_bound_drat() {
+        // x == 5 AND x == 6 is one infeasible Glaurung path. The verdict must
+        // retain the certificate, and the certificate must bind to this exact
+        // source path rather than merely recheck its own CNF bytes.
         let mut p = ExprPool::new();
         let w = Width::W32;
         let x = p.fresh_symbol(w);
@@ -4334,23 +4403,61 @@ mod tests {
         let six = c(&mut p, 6, w);
         let e5 = cmp(&mut p, CmpOp::Eq, x, five, w);
         let e6 = cmp(&mut p, CmpOp::Eq, x, six, w);
-        match AxeyumSolver::new().prove_unsat(&p, &[(e5, true), (e6, true)]) {
-            ProofOutcome::ProvedRechecked { drat_lines } => assert!(drat_lines > 0),
-            other => panic!("expected a rechecked DRAT proof, got {other:?}"),
+        let path = [(e5, true), (e6, true)];
+        match AxeyumSolver::new().prove_infeasible_path(&p, &path) {
+            InfeasiblePathVerdict::Infeasible(certificate) => {
+                assert!(!certificate.drat().is_empty());
+                assert_eq!(certificate.recheck_for_path(&p, &path), Ok(true));
+                assert_eq!(
+                    certificate.recheck_for_path(&p, &[(e5, true)]),
+                    Ok(false),
+                    "the proof must not rebind to a weakened satisfiable path"
+                );
+            }
+            other => panic!("expected an attached infeasible-path certificate, got {other:?}"),
         }
     }
 
     #[test]
-    fn prove_unsat_reports_satisfiable() {
-        // x == 5 is sat; there is no unsat proof.
+    fn prove_infeasible_path_reports_feasible_without_certificate() {
+        // x == 5 is feasible; no infeasibility certificate may be attached.
         let mut p = ExprPool::new();
         let w = Width::W32;
         let x = p.fresh_symbol(w);
         let five = c(&mut p, 5, w);
         let e5 = cmp(&mut p, CmpOp::Eq, x, five, w);
         assert!(matches!(
-            AxeyumSolver::new().prove_unsat(&p, &[(e5, true)]),
-            ProofOutcome::Satisfiable
+            AxeyumSolver::new().prove_infeasible_path(&p, &[(e5, true)]),
+            InfeasiblePathVerdict::Feasible
+        ));
+    }
+
+    #[test]
+    fn prove_infeasible_path_keeps_expired_search_inconclusive() {
+        let mut p = ExprPool::new();
+        let x = p.fresh_symbol(Width::W32);
+        let five = c(&mut p, 5, Width::W32);
+        let equals_five = cmp(&mut p, CmpOp::Eq, x, five, Width::W32);
+        match AxeyumSolver::new().prove_infeasible_path_before(
+            &p,
+            &[(equals_five, true)],
+            Some(Instant::now() - Duration::from_secs(1)),
+        ) {
+            InfeasiblePathVerdict::Inconclusive => {}
+            other => panic!("expired proof search should be inconclusive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn prove_infeasible_path_keeps_translation_failure_as_error() {
+        let mut p = ExprPool::new();
+        let invalid = p.intern(Expr::Const {
+            value: 0,
+            width: Width(0),
+        });
+        assert!(matches!(
+            AxeyumSolver::new().prove_infeasible_path(&p, &[(invalid, true)]),
+            InfeasiblePathVerdict::Error(_)
         ));
     }
 

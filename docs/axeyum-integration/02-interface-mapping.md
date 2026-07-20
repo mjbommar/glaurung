@@ -183,21 +183,29 @@ occur for <=128-bit inputs, which is all real IOCTL data). This is a
 ## Unsat proof (Phase 3)
 
 The warm `check()` returns bare `Unsat` (no proof). To obtain a
-DRAT-checked certificate, re-run the one-shot exporter over the same
-assertion terms:
+DRAT-checked certificate for one exact path, call the concrete off-trait
+consumer API:
 
 ```
-export_qf_bv_unsat_proof(&arena, &assertion_term_ids) -> UnsatProofOutcome
-  Proved(UnsatProof{ dimacs, drat, lrat })  // in-memory text
-  Satisfiable | Inconclusive
-UnsatProof::recheck() -> Result<bool, _>    // independent RUP+RAT re-check, no solver
+AxeyumSolver::prove_infeasible_path(pool, assertions) -> InfeasiblePathVerdict
+  Infeasible(InfeasiblePathCertificate{...})
+  Feasible | Inconclusive | Error
+certificate.recheck_for_path(pool, assertions) -> Result<bool, _>
 ```
+
+The certificate owns in-memory DIMACS/DRAT/optional-LRAT text. Rechecking
+retranslates the supplied Glaurung path, requires the same deterministic CNF,
+and then independently checks DRAT/LRAT, so a proof cannot be rebound to a
+weakened path. The second pass is bounded to 250 ms and is requested only for a
+proof-carrying verdict; normal exploration stays on the existing warm route.
 
 Scope caveat to record in any verdict that cites it: the DRAT certifies
 the **clausal (CNF) layer**; the term->AIG->CNF reduction is trusted
 unless `certify_qf_bv_unsat_end_to_end` (a faithfulness miter) is used.
-So a proof-carrying "path infeasible" claim is "CNF-unsat DRAT-checked",
-strengthenable to end-to-end-certified if we opt into the miter.
+So a proof-carrying "path infeasible" claim is "exact Glaurung path rebound to
+CNF; CNF-unsat DRAT-checked", strengthenable to end-to-end-certified if we opt
+into the miter. It is not by itself a proof that all CFG paths to a target were
+enumerated.
 
 ## What axeyum offers that glaurung does not yet use (future seams)
 

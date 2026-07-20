@@ -175,13 +175,15 @@ byte reassembly, unsat contradictions, ite/shift mux), across widths
 
 ## Iteration 5 - proofs + incremental PoC (DONE)
 
-- **[AXEYUM - G3 works] Proof-carrying unsat.** `AxeyumSolver::prove_unsat`
-  translates the query, calls `export_qf_bv_unsat_proof`, and
-  `UnsatProof::recheck()`s the DRAT independently. Test:
-  `x==5 AND x==6` -> `ProvedRechecked{drat_lines>0}`. This is a capability
-  z3 does NOT give us: a checkable certificate that a bug path is
-  infeasible. The API (`Proved/Satisfiable/Inconclusive`, in-memory
-  `dimacs/drat/lrat`, self-`recheck`) was clean and worked first try.
+- **[AXEYUM - G3 now consumer-complete] Proof-carrying infeasible path.**
+  `AxeyumSolver::prove_infeasible_path` translates one exact Glaurung path and
+  returns `InfeasiblePathVerdict::Infeasible(certificate)` only after the
+  attached proof rebinds to the source path and independently checks. The
+  certificate retains standard DIMACS/DRAT/optional-LRAT text; a weakened-path
+  negative proves it cannot be relabelled onto `x==5` after being produced for
+  `x==5 AND x==6`. Feasible, 250-ms-inconclusive, and translation-error outcomes
+  remain non-infeasible. The fixed example exports a reviewer-consumable bundle;
+  external-check results are recorded separately rather than inferred here.
 - **[AXEYUM - P5 mechanism validated] Warm push/pop.**
   `IncrementalBvSolver` push/assert/check/pop drives glaurung's fork shape
   correctly (base `x<100`; fork `x==50` sat; fork `x==200` unsat; base sat

@@ -151,3 +151,7 @@ required-features = ["solver-z3", "solver-axeyum"]
 [[example]]
 name = "axeyum_incremental"
 required-features = ["solver-z3", "solver-axeyum"]
+
+[[example]]
+name = "axeyum_infeasible_path_proof"
+required-features = ["solver-axeyum"]
