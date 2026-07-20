@@ -1,21 +1,31 @@
-//! Execute one strictly admitted Linux AArch64 ioctl handler with Axeyum.
+//! Execute one strictly admitted Linux AArch64 ioctl handler with the selected
+//! in-process solver authority.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use glaurung::analysis::linux_symbolic_frontend::admit_linux_aarch64_handler;
 use glaurung::symbolic::{
-    canonical_model_choice_stats, execution_path_stats, exploration_limit_stats,
-    find_linux_ioctl_sinks_for_command_with_apis, find_linux_ioctl_sinks_with_apis,
-    linux_driver_api_model, linux_local_api_model, reset_execution_path_stats,
-    reset_exploration_limit_stats, LinuxIoctlEnvironment, Severity,
+    LinuxIoctlEnvironment, Severity, canonical_model_choice_stats, execution_path_stats,
+    exploration_limit_stats, find_linux_ioctl_sinks_for_command_with_apis,
+    find_linux_ioctl_sinks_with_apis, linux_driver_api_model, linux_local_api_model,
+    reset_execution_path_stats, reset_exploration_limit_stats,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
+
+#[cfg(feature = "solver-z3")]
+const SOLVER_ID: &str = "z3";
+#[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+const SOLVER_ID: &str = "axeyum-qfbv";
+#[cfg(not(any(feature = "solver-z3", feature = "solver-axeyum")))]
+compile_error!("linux_symbolic_cve requires solver-z3 or solver-axeyum");
 
 #[derive(Serialize)]
 struct Report {
     schema: &'static str,
-    object: String,
+    object_id: String,
+    object_sha256: String,
     handler: String,
     solver: &'static str,
     max_states: usize,
@@ -110,6 +120,37 @@ fn parse_environment(value: &str) -> Result<LinuxIoctlEnvironment, String> {
     }
 }
 
+fn validate_object_id(value: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Err("GLAURUNG_SYMBOLIC_CVE_OBJECT_ID must not be empty".to_string());
+    }
+    let path = Path::new(value);
+    if path.is_absolute()
+        || value.contains('\\')
+        || value
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(
+            "GLAURUNG_SYMBOLIC_CVE_OBJECT_ID must be a normalized relative path".to_string(),
+        );
+    }
+    Ok(value.to_string())
+}
+
+fn object_id() -> Result<String, String> {
+    let value = std::env::var("GLAURUNG_SYMBOLIC_CVE_OBJECT_ID")
+        .map_err(|error| format!("GLAURUNG_SYMBOLIC_CVE_OBJECT_ID is required: {error}"))?;
+    validate_object_id(&value)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let Some(object_path) = args.next().map(PathBuf::from) else {
@@ -161,7 +202,13 @@ fn main() {
         std::process::exit(2);
     }
 
-    let object_name = object_path.display().to_string();
+    let object_id = match object_id() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
     let data = match std::fs::read(&object_path) {
         Ok(data) => data,
         Err(error) => {
@@ -169,14 +216,16 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let object_sha256 = sha256_hex(&data);
     let admitted = match admit_linux_aarch64_handler(&data, &handler) {
         Ok(admitted) => admitted,
         Err(error) => {
             let report = Report {
-                schema: "glaurung-linux-symbolic-cve-v2",
-                object: object_name,
+                schema: "glaurung-linux-symbolic-cve-v3",
+                object_id,
+                object_sha256,
                 handler,
-                solver: "axeyum-qfbv",
+                solver: SOLVER_ID,
                 max_states,
                 command,
                 environment: environment.id(),
@@ -252,10 +301,11 @@ fn main() {
         && paths.incomplete_stops() == 0
         && paths.modeled_terminal_paths() > 0;
     let report = Report {
-        schema: "glaurung-linux-symbolic-cve-v2",
-        object: object_name,
+        schema: "glaurung-linux-symbolic-cve-v3",
+        object_id,
+        object_sha256,
         handler,
-        solver: "axeyum-qfbv",
+        solver: SOLVER_ID,
         max_states,
         command,
         environment: environment.id(),
@@ -306,5 +356,37 @@ fn main() {
     if let Err(error) = emit(&report) {
         eprintln!("{error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_id_requires_a_normalized_relative_path() {
+        assert_eq!(
+            validate_object_id("CVE-2025-40117/vulnerable/ordinary").unwrap(),
+            "CVE-2025-40117/vulnerable/ordinary"
+        );
+        for invalid in ["", "/tmp/object.o", "../object.o", "side/./object.o"] {
+            assert!(validate_object_id(invalid).is_err(), "accepted {invalid:?}");
+        }
+    }
+
+    #[test]
+    fn object_digest_is_full_width_and_stable() {
+        assert_eq!(
+            sha256_hex(b"axeyum"),
+            "0386def91e863f7a27dd7bf2b463dbc297a92717922a79c1b38b0c706e1fa653"
+        );
+    }
+
+    #[test]
+    fn solver_id_matches_compile_time_priority() {
+        #[cfg(feature = "solver-z3")]
+        assert_eq!(SOLVER_ID, "z3");
+        #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+        assert_eq!(SOLVER_ID, "axeyum-qfbv");
     }
 }
