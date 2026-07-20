@@ -85,6 +85,18 @@ impl FactorialMode {
     }
 }
 
+fn replay_owner_share(mode: FactorialMode, owner: u64, children: u64) {
+    if mode.warm() {
+        share_serial_warm_owner_with_children(owner, children);
+    }
+}
+
+fn replay_owner_release(mode: FactorialMode, owner: u64) {
+    if mode.warm() {
+        close_warm_path(owner);
+    }
+}
+
 #[derive(Clone)]
 struct Scope {
     id: String,
@@ -475,12 +487,12 @@ pub fn replay_to_report(
             "warm_owner_share" => {
                 let owner = integer(&event["owner_id"], "owner ID")?;
                 let children = integer(&event["children"], "owner children")?;
-                share_serial_warm_owner_with_children(owner, children);
+                replay_owner_share(mode, owner, children);
                 owner_shares = owner_shares.saturating_add(1);
             }
             "warm_owner_release" => {
                 let owner = integer(&event["owner_id"], "owner ID")?;
-                close_warm_path(owner);
+                replay_owner_release(mode, owner);
                 if lagged_owners.remove(&owner) {
                     counts.closed_lagged_owners = counts.closed_lagged_owners.saturating_add(1);
                 }
@@ -1027,9 +1039,10 @@ fn boolean(value: &Value, name: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        peak_rss_kib, validate_engine_cache_stats, EngineCachePolicy, EngineCacheStats,
-        FactorialMode,
+        peak_rss_kib, replay_owner_release, replay_owner_share, validate_engine_cache_stats,
+        EngineCachePolicy, EngineCacheStats, FactorialMode,
     };
+    use crate::symbolic::solver::axeyum_backend::serial_sibling_reuse_stats;
 
     #[test]
     fn factorial_modes_are_exact_and_map_to_one_warm_and_cache_policy() {
@@ -1050,6 +1063,14 @@ mod tests {
         for invalid in [None, Some(""), Some("warm"), Some("cold-implication")] {
             assert!(FactorialMode::parse(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn cold_modes_do_not_mutate_warm_owner_leases() {
+        let before = serial_sibling_reuse_stats();
+        replay_owner_share(FactorialMode::ColdOff, 0x303, 7);
+        replay_owner_release(FactorialMode::ColdOff, 0x303);
+        assert_eq!(serial_sibling_reuse_stats(), before);
     }
 
     #[test]
