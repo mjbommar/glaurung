@@ -16,6 +16,8 @@
 pub mod axeyum_backend;
 #[cfg(feature = "solver-bitwuzla")]
 pub mod bitwuzla_backend;
+#[cfg(feature = "solver-axeyum")]
+pub(crate) mod constraint_cache;
 pub mod pipe;
 #[cfg(feature = "solver-z3")]
 pub mod z3_backend;
@@ -23,6 +25,12 @@ pub mod z3_backend;
 use std::collections::BTreeMap;
 
 use crate::symbolic::expr::{ExprId, ExprPool};
+
+#[cfg(feature = "solver-axeyum")]
+use constraint_cache::{
+    insert_process_cache, lookup_process_cache, process_cache_policy, process_cache_stats,
+    CacheHitKind, CacheLookup, EngineCachePolicy, EngineCacheStats,
+};
 
 /// A satisfying assignment: free-symbol id → concrete value.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -105,6 +113,8 @@ pub trait IncrementalSolver {
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+#[cfg(feature = "solver-axeyum")]
+use std::time::Instant;
 
 /// Default per-function solver budget: `(max_solves, max_timeouts)`. The explorer
 /// bails when either is exceeded — a deterministic ceiling on solving work that
@@ -229,6 +239,38 @@ pub fn check_timeout_ms() -> u64 {
     u64::try_from(check_timeout().as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Non-overlapping stage timing and classification for one engine-cache wrapper.
+#[cfg(feature = "solver-axeyum")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EngineCacheCheck {
+    pub(crate) policy: EngineCachePolicy,
+    pub(crate) hit_kind: Option<CacheHitKind>,
+    pub(crate) lookup_nanos: u64,
+    pub(crate) model_replay_nanos: u64,
+    pub(crate) index_update_nanos: u64,
+    pub(crate) eviction_nanos: u64,
+    pub(crate) backend_miss_nanos: u64,
+    pub(crate) wrapper_nanos: u64,
+    pub(crate) backend_called: bool,
+    pub(crate) warm_synchronized: bool,
+}
+
+#[cfg(feature = "solver-axeyum")]
+impl EngineCacheCheck {
+    const ZERO: Self = Self {
+        policy: EngineCachePolicy::Off,
+        hit_kind: None,
+        lookup_nanos: 0,
+        model_replay_nanos: 0,
+        index_update_nanos: 0,
+        eviction_nanos: 0,
+        backend_miss_nanos: 0,
+        wrapper_nanos: 0,
+        backend_called: false,
+        warm_synchronized: false,
+    };
+}
+
 thread_local! {
     /// Per-thread solver-call meter, reset before each function run.
     static SOLVE_COUNT: Cell<u64> = const { Cell::new(0) };
@@ -250,6 +292,9 @@ thread_local! {
     /// path. `persistent_assertions` partitions the full query slice from any
     /// trailing one-shot assumptions.
     static ACTIVE_WARM_DELTA: RefCell<Option<WarmDeltaContext>> = const { RefCell::new(None) };
+    /// Engine-cache classification for the immediately preceding path-delta check.
+    #[cfg(feature = "solver-axeyum")]
+    static LAST_ENGINE_CACHE_CHECK: Cell<EngineCacheCheck> = const { Cell::new(EngineCacheCheck::ZERO) };
 }
 
 /// Copy-on-write source ancestry for one explorer path's persistent assertions.
@@ -432,6 +477,7 @@ impl From<&SolveResult> for SolveOutcome {
 /// Exact Axeyum execution population for one independently timed invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AxeyumExecutionClass {
+    EngineCacheHit,
     ColdOneShot,
     WarmSnapshot,
     WarmCreated,
@@ -447,6 +493,7 @@ pub(crate) enum AxeyumExecutionClass {
 impl AxeyumExecutionClass {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::EngineCacheHit => "engine-cache-hit",
             Self::ColdOneShot => "cold-one-shot",
             Self::WarmSnapshot => "warm-snapshot",
             Self::WarmCreated => "warm-created",
@@ -504,6 +551,11 @@ impl Z3ExecutionClass {
 /// Timing for the immediately preceding [`solve`] call on this worker.
 pub(crate) fn last_solve_timing() -> SolveTiming {
     LAST_SOLVE_TIMING.with(Cell::get)
+}
+
+#[cfg(feature = "solver-axeyum")]
+pub(crate) fn last_engine_cache_check() -> EngineCacheCheck {
+    LAST_ENGINE_CACHE_CHECK.with(Cell::get)
 }
 
 /// Whether the opt-in fair cold/warm diagnostic is active.
@@ -1331,6 +1383,38 @@ pub(crate) fn solve_for_path_delta(
             false,
         );
     }
+
+    #[cfg(feature = "solver-axeyum")]
+    {
+        solve_for_path_delta_with_engine_cache(
+            pool,
+            asserts,
+            path_id,
+            retain_assertions,
+            persistent_assertions,
+            persistent_prefix,
+        )
+    }
+
+    #[cfg(not(feature = "solver-axeyum"))]
+    solve_path_backend(
+        pool,
+        asserts,
+        path_id,
+        retain_assertions,
+        persistent_assertions,
+        persistent_prefix,
+    )
+}
+
+fn solve_path_backend(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    retain_assertions: usize,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+) -> (SolveResult, bool) {
     let previous_path = ACTIVE_WARM_PATH.with(|active| active.replace(Some(path_id)));
     let previous_delta = ACTIVE_WARM_DELTA.with(|active| {
         active.borrow_mut().replace(WarmDeltaContext {
@@ -1351,6 +1435,291 @@ pub(crate) fn solve_for_path_delta(
     });
     ACTIVE_WARM_PATH.with(|active| active.set(previous_path));
     (result, synced)
+}
+
+#[cfg(feature = "solver-axeyum")]
+fn solve_for_path_delta_with_engine_cache(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    retain_assertions: usize,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+) -> (SolveResult, bool) {
+    let wrapper_started = Instant::now();
+    let policy = match process_cache_policy() {
+        Ok(policy) => policy,
+        Err(error) => return finish_engine_cache_error(error, wrapper_started),
+    };
+
+    #[cfg(feature = "solver-z3")]
+    if policy != EngineCachePolicy::Off {
+        return finish_engine_cache_error(
+            "engine constraint cache requires an Axeyum-only solver build".into(),
+            wrapper_started,
+        );
+    }
+
+    let before = match process_cache_stats() {
+        Ok(stats) => stats,
+        Err(error) => return finish_engine_cache_error(error, wrapper_started),
+    };
+    if policy == EngineCachePolicy::Off {
+        let backend_started = Instant::now();
+        let (result, synced) = solve_path_backend(
+            pool,
+            asserts,
+            path_id,
+            retain_assertions,
+            persistent_assertions,
+            persistent_prefix,
+        );
+        let backend_nanos = elapsed_nanos(backend_started);
+        let wrapper_nanos = elapsed_nanos(wrapper_started);
+        record_engine_cache_check(
+            policy,
+            None,
+            before,
+            before,
+            backend_nanos,
+            wrapper_nanos,
+            true,
+            synced,
+        );
+        replace_axeyum_timing(&result, wrapper_nanos, None);
+        return (result, synced);
+    }
+
+    let lookup = match lookup_process_cache(pool, asserts) {
+        Ok(lookup) => lookup,
+        Err(error) => return finish_engine_cache_error(error, wrapper_started),
+    };
+    if let CacheLookup::Hit { kind, result } = lookup {
+        if kind.is_structural() {
+            if let Err(error) = insert_process_cache(pool, asserts, &result) {
+                return finish_engine_cache_error(error, wrapper_started);
+            }
+        }
+        let after = match process_cache_stats() {
+            Ok(stats) => stats,
+            Err(error) => return finish_engine_cache_error(error, wrapper_started),
+        };
+        let wrapper_nanos = elapsed_nanos(wrapper_started);
+        record_engine_cache_check(
+            policy,
+            Some(kind),
+            before,
+            after,
+            0,
+            wrapper_nanos,
+            false,
+            false,
+        );
+        replace_axeyum_timing(
+            &result,
+            wrapper_nanos,
+            Some(AxeyumExecutionClass::EngineCacheHit),
+        );
+        return (result, false);
+    }
+
+    let backend_started = Instant::now();
+    let (result, synced) = solve_path_backend(
+        pool,
+        asserts,
+        path_id,
+        retain_assertions,
+        persistent_assertions,
+        persistent_prefix,
+    );
+    let backend_nanos = elapsed_nanos(backend_started);
+    if let Err(error) = insert_process_cache(pool, asserts, &result) {
+        return finish_engine_cache_error(error, wrapper_started);
+    }
+    let after = match process_cache_stats() {
+        Ok(stats) => stats,
+        Err(error) => return finish_engine_cache_error(error, wrapper_started),
+    };
+    let wrapper_nanos = elapsed_nanos(wrapper_started);
+    record_engine_cache_check(
+        policy,
+        None,
+        before,
+        after,
+        backend_nanos,
+        wrapper_nanos,
+        true,
+        synced,
+    );
+    replace_axeyum_timing(&result, wrapper_nanos, None);
+    (result, synced)
+}
+
+#[cfg(feature = "solver-axeyum")]
+#[allow(clippy::too_many_arguments)]
+fn record_engine_cache_check(
+    policy: EngineCachePolicy,
+    hit_kind: Option<CacheHitKind>,
+    before: EngineCacheStats,
+    after: EngineCacheStats,
+    backend_miss_nanos: u64,
+    wrapper_nanos: u64,
+    backend_called: bool,
+    warm_synchronized: bool,
+) {
+    LAST_ENGINE_CACHE_CHECK.with(|last| {
+        last.set(EngineCacheCheck {
+            policy,
+            hit_kind,
+            lookup_nanos: after.lookup_nanos.saturating_sub(before.lookup_nanos),
+            model_replay_nanos: after
+                .model_replay_nanos
+                .saturating_sub(before.model_replay_nanos),
+            index_update_nanos: after
+                .index_update_nanos
+                .saturating_sub(before.index_update_nanos),
+            eviction_nanos: after.eviction_nanos.saturating_sub(before.eviction_nanos),
+            backend_miss_nanos,
+            wrapper_nanos,
+            backend_called,
+            warm_synchronized,
+        });
+    });
+}
+
+#[cfg(feature = "solver-axeyum")]
+fn finish_engine_cache_error(error: String, wrapper_started: Instant) -> (SolveResult, bool) {
+    let result = SolveResult::Error(error);
+    let wrapper_nanos = elapsed_nanos(wrapper_started);
+    LAST_ENGINE_CACHE_CHECK.with(|last| {
+        last.set(EngineCacheCheck {
+            wrapper_nanos,
+            ..EngineCacheCheck::ZERO
+        });
+    });
+    replace_axeyum_timing(&result, wrapper_nanos, None);
+    (result, false)
+}
+
+#[cfg(feature = "solver-axeyum")]
+fn replace_axeyum_timing(
+    result: &SolveResult,
+    wrapper_nanos: u64,
+    execution: Option<AxeyumExecutionClass>,
+) {
+    let previous = LAST_SOLVE_TIMING.with(Cell::get);
+    LAST_SOLVE_TIMING.with(|timing| {
+        timing.set(SolveTiming {
+            total_nanos: wrapper_nanos,
+            axeyum_nanos: Some(wrapper_nanos),
+            axeyum_outcome: Some(SolveOutcome::from(result)),
+            axeyum_execution: execution.or(previous.axeyum_execution),
+            ..previous
+        });
+    });
+}
+
+#[cfg(feature = "solver-axeyum")]
+fn elapsed_nanos(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+#[cfg(all(test, feature = "solver-axeyum"))]
+mod engine_cache_integration_tests {
+    use super::{
+        last_engine_cache_check, solve_for_path_delta, AxeyumExecutionClass, CacheHitKind,
+        EngineCachePolicy, ExprPool, SolveResult, WarmAssertionPrefix,
+    };
+    use crate::ir::types::Width;
+    use crate::symbolic::solver::axeyum_backend::close_warm_path;
+    use crate::symbolic::solver::constraint_cache::{
+        reset_process_cache_for_test, EngineCacheLimits,
+    };
+
+    #[test]
+    fn exact_cache_hit_skips_backend_and_never_advances_warm_sync() {
+        reset_process_cache_for_test(
+            EngineCachePolicy::Exact,
+            EngineCacheLimits {
+                max_entries: 8,
+                max_assertion_refs: 8,
+                max_model_values: 8,
+                max_model_values_per_entry: 8,
+            },
+        );
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W8);
+        let query = [(x, true)];
+        let prefix = WarmAssertionPrefix::default();
+        let path_id = 0x303;
+
+        let (first, _) = solve_for_path_delta(&pool, &query, path_id, 0, 0, &prefix);
+        assert!(matches!(first, SolveResult::Sat(_)));
+        assert!(last_engine_cache_check().backend_called);
+
+        let (second, synced) = solve_for_path_delta(&pool, &query, path_id, 0, 0, &prefix);
+        assert!(matches!(second, SolveResult::Sat(_)));
+        assert!(!synced);
+        let check = last_engine_cache_check();
+        assert_eq!(check.hit_kind, Some(CacheHitKind::ExactSat));
+        assert!(!check.backend_called);
+        assert!(!check.warm_synchronized);
+        assert_eq!(
+            super::last_solve_timing().axeyum_execution,
+            Some(AxeyumExecutionClass::EngineCacheHit)
+        );
+
+        close_warm_path(path_id);
+    }
+
+    #[test]
+    fn structural_hit_is_promoted_to_an_exact_entry() {
+        reset_process_cache_for_test(
+            EngineCachePolicy::Structural,
+            EngineCacheLimits {
+                max_entries: 8,
+                max_assertion_refs: 16,
+                max_model_values: 16,
+                max_model_values_per_entry: 8,
+            },
+        );
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W8);
+        let y = pool.fresh_symbol(Width::W8);
+        let strong = [(x, true), (y, false)];
+        let weak = [(x, true)];
+        let prefix = WarmAssertionPrefix::default();
+        let path_id = 0x304;
+
+        let (first, _) = solve_for_path_delta(&pool, &strong, path_id, 0, 0, &prefix);
+        assert!(matches!(first, SolveResult::Sat(_)));
+        assert!(last_engine_cache_check().backend_called);
+
+        let (second, synced) = solve_for_path_delta(&pool, &weak, path_id, 0, 0, &prefix);
+        assert!(matches!(second, SolveResult::Sat(_)));
+        assert!(!synced);
+        let structural = last_engine_cache_check();
+        assert_eq!(structural.hit_kind, Some(CacheHitKind::SatSuperset));
+        assert!(!structural.backend_called);
+        assert_eq!(structural.backend_miss_nanos, 0);
+        assert!(
+            structural
+                .lookup_nanos
+                .saturating_add(structural.model_replay_nanos)
+                .saturating_add(structural.index_update_nanos)
+                .saturating_add(structural.eviction_nanos)
+                <= structural.wrapper_nanos
+        );
+
+        let (third, _) = solve_for_path_delta(&pool, &weak, path_id, 0, 0, &prefix);
+        assert!(matches!(third, SolveResult::Sat(_)));
+        assert_eq!(
+            last_engine_cache_check().hit_kind,
+            Some(CacheHitKind::ExactSat)
+        );
+
+        close_warm_path(path_id);
+    }
 }
 
 #[cfg(test)]
