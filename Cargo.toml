@@ -39,8 +39,8 @@ capstone = "0.12"
 z3 = { version = "0.12", optional = true }
 # Pure-Rust in-process SMT solver (feature `solver-axeyum`); no C dependency.
 # Dev: absolute path dep (ADR-001); pin to a git rev before release.
-axeyum-solver = { path = "/home/mjbommar/projects/personal/axeyum/crates/axeyum-solver", optional = true, default-features = false, features = ["qfbv"] }
-axeyum-ir = { path = "/home/mjbommar/projects/personal/axeyum/crates/axeyum-ir", optional = true }
+axeyum-solver = { path = "/home/mjbommar/.cache/codex/axeyum-adr0303-da24b016/crates/axeyum-solver", optional = true, default-features = false, features = ["qfbv"] }
+axeyum-ir = { path = "/home/mjbommar/.cache/codex/axeyum-adr0303-da24b016/crates/axeyum-ir", optional = true }
 
 # DEV-ONLY differential-test oracle (feature `dev-oracle`); links the system
 # Unicorn engine via pkg-config (libunicorn-dev). Never shipped in the wheel.
