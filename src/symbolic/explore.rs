@@ -688,6 +688,16 @@ fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
             path_id, children,
         );
     }
+    #[cfg(all(
+        feature = "solver-z3",
+        feature = "solver-axeyum",
+        feature = "solver-bitwuzla"
+    ))]
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::bitwuzla_backend::share_serial_warm_owner_with_children(
+            path_id, children,
+        );
+    }
     #[cfg(not(feature = "solver-axeyum"))]
     let _ = (path_id, children);
 }
@@ -703,6 +713,14 @@ fn close_warm_owner(path_id: u64) {
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     if crate::symbolic::solver::fair_shadow_enabled() {
         crate::symbolic::solver::z3_backend::close_warm_path(path_id);
+    }
+    #[cfg(all(
+        feature = "solver-z3",
+        feature = "solver-axeyum",
+        feature = "solver-bitwuzla"
+    ))]
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::bitwuzla_backend::close_warm_path(path_id);
     }
 }
 
@@ -959,7 +977,7 @@ fn select_unsigned_extremum(
             CANONICAL_MODEL_CHOICE_INFEASIBLE.fetch_add(1, Ordering::Relaxed);
             return None;
         }
-        SolveResult::Unknown => {
+        SolveResult::Unknown(_) => {
             CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
             CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
             return None;
@@ -1009,7 +1027,7 @@ fn select_unsigned_extremum(
                 UnsignedExtremum::Minimum => low = midpoint + 1,
                 UnsignedExtremum::Maximum => high = midpoint - 1,
             },
-            SolveResult::Unknown => {
+            SolveResult::Unknown(_) => {
                 CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
                 CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
                 return None;
@@ -1046,7 +1064,7 @@ fn select_unsigned_extremum(
             CANONICAL_MODEL_CHOICE_FINAL_UNSAT.fetch_add(1, Ordering::Relaxed);
             None
         }
-        SolveResult::Unknown => {
+            SolveResult::Unknown(_) => {
             CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
             CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
             None
@@ -1110,7 +1128,7 @@ pub fn find_input_reaching(
             for pending in &mut work {
                 pending.end_trace("state-budget");
             }
-            return SolveResult::Unknown;
+            return SolveResult::Unknown(crate::symbolic::solver::SolveUnknownReason::Other);
         }
         explored += 1;
 
@@ -2977,7 +2995,7 @@ mod tests {
         let lf = func(vec![(0x1000, vec![Op::Return], 0x1004)]);
         let result = find_input_reaching(&lf, 0x9999, |_| {}, 1000);
         assert!(
-            matches!(result, SolveResult::Unsat | SolveResult::Unknown),
+            matches!(result, SolveResult::Unsat | SolveResult::Unknown(_)),
             "got {:?}",
             result
         );

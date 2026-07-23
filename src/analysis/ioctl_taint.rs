@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::ir::types::{
-    BinOp as IrBinOp, CallTarget, CmpOp, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value,
+    BinOp as IrBinOp, CmpOp, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value,
 };
 
 /// Abstract taint values. A register either carries a known IRP-derived

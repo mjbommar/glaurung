@@ -1,17 +1,23 @@
-//! SMT solver layer — a pluggable [`Solver`] trait with two backends.
+//! SMT solver layer — a pluggable [`Solver`] trait with production backends
+//! plus an optional benchmark-only neutral cell.
 //!
 //! Per the corrected ADR-0005 (native-first), the preferred backend is the
 //! **in-process native [`z3_backend::Z3Solver`]** (feature `solver-z3`, links
 //! libz3) — keeping the engine self-contained rather than shelling out. The
 //! [`pipe::PipeSolver`] (SMT-LIB2 over a subprocess) is a zero-build fallback
-//! for environments without a linked solver. A future pure-Rust backend
-//! (bit-blast → SAT) can implement the same trait.
+//! for environments without a linked solver. The pure-Rust Axeyum backend is
+//! product-capable; the direct Bitwuzla C API is isolated behind
+//! `solver-bitwuzla` solely for topology-equivalent measurements.
 //!
 //! All backends consume the bit-vector [`ExprPool`](crate::symbolic::ExprPool):
 //! solving needs no Python and no external protocol when `solver-z3` is on.
 
 #[cfg(feature = "solver-axeyum")]
 pub mod axeyum_backend;
+#[cfg(feature = "solver-bitwuzla")]
+pub mod bitwuzla_backend;
+#[cfg(feature = "solver-axeyum")]
+pub(crate) mod constraint_cache;
 pub mod pipe;
 #[cfg(feature = "solver-z3")]
 pub mod z3_backend;
@@ -20,10 +26,37 @@ use std::collections::BTreeMap;
 
 use crate::symbolic::expr::{ExprId, ExprPool};
 
+#[cfg(feature = "solver-axeyum")]
+use constraint_cache::{
+    insert_process_cache, lookup_process_cache, process_cache_policy, process_cache_stats,
+    CacheHitKind, CacheLookup, EngineCachePolicy, EngineCacheStats,
+};
+
 /// A satisfying assignment: free-symbol id → concrete value.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Model {
     pub values: BTreeMap<u32, u128>,
+}
+
+/// Stable reason class for a solver nondecision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SolveUnknownReason {
+    /// A backend-specific deterministic work limit was exhausted.
+    ResourceLimit,
+    /// The cooperative wall-clock safety cap was exhausted.
+    WallTimeout,
+    /// The backend declined for another reason.
+    Other,
+}
+
+impl SolveUnknownReason {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ResourceLimit => "resource-limit",
+            Self::WallTimeout => "wall-timeout",
+            Self::Other => "other",
+        }
+    }
 }
 
 /// The result of a solve attempt.
@@ -33,8 +66,8 @@ pub enum SolveResult {
     Sat(Model),
     /// Unsatisfiable.
     Unsat,
-    /// The solver returned `unknown`.
-    Unknown,
+    /// The solver returned `unknown`, with a stable nondecision class.
+    Unknown(SolveUnknownReason),
     /// No solver backend was available (graceful no-op).
     NoSolver,
     /// The backend was available but errored (with a message).
@@ -80,6 +113,8 @@ pub trait IncrementalSolver {
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+#[cfg(feature = "solver-axeyum")]
+use std::time::Instant;
 
 /// Default per-function solver budget: `(max_solves, max_timeouts)`. The explorer
 /// bails when either is exceeded — a deterministic ceiling on solving work that
@@ -92,6 +127,87 @@ pub const DEFAULT_CHECK_TIMEOUT_MS: u64 = 250;
 const MAX_CHECK_TIMEOUT_MS: u64 = 60_000;
 const CHECK_TIMEOUT_ENV: &str = "GLAURUNG_CHECK_TIMEOUT_MS";
 static CHECK_TIMEOUT: OnceLock<Duration> = OnceLock::new();
+const Z3_RLIMIT_ENV: &str = "GLAURUNG_Z3_RLIMIT";
+const AXEYUM_PROGRESS_CHECK_LIMIT_ENV: &str = "GLAURUNG_AXEYUM_PROGRESS_CHECK_LIMIT";
+const BITWUZLA_TERMINATION_POLL_LIMIT_ENV: &str = "GLAURUNG_BITWUZLA_TERMINATION_POLL_LIMIT";
+static SOLVER_WORK_BUDGETS: OnceLock<SolverWorkBudgets> = OnceLock::new();
+
+/// Backend-specific deterministic per-check work limits.
+///
+/// The three values intentionally retain distinct names and units. Equal
+/// numbers are not equal work across solvers; reproducibility is evaluated
+/// within one pinned backend, while verdict/finding parity is evaluated across
+/// backends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SolverWorkBudgets {
+    pub(crate) z3_rlimit: Option<u32>,
+    pub(crate) axeyum_progress_checks: Option<u64>,
+    pub(crate) bitwuzla_termination_polls: Option<u64>,
+}
+
+impl SolverWorkBudgets {
+    fn from_values(
+        z3_rlimit: Option<&str>,
+        axeyum_progress_checks: Option<&str>,
+        bitwuzla_termination_polls: Option<&str>,
+    ) -> Result<Self, String> {
+        let z3_rlimit = parse_solver_work_budget(Z3_RLIMIT_ENV, z3_rlimit, u64::from(u32::MAX))?
+            .map(|value| u32::try_from(value).expect("Z3 work budget was range-checked"));
+        Ok(Self {
+            z3_rlimit,
+            axeyum_progress_checks: parse_solver_work_budget(
+                AXEYUM_PROGRESS_CHECK_LIMIT_ENV,
+                axeyum_progress_checks,
+                u64::MAX,
+            )?,
+            bitwuzla_termination_polls: parse_solver_work_budget(
+                BITWUZLA_TERMINATION_POLL_LIMIT_ENV,
+                bitwuzla_termination_polls,
+                u64::MAX,
+            )?,
+        })
+    }
+
+    pub(crate) const fn is_complete(self) -> bool {
+        self.z3_rlimit.is_some()
+            && self.axeyum_progress_checks.is_some()
+            && self.bitwuzla_termination_polls.is_some()
+    }
+
+    pub(crate) const fn is_active(self) -> bool {
+        self.z3_rlimit.is_some()
+            || self.axeyum_progress_checks.is_some()
+            || self.bitwuzla_termination_polls.is_some()
+    }
+}
+
+fn parse_solver_work_budget(
+    name: &str,
+    value: Option<&str>,
+    maximum: u64,
+) -> Result<Option<u64>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let limit = value
+        .parse::<u64>()
+        .map_err(|_| format!("{name} must be an integer from 1 to {maximum}"))?;
+    if limit == 0 || limit > maximum {
+        return Err(format!("{name} must be an integer from 1 to {maximum}"));
+    }
+    Ok(Some(limit))
+}
+
+/// Effective process-wide deterministic work limits for the native backends.
+pub(crate) fn solver_work_budgets() -> SolverWorkBudgets {
+    *SOLVER_WORK_BUDGETS.get_or_init(|| {
+        let z3 = std::env::var(Z3_RLIMIT_ENV).ok();
+        let axeyum = std::env::var(AXEYUM_PROGRESS_CHECK_LIMIT_ENV).ok();
+        let bitwuzla = std::env::var(BITWUZLA_TERMINATION_POLL_LIMIT_ENV).ok();
+        SolverWorkBudgets::from_values(z3.as_deref(), axeyum.as_deref(), bitwuzla.as_deref())
+            .unwrap_or_else(|error| panic!("{error}"))
+    })
+}
 
 fn parse_check_timeout_ms(value: Option<&str>) -> Result<u64, String> {
     let Some(value) = value else {
@@ -123,6 +239,38 @@ pub fn check_timeout_ms() -> u64 {
     u64::try_from(check_timeout().as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Non-overlapping stage timing and classification for one engine-cache wrapper.
+#[cfg(feature = "solver-axeyum")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EngineCacheCheck {
+    pub(crate) policy: EngineCachePolicy,
+    pub(crate) hit_kind: Option<CacheHitKind>,
+    pub(crate) lookup_nanos: u64,
+    pub(crate) model_replay_nanos: u64,
+    pub(crate) index_update_nanos: u64,
+    pub(crate) eviction_nanos: u64,
+    pub(crate) backend_miss_nanos: u64,
+    pub(crate) wrapper_nanos: u64,
+    pub(crate) backend_called: bool,
+    pub(crate) warm_synchronized: bool,
+}
+
+#[cfg(feature = "solver-axeyum")]
+impl EngineCacheCheck {
+    const ZERO: Self = Self {
+        policy: EngineCachePolicy::Off,
+        hit_kind: None,
+        lookup_nanos: 0,
+        model_replay_nanos: 0,
+        index_update_nanos: 0,
+        eviction_nanos: 0,
+        backend_miss_nanos: 0,
+        wrapper_nanos: 0,
+        backend_called: false,
+        warm_synchronized: false,
+    };
+}
+
 thread_local! {
     /// Per-thread solver-call meter, reset before each function run.
     static SOLVE_COUNT: Cell<u64> = const { Cell::new(0) };
@@ -144,6 +292,9 @@ thread_local! {
     /// path. `persistent_assertions` partitions the full query slice from any
     /// trailing one-shot assumptions.
     static ACTIVE_WARM_DELTA: RefCell<Option<WarmDeltaContext>> = const { RefCell::new(None) };
+    /// Engine-cache classification for the immediately preceding path-delta check.
+    #[cfg(feature = "solver-axeyum")]
+    static LAST_ENGINE_CACHE_CHECK: Cell<EngineCacheCheck> = const { Cell::new(EngineCacheCheck::ZERO) };
 }
 
 /// Copy-on-write source ancestry for one explorer path's persistent assertions.
@@ -231,12 +382,23 @@ pub(crate) struct SolveTiming {
     pub(crate) z3_warm_nanos: Option<u64>,
     pub(crate) axeyum_cold_nanos: Option<u64>,
     pub(crate) axeyum_warm_nanos: Option<u64>,
+    pub(crate) bitwuzla_cold_nanos: Option<u64>,
+    pub(crate) bitwuzla_warm_nanos: Option<u64>,
     pub(crate) z3_cold_outcome: Option<SolveOutcome>,
     pub(crate) z3_warm_outcome: Option<SolveOutcome>,
     pub(crate) axeyum_cold_outcome: Option<SolveOutcome>,
     pub(crate) axeyum_warm_outcome: Option<SolveOutcome>,
+    pub(crate) bitwuzla_cold_outcome: Option<SolveOutcome>,
+    pub(crate) bitwuzla_warm_outcome: Option<SolveOutcome>,
+    pub(crate) z3_cold_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) z3_warm_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) axeyum_cold_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) axeyum_warm_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) bitwuzla_cold_unknown_reason: Option<SolveUnknownReason>,
+    pub(crate) bitwuzla_warm_unknown_reason: Option<SolveUnknownReason>,
     pub(crate) z3_warm_execution: Option<Z3ExecutionClass>,
     pub(crate) axeyum_warm_execution: Option<AxeyumExecutionClass>,
+    pub(crate) bitwuzla_warm_execution: Option<BitwuzlaExecutionClass>,
 }
 
 impl SolveTiming {
@@ -251,13 +413,31 @@ impl SolveTiming {
         z3_warm_nanos: None,
         axeyum_cold_nanos: None,
         axeyum_warm_nanos: None,
+        bitwuzla_cold_nanos: None,
+        bitwuzla_warm_nanos: None,
         z3_cold_outcome: None,
         z3_warm_outcome: None,
         axeyum_cold_outcome: None,
         axeyum_warm_outcome: None,
+        bitwuzla_cold_outcome: None,
+        bitwuzla_warm_outcome: None,
+        z3_cold_unknown_reason: None,
+        z3_warm_unknown_reason: None,
+        axeyum_cold_unknown_reason: None,
+        axeyum_warm_unknown_reason: None,
+        bitwuzla_cold_unknown_reason: None,
+        bitwuzla_warm_unknown_reason: None,
         z3_warm_execution: None,
         axeyum_warm_execution: None,
+        bitwuzla_warm_execution: None,
     };
+}
+
+const fn unknown_reason(result: &SolveResult) -> Option<SolveUnknownReason> {
+    match result {
+        SolveResult::Unknown(reason) => Some(*reason),
+        _ => None,
+    }
 }
 
 /// Stable result class for one independently timed backend invocation.
@@ -287,7 +467,7 @@ impl From<&SolveResult> for SolveOutcome {
         match result {
             SolveResult::Sat(_) => Self::Sat,
             SolveResult::Unsat => Self::Unsat,
-            SolveResult::Unknown => Self::Unknown,
+            SolveResult::Unknown(_) => Self::Unknown,
             SolveResult::NoSolver => Self::NoSolver,
             SolveResult::Error(_) => Self::Error,
         }
@@ -297,6 +477,7 @@ impl From<&SolveResult> for SolveOutcome {
 /// Exact Axeyum execution population for one independently timed invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AxeyumExecutionClass {
+    EngineCacheHit,
     ColdOneShot,
     WarmSnapshot,
     WarmCreated,
@@ -312,6 +493,7 @@ pub(crate) enum AxeyumExecutionClass {
 impl AxeyumExecutionClass {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::EngineCacheHit => "engine-cache-hit",
             Self::ColdOneShot => "cold-one-shot",
             Self::WarmSnapshot => "warm-snapshot",
             Self::WarmCreated => "warm-created",
@@ -335,6 +517,26 @@ pub(crate) enum Z3ExecutionClass {
     InvalidDirectDelta,
 }
 
+/// Exact neutral Bitwuzla warm execution population for one fair-shadow cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BitwuzlaExecutionClass {
+    WarmCreated,
+    WarmRetained,
+    FallbackMissingDelta,
+    InvalidDirectDelta,
+}
+
+impl BitwuzlaExecutionClass {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::WarmCreated => "warm-created",
+            Self::WarmRetained => "warm-retained",
+            Self::FallbackMissingDelta => "fallback-missing-delta",
+            Self::InvalidDirectDelta => "invalid-direct-delta",
+        }
+    }
+}
+
 impl Z3ExecutionClass {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -351,7 +553,15 @@ pub(crate) fn last_solve_timing() -> SolveTiming {
     LAST_SOLVE_TIMING.with(Cell::get)
 }
 
-/// Whether the opt-in four-cell cold/warm diagnostic is active.
+#[cfg(feature = "solver-axeyum")]
+pub(crate) fn last_engine_cache_check() -> EngineCacheCheck {
+    LAST_ENGINE_CACHE_CHECK.with(Cell::get)
+}
+
+/// Whether the opt-in fair cold/warm diagnostic is active.
+///
+/// It emits the legacy four cells without `solver-bitwuzla` and the neutral
+/// six-cell extension when all three in-process backends are compiled.
 pub(crate) fn fair_shadow_enabled() -> bool {
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     {
@@ -468,7 +678,7 @@ fn shadow_result_class(result: &SolveResult) -> &'static str {
     match result {
         SolveResult::Sat(_) => "sat",
         SolveResult::Unsat => "unsat",
-        SolveResult::Unknown => "unknown",
+        SolveResult::Unknown(_) => "unknown",
         SolveResult::NoSolver => "no-solver",
         SolveResult::Error(_) => "error",
     }
@@ -479,7 +689,7 @@ fn should_capture_shadow_split(z3: &SolveResult, axeyum: &SolveResult) -> bool {
         matches!(result, SolveResult::Sat(_) | SolveResult::Unsat)
     }
     fn nondecided(result: &SolveResult) -> bool {
-        matches!(result, SolveResult::Unknown | SolveResult::Error(_))
+        matches!(result, SolveResult::Unknown(_) | SolveResult::Error(_))
     }
 
     (decided(z3) && nondecided(axeyum)) || (nondecided(z3) && decided(axeyum))
@@ -726,19 +936,34 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     {
         if fair_shadow_enabled() {
-            let rotation = FAIR_SHADOW_SEQUENCE.fetch_add(1, Ordering::Relaxed) % 4;
+            let cell_count = if cfg!(feature = "solver-bitwuzla") {
+                6
+            } else {
+                4
+            };
+            let rotation = FAIR_SHADOW_SEQUENCE.fetch_add(1, Ordering::Relaxed) % cell_count;
             let mut z3_cold = None;
             let mut z3_warm = None;
             let mut axeyum_cold = None;
             let mut axeyum_warm = None;
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_cold = None;
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_warm = None;
             let mut z3_cold_nanos = 0;
             let mut z3_warm_nanos = 0;
             let mut axeyum_cold_nanos = 0;
             let mut axeyum_warm_nanos = 0;
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_cold_nanos = 0;
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_warm_nanos = 0;
             let mut z3_warm_execution = None;
             let mut axeyum_warm_execution = None;
-            for offset in 0..4 {
-                match (rotation + offset) % 4 {
+            #[cfg(feature = "solver-bitwuzla")]
+            let mut bitwuzla_warm_execution = None;
+            for offset in 0..cell_count {
+                match (rotation + offset) % cell_count {
                     0 => {
                         let started = std::time::Instant::now();
                         z3_cold = Some(z3_backend::Z3Solver::new().check(pool, asserts));
@@ -762,7 +987,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                             Some(axeyum_backend::AxeyumSolver::new().check(pool, asserts));
                         axeyum_cold_nanos = started.elapsed().as_nanos() as u64;
                     }
-                    _ => {
+                    3 => {
                         let started = std::time::Instant::now();
                         let (result, execution) = axeyum_backend::check_fair_warm_thread_local(
                             pool,
@@ -774,12 +999,39 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                         axeyum_warm_execution = Some(execution);
                         axeyum_warm_nanos = started.elapsed().as_nanos() as u64;
                     }
+                    #[cfg(feature = "solver-bitwuzla")]
+                    4 => {
+                        let started = std::time::Instant::now();
+                        bitwuzla_cold =
+                            Some(bitwuzla_backend::BitwuzlaSolver::new().check(pool, asserts));
+                        bitwuzla_cold_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    #[cfg(feature = "solver-bitwuzla")]
+                    5 => {
+                        let started = std::time::Instant::now();
+                        let (result, execution) = bitwuzla_backend::check_warm_thread_local(
+                            pool,
+                            asserts,
+                            ACTIVE_WARM_PATH.with(Cell::get),
+                            active_warm_delta(),
+                        );
+                        bitwuzla_warm = Some(result);
+                        bitwuzla_warm_execution = Some(execution);
+                        bitwuzla_warm_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    _ => unreachable!("fair-shadow cell index is bounded"),
                 }
             }
             let rz = z3_cold.expect("fair-shadow rotation runs cold Z3 exactly once");
             let rzw = z3_warm.expect("fair-shadow rotation runs warm Z3 exactly once");
             let rac = axeyum_cold.expect("fair-shadow rotation runs cold Axeyum exactly once");
             let raw = axeyum_warm.expect("fair-shadow rotation runs warm Axeyum exactly once");
+            #[cfg(feature = "solver-bitwuzla")]
+            let rbc = bitwuzla_cold
+                .expect("neutral fair-shadow rotation runs cold Bitwuzla exactly once");
+            #[cfg(feature = "solver-bitwuzla")]
+            let rbw = bitwuzla_warm
+                .expect("neutral fair-shadow rotation runs warm Bitwuzla exactly once");
 
             let same = matches!(
                 (&rz, &raw),
@@ -788,7 +1040,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             );
             let nondecided = [&rz, &raw]
                 .into_iter()
-                .any(|result| matches!(result, SolveResult::Unknown | SolveResult::Error(_)));
+                .any(|result| matches!(result, SolveResult::Unknown(_) | SolveResult::Error(_)));
             if same || nondecided {
                 SHADOW_AGREE.fetch_add(1, Ordering::Relaxed);
             } else {
@@ -800,8 +1052,8 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     SHADOW_MODEL_DIFF.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            let z3_nondecided = matches!(rz, SolveResult::Unknown | SolveResult::Error(_));
-            let axeyum_nondecided = matches!(raw, SolveResult::Unknown | SolveResult::Error(_));
+            let z3_nondecided = matches!(rz, SolveResult::Unknown(_) | SolveResult::Error(_));
+            let axeyum_nondecided = matches!(raw, SolveResult::Unknown(_) | SolveResult::Error(_));
             if z3_nondecided {
                 SHADOW_Z3_UNK.fetch_add(1, Ordering::Relaxed);
             }
@@ -828,12 +1080,86 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     z3_warm_nanos: Some(z3_warm_nanos),
                     axeyum_cold_nanos: Some(axeyum_cold_nanos),
                     axeyum_warm_nanos: Some(axeyum_warm_nanos),
+                    bitwuzla_cold_nanos: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            Some(bitwuzla_cold_nanos)
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
+                    bitwuzla_warm_nanos: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            Some(bitwuzla_warm_nanos)
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
                     z3_cold_outcome: Some(SolveOutcome::from(&rz)),
                     z3_warm_outcome: Some(SolveOutcome::from(&rzw)),
                     axeyum_cold_outcome: Some(SolveOutcome::from(&rac)),
                     axeyum_warm_outcome: Some(SolveOutcome::from(&raw)),
+                    bitwuzla_cold_outcome: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            Some(SolveOutcome::from(&rbc))
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
+                    bitwuzla_warm_outcome: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            Some(SolveOutcome::from(&rbw))
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
+                    z3_cold_unknown_reason: unknown_reason(&rz),
+                    z3_warm_unknown_reason: unknown_reason(&rzw),
+                    axeyum_cold_unknown_reason: unknown_reason(&rac),
+                    axeyum_warm_unknown_reason: unknown_reason(&raw),
+                    bitwuzla_cold_unknown_reason: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            unknown_reason(&rbc)
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
+                    bitwuzla_warm_unknown_reason: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            unknown_reason(&rbw)
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
                     z3_warm_execution,
                     axeyum_warm_execution,
+                    bitwuzla_warm_execution: {
+                        #[cfg(feature = "solver-bitwuzla")]
+                        {
+                            bitwuzla_warm_execution
+                        }
+                        #[cfg(not(feature = "solver-bitwuzla"))]
+                        {
+                            None
+                        }
+                    },
                 });
             });
             return rz;
@@ -886,8 +1212,8 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                 z3_nanos = t.elapsed().as_nanos() as u64;
                 SHADOW_Z3_NANOS.fetch_add(z3_nanos, Ordering::Relaxed);
             }
-            let unknown = matches!(rz, SolveResult::Unknown)
-                || matches!(ra, SolveResult::Unknown)
+            let unknown = matches!(rz, SolveResult::Unknown(_))
+                || matches!(ra, SolveResult::Unknown(_))
                 || matches!(rz, SolveResult::Error(_))
                 || matches!(ra, SolveResult::Error(_));
             let same = matches!(
@@ -908,7 +1234,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             }
             // Diagnostic: print the first few axeyum non-decided reasons so
             // we know WHY (Unknown budget vs Error translation) it punts.
-            if matches!(ra, SolveResult::Unknown | SolveResult::Error(_))
+            if matches!(ra, SolveResult::Unknown(_) | SolveResult::Error(_))
                 && SHADOW_AX_UNK.load(Ordering::Relaxed) < 5
             {
                 eprintln!(
@@ -917,8 +1243,8 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     ra
                 );
             }
-            let z3_unk = matches!(rz, SolveResult::Unknown | SolveResult::Error(_));
-            let ax_unk = matches!(ra, SolveResult::Unknown | SolveResult::Error(_));
+            let z3_unk = matches!(rz, SolveResult::Unknown(_) | SolveResult::Error(_));
+            let ax_unk = matches!(ra, SolveResult::Unknown(_) | SolveResult::Error(_));
             if z3_unk {
                 SHADOW_Z3_UNK.fetch_add(1, Ordering::Relaxed);
             }
@@ -1016,7 +1342,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     });
     TOTAL_SOLVE_COUNT.fetch_add(1, Ordering::Relaxed);
     TOTAL_SOLVE_NANOS.fetch_add(__elapsed, Ordering::Relaxed);
-    if matches!(result, SolveResult::Unknown) {
+    if matches!(result, SolveResult::Unknown(_)) {
         TIMEOUT_COUNT.with(|c| c.set(c.get() + 1));
     }
     #[cfg(feature = "solver-z3")]
@@ -1057,6 +1383,38 @@ pub(crate) fn solve_for_path_delta(
             false,
         );
     }
+
+    #[cfg(feature = "solver-axeyum")]
+    {
+        solve_for_path_delta_with_engine_cache(
+            pool,
+            asserts,
+            path_id,
+            retain_assertions,
+            persistent_assertions,
+            persistent_prefix,
+        )
+    }
+
+    #[cfg(not(feature = "solver-axeyum"))]
+    solve_path_backend(
+        pool,
+        asserts,
+        path_id,
+        retain_assertions,
+        persistent_assertions,
+        persistent_prefix,
+    )
+}
+
+fn solve_path_backend(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    retain_assertions: usize,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+) -> (SolveResult, bool) {
     let previous_path = ACTIVE_WARM_PATH.with(|active| active.replace(Some(path_id)));
     let previous_delta = ACTIVE_WARM_DELTA.with(|active| {
         active.borrow_mut().replace(WarmDeltaContext {
@@ -1079,9 +1437,297 @@ pub(crate) fn solve_for_path_delta(
     (result, synced)
 }
 
+#[cfg(feature = "solver-axeyum")]
+fn solve_for_path_delta_with_engine_cache(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    retain_assertions: usize,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+) -> (SolveResult, bool) {
+    let wrapper_started = Instant::now();
+    let policy = match process_cache_policy() {
+        Ok(policy) => policy,
+        Err(error) => return finish_engine_cache_error(error, wrapper_started),
+    };
+
+    #[cfg(feature = "solver-z3")]
+    if policy != EngineCachePolicy::Off {
+        return finish_engine_cache_error(
+            "engine constraint cache requires an Axeyum-only solver build".into(),
+            wrapper_started,
+        );
+    }
+
+    let before = match process_cache_stats() {
+        Ok(stats) => stats,
+        Err(error) => return finish_engine_cache_error(error, wrapper_started),
+    };
+    if policy == EngineCachePolicy::Off {
+        let backend_started = Instant::now();
+        let (result, synced) = solve_path_backend(
+            pool,
+            asserts,
+            path_id,
+            retain_assertions,
+            persistent_assertions,
+            persistent_prefix,
+        );
+        let backend_nanos = elapsed_nanos(backend_started);
+        let wrapper_nanos = elapsed_nanos(wrapper_started);
+        record_engine_cache_check(
+            policy,
+            None,
+            before,
+            before,
+            backend_nanos,
+            wrapper_nanos,
+            true,
+            synced,
+        );
+        replace_axeyum_timing(&result, wrapper_nanos, None);
+        return (result, synced);
+    }
+
+    let lookup = match lookup_process_cache(pool, asserts) {
+        Ok(lookup) => lookup,
+        Err(error) => return finish_engine_cache_error(error, wrapper_started),
+    };
+    if let CacheLookup::Hit { kind, result } = lookup {
+        if kind.is_structural() {
+            if let Err(error) = insert_process_cache(pool, asserts, &result) {
+                return finish_engine_cache_error(error, wrapper_started);
+            }
+        }
+        let after = match process_cache_stats() {
+            Ok(stats) => stats,
+            Err(error) => return finish_engine_cache_error(error, wrapper_started),
+        };
+        let wrapper_nanos = elapsed_nanos(wrapper_started);
+        record_engine_cache_check(
+            policy,
+            Some(kind),
+            before,
+            after,
+            0,
+            wrapper_nanos,
+            false,
+            false,
+        );
+        replace_axeyum_timing(
+            &result,
+            wrapper_nanos,
+            Some(AxeyumExecutionClass::EngineCacheHit),
+        );
+        return (result, false);
+    }
+
+    let backend_started = Instant::now();
+    let (result, synced) = solve_path_backend(
+        pool,
+        asserts,
+        path_id,
+        retain_assertions,
+        persistent_assertions,
+        persistent_prefix,
+    );
+    let backend_nanos = elapsed_nanos(backend_started);
+    if let Err(error) = insert_process_cache(pool, asserts, &result) {
+        return finish_engine_cache_error(error, wrapper_started);
+    }
+    let after = match process_cache_stats() {
+        Ok(stats) => stats,
+        Err(error) => return finish_engine_cache_error(error, wrapper_started),
+    };
+    let wrapper_nanos = elapsed_nanos(wrapper_started);
+    record_engine_cache_check(
+        policy,
+        None,
+        before,
+        after,
+        backend_nanos,
+        wrapper_nanos,
+        true,
+        synced,
+    );
+    replace_axeyum_timing(&result, wrapper_nanos, None);
+    (result, synced)
+}
+
+#[cfg(feature = "solver-axeyum")]
+#[allow(clippy::too_many_arguments)]
+fn record_engine_cache_check(
+    policy: EngineCachePolicy,
+    hit_kind: Option<CacheHitKind>,
+    before: EngineCacheStats,
+    after: EngineCacheStats,
+    backend_miss_nanos: u64,
+    wrapper_nanos: u64,
+    backend_called: bool,
+    warm_synchronized: bool,
+) {
+    LAST_ENGINE_CACHE_CHECK.with(|last| {
+        last.set(EngineCacheCheck {
+            policy,
+            hit_kind,
+            lookup_nanos: after.lookup_nanos.saturating_sub(before.lookup_nanos),
+            model_replay_nanos: after
+                .model_replay_nanos
+                .saturating_sub(before.model_replay_nanos),
+            index_update_nanos: after
+                .index_update_nanos
+                .saturating_sub(before.index_update_nanos),
+            eviction_nanos: after.eviction_nanos.saturating_sub(before.eviction_nanos),
+            backend_miss_nanos,
+            wrapper_nanos,
+            backend_called,
+            warm_synchronized,
+        });
+    });
+}
+
+#[cfg(feature = "solver-axeyum")]
+fn finish_engine_cache_error(error: String, wrapper_started: Instant) -> (SolveResult, bool) {
+    let result = SolveResult::Error(error);
+    let wrapper_nanos = elapsed_nanos(wrapper_started);
+    LAST_ENGINE_CACHE_CHECK.with(|last| {
+        last.set(EngineCacheCheck {
+            wrapper_nanos,
+            ..EngineCacheCheck::ZERO
+        });
+    });
+    replace_axeyum_timing(&result, wrapper_nanos, None);
+    (result, false)
+}
+
+#[cfg(feature = "solver-axeyum")]
+fn replace_axeyum_timing(
+    result: &SolveResult,
+    wrapper_nanos: u64,
+    execution: Option<AxeyumExecutionClass>,
+) {
+    let previous = LAST_SOLVE_TIMING.with(Cell::get);
+    LAST_SOLVE_TIMING.with(|timing| {
+        timing.set(SolveTiming {
+            total_nanos: wrapper_nanos,
+            axeyum_nanos: Some(wrapper_nanos),
+            axeyum_outcome: Some(SolveOutcome::from(result)),
+            axeyum_execution: execution.or(previous.axeyum_execution),
+            ..previous
+        });
+    });
+}
+
+#[cfg(feature = "solver-axeyum")]
+fn elapsed_nanos(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+#[cfg(all(test, feature = "solver-axeyum"))]
+mod engine_cache_integration_tests {
+    use super::{
+        last_engine_cache_check, solve_for_path_delta, AxeyumExecutionClass, CacheHitKind,
+        EngineCachePolicy, ExprPool, SolveResult, WarmAssertionPrefix,
+    };
+    use crate::ir::types::Width;
+    use crate::symbolic::solver::axeyum_backend::close_warm_path;
+    use crate::symbolic::solver::constraint_cache::{
+        reset_process_cache_for_test, EngineCacheLimits,
+    };
+
+    #[test]
+    fn exact_cache_hit_skips_backend_and_never_advances_warm_sync() {
+        reset_process_cache_for_test(
+            EngineCachePolicy::Exact,
+            EngineCacheLimits {
+                max_entries: 8,
+                max_assertion_refs: 8,
+                max_model_values: 8,
+                max_model_values_per_entry: 8,
+            },
+        );
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W8);
+        let query = [(x, true)];
+        let prefix = WarmAssertionPrefix::default();
+        let path_id = 0x303;
+
+        let (first, _) = solve_for_path_delta(&pool, &query, path_id, 0, 0, &prefix);
+        assert!(matches!(first, SolveResult::Sat(_)));
+        assert!(last_engine_cache_check().backend_called);
+
+        let (second, synced) = solve_for_path_delta(&pool, &query, path_id, 0, 0, &prefix);
+        assert!(matches!(second, SolveResult::Sat(_)));
+        assert!(!synced);
+        let check = last_engine_cache_check();
+        assert_eq!(check.hit_kind, Some(CacheHitKind::ExactSat));
+        assert!(!check.backend_called);
+        assert!(!check.warm_synchronized);
+        assert_eq!(
+            super::last_solve_timing().axeyum_execution,
+            Some(AxeyumExecutionClass::EngineCacheHit)
+        );
+
+        close_warm_path(path_id);
+    }
+
+    #[test]
+    fn structural_hit_is_promoted_to_an_exact_entry() {
+        reset_process_cache_for_test(
+            EngineCachePolicy::Structural,
+            EngineCacheLimits {
+                max_entries: 8,
+                max_assertion_refs: 16,
+                max_model_values: 16,
+                max_model_values_per_entry: 8,
+            },
+        );
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W8);
+        let y = pool.fresh_symbol(Width::W8);
+        let strong = [(x, true), (y, false)];
+        let weak = [(x, true)];
+        let prefix = WarmAssertionPrefix::default();
+        let path_id = 0x304;
+
+        let (first, _) = solve_for_path_delta(&pool, &strong, path_id, 0, 0, &prefix);
+        assert!(matches!(first, SolveResult::Sat(_)));
+        assert!(last_engine_cache_check().backend_called);
+
+        let (second, synced) = solve_for_path_delta(&pool, &weak, path_id, 0, 0, &prefix);
+        assert!(matches!(second, SolveResult::Sat(_)));
+        assert!(!synced);
+        let structural = last_engine_cache_check();
+        assert_eq!(structural.hit_kind, Some(CacheHitKind::SatSuperset));
+        assert!(!structural.backend_called);
+        assert_eq!(structural.backend_miss_nanos, 0);
+        assert!(
+            structural
+                .lookup_nanos
+                .saturating_add(structural.model_replay_nanos)
+                .saturating_add(structural.index_update_nanos)
+                .saturating_add(structural.eviction_nanos)
+                <= structural.wrapper_nanos
+        );
+
+        let (third, _) = solve_for_path_delta(&pool, &weak, path_id, 0, 0, &prefix);
+        assert!(matches!(third, SolveResult::Sat(_)));
+        assert_eq!(
+            last_engine_cache_check().hit_kind,
+            Some(CacheHitKind::ExactSat)
+        );
+
+        close_warm_path(path_id);
+    }
+}
+
 #[cfg(test)]
 mod timeout_configuration_tests {
-    use super::{parse_check_timeout_ms, DEFAULT_CHECK_TIMEOUT_MS};
+    use super::{
+        DEFAULT_CHECK_TIMEOUT_MS, SolveUnknownReason, SolverWorkBudgets, parse_check_timeout_ms,
+        parse_solver_work_budget,
+    };
 
     #[test]
     fn check_timeout_defaults_and_accepts_a_bounded_override() {
@@ -1095,13 +1741,124 @@ mod timeout_configuration_tests {
             assert!(parse_check_timeout_ms(Some(value)).is_err(), "{value}");
         }
     }
+
+    #[test]
+    fn solver_work_budgets_name_backend_specific_units() {
+        let budgets = SolverWorkBudgets::from_values(Some("7"), Some("11"), Some("13"))
+            .expect("three positive backend budgets");
+        assert_eq!(budgets.z3_rlimit, Some(7));
+        assert_eq!(budgets.axeyum_progress_checks, Some(11));
+        assert_eq!(budgets.bitwuzla_termination_polls, Some(13));
+        assert!(budgets.is_complete());
+    }
+
+    #[test]
+    fn solver_work_budget_rejects_zero_invalid_and_u32_overflow() {
+        for value in ["", "zero", "0"] {
+            assert!(parse_solver_work_budget("TEST", Some(value), u64::MAX).is_err());
+        }
+        assert!(
+            SolverWorkBudgets::from_values(Some("4294967296"), Some("1"), Some("1")).is_err(),
+            "Z3 rlimit must fit the u32 parameter API"
+        );
+    }
+
+    #[test]
+    fn solver_unknown_reasons_keep_work_and_wall_exhaustion_distinct() {
+        assert_eq!(SolveUnknownReason::ResourceLimit.as_str(), "resource-limit");
+        assert_eq!(SolveUnknownReason::WallTimeout.as_str(), "wall-timeout");
+        assert_eq!(SolveUnknownReason::Other.as_str(), "other");
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "solver-z3",
+    feature = "solver-axeyum",
+    feature = "solver-bitwuzla"
+))]
+mod neutral_fair_shadow_tests {
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::ir::types::{CmpOp, Width};
+    use crate::symbolic::expr::Expr;
+
+    static ENVIRONMENT: Mutex<()> = Mutex::new(());
+
+    struct FairShadowEnvironment;
+
+    impl FairShadowEnvironment {
+        fn enable() -> Self {
+            std::env::set_var("GLAURUNG_FAIR_SHADOW", "1");
+            Self
+        }
+    }
+
+    impl Drop for FairShadowEnvironment {
+        fn drop(&mut self) {
+            std::env::remove_var("GLAURUNG_FAIR_SHADOW");
+        }
+    }
+
+    #[test]
+    fn neutral_fair_shadow_executes_all_six_cells_on_one_delta() {
+        let _guard = ENVIRONMENT.lock().expect("environment lock");
+        let _environment = FairShadowEnvironment::enable();
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W32);
+        let one = pool.constant(Width::W32, 1);
+        let equals = pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: x,
+            b: one,
+            width: Width::W32,
+        });
+        let mut prefix = WarmAssertionPrefix::default();
+        prefix.push();
+        let path_id = u64::MAX - 17;
+
+        let (result, synchronized) =
+            solve_for_path_delta(&pool, &[(equals, true)], path_id, 0, 1, &prefix);
+        assert!(matches!(result, SolveResult::Sat(_)));
+        assert!(synchronized);
+        let timing = last_solve_timing();
+        for outcome in [
+            timing.z3_cold_outcome,
+            timing.z3_warm_outcome,
+            timing.axeyum_cold_outcome,
+            timing.axeyum_warm_outcome,
+            timing.bitwuzla_cold_outcome,
+            timing.bitwuzla_warm_outcome,
+        ] {
+            assert_eq!(outcome, Some(SolveOutcome::Sat));
+        }
+        for nanos in [
+            timing.z3_cold_nanos,
+            timing.z3_warm_nanos,
+            timing.axeyum_cold_nanos,
+            timing.axeyum_warm_nanos,
+            timing.bitwuzla_cold_nanos,
+            timing.bitwuzla_warm_nanos,
+        ] {
+            assert!(nanos.is_some());
+        }
+        assert_eq!(
+            timing.bitwuzla_warm_execution,
+            Some(BitwuzlaExecutionClass::WarmCreated)
+        );
+
+        axeyum_backend::close_fair_warm_path(path_id);
+        z3_backend::close_warm_path(path_id);
+        bitwuzla_backend::close_warm_path(path_id);
+    }
 }
 
 #[cfg(all(test, feature = "solver-z3"))]
 mod capture_tests {
     use super::{
-        append_capture_index, publish_query_file, publish_shadow_split_bytes, shadow_result_class,
-        should_capture_shadow_split, SolveResult,
+        SolveResult, SolveUnknownReason, append_capture_index, publish_query_file,
+        publish_shadow_split_bytes, shadow_result_class, should_capture_shadow_split,
     };
 
     #[test]
@@ -1145,7 +1902,7 @@ mod capture_tests {
     fn shadow_split_capture_requires_exactly_one_nondecided_backend() {
         let sat = SolveResult::Sat(Default::default());
         let unsat = SolveResult::Unsat;
-        let unknown = SolveResult::Unknown;
+        let unknown = SolveResult::Unknown(SolveUnknownReason::Other);
         let error = SolveResult::Error("diagnostic must not enter identity".to_string());
 
         assert!(should_capture_shadow_split(&sat, &unknown));
