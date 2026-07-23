@@ -655,6 +655,18 @@ fn discover_function(
                 stats.hit_timeout = true;
                 break 'block;
             }
+            // Basic-block leader rule: if the linear sweep has reached the start
+            // of another already-discovered block (a branch/fallthrough target
+            // in `seen`), the current block ends here and falls through to it.
+            // Without this a block that falls into a jump-target (e.g. a rotated
+            // `-O0` loop's body falling into its condition block) would swallow
+            // the successor's instructions and inherit its edges, destroying the
+            // back-edge so no natural loop is recovered.
+            if cur_va != start_va && seen.contains(&cur_va) {
+                edges.push((start_va, cur_va, ControlFlowEdgeKind::Fallthrough));
+                blocks.insert(start_va, (cur_va, instrs));
+                break 'block;
+            }
             // Map VA -> file offset using shared helper for robustness
             let fo = match crate::analysis::entry::va_to_file_offset(data, cur_va) {
                 Some(v) => v,

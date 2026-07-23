@@ -74,10 +74,19 @@ pub fn apply_role_names(f: &mut Function, cc: CallConv) {
     // that every substitution is consistent across the function.
     let mut role: HashMap<String, String> = HashMap::new();
 
+    // Only arg-passing registers that are genuine *live-in parameters* become
+    // `argN`. A register in an argument slot that is written before it is ever
+    // read is just scratch reuse of that ABI register (e.g. `cl` as a variable
+    // shift count reuses `rcx`, the 4th SysV arg slot) and must NOT inflate the
+    // recovered arity — it falls through to a `varN` alias below.
+    let param_slots = live_in_arg_slots(&f.body, cc);
     // On AArch64 x0 serves as both arg0 and return value. We prefer `arg0`
     // because in a called function it's more often referenced as the input
     // than as the output slot.
     for (slot_idx, names) in arg_slot_tables(cc).iter().enumerate() {
+        if !param_slots.contains(&slot_idx) {
+            continue;
+        }
         for name in *names {
             role.entry(name.to_string())
                 .or_insert_with(|| format!("arg{}", slot_idx));
@@ -115,6 +124,112 @@ pub fn apply_role_names(f: &mut Function, cc: CallConv) {
     }
 
     rewrite_body(&mut f.body, &role);
+}
+
+/// Slot indices (into [`arg_slot_tables`]) that behave like genuine live-in
+/// parameters: some alias of the slot is **read before** any alias is
+/// **written**, scanning the body in linear (approximate execution) order.
+///
+/// A register written before its first read is scratch reuse of that ABI slot,
+/// not an incoming argument, so its slot is excluded — this is what stops
+/// scratch uses of `rcx`/`rdx`/... from inflating the recovered function arity.
+/// The prologue of an `-O0` function spills each real parameter first thing
+/// (`mov [rbp-x], edi`), i.e. reads it, so real parameters are reliably
+/// classified as live-in by this first-touch scan.
+fn live_in_arg_slots(body: &[Stmt], cc: CallConv) -> std::collections::HashSet<usize> {
+    let mut slot_of: HashMap<&str, usize> = HashMap::new();
+    for (i, names) in arg_slot_tables(cc).iter().enumerate() {
+        for n in *names {
+            slot_of.insert(n, i);
+        }
+    }
+    // slot -> is_param (true = first touch was a read). First touch wins.
+    let mut decided: HashMap<usize, bool> = HashMap::new();
+    for s in body {
+        walk_stmt_rw(s, &mut |name, is_write| {
+            if let Some(&slot) = slot_of.get(name) {
+                decided.entry(slot).or_insert(!is_write);
+            }
+        });
+    }
+    decided
+        .into_iter()
+        .filter_map(|(slot, is_param)| is_param.then_some(slot))
+        .collect()
+}
+
+/// Walk a statement emitting `(register_name, is_write)` events in execution
+/// order: the reads of a statement are reported before its write. Memory stores
+/// write memory, not a register, so their operands are all reads.
+fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
+    match s {
+        Stmt::Assign { dst, src } => {
+            walk_expr_phys(src, &mut |n| cb(n, false));
+            if let VReg::Phys(n) = dst {
+                cb(n, true);
+            }
+        }
+        Stmt::Store { addr, src } => {
+            walk_expr_phys(addr, &mut |n| cb(n, false));
+            walk_expr_phys(src, &mut |n| cb(n, false));
+        }
+        Stmt::Call { target, args } => {
+            walk_expr_phys(target, &mut |n| cb(n, false));
+            for a in args {
+                walk_expr_phys(a, &mut |n| cb(n, false));
+            }
+        }
+        Stmt::Return { value } => {
+            if let Some(e) = value {
+                walk_expr_phys(e, &mut |n| cb(n, false));
+            }
+        }
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            walk_expr_phys(cond, &mut |n| cb(n, false));
+            for s in then_body {
+                walk_stmt_rw(s, cb);
+            }
+            if let Some(eb) = else_body {
+                for s in eb {
+                    walk_stmt_rw(s, cb);
+                }
+            }
+        }
+        Stmt::While { cond, body } => {
+            walk_expr_phys(cond, &mut |n| cb(n, false));
+            for s in body {
+                walk_stmt_rw(s, cb);
+            }
+        }
+        Stmt::Push { value } => walk_expr_phys(value, &mut |n| cb(n, false)),
+        Stmt::Pop { target } => {
+            if let VReg::Phys(n) = target {
+                cb(n, true);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            walk_expr_phys(discriminant, &mut |n| cb(n, false));
+            for (_, body) in cases {
+                for s in body {
+                    walk_stmt_rw(s, cb);
+                }
+            }
+            if let Some(b) = default {
+                for s in b {
+                    walk_stmt_rw(s, cb);
+                }
+            }
+        }
+        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+    }
 }
 
 fn collect_first_appearance_phys(body: &[Stmt]) -> Vec<String> {
@@ -332,13 +447,15 @@ mod tests {
 
     #[test]
     fn sysv_rdi_becomes_arg0_and_rax_becomes_ret() {
+        // rdi is READ (a genuine live-in parameter) before rax is set as the
+        // return value.
         let mut f = Function {
             name: "f".into(),
             entry_va: 0x1000,
             body: vec![
                 Stmt::Assign {
-                    dst: reg("rdi"),
-                    src: Expr::Const(1),
+                    dst: reg("rax"),
+                    src: Expr::Reg(reg("rdi")),
                 },
                 Stmt::Return {
                     value: Some(Expr::Reg(reg("rax"))),
@@ -347,10 +464,47 @@ mod tests {
         };
         apply_role_names(&mut f, CallConv::SysVAmd64);
         let text = render(&f);
-        assert!(text.contains("%arg0 = 1;"), "got: {}", text);
+        assert!(text.contains("%ret = %arg0;"), "got: {}", text);
         assert!(text.contains("return %ret;"), "got: {}", text);
         assert!(!text.contains("%rdi"));
         assert!(!text.contains("%rax"));
+    }
+
+    #[test]
+    fn scratch_arg_register_written_first_is_not_a_param() {
+        // rcx (SysV 4th arg slot) is written before any read -> it is scratch,
+        // not `arg3`; it must become a `varN` local so the recovered arity is
+        // not inflated. rdi *is* read first, so it is the sole parameter.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x2000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: Expr::Const(32),
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rdi"))),
+                        rhs: Box::new(Expr::Reg(reg("rcx"))),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax"))),
+                },
+            ],
+        };
+        apply_role_names(&mut f, CallConv::SysVAmd64);
+        let text = render(&f);
+        assert!(text.contains("%arg0"), "rdi should be arg0: {}", text);
+        assert!(
+            !text.contains("arg3") && !text.contains("arg1") && !text.contains("arg2"),
+            "scratch rcx must not become an arg slot: {}",
+            text
+        );
+        assert!(!text.contains("%rcx"), "rcx should be aliased away: {}", text);
     }
 
     #[test]
@@ -396,17 +550,18 @@ mod tests {
 
     #[test]
     fn aarch64_x0_stays_arg0() {
+        // x0 is read (live-in parameter); on AArch64 arg0 wins over the
+        // ret-alias for the shared x0 register.
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
-            body: vec![Stmt::Assign {
-                dst: reg("x0"),
-                src: Expr::Const(42),
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(reg("x0"))),
             }],
         };
         apply_role_names(&mut f, CallConv::Aarch64);
         let text = render(&f);
-        assert!(text.contains("%arg0 = 42;"), "got: {}", text);
+        assert!(text.contains("return %arg0;"), "got: {}", text);
     }
 
     #[test]
@@ -429,13 +584,15 @@ mod tests {
 
     #[test]
     fn win64_rcx_becomes_arg0_and_rdi_becomes_var() {
+        // rcx (Win64 arg0) is read first -> arg0; rdi is not a Win64 arg slot
+        // and is written -> a var local.
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
             body: vec![
                 Stmt::Assign {
-                    dst: reg("rcx"),
-                    src: Expr::Const(1),
+                    dst: reg("rax"),
+                    src: Expr::Reg(reg("rcx")),
                 },
                 Stmt::Assign {
                     dst: reg("rdi"),
@@ -448,7 +605,7 @@ mod tests {
         };
         apply_role_names(&mut f, CallConv::Win64);
         let text = render(&f);
-        assert!(text.contains("%arg0 = 1;"), "got: {}", text);
+        assert!(text.contains("%ret = %arg0;"), "got: {}", text);
         assert!(text.contains("%var0 = 2;"), "got: {}", text);
         assert!(text.contains("return %ret;"), "got: {}", text);
     }

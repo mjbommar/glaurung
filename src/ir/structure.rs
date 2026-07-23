@@ -330,75 +330,66 @@ fn detect_natural_loop(
     if cfg.succs[header].len() != 2 {
         return None;
     }
+    // A natural loop requires a back-edge: a predecessor `tail` of `header`
+    // that `header` dominates.
+    let tail = cfg
+        .preds[header]
+        .iter()
+        .copied()
+        .find(|&p| cfg.dominates(header, p))?;
+    // The loop body is `header` plus every block that can reach `tail` without
+    // passing back through `header` (the standard natural-loop body set).
+    let body_set = natural_loop_body(header, tail, cfg);
+    // Of the header's two successors, exactly one should be inside the body
+    // (the loop entry); the other leaves the loop.
     let a = cfg.succs[header][0];
     let b = cfg.succs[header][1];
+    let (body_head, exit) = match (body_set.contains(&a), body_set.contains(&b)) {
+        (true, false) => (a, b),
+        (false, true) => (b, a),
+        // Both or neither inside → shape we don't model; fall back gracefully.
+        _ => return None,
+    };
 
-    // Find whichever successor's sub-path contains a back-edge to `header`.
-    for &(body_head, exit) in &[(a, b), (b, a)] {
-        if !cfg.dominates(header, body_head) {
-            continue;
-        }
-        // Walk a linear chain from body_head and see whether it loops back.
-        if let Some(body_region) = collect_loop_body(body_head, header, cfg, visited) {
-            visited.insert(header);
-            return Some(LoopRegion {
-                region: Region::While {
-                    header,
-                    body: Box::new(body_region),
-                    exit: Some(exit),
-                },
-                exit: Some(exit),
-            });
-        }
+    // Commit. Consume the header, then structure the body *recursively* via
+    // `build` so nested loops and conditionals inside the body are recovered
+    // too — the old linear walk bailed on any branch, leaving multi-level loops
+    // (matrix multiply, nested sorts) as goto soup. Temporarily mark the exit
+    // visited so body structuring can't escape the loop through it.
+    visited.insert(header);
+    let exit_was_visited = visited.contains(&exit);
+    visited.insert(exit);
+    let body = build(body_head, cfg, visited, Some(header));
+    if !exit_was_visited {
+        visited.remove(&exit);
     }
-    None
+    Some(LoopRegion {
+        region: Region::While {
+            header,
+            body: Box::new(body),
+            exit: Some(exit),
+        },
+        exit: Some(exit),
+    })
 }
 
-/// Collect a loop body starting at `body_head` whose back-edge returns to
-/// `header`. Returns None if the shape isn't recognisable.
-fn collect_loop_body(
-    body_head: usize,
-    header: usize,
-    cfg: &Cfg,
-    visited: &mut HashSet<usize>,
-) -> Option<Region> {
-    // The simplest case we handle: body is a single block whose only
-    // successor is `header`.
-    if cfg.succs[body_head] == vec![header] {
-        visited.insert(body_head);
-        return Some(Region::Block(body_head));
-    }
-    // A slightly richer case: body is a straight-line chain ending with a
-    // block whose only successor is `header`.
-    let mut parts: Vec<Region> = Vec::new();
-    let mut cur = body_head;
-    let mut local_visited: HashSet<usize> = HashSet::new();
-    loop {
-        if !local_visited.insert(cur) {
-            return None; // internal cycle — too complex for v1
-        }
-        parts.push(Region::Block(cur));
-        let succs = &cfg.succs[cur];
-        if succs.len() == 1 && succs[0] == header {
-            // Commit
-            for b in &local_visited {
-                visited.insert(*b);
+/// The blocks of the natural loop with the given `header` and back-edge `tail`:
+/// `header` itself plus every block that can reach `tail` by walking
+/// predecessors without going through `header`.
+fn natural_loop_body(header: usize, tail: usize, cfg: &Cfg) -> HashSet<usize> {
+    let mut body = HashSet::new();
+    body.insert(header);
+    let mut stack = vec![tail];
+    while let Some(n) = stack.pop() {
+        if body.insert(n) {
+            for &p in &cfg.preds[n] {
+                if p != header {
+                    stack.push(p);
+                }
             }
-            return Some(if parts.len() == 1 {
-                parts.pop().unwrap()
-            } else {
-                Region::Seq(parts)
-            });
         }
-        if succs.len() != 1 {
-            return None;
-        }
-        let next = succs[0];
-        if cfg.preds[next].len() != 1 {
-            return None;
-        }
-        cur = next;
     }
+    body
 }
 
 /// Recognise an if-then / if-then-else diamond rooted at `cond`.
@@ -648,6 +639,25 @@ mod tests {
     fn recover_for(lf: &LlirFunction) -> Region {
         let ssa = compute_ssa(lf);
         recover(lf, &ssa)
+    }
+
+    #[test]
+    fn rotated_for_loop_is_recovered_as_while() {
+        // gcc -O0 for-loop shape (from `sum_to`): entry jumps forward to the
+        // condition block, which conditionally branches *back* to the body.
+        //   B0(entry) -> COND
+        //   COND -> BODY (taken, back-edge target) / AFTER (fallthrough)
+        //   BODY -> COND
+        // Block order in memory is B0, BODY, COND, AFTER.
+        let lf = mk_cfg(vec![
+            (0x10f9, vec![Op::Nop], vec![0x1122]),         // 0: B0  -> COND
+            (0x1115, vec![Op::Nop], vec![0x1122]),         // 1: BODY-> COND
+            (0x1122, vec![Op::Nop], vec![0x1115, 0x112a]), // 2: COND-> BODY/AFTER
+            (0x112a, vec![Op::Return], vec![]),            // 3: AFTER
+        ]);
+        let r = recover_for(&lf);
+        let has_while = format!("{:?}", r).contains("While");
+        assert!(has_while, "rotated for-loop not structured as While: {:?}", r);
     }
 
     #[test]

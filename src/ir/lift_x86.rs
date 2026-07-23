@@ -102,9 +102,13 @@ fn value_of_operand(instr: &iced_x86::Instruction, idx: u32) -> Option<Value> {
         OpKind::Immediate32 | OpKind::Immediate8to32 => {
             Some(Value::Const(instr.immediate32() as i32 as i64))
         }
-        OpKind::Immediate64 | OpKind::Immediate8to64 | OpKind::Immediate32to64 => {
-            Some(Value::Const(instr.immediate64() as i64))
-        }
+        // Each sign-/zero-extended-to-64 form has its OWN accessor. Calling the
+        // plain `immediate64()` on an `Immediate32to64`/`Immediate8to64` operand
+        // returns garbage (iced only populates it for a true `Immediate64`), so
+        // `movq $0,[mem]` was lifting to a bogus constant.
+        OpKind::Immediate64 => Some(Value::Const(instr.immediate64() as i64)),
+        OpKind::Immediate8to64 => Some(Value::Const(instr.immediate8to64())),
+        OpKind::Immediate32to64 => Some(Value::Const(instr.immediate32to64())),
         OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
             Some(Value::Addr(instr.near_branch_target()))
         }
@@ -269,9 +273,9 @@ fn push_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         OpKind::Immediate32 | OpKind::Immediate8to32 => {
             Value::Const(instr.immediate32() as i32 as i64)
         }
-        OpKind::Immediate64 | OpKind::Immediate8to64 | OpKind::Immediate32to64 => {
-            Value::Const(instr.immediate64() as i64)
-        }
+        OpKind::Immediate64 => Value::Const(instr.immediate64() as i64),
+        OpKind::Immediate8to64 => Value::Const(instr.immediate8to64()),
+        OpKind::Immediate32to64 => Value::Const(instr.immediate32to64()),
         OpKind::Memory => {
             // push qword [mem]: tmp = load [mem]; rsp -= width; *[rsp] = tmp.
             let tmp = VReg::Temp(0);
@@ -1734,6 +1738,7 @@ fn _keep_reg_size() {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     fn lift64(bytes: &[u8]) -> Vec<LlirInstr> {
@@ -1746,6 +1751,35 @@ mod tests {
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].op, Op::Nop);
         assert_eq!(ops[0].va, 0x1000);
+    }
+
+    #[test]
+    fn movq_imm32to64_store_decodes_immediate_correctly() {
+        // movq $0x0,-0x8(%rbp) — the immediate is a sign-extended imm32, which
+        // must be read via `immediate32to64()`. Using `immediate64()` returned
+        // garbage (`-8 << 32`), turning `long x = 0;` into a bogus constant.
+        let ops = lift64(&[0x48, 0xc7, 0x45, 0xf8, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(ops.len(), 1);
+        match &ops[0].op {
+            Op::Store {
+                src: Value::Const(c),
+                ..
+            } => assert_eq!(*c, 0, "movq $0 must store 0, got {c:#x}"),
+            other => panic!("expected Store of Const(0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn movq_imm32to64_negative_store_sign_extends() {
+        // movq $-1,-0x8(%rbp): 48 c7 45 f8 ff ff ff ff -> Const(-1).
+        let ops = lift64(&[0x48, 0xc7, 0x45, 0xf8, 0xff, 0xff, 0xff, 0xff]);
+        match &ops[0].op {
+            Op::Store {
+                src: Value::Const(c),
+                ..
+            } => assert_eq!(*c, -1, "movq $-1 must sign-extend to -1, got {c:#x}"),
+            other => panic!("expected Store of Const(-1), got {other:?}"),
+        }
     }
 
     #[test]
