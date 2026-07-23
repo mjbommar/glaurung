@@ -81,6 +81,14 @@ Recompile our C at the original's `-O0` and diff assembly to find the drivers:
   `p = base + t` at their single next-statement use before `ret` is reassigned.
   That is the correct (more careful) implementation; the global version was
   insufficient and churned render goldens, so it was reverted.
+  UPDATE: a local-single-use forward-substitution pass was prototyped and
+  produced a CORRECTNESS BUG on the reused-register (`ret`) chain — it dropped
+  the address computation, so `a[i]` decompiled as `a[0]` (caught only by
+  diffing recompiled assembly). Reverted. Lesson: ad-hoc AST value-folding over a
+  register reused across iterations is unsafe; the address-idiom / expr-prop work
+  must be done on the **SSA value model** (Stage 2 value-tagged lowering), where
+  each `ret` version is a distinct value, not by an AST rewrite that cannot tell
+  the versions apart. byte parity therefore depends on Stage 2, not a render hack.
 - Deeper: `cltq`/sign-extend and 64-bit ops from our `long`-typed intermediates;
   local→local redundant copies (`local_14 = local_10`) copy-prop doesn't fold
   (it only handles register copies, not promoted-local value numbering).
