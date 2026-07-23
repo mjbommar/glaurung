@@ -74,6 +74,13 @@ Recompile our C at the original's `-O0` and diff assembly to find the drivers:
   indexing) instead of the byte-offset form — which lets the compiler use its own
   scaled-addressing idiom and drops the `(long)` casts/`cltq`. This is the next
   concrete byte lever (medium effort: expr-prop pass + array-index render).
+  NOTE (attempted): a *global* single-use guard for expression propagation does
+  NOT fold this chain — the address flows through `ret`, which is reused every
+  loop iteration (multi-use globally). Folding needs **local** single-use
+  analysis (def to next redefinition within a run), i.e. inline `t = i*4` and
+  `p = base + t` at their single next-statement use before `ret` is reassigned.
+  That is the correct (more careful) implementation; the global version was
+  insufficient and churned render goldens, so it was reverted.
 - Deeper: `cltq`/sign-extend and 64-bit ops from our `long`-typed intermediates;
   local→local redundant copies (`local_14 = local_10`) copy-prop doesn't fold
   (it only handles register copies, not promoted-local value numbering).
