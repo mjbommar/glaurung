@@ -460,6 +460,7 @@ fn decompile_at_py(
     } else {
         None
     };
+    crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
     crate::ir::naming::apply_role_names(&mut f, cc);
     crate::ir::canary::collapse_canary_save(&mut f);
     if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
@@ -623,6 +624,7 @@ fn decompile_range_at_py(
     } else {
         None
     };
+    crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
     crate::ir::naming::apply_role_names(&mut f, cc);
     crate::ir::canary::collapse_canary_save(&mut f);
     if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
@@ -816,6 +818,7 @@ fn decompile_all_py(
         crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
         crate::ir::canary::recognise_canary(&mut f);
         let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
+        crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
         crate::ir::naming::apply_role_names(&mut f, cc);
         crate::ir::canary::collapse_canary_save(&mut f);
         if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
@@ -930,6 +933,7 @@ fn decompile_many_py(
         } else {
             None
         };
+        crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
         crate::ir::naming::apply_role_names(&mut f, cc);
         crate::ir::canary::collapse_canary_save(&mut f);
         if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {

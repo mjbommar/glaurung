@@ -63,4 +63,7 @@ type_match guard. Validation: `cargo test` + `/tmp/claude-1000/local_eval.py`.
 - IR opt passes (#3): copy-prop + dead-store `ir/copy_prop.rs` — DONE.
 - Render width/casts (bridges to #1/#5): load-width casts + pointer-arg
   int/pointer reconcile — DONE (byte 0.130→0.17).
-- #1 Stage 0: _in progress_.
+- #1 Stage 0: DONE (bb96f61). Stage 1 (value_split.rs): DONE — splits post-spill
+  arg-register scratch reuse into varN. Metric-neutral now (the DEC_PTR_ARGS cast
+  already made it compile); value is architectural (foundation for stages 2-5,
+  which remove the cast + match codegen for the real byte_match gains).
