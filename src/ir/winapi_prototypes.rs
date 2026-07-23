@@ -72,9 +72,41 @@ pub fn lookup(name: &str) -> Option<&'static WinApiPrototype> {
         .or_else(|| api_stem(&clean).and_then(|stem| prototypes().get(&stem)))
 }
 
+/// Map a C / stdint type spelling to the conventional Win32 typedef so call
+/// hints read the way Windows headers (and IDA/Ghidra output) do — `DWORD`
+/// rather than `uint32_t`, `LPVOID` rather than `uint8_t *`. The proto bundle is
+/// generated from Microsoft Win32 metadata, which normalises everything to
+/// stdint/base types; this restores the familiar names. Types that are already
+/// Windows typedefs (`HANDLE`, `HWND`, `BOOL`, `PWSTR`, `GUID *`, `HRESULT`, …)
+/// pass through unchanged, as do anything not in the table.
+pub fn to_windows_type(c_type: &str) -> &str {
+    match c_type.trim() {
+        // Fixed-width scalars.
+        "uint8_t" => "BYTE",
+        "uint16_t" => "WORD",
+        "uint32_t" => "DWORD",
+        "uint64_t" => "DWORD64",
+        "int8_t" => "CHAR",
+        "int16_t" => "SHORT",
+        "int32_t" => "LONG",
+        "int64_t" => "LONGLONG",
+        "uintptr_t" => "SIZE_T",
+        "intptr_t" => "SSIZE_T",
+        // Pointers. Win32 buffer/void pointers conventionally read as LP*.
+        "void *" => "LPVOID",
+        "void * *" => "LPVOID *",
+        "uint8_t *" => "LPVOID",
+        "uint16_t *" => "LPWORD",
+        "uint32_t *" => "LPDWORD",
+        "uint64_t *" => "PDWORD64",
+        "int32_t *" => "LPLONG",
+        other => other,
+    }
+}
+
 pub fn render_signature(proto: &WinApiPrototype) -> String {
     let mut out = String::new();
-    out.push_str(&proto.return_type);
+    out.push_str(to_windows_type(&proto.return_type));
     out.push(' ');
     out.push_str(&proto.name);
     out.push('(');
@@ -85,7 +117,7 @@ pub fn render_signature(proto: &WinApiPrototype) -> String {
             if idx > 0 {
                 out.push_str(", ");
             }
-            out.push_str(&param.c_type);
+            out.push_str(to_windows_type(&param.c_type));
             out.push(' ');
             out.push_str(&param.name);
         }

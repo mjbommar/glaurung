@@ -31,6 +31,7 @@ pub mod dce;
 pub mod dead_stores;
 pub mod expr_reconstruct;
 pub mod label_prune;
+pub mod lift_arm32;
 pub mod lift_arm64;
 pub mod lift_function;
 pub mod lift_x86;

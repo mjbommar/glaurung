@@ -357,8 +357,56 @@ fn in_exec_regions(regions: &[ExecRegion], va: u64) -> Option<&ExecRegion> {
     regions.iter().find(|r| va >= r.start && va < r.end)
 }
 
+/// True when `m` is an ARM condition-suffixed branch (`bne`, `beq`, `bhi`, …):
+/// a `b` followed by exactly one of the 16 ARM condition codes. Excludes
+/// non-branch `b*` mnemonics such as `bl`, `bx`, `bic`, `bkpt`, `bfi`.
+fn is_arm_cond_branch(m: &str) -> bool {
+    let Some(cc) = m.strip_prefix('b') else {
+        return false;
+    };
+    matches!(
+        cc,
+        "eq" | "ne"
+            | "cs"
+            | "hs"
+            | "cc"
+            | "lo"
+            | "mi"
+            | "pl"
+            | "vs"
+            | "vc"
+            | "hi"
+            | "ls"
+            | "ge"
+            | "lt"
+            | "gt"
+            | "le"
+    )
+}
+
+/// True when `ins` is an ARM `pop`/`ldm*` that writes `pc` — i.e. a function
+/// return. Resolved on operands because the mnemonic alone (`pop`) does not say
+/// whether the register list includes `pc`.
+fn arm_pop_writes_pc(ins: &Instruction) -> bool {
+    let m = ins.mnemonic.to_ascii_lowercase();
+    if m == "pop" || m.starts_with("ldm") {
+        return ins
+            .operands
+            .iter()
+            .any(|o| o.register.as_deref() == Some("pc"));
+    }
+    false
+}
+
 fn classify_ctrl_flow(mnemonic: &str, arch: BArch) -> (bool, bool, bool) {
-    let m = mnemonic.to_ascii_lowercase();
+    let lower = mnemonic.to_ascii_lowercase();
+    // Strip the Thumb-2 `.w`/`.n` width qualifier so `bne.w`, `bl.w`, `b.w`
+    // classify the same as their base mnemonics.
+    let m = lower
+        .strip_suffix(".w")
+        .or_else(|| lower.strip_suffix(".n"))
+        .unwrap_or(&lower)
+        .to_string();
     // returns (is_branch, is_call, is_ret)
     match arch {
         BArch::X86 | BArch::X86_64 => {
@@ -373,7 +421,23 @@ fn classify_ctrl_flow(mnemonic: &str, arch: BArch) -> (bool, bool, bool) {
             }
             (false, false, false)
         }
-        BArch::ARM | BArch::AArch64 => {
+        BArch::ARM => {
+            // ARM32/Thumb-2. Returns are `bx lr` / `pop {…,pc}` (the pc-list
+            // case is resolved operand-aware in the caller); `bx`/`bxns` end a
+            // block either way. Calls are `bl`/`blx`. Branches are `b`, the
+            // condition-suffixed `b<cond>` (bne/beq/…), and Thumb `cbz`/`cbnz`.
+            if m == "bx" || m == "bxns" || m == "ret" {
+                return (false, false, true);
+            }
+            if m == "bl" || m == "blx" {
+                return (false, true, false);
+            }
+            if m == "b" || m == "b.w" || m == "cbz" || m == "cbnz" || is_arm_cond_branch(&m) {
+                return (true, false, false);
+            }
+            (false, false, false)
+        }
+        BArch::AArch64 => {
             // Returns, including ARMv8.3 pointer-authenticated returns
             // (RETAA/RETAB) that a PAC-hardened Pixel binary emits instead of
             // a plain RET at every function epilogue.
@@ -459,7 +523,8 @@ fn is_unconditional_branch_mnemonic(mnemonic: &str, arch: BArch) -> bool {
     match arch {
         BArch::ARM | BArch::AArch64 => matches!(
             m.as_str(),
-            "b" | "br" | "braa" | "braaz" | "brab" | "brabz"
+            // `b.w` is the Thumb-2 wide unconditional branch.
+            "b" | "b.w" | "br" | "braa" | "braaz" | "brab" | "brabz"
         ),
         BArch::X86 | BArch::X86_64 => m == "jmp",
         // Preserve the historical (arch-agnostic) semantics for the remaining
@@ -538,7 +603,15 @@ fn discover_function(
     budgets: &Budgets,
 ) -> Option<(Function, Vec<FunctionXref>, SingleFunctionDiscoveryStats)> {
     let darch: crate::core::disassembler::Architecture = arch.into();
-    let backend = registry::for_arch(darch, end)?;
+    let mut backend = registry::for_arch(darch, end)?;
+    // ARM32 is decoded as Thumb-2 (Cortex-M is Thumb-only; modern
+    // arm-linux-gnueabihf defaults to Thumb). Matches the lifter default in
+    // `ir::lift_function`. A32-only binaries are a documented follow-up.
+    if matches!(arch, BArch::ARM) {
+        // Best-effort: on the off chance the backend rejects the mode switch we
+        // fall back to A32 decoding rather than aborting discovery.
+        let _ = backend.set_thumb_mode(true);
+    }
     let bits = darch.address_bits();
     let t0 = std::time::Instant::now();
     let mut stats = SingleFunctionDiscoveryStats::default();
@@ -603,7 +676,12 @@ fn discover_function(
                 blocks.insert(start_va, (end_va, instrs));
                 break 'block;
             }
-            let (is_branch, is_call, is_ret) = classify_ctrl_flow(&ins.mnemonic, arch);
+            let (is_branch, is_call, mut is_ret) = classify_ctrl_flow(&ins.mnemonic, arch);
+            // ARM `pop {…, pc}` / `ldm …, pc` is a return; the mnemonic alone
+            // can't say so, so resolve it on the operands here.
+            if matches!(arch, BArch::ARM) && arm_pop_writes_pc(&ins) {
+                is_ret = true;
+            }
             if is_call {
                 // Fallthrough continues; preserve the exact instruction VA
                 // so downstream xref tables can report callsites, not just
@@ -2259,17 +2337,29 @@ fn parse_pe_export_function_starts(data: &[u8], regions: &[ExecRegion], arch: BA
     starts
 }
 
+/// Normalise a symbol/target VA to its code address. On ARM, function symbols
+/// and branch targets for Thumb code carry the T-bit (LSB=1); the actual
+/// instruction stream is at the even address, so clear it. No-op elsewhere.
+fn code_addr(va: u64, arch: BArch) -> u64 {
+    if matches!(arch, BArch::ARM) {
+        va & !1
+    } else {
+        va
+    }
+}
+
 fn parse_function_seeds(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<Address> {
     let bits = if arch.is_64_bit() { 64 } else { 32 };
     let mut seeds: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
     if let Ok(obj) = object::read::File::parse(data) {
-        // Symbols defined in executable regions
+        // Symbols defined in executable regions. We do NOT special-case
+        // addr==0: `in_exec_regions` already excludes address 0 in linked
+        // binaries (where it is never executable), while keeping a genuine
+        // function at offset 0 in a relocatable object — e.g. the first Thumb
+        // function, whose symbol value is the T-bit `1` masked to `0`.
         for sym in obj.symbols() {
             if sym.is_definition() {
-                let addr = sym.address();
-                if addr == 0 {
-                    continue;
-                }
+                let addr = code_addr(sym.address(), arch);
                 if in_exec_regions(regions, addr).is_some() {
                     seeds.insert(addr);
                 }
@@ -2278,10 +2368,7 @@ fn parse_function_seeds(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec
         // Also consider dynamic symbols (ELF .plt entries often appear here)
         for sym in obj.dynamic_symbols() {
             if sym.is_definition() {
-                let addr = sym.address();
-                if addr == 0 {
-                    continue;
-                }
+                let addr = code_addr(sym.address(), arch);
                 if in_exec_regions(regions, addr).is_some() {
                     seeds.insert(addr);
                 }
@@ -3006,7 +3093,7 @@ pub fn analyze_functions_bytes_with_stats(
             std::collections::HashMap::new();
         for sym in obj.symbols() {
             if sym.is_definition() {
-                let addr = sym.address();
+                let addr = code_addr(sym.address(), arch);
                 if addr != 0 && in_exec_regions(&regions, addr).is_some() {
                     if let Ok(name) = sym.name() {
                         if !name.is_empty() {
@@ -3018,7 +3105,7 @@ pub fn analyze_functions_bytes_with_stats(
         }
         for sym in obj.dynamic_symbols() {
             if sym.is_definition() {
-                let addr = sym.address();
+                let addr = code_addr(sym.address(), arch);
                 if addr != 0 && in_exec_regions(&regions, addr).is_some() {
                     if let Ok(name) = sym.name() {
                         if !name.is_empty() {

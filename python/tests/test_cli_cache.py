@@ -133,11 +133,17 @@ def fake_binary(tmp_path: Path) -> Path:
 def _decompile_args(path: Path, cache_dir: Path | None, style: str = "plain"):
     return SimpleNamespace(
         path=str(path),
+        analysis_config=None,
         func=0x1840,
         all=False,
+        vas=None,
         limit=8,
         types=True,
         timeout_ms=500,
+        max_blocks=None,
+        max_instructions=None,
+        range_start=None,
+        range_end=None,
         style=style,
         pdb_cache="",
         cache_dir=str(cache_dir) if cache_dir is not None else None,

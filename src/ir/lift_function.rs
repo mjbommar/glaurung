@@ -12,7 +12,7 @@ use crate::analysis::entry::va_to_file_offset;
 use crate::core::binary::Arch;
 use crate::core::function::Function;
 use crate::ir::types::*;
-use crate::ir::{lift_arm64, lift_x86};
+use crate::ir::{lift_arm32, lift_arm64, lift_x86};
 
 /// Lift a byte window into LLIR using the appropriate per-arch lifter.
 fn lift_window(bytes: &[u8], start_va: u64, arch: Arch) -> Vec<LlirInstr> {
@@ -20,13 +20,17 @@ fn lift_window(bytes: &[u8], start_va: u64, arch: Arch) -> Vec<LlirInstr> {
         Arch::X86 => lift_x86::lift_bytes(bytes, start_va, 32),
         Arch::X86_64 => lift_x86::lift_bytes(bytes, start_va, 64),
         Arch::AArch64 => lift_arm64::lift_bytes(bytes, start_va),
+        // ARM32 decodes as Thumb-2: Cortex-M is Thumb-only and modern
+        // arm-linux-gnueabihf defaults to Thumb, so Thumb is the pipeline
+        // default. (A32-only binaries are a documented follow-up.)
+        Arch::ARM => lift_arm32::lift_bytes(bytes, start_va, true),
         _ => Vec::new(),
     }
 }
 
 /// Returns true when an LLIR lifter exists for the given architecture.
 pub fn supports_arch(arch: Arch) -> bool {
-    matches!(arch, Arch::X86 | Arch::X86_64 | Arch::AArch64)
+    matches!(arch, Arch::X86 | Arch::X86_64 | Arch::AArch64 | Arch::ARM)
 }
 
 /// Lift every basic block of `func` from `data` into LLIR blocks.
@@ -251,7 +255,6 @@ mod tests {
         use crate::core::function::{Function, FunctionKind};
         let entry = Address::new(AddressKind::VA, 0, 64, None, None).unwrap();
         let f = Function::new("f".into(), entry, FunctionKind::Normal).unwrap();
-        assert!(lift_function_from_bytes(&[0u8; 0], &f, Arch::ARM).is_none());
         assert!(lift_function_from_bytes(&[0u8; 0], &f, Arch::MIPS64).is_none());
         assert!(lift_function_from_bytes(&[0u8; 0], &f, Arch::RISCV64).is_none());
     }
@@ -261,7 +264,7 @@ mod tests {
         assert!(supports_arch(Arch::X86));
         assert!(supports_arch(Arch::X86_64));
         assert!(supports_arch(Arch::AArch64));
-        assert!(!supports_arch(Arch::ARM));
+        assert!(supports_arch(Arch::ARM));
         assert!(!supports_arch(Arch::MIPS));
     }
 

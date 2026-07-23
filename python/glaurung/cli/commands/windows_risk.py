@@ -1684,6 +1684,37 @@ def _extract_api_calls(
     return calls
 
 
+# Map the winapi-proto stdint/base type spellings to the conventional Win32
+# typedefs so the risk report reads the way Windows headers (and IDA/Ghidra)
+# do — `DWORD` rather than `uint32_t`. Kept in sync with the Rust
+# `ir::winapi_prototypes::to_windows_type` used by the decompiler call hints.
+_WINDOWS_TYPEDEFS = {
+    "uint8_t": "BYTE",
+    "uint16_t": "WORD",
+    "uint32_t": "DWORD",
+    "uint64_t": "DWORD64",
+    "int8_t": "CHAR",
+    "int16_t": "SHORT",
+    "int32_t": "LONG",
+    "int64_t": "LONGLONG",
+    "uintptr_t": "SIZE_T",
+    "intptr_t": "SSIZE_T",
+    "void *": "LPVOID",
+    "void * *": "LPVOID *",
+    "uint8_t *": "LPVOID",
+    "uint16_t *": "LPWORD",
+    "uint32_t *": "LPDWORD",
+    "uint64_t *": "PDWORD64",
+    "int32_t *": "LPLONG",
+}
+
+
+def _to_windows_type(c_type: str) -> str:
+    """Windows-typedef display spelling for a proto C type (pass-through if not
+    in the table)."""
+    return _WINDOWS_TYPEDEFS.get(c_type.strip(), c_type)
+
+
 def _api_call_row(name: str, arg_exprs: list[str]) -> dict[str, Any]:
     proto = _prototype_for_api(name)
     params = list(proto.get("params") or []) if proto else []
@@ -1697,7 +1728,7 @@ def _api_call_row(name: str, arg_exprs: list[str]) -> dict[str, Any]:
             if param_name:
                 arg["param"] = param_name
             if c_type:
-                arg["type"] = c_type
+                arg["type"] = _to_windows_type(c_type)
             role = _param_role(param_name, c_type)
             if role:
                 arg["role"] = role

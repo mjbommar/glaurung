@@ -16,6 +16,9 @@ SAMPLE = Path(
 ARM64_SAMPLE = Path(
     "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc"
 )
+ARM32_SAMPLE = Path(
+    "samples/binaries/platforms/linux/amd64/cross/armhf/hello-armhf-gcc"
+)
 X86_O0_SAMPLE = Path(
     "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0"
 )
@@ -39,8 +42,11 @@ def test_decompile_entry_prints_pseudocode():
     result = _run([str(SAMPLE)])
     assert result.returncode == 0, result.stderr
     assert "function _start @ 0x1840 {" in result.stdout
-    # Call target name-resolution and arg reconstruction should be visible.
-    assert "call __libc_start_main(main);" in result.stdout
+    # Call target name-resolution and arg reconstruction should be visible: the
+    # entry stub passes `main` as the first argument to __libc_start_main. (Arg
+    # reconstruction also recovers the trailing boot args, so match the prefix
+    # rather than pinning an exact arity.)
+    assert "call __libc_start_main(main" in result.stdout
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
@@ -120,6 +126,23 @@ def test_decompile_arm64_main_shows_prologue_and_epilogue():
     )
 
 
+@pytest.mark.skipif(not ARM32_SAMPLE.exists(), reason="armhf sample missing")
+def test_decompile_arm32_thumb_recovers_main():
+    # ARM32/Thumb-2 (Cortex-M profile): the function symbol carries the Thumb
+    # T-bit, which discovery must clear so `main` decodes at its even VA rather
+    # than one byte off. The lifter then yields structured pseudocode, not
+    # garbage.
+    funcs, _ = g.analysis.analyze_functions_path(str(ARM32_SAMPLE), max_functions=500)
+    main = next((f for f in funcs if f.name == "main"), None)
+    assert main is not None, "main not discovered in Thumb binary"
+    va = int(main.entry_point.value)
+    assert va % 2 == 0, f"main VA {va:#x} still carries the Thumb T-bit"
+    text = g.ir.decompile_at(str(ARM32_SAMPLE), va, style="c", timeout_ms=8000)
+    assert text.startswith("fn main {"), text[:200]
+    # A real call should have been reconstructed (this hello calls into libc).
+    assert "sub_" in text or "(" in text
+
+
 @pytest.mark.skipif(not X86_O0_SAMPLE.exists(), reason="clang-O0 sample missing")
 def test_decompile_style_c_strips_percent_prefix():
     # `--style c` drops the `%` prefix from register names and the
@@ -164,8 +187,8 @@ def test_decompile_pe32_plus_resolves_iat_names():
 
 
 @pytest.mark.skipif(not PE32_PLUS_SAMPLE.exists(), reason="PE32+ sample missing")
-def test_pe_import_thunk_map_exposes_api_aliases():
-    got = g.analysis.pe_import_thunk_map_path(str(PE32_PLUS_SAMPLE))
+def test_pe_iat_map_exposes_api_aliases():
+    got = g.analysis.pe_iat_map_path(str(PE32_PLUS_SAMPLE))
     names = {name for _, name in got}
     assert {"malloc", "LeaveCriticalSection"} & names
     assert any(va for va, _ in got)

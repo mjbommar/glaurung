@@ -41,6 +41,7 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
 
     // PE-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(pe_iat_map_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(pe_tls_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_import_call_sites_path_py, &analysis_mod)?)?;
     // Windows driver IOCTL attack-surface mapper (dispatchers, codes, jump tables, handlers).
     analysis_mod.add_function(wrap_pyfunction!(ioctl_surface_map_bytes_py, &analysis_mod)?)?;
@@ -591,6 +592,46 @@ fn pe_iat_map_path_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     Ok(crate::analysis::pe_iat::pe_iat_map(&data))
+}
+
+/// Parse a PE's TLS directory and walk its callback array.
+///
+/// Returns a dict describing the `IMAGE_TLS_DIRECTORY` and its (pre-DllMain /
+/// pre-DriverEntry) callback function-pointer list — an early-execution surface
+/// relevant to several Windows-kernel CVE classes. On a non-PE input, a
+/// truncated header, or a PE with no TLS directory, the callback list is empty
+/// and any soft errors are recorded in `stop_reasons` rather than raised.
+#[pyfunction]
+#[pyo3(name = "pe_tls_path")]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
+fn pe_tls_path_py(
+    py: Python<'_>,
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Py<PyAny>> {
+    use pyo3::types::PyDict;
+
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    let parser =
+        crate::formats::pe::PeParser::with_options(&data, crate::formats::pe::ParseOptions::default())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{}", e)))?;
+    let tls = parser
+        .tls()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+
+    let d = PyDict::new(py);
+    d.set_item("has_tls", tls.has_tls_header())?;
+    d.set_item("has_callbacks", tls.has_callbacks())?;
+    d.set_item("callback_count", tls.callback_count())?;
+    d.set_item("address_of_callbacks", tls.address_of_callbacks)?;
+    d.set_item("callbacks", tls.callbacks.clone())?;
+    d.set_item("callback_rvas", tls.callback_rvas.clone())?;
+    d.set_item("truncated", tls.truncated)?;
+    d.set_item("stop_reasons", tls.stop_reasons.clone())?;
+    Ok(d.into())
 }
 
 /// List PE import call/jmp sites (xrefs to imported symbols) for a file.

@@ -356,6 +356,7 @@ fn detect_arch_and_call_conv(
             object::Architecture::I386 => BArch::X86,
             object::Architecture::X86_64 => BArch::X86_64,
             object::Architecture::Aarch64 => BArch::AArch64,
+            object::Architecture::Arm => BArch::ARM,
             _ => BArch::X86_64,
         }
     } else {
@@ -364,6 +365,7 @@ fn detect_arch_and_call_conv(
 
     let cc = match (arch, is_pe) {
         (BArch::AArch64, _) => crate::ir::call_args::CallConv::Aarch64,
+        (BArch::ARM, _) => crate::ir::call_args::CallConv::Arm,
         (BArch::X86_64, true) => crate::ir::call_args::CallConv::Win64,
         _ => crate::ir::call_args::CallConv::SysVAmd64,
     };
@@ -485,9 +487,12 @@ fn decompile_at_py(
     // outer-name resolution above; we only emit when a PDB cache was
     // configured AND the cache map actually answered for this VA.
     let pdb_outer_name = pdb_cache
-        .and_then(|_| addr_map.get(&func_va))
-        .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
-        .cloned();
+        .and_then(|cache_dir| {
+            crate::ir::name_resolve::collect_pdb_public_symbol_map(&path, cache_dir)
+                .get(&func_va)
+                .cloned()
+        })
+        .filter(|name| !name.is_empty() && !name.starts_with("sub_"));
     Ok(if style == "c" {
         let body = crate::ir::ast::render_c(&f);
         match pdb_outer_name {
@@ -554,7 +559,7 @@ fn decompile_range_at_py(
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let bits = match arch {
-        crate::core::binary::Arch::X86 => 32,
+        crate::core::binary::Arch::X86 | crate::core::binary::Arch::ARM => 32,
         crate::core::binary::Arch::X86_64 | crate::core::binary::Arch::AArch64 => 64,
         _ => 64,
     };
@@ -675,6 +680,7 @@ fn remap_type_map(
             &["x6", "w6"],
             &["x7", "w7"],
         ],
+        crate::ir::call_args::CallConv::Arm => &[&["r0"], &["r1"], &["r2"], &["r3"]],
     };
     for (slot, names) in arg_slots.iter().enumerate() {
         for n in *names {
@@ -688,6 +694,7 @@ fn remap_type_map(
             &["rax", "eax", "ax", "al"]
         }
         crate::ir::call_args::CallConv::Aarch64 => &["x0", "w0"],
+        crate::ir::call_args::CallConv::Arm => &["r0"],
     };
     for n in ret_aliases {
         alias
@@ -841,6 +848,11 @@ fn decompile_many_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
+    // PDB-only public-symbol map for the `// PDB:` provenance comment; built
+    // once, empty for non-PE inputs (so it never fires on ELF/Mach-O).
+    let pdb_public_map = pdb_cache
+        .map(|cache_dir| crate::ir::name_resolve::collect_pdb_public_symbol_map(&path, cache_dir))
+        .unwrap_or_default();
 
     let wanted: HashSet<u64> = func_vas.iter().copied().collect();
     let list = PyList::empty(py);
@@ -887,8 +899,8 @@ fn decompile_many_py(
         if let Some(field_map) = &field_map {
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
-        let pdb_outer_name = pdb_cache
-            .and_then(|_| addr_map.get(&func_va))
+        let pdb_outer_name = pdb_public_map
+            .get(&func_va)
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
         let text = if style == "c" {

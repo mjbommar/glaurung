@@ -11,18 +11,92 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+from pathlib import Path
 from typing import Optional
 
 import glaurung as g
 from glaurung.windows_config import load_windows_analysis_config
 
 from .base import BaseCommand
+from .. import cache as _cache
 from ..formatters.base import BaseFormatter, OutputFormat
 from ..func_ref import (
     FuncResolutionError,
     parse_func_arg,
     resolve_func_to_va,
 )
+
+log = logging.getLogger(__name__)
+
+
+def _decompile_at_cached(
+    *,
+    path: str,
+    func_va: int,
+    style: str,
+    types: bool,
+    timeout_ms: int,
+    max_blocks: int,
+    max_instructions: int,
+    pdb_cache: str,
+    cache_dir_arg: Optional[str],
+) -> str:
+    """Run ``g.ir.decompile_at`` with optional persistent caching.
+
+    Entries are keyed by (glaurung version, sha256(binary), VA, decompile
+    flags). Best-effort: any cache I/O failure logs a WARNING and falls through
+    to the live decompile, so behaviour matches a direct call when caching is
+    disabled or unavailable.
+    """
+    cache_dir = _cache.resolve_cache_dir(cache_dir_arg)
+    paths = None
+    if cache_dir is not None:
+        try:
+            flags = _cache.canonical_flag_dict(
+                [
+                    ("style", style or "plain"),
+                    ("types", bool(types)),
+                    ("timeout_ms", int(timeout_ms)),
+                    ("max_blocks", int(max_blocks)),
+                    ("max_instructions", int(max_instructions)),
+                    ("pdb_cache_present", bool(pdb_cache)),
+                    ("schema", 2),
+                ]
+            )
+            paths = _cache.build_paths(
+                cache_dir,
+                namespace="decomp",
+                binary_sha256=_cache.sha256_file(Path(path)),
+                va=func_va,
+                flags=flags,
+                suffix=f".{style or 'plain'}.c",
+            )
+            hit = _cache.read_text(paths)
+            if hit is not None:
+                log.debug("decomp cache HIT %s", paths.file)
+                return hit
+            log.debug("decomp cache MISS %s", paths.file)
+        except OSError as exc:
+            log.warning(
+                "decomp cache: setup failed (%s); falling back to live decompile",
+                exc,
+            )
+            paths = None
+
+    text = g.ir.decompile_at(
+        path,
+        int(func_va),
+        max_blocks=max_blocks,
+        max_instructions=max_instructions,
+        timeout_ms=timeout_ms,
+        types=types,
+        style=style,
+        pdb_cache=pdb_cache,
+    )
+    if paths is not None:
+        _cache.write_text(paths, text)
+    return text
 
 
 class DecompileCommand(BaseCommand):
@@ -117,6 +191,15 @@ class DecompileCommand(BaseCommand):
             help="Optional Microsoft-style PDB cache directory used to resolve "
                  "PE/PDB public function names in decompile output.",
         )
+        parser.add_argument(
+            "--cache-dir",
+            default=None,
+            help="Optional persistent cache directory for single-function "
+                 "decompile output. Entries are keyed by (glaurung version, "
+                 "sha256(binary), VA, decompile flags). Falls back to "
+                 "$GLAURUNG_CACHE_DIR when unset. Append-only — clear the "
+                 "directory manually if disk fills up.",
+        )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         try:
@@ -205,15 +288,16 @@ class DecompileCommand(BaseCommand):
                         pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
                     )
                 else:
-                    text = g.ir.decompile_at(
-                        str(path),
-                        int(func_va),
+                    text = _decompile_at_cached(
+                        path=str(path),
+                        func_va=int(func_va),
+                        style=style,
+                        types=args.types,
+                        timeout_ms=timeout_ms,
                         max_blocks=max_blocks,
                         max_instructions=max_instructions,
-                        timeout_ms=timeout_ms,
-                        types=args.types,
-                        style=style,
                         pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
+                        cache_dir_arg=args.cache_dir,
                     )
             except ValueError as e:
                 formatter.output_plain(f"Error: {e}")

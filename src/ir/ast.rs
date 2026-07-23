@@ -783,6 +783,7 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
 const RETURN_REGS: &[&str] = &[
     "rax", "eax", "ax", "al", // x86 / x86-64
     "x0", "w0", // AArch64
+    "r0", // ARM32 AAPCS
 ];
 
 fn is_return_reg(v: &VReg) -> bool {
@@ -975,7 +976,7 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
                 };
                 let _ = write!(out, "0x{:x} /*u{}mask*/", c, bits);
             } else if *c < 0 {
-                let _ = write!(out, "-0x{:x}", -c);
+                let _ = write!(out, "-0x{:x}", c.unsigned_abs());
             } else {
                 let _ = write!(out, "0x{:x}", c);
             }
@@ -1044,7 +1045,7 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
             }
             if *disp != 0 || first {
                 if *disp < 0 {
-                    let _ = write!(out, "-0x{:x}", -disp);
+                    let _ = write!(out, "-0x{:x}", disp.unsigned_abs());
                 } else {
                     if !first {
                         out.push('+');
@@ -1064,8 +1065,12 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
         Expr::Bin { op, lhs, rhs } => {
             // Canonicalise sign: `x + -N` prints as `x - N`; `x - -N` as `x + N`.
             let (shown_op, shown_rhs) = match (*op, rhs.as_ref()) {
-                (BinOp::Add, Expr::Const(c)) if *c < 0 => (BinOp::Sub, Expr::Const(-c)),
-                (BinOp::Sub, Expr::Const(c)) if *c < 0 => (BinOp::Add, Expr::Const(-c)),
+                (BinOp::Add, Expr::Const(c)) if *c < 0 && *c != i64::MIN => {
+                    (BinOp::Sub, Expr::Const(-c))
+                }
+                (BinOp::Sub, Expr::Const(c)) if *c < 0 && *c != i64::MIN => {
+                    (BinOp::Add, Expr::Const(-c))
+                }
                 _ => (*op, *rhs.clone()),
             };
             out.push('(');
@@ -1433,7 +1438,7 @@ fn write_expr_c(e: &Expr, out: &mut String) {
             } else if *c >= -4096 && *c <= 4096 {
                 let _ = write!(out, "{}", c);
             } else if *c < 0 {
-                let _ = write!(out, "-0x{:x}", -c);
+                let _ = write!(out, "-0x{:x}", c.unsigned_abs());
             } else {
                 let _ = write!(out, "0x{:x}", c);
             }
@@ -1499,7 +1504,7 @@ fn write_expr_c(e: &Expr, out: &mut String) {
             }
             if *disp != 0 || first {
                 if *disp < 0 {
-                    let _ = write!(out, "-0x{:x}", -disp);
+                    let _ = write!(out, "-0x{:x}", disp.unsigned_abs());
                 } else {
                     if !first {
                         out.push('+');
@@ -1518,8 +1523,12 @@ fn write_expr_c(e: &Expr, out: &mut String) {
         }
         Expr::Bin { op, lhs, rhs } => {
             let (shown_op, shown_rhs) = match (*op, rhs.as_ref()) {
-                (BinOp::Add, Expr::Const(c)) if *c < 0 => (BinOp::Sub, Expr::Const(-c)),
-                (BinOp::Sub, Expr::Const(c)) if *c < 0 => (BinOp::Add, Expr::Const(-c)),
+                (BinOp::Add, Expr::Const(c)) if *c < 0 && *c != i64::MIN => {
+                    (BinOp::Sub, Expr::Const(-c))
+                }
+                (BinOp::Sub, Expr::Const(c)) if *c < 0 && *c != i64::MIN => {
+                    (BinOp::Add, Expr::Const(-c))
+                }
                 _ => (*op, *rhs.clone()),
             };
             out.push('(');
@@ -1773,6 +1782,37 @@ mod tests {
         assert!(c_style.contains(
             "// proto: BOOL ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesToRead"
         ));
+    }
+
+    #[test]
+    fn i64_min_constants_do_not_overflow_the_renderers() {
+        // Regression: rendering `-0x...` for a negative constant/displacement
+        // computed `-c`, which panics ("attempt to negate with overflow") when
+        // the value is exactly i64::MIN. Both renderers must format the
+        // magnitude instead of aborting.
+        let f = Function {
+            name: "m".to_string(),
+            entry_va: 0x80,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Expr::Const(i64::MIN),
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(VReg::phys("rbp")),
+                        index: None,
+                        scale: 1,
+                        disp: i64::MIN,
+                        segment: None,
+                    },
+                    src: Expr::Reg(VReg::phys("rax")),
+                },
+            ],
+        };
+        // Neither call may panic; the i64::MIN magnitude must appear.
+        assert!(render(&f).contains("0x8000000000000000"));
+        assert!(render_c(&f).contains("0x8000000000000000"));
     }
 
     #[test]

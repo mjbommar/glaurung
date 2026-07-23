@@ -89,6 +89,9 @@ from ..tools.list_suspicious_imports import (
 from ..tools.windows_surface_metadata import (
     build_tool as build_windows_surface_metadata,
 )
+from ..tools.windows_risk_report import (
+    build_tool as build_windows_risk_report,
+)
 from ..tools.windows_build_corpus import (
     build_tool as build_windows_build_corpus,
 )
@@ -1394,6 +1397,7 @@ def _register_analysis_tools_inner(
         tool_to_pyd_ai(build_windows_seed_binary_diff_triage())
     )
     agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_surface_metadata()))
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_windows_risk_report()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_enumerate_entrypoints())
     )

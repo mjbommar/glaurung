@@ -34,6 +34,7 @@ fn return_reg_aliases(cc: CallConv) -> &'static [&'static str] {
     match cc {
         CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
         CallConv::Aarch64 => &["x0", "w0"],
+        CallConv::Arm => &["r0"],
     }
 }
 
@@ -63,6 +64,7 @@ fn arg_slot_tables(cc: CallConv) -> &'static [&'static [&'static str]] {
             &["x6", "w6"],
             &["x7", "w7"],
         ],
+        CallConv::Arm => &[&["r0"], &["r1"], &["r2"], &["r3"]],
     }
 }
 

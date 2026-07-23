@@ -57,11 +57,18 @@ const AARCH64_ARG_SLOTS: &[&[&str]] = &[
     &["x7", "w7"],
 ];
 
+// ARM32 AAPCS: the first four word-sized arguments are passed in r0-r3;
+// further arguments spill to the stack. (64-bit values use register pairs,
+// which v1 does not split out.)
+const ARM32_AAPCS_ARG_SLOTS: &[&[&str]] = &[&["r0"], &["r1"], &["r2"], &["r3"]];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallConv {
     SysVAmd64,
     Win64,
     Aarch64,
+    /// ARM32 AAPCS (r0-r3 args, r0 return).
+    Arm,
 }
 
 fn arg_slots(arch: CallConv) -> &'static [&'static [&'static str]] {
@@ -69,6 +76,7 @@ fn arg_slots(arch: CallConv) -> &'static [&'static [&'static str]] {
         CallConv::SysVAmd64 => X86_64_SYSV_ARG_SLOTS,
         CallConv::Win64 => X86_64_WIN64_ARG_SLOTS,
         CallConv::Aarch64 => AARCH64_ARG_SLOTS,
+        CallConv::Arm => ARM32_AAPCS_ARG_SLOTS,
     }
 }
 
