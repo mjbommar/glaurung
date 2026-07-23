@@ -1941,7 +1941,9 @@ pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
     // Provenance as a C comment (valid, and the harness maps by address anyway).
     let _ = writeln!(out, "// glaurung: {} @ 0x{:x}", f.name, f.entry_va);
 
-    // Signature: recovered return + argument types.
+    // Signature: recovered return + argument types. Record which arguments are
+    // pointers so the body can cast their int↔pointer reuse (see DEC_PTR_ARGS).
+    DEC_PTR_ARGS.with(|m| m.borrow_mut().clear());
     out.push_str(ctype_for("ret", tm));
     out.push(' ');
     out.push_str(&name);
@@ -1953,7 +1955,12 @@ pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
             if i > 0 {
                 out.push_str(", ");
             }
-            let _ = write!(out, "{} arg{}", ctype_for(&format!("arg{}", i), tm), i);
+            let aname = format!("arg{}", i);
+            let aty = ctype_for(&aname, tm);
+            if aty.ends_with('*') {
+                DEC_PTR_ARGS.with(|m| m.borrow_mut().insert(aname.clone(), aty));
+            }
+            let _ = write!(out, "{} arg{}", aty, i);
         }
     }
     out.push_str(") {\n");
@@ -2174,7 +2181,40 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
     }
 }
 
+thread_local! {
+    /// Pointer-typed argument names (`arg0` → `"int *"`) for the function
+    /// currently being rendered by `render_decbench_typed`. A pointer argument
+    /// is genuinely a pointer in the signature (so type_match credits it), but
+    /// our IR uses explicit byte-offset arithmetic and reuses the ABI register
+    /// as a scratch integer, which is an int↔pointer conflict in C. We reconcile
+    /// it at render time with casts (see `write_reg_dec` / the Assign arm), so
+    /// the emitted C compiles (the gate for byte_match) without changing the
+    /// recovered signature. Scoped per render; renders are single-threaded.
+    static DEC_PTR_ARGS: std::cell::RefCell<std::collections::HashMap<String, &'static str>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn dec_ptr_arg_type(name: &str) -> Option<&'static str> {
+    DEC_PTR_ARGS.with(|m| m.borrow().get(name).copied())
+}
+
+/// Render a register in **rvalue** position. A pointer-typed argument is cast to
+/// `long` here: our byte-offset arithmetic treats it as an integer address, and
+/// leaving it a pointer would be an invalid operand for `&`/`*`/`-`/pointer±pointer.
 fn write_reg_dec(v: &VReg, out: &mut String) {
+    if let VReg::Phys(n) = v {
+        if dec_ptr_arg_type(n).is_some() {
+            out.push_str("(long)");
+            out.push_str(n);
+            return;
+        }
+    }
+    write_reg_lvalue_dec(v, out);
+}
+
+/// Render a register in **lvalue** position (assignment target) — never cast,
+/// since a cast is not a valid lvalue.
+fn write_reg_lvalue_dec(v: &VReg, out: &mut String) {
     match v {
         VReg::Phys(n) => {
             if let Some(idx) = parse_arg_index(n) {
@@ -2381,8 +2421,18 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
     match s {
         Stmt::Assign { dst, src } => {
             indent(out, level);
-            write_reg_dec(dst, out);
+            write_reg_lvalue_dec(dst, out);
             out.push_str(" = ");
+            // Reassigning a scratch integer into a pointer-typed arg register:
+            // cast the RHS to the pointer type so int→pointer is explicit.
+            if let VReg::Phys(n) = dst {
+                if let Some(pty) = dec_ptr_arg_type(n) {
+                    let _ = write!(out, "({})(", pty);
+                    write_expr_dec(src, out);
+                    out.push_str(");\n");
+                    return;
+                }
+            }
             write_expr_dec(src, out);
             out.push_str(";\n");
         }
