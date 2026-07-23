@@ -401,7 +401,7 @@ fn decompile_at_py(
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
-    use crate::ir::types_recover::recover_types;
+    use crate::ir::types_recover::recover_types_for;
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
@@ -451,11 +451,11 @@ fn decompile_at_py(
     // Stack-slot promotion runs before register renaming so the aliases
     // (`stack_0`, `local_0`, ...) it allocates don't collide with the role
     // names (`arg0`, `ret`, `varN`) that the naming pass introduces.
-    crate::ir::stack_locals::promote_stack_locals(&mut f);
+    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
     // Type recovery runs on the raw LLIR (before register renaming) so we
     // can cross-reference the renamed AST against the recovered types.
     let tm = if types {
-        Some(recover_types(&lf))
+        Some(recover_types_for(&lf, cc))
     } else {
         None
     };
@@ -493,7 +493,17 @@ fn decompile_at_py(
                 .cloned()
         })
         .filter(|name| !name.is_empty() && !name.starts_with("sub_"));
-    Ok(if style == "c" {
+    Ok(if style == "decbench" {
+        // DecBench wants concrete C types. Reuse the recovered TypeMap when it
+        // was computed, else recover on demand, then remap raw-reg keys to the
+        // AST's role names (`arg0`, `ret`, ...) before rendering.
+        let mut renamed = tm
+            .as_ref()
+            .map(|t| remap_type_map(t, &f, cc))
+            .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc));
+        merge_slot_sizes(&mut renamed, &slot_sizes);
+        crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
+    } else if style == "c" {
         let body = crate::ir::ast::render_c(&f);
         match pdb_outer_name {
             Some(name) => format!("// PDB: {}\n{}", name, body),
@@ -536,7 +546,7 @@ fn decompile_range_at_py(
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
-    use crate::ir::types_recover::recover_types;
+    use crate::ir::types_recover::recover_types_for;
 
     if range_end <= range_start {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -606,9 +616,9 @@ fn decompile_range_at_py(
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
     crate::ir::canary::recognise_canary(&mut f);
-    crate::ir::stack_locals::promote_stack_locals(&mut f);
+    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
     let tm = if types {
-        Some(recover_types(&lf))
+        Some(recover_types_for(&lf, cc))
     } else {
         None
     };
@@ -629,7 +639,14 @@ fn decompile_range_at_py(
     if let Some(field_map) = &field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
     }
-    Ok(if style == "c" {
+    Ok(if style == "decbench" {
+        let mut renamed = tm
+            .as_ref()
+            .map(|t| remap_type_map(t, &f, cc))
+            .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc));
+        merge_slot_sizes(&mut renamed, &slot_sizes);
+        crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
+    } else if style == "c" {
         crate::ir::ast::render_c(&f)
     } else {
         match tm {
@@ -640,6 +657,29 @@ fn decompile_range_at_py(
             None => render(&f),
         }
     })
+}
+
+/// Fold recovered stack-slot sizes into a (already-remapped) TypeMap as
+/// width-typed integers keyed by the promoted local name (`local_0`,
+/// `stack_1`, …). `upsert_public` keeps any more-specific classification
+/// (e.g. a pointer), so this only supplies a committed width where nothing
+/// else typed the slot.
+fn merge_slot_sizes(
+    tm: &mut crate::ir::types_recover::TypeMap,
+    sizes: &std::collections::HashMap<String, u8>,
+) {
+    for (name, &size) in sizes {
+        if size == 0 {
+            continue;
+        }
+        tm.upsert_public(
+            crate::ir::types::VReg::Phys(name.clone()),
+            crate::ir::types_recover::TypeHint::Int {
+                signed: true,
+                width: size,
+            },
+        );
+    }
 }
 
 /// Rebuild a TypeMap whose keys match the post-rename AST. We walk the
@@ -722,7 +762,7 @@ fn remap_type_map(
 /// explicitly opts back into a smaller window.
 #[pyfunction]
 #[pyo3(name = "decompile_all")]
-#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache=""))]
+#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache="", style=""))]
 fn decompile_all_py(
     py: Python<'_>,
     path: String,
@@ -731,6 +771,7 @@ fn decompile_all_py(
     max_instructions: usize,
     timeout_ms: u64,
     pdb_cache: &str,
+    style: &str,
 ) -> PyResult<PyObject> {
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render};
@@ -738,6 +779,7 @@ fn decompile_all_py(
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
+    use crate::ir::types_recover::recover_types_for;
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
@@ -773,7 +815,7 @@ fn decompile_all_py(
         crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
         crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
         crate::ir::canary::recognise_canary(&mut f);
-        crate::ir::stack_locals::promote_stack_locals(&mut f);
+        let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
         crate::ir::naming::apply_role_names(&mut f, cc);
         crate::ir::canary::collapse_canary_save(&mut f);
         if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
@@ -790,7 +832,13 @@ fn decompile_all_py(
         if let Some(field_map) = &field_map {
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
-        let text = render(&f);
+        let text = if style == "decbench" {
+            let mut renamed = remap_type_map(&recover_types_for(&lf, cc), &f, cc);
+            merge_slot_sizes(&mut renamed, &slot_sizes);
+            crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
+        } else {
+            render(&f)
+        };
         list.append((outer_name, func.entry_point.value, text))?;
     }
     Ok(list.into())
@@ -827,7 +875,7 @@ fn decompile_many_py(
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
-    use crate::ir::types_recover::recover_types;
+    use crate::ir::types_recover::recover_types_for;
     use std::collections::HashSet;
 
     let data = std::fs::read(&path)
@@ -876,9 +924,9 @@ fn decompile_many_py(
         crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
         crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
         crate::ir::canary::recognise_canary(&mut f);
-        crate::ir::stack_locals::promote_stack_locals(&mut f);
+        let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
         let tm = if types {
-            Some(recover_types(&lf))
+            Some(recover_types_for(&lf, cc))
         } else {
             None
         };
@@ -903,7 +951,14 @@ fn decompile_many_py(
             .get(&func_va)
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
-        let text = if style == "c" {
+        let text = if style == "decbench" {
+            let mut renamed = tm
+                .as_ref()
+                .map(|t| remap_type_map(t, &f, cc))
+                .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc));
+            merge_slot_sizes(&mut renamed, &slot_sizes);
+            crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
+        } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);
             match pdb_outer_name {
                 Some(name) => format!("// PDB: {}\n{}", name, body),

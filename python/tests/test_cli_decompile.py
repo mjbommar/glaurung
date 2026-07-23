@@ -180,7 +180,11 @@ def test_decompile_pe32_plus_resolves_iat_names():
         timeout_ms=1000,
         style="c",
     )
-    assert "GetStartupInfoA(arg2);" in text
+    # The IAT thunk resolves to the imported symbol name (with a recovered
+    # prototype). The argument register is scratch reuse of an ABI arg slot in
+    # this parameter-less CRT entry, so it is named `varN`, not `argN` — assert
+    # the resolved call, not the incidental operand spelling.
+    assert "GetStartupInfoA(" in text
     assert "0x14000d1ec(" not in text
     assert "Sleep" in text
     assert "0x14000d21c" not in text
@@ -192,3 +196,93 @@ def test_pe_iat_map_exposes_api_aliases():
     names = {name for _, name in got}
     assert {"malloc", "LeaveCriticalSection"} & names
     assert any(va for va, _ in got)
+
+
+# -- DecBench parseable-C style (`--style decbench`) --------------------------
+#
+# The `decbench` style is a *valid C* rendering (real signature + declared
+# locals) used by external tooling that parses our output as C — distinct from
+# `--style c`, which is a register-level reading aid that does not parse. See
+# `src/ir/ast.rs::render_decbench`.
+
+import json
+import shutil
+import tempfile
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
+def test_decompile_style_decbench_is_valid_c_shape():
+    result = _run([str(SAMPLE), "--func", "0x1840", "--style", "decbench"])
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    # A real C signature, not the `fn name {` register-view header.
+    assert "long " in out and "(" in out
+    assert "fn sub_1840 {" not in out and "fn _start {" not in out
+    # No register sigils or `&[...]` address forms leak into valid-C output.
+    assert "%" not in out
+    assert "&[" not in out
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
+def test_decompile_vas_batch_emits_named_json():
+    # Discover a handful of real entry VAs, then decompile exactly those in one
+    # pass via --vas and assert the JSON shape {name, entry_va, pseudocode}.
+    funcs, _ = g.analysis.analyze_functions_path(str(SAMPLE), max_functions=200)
+    vas = [int(f.entry_point.value) for f in funcs[:5]]
+    assert vas, "no functions discovered in sample"
+    va_arg = ",".join(hex(v) for v in vas)
+    result = _run(
+        [str(SAMPLE), "--vas", va_arg, "--style", "decbench", "--format", "json"]
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert isinstance(payload, list) and payload
+    for entry in payload:
+        assert set(entry) >= {"name", "entry_va", "pseudocode"}
+        assert isinstance(entry["entry_va"], int)
+    got_vas = {e["entry_va"] for e in payload}
+    # Every returned VA was one we asked for (subset — some may be unliftable).
+    assert got_vas <= set(vas)
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
+def test_decbench_output_parses_with_gcc():
+    """Contract: `--style decbench` output is syntactically valid C.
+
+    We compile each function with ``gcc -fsyntax-only`` under lenient flags that
+    silence diagnostics *inherent* to headerless, per-function decompilation
+    (implicit function declarations, int<->pointer conversions, libc builtin
+    prototypes) — exactly what Joern (the GED metric) and byte_match's fixup
+    loop tolerate. What remains is genuine C syntax validity, which must hold
+    for a high fraction of functions.
+    """
+    import os
+    import subprocess as sp
+
+    gcc = shutil.which("gcc")
+    flags = [
+        gcc, "-fsyntax-only", "-std=gnu89", "-w",
+        "-Wno-implicit-function-declaration", "-Wno-int-conversion",
+        "-Wno-implicit-int", "-Wno-builtin-declaration-mismatch", "-fno-builtin",
+    ]
+    funcs, _ = g.analysis.analyze_functions_path(str(SAMPLE), max_functions=4000)
+    vas = [int(f.entry_point.value) for f in funcs]
+    results = g.ir.decompile_many(str(SAMPLE), vas, style="decbench", timeout_ms=8000)
+    total = ok = 0
+    for _name, _va, text in results:
+        if not text.strip():
+            continue
+        total += 1
+        with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as fp:
+            fp.write(text)
+            tmp = fp.name
+        try:
+            r = sp.run(flags + [tmp], capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                ok += 1
+        finally:
+            os.unlink(tmp)
+    assert total > 0, "no functions decompiled"
+    rate = ok / total
+    assert rate >= 0.95, f"only {ok}/{total} ({rate:.1%}) functions parse as C"

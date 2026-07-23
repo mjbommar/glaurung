@@ -3,9 +3,10 @@
 //! A lot of decompiled noise comes from seeing `*(u64)&[%rsp+0x158]` over
 //! and over. This pass rewrites every such access whose base is a stack
 //! register (rsp/ebp/sp/x29) and whose effective address is a constant
-//! displacement into a named local variable. Distinct `(base, disp, size)`
-//! triples map to distinct locals so differing access widths at the same
-//! offset stay separate (helps callers spot type confusion).
+//! displacement into a named local variable. A slot is identified by its
+//! `(base, disp)` alone, so a read and a write of the same slot resolve to one
+//! local (keeping its def/use chain intact); the recovered access width is
+//! carried alongside the name and narrowed to the true load width.
 //!
 //! Naming:
 //! * Positive displacements from rsp/sp — likely caller-allocated scratch —
@@ -37,17 +38,36 @@ fn is_frame_pointer(name: &str) -> bool {
     FRAME_POINTER_BASES.contains(&name)
 }
 
-/// Opaque key for the (base_name, disp, size) triple of a stack slot.
+/// Opaque key for the (base_name, disp) of a stack slot. Deliberately does NOT
+/// include the access size: the *same* memory slot is often read and written at
+/// spellings the lowering reports with different sizes (a 4-byte load vs a store
+/// whose size we don't thread through), and keying on size would then mint two
+/// different local names for one variable — severing its def/use chain. The
+/// recovered size is tracked in the map *value* instead (see [`SlotVal`]).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SlotKey {
     base: String,
     disp: i64,
-    size: u8,
 }
+
+/// The promoted local name for a slot plus the narrowest access width observed
+/// for it. Loads report the true width; stores (width unknown here) report the
+/// conservative 8, so taking the min lets a real load width win.
+type SlotVal = (String, u8);
 
 /// Rewrite stack-relative memory accesses to named locals.
 pub fn promote_stack_locals(f: &mut Function) {
-    let mut map: HashMap<SlotKey, String> = HashMap::new();
+    let _ = promote_stack_locals_typed(f);
+}
+
+/// Like [`promote_stack_locals`], but also returns the recovered byte size of
+/// each promoted local (`local_0 -> 4`, `stack_1 -> 8`, ...), taken from the
+/// width of the memory accesses that defined the slot. Callers thread this into
+/// type recovery so a 4-byte spill slot renders as `int` rather than the
+/// blanket `long`. When a name is defined at more than one width the widest is
+/// kept (the safest committed size).
+pub fn promote_stack_locals_typed(f: &mut Function) -> HashMap<String, u8> {
+    let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
     let mut stack_counter = 0usize;
     let mut local_counter = 0usize;
     rewrite_body(
@@ -56,11 +76,12 @@ pub fn promote_stack_locals(f: &mut Function) {
         &mut stack_counter,
         &mut local_counter,
     );
+    map.into_values().collect()
 }
 
 fn rewrite_body(
     body: &mut [Stmt],
-    map: &mut HashMap<SlotKey, String>,
+    map: &mut HashMap<SlotKey, SlotVal>,
     stack_counter: &mut usize,
     local_counter: &mut usize,
 ) {
@@ -127,7 +148,7 @@ fn rewrite_body(
 /// `Reg(local_name)` reference. Walks sub-expressions so nested derefs fold.
 fn rewrite_expr(
     e: &mut Expr,
-    map: &mut HashMap<SlotKey, String>,
+    map: &mut HashMap<SlotKey, SlotVal>,
     stack_counter: &mut usize,
     local_counter: &mut usize,
 ) {
@@ -149,12 +170,13 @@ fn rewrite_expr(
                     let key = SlotKey {
                         base: name.clone(),
                         disp: *disp,
-                        size: size_val,
                     };
-                    let alias = map
-                        .entry(key)
-                        .or_insert_with(|| alloc_name(name, *disp, stack_counter, local_counter))
-                        .clone();
+                    let entry = map.entry(key).or_insert_with(|| {
+                        (alloc_name(name, *disp, stack_counter, local_counter), size_val)
+                    });
+                    // A load reports the true access width — let it win.
+                    entry.1 = entry.1.min(size_val);
+                    let alias = entry.0.clone();
                     *e = Expr::Reg(VReg::phys(alias));
                     return;
                 }
@@ -179,15 +201,15 @@ fn rewrite_expr(
 /// Store-address Lea: turn the full `&[base+disp]` into a `Reg(local)`.
 fn try_promote_lea_to_local(
     addr: &mut Expr,
-    map: &mut HashMap<SlotKey, String>,
+    map: &mut HashMap<SlotKey, SlotVal>,
     stack_counter: &mut usize,
     local_counter: &mut usize,
 ) {
-    // The store's `addr` was produced with an implicit access size — our
-    // lowering pass doesn't pass it through, so reuse the memop's original
-    // size via a conservative default of 8 (matches the prevailing 64-bit
-    // width). For callers that produce narrower stores the local will be
-    // keyed as size=8; we accept that small collision rate in v1.
+    // The store's `addr` carries no access size (our lowering doesn't thread it
+    // through), so we record the conservative 8. Because the size lives in the
+    // map value and is combined with `min`, a load of the same slot still gets
+    // to pin the true, narrower width — and, crucially, the slot resolves to the
+    // *same* local name as that load rather than a second one.
     if let Expr::Lea {
         base: Some(VReg::Phys(name)),
         index: None,
@@ -200,12 +222,12 @@ fn try_promote_lea_to_local(
             let key = SlotKey {
                 base: name.clone(),
                 disp: *disp,
-                size: 8,
             };
-            let alias = map
+            let entry = map
                 .entry(key)
-                .or_insert_with(|| alloc_name(name, *disp, stack_counter, local_counter))
-                .clone();
+                .or_insert_with(|| (alloc_name(name, *disp, stack_counter, local_counter), 8));
+            entry.1 = entry.1.min(8);
+            let alias = entry.0.clone();
             *addr = Expr::Reg(VReg::phys(alias));
         }
     }
@@ -221,9 +243,12 @@ fn alloc_name(
         return "stack_top".to_string();
     }
     if is_frame_pointer(base) && disp < 0 {
-        let n = *local_counter;
-        *local_counter += 1;
-        return format!("local_{}", n);
+        // Name frame locals by their offset (`[rbp-0xc]` -> `local_c`), the
+        // Ghidra/IDA convention. The offset is genuine recovered information and
+        // lets an offset-aware consumer align our locals to the ground truth,
+        // rather than an appearance-order counter that carries no such signal.
+        *local_counter += 1; // keep the counter advancing for any legacy callers
+        return format!("local_{:x}", disp.unsigned_abs());
     }
     // Positive offsets from rsp are outgoing-arg / scratch slots; negative
     // offsets from rsp are the function's own frame carved out by `sub
@@ -361,8 +386,41 @@ mod tests {
         };
         promote_stack_locals(&mut f);
         if let Stmt::Assign { src, .. } = &f.body[0] {
-            assert_eq!(*src, Expr::Reg(reg("local_0")));
+            // Named by frame offset (Ghidra/IDA convention): `[rbp-0x8]` -> `local_8`.
+            assert_eq!(*src, Expr::Reg(reg("local_8")));
         }
+    }
+
+    #[test]
+    fn same_slot_read_and_write_share_one_local_name() {
+        // A store to and a load from the same frame slot must resolve to a
+        // single local (its def/use chain stays intact), even though the store
+        // path can't see the access width.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -0xc),
+                    src: Expr::Const(0),
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: deref_of("rbp", -0xc, 4),
+                },
+            ],
+        };
+        promote_stack_locals(&mut f);
+        let store_name = match &f.body[0] {
+            Stmt::Store { addr, .. } => addr.clone(),
+            _ => panic!("expected store"),
+        };
+        let load_name = match &f.body[1] {
+            Stmt::Assign { src, .. } => src.clone(),
+            _ => panic!("expected assign"),
+        };
+        assert_eq!(store_name, Expr::Reg(reg("local_c")));
+        assert_eq!(load_name, Expr::Reg(reg("local_c")));
     }
 
     #[test]

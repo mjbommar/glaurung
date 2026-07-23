@@ -45,9 +45,9 @@ def _decompile_at_cached(
     """Run ``g.ir.decompile_at`` with optional persistent caching.
 
     Entries are keyed by (glaurung version, sha256(binary), VA, decompile
-    flags). Best-effort: any cache I/O failure logs a WARNING and falls through
-    to the live decompile, so behaviour matches a direct call when caching is
-    disabled or unavailable.
+    flags). Cache logic is best-effort: any cache I/O failure logs a WARNING
+    and falls through to the live decompile, so behaviour is identical to a
+    direct ``decompile_at`` call when caching is disabled or unavailable.
     """
     cache_dir = _cache.resolve_cache_dir(cache_dir_arg)
     paths = None
@@ -60,7 +60,11 @@ def _decompile_at_cached(
                     ("timeout_ms", int(timeout_ms)),
                     ("max_blocks", int(max_blocks)),
                     ("max_instructions", int(max_instructions)),
+                    # The PDB cache *path* is a machine-local detail and must
+                    # not enter the key, but its *presence* changes name
+                    # resolution and therefore the output.
                     ("pdb_cache_present", bool(pdb_cache)),
+                    # Bump when the flag schema grows so old entries invalidate.
                     ("schema", 2),
                 ]
             )
@@ -135,6 +139,16 @@ class DecompileCommand(BaseCommand):
             help="Decompile up to --limit discovered functions instead of one.",
         )
         parser.add_argument(
+            "--vas",
+            dest="vas",
+            default=None,
+            help="Decompile exactly this comma/space-separated list of entry "
+                 "VAs (each hex 0x... or decimal) in a single analysis pass. "
+                 "Emits a JSON list of {name, entry_va, pseudocode}. Intended "
+                 "for batch/benchmark harnesses that already know their target "
+                 "function set (e.g. DWARF low_pc addresses).",
+        )
+        parser.add_argument(
             "--limit",
             type=int,
             default=8,
@@ -179,11 +193,13 @@ class DecompileCommand(BaseCommand):
         )
         parser.add_argument(
             "--style",
-            choices=["plain", "c"],
+            choices=["plain", "c", "decbench"],
             default="plain",
             help="Pseudocode style: 'plain' keeps the register-level detail "
                  "(default); 'c' strips the %% prefix and annotations for a "
-                 "closer-to-C view.",
+                 "closer-to-C view; 'decbench' emits parseable C (a real "
+                 "'long name(long arg0, ...)' signature with declared locals) "
+                 "for external tooling that parses the output as C.",
         )
         parser.add_argument(
             "--pdb-cache",
@@ -220,12 +236,46 @@ class DecompileCommand(BaseCommand):
             timeout_ms = config.timeout_ms
             max_blocks = config.max_blocks
             max_instructions = config.max_instructions
+            # Native style token: "" (plain), "c" (register-view), or "decbench"
+            # (parseable C). The public --style values map straight through.
+            style = "" if args.style == "plain" else args.style
+
+            # Batch-by-VA mode: decompile exactly the requested entry VAs in a
+            # single analysis pass. Mirrors the JSON shape of --all.
+            if args.vas is not None:
+                try:
+                    vas = _parse_va_list(args.vas)
+                except ValueError as e:
+                    formatter.output_plain(f"Error: {e}")
+                    return 2
+                results = g.ir.decompile_many(
+                    str(path),
+                    vas,
+                    max_blocks=max_blocks,
+                    max_instructions=max_instructions,
+                    timeout_ms=timeout_ms,
+                    types=args.types,
+                    style=style,
+                    pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
+                )
+                if as_json:
+                    payload = [
+                        {"name": name, "entry_va": int(va), "pseudocode": text}
+                        for name, va, text in results
+                    ]
+                    print(json.dumps(payload, indent=2))
+                else:
+                    for name, va, text in results:
+                        formatter.output_plain(text)
+                return 0
+
             if args.all:
                 results = g.ir.decompile_all(
                     str(path),
                     args.limit,
                     timeout_ms=timeout_ms,
                     pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
+                    style=style,
                 )
                 if as_json:
                     payload = [
@@ -269,7 +319,6 @@ class DecompileCommand(BaseCommand):
                 func_va = int(got[3])
 
             try:
-                style = "c" if args.style == "c" else ""
                 if args.range_end is not None or args.range_start is not None:
                     range_start = args.range_start if args.range_start is not None else int(func_va)
                     if args.range_end is None:
@@ -304,10 +353,38 @@ class DecompileCommand(BaseCommand):
                 return 2
 
             if as_json:
-                print(json.dumps({"entry_va": int(func_va), "pseudocode": text}, indent=2))
+                # Best-effort name: only resolvable when --func was a name.
+                name = args.func if isinstance(args.func, str) else ""
+                print(
+                    json.dumps(
+                        {"name": name, "entry_va": int(func_va), "pseudocode": text},
+                        indent=2,
+                    )
+                )
             else:
                 formatter.output_plain(text)
             return 0
         except Exception as e:  # pragma: no cover - surfaces as CLI error
             formatter.output_plain(f"Error: {e}")
             return 1
+
+
+def _parse_va_list(raw: str) -> list[int]:
+    """Parse a comma/space-separated list of entry VAs (hex ``0x..`` or decimal).
+
+    Returns the de-duplicated VAs in first-seen order. Raises ``ValueError`` on
+    any unparseable token so the caller can surface a clean CLI error.
+    """
+    seen: set[int] = set()
+    out: list[int] = []
+    for tok in raw.replace(",", " ").split():
+        try:
+            va = int(tok, 0)
+        except ValueError as e:
+            raise ValueError(f"invalid VA in --vas: {tok!r}") from e
+        if va not in seen:
+            seen.add(va)
+            out.append(va)
+    if not out:
+        raise ValueError("--vas was empty")
+    return out

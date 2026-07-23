@@ -15,7 +15,8 @@ use std::fmt::{self, Write};
 
 use crate::ir::structure::Region;
 use crate::ir::types::{
-    BinOp, CallTarget, CmpOp, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, UnOp, VReg, Value,
+    BinOp, CallTarget, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, UnOp,
+    VReg, Value,
 };
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -673,8 +674,19 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
         Region::Block(bi) => lower_block(&lf.blocks[*bi]),
         Region::Seq(parts) => {
             let mut out = Vec::new();
-            for p in parts {
-                out.extend(lower_region(p, lf));
+            for (idx, p) in parts.iter().enumerate() {
+                let mut lowered = lower_region(p, lf);
+                // Strip a redundant `goto <header>` when the next region is a
+                // loop headed at that VA: the `-O0` for-loop's entry jump to its
+                // condition block is just the natural fall-in to the `while`, so
+                // keeping it would leave a goto to a synthesized empty label.
+                if let Some(Region::While { header, .. }) = parts.get(idx + 1) {
+                    let hva = lf.blocks[*header].start_va;
+                    if matches!(lowered.last(), Some(Stmt::Goto { target }) if *target == hva) {
+                        lowered.pop();
+                    }
+                }
+                out.extend(lowered);
             }
             out
         }
@@ -777,6 +789,107 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
     f
 }
 
+/// After [`fold_returns`] has collapsed adjacent `ret = E; return;` pairs, any
+/// remaining `Return { value: None }` is a return sited in a different block
+/// from where its value was computed — ubiquitous in `-O0` goto-heavy code
+/// (comparison ladders, switch chains). By the ABI the return register holds
+/// the result at every return, so when the function actually writes its return
+/// register (i.e. it is not void) we spell these `return <ret_reg>` rather than
+/// a bare `return;`.
+///
+/// Applied only in the DecBench C renderer, which always commits to a non-void
+/// return type: there a bare return would be emitted as the value-losing
+/// `return 0;`, whereas `return ret;` recovers the data dependency Joern/GED and
+/// recompilation both need. The faithful register/`render_c` views keep bare
+/// `return;` so a genuinely void function is not given an invented value.
+fn default_return_to_reg(body: &mut [Stmt]) {
+    let Some(ret_reg) = find_written_return_reg(body) else {
+        return;
+    };
+    apply_default_return(body, &ret_reg);
+}
+
+/// Whether the body contains any `Return { value: None }` (including nested).
+fn body_has_bare_return(body: &[Stmt]) -> bool {
+    body.iter().any(|s| match s {
+        Stmt::Return { value } => value.is_none(),
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            body_has_bare_return(then_body)
+                || else_body.as_deref().is_some_and(body_has_bare_return)
+        }
+        Stmt::While { body, .. } => body_has_bare_return(body),
+        Stmt::Switch { cases, default, .. } => {
+            cases.iter().any(|(_, b)| body_has_bare_return(b))
+                || default.as_deref().is_some_and(body_has_bare_return)
+        }
+        _ => false,
+    })
+}
+
+/// The first return register the body assigns, or `None` for a void function.
+/// Recognises both raw ABI names and the post-naming `ret` alias.
+fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
+    for s in body {
+        let found = match s {
+            Stmt::Assign { dst, .. }
+                if is_return_reg(dst) || matches!(dst, VReg::Phys(n) if n == "ret") =>
+            {
+                Some(dst.clone())
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => find_written_return_reg(then_body)
+                .or_else(|| else_body.as_deref().and_then(find_written_return_reg)),
+            Stmt::While { body, .. } => find_written_return_reg(body),
+            Stmt::Switch { cases, default, .. } => cases
+                .iter()
+                .find_map(|(_, b)| find_written_return_reg(b))
+                .or_else(|| default.as_deref().and_then(find_written_return_reg)),
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+fn apply_default_return(body: &mut [Stmt], ret_reg: &VReg) {
+    for s in body.iter_mut() {
+        match s {
+            Stmt::Return { value } if value.is_none() => {
+                *value = Some(Expr::Reg(ret_reg.clone()));
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                apply_default_return(then_body, ret_reg);
+                if let Some(eb) = else_body {
+                    apply_default_return(eb, ret_reg);
+                }
+            }
+            Stmt::While { body, .. } => apply_default_return(body, ret_reg),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, b) in cases.iter_mut() {
+                    apply_default_return(b, ret_reg);
+                }
+                if let Some(b) = default {
+                    apply_default_return(b, ret_reg);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Common return registers across the ISAs we currently lift. We use a list
 /// rather than a single name so this pass works on both x86/x86-64 and
 /// AArch64 without having to thread arch info through the AST.
@@ -788,6 +901,13 @@ const RETURN_REGS: &[&str] = &[
 
 fn is_return_reg(v: &VReg) -> bool {
     matches!(v, VReg::Phys(n) if RETURN_REGS.iter().any(|r| n == *r))
+}
+
+/// Whether `name` is a stack slot the promotion pass named — i.e. a real local
+/// variable, so a store *to* it is a plain assignment rather than a pointer
+/// write.
+fn is_promoted_local(name: &str) -> bool {
+    name.starts_with("local_") || name.starts_with("stack_")
 }
 
 /// Collapse `Stmt::Assign { dst: return_reg, src: E }` immediately followed
@@ -1701,6 +1821,708 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
     }
 }
 
+fn binop_sym_c(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Sar | BinOp::Shr => ">>",
+        other => binop_sym(other),
+    }
+}
+
+/// Like [`cmpop_sym`], but valid C. Unsigned comparisons are handled by the
+/// caller with `unsigned long` casts; the signed/equality forms map directly.
+fn cmpop_sym_c(op: CmpOp) -> &'static str {
+    match op {
+        CmpOp::Eq => "==",
+        CmpOp::Ne => "!=",
+        CmpOp::Slt => "<",
+        CmpOp::Sle => "<=",
+        // Unsigned forms are rendered with casts by the caller; keep a valid
+        // fallback token so this is never a syntax error.
+        CmpOp::Ult => "<",
+        CmpOp::Ule => "<=",
+    }
+}
+
+// -- DecBench parseable-C renderer -------------------------------------------
+//
+// `render_decbench` emits a *syntactically valid* C translation-unit fragment
+// for one function, as opposed to `render_c` which is a register-level reading
+// aid (`fn name { ... }`, `%zf` flags, `&[...]` address forms — none of which
+// parse as C). External consumers such as the DecBench benchmark harness feed
+// our output to a tolerant C front-end (Joern for the structural metric, or
+// `gcc -fsyntax-only` as a sanity gate); a hard parse error there zeroes every
+// downstream score. So this renderer holds a single contract: **the output
+// parses.** It achieves that by
+//   * synthesising a real signature `long name(long arg0, ...)` (arity from the
+//     highest `argN` the naming pass left in the body),
+//   * declaring `long <id>;` for every local identifier referenced (vars,
+//     stack slots, temps, `ret`, flags) so nothing is undeclared,
+//   * lowering memory to `*(long *)(addr)` loads/stores and addresses to plain
+//     `long` arithmetic (no `&[...]`, no segment prefixes),
+//   * spelling calls as `callee(args)` (implicit-declaration, a warning only)
+//     or `((long (*)())(target))(args)` for indirect targets, and
+//   * turning constructs with no faithful C spelling — unmodelled instructions,
+//     pushes/pops, nops — into comments or elisions rather than invalid tokens.
+// Types are intentionally uniform `long` (ABI word width); real type recovery
+// is a separate, later effort. See `docs/analysis/decompiler/pipeline.md`.
+
+/// Render `f` as parseable C for the DecBench harness (and any consumer that
+/// needs valid C rather than the register-level `render_c` view). See the
+/// module-level notes above this function for the contract and rationale.
+/// Map a recovered [`TypeHint`] to a concrete C type spelling. Widths and
+/// signedness come from `types_recover`; pointers carry a pointee-width-derived
+/// element type. This is what turns the blanket `long` into `int`/`unsigned
+/// int`/`char *`/… for the DecBench renderer.
+fn hint_to_ctype(hint: TypeHint) -> &'static str {
+    match hint {
+        TypeHint::Int { signed, width } => match (signed, width) {
+            (true, 1) => "signed char",
+            (false, 1) => "unsigned char",
+            (true, 2) => "short",
+            (false, 2) => "unsigned short",
+            (true, 4) => "int",
+            (false, 4) => "unsigned int",
+            (false, 8) => "unsigned long",
+            _ => "long",
+        },
+        TypeHint::Pointer { pointee_width } => match pointee_width {
+            1 => "char *",
+            2 => "short *",
+            4 => "int *",
+            8 => "long *",
+            _ => "void *",
+        },
+        // A value only ever compared against zero: bool-ish, but recompiles and
+        // matches most reliably as `int`.
+        TypeHint::BoolLike => "int",
+        TypeHint::CodePointer => "void *",
+    }
+}
+
+/// The C type for an identifier: its recovered hint if the (already remapped)
+/// TypeMap has one, else the safe `long` default. We never *guess* a narrower
+/// type without a signal — an unknown value stays `long`.
+fn ctype_for(ident: &str, tm: Option<&TypeMap>) -> &'static str {
+    tm.and_then(|m| m.get(&VReg::Phys(ident.to_string())))
+        .map(hint_to_ctype)
+        .unwrap_or("long")
+}
+
+/// Untyped entry point (blanket `long`) — used by unit tests and any consumer
+/// that has no recovered types.
+pub fn render_decbench(f: &Function) -> String {
+    render_decbench_typed(f, None)
+}
+
+/// Render `f` as parseable C for DecBench, typing the return value and
+/// arguments from `tm` (a TypeMap already remapped to the AST's role names —
+/// `arg0`, `ret`, …). Locals stay `long` for now (their TypeMap keys do not
+/// survive register renaming; a later pass will type stack slots by size).
+pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
+    // Give bare returns (value computed in another block) their ABI return
+    // register, so this always-non-void renderer emits `return ret;` rather than
+    // the value-losing `return 0;`. Only clone when there is a bare return.
+    let mut owned;
+    let f = if body_has_bare_return(&f.body) {
+        owned = f.clone();
+        default_return_to_reg(&mut owned.body);
+        &owned
+    } else {
+        f
+    };
+
+    let mut ids = DecIdents::default();
+    for s in &f.body {
+        collect_idents_stmt(s, &mut ids);
+    }
+
+    let name = sanitize_c_ident(&f.name);
+    let arg_count = ids.max_arg.map(|m| m + 1).unwrap_or(0);
+
+    let mut out = String::new();
+    // Provenance as a C comment (valid, and the harness maps by address anyway).
+    let _ = writeln!(out, "// glaurung: {} @ 0x{:x}", f.name, f.entry_va);
+
+    // Signature: recovered return + argument types.
+    out.push_str(ctype_for("ret", tm));
+    out.push(' ');
+    out.push_str(&name);
+    out.push('(');
+    if arg_count == 0 {
+        out.push_str("void");
+    } else {
+        for i in 0..arg_count {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            let _ = write!(out, "{} arg{}", ctype_for(&format!("arg{}", i), tm), i);
+        }
+    }
+    out.push_str(") {\n");
+
+    // Local declarations. Only *promoted stack slots* (`local_c`, `stack_1`)
+    // take a recovered type — those are genuine C variables and their recovered
+    // width is a clean scalar. Raw machine registers that survive as locals
+    // (`rsp`, `rbp`, `varN`, temps, flags) stay `long`: type recovery may tag
+    // them as pointers, but they participate in bitwise/address arithmetic
+    // (`rsp & -16`, `rbp + ret`) that is a hard error on a pointer-typed operand
+    // in C. Keeping them `long` preserves parseability.
+    for local in &ids.locals {
+        let ty = if is_promoted_local(local) {
+            ctype_for(local, tm)
+        } else {
+            "long"
+        };
+        let _ = writeln!(out, "    {} {};", ty, local);
+    }
+
+    // Body.
+    for s in &f.body {
+        write_stmt_dec(s, &mut out, 1);
+    }
+
+    // Any `goto` target that was never emitted as a label would make the unit
+    // fail to compile ("label used but not defined"); pin each missing one with
+    // a trailing null-statement label so the parse still closes cleanly.
+    for target in ids.gotos.difference(&ids.labels) {
+        let _ = writeln!(out, "    L_{:x}: ;", target);
+    }
+
+    out.push_str("}\n");
+    out
+}
+
+/// Identifiers and control-flow anchors gathered from a function body so the
+/// DecBench renderer can declare every local and reconcile goto/label pairs.
+#[derive(Default)]
+struct DecIdents {
+    /// Highest `argN` index seen (drives the synthesised signature arity).
+    max_arg: Option<usize>,
+    /// Every non-argument identifier that will appear in the body, as the exact
+    /// (sanitised) spelling the writer emits. `BTreeSet` for stable output.
+    locals: std::collections::BTreeSet<String>,
+    /// VAs that appear as `Stmt::Label` (defined labels).
+    labels: std::collections::BTreeSet<u64>,
+    /// VAs that appear as `Stmt::Goto` targets (used labels).
+    gotos: std::collections::BTreeSet<u64>,
+}
+
+/// If `name` is exactly `arg` followed by decimal digits, return that index.
+fn parse_arg_index(name: &str) -> Option<usize> {
+    let rest = name.strip_prefix("arg")?;
+    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse().ok()
+}
+
+/// The C-identifier spelling for a processor flag (`Flag::Z` -> `zf`).
+fn flag_ident(fl: &Flag) -> &'static str {
+    match fl {
+        Flag::Z => "zf",
+        Flag::C => "cf",
+        Flag::Ule => "ule",
+        Flag::S => "sf",
+        Flag::Slt => "slt",
+        Flag::Sle => "sle",
+        Flag::O => "of",
+        Flag::P => "pf",
+        Flag::A => "af",
+    }
+}
+
+/// Map an arbitrary name (function or register) to a valid C identifier: keep
+/// `[A-Za-z0-9_]`, replace the rest with `_`, and prefix a leading digit.
+fn sanitize_c_ident(name: &str) -> String {
+    let mut s = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            s.push(ch);
+        } else {
+            s.push('_');
+        }
+    }
+    if s.is_empty() {
+        return "fn_anon".to_string();
+    }
+    if s.as_bytes()[0].is_ascii_digit() {
+        s.insert(0, '_');
+    }
+    s
+}
+
+/// Neutralise text going into a `/* ... */` or `// ...` comment: no early
+/// terminator, no newlines.
+fn sanitize_comment(s: &str) -> String {
+    s.replace("*/", "* /").replace(['\n', '\r'], " ")
+}
+
+/// Record the (sanitised) spelling of a single register operand as either an
+/// argument (updating `max_arg`) or a local.
+fn collect_reg(v: &VReg, ids: &mut DecIdents) {
+    let spelling = match v {
+        VReg::Phys(n) => {
+            if let Some(idx) = parse_arg_index(n) {
+                ids.max_arg = Some(ids.max_arg.map_or(idx, |m| m.max(idx)));
+                return;
+            }
+            sanitize_c_ident(n)
+        }
+        VReg::Temp(i) => format!("t{}", i),
+        VReg::Flag(fl) => flag_ident(fl).to_string(),
+    };
+    ids.locals.insert(spelling);
+}
+
+fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
+    match e {
+        Expr::Reg(v) => collect_reg(v, ids),
+        // `Named` in a value position renders as a bare VA constant, and in a
+        // call-target position as an (implicitly-declared) function name; either
+        // way it is not a declared local, so nothing to collect here.
+        Expr::Const(_) | Expr::Addr(_) | Expr::Named { .. } | Expr::StringLit { .. }
+        | Expr::Unknown(_) => {}
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            if let Some(b) = base {
+                collect_reg(b, ids);
+            }
+            if let Some(i) = index {
+                collect_reg(i, ids);
+            }
+        }
+        Expr::Deref { addr, .. } => collect_idents_expr(addr, ids),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            collect_idents_expr(lhs, ids);
+            collect_idents_expr(rhs, ids);
+        }
+        Expr::Un { src, .. } => collect_idents_expr(src, ids),
+    }
+}
+
+fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
+    match s {
+        Stmt::Assign { dst, src } => {
+            collect_reg(dst, ids);
+            collect_idents_expr(src, ids);
+        }
+        Stmt::Store { addr, src } => {
+            collect_idents_expr(addr, ids);
+            collect_idents_expr(src, ids);
+        }
+        Stmt::Call { target, args } => {
+            // A `Named` target is a callee name, not a local; other targets are
+            // rendered as value expressions and their registers must be declared.
+            if !matches!(target, Expr::Named { .. }) {
+                collect_idents_expr(target, ids);
+            }
+            for a in args {
+                collect_idents_expr(a, ids);
+            }
+        }
+        Stmt::Return { value } => {
+            if let Some(e) = value {
+                collect_idents_expr(e, ids);
+            }
+        }
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            collect_idents_expr(cond, ids);
+            for s in then_body {
+                collect_idents_stmt(s, ids);
+            }
+            if let Some(eb) = else_body {
+                for s in eb {
+                    collect_idents_stmt(s, ids);
+                }
+            }
+        }
+        Stmt::While { cond, body } => {
+            collect_idents_expr(cond, ids);
+            for s in body {
+                collect_idents_stmt(s, ids);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            collect_idents_expr(discriminant, ids);
+            for (_, body) in cases {
+                for s in body {
+                    collect_idents_stmt(s, ids);
+                }
+            }
+            if let Some(b) = default {
+                for s in b {
+                    collect_idents_stmt(s, ids);
+                }
+            }
+        }
+        Stmt::Label(va) => {
+            ids.labels.insert(*va);
+        }
+        Stmt::Goto { target } => {
+            ids.gotos.insert(*target);
+        }
+        // Push/Pop/Nop are elided by the renderer; Unknown/Comment become
+        // comments; none introduce a declared identifier.
+        Stmt::Push { .. } | Stmt::Pop { .. } | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+    }
+}
+
+fn write_reg_dec(v: &VReg, out: &mut String) {
+    match v {
+        VReg::Phys(n) => {
+            if let Some(idx) = parse_arg_index(n) {
+                let _ = write!(out, "arg{}", idx);
+            } else {
+                out.push_str(&sanitize_c_ident(n));
+            }
+        }
+        VReg::Temp(i) => {
+            let _ = write!(out, "t{}", i);
+        }
+        VReg::Flag(fl) => out.push_str(flag_ident(fl)),
+    }
+}
+
+/// Write a `long`-valued integer constant using the same compact spelling as
+/// the register-level renderer (small decimals, hex for wide values).
+fn write_const_dec(c: i64, out: &mut String) {
+    if c == 0 {
+        out.push('0');
+    } else if c == -1 {
+        out.push_str("-1");
+    } else if (-4096..=4096).contains(&c) {
+        let _ = write!(out, "{}", c);
+    } else if c < 0 {
+        let _ = write!(out, "-0x{:x}", c.unsigned_abs());
+    } else {
+        let _ = write!(out, "0x{:x}", c);
+    }
+}
+
+/// Render `base + index*scale + disp` as a parenthesised `long` expression (an
+/// address computed as an integer — no `&`, no segment). Used for `lea`/field
+/// addresses; a parent `Deref`/`Store` wraps it in `*(long *)(...)`.
+fn write_addr_arith_dec(
+    base: &Option<VReg>,
+    index: &Option<VReg>,
+    scale: u8,
+    disp: i64,
+    out: &mut String,
+) {
+    out.push('(');
+    let mut wrote = false;
+    if let Some(b) = base {
+        write_reg_dec(b, out);
+        wrote = true;
+    }
+    if let Some(i) = index {
+        if wrote {
+            out.push_str(" + ");
+        }
+        write_reg_dec(i, out);
+        if scale > 1 {
+            let _ = write!(out, " * {}", scale);
+        }
+        wrote = true;
+    }
+    if disp != 0 || !wrote {
+        if disp < 0 {
+            out.push_str(if wrote { " - " } else { "-" });
+            let _ = write!(out, "0x{:x}", disp.unsigned_abs());
+        } else {
+            if wrote {
+                out.push_str(" + ");
+            }
+            let _ = write!(out, "0x{:x}", disp);
+        }
+    }
+    out.push(')');
+}
+
+fn write_expr_dec(e: &Expr, out: &mut String) {
+    match e {
+        Expr::Reg(v) => write_reg_dec(v, out),
+        Expr::Const(c) => write_const_dec(*c, out),
+        Expr::Addr(a) => {
+            let _ = write!(out, "0x{:x}", a);
+        }
+        // In a value position a resolved symbol becomes its address constant;
+        // the readable name is kept only where it is *called* (see write_call_dec).
+        Expr::Named { va, .. } => {
+            let _ = write!(out, "0x{:x}", va);
+        }
+        Expr::StringLit { value } => write_string_lit(value, out),
+        Expr::Lea {
+            base,
+            index,
+            scale,
+            disp,
+            ..
+        }
+        | Expr::PdbFieldAddr {
+            base,
+            index,
+            scale,
+            disp,
+            ..
+        } => write_addr_arith_dec(base, index, *scale, *disp, out),
+        Expr::Deref { addr, .. } => {
+            out.push_str("*(long *)(");
+            write_expr_dec(addr, out);
+            out.push(')');
+        }
+        Expr::Bin { op, lhs, rhs } => {
+            // Logical (unsigned) right shift has no direct signed-`long` C form;
+            // cast the operand to `unsigned long` so `>>` is the zero-filling
+            // shift the IR means. Arithmetic shift (`Sar`) is plain `>>`.
+            if matches!(op, BinOp::Shr) {
+                out.push_str("((unsigned long)(");
+                write_expr_dec(lhs, out);
+                out.push_str(") >> ");
+                write_expr_dec(rhs, out);
+                out.push(')');
+            } else {
+                let (shown_op, shown_rhs) = match (*op, rhs.as_ref()) {
+                    (BinOp::Add, Expr::Const(c)) if *c < 0 && *c != i64::MIN => {
+                        (BinOp::Sub, Expr::Const(-c))
+                    }
+                    (BinOp::Sub, Expr::Const(c)) if *c < 0 && *c != i64::MIN => {
+                        (BinOp::Add, Expr::Const(-c))
+                    }
+                    _ => (*op, *rhs.clone()),
+                };
+                out.push('(');
+                write_expr_dec(lhs, out);
+                let _ = write!(out, " {} ", binop_sym_c(shown_op));
+                write_expr_dec(&shown_rhs, out);
+                out.push(')');
+            }
+        }
+        Expr::Un { op, src } => {
+            let _ = write!(out, "({}", unop_sym(*op));
+            write_expr_dec(src, out);
+            out.push(')');
+        }
+        Expr::Cmp { op, lhs, rhs } => {
+            // Unsigned comparisons need explicit `unsigned long` casts; the
+            // register-level `u<` / `u<=` spellings are not valid C.
+            if matches!(op, CmpOp::Ult | CmpOp::Ule) {
+                let sym = if matches!(op, CmpOp::Ult) { "<" } else { "<=" };
+                out.push_str("((unsigned long)(");
+                write_expr_dec(lhs, out);
+                let _ = write!(out, ") {} (unsigned long)(", sym);
+                write_expr_dec(rhs, out);
+                out.push_str("))");
+            } else {
+                out.push('(');
+                write_expr_dec(lhs, out);
+                let _ = write!(out, " {} ", cmpop_sym_c(*op));
+                write_expr_dec(rhs, out);
+                out.push(')');
+            }
+        }
+        // An unmodelled/indirect value: a call to an undeclared `__unknown`
+        // (implicit-declaration warning only) keeps it a valid `long` rvalue.
+        Expr::Unknown(_) => out.push_str("__unknown(0)"),
+    }
+}
+
+/// Shared C-string quoting for the DecBench renderer.
+fn write_string_lit(value: &str, out: &mut String) {
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => out.push_str("\\0"),
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+                let _ = write!(out, "\\x{:02x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// Render a call: `callee(args)` for a resolved symbol (implicit declaration,
+/// a warning only), else `((long (*)())(target))(args)` so an indirect target
+/// through a `long`-typed value is a valid call rather than "called object is
+/// not a function".
+fn write_call_dec(target: &Expr, args: &[Expr], out: &mut String) {
+    match target {
+        Expr::Named { name, .. } => out.push_str(&sanitize_c_ident(name)),
+        _ => {
+            out.push_str("((long (*)())(");
+            write_expr_dec(target, out);
+            out.push_str("))");
+        }
+    }
+    out.push('(');
+    for (i, a) in args.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_expr_dec(a, out);
+    }
+    out.push(')');
+}
+
+fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
+    match s {
+        Stmt::Assign { dst, src } => {
+            indent(out, level);
+            write_reg_dec(dst, out);
+            out.push_str(" = ");
+            write_expr_dec(src, out);
+            out.push_str(";\n");
+        }
+        Stmt::Store { addr, src } => {
+            indent(out, level);
+            // A store whose address is a bare promoted stack local (`local_0`,
+            // `stack_1`, …) is a plain variable assignment, not a pointer
+            // write: emit `local_0 = src` rather than `*(long *)(local_0) = src`.
+            if let Expr::Reg(VReg::Phys(name)) = addr {
+                if is_promoted_local(name) {
+                    write_expr_dec(addr, out);
+                    out.push_str(" = ");
+                    write_expr_dec(src, out);
+                    out.push_str(";\n");
+                    return;
+                }
+            }
+            out.push_str("*(long *)(");
+            write_expr_dec(addr, out);
+            out.push_str(") = ");
+            write_expr_dec(src, out);
+            out.push_str(";\n");
+        }
+        Stmt::Call { target, args } => {
+            indent(out, level);
+            write_call_dec(target, args, out);
+            out.push_str(";\n");
+        }
+        Stmt::Return { value } => {
+            indent(out, level);
+            match value {
+                Some(e) => {
+                    out.push_str("return ");
+                    write_expr_dec(e, out);
+                    out.push_str(";\n");
+                }
+                None => out.push_str("return 0;\n"),
+            }
+        }
+        // No faithful, valid-C spelling — elide (Nop/Push/Pop) or comment out.
+        Stmt::Nop | Stmt::Push { .. } | Stmt::Pop { .. } => {}
+        Stmt::Unknown(mnemonic) => {
+            indent(out, level);
+            let _ = writeln!(out, "/* asm: {} */", sanitize_comment(mnemonic));
+        }
+        Stmt::Comment(text) => {
+            indent(out, level);
+            let _ = writeln!(out, "// {}", sanitize_comment(text));
+        }
+        Stmt::Label(va) => {
+            indent(out, level);
+            let _ = writeln!(out, "L_{:x}: ;", va);
+        }
+        Stmt::Goto { target } => {
+            indent(out, level);
+            let _ = writeln!(out, "goto L_{:x};", target);
+        }
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            indent(out, level);
+            out.push_str("if (");
+            write_expr_dec(cond, out);
+            out.push_str(") {\n");
+            for s in then_body {
+                write_stmt_dec(s, out, level + 1);
+            }
+            indent(out, level);
+            out.push('}');
+            if let Some(eb) = else_body {
+                out.push_str(" else {\n");
+                for s in eb {
+                    write_stmt_dec(s, out, level + 1);
+                }
+                indent(out, level);
+                out.push('}');
+            }
+            out.push('\n');
+        }
+        Stmt::While { cond, body } => {
+            indent(out, level);
+            out.push_str("while (");
+            write_expr_dec(cond, out);
+            out.push_str(") {\n");
+            for s in body {
+                write_stmt_dec(s, out, level + 1);
+            }
+            indent(out, level);
+            out.push_str("}\n");
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            indent(out, level);
+            out.push_str("switch (");
+            write_expr_dec(discriminant, out);
+            out.push_str(") {\n");
+            // C forbids duplicate case labels and `case _:`; keep the first of
+            // each numeric label and fold every unlabelled / duplicate arm plus
+            // the explicit default into a single `default:` block.
+            let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+            let mut default_arms: Vec<&Vec<Stmt>> = Vec::new();
+            for (label, body) in cases {
+                match label {
+                    Some(n) if seen.insert(*n) => {
+                        indent(out, level + 1);
+                        let _ = writeln!(out, "case {}:", n);
+                        for s in body {
+                            write_stmt_dec(s, out, level + 2);
+                        }
+                        indent(out, level + 2);
+                        out.push_str("break;\n");
+                    }
+                    _ => default_arms.push(body),
+                }
+            }
+            if let Some(def_body) = default {
+                default_arms.push(def_body);
+            }
+            if !default_arms.is_empty() {
+                indent(out, level + 1);
+                out.push_str("default:\n");
+                for body in default_arms {
+                    for s in body {
+                        write_stmt_dec(s, out, level + 2);
+                    }
+                }
+                indent(out, level + 2);
+                out.push_str("break;\n");
+            }
+            indent(out, level);
+            out.push_str("}\n");
+        }
+    }
+}
+
 /// Render a function using the provided [`TypeMap`] for register-level
 /// type annotations. Pointers print as `(u64*)%rbx`, booleans as `(bool)`,
 /// code pointers as `(fnptr)`. Non-inferred registers print unchanged.
@@ -2295,5 +3117,477 @@ function f @ 0x1000 {
                 assert!(text.len() > 30, "pseudocode too short: {}", text);
             }
         }
+    }
+    // -- render_decbench (parseable-C) -----------------------------------------
+
+    /// Assertions that must hold for *any* `render_decbench` output: no
+    /// register `%` sigils, no `&[...]` address forms, no `<...>` unknowns, a
+    /// real `long` signature, and a balanced brace at the end.
+    fn assert_looks_like_c(text: &str) {
+        assert!(
+            !text.contains('%'),
+            "decbench output still has % sigils:\n{}",
+            text
+        );
+        assert!(
+            !text.contains("&["),
+            "decbench output still has &[ address form:\n{}",
+            text
+        );
+        // Reject angle-bracket-wrapped tokens (`<rax>`, `<unk>`) while allowing
+        // legitimate C comparison/shift operators (`<`, `<=`, `<<`, `>>`): flag
+        // only a `<`/`>` that is glued to an alphanumeric identifier character.
+        let bytes = text.as_bytes();
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'<' {
+                if let Some(&n) = bytes.get(i + 1) {
+                    assert!(
+                        !n.is_ascii_alphanumeric(),
+                        "decbench output has a `<ident>` token:\n{}",
+                        text
+                    );
+                }
+            }
+            if b == b'>' && i > 0 {
+                let p = bytes[i - 1];
+                assert!(
+                    !p.is_ascii_alphanumeric(),
+                    "decbench output has an `ident>` token:\n{}",
+                    text
+                );
+            }
+        }
+        assert!(
+            text.contains("long "),
+            "decbench output missing a long signature:\n{}",
+            text
+        );
+        assert!(
+            text.trim_end().ends_with('}'),
+            "decbench output not brace-terminated:\n{}",
+            text
+        );
+    }
+
+    #[test]
+    fn decbench_emits_signature_locals_and_return() {
+        // arg0 flows to a local `var0`, which is returned.
+        let f = Function {
+            name: "add_one".to_string(),
+            entry_va: 0x1230,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("var0"))),
+                },
+            ],
+        };
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("long add_one(long arg0) {"),
+            "got:\n{}",
+            text
+        );
+        assert!(text.contains("long var0;"), "missing local decl:\n{}", text);
+        assert!(
+            text.contains("var0 = (arg0 + 1);"),
+            "body wrong:\n{}",
+            text
+        );
+        assert!(text.contains("return var0;"), "return wrong:\n{}", text);
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn hint_to_ctype_covers_widths_signs_and_pointers() {
+        use crate::ir::types_recover::TypeHint;
+        assert_eq!(
+            hint_to_ctype(TypeHint::Int {
+                signed: true,
+                width: 4
+            }),
+            "int"
+        );
+        assert_eq!(
+            hint_to_ctype(TypeHint::Int {
+                signed: false,
+                width: 4
+            }),
+            "unsigned int"
+        );
+        assert_eq!(
+            hint_to_ctype(TypeHint::Int {
+                signed: true,
+                width: 8
+            }),
+            "long"
+        );
+        assert_eq!(
+            hint_to_ctype(TypeHint::Int {
+                signed: false,
+                width: 1
+            }),
+            "unsigned char"
+        );
+        assert_eq!(
+            hint_to_ctype(TypeHint::Pointer { pointee_width: 1 }),
+            "char *"
+        );
+        assert_eq!(
+            hint_to_ctype(TypeHint::Pointer { pointee_width: 8 }),
+            "long *"
+        );
+        assert_eq!(hint_to_ctype(TypeHint::BoolLike), "int");
+        assert_eq!(hint_to_ctype(TypeHint::CodePointer), "void *");
+    }
+
+    #[test]
+    fn decbench_typed_emits_recovered_return_and_arg_types() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+        // Same body as the signature test, but with a TypeMap keyed by the
+        // AST's role names: arg0 is a 32-bit signed int, the return is too.
+        let f = Function {
+            name: "add_one".to_string(),
+            entry_va: 0x1230,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("var0"))),
+                },
+            ],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("arg0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        tm.upsert_public(
+            VReg::phys("ret"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let text = render_decbench_typed(&f, Some(&tm));
+        assert!(
+            text.contains("int add_one(int arg0) {"),
+            "typed signature wrong:\n{}",
+            text
+        );
+        // Locals still default to `long` (their keys don't survive renaming).
+        assert!(text.contains("long var0;"), "missing local decl:\n{}", text);
+        assert_looks_like_c(&text);
+
+        // Without a TypeMap the untyped path stays blanket-`long`.
+        let untyped = render_decbench(&f);
+        assert!(
+            untyped.contains("long add_one(long arg0) {"),
+            "untyped fallback changed:\n{}",
+            untyped
+        );
+    }
+
+    #[test]
+    fn decbench_bare_return_uses_return_register_not_zero() {
+        // The value is computed into `ret` in one block, then returned from
+        // another (goto-separated) — the adjacent fold can't reach it. The
+        // decbench renderer must emit `return ret;`, never the value-losing
+        // `return 0;`.
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Goto { target: 0x20 },
+                Stmt::Label(0x20),
+                Stmt::Return { value: None },
+            ],
+        };
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("return ret;"),
+            "bare return should use the return register:\n{}",
+            text
+        );
+        assert!(
+            !text.contains("return 0;"),
+            "must not lose the value as return 0:\n{}",
+            text
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_no_args_renders_void_signature() {
+        let f = Function {
+            name: "noargs".to_string(),
+            entry_va: 0x400,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }],
+        };
+        let text = render_decbench(&f);
+        assert!(text.contains("long noargs(void) {"), "got:\n{}", text);
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_flags_lose_sigil_and_are_declared() {
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x10,
+            body: vec![Stmt::Assign {
+                dst: VReg::Flag(Flag::Z),
+                src: Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+            }],
+        };
+        let text = render_decbench(&f);
+        assert!(text.contains("long zf;"), "flag not declared:\n{}", text);
+        assert!(text.contains("zf = (arg0 == 0);"), "flag body:\n{}", text);
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_lea_and_store_are_valid_c() {
+        // *(long *)(rbp - 0x8) = arg0;
+        let f = Function {
+            name: "st".to_string(),
+            entry_va: 0x20,
+            body: vec![Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 1,
+                    disp: -8,
+                    segment: None,
+                },
+                src: Expr::Reg(VReg::phys("arg0")),
+            }],
+        };
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("*(long *)((rbp - 0x8)) = arg0;"),
+            "store wrong:\n{}",
+            text
+        );
+        assert!(text.contains("long rbp;"), "base not declared:\n{}", text);
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_unknown_and_indirect_call_are_valid_c() {
+        let f = Function {
+            name: "u".to_string(),
+            entry_va: 0x30,
+            body: vec![
+                Stmt::Unknown("cpuid".to_string()),
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Unknown("rax".to_string()),
+                },
+                Stmt::Call {
+                    target: Expr::Reg(VReg::phys("var0")),
+                    args: vec![Expr::Reg(VReg::phys("arg0"))],
+                },
+            ],
+        };
+        let text = render_decbench(&f);
+        assert!(text.contains("/* asm: cpuid */"), "unknown stmt:\n{}", text);
+        assert!(
+            text.contains("var0 = __unknown(0);"),
+            "unknown expr:\n{}",
+            text
+        );
+        assert!(
+            text.contains("((long (*)())(var0))(arg0);"),
+            "indirect call:\n{}",
+            text
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_undefined_goto_target_gets_trailing_label() {
+        let f = Function {
+            name: "g".to_string(),
+            entry_va: 0x40,
+            body: vec![Stmt::Goto { target: 0x44 }],
+        };
+        let text = render_decbench(&f);
+        assert!(text.contains("goto L_44;"), "goto:\n{}", text);
+        assert!(
+            text.contains("L_44: ;"),
+            "missing trailing label for undefined goto:\n{}",
+            text
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_sanitizes_plt_style_function_name() {
+        let f = Function {
+            name: "printf@plt".to_string(),
+            entry_va: 0x50,
+            body: vec![Stmt::Return { value: None }],
+        };
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("long printf_plt(void) {"),
+            "name not sanitized:\n{}",
+            text
+        );
+        assert!(text.contains("return 0;"), "void return:\n{}", text);
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_shifts_and_unsigned_compares_are_valid_c() {
+        let f = Function {
+            name: "sh".to_string(),
+            entry_va: 0x70,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Bin {
+                        op: BinOp::Sar,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: Expr::Bin {
+                        op: BinOp::Shr,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::Flag(Flag::C),
+                    src: Expr::Cmp {
+                        op: CmpOp::Ult,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(10)),
+                    },
+                },
+            ],
+        };
+        let text = render_decbench(&f);
+        assert!(!text.contains(">>>"), "arithmetic shift not C:\n{}", text);
+        assert!(!text.contains("u<"), "unsigned cmp not C:\n{}", text);
+        assert!(text.contains("var0 = (arg0 >> 3);"), "sar:\n{}", text);
+        assert!(
+            text.contains("(unsigned long)(arg0) >> 1"),
+            "logical shift cast:\n{}",
+            text
+        );
+        assert!(
+            text.contains("(unsigned long)(arg0) < (unsigned long)(10)"),
+            "unsigned cmp cast:\n{}",
+            text
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_i64_min_constants_do_not_overflow() {
+        // Regression: negating i64::MIN to render `-0x...` panicked
+        // ("attempt to negate with overflow"). Constants and displacements at
+        // the extreme must render (as their unsigned magnitude) across all
+        // renderers, not abort the whole batch.
+        let f = Function {
+            name: "m".to_string(),
+            entry_va: 0x80,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Const(i64::MIN),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(i64::MIN)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(VReg::phys("rbp")),
+                        index: None,
+                        scale: 1,
+                        disp: i64::MIN,
+                        segment: None,
+                    },
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+            ],
+        };
+        // Must not panic in any renderer.
+        let _ = render(&f);
+        let _ = render_c(&f);
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("0x8000000000000000"),
+            "i64::MIN magnitude missing:\n{}",
+            text
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_switch_folds_default_and_dedups_cases() {
+        let f = Function {
+            name: "sw".to_string(),
+            entry_va: 0x60,
+            body: vec![Stmt::Switch {
+                discriminant: Expr::Reg(VReg::phys("arg0")),
+                cases: vec![
+                    (Some(0), vec![Stmt::Return { value: Some(Expr::Const(1)) }]),
+                    // Unlabelled arm -> folded into default.
+                    (None, vec![Stmt::Return { value: Some(Expr::Const(2)) }]),
+                ],
+                default: Some(vec![Stmt::Return { value: Some(Expr::Const(3)) }]),
+            }],
+        };
+        let text = render_decbench(&f);
+        assert!(text.contains("case 0:"), "case:\n{}", text);
+        assert!(!text.contains("case _:"), "illegal case _::\n{}", text);
+        // Exactly one default block.
+        assert_eq!(
+            text.matches("default:").count(),
+            1,
+            "expected a single default:\n{}",
+            text
+        );
+        assert_looks_like_c(&text);
     }
 }

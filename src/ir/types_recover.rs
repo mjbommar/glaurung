@@ -73,19 +73,54 @@ impl TypeMap {
         let cur = self.inner.get(&reg).copied();
         let keep = match (cur, new) {
             (None, _) => new,
-            // Pointer wins over non-pointer.
-            (Some(TypeHint::Int { .. }), TypeHint::Pointer { .. }) => new,
-            (Some(TypeHint::BoolLike), TypeHint::Pointer { .. }) => new,
-            // CodePointer wins over Int.
-            (Some(TypeHint::Int { .. }), TypeHint::CodePointer) => new,
+            // Pointer / CodePointer are the strongest (semantic) classifications
+            // and win over a plain integer or bool.
+            (
+                Some(TypeHint::Int { .. }) | Some(TypeHint::BoolLike),
+                TypeHint::Pointer { .. } | TypeHint::CodePointer,
+            ) => new,
             // Wider pointee replaces narrower pointee.
             (
                 Some(TypeHint::Pointer { pointee_width: a }),
                 TypeHint::Pointer { pointee_width: b },
             ) if b > a => new,
-            _ => cur.unwrap_or(new),
+            // Nothing downgrades an established pointer / code-pointer.
+            (Some(TypeHint::Pointer { .. }) | Some(TypeHint::CodePointer), _) => cur.unwrap(),
+            // A value only ever tested against zero is bool-ish; that beats a
+            // plain integer, but an integer signal never overwrites it.
+            (Some(TypeHint::Int { .. }), TypeHint::BoolLike) => new,
+            (Some(TypeHint::BoolLike), TypeHint::Int { .. }) => cur.unwrap(),
+            (Some(TypeHint::BoolLike), TypeHint::BoolLike) => new,
+            // Int + Int: unsigned is sticky (we only ever *assert* unsigned, from
+            // shifts / index / movzx; signed is the silent default), and we keep
+            // the more-specific (narrower, register-sub-name-derived) width over
+            // the conservative 8-byte fallback.
+            (
+                Some(TypeHint::Int {
+                    signed: cs,
+                    width: cw,
+                }),
+                TypeHint::Int {
+                    signed: ns,
+                    width: nw,
+                },
+            ) => TypeHint::Int {
+                signed: cs && ns,
+                width: combine_int_width(cw, nw),
+            },
         };
         self.inner.insert(reg, keep);
+    }
+}
+
+/// Merge two candidate integer widths. Register sub-names give the true operand
+/// width (`edi`=4), while the arithmetic-result fallback conservatively assumes
+/// 8; when they disagree the narrower, more-specific width wins. Zero (unknown)
+/// defers to the other.
+fn combine_int_width(a: u8, b: u8) -> u8 {
+    match (a, b) {
+        (0, x) | (x, 0) => x,
+        (a, b) => a.min(b),
     }
 }
 
@@ -94,6 +129,199 @@ fn classify_int_default() -> TypeHint {
         signed: true,
         width: 8,
     }
+}
+
+/// The byte width a physical register name implies (`edi`->4, `rdi`->8,
+/// `w0`->4, `x0`->8, `di`->2, `dil`->1). Falls back to 8 for unknown names.
+fn reg_width_bytes(v: &VReg) -> u8 {
+    if let VReg::Phys(n) = v {
+        if let Some(w) = crate::ir::types::phys_reg_width(n) {
+            return (w.bits() / 8).max(1) as u8;
+        }
+    }
+    8
+}
+
+/// A signed integer hint whose width comes from the register's sub-name. This
+/// is the single biggest type-recovery signal at `-O0`: an `int` argument is
+/// spilled through the 32-bit view (`edi`/`w0`) while a `long`/pointer uses the
+/// 64-bit view (`rdi`/`x0`).
+fn int_for_reg(v: &VReg) -> TypeHint {
+    TypeHint::Int {
+        signed: true,
+        width: reg_width_bytes(v),
+    }
+}
+
+/// Tag every physical register that carries a value in `op` with a
+/// width-appropriate signed-int hint. The `upsert` policy keeps a more-specific
+/// classification (pointer / bool / code-pointer / narrower width), so this only
+/// fills in the width for registers nothing else has typed.
+fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
+    let mut tag = |val: &Value, tm: &mut TypeMap| {
+        if let Value::Reg(r @ VReg::Phys(_)) = val {
+            tm.upsert(r.clone(), int_for_reg(r));
+        }
+    };
+    match op {
+        Op::Assign { dst, src } => {
+            if let VReg::Phys(_) = dst {
+                tm.upsert(dst.clone(), int_for_reg(dst));
+            }
+            tag(src, tm);
+        }
+        Op::Store { src, .. } => tag(src, tm),
+        Op::Bin { dst, lhs, rhs, .. } => {
+            if let VReg::Phys(_) = dst {
+                tm.upsert(dst.clone(), int_for_reg(dst));
+            }
+            tag(lhs, tm);
+            tag(rhs, tm);
+        }
+        Op::Un { dst, src, .. } => {
+            if let VReg::Phys(_) = dst {
+                tm.upsert(dst.clone(), int_for_reg(dst));
+            }
+            tag(src, tm);
+        }
+        Op::Cmp { lhs, rhs, .. } => {
+            tag(lhs, tm);
+            tag(rhs, tm);
+        }
+        _ => {}
+    }
+}
+
+/// True for a frame-relative base register (`rbp`/`rsp` on x86-64,
+/// `x29`/`sp`/`w29` on AArch64) — the anchors `-O0` code spills locals against.
+fn is_frame_base(v: &VReg) -> bool {
+    matches!(
+        v,
+        VReg::Phys(n)
+            if matches!(n.as_str(), "rbp" | "rsp" | "ebp" | "esp" | "x29" | "sp" | "w29")
+    )
+}
+
+/// See the call site in [`recover_types`]. Two forward passes over `lf`:
+///   1. record `slot -> register` for each spill store `[frame+disp] = reg`;
+///   2. for each reload `reg = [frame+disp]` whose destination is already a
+///      pointer in `tm`, propagate that pointer back to the spilled register.
+fn propagate_spill_slot_pointers(lf: &LlirFunction, tm: &mut TypeMap) {
+    // slot (frame-base name, disp) -> the register most recently spilled there.
+    let mut spilled_from: HashMap<(String, i64), VReg> = HashMap::new();
+    for block in &lf.blocks {
+        for ins in &block.instrs {
+            if let Op::Store {
+                addr,
+                src: Value::Reg(r @ VReg::Phys(_)),
+            } = &ins.op
+            {
+                if let Some(base) = &addr.base {
+                    if is_frame_base(base) && addr.index.is_none() {
+                        if let VReg::Phys(bn) = base {
+                            spilled_from.insert((bn.clone(), addr.disp), r.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if spilled_from.is_empty() {
+        return;
+    }
+    for block in &lf.blocks {
+        for ins in &block.instrs {
+            if let Op::Load { dst, addr } = &ins.op {
+                if let Some(base) = &addr.base {
+                    if is_frame_base(base) && addr.index.is_none() {
+                        if let VReg::Phys(bn) = base {
+                            if let (Some(src_reg), Some(TypeHint::Pointer { pointee_width })) =
+                                (spilled_from.get(&(bn.clone(), addr.disp)), tm.get(dst))
+                            {
+                                tm.upsert(src_reg.clone(), TypeHint::Pointer { pointee_width });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The registers that carry the return value under `cc`, widest first.
+fn return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static str] {
+    use crate::ir::call_args::CallConv;
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
+        CallConv::Aarch64 => &["x0", "w0"],
+        CallConv::Arm => &["r0"],
+    }
+}
+
+/// The destination register an op writes to (if it writes a value register).
+fn op_dst_reg(op: &Op) -> Option<&VReg> {
+    match op {
+        Op::Assign { dst, .. }
+        | Op::Bin { dst, .. }
+        | Op::Un { dst, .. }
+        | Op::Load { dst, .. } => Some(dst),
+        _ => None,
+    }
+}
+
+/// Correct the return register's type from the value that is actually
+/// *returned*, not the flow-insensitive union of every use of the ABI return
+/// register. At `-O0` `rax` is heavily reused as scratch — often as a pointer
+/// base while computing an integer result — so the union wrongly reports a
+/// pointer return (e.g. `char *str_len(...)` that really returns `int`).
+///
+/// Key fact: a value produced into a **sub-64-bit** view of the return register
+/// (`eax`/`ax`/`al`, `w0`) cannot be a 64-bit pointer. So when the *last*
+/// definition of the return register in program order writes such a narrow
+/// view, we overwrite every return-register alias with that concrete integer
+/// width, clearing any spurious pointer classification. A genuine pointer
+/// return writes the full 64-bit register and is left untouched.
+fn refine_return_type(lf: &LlirFunction, tm: &mut TypeMap, cc: crate::ir::call_args::CallConv) {
+    let ret_names = return_reg_names(cc);
+    let mut last_dst: Option<VReg> = None;
+    for block in &lf.blocks {
+        for ins in &block.instrs {
+            if let Some(VReg::Phys(n)) = op_dst_reg(&ins.op) {
+                if ret_names.contains(&n.as_str()) {
+                    last_dst = Some(VReg::phys(n));
+                }
+            }
+        }
+    }
+    let Some(dst) = last_dst else {
+        return;
+    };
+    let w = reg_width_bytes(&dst);
+    if w == 0 || w >= 8 {
+        // Full-width (or unknown) last definition: could legitimately be a
+        // pointer or a `long`; leave the recovered classification alone.
+        return;
+    }
+    let signed = match tm.get(&dst) {
+        Some(TypeHint::Int { signed, .. }) => signed,
+        _ => true,
+    };
+    let hint = TypeHint::Int { signed, width: w };
+    for n in ret_names {
+        let key = VReg::phys(*n);
+        if tm.inner.contains_key(&key) {
+            tm.inner.insert(key, hint);
+        }
+    }
+}
+
+/// Production entry point: [`recover_types`] plus the calling-convention-aware
+/// return-type correction. Callers that know the ABI (the Python bindings)
+/// should prefer this over the bare [`recover_types`].
+pub fn recover_types_for(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) -> TypeMap {
+    let mut tm = recover_types(lf);
+    refine_return_type(lf, &mut tm, cc);
+    tm
 }
 
 /// Produce a [`TypeMap`] for all register VRegs touched by `lf`.
@@ -120,6 +348,9 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
 
     for block in &lf.blocks {
         for ins in &block.instrs {
+            // Width-from-register-name for every value register (specific
+            // classifications below still win via `upsert`).
+            tag_value_regs(&ins.op, &mut tm);
             match &ins.op {
                 // Any register used as the base of a memory op is a pointer.
                 Op::Load { addr, .. } | Op::Store { addr, .. } => {
@@ -132,12 +363,12 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
                         );
                     }
                     if let Some(i) = &addr.index {
-                        // Index registers are integers (array index counts).
+                        // Index registers are unsigned integers (array offsets).
                         tm.upsert(
                             i.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: 8,
+                                width: reg_width_bytes(i),
                             },
                         );
                     }
@@ -153,7 +384,7 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
                             r.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: 1,
+                                width: reg_width_bytes(r),
                             },
                         );
                     }
@@ -192,6 +423,16 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
         }
     }
 
+    // Propagate pointer-ness from a stack slot back to the register spilled
+    // into it. At `-O0` a pointer *argument* is spilled to a frame slot
+    // (`store [rbp-8] = rdi`) in the prologue and every later dereference goes
+    // through a *reload* of that slot into a scratch register — so the pointer
+    // classification lands on the reloaded temp, never on the incoming argument
+    // register. Link them: `reg -> slot` (the spill) and `slot -> pointer`
+    // (a reload of that slot that is itself a pointer), then tag the spilled
+    // register as the pointer. This is what recovers `T *` argument types.
+    propagate_spill_slot_pointers(lf, &mut tm);
+
     // Demote pointer / code-pointer classifications for regs that get a
     // constant assignment. They end up as generic ints — which the printer
     // leaves uncluttered.
@@ -204,13 +445,8 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
         .map(|(k, _)| k.clone())
         .collect();
     for k in to_demote {
-        tm.inner.insert(
-            k,
-            TypeHint::Int {
-                signed: true,
-                width: 8,
-            },
-        );
+        let hint = int_for_reg(&k);
+        tm.inner.insert(k, hint);
     }
 
     tm
@@ -291,6 +527,138 @@ mod tests {
         assert_eq!(
             tm.get(&VReg::phys("rbx")),
             Some(TypeHint::Pointer { pointee_width: 8 })
+        );
+    }
+
+    #[test]
+    fn return_type_narrowed_from_last_definition() {
+        use crate::ir::call_args::CallConv;
+        use crate::ir::types::BinOp;
+        // rax is used as a pointer base (spurious for the return), but the LAST
+        // write to the return register is a 32-bit multiply into eax -> the
+        // function returns an int, not a pointer.
+        let lf = mk_block(vec![
+            Op::Load {
+                dst: VReg::phys("rcx"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rax")),
+                    index: None,
+                    scale: 0,
+                    disp: 0,
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+            Op::Bin {
+                dst: VReg::phys("eax"),
+                op: BinOp::Mul,
+                lhs: Value::Reg(VReg::phys("eax")),
+                rhs: Value::Reg(VReg::phys("ecx")),
+            },
+        ]);
+        // Bare recover_types leaves rax as a pointer (union of all uses).
+        let raw = recover_types(&lf);
+        assert!(matches!(
+            raw.get(&VReg::phys("rax")),
+            Some(TypeHint::Pointer { .. })
+        ));
+        // The cc-aware entry corrects it: last def is a 32-bit write to eax.
+        let tm = recover_types_for(&lf, CallConv::SysVAmd64);
+        assert_eq!(
+            tm.get(&VReg::phys("rax")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4
+            }),
+            "return should be narrowed to int from the 32-bit last def"
+        );
+    }
+
+    #[test]
+    fn pointer_return_via_full_width_is_preserved() {
+        use crate::ir::call_args::CallConv;
+        // Last def writes the full 64-bit rax by loading a pointer slot -> a
+        // genuine pointer return must survive the refinement.
+        let lf = mk_block(vec![Op::Load {
+            dst: VReg::phys("rax"),
+            addr: MemOp {
+                base: Some(VReg::phys("rbp")),
+                index: None,
+                scale: 0,
+                disp: -8,
+                size: 8,
+                ..Default::default()
+            },
+        }]);
+        // Make rax a pointer via a subsequent deref so the union sees a pointer.
+        let mut lf = lf;
+        lf.blocks[0].instrs.push(LlirInstr {
+            va: 0x2000,
+            op: Op::Load {
+                dst: VReg::phys("rdx"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rax")),
+                    index: None,
+                    scale: 0,
+                    disp: 0,
+                    size: 8,
+                    ..Default::default()
+                },
+            },
+        });
+        let tm = recover_types_for(&lf, CallConv::SysVAmd64);
+        assert!(
+            matches!(tm.get(&VReg::phys("rax")), Some(TypeHint::Pointer { .. })),
+            "full-width pointer return must be preserved, got {:?}",
+            tm.get(&VReg::phys("rax"))
+        );
+    }
+
+    #[test]
+    fn pointer_arg_recovered_through_spill_slot() {
+        // -O0 pattern: rdi (arg0) is spilled to [rbp-8], later reloaded into
+        // rax which is dereferenced. rax is a pointer; the propagation must
+        // push that back onto rdi so the argument types as a pointer.
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 0,
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 0,
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+            },
+            Op::Load {
+                dst: VReg::phys("rcx"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rax")),
+                    index: None,
+                    scale: 0,
+                    disp: 0,
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+        ]);
+        let tm = recover_types(&lf);
+        assert!(
+            matches!(tm.get(&VReg::phys("rdi")), Some(TypeHint::Pointer { .. })),
+            "arg spilled to slot then dereferenced should type as pointer, got {:?}",
+            tm.get(&VReg::phys("rdi"))
         );
     }
 
