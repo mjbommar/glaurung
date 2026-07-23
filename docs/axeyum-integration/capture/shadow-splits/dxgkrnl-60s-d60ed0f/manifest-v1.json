@@ -1,0 +1,29 @@
+{
+  "files": [
+    {
+      "content_hash": "sha256:0f4e6d3fc7e6d0d29b2763271a6ebd96f7a1c05d5c5e1de356b36cd2c05a67ed",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "0f4e6d3fc7e6d0d29b2763271a6ebd96f7a1c05d5c5e1de356b36cd2c05a67ed.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided",
+        "representative"
+      ]
+    },
+    {
+      "content_hash": "sha256:9e45981b1dd579fd8665baba762ffd46dcba9004d502095fed56fd9ca1f1695c",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "9e45981b1dd579fd8665baba762ffd46dcba9004d502095fed56fd9ca1f1695c.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    }
+  ],
+  "logic": "QF_BV",
+  "name": "glaurung-dxgkrnl-shadow-splits-post-concat-fix-v1",
+  "source": "Glaurung d60ed0f; Axeyum 4b81e4de; combined shadow, source-prefix direct lineage, 60 seconds per function; declared concat widths enforced; expected is the only backend-decided class",
+  "version": 1
+}

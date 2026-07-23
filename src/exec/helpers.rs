@@ -155,8 +155,16 @@ fn helper_mul<D: Domain>(
     ins: &[Value],
     outs: &[(VReg, Width)],
 ) -> Result<(), Halt> {
+    // Robustness (2026-06-17): a well-formed `mul` intrinsic carries 2 inputs and
+    // 2 outputs (lo=rax/…, hi=rdx/…). A malformed / edge-case lift that yields an
+    // empty `outs` must NOT panic-abort the entire driver's symbolic exploration
+    // (the kdnic.sys `index out of bounds: len is 0 but index is 0` crash that
+    // silently dropped coverage). Skip the degenerate op; model 1-output (low
+    // product only, e.g. a 2/3-operand imul that routed here) and full 2-output.
+    if ins.len() < 2 || outs.is_empty() {
+        return Ok(());
+    }
     let (lo_reg, w) = (&outs[0].0, outs[0].1);
-    let hi_reg = &outs[1].0;
     let w2 = Width(w.bits() * 2);
     let a = m.read(&ins[0], w);
     let b = m.read(&ins[1], w);
@@ -164,9 +172,12 @@ fn helper_mul<D: Domain>(
     let bz = m.dom.zext(&b, w, w2);
     let prod = m.dom.binop(BinOp::Mul, &az, &bz, w2);
     let lo = m.dom.trunc(&prod, w);
-    let hi = m.dom.extract(&prod, w.bits() * 2, w.bits());
     m.regs.write(&mut m.dom, lo_reg, lo);
-    m.regs.write(&mut m.dom, hi_reg, hi);
+    if outs.len() >= 2 {
+        let hi_reg = &outs[1].0;
+        let hi = m.dom.extract(&prod, w.bits() * 2, w.bits());
+        m.regs.write(&mut m.dom, hi_reg, hi);
+    }
     Ok(())
 }
 

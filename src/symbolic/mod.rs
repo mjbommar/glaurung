@@ -14,12 +14,16 @@
 pub mod explore;
 pub mod expr;
 pub mod ioctl;
+pub(crate) mod native_trace;
+#[cfg(feature = "solver-axeyum")]
+pub mod ordered_replay;
+pub mod ordered_trace;
 pub mod solver;
 pub mod symdomain;
 
 pub use explore::{
-    find_input_reaching, find_sinks, find_sinks_stateful, ApiSummary, CallModel, Severity, Sink,
-    SinkKind, TaintSpec,
+    find_input_reaching, find_sinks, find_sinks_stateful, set_call_site_summaries, ApiSummary,
+    CallModel, Severity, Sink, SinkKind, TaintSpec,
 };
 pub use expr::{Expr, ExprId, ExprPool};
 pub use ioctl::{
@@ -28,7 +32,8 @@ pub use ioctl::{
     seed_tainted_args, IrpSeed,
 };
 pub use solver::{
-    set_solver_budget, set_time_budget, solve, solver_budget, solver_meter, time_budget, Model,
-    SolveResult, Solver, DEFAULT_SOLVER_BUDGET,
+    reset_total_solver_stats, set_solver_budget, set_time_budget, solve, solver_budget,
+    solver_meter, time_budget, total_solver_stats, Model, SolveResult, Solver,
+    DEFAULT_SOLVER_BUDGET,
 };
 pub use symdomain::Symbolic;

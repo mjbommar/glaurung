@@ -7,7 +7,8 @@
 //! QF_BV is total. See
 //! `docs/design/execution-engine/02-architecture/symbolic-engine.md`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Write as _;
 
 use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
 
@@ -151,7 +152,7 @@ impl ExprPool {
         match self.get(id) {
             Expr::Const { value, width } => format!("(_ bv{} {})", value, width.bits()),
             Expr::Sym { id, width } => format!("sym{}_{}", id, width.bits()),
-            Expr::Bin { op, a, b, .. } => {
+            Expr::Bin { op, a, b, width } => {
                 let f = match op {
                     BinOp::Add => "bvadd",
                     BinOp::Sub => "bvsub",
@@ -164,11 +165,14 @@ impl ExprPool {
                     BinOp::Shr => "bvlshr",
                     BinOp::Sar => "bvashr",
                 };
+                // Coerce both operands to the node width so the emitted
+                // SMT-LIB is well-typed (the lifter emits width-mismatched
+                // operands; the AST backends coerce, so the text must too).
                 format!(
                     "({} {} {})",
                     f,
-                    self.render_smtlib(*a),
-                    self.render_smtlib(*b)
+                    self.render_coerced(*a, width.bits()),
+                    self.render_coerced(*b, width.bits())
                 )
             }
             Expr::Un { op, a, .. } => {
@@ -178,7 +182,7 @@ impl ExprPool {
                 };
                 format!("({} {})", f, self.render_smtlib(*a))
             }
-            Expr::Cmp { op, a, b, .. } => {
+            Expr::Cmp { op, a, b, width } => {
                 let (pred, signed) = match op {
                     CmpOp::Eq => ("=", false),
                     CmpOp::Ne => ("distinct", false),
@@ -191,41 +195,232 @@ impl ExprPool {
                 format!(
                     "(ite ({} {} {}) (_ bv1 1) (_ bv0 1))",
                     pred,
-                    self.render_smtlib(*a),
-                    self.render_smtlib(*b)
+                    self.render_coerced(*a, width.bits()),
+                    self.render_coerced(*b, width.bits())
                 )
             }
             Expr::ZExt { a, from, to } => format!(
                 "((_ zero_extend {}) {})",
                 to.bits() - from.bits(),
-                self.render_smtlib(*a)
+                self.render_coerced(*a, from.bits())
             ),
             Expr::SExt { a, from, to } => format!(
                 "((_ sign_extend {}) {})",
                 to.bits() - from.bits(),
-                self.render_smtlib(*a)
+                self.render_coerced(*a, from.bits())
             ),
             Expr::Trunc { a, to } => {
+                // Ensure the source is at least `to` bits before extracting.
                 format!(
                     "((_ extract {} 0) {})",
                     to.bits() - 1,
-                    self.render_smtlib(*a)
+                    self.render_coerced(*a, to.bits())
                 )
             }
             Expr::Extract { a, hi, lo } => {
-                format!("((_ extract {} {}) {})", hi - 1, lo, self.render_smtlib(*a))
+                // Ensure the source is >= hi bits before extracting [hi-1:lo].
+                format!(
+                    "((_ extract {} {}) {})",
+                    hi - 1,
+                    lo,
+                    self.render_coerced(*a, *hi)
+                )
             }
-            Expr::Concat { hi, lo, .. } => format!(
+            Expr::Concat { hi, lo, hi_w, lo_w } => format!(
                 "(concat {} {})",
-                self.render_smtlib(*hi),
-                self.render_smtlib(*lo)
+                self.render_coerced(*hi, hi_w.bits()),
+                self.render_coerced(*lo, lo_w.bits())
             ),
-            Expr::Ite { c, t, e, .. } => format!(
+            Expr::Ite { c, t, e, width } => format!(
                 "(ite (= {} (_ bv1 1)) {} {})",
                 self.render_smtlib(*c),
-                self.render_smtlib(*t),
-                self.render_smtlib(*e)
+                self.render_coerced(*t, width.bits()),
+                self.render_coerced(*e, width.bits())
             ),
+        }
+    }
+
+    /// Render one term with deterministic nested `let` bindings for every
+    /// reachable non-leaf DAG node. SMT-LIB `let` bindings are simultaneous,
+    /// so nesting keeps each later definition in scope while preserving the
+    /// pool's structural sharing instead of recursively expanding it.
+    pub fn render_smtlib_shared(&self, root: ExprId) -> String {
+        let mut order = Vec::new();
+        let mut seen = HashSet::new();
+        let mut stack = vec![(root, false)];
+        while let Some((id, expanded)) = stack.pop() {
+            if expanded {
+                order.push(id);
+                continue;
+            }
+            if !seen.insert(id) || self.is_leaf(id) {
+                continue;
+            }
+            stack.push((id, true));
+            match *self.get(id) {
+                Expr::Bin { a, b, .. } | Expr::Cmp { a, b, .. } => {
+                    stack.push((b, false));
+                    stack.push((a, false));
+                }
+                Expr::Un { a, .. }
+                | Expr::ZExt { a, .. }
+                | Expr::SExt { a, .. }
+                | Expr::Trunc { a, .. }
+                | Expr::Extract { a, .. } => stack.push((a, false)),
+                Expr::Concat { hi, lo, .. } => {
+                    stack.push((lo, false));
+                    stack.push((hi, false));
+                }
+                Expr::Ite { c, t, e, .. } => {
+                    stack.push((e, false));
+                    stack.push((t, false));
+                    stack.push((c, false));
+                }
+                Expr::Const { .. } | Expr::Sym { .. } => unreachable!("leaf returned above"),
+            }
+        }
+
+        let bound = order
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(ordinal, id)| (id, ordinal))
+            .collect::<BTreeMap<_, _>>();
+        let mut rendered = String::new();
+        for id in &order {
+            write!(
+                rendered,
+                "(let ((g!{} {})) ",
+                bound[id],
+                self.render_shared_node(*id, &bound)
+            )
+            .expect("writing to a String cannot fail");
+        }
+        rendered.push_str(&self.render_shared_ref(root, &bound));
+        rendered.extend(std::iter::repeat_n(')', order.len()));
+        rendered
+    }
+
+    fn is_leaf(&self, id: ExprId) -> bool {
+        matches!(self.get(id), Expr::Const { .. } | Expr::Sym { .. })
+    }
+
+    fn render_shared_ref(&self, id: ExprId, bound: &BTreeMap<ExprId, usize>) -> String {
+        if let Some(ordinal) = bound.get(&id) {
+            format!("g!{ordinal}")
+        } else {
+            self.render_smtlib(id)
+        }
+    }
+
+    fn render_shared_coerced(
+        &self,
+        id: ExprId,
+        target: u16,
+        bound: &BTreeMap<ExprId, usize>,
+    ) -> String {
+        let current = self.width_of(id).bits();
+        let inner = self.render_shared_ref(id, bound);
+        if current == target {
+            inner
+        } else if current < target {
+            format!("((_ zero_extend {}) {})", target - current, inner)
+        } else {
+            format!("((_ extract {} 0) {})", target - 1, inner)
+        }
+    }
+
+    fn render_shared_node(&self, id: ExprId, bound: &BTreeMap<ExprId, usize>) -> String {
+        match self.get(id) {
+            Expr::Const { .. } | Expr::Sym { .. } => self.render_smtlib(id),
+            Expr::Bin { op, a, b, width } => {
+                let function = match op {
+                    BinOp::Add => "bvadd",
+                    BinOp::Sub => "bvsub",
+                    BinOp::Mul => "bvmul",
+                    BinOp::Div => "bvudiv",
+                    BinOp::And => "bvand",
+                    BinOp::Or => "bvor",
+                    BinOp::Xor => "bvxor",
+                    BinOp::Shl => "bvshl",
+                    BinOp::Shr => "bvlshr",
+                    BinOp::Sar => "bvashr",
+                };
+                format!(
+                    "({function} {} {})",
+                    self.render_shared_coerced(*a, width.bits(), bound),
+                    self.render_shared_coerced(*b, width.bits(), bound)
+                )
+            }
+            Expr::Un { op, a, .. } => {
+                let function = match op {
+                    UnOp::Not => "bvnot",
+                    UnOp::Neg => "bvneg",
+                };
+                format!("({function} {})", self.render_shared_ref(*a, bound))
+            }
+            Expr::Cmp { op, a, b, width } => {
+                let predicate = match op {
+                    CmpOp::Eq => "=",
+                    CmpOp::Ne => "distinct",
+                    CmpOp::Ult => "bvult",
+                    CmpOp::Ule => "bvule",
+                    CmpOp::Slt => "bvslt",
+                    CmpOp::Sle => "bvsle",
+                };
+                format!(
+                    "(ite ({predicate} {} {}) (_ bv1 1) (_ bv0 1))",
+                    self.render_shared_coerced(*a, width.bits(), bound),
+                    self.render_shared_coerced(*b, width.bits(), bound)
+                )
+            }
+            Expr::ZExt { a, from, to } => format!(
+                "((_ zero_extend {}) {})",
+                to.bits() - from.bits(),
+                self.render_shared_coerced(*a, from.bits(), bound)
+            ),
+            Expr::SExt { a, from, to } => format!(
+                "((_ sign_extend {}) {})",
+                to.bits() - from.bits(),
+                self.render_shared_coerced(*a, from.bits(), bound)
+            ),
+            Expr::Trunc { a, to } => format!(
+                "((_ extract {} 0) {})",
+                to.bits() - 1,
+                self.render_shared_coerced(*a, to.bits(), bound)
+            ),
+            Expr::Extract { a, hi, lo } => format!(
+                "((_ extract {} {}) {})",
+                hi - 1,
+                lo,
+                self.render_shared_coerced(*a, *hi, bound)
+            ),
+            Expr::Concat { hi, lo, hi_w, lo_w } => format!(
+                "(concat {} {})",
+                self.render_shared_coerced(*hi, hi_w.bits(), bound),
+                self.render_shared_coerced(*lo, lo_w.bits(), bound)
+            ),
+            Expr::Ite { c, t, e, width } => format!(
+                "(ite (= {} (_ bv1 1)) {} {})",
+                self.render_shared_ref(*c, bound),
+                self.render_shared_coerced(*t, width.bits(), bound),
+                self.render_shared_coerced(*e, width.bits(), bound)
+            ),
+        }
+    }
+
+    /// Render `id` coerced to `target` bits: zero-extend if narrower, extract
+    /// low bits if wider. Mirrors the AST backends' `coerce` so the emitted
+    /// SMT-LIB text is always well-typed.
+    fn render_coerced(&self, id: ExprId, target: u16) -> String {
+        let cur = self.width_of(id).bits();
+        let inner = self.render_smtlib(id);
+        if cur == target {
+            inner
+        } else if cur < target {
+            format!("((_ zero_extend {}) {})", target - cur, inner)
+        } else {
+            format!("((_ extract {} 0) {})", target - 1, inner)
         }
     }
 
@@ -338,6 +533,38 @@ mod tests {
     }
 
     #[test]
+    fn extension_rendering_coerces_to_declared_source_width() {
+        let mut p = ExprPool::new();
+        let wide = p.constant(Width::W64, 0x1_0000_0001);
+        let z = p.intern(Expr::ZExt {
+            a: wide,
+            from: Width::W32,
+            to: Width::W64,
+        });
+        assert_eq!(
+            p.render_smtlib(z),
+            "((_ zero_extend 32) ((_ extract 31 0) (_ bv4294967297 64)))"
+        );
+    }
+
+    #[test]
+    fn concat_rendering_coerces_to_declared_operand_widths() {
+        let mut p = ExprPool::new();
+        let hi = p.constant(Width(56), 0x12);
+        let lo = p.constant(Width::W1, 1);
+        let cat = p.intern(Expr::Concat {
+            hi,
+            lo,
+            hi_w: Width(56),
+            lo_w: Width::W8,
+        });
+        assert_eq!(
+            p.render_smtlib(cat),
+            "(concat (_ bv18 56) ((_ zero_extend 7) (_ bv1 1)))"
+        );
+    }
+
+    #[test]
     fn smtlib_rendering_of_a_constraint() {
         // (bvadd sym0_32 (_ bv1 32)) == 0x100  → an Eq predicate term
         let mut p = ExprPool::new();
@@ -366,6 +593,73 @@ mod tests {
         assert_eq!(
             s,
             "(ite (= (bvadd sym0_32 (_ bv1 32)) (_ bv256 32)) (_ bv1 1) (_ bv0 1))"
+        );
+    }
+
+    #[test]
+    fn shared_smtlib_rendering_is_linear_in_the_expression_dag() {
+        let mut p = ExprPool::new();
+        let x = p.fresh_symbol(Width::W64);
+        let one = p.constant(Width::W64, 1);
+        let mut root = p.intern(Expr::Bin {
+            op: BinOp::Add,
+            a: x,
+            b: one,
+            width: Width::W64,
+        });
+        for _ in 0..24 {
+            root = p.intern(Expr::Bin {
+                op: BinOp::Xor,
+                a: root,
+                b: root,
+                width: Width::W64,
+            });
+        }
+
+        let rendered = p.render_smtlib_shared(root);
+        assert!(rendered.starts_with("(let ((g!"));
+        assert_eq!(rendered.matches("bvxor").count(), 24);
+        assert_eq!(rendered.matches("bvadd").count(), 1);
+        assert!(
+            rendered.len() < 4_096,
+            "shared DAG expanded: {} bytes",
+            rendered.len()
+        );
+    }
+
+    #[test]
+    fn shared_smtlib_rendering_is_independent_of_pool_expression_ids() {
+        fn diamond(pool: &mut ExprPool) -> ExprId {
+            let x = pool.fresh_symbol(Width::W64);
+            let one = pool.constant(Width::W64, 1);
+            let mut root = pool.intern(Expr::Bin {
+                op: BinOp::Add,
+                a: x,
+                b: one,
+                width: Width::W64,
+            });
+            for _ in 0..4 {
+                root = pool.intern(Expr::Bin {
+                    op: BinOp::Xor,
+                    a: root,
+                    b: root,
+                    width: Width::W64,
+                });
+            }
+            root
+        }
+
+        let mut first = ExprPool::new();
+        let first_root = diamond(&mut first);
+
+        let mut shifted = ExprPool::new();
+        shifted.constant(Width::W8, 7);
+        let shifted_root = diamond(&mut shifted);
+
+        assert_ne!(first_root, shifted_root);
+        assert_eq!(
+            first.render_smtlib_shared(first_root),
+            shifted.render_smtlib_shared(shifted_root)
         );
     }
 }

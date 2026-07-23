@@ -1,0 +1,308 @@
+{
+  "drivers": {
+    "netwtw10": {
+      "bytes": 4874856,
+      "path": "/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-wifi-NETwtw10.sys",
+      "sha256": "785a3c05981303b5856f3d86d7ca186843322407ae31f6bb33659cf61cd4e6f1",
+      "solve_budget": 20000
+    },
+    "surface": {
+      "bytes": 320728,
+      "path": "/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys",
+      "sha256": "3c062dc57832caab776bec99656798474af7ffb59ef751c9a004a95c0ae74405",
+      "solve_budget": 1000000
+    }
+  },
+  "policy": {
+    "analysis_deadline_seconds": 400,
+    "max_assertions_per_path": 512,
+    "max_live_paths": 9,
+    "memory_limit_gib": 4,
+    "solver_seconds": 600,
+    "warm_reuse": "adaptive"
+  },
+  "repetitions": 3,
+  "runs": [
+    {
+      "adaptive": {
+        "expansions": 1,
+        "initial-live-paths": 2,
+        "pressure-events": 128,
+        "pressure-threshold": 128
+      },
+      "agree": 28356,
+      "auto": {},
+      "axeyum_ms": 18658.5,
+      "disagree": 0,
+      "driver": "netwtw10",
+      "max_rss_kib": 255460,
+      "queries": 28356,
+      "repetition": 1,
+      "stderr_path": "netwtw10-r1.stderr",
+      "stdout_path": "netwtw10-r1.stdout",
+      "stdout_sha256": "0ccc9c34d01b6e567347400e082c22d45798ebeba9d6e7d48ac78e9022de1ea7",
+      "time_path": "netwtw10-r1.time",
+      "unknown_split": 0,
+      "wall_seconds": 79.03,
+      "warm": {
+        "added": 250687,
+        "assertion-cap-fallbacks": 0,
+        "checks": 20380,
+        "exact": 1316,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 7976,
+        "paths-closed": 6056,
+        "paths-created": 6056,
+        "paths-live": 0,
+        "paths-peak": 9,
+        "popped": 2319,
+        "prefix-roots": 537404,
+        "resets": 0
+      },
+      "z3_ms": 52202.6
+    },
+    {
+      "adaptive": {
+        "expansions": 1,
+        "initial-live-paths": 2,
+        "pressure-events": 128,
+        "pressure-threshold": 128
+      },
+      "agree": 28356,
+      "auto": {},
+      "axeyum_ms": 18536.9,
+      "disagree": 0,
+      "driver": "netwtw10",
+      "max_rss_kib": 253108,
+      "queries": 28356,
+      "repetition": 2,
+      "stderr_path": "netwtw10-r2.stderr",
+      "stdout_path": "netwtw10-r2.stdout",
+      "stdout_sha256": "0ccc9c34d01b6e567347400e082c22d45798ebeba9d6e7d48ac78e9022de1ea7",
+      "time_path": "netwtw10-r2.time",
+      "unknown_split": 0,
+      "wall_seconds": 78.6,
+      "warm": {
+        "added": 250687,
+        "assertion-cap-fallbacks": 0,
+        "checks": 20380,
+        "exact": 1316,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 7976,
+        "paths-closed": 6056,
+        "paths-created": 6056,
+        "paths-live": 0,
+        "paths-peak": 9,
+        "popped": 2319,
+        "prefix-roots": 537404,
+        "resets": 0
+      },
+      "z3_ms": 51990.8
+    },
+    {
+      "adaptive": {
+        "expansions": 1,
+        "initial-live-paths": 2,
+        "pressure-events": 128,
+        "pressure-threshold": 128
+      },
+      "agree": 28356,
+      "auto": {},
+      "axeyum_ms": 18479.2,
+      "disagree": 0,
+      "driver": "netwtw10",
+      "max_rss_kib": 255364,
+      "queries": 28356,
+      "repetition": 3,
+      "stderr_path": "netwtw10-r3.stderr",
+      "stdout_path": "netwtw10-r3.stdout",
+      "stdout_sha256": "0ccc9c34d01b6e567347400e082c22d45798ebeba9d6e7d48ac78e9022de1ea7",
+      "time_path": "netwtw10-r3.time",
+      "unknown_split": 0,
+      "wall_seconds": 78.58,
+      "warm": {
+        "added": 250687,
+        "assertion-cap-fallbacks": 0,
+        "checks": 20380,
+        "exact": 1316,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 7976,
+        "paths-closed": 6056,
+        "paths-created": 6056,
+        "paths-live": 0,
+        "paths-peak": 9,
+        "popped": 2319,
+        "prefix-roots": 537404,
+        "resets": 0
+      },
+      "z3_ms": 52038.3
+    },
+    {
+      "adaptive": {
+        "expansions": 0,
+        "initial-live-paths": 2,
+        "pressure-events": 87,
+        "pressure-threshold": 128
+      },
+      "agree": 2551,
+      "auto": {},
+      "axeyum_ms": 1084.3,
+      "disagree": 0,
+      "driver": "surface",
+      "max_rss_kib": 81776,
+      "queries": 2551,
+      "repetition": 1,
+      "stderr_path": "surface-r1.stderr",
+      "stdout_path": "surface-r1.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "time_path": "surface-r1.time",
+      "unknown_split": 0,
+      "wall_seconds": 5.7,
+      "warm": {
+        "added": 14814,
+        "assertion-cap-fallbacks": 0,
+        "checks": 2464,
+        "exact": 92,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 87,
+        "paths-closed": 300,
+        "paths-created": 300,
+        "paths-live": 0,
+        "paths-peak": 2,
+        "popped": 147,
+        "prefix-roots": 286545,
+        "resets": 0
+      },
+      "z3_ms": 4351.3
+    },
+    {
+      "adaptive": {
+        "expansions": 0,
+        "initial-live-paths": 2,
+        "pressure-events": 87,
+        "pressure-threshold": 128
+      },
+      "agree": 2551,
+      "auto": {},
+      "axeyum_ms": 1083.0,
+      "disagree": 0,
+      "driver": "surface",
+      "max_rss_kib": 74792,
+      "queries": 2551,
+      "repetition": 2,
+      "stderr_path": "surface-r2.stderr",
+      "stdout_path": "surface-r2.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "time_path": "surface-r2.time",
+      "unknown_split": 0,
+      "wall_seconds": 5.59,
+      "warm": {
+        "added": 14814,
+        "assertion-cap-fallbacks": 0,
+        "checks": 2464,
+        "exact": 92,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 87,
+        "paths-closed": 300,
+        "paths-created": 300,
+        "paths-live": 0,
+        "paths-peak": 2,
+        "popped": 147,
+        "prefix-roots": 286545,
+        "resets": 0
+      },
+      "z3_ms": 4364.9
+    },
+    {
+      "adaptive": {
+        "expansions": 0,
+        "initial-live-paths": 2,
+        "pressure-events": 87,
+        "pressure-threshold": 128
+      },
+      "agree": 2551,
+      "auto": {},
+      "axeyum_ms": 1087.8,
+      "disagree": 0,
+      "driver": "surface",
+      "max_rss_kib": 79424,
+      "queries": 2551,
+      "repetition": 3,
+      "stderr_path": "surface-r3.stderr",
+      "stdout_path": "surface-r3.stdout",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "time_path": "surface-r3.time",
+      "unknown_split": 0,
+      "wall_seconds": 5.67,
+      "warm": {
+        "added": 14814,
+        "assertion-cap-fallbacks": 0,
+        "checks": 2464,
+        "exact": 92,
+        "max-assertions-per-path": 512,
+        "max-live-paths": 9,
+        "path-cap-fallbacks": 87,
+        "paths-closed": 300,
+        "paths-created": 300,
+        "paths-live": 0,
+        "paths-peak": 2,
+        "popped": 147,
+        "prefix-roots": 286545,
+        "resets": 0
+      },
+      "z3_ms": 4440.9
+    }
+  ],
+  "schema": "glaurung-axeyum-lineage-gate-v1",
+  "sources": {
+    "axeyum": {
+      "dirty": [],
+      "path": "/tmp/axeyum-adaptive-clean.Hayzm3",
+      "revision": "f91fb2328e1a0506078c889154ebafc79a95dd35"
+    },
+    "binary": {
+      "path": "/nas4/data/workspace-infosec/glaurung/target/release/examples/ioctlance",
+      "sha256": "a7a0f9c19901d5f446818f46135957487d3ea9bda58eeb0e71a2e0baf6044993"
+    },
+    "glaurung": {
+      "dirty": [],
+      "path": "/tmp/glaurung-adaptive-clean.O343E2",
+      "revision": "95c43cb4f9bfce44a3af27475346e9ff833ac9ea"
+    }
+  },
+  "summaries": {
+    "netwtw10": {
+      "axeyum_mean_ms": 18558.2,
+      "axeyum_population_cv": 0.004026918932225969,
+      "axeyum_z3_ratio": 0.35635917678678525,
+      "max_rss_kib": 255460,
+      "median_rss_kib": 255364,
+      "min_rss_kib": 253108,
+      "runs": 3,
+      "z3_mean_ms": 52077.23333333334,
+      "z3_population_cv": 0.0017424855671555482
+    },
+    "surface": {
+      "axeyum_mean_ms": 1085.0333333333333,
+      "axeyum_population_cv": 0.0018681817204400058,
+      "axeyum_z3_ratio": 0.24740254311360407,
+      "max_rss_kib": 81776,
+      "median_rss_kib": 79424,
+      "min_rss_kib": 74792,
+      "runs": 3,
+      "z3_mean_ms": 4385.7,
+      "z3_population_cv": 0.008989489350579227
+    }
+  },
+  "system": {
+    "machine": "x86_64",
+    "platform": "Linux-7.0.0-22-generic-x86_64-with-glibc2.43",
+    "processor": "",
+    "rustc": "rustc 1.96.0-nightly (48cc71ee8 2026-03-31)\nbinary: rustc\ncommit-hash: 48cc71ee88cd0f11217eced958b9930970da998b\ncommit-date: 2026-03-31\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0-nightly\nLLVM version: 22.1.2"
+  }
+}

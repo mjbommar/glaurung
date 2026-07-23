@@ -255,12 +255,30 @@ pub fn driver_api_model(imports: &BTreeMap<String, u64>) -> CallModel {
                     kind: PhysicalMemory,
                 }
             }
-            "ZwCreateFile" | "IoCreateFile" | "ZwOpenFile" | "ZwWriteFile" | "ZwDeleteFile" => {
-                ApiSummary::DangerousCall {
-                    args: &[0],
-                    kind: FileOperation,
-                }
-            }
+            // File APIs: flag when an attacker-controlled parameter reaches the call.
+            // Per-API arg lists target the value-carrying params an attacker steers
+            // (DesiredAccess / CreateDisposition / CreateOptions / Buffer / Length /
+            // OpenOptions), not the output handle. NOTE: the attacker FILENAME lives
+            // in OBJECT_ATTRIBUTES.ObjectName->Buffer (tainted by reference, several
+            // derefs deep) -- value-taint on the OA pointer arg does not fire, so a
+            // pure-filename ZwDeleteFile is not yet caught; that needs struct-deref
+            // taint. The disposition/options/access/buffer/length value-taint IS caught.
+            "ZwCreateFile" | "IoCreateFile" => ApiSummary::DangerousCall {
+                args: &[1, 2, 7, 8],
+                kind: FileOperation,
+            },
+            "ZwOpenFile" => ApiSummary::DangerousCall {
+                args: &[1, 2, 5],
+                kind: FileOperation,
+            },
+            "ZwWriteFile" => ApiSummary::DangerousCall {
+                args: &[5, 6],
+                kind: FileOperation,
+            },
+            "ZwDeleteFile" => ApiSummary::DangerousCall {
+                args: &[0],
+                kind: FileOperation,
+            },
             "sprintf" | "swprintf" | "vsprintf" | "vswprintf" | "_snprintf" | "_snwprintf" => {
                 ApiSummary::DangerousCall {
                     args: &[1],
@@ -302,6 +320,9 @@ mod tests {
             SinkKind::ProbeBypass => "probe_bypass",
             SinkKind::ProcessTermination => "proc_term",
             SinkKind::FileOperation => "file_op",
+            SinkKind::ArbitraryMsrWrite => "wrmsr",
+            SinkKind::ArbitraryMsrRead => "rdmsr",
+            SinkKind::PortAccess => "portio",
         }
     }
 
@@ -400,6 +421,52 @@ mod tests {
         // address is fully attacker-chosen (write-where), tagged with provenance.
         assert_eq!(w.severity, Severity::Arbitrary, "expected write-where");
         assert_eq!(w.tainted_by, vec!["SystemBuffer".to_string()]);
+    }
+
+    /// Positive control for the KMDF `WdfRequestRetrieveInputBuffer` model
+    /// (`ApiSummary::RetrieveBuffer` via the call-site map). An UNGUARDED handler that
+    /// retrieves the input buffer and writes through it must produce a `SystemBuffer`-
+    /// tainted controlled write — proving the WDF-retrieved buffer flows as precise
+    /// attacker taint, the KMDF analogue of `IRP.AssociatedIrp.SystemBuffer`.
+    #[test]
+    fn wdf_retrieve_input_buffer_taints_systembuffer() {
+        use crate::symbolic::explore::set_call_site_summaries;
+        // r9 = &buf (scratch local); call <retrieve> (taints *r9); rax = *r9; *rax = x
+        let lf = func(vec![(
+            0x2000,
+            vec![
+                Op::Assign {
+                    dst: VReg::phys("r9"),
+                    src: Value::Const(0x60000),
+                }, // va 0x2000: r9 = &buf
+                Op::Call {
+                    target: CallTarget::Indirect(Value::Addr(0xDEAD)),
+                }, // va 0x2004: WdfRequestRetrieveInputBuffer (call-site summarized)
+                load("rax", "r9", 0, 8), // va 0x2008: rax = *r9 = tainted buffer ptr
+                Op::Store {
+                    addr: MemOp::plain(Some(VReg::phys("rax")), None, 1, 0, 8),
+                    src: Value::Const(0x4141_4141),
+                }, // va 0x200c: *buf = x  -> controlled write through SystemBuffer
+                Op::Return,
+            ],
+            0x2014,
+            vec![],
+        )]);
+        let mut m = std::collections::BTreeMap::new();
+        m.insert(0x2004u64, ApiSummary::RetrieveBuffer { out_ptr_arg: 3 });
+        set_call_site_summaries(m);
+        let sinks = find_function_sinks_with_apis(&lf, &CallModel::new(), 1000);
+        set_call_site_summaries(std::collections::BTreeMap::new()); // clear for other tests
+        let w = sinks
+            .iter()
+            .find(|s| s.kind == SinkKind::ControlledWrite)
+            .expect("expected a controlled write through the WDF-retrieved buffer");
+        assert_eq!(
+            w.tainted_by,
+            vec!["SystemBuffer".to_string()],
+            "WDF-retrieved buffer must carry SystemBuffer taint, got {:?}",
+            w.tainted_by
+        );
     }
 
     /// A handler that writes into a *concrete* scratch buffer at an attacker
@@ -706,7 +773,9 @@ mod tests {
     #[test]
     fn tainted_path_to_zwcreatefile() {
         const API: u64 = 0x9000;
-        let lf = handler_calling(vec![load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], API);
+        // rdx (arg1 = DesiredAccess) = SystemBuffer: an attacker-controlled file-op
+        // parameter. (arg0 is the output FileHandle and is no longer a trigger.)
+        let lf = handler_calling(vec![load("rdx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], API);
         let sinks = find_ioctl_sinks_with_apis(&lf, &model("ZwCreateFile", API), 1000);
         assert_eq!(kinds(&sinks), ["file_op"].into_iter().collect());
     }

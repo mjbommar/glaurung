@@ -1,0 +1,45 @@
+{
+  "schema": "glaurung-shadow-split-capture-v1",
+  "producer": {
+    "glaurung_revision": "d60ed0f",
+    "axeyum_revision": "4b81e4de"
+  },
+  "driver": {
+    "path": "tests/fixtures/msvc-pdb/dxgkrnl.sys",
+    "sha256": "b1597bd6450e539c6dd0d20620cc17f5d6dee661a6a9845e505bf8bde27168f4",
+    "bytes": 4703600
+  },
+  "policy": {
+    "shadow_diff": true,
+    "warm_reuse": "lineage",
+    "warm_owner_transfer": false,
+    "serial_sibling_reuse": true,
+    "direct_delta": true,
+    "direct_sibling_identity": "source-prefix-v1",
+    "replay_sat_cache": true,
+    "max_live_paths": 9,
+    "max_assertions_per_path": 512,
+    "analysis_deadline_seconds": 400,
+    "solve_budget": 1000000,
+    "solver_seconds_per_function": 60,
+    "memory_limit_gib": 4
+  },
+  "run": {
+    "queries": 17712,
+    "agree_or_nondecided": 17712,
+    "sat_unsat_disagreements": 0,
+    "z3_nanos": 25192100000,
+    "axeyum_nanos": 9190000000,
+    "z3_nondecided_occurrences": 3,
+    "axeyum_nondecided_occurrences": 0,
+    "split_occurrences": 3,
+    "warm_resets": 0,
+    "path_cap_fallbacks": 1244,
+    "assertion_cap_fallbacks": 0,
+    "max_rss_kib": 341732
+  },
+  "validated_summary": "summary-v1.json",
+  "split_index": "shadow-splits.tsv",
+  "capture_index": "capture-index-v1.json",
+  "axeyum_manifest": "manifest-v1.json"
+}

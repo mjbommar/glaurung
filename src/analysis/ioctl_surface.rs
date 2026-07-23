@@ -73,10 +73,23 @@ pub struct Dispatcher {
 #[derive(Debug, Clone, Default)]
 pub struct IoctlSurface {
     pub dispatchers: Vec<Dispatcher>,
+    /// KMDF callback roots: address-taken `.pdata` functions (e.g. EvtIoDeviceControl,
+    /// EvtIoRead/Write) registered via a WDF_IO_QUEUE_CONFIG and reached through the WDF
+    /// function table -- NOT the WDM DriverObject->MajorFunction the cmp-immediate scan
+    /// keys on. Without these, a pure-KMDF driver whose dispatcher uses a computed/table
+    /// index (codes never appear as immediates) is invisible. Seed symbolic analysis here.
+    pub callback_roots: Vec<u64>,
     /// Functions carrying any IOCTL-shaped constant.
     pub n_code_functions: usize,
     /// Functions with a decoded jump table.
     pub n_jumptable: usize,
+    /// Import call-stub thunks: a tiny `jmp *[rip+slot]` function (entry VA) ->
+    /// the IAT slot VA it tail-jumps to. This is the non-`dllimport` call form
+    /// the compiler emits for e.g. `memcpy` / `sprintf` (`call <thunk>` rather
+    /// than `call *[__imp_x]`). The symbolic API model is keyed on IAT slot VAs,
+    /// so a `call <thunk>` would not resolve; the runner uses this map to alias
+    /// the thunk entry to the slot's summary.
+    pub import_thunks: BTreeMap<u64, u64>,
 }
 
 /// Decode whether an immediate is a plausible CTL_CODE. Mirrors the calibrated
@@ -101,8 +114,22 @@ pub fn is_ioctl_shaped(v: u32) -> bool {
     if func == 0xFFF {
         return false;
     }
+    // NTSTATUS error codes (0xCxxxxxxx) are the dominant spurious "cluster" in
+    // error-handling switches, so keep rejecting the 0xC top nibble entirely. But
+    // DeviceType 0x8000-0x8FFF is the DDK customer/vendor range -- a CTL_CODE with
+    // a vendor device type is 0x8xxxxxxx (e.g. gna.sys 0x80002400..0x80002808, and
+    // many Intel/Lenovo OEM drivers). Rejecting top==0x8 outright made every
+    // vendor-DeviceType dispatcher invisible (dispatchers=0). Allow it, but still
+    // reject the one ambiguous overlap: facility-0 NTSTATUS *warnings* (0x8000_00xx,
+    // e.g. STATUS_BUFFER_OVERFLOW 0x80000005) share the 0x8000 high word and would
+    // otherwise let a pair of status comparisons register as a false dispatcher.
+    // Real vendor IOCTLs carry a non-trivial Function field (code >= 0x100), so the
+    // facility-0 + tiny-code test separates them.
     let top = v >> 28;
-    if top == 0xC || top == 0x8 {
+    if top == 0xC {
+        return false;
+    }
+    if top == 0x8 && (v & 0x0FFF_0000) == 0 && (v & 0xFFFF) < 0x100 {
         return false;
     }
     // four printable-ASCII bytes => a signature, not a CTL_CODE
@@ -420,9 +447,53 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
     let pdata_starts: BTreeSet<u64> = ranges.iter().map(|&(b, _)| b).collect();
     let dis = IcedDisassembler::new(Architecture::X86_64, Endianness::Little);
 
+    // Import call-stub thunks live OUTSIDE .pdata (leaf stubs carry no unwind info),
+    // so the pdata-driven function loop never sees them. Scan executable section
+    // bytes for the `FF 25 <disp32>` (jmp qword ptr [rip+disp32]) shape directly and
+    // record entry VA -> rip-relative target (the IAT slot). The runner keeps only
+    // entries whose target is a modeled import, so stray FF25 bytes inside other
+    // instructions are harmless (no call targets them, and the target rarely lands
+    // exactly on a modeled slot). This is what makes `call <memcpy/sprintf thunk>`
+    // resolve to its API summary.
+    let mut import_thunks: BTreeMap<u64, u64> = BTreeMap::new();
+    for sec in obj.sections() {
+        let exec = matches!(
+            sec.flags(),
+            object::SectionFlags::Coff { characteristics } if characteristics & 0x2000_0000 != 0
+        );
+        if !exec {
+            continue;
+        }
+        let base = sec.address();
+        if let Ok(bytes) = sec.data() {
+            let mut i = 0usize;
+            while i + 6 <= bytes.len() {
+                if bytes[i] == 0xFF && bytes[i + 1] == 0x25 {
+                    let disp =
+                        i32::from_le_bytes([bytes[i + 2], bytes[i + 3], bytes[i + 4], bytes[i + 5]]);
+                    let va = base + i as u64;
+                    let target = va.wrapping_add(6).wrapping_add(disp as i64 as u64);
+                    import_thunks.insert(va, target);
+                    i += 6;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
     let mut per_func: BTreeMap<u64, Vec<IoctlCode>> = BTreeMap::new();
     let mut jt_maps: BTreeMap<u64, BTreeMap<u32, u64>> = BTreeMap::new();
     let mut handlers_map: BTreeMap<u64, Vec<(u64, bool)>> = BTreeMap::new();
+    // Address-taken .pdata functions (`lea reg,[rip+fn]`): callback registrations.
+    // KMDF EvtIoDeviceControl & friends are taken this way for WDF_IO_QUEUE_CONFIG.
+    let mut lea_taken: BTreeSet<u64> = BTreeSet::new();
+    // WDM dispatch registration: `DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL]
+    // = handler` compiles to `mov [drvobj+0xe0], reg` (0xe8 for INTERNAL_DEVICE_CONTROL),
+    // where `reg` was `lea`'d from the handler's address. A single-handler driver with
+    // no IOCTL command switch (no cmp-immediate cluster) is otherwise invisible to the
+    // dispatcher scan; recover the handler here so the symbolic engine still seeds it.
+    let mut devctl_roots: BTreeSet<u64> = BTreeSet::new();
 
     let is_dispatcher = |codes: &[IoctlCode]| -> bool {
         if all_functions {
@@ -446,6 +517,11 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
         }
         let mut has_jmp_reg = false;
         let mut codes: Vec<IoctlCode> = Vec::new();
+        // Per-function register->lea'd-handler provenance for the MajorFunction store
+        // idiom (`lea reg,[rip+handler]; mov [drvobj+0xe0],reg`). Conservatively
+        // overwritten on each lea; only the most-recent lea into a register matters
+        // for the immediately-following store the DriverEntry idiom produces.
+        let mut reg_lea: BTreeMap<String, u64> = BTreeMap::new();
         for i in 0..insns.len() {
             let ins = &insns[i];
             let m = ins.mnemonic.as_str();
@@ -453,6 +529,38 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
                 if let Some(o) = ins.operands.first() {
                     if o.kind == OperandKind::Register {
                         has_jmp_reg = true;
+                    }
+                }
+                continue;
+            }
+            if m == "lea" {
+                if let Some(o) = ins.operands.get(1) {
+                    if o.kind == OperandKind::Memory && o.base.as_deref() == Some("rip") {
+                        if let Some(d) = o.displacement {
+                            lea_taken.insert(d as u64);
+                            if let Some(dst) = ins.operands.first().and_then(|o| o.register.clone())
+                            {
+                                reg_lea.insert(dst, d as u64);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            // MajorFunction[IRP_MJ_DEVICE_CONTROL/INTERNAL_DEVICE_CONTROL] registration:
+            // mov [base+0xe0], reg / mov [base+0xe8], reg where reg was lea'd from a
+            // .pdata function start -> that function is an IOCTL dispatch handler.
+            if m == "mov" {
+                if let (Some(dstm), Some(srcr)) = (ins.operands.first(), ins.operands.get(1)) {
+                    if dstm.kind == OperandKind::Memory
+                        && matches!(dstm.displacement, Some(0xe0) | Some(0xe8))
+                        && srcr.kind == OperandKind::Register
+                    {
+                        if let Some(t) = srcr.register.as_deref().and_then(|r| reg_lea.get(r)) {
+                            if pdata_starts.contains(t) {
+                                devctl_roots.insert(*t);
+                            }
+                        }
                     }
                 }
                 continue;
@@ -545,10 +653,41 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
         score(b).cmp(&score(a))
     });
 
+    // KMDF augmentation: if this is a WDF driver, the IOCTL dispatcher (EvtIoDeviceControl)
+    // is an address-taken callback reached via the WDF function table, which the WDM
+    // cmp-immediate scan above does not find. Surface the address-taken .pdata functions
+    // (minus those already recognised as dispatchers) as callback roots so the symbolic
+    // engine seeds at the real KMDF handlers instead of analysing nothing.
+    let is_kmdf = data.windows(14).any(|w| w == b"WdfVersionBind");
+    let disp_set: BTreeSet<u64> = dispatchers.iter().map(|d| d.va).collect();
+    let mut root_set: BTreeSet<u64> = BTreeSet::new();
+    // KMDF all-address-taken fallback: ONLY when no precise dispatcher was found.
+    // Seeding every address-taken .pdata callback (DPCs, timers, completion/EvtIoRead/
+    // Write routines -- 1266 on rtwlanu) floods FPs and explodes the reachable set
+    // (the iter09 over-collection). Now that customer DeviceType 0x8xxx dispatchers
+    // are recognised, a driver with a real EvtIoDeviceControl dispatcher is seeded
+    // precisely from it + its resolved handlers; the blunt fallback is only needed
+    // when the dispatcher scan still comes up empty (genuinely table/computed dispatch).
+    if is_kmdf && dispatchers.is_empty() {
+        root_set.extend(
+            lea_taken
+                .into_iter()
+                .filter(|t| pdata_starts.contains(t) && !disp_set.contains(t)),
+        );
+    }
+    // WDM MajorFunction[MJ_DEVICE_CONTROL] handlers recovered from the registration
+    // store -- seeded for every driver, not just KMDF (a single-handler WDM driver
+    // has no cmp-cluster dispatcher). Drop any that are already known dispatchers.
+    root_set.extend(devctl_roots.into_iter().filter(|t| !disp_set.contains(t)));
+    let mut callback_roots: Vec<u64> = root_set.into_iter().collect();
+    callback_roots.sort_unstable();
+
     IoctlSurface {
         dispatchers,
+        callback_roots,
         n_code_functions: per_func.len(),
         n_jumptable: jt_maps.len(),
+        import_thunks,
     }
 }
 
@@ -563,8 +702,17 @@ mod tests {
         assert!(!is_ioctl_shaped(0x0)); // too small
         assert!(!is_ioctl_shaped(0xFFFFFFFF)); // sentinel / mask
         assert!(!is_ioctl_shaped(0x41424344)); // "ABCD" ascii signature
-        assert!(!is_ioctl_shaped(0xC0000001)); // NTSTATUS-shaped
+        assert!(!is_ioctl_shaped(0xC0000001)); // NTSTATUS error-shaped (0xC top)
         assert!(!is_ioctl_shaped(0x00220000)); // func==0, too round
+        // Customer/vendor DeviceType 0x8000 range: these ARE real CTL_CODEs (gna.sys,
+        // many OEM drivers) and must pass despite the 0x8 top nibble.
+        assert!(is_ioctl_shaped(0x80002400)); // gna.sys EvtIoDeviceControl code
+        assert!(is_ioctl_shaped(0x80002808)); // gna.sys code
+        assert!(is_ioctl_shaped(0x8000e00c)); // ISH/Tee customer IOCTL
+        // ...but facility-0 NTSTATUS *warnings* (0x8000_00xx, tiny code field) must
+        // still be rejected so a pair of them is not a false dispatcher.
+        assert!(!is_ioctl_shaped(0x80000005)); // STATUS_BUFFER_OVERFLOW
+        assert!(!is_ioctl_shaped(0x80000001)); // NTSTATUS warning
     }
 
     /// Parity check against real driver fixtures. Gated on GLAURUNG_IOCTL_FIXTURES

@@ -1,4 +1,5 @@
 .claude/scheduled_tasks.lock
+.claude/settings.local.json
 
 # Rust
 /target/

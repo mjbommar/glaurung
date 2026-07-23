@@ -20,11 +20,16 @@ use crate::exec::{Concrete, Flow, Halt, Machine};
 use crate::ir::types::{
     BinOp, CallTarget, CmpOp, Endian, LlirBlock, LlirFunction, Op, VReg, Value, Width,
 };
-use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{solve, Assert, Model, SolveResult};
 use crate::symbolic::Symbolic;
+use crate::symbolic::expr::{Expr, ExprId, ExprPool};
+use crate::symbolic::ordered_trace::{TracePath, WarmReplayCheck};
+use crate::symbolic::solver::{
+    Assert, Model, SolveResult, WarmAssertionPrefix, last_solve_timing, solve_for_path_delta,
+};
 
 use std::cell::Cell;
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 thread_local! {
@@ -33,12 +38,32 @@ thread_local! {
     /// expressions can still be interrupted — coarser checks at block boundaries
     /// are not enough when one block takes minutes.
     static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+
+    /// Summaries keyed by CALL-INSTRUCTION VA (not callee VA). Used for indirect
+    /// calls whose callee cannot be resolved statically — notably KMDF WDF
+    /// function-table calls (`mov rax,[WdfFunctions+idx*8]; call *[thunk]`), which
+    /// all share one dynamic thunk so they cannot be keyed by callee. The runner
+    /// detects e.g. `WdfRequestRetrieveInputBuffer` call sites and registers a
+    /// [`ApiSummary::RetrieveBuffer`] here so the engine taints the retrieved
+    /// buffer as `SystemBuffer` (the KMDF analogue of IRP.AssociatedIrp.SystemBuffer).
+    static CALL_SITE_SUMMARIES: RefCell<BTreeMap<u64, ApiSummary>> =
+        const { RefCell::new(BTreeMap::new()) };
 }
 
 fn deadline_passed() -> bool {
     DEADLINE
         .with(Cell::get)
         .is_some_and(|dl| Instant::now() >= dl)
+}
+
+/// Register call-site-keyed summaries (see [`CALL_SITE_SUMMARIES`]). Set once per
+/// function before [`find_function_sinks_with_apis`]; pass an empty map to clear.
+pub fn set_call_site_summaries(map: BTreeMap<u64, ApiSummary>) {
+    CALL_SITE_SUMMARIES.with(|c| *c.borrow_mut() = map);
+}
+
+fn call_site_summary(va: u64) -> Option<ApiSummary> {
+    CALL_SITE_SUMMARIES.with(|c| c.borrow().get(&va).copied())
 }
 
 /// A sentinel address the attacker would "love to" write to — distinct from any
@@ -128,6 +153,20 @@ pub enum SinkKind {
     ProcessTermination,
     /// An attacker-tainted path/handle into a file API.
     FileOperation,
+    /// An attacker-tainted MSR index reaching `wrmsr` (`__writemsr`): a write to
+    /// an attacker-chosen model-specific register. Writing IA32_LSTAR
+    /// (0xC0000082) redirects the syscall entry to attacker code -> ring-0 code
+    /// execution. (IOCTLance "arbitrary wrmsr".)
+    ArbitraryMsrWrite,
+    /// An attacker-tainted MSR index reaching `rdmsr` (`__readmsr`): reads an
+    /// attacker-chosen MSR. Reading IA32_LSTAR leaks KiSystemCall64 -> defeats
+    /// KASLR and EDR syscall-hook detection.
+    ArbitraryMsrRead,
+    /// An attacker-tainted port reaching a port-I/O instruction (`out`/`in`,
+    /// `__outbyte`/`__inbyte`): arbitrary hardware port access. Port 0xCF9 forces
+    /// a platform reset (unauth DoS); general access enables firmware / PCI-config
+    /// manipulation. (IOCTLance "arbitrary out".)
+    PortAccess,
 }
 
 /// A summary for a known callee, letting the explorer detect attacker-controlled
@@ -159,6 +198,13 @@ pub enum ApiSummary {
     /// `MmMapIoSpace` args 0/1 → [`SinkKind::PhysicalMemory`], `sprintf` fmt arg →
     /// [`SinkKind::FormatString`], `ZwCreateFile` path → [`SinkKind::FileOperation`]).
     DangerousCall { args: &'static [u8], kind: SinkKind },
+    /// A KMDF buffer-retrieval call (`WdfRequestRetrieveInputBuffer`/`InputMemory`):
+    /// `(globals, request, minlen, OUT *Buffer = arg[out_ptr_arg], OUT *Length)`.
+    /// Writes a fresh `SystemBuffer`-tainted pointer to `*arg[out_ptr_arg]`, so the
+    /// subsequent `mov reg,[buf_slot]; ...[reg]` loads carry precise attacker taint
+    /// — the KMDF analogue of seeding `IRP.AssociatedIrp.SystemBuffer`. Used via the
+    /// call-site-keyed map (the WDF callee is a dynamic function-table thunk).
+    RetrieveBuffer { out_ptr_arg: u8 },
 }
 
 /// Maps a call-target VA to its [`ApiSummary`]. Populated by the analysis layer
@@ -257,6 +303,79 @@ struct Alloc {
 /// seeded IRP structures and the stack).
 const HEAP_BASE: u64 = 0x7000_0000;
 
+/// Process-local identity for explicit warm-solver ownership. It never enters
+/// formulas or evidence; ordered trace paths retain their separate stable IDs.
+static NEXT_WARM_PATH_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_warm_path_id() -> u64 {
+    NEXT_WARM_PATH_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+fn warm_owner_transfer_enabled() -> bool {
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        return true;
+    }
+    #[cfg(feature = "solver-axeyum")]
+    {
+        crate::symbolic::solver::axeyum_backend::warm_owner_transfer_enabled()
+    }
+    #[cfg(not(feature = "solver-axeyum"))]
+    {
+        false
+    }
+}
+
+fn warm_serial_sibling_reuse_enabled() -> bool {
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        return true;
+    }
+    #[cfg(feature = "solver-axeyum")]
+    {
+        effective_serial_sibling_reuse(
+            crate::symbolic::solver::axeyum_backend::warm_serial_sibling_reuse_enabled(),
+            crate::symbolic::solver::axeyum_backend::direct_delta_enabled(),
+        )
+    }
+    #[cfg(not(feature = "solver-axeyum"))]
+    {
+        false
+    }
+}
+
+fn effective_serial_sibling_reuse(configured: bool, _direct_delta: bool) -> bool {
+    configured
+}
+
+fn share_serial_warm_owner_with_children(path_id: u64, children: u64) {
+    crate::symbolic::ordered_trace::warm_owner_share(path_id, children);
+    #[cfg(feature = "solver-axeyum")]
+    crate::symbolic::solver::axeyum_backend::share_serial_warm_owner_with_children(
+        path_id, children,
+    );
+    #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::z3_backend::share_serial_warm_owner_with_children(
+            path_id, children,
+        );
+    }
+    #[cfg(not(feature = "solver-axeyum"))]
+    let _ = (path_id, children);
+}
+
+fn close_warm_owner(path_id: u64) {
+    crate::symbolic::ordered_trace::warm_owner_release(path_id);
+    #[cfg(feature = "solver-axeyum")]
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::axeyum_backend::close_fair_warm_path(path_id);
+    } else {
+        crate::symbolic::solver::axeyum_backend::close_warm_path(path_id);
+    }
+    #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+    if crate::symbolic::solver::fair_shadow_enabled() {
+        crate::symbolic::solver::z3_backend::close_warm_path(path_id);
+    }
+}
+
 /// One in-flight path: a machine snapshot, its program counter, the path
 /// condition, and the per-path bookkeeping the lifecycle detectors need.
 #[derive(Clone)]
@@ -284,6 +403,17 @@ struct State {
     /// the resulting giant expression non-interruptible); capping revisits per
     /// path bounds expression growth at the source — IOCTLance's `LoopSeer`.
     visits: BTreeMap<u64, u32>,
+    /// Ordered-trace lineage and scope state. Absent in ordinary execution.
+    trace: Option<TracePath>,
+    /// Logical owner of opt-in retained Axeyum mutable state.
+    warm_path_id: u64,
+    /// Absolute number of persistent constraints known synchronized in that
+    /// owner. It advances only when the direct-delta backend confirms success.
+    warm_retain_assertions: usize,
+    /// Exact copy-on-write ancestry of persistent source assertions. Unlike
+    /// expression IDs or depth, shared node identity cannot alias after pools
+    /// fork and independently intern different expressions.
+    warm_assertion_prefix: WarmAssertionPrefix,
 }
 
 /// Max times a single path may re-enter the same block before it is cut.
@@ -302,6 +432,10 @@ impl State {
             validated: BTreeSet::new(),
             tainted_reads: BTreeSet::new(),
             visits: BTreeMap::new(),
+            trace: TracePath::root(pc),
+            warm_path_id: next_warm_path_id(),
+            warm_retain_assertions: 0,
+            warm_assertion_prefix: WarmAssertionPrefix::default(),
         }
     }
 
@@ -318,8 +452,151 @@ impl State {
             validated: self.validated.clone(),
             tainted_reads: self.tainted_reads.clone(),
             visits: self.visits.clone(),
+            trace: self.trace.as_ref().map(|trace| trace.fork(pc)),
+            warm_path_id: next_warm_path_id(),
+            warm_retain_assertions: self.warm_retain_assertions,
+            warm_assertion_prefix: self.warm_assertion_prefix.clone(),
         }
     }
+
+    fn fork_transferring_warm_owner(&mut self, pc: u64) -> Self {
+        let mut child = self.fork(pc);
+        std::mem::swap(&mut self.warm_path_id, &mut child.warm_path_id);
+        child
+    }
+
+    /// Returns successors in worklist insertion order. The worklist is LIFO,
+    /// so an enabled transfer targets only the second/next-executed child.
+    fn fork_branch_successors(
+        &mut self,
+        pc_if_true: u64,
+        pc_if_false: u64,
+        transfer_warm_owner: bool,
+        serial_sibling_reuse: bool,
+    ) -> [(bool, Self); 2] {
+        let mut first = self.fork(pc_if_true);
+        let mut next = if transfer_warm_owner && !serial_sibling_reuse {
+            self.fork_transferring_warm_owner(pc_if_false)
+        } else {
+            self.fork(pc_if_false)
+        };
+        if serial_sibling_reuse {
+            first.warm_path_id = self.warm_path_id;
+            next.warm_path_id = self.warm_path_id;
+        }
+        [(true, first), (false, next)]
+    }
+
+    /// Add one persistent path assertion and its matching trace scope.
+    fn assert(&mut self, assertion: Assert, role: &str, location: u64) {
+        if let Some(trace) = &mut self.trace {
+            trace.push_assert(&self.machine.dom.pool, assertion, role, location);
+        }
+        self.constraints.push(assertion);
+        self.warm_assertion_prefix.push();
+    }
+
+    /// Terminate this path in the ordered trace, if capture is active.
+    fn end_trace(&mut self, reason: &str) {
+        close_warm_owner(self.warm_path_id);
+        if let Some(trace) = &mut self.trace {
+            trace.end(reason, self.pc);
+        }
+    }
+
+    /// A stateful round is a new logical root even when it carries machine data.
+    fn restart_trace(&mut self) {
+        close_warm_owner(self.warm_path_id);
+        self.warm_path_id = next_warm_path_id();
+        self.warm_retain_assertions = 0;
+        self.warm_assertion_prefix = WarmAssertionPrefix::default();
+        self.trace = TracePath::root(self.pc);
+    }
+}
+
+/// Solve the current path condition and record the exact query occurrence.
+fn solve_traced(st: &mut State, purpose: &str, location: u64) -> SolveResult {
+    let persistent = st.constraints.len();
+    let requested_retain_assertions = st.warm_retain_assertions;
+    let (result, synced) = solve_for_path_delta(
+        &st.machine.dom.pool,
+        &st.constraints,
+        st.warm_path_id,
+        st.warm_retain_assertions,
+        persistent,
+        &st.warm_assertion_prefix,
+    );
+    if synced {
+        st.warm_retain_assertions = persistent;
+    }
+    let timing = last_solve_timing();
+    if let Some(trace) = &mut st.trace {
+        let warm_replay = WarmReplayCheck {
+            owner_id: st.warm_path_id,
+            requested_retain_assertions,
+            persistent_assertions: persistent,
+            synchronized: synced,
+        };
+        trace.check(
+            &st.machine.dom.pool,
+            &st.constraints,
+            &result,
+            purpose,
+            timing,
+            Some(&warm_replay),
+            location,
+        );
+    }
+    result
+}
+
+/// Solve with one temporary assertion, preserving explicit push/check/pop
+/// history while leaving the path condition unchanged.
+fn solve_probe_traced(
+    st: &mut State,
+    assertion: Assert,
+    purpose: &str,
+    role: &str,
+    location: u64,
+) -> SolveResult {
+    if let Some(trace) = &mut st.trace {
+        trace.push_temporary(&st.machine.dom.pool, assertion, role, location);
+    }
+    let mut probe = st.constraints.clone();
+    probe.push(assertion);
+    let persistent = st.constraints.len();
+    let requested_retain_assertions = st.warm_retain_assertions;
+    let (result, synced) = solve_for_path_delta(
+        &st.machine.dom.pool,
+        &probe,
+        st.warm_path_id,
+        st.warm_retain_assertions,
+        persistent,
+        &st.warm_assertion_prefix,
+    );
+    if synced {
+        st.warm_retain_assertions = persistent;
+    }
+    let timing = last_solve_timing();
+    if let Some(trace) = &mut st.trace {
+        let warm_replay = WarmReplayCheck {
+            owner_id: st.warm_path_id,
+            requested_retain_assertions,
+            persistent_assertions: persistent,
+            synchronized: synced,
+        };
+        trace.check(
+            &st.machine.dom.pool,
+            &probe,
+            &result,
+            purpose,
+            timing,
+            Some(&warm_replay),
+            location,
+        );
+        trace.pop(location);
+    }
+    result
 }
 
 /// Search for an input that reaches `target`, starting from `lf`'s entry with the
@@ -342,8 +619,12 @@ pub fn find_input_reaching(
     let mut work = vec![State::root(machine, lf.entry_va, TaintSpec::new())];
     let mut explored = 0usize;
 
-    while let Some(st) = work.pop() {
+    while let Some(mut st) = work.pop() {
         if explored >= max_states {
+            st.end_trace("state-budget");
+            for pending in &mut work {
+                pending.end_trace("state-budget");
+            }
             return SolveResult::Unknown;
         }
         explored += 1;
@@ -351,7 +632,9 @@ pub fn find_input_reaching(
         if st.pc == target {
             // Reached the target: solve the accumulated path condition for a
             // concrete input that drives execution here.
-            return solve(&st.machine.dom.pool, &st.constraints);
+            let result = solve_traced(&mut st, "target-reachability", target);
+            st.end_trace("target-reached");
+            return result;
         }
 
         let apis = CallModel::new();
@@ -403,7 +686,10 @@ fn consider_terminal(st: &State, best: &mut Option<State>) {
         return;
     }
     if best.as_ref().is_none_or(|b| progress(b) < p) {
-        *best = Some(st.clone());
+        let mut candidate = st.clone();
+        candidate.warm_path_id = next_warm_path_id();
+        candidate.warm_retain_assertions = 0;
+        *best = Some(candidate);
     }
 }
 
@@ -427,15 +713,27 @@ fn run_worklist(
     let mut out = Vec::new();
     let mut best: Option<State> = None;
 
-    while let Some(st) = work.pop() {
+    while let Some(mut st) = work.pop() {
         if explored >= max_states {
+            st.end_trace("state-budget");
+            for pending in &mut work {
+                pending.end_trace("state-budget");
+            }
             break;
         }
         let (solves, timeouts) = solver_meter();
         if solves >= max_solves || timeouts >= max_timeouts {
+            st.end_trace("solver-budget");
+            for pending in &mut work {
+                pending.end_trace("solver-budget");
+            }
             break; // solver budget spent: bail with partial findings
         }
         if deadline.is_some_and(|dl| std::time::Instant::now() >= dl) {
+            st.end_trace("deadline");
+            for pending in &mut work {
+                pending.end_trace("deadline");
+            }
             break; // wall-clock budget spent: bail with partial findings
         }
         explored += 1;
@@ -477,8 +775,10 @@ pub fn find_sinks_stateful(
                 st.taint = seed(&mut st.machine);
                 st.pc = lf.entry_va;
                 st.constraints.clear();
+                st.warm_assertion_prefix = WarmAssertionPrefix::default();
                 st.validated.clear();
                 st.tainted_reads.clear();
+                st.restart_trace();
                 st
             }
             None => {
@@ -513,6 +813,7 @@ fn process_block(
 ) -> Vec<State> {
     let Some(block) = blocks.get(&st.pc).cloned() else {
         consider_terminal(&st, best); // ran off the known CFG
+        st.end_trace("off-cfg");
         return Vec::new();
     };
 
@@ -523,6 +824,7 @@ fn process_block(
     *visits += 1;
     if *visits > MAX_BLOCK_VISITS {
         consider_terminal(&st, best);
+        st.end_trace("loop-limit");
         return Vec::new();
     }
 
@@ -531,6 +833,7 @@ fn process_block(
         // expressions can take a long time in a single op, so bail mid-block.
         if deadline_passed() {
             consider_terminal(&st, best);
+            st.end_trace("deadline");
             return Vec::new();
         }
         match &ins.op {
@@ -559,20 +862,31 @@ fn process_block(
                         // set unsat (the forked predicate is non-constant, so
                         // satisfiable on its own), so the feasibility solve can be
                         // skipped — the common case of branching on a fresh field.
-                        let independent = !shares_symbols(&st, c);
+                        let independent = can_skip_feasibility_check(&st, c);
+                        let serial_sibling_reuse = warm_serial_sibling_reuse_enabled();
+                        if serial_sibling_reuse {
+                            share_serial_warm_owner_with_children(st.warm_path_id, 2);
+                        }
                         let mut out = Vec::new();
-                        for (bit, npc) in [(true, pc_if_true), (false, pc_if_false)] {
-                            let mut child = st.fork(npc);
-                            child.constraints.push((c, bit));
-                            if independent
+                        for (bit, mut child) in st.fork_branch_successors(
+                            pc_if_true,
+                            pc_if_false,
+                            warm_owner_transfer_enabled(),
+                            serial_sibling_reuse,
+                        ) {
+                            child.assert((c, bit), "branch", ins.va);
+                            let feasible = independent
                                 || !matches!(
-                                    solve(&child.machine.dom.pool, &child.constraints),
+                                    solve_traced(&mut child, "branch-feasibility", ins.va),
                                     SolveResult::Unsat
-                                )
-                            {
+                                );
+                            if feasible {
                                 out.push(child);
+                            } else {
+                                child.end_trace("unsat-prune");
                             }
                         }
+                        st.end_trace("forked");
                         return out;
                     }
                 }
@@ -588,6 +902,16 @@ fn process_block(
             // register-indirect call through an *attacker-controlled* target is a
             // control-flow hijack (shellcode); anything else ends the path.
             Op::Call { target } => {
+                // Call-site-keyed summary (indirect WDF function-table calls whose
+                // callee is a dynamic thunk, e.g. WdfRequestRetrieveInputBuffer).
+                // Checked before callee resolution; args are still in registers here.
+                if let Some(summary) = call_site_summary(ins.va) {
+                    if !apply_summary(&mut st, ins.va, summary, sinks) {
+                        st.end_trace("model-unavailable");
+                        return Vec::new();
+                    }
+                    continue;
+                }
                 let callee: Option<u64> = match target {
                     CallTarget::Direct(va) => Some(*va),
                     CallTarget::Indirect(Value::Addr(va)) => Some(*va),
@@ -597,7 +921,11 @@ fn process_block(
                         st.machine.dom.pool.collect_syms(tv, &mut syms);
                         if syms.is_empty() {
                             // Concrete function pointer (e.g. loaded from the IAT).
-                            Some(eval_concrete(&mut st, tv))
+                            let Some(callee) = eval_concrete(&mut st, tv) else {
+                                st.end_trace("model-unavailable");
+                                return Vec::new();
+                            };
+                            Some(callee)
                         } else {
                             let prov = st.taint.provenance_of(&st.machine.dom.pool, tv);
                             if !prov.is_empty() {
@@ -608,7 +936,12 @@ fn process_block(
                     }
                 };
                 match callee.and_then(|va| apis.get(&va).copied()) {
-                    Some(summary) => apply_summary(&mut st, ins.va, summary, sinks),
+                    Some(summary) => {
+                        if !apply_summary(&mut st, ins.va, summary, sinks) {
+                            st.end_trace("model-unavailable");
+                            return Vec::new();
+                        }
+                    }
                     // An unmodeled callee (a local helper, logging, etc.) is
                     // treated as opaque: havoc the return and continue, rather than
                     // ending the path. Ending here would cut off everything after a
@@ -628,16 +961,57 @@ fn process_block(
                     .machine
                     .regs
                     .read(&mut st.machine.dom, &VReg::phys("rsp"));
-                let rsp = eval_concrete(&mut st, rsp_v);
+                let Some(rsp) = eval_concrete(&mut st, rsp_v) else {
+                    st.end_trace("model-unavailable");
+                    return Vec::new();
+                };
                 if rsp != 0 {
-                    let ret = st.machine.mem.load(&mut st.machine.dom, rsp, 8, Endian::Little);
+                    let ret = st
+                        .machine
+                        .mem
+                        .load(&mut st.machine.dom, rsp, 8, Endian::Little);
                     let prov = st.taint.provenance_of(&st.machine.dom.pool, ret);
                     if !prov.is_empty() {
                         push_sink(&mut st, ins.va, SinkKind::StackOverflow, ret, prov, sinks);
                     }
                 }
                 consider_terminal(&st, best);
+                st.end_trace("return");
                 return Vec::new();
+            }
+            // Privileged-instruction sinks. `wrmsr`/`rdmsr`/`out`/`in` lift to an
+            // opaque `Op::Intrinsic` (empty ins/outs, no register dataflow). We
+            // inspect the architectural operand register for attacker taint, raise
+            // the matching primitive, then continue (the intrinsic has no declared
+            // outputs to havoc, so it is a no-op for the symbolic state).
+            // `wrmsr`/`rdmsr` MSR index = ECX (rcx); `out`/`in` port = DX (rdx).
+            // Mirrors IOCTLance's wrmsr/out hooks.
+            Op::Intrinsic { name, .. } if name == "wrmsr" || name == "rdmsr" => {
+                let idx = st
+                    .machine
+                    .regs
+                    .read(&mut st.machine.dom, &VReg::phys("rcx"));
+                let prov = st.taint.provenance_of(&st.machine.dom.pool, idx);
+                if !prov.is_empty() {
+                    let kind = if name == "wrmsr" {
+                        SinkKind::ArbitraryMsrWrite
+                    } else {
+                        SinkKind::ArbitraryMsrRead
+                    };
+                    push_sink(&mut st, ins.va, kind, idx, prov, sinks);
+                }
+                continue;
+            }
+            Op::Intrinsic { name, .. } if name == "out" || name == "in" => {
+                let port = st
+                    .machine
+                    .regs
+                    .read(&mut st.machine.dom, &VReg::phys("rdx"));
+                let prov = st.taint.provenance_of(&st.machine.dom.pool, port);
+                if !prov.is_empty() {
+                    push_sink(&mut st, ins.va, SinkKind::PortAccess, port, prov, sinks);
+                }
+                continue;
             }
             other => {
                 check_int_overflow(&mut st, ins.va, other, sinks);
@@ -646,7 +1020,10 @@ fn process_block(
                 // so a deref of a freed pointer held in a global is caught.
                 if let Op::Load { addr, .. } | Op::Store { addr, .. } = other {
                     let av = st.machine.eval_addr(addr);
-                    uaf_check(&mut st, ins.va, av, sinks);
+                    if !uaf_check(&mut st, ins.va, av, sinks) {
+                        st.end_trace("model-unavailable");
+                        return Vec::new();
+                    }
                 }
                 match st.machine.step(other) {
                     Flow::Next => continue,
@@ -659,6 +1036,7 @@ fn process_block(
                     Flow::Halt(Halt::UnresolvedAddress) => {
                         if symbolic_mem_op(&mut st, other, ins.va, sinks).is_none() {
                             consider_terminal(&st, best);
+                            st.end_trace("unresolved-symbolic-memory");
                             return Vec::new();
                         }
                         continue;
@@ -667,6 +1045,7 @@ fn process_block(
                     // halts / return / call end the path.
                     _ => {
                         consider_terminal(&st, best);
+                        st.end_trace("execution-halt");
                         return Vec::new();
                     }
                 }
@@ -682,21 +1061,32 @@ fn process_block(
 /// Concretize a symbolic address: solve the path condition for a model, evaluate
 /// the address expression under it, and bind `addr == chosen` so the path stays
 /// consistent (the "any" strategy; concretize-with-threshold for reads is a
-/// later refinement). Returns the concrete address.
-fn concretize_addr(st: &mut State, addr_val: ExprId) -> u64 {
-    let model = match solve(&st.machine.dom.pool, &st.constraints) {
+/// later refinement). Returns `None` when no satisfying model is available; in
+/// that case the caller must stop the path rather than inventing a value.
+fn concretize_addr(st: &mut State, addr_val: ExprId) -> Option<u64> {
+    let model = match solve_traced(st, "address-concretization", st.pc) {
         SolveResult::Sat(m) => m.values,
-        _ => BTreeMap::new(),
+        _ => return None,
     };
     let mut c = Concrete;
     let a = eval_expr(&st.machine.dom.pool, addr_val, &model, &mut c);
+    if let Some(trace) = &mut st.trace {
+        trace.model_choice(
+            &st.machine.dom.pool,
+            addr_val,
+            a,
+            true,
+            "glaurung-any-address-v1",
+            st.pc,
+        );
+    }
     let chosen = st.machine.dom.constant(Width::W64, a);
     let eq = st
         .machine
         .dom
         .cmp(CmpOp::Eq, &addr_val, &chosen, Width::W64);
-    st.constraints.push((eq, true));
-    a as u64
+    st.assert((eq, true), "concretization", st.pc);
+    Some(a as u64)
 }
 
 /// If the attacker can drive `addr_val` to exactly `value` under the current path
@@ -708,63 +1098,104 @@ fn witness_for_value(st: &mut State, addr_val: ExprId, value: u128) -> Option<Mo
     let w = st.machine.dom.pool.width_of(addr_val);
     let target = st.machine.dom.constant(w, value);
     let eq = st.machine.dom.cmp(CmpOp::Eq, &addr_val, &target, w);
-    let mut probe = st.constraints.clone();
-    probe.push((eq, true));
-    match solve(&st.machine.dom.pool, &probe) {
+    match solve_probe_traced(st, (eq, true), "value-witness", "other", st.pc) {
+        // The target value is fixed by the probe, not selected from a backend
+        // model, so this check has no model-driven exploration choice to record.
         SolveResult::Sat(m) => Some(m),
         _ => None,
     }
 }
 
 /// The MS x64 integer argument register for parameter index `n` (0-based).
-fn arg_reg(n: u8) -> &'static str {
+/// Only the first four parameters are register-passed; index >=4 lives on the
+/// stack (see [`read_arg`]).
+fn arg_reg(n: u8) -> Option<&'static str> {
     match n {
-        0 => "rcx",
-        1 => "rdx",
-        2 => "r8",
-        3 => "r9",
-        _ => "rsp", // beyond arg3 args are on the stack; unmodeled → harmless
+        0 => Some("rcx"),
+        1 => Some("rdx"),
+        2 => Some("r8"),
+        3 => Some("r9"),
+        _ => None,
     }
 }
 
-/// Read call argument `n` as a symbolic value.
-fn read_arg(st: &mut State, n: u8) -> ExprId {
-    st.machine
-        .regs
-        .read(&mut st.machine.dom, &VReg::phys(arg_reg(n)))
+/// Read call argument `n` as a symbolic value. Args 0-3 are in rcx/rdx/r8/r9;
+/// args >=4 are on the stack at `[rsp + 0x20 + (n-4)*8]` at the call site -- the
+/// 32-byte shadow space precedes the first stack arg in the MS x64 ABI. Reading
+/// them (rather than the old `rsp` stub) is what lets a dangerous-call detector
+/// see attacker taint that reached a high-numbered parameter, e.g. the
+/// attacker-controlled CreateDisposition (param 7) of `ZwCreateFile`, which the
+/// handler spills from the IRP system buffer into `[rsp+0x38]`.
+fn read_arg(st: &mut State, n: u8) -> Option<ExprId> {
+    match arg_reg(n) {
+        Some(r) => Some(st.machine.regs.read(&mut st.machine.dom, &VReg::phys(r))),
+        None => {
+            let rsp = st
+                .machine
+                .regs
+                .read(&mut st.machine.dom, &VReg::phys("rsp"));
+            let off = st
+                .machine
+                .dom
+                .constant(Width::W64, 0x20 + (n as u128 - 4) * 8);
+            let addr = st.machine.dom.binop(BinOp::Add, &rsp, &off, Width::W64);
+            let a = concretize_addr(st, addr)?;
+            Some(
+                st.machine
+                    .mem
+                    .load(&mut st.machine.dom, a, 8, Endian::Little),
+            )
+        }
+    }
 }
 
 /// Concretely evaluate `val` under a model of the current path *without* binding
 /// it (a read-only probe, unlike [`concretize_addr`]). Used by the lifecycle
 /// checks (free/UAF/stack) that only need a representative concrete value.
-fn eval_concrete(st: &mut State, val: ExprId) -> u64 {
-    let model = match solve(&st.machine.dom.pool, &st.constraints) {
+/// Returns `None` for UNSAT, unknown, unavailable, or failed solver results;
+/// none of those outcomes authorizes a model-driven exploration choice.
+fn eval_concrete(st: &mut State, val: ExprId) -> Option<u64> {
+    let model = match solve_traced(st, "concrete-evaluation", st.pc) {
         SolveResult::Sat(m) => m.values,
-        _ => BTreeMap::new(),
+        _ => return None,
     };
     let mut c = Concrete;
-    eval_expr(&st.machine.dom.pool, val, &model, &mut c) as u64
+    let value = eval_expr(&st.machine.dom.pool, val, &model, &mut c);
+    if let Some(trace) = &mut st.trace {
+        trace.model_choice(
+            &st.machine.dom.pool,
+            val,
+            value,
+            true,
+            "glaurung-representative-value-v1",
+            st.pc,
+        );
+    }
+    Some(value as u64)
 }
 
 /// A reaching witness for the current path: the empty model when there are no
 /// constraints (no solver call needed), otherwise a solve. `None` only when the
 /// path is provably infeasible (Unsat); Unknown/NoSolver are kept as a sound
 /// over-approximation. This avoids a z3 context-build per sink on shallow paths.
-fn reach_model(st: &State) -> Option<Model> {
+fn reach_model(st: &mut State) -> Option<Model> {
     if st.constraints.is_empty() {
         return Some(Model::default());
     }
-    match solve(&st.machine.dom.pool, &st.constraints) {
+    match solve_traced(st, "finding-reachability", st.pc) {
         SolveResult::Sat(m) => Some(m),
         SolveResult::Unsat => None,
         _ => Some(Model::default()),
     }
 }
 
-/// True if `pred`'s free symbols overlap any symbol already in the path
-/// condition — i.e. adding `pred` could interact with (and possibly contradict)
-/// the existing constraints, so a feasibility solve is warranted.
-fn shares_symbols(st: &State, pred: ExprId) -> bool {
+/// True only when `pred` has at least one free symbol and none overlaps the
+/// existing path condition. In that case either polarity of the non-constant
+/// symbolic branch is satisfiable independently and its feasibility check can
+/// be skipped. A symbol-free expression is *not* admitted: syntactic
+/// `BranchDecision::Fork` does not prove that a constant DAG is semantically
+/// satisfiable, and skipping it can preserve an infeasible path.
+fn can_skip_feasibility_check(st: &State, pred: ExprId) -> bool {
     let pool = &st.machine.dom.pool;
     let mut psyms = BTreeMap::new();
     pool.collect_syms(pred, &mut psyms);
@@ -775,10 +1206,10 @@ fn shares_symbols(st: &State, pred: ExprId) -> bool {
         let mut csyms = BTreeMap::new();
         pool.collect_syms(*c, &mut csyms);
         if csyms.keys().any(|k| psyms.contains_key(k)) {
-            return true;
+            return false;
         }
     }
-    false
+    true
 }
 
 /// True if `expr` has at least one free symbol and *none* of them appear in the
@@ -938,8 +1369,13 @@ fn is_validated(st: &State, addr: ExprId) -> bool {
 }
 
 /// Flag a [`SinkKind::UseAfterFree`] if `ptr` concretizes into a freed block.
-fn uaf_check(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) {
-    let a = eval_concrete(st, ptr);
+fn uaf_check(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) -> bool {
+    if !st.allocations.iter().any(|allocation| allocation.freed) {
+        return true;
+    }
+    let Some(a) = eval_concrete(st, ptr) else {
+        return false;
+    };
     let hit = st
         .allocations
         .iter()
@@ -947,6 +1383,7 @@ fn uaf_check(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) {
     if hit {
         push_sink(st, va, SinkKind::UseAfterFree, ptr, Vec::new(), sinks);
     }
+    true
 }
 
 /// Stack window (bytes) around `rsp` within which a `memcpy` destination is
@@ -955,23 +1392,37 @@ const STACK_WINDOW: u64 = 0x1_0000;
 
 /// Apply a callee summary, recording the attacker-controlled primitives it
 /// exposes, then modeling its return value.
-fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<Sink>) {
+fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<Sink>) -> bool {
     match summary {
         ApiSummary::CopyMemory => {
-            let dst = read_arg(st, 0);
-            let src = read_arg(st, 1);
-            let len = read_arg(st, 2);
-            uaf_check(st, va, dst, sinks);
-            uaf_check(st, va, src, sinks);
+            let Some(dst) = read_arg(st, 0) else {
+                return false;
+            };
+            let Some(src) = read_arg(st, 1) else {
+                return false;
+            };
+            let Some(len) = read_arg(st, 2) else {
+                return false;
+            };
+            if !uaf_check(st, va, dst, sinks) || !uaf_check(st, va, src, sinks) {
+                return false;
+            }
             record_access(st, va, dst, true, sinks);
             record_access(st, va, src, false, sinks);
-            stack_overflow_check(st, va, dst, len, sinks);
+            if !stack_overflow_check(st, va, dst, len, sinks) {
+                return false;
+            }
             havoc_rax(st);
         }
         ApiSummary::Alloc { size_arg } => {
-            let size_val = read_arg(st, size_arg);
+            let Some(size_val) = read_arg(st, size_arg) else {
+                return false;
+            };
             // Choose a concrete size in a sane range for the bump allocator.
-            let size = eval_concrete(st, size_val).clamp(1, 0x10_000);
+            let Some(size) = eval_concrete(st, size_val) else {
+                return false;
+            };
+            let size = size.clamp(1, 0x10_000);
             let base = st.heap_next;
             st.heap_next = st.heap_next.saturating_add((size + 0xF) & !0xF);
             st.allocations.push(Alloc {
@@ -985,13 +1436,21 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
                 .write(&mut st.machine.dom, &VReg::phys("rax"), ret);
         }
         ApiSummary::Free { ptr_arg } => {
-            let ptr = read_arg(st, ptr_arg);
-            do_free(st, va, ptr, sinks);
+            let Some(ptr) = read_arg(st, ptr_arg) else {
+                return false;
+            };
+            if !do_free(st, va, ptr, sinks) {
+                return false;
+            }
             havoc_rax(st);
         }
         ApiSummary::Probe { addr_arg, len_arg } => {
-            let addr = read_arg(st, addr_arg);
-            let len = read_arg(st, len_arg);
+            let Some(addr) = read_arg(st, addr_arg) else {
+                return false;
+            };
+            let Some(len) = read_arg(st, len_arg) else {
+                return false;
+            };
             // A probe whose length can be zero validates nothing (bypassable).
             if witness_for_value(st, len, 0).is_some() {
                 let prov = st.taint.provenance_of(&st.machine.dom.pool, addr);
@@ -1006,10 +1465,33 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             havoc_rax(st);
         }
         ApiSummary::DangerousCall { args, kind } => {
-            dangerous_call(st, va, args, kind, sinks);
+            if !dangerous_call(st, va, args, kind, sinks) {
+                return false;
+            }
             havoc_rax(st);
         }
+        ApiSummary::RetrieveBuffer { out_ptr_arg } => {
+            // *arg[out_ptr_arg] := fresh SystemBuffer-tainted pointer.
+            let Some(out_ptr) = read_arg(st, out_ptr_arg) else {
+                return false;
+            };
+            let Some(addr) = eval_concrete(st, out_ptr) else {
+                return false;
+            };
+            if addr != 0 {
+                let e = st.machine.dom.fresh(Width::W64);
+                if let Expr::Sym { id, .. } = st.machine.dom.pool.get(e) {
+                    let id = *id;
+                    st.taint.mark(id, "SystemBuffer");
+                }
+                st.machine
+                    .mem
+                    .store(&mut st.machine.dom, addr, &e, 8, Endian::Little);
+            }
+            havoc_rax(st); // returns NTSTATUS
+        }
     }
+    true
 }
 
 /// Havoc the return register (`rax`) with a fresh symbol — the sound
@@ -1023,8 +1505,10 @@ fn havoc_rax(st: &mut State) {
 
 /// `ExFreePool(ptr)`: a second free of an already-freed block is a double-free;
 /// otherwise mark the matching live block freed.
-fn do_free(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) {
-    let a = eval_concrete(st, ptr);
+fn do_free(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) -> bool {
+    let Some(a) = eval_concrete(st, ptr) else {
+        return false;
+    };
     if let Some(al) = st.allocations.iter_mut().find(|al| al.base == a) {
         if al.freed {
             push_sink(st, va, SinkKind::DoubleFree, ptr, Vec::new(), sinks);
@@ -1032,29 +1516,41 @@ fn do_free(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) {
             al.freed = true;
         }
     }
+    true
 }
 
 /// Flag a [`SinkKind::StackOverflow`] when a `memcpy` destination is on the stack
 /// and the length is attacker-controlled (an unbounded copy onto the frame).
-fn stack_overflow_check(st: &mut State, va: u64, dst: ExprId, len: ExprId, sinks: &mut Vec<Sink>) {
+fn stack_overflow_check(
+    st: &mut State,
+    va: u64,
+    dst: ExprId,
+    len: ExprId,
+    sinks: &mut Vec<Sink>,
+) -> bool {
     let len_prov = st.taint.provenance_of(&st.machine.dom.pool, len);
     if len_prov.is_empty() {
-        return; // a fixed-length copy can't overflow under attacker control
+        return true; // a fixed-length copy can't overflow under attacker control
     }
     let rsp_v = st
         .machine
         .regs
         .read(&mut st.machine.dom, &VReg::phys("rsp"));
-    let rsp = eval_concrete(st, rsp_v);
+    let Some(rsp) = eval_concrete(st, rsp_v) else {
+        return false;
+    };
     if rsp == 0 {
-        return; // stack pointer not modeled on this path
+        return true; // stack pointer not modeled on this path
     }
-    let dst_a = eval_concrete(st, dst);
+    let Some(dst_a) = eval_concrete(st, dst) else {
+        return false;
+    };
     let lo = rsp.saturating_sub(STACK_WINDOW);
     let hi = rsp.saturating_add(STACK_WINDOW);
     if dst_a >= lo && dst_a <= hi {
         push_sink(st, va, SinkKind::StackOverflow, len, len_prov, sinks);
     }
+    true
 }
 
 /// Flag a [`SinkKind::IntegerOverflow`] when an attacker-tainted `add`/`sub`/`mul`
@@ -1114,9 +1610,9 @@ fn check_int_overflow(st: &mut State, va: u64, op: &Op, sinks: &mut Vec<Sink>) {
         _ => unreachable!(),
     };
 
-    let mut probe = st.constraints.clone();
-    probe.push((pred, true));
-    if let SolveResult::Sat(witness) = solve(&st.machine.dom.pool, &probe) {
+    if let SolveResult::Sat(witness) =
+        solve_probe_traced(st, (pred, true), "integer-overflow", "other", va)
+    {
         sinks.push(Sink {
             va,
             kind: SinkKind::IntegerOverflow,
@@ -1129,11 +1625,19 @@ fn check_int_overflow(st: &mut State, va: u64, op: &Op, sinks: &mut Vec<Sink>) {
 
 /// A routine dangerous when any of `args` is attacker-tainted: aggregate the
 /// provenance of the tainted args and raise one `kind` sink.
-fn dangerous_call(st: &mut State, va: u64, args: &[u8], kind: SinkKind, sinks: &mut Vec<Sink>) {
+fn dangerous_call(
+    st: &mut State,
+    va: u64,
+    args: &[u8],
+    kind: SinkKind,
+    sinks: &mut Vec<Sink>,
+) -> bool {
     let mut prov: BTreeSet<String> = BTreeSet::new();
     let mut tainted_arg: Option<ExprId> = None;
     for &a in args {
-        let v = read_arg(st, a);
+        let Some(v) = read_arg(st, a) else {
+            return false;
+        };
         let p = st.taint.provenance_of(&st.machine.dom.pool, v);
         if !p.is_empty() {
             prov.extend(p);
@@ -1143,6 +1647,7 @@ fn dangerous_call(st: &mut State, va: u64, args: &[u8], kind: SinkKind, sinks: &
     if let Some(v) = tainted_arg {
         push_sink(st, va, kind, v, prov.into_iter().collect(), sinks);
     }
+    true
 }
 
 /// Execute a memory op whose address is symbolic by concretizing the address,
@@ -1154,7 +1659,7 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
             let av = st.machine.eval_addr(addr);
             let addr_tainted = !st.taint.provenance_of(&st.machine.dom.pool, av).is_empty();
             record_access(st, va, av, false, sinks);
-            let a = concretize_addr(st, av);
+            let a = concretize_addr(st, av)?;
             // Taint-through-memory: a load from an attacker-controlled pointer into
             // *uninitialized* memory yields fresh attacker data (mirrors a
             // fully-symbolic memory model). Mark the fresh symbol so values read
@@ -1184,7 +1689,7 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
         Op::Store { addr, src } => {
             let av = st.machine.eval_addr(addr);
             record_access(st, va, av, true, sinks);
-            let a = concretize_addr(st, av);
+            let a = concretize_addr(st, av)?;
             let w = Width::from_bytes(addr.size as u16);
             let v = st.machine.read(src, w);
             st.machine
@@ -1315,6 +1820,22 @@ mod tests {
     }
 
     #[test]
+    fn model_driven_choices_require_a_satisfying_model() {
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W64);
+        let zero = machine.dom.constant(Width::W8, 0);
+        let one = machine.dom.constant(Width::W8, 1);
+        let contradiction = machine.dom.cmp(CmpOp::Eq, &zero, &one, Width::W8);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        state.assert((contradiction, true), "test", state.pc);
+
+        assert_eq!(eval_concrete(&mut state, value), None);
+        let constraints_before = state.constraints.clone();
+        assert_eq!(concretize_addr(&mut state, value), None);
+        assert_eq!(state.constraints, constraints_before);
+    }
+
+    #[test]
     fn unreachable_target_is_unsat_or_exhausted() {
         // Single block that just returns; target 0x9999 is never reached.
         let lf = func(vec![(0x1000, vec![Op::Return], 0x1004)]);
@@ -1326,13 +1847,115 @@ mod tests {
         );
     }
 
+    #[test]
+    fn symbol_free_branch_never_skips_feasibility() {
+        let mut machine = Machine::new(Symbolic::new());
+        let one = machine.dom.constant(Width::W8, 1);
+        let two = machine.dom.constant(Width::W8, 2);
+        // Construct the constant comparison as a DAG node directly: the branch
+        // classifier may see a syntactically non-constant node even though its
+        // asserted true polarity is semantically UNSAT.
+        let predicate = machine.dom.pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: one,
+            b: two,
+            width: Width::W8,
+        });
+        let state = State::root(machine, 0x1000, TaintSpec::new());
+        assert!(!can_skip_feasibility_check(&state, predicate));
+    }
+
+    #[test]
+    fn warm_solver_ownership_is_distinct_across_forks_and_restarts() {
+        let machine = Machine::new(Symbolic::new());
+        let mut root = State::root(machine, 0x1000, TaintSpec::new());
+        root.warm_retain_assertions = 7;
+        let child = root.fork(0x2000);
+        assert_ne!(root.warm_path_id, child.warm_path_id);
+        assert_eq!(child.warm_retain_assertions, 7);
+
+        let original = root.warm_path_id;
+        root.restart_trace();
+        assert_ne!(root.warm_path_id, original);
+        assert_ne!(root.warm_path_id, child.warm_path_id);
+        assert_eq!(root.warm_retain_assertions, 0);
+    }
+
+    #[test]
+    fn warm_owner_transfer_targets_the_next_lifo_successor_only() {
+        let machine = Machine::new(Symbolic::new());
+        let mut parent = State::root(machine, 0x1000, TaintSpec::new());
+        let original_owner = parent.warm_path_id;
+
+        let [(first_bit, first), (next_bit, next)] =
+            parent.fork_branch_successors(0x2000, 0x3000, true, false);
+
+        assert!(first_bit);
+        assert!(!next_bit);
+        assert_ne!(first.warm_path_id, original_owner);
+        assert_eq!(next.warm_path_id, original_owner);
+        assert_ne!(parent.warm_path_id, original_owner);
+        assert_ne!(first.warm_path_id, parent.warm_path_id);
+        assert_ne!(first.warm_path_id, next.warm_path_id);
+    }
+
+    #[test]
+    fn source_ancestry_allows_serial_sibling_leasing_for_direct_delta() {
+        assert!(effective_serial_sibling_reuse(true, false));
+        assert!(effective_serial_sibling_reuse(true, true));
+        assert!(!effective_serial_sibling_reuse(false, false));
+        assert!(!effective_serial_sibling_reuse(false, true));
+    }
+
+    #[test]
+    fn warm_source_ancestry_shares_only_the_exact_fork_prefix() {
+        let machine = Machine::new(Symbolic::new());
+        let mut parent = State::root(machine, 0x1000, TaintSpec::new());
+        let base = parent.machine.dom.constant(Width::W1, 1);
+        parent.assert((base, true), "base", parent.pc);
+
+        let mut left = parent.fork(0x2000);
+        let mut right = parent.fork(0x3000);
+        // Both cloned pools may intern this identical expression to the same
+        // numeric ExprId. Distinct source appends must still be distinct nodes.
+        let left_branch = left.machine.dom.constant(Width::W1, 1);
+        let right_branch = right.machine.dom.constant(Width::W1, 1);
+        left.assert((left_branch, true), "left", left.pc);
+        right.assert((right_branch, true), "right", right.pc);
+
+        assert_eq!(parent.warm_assertion_prefix.depth(), 1);
+        assert_eq!(left.warm_assertion_prefix.depth(), 2);
+        assert_eq!(right.warm_assertion_prefix.depth(), 2);
+        assert_eq!(
+            left.warm_assertion_prefix
+                .common_depth(&right.warm_assertion_prefix),
+            1
+        );
+    }
+
+    #[test]
+    fn serial_sibling_reuse_keeps_one_logical_owner() {
+        let machine = Machine::new(Symbolic::new());
+        let mut parent = State::root(machine, 0x1000, TaintSpec::new());
+        let owner = parent.warm_path_id;
+
+        let [(first_bit, first), (next_bit, next)] =
+            parent.fork_branch_successors(0x2000, 0x3000, true, true);
+
+        assert!(first_bit);
+        assert!(!next_bit);
+        assert_eq!(parent.warm_path_id, owner);
+        assert_eq!(first.warm_path_id, owner);
+        assert_eq!(next.warm_path_id, owner);
+    }
+
     /// The solver budget bails out of a runaway exploration. The block loops to
     /// itself on a symbolic condition, so without a cap it would fork forever (up
     /// to the state cap). With a small solver budget and a huge state cap, the
     /// *solver* budget is what stops it — proving the safety cap engages.
     #[test]
     fn solver_budget_bails_on_runaway_exploration() {
-        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
+        use crate::symbolic::solver::{DEFAULT_SOLVER_BUDGET, set_solver_budget, solver_meter};
         let lf = func(vec![
             (
                 0x1000,
@@ -1380,7 +2003,7 @@ mod tests {
     /// at its source. Without it, the loop would fork up to the state cap.
     #[test]
     fn loop_bound_cuts_runaway_path() {
-        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
+        use crate::symbolic::solver::{DEFAULT_SOLVER_BUDGET, set_solver_budget, solver_meter};
         let lf = func(vec![
             (
                 0x1000,

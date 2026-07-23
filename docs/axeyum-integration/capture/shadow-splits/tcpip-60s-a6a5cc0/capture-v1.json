@@ -1,0 +1,44 @@
+{
+  "schema": "glaurung-shadow-split-capture-v1",
+  "producer": {
+    "glaurung_revision": "a6a5cc0",
+    "axeyum_revision": "4b81e4de"
+  },
+  "driver": {
+    "path": "tests/fixtures/msvc-pdb/tcpip.sys",
+    "sha256": "ff965206a37f2c258b7199bc87b49ee12c834e5fc50f58dae2f3de66a57022ea",
+    "bytes": 3306984
+  },
+  "policy": {
+    "shadow_diff": true,
+    "warm_reuse": "lineage",
+    "warm_owner_transfer": false,
+    "serial_sibling_reuse": true,
+    "direct_delta": true,
+    "direct_sibling_identity": "source-prefix-v1",
+    "replay_sat_cache": true,
+    "max_live_paths": 9,
+    "max_assertions_per_path": 512,
+    "analysis_deadline_seconds": 400,
+    "solve_budget": 1000000,
+    "solver_seconds_per_function": 60,
+    "memory_limit_gib": 4
+  },
+  "run": {
+    "queries": 72117,
+    "agree_or_nondecided": 72117,
+    "sat_unsat_disagreements": 0,
+    "z3_nanos": 249052900000,
+    "axeyum_nanos": 131298100000,
+    "z3_nondecided_occurrences": 50,
+    "axeyum_nondecided_occurrences": 931,
+    "split_occurrences": 977,
+    "warm_resets": 925,
+    "assertion_cap_fallbacks": 480,
+    "max_rss_kib": 439860
+  },
+  "validated_summary": "summary-v1.json",
+  "split_index": "shadow-splits.tsv",
+  "capture_index": "capture-index-v1.json",
+  "axeyum_manifest": "manifest-v1.json"
+}

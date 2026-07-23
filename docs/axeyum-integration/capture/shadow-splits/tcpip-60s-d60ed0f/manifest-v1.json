@@ -1,0 +1,532 @@
+{
+  "files": [
+    {
+      "content_hash": "sha256:0220f437edee8f02c59faa641b896dcf3491ac7b6ada35d7a021d62e96edd349",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "0220f437edee8f02c59faa641b896dcf3491ac7b6ada35d7a021d62e96edd349.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:0aadf044f2b40bc734a49e798d64181cbaea216c105573681280ac98be441c39",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "path": "0aadf044f2b40bc734a49e798d64181cbaea216c105573681280ac98be441c39.smt2",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:1c14c34c98febea5c8526fda97a90ce5f53ba18344f19d437181f8c610365636",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "1c14c34c98febea5c8526fda97a90ce5f53ba18344f19d437181f8c610365636.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:21116c54a86e7e7a5ceca3e93f801550c3196405d408524475e6c7337f21aaa0",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "21116c54a86e7e7a5ceca3e93f801550c3196405d408524475e6c7337f21aaa0.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:241cffea7ba2f1282c21b775800193cc4860019754a55a7c9a2eb8ab25bac70d",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "241cffea7ba2f1282c21b775800193cc4860019754a55a7c9a2eb8ab25bac70d.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:246079cbedd5404f25787c14d0b2092dfb29751f856a729900cd3d212fc49314",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "246079cbedd5404f25787c14d0b2092dfb29751f856a729900cd3d212fc49314.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:24a8f9bfa0d914d343666315dbc4ff8fc320c37de5719369d198b815c0671897",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "24a8f9bfa0d914d343666315dbc4ff8fc320c37de5719369d198b815c0671897.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:27b40aef5f3cd2614019fe2cf11b15e6782402be452bd7ea36a998de551e38e4",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "27b40aef5f3cd2614019fe2cf11b15e6782402be452bd7ea36a998de551e38e4.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:38d7783d61e4ff3b29df17378fe9da009eaf256cf2348eb3d90bbad9579cb6b6",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "38d7783d61e4ff3b29df17378fe9da009eaf256cf2348eb3d90bbad9579cb6b6.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:4101c1943740b42f7d2165bfe35dae7b3097ed7ed046f83e244610b3de56aebe",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "4101c1943740b42f7d2165bfe35dae7b3097ed7ed046f83e244610b3de56aebe.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:51ca2f5c3e59415ba2ec93f9b0bf176b2e0d6a210dd7a07c1823572c8aa498bf",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "51ca2f5c3e59415ba2ec93f9b0bf176b2e0d6a210dd7a07c1823572c8aa498bf.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:51e627e56cb12ab194604a6f08e3879042a36e6b4275d68f957f051f22bba635",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "path": "51e627e56cb12ab194604a6f08e3879042a36e6b4275d68f957f051f22bba635.smt2",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:53a92060e99d6fe14282574ea84ee7b44ba6a7e5bd3a1d7924cd17c34e04d08e",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "53a92060e99d6fe14282574ea84ee7b44ba6a7e5bd3a1d7924cd17c34e04d08e.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:591a77f964c246c59750507e6121a1448925ab8db341bc53935d6fdb83c7ff1a",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "591a77f964c246c59750507e6121a1448925ab8db341bc53935d6fdb83c7ff1a.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:5b9d91ab5b4ff5860b6d6bbc632a5f8ff7cefdc7b990baf164c9e66f9e378ba2",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "5b9d91ab5b4ff5860b6d6bbc632a5f8ff7cefdc7b990baf164c9e66f9e378ba2.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:5f4a1ea53f99e5bce17678950f180e2a21ac7b6fcebaa850a7c1f2f1449ff8e8",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "5f4a1ea53f99e5bce17678950f180e2a21ac7b6fcebaa850a7c1f2f1449ff8e8.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:6008066fd5fb2af3804e61677fbf8acf22641c96b073c62fb70ae116d14b2f7b",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "6008066fd5fb2af3804e61677fbf8acf22641c96b073c62fb70ae116d14b2f7b.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:607312894d239c1b52f73d5ed38d3a8006d6c6a1a95f261445e47a74b5a8e017",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "path": "607312894d239c1b52f73d5ed38d3a8006d6c6a1a95f261445e47a74b5a8e017.smt2",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:60ad3f0207d218b9d0a266b74b2c797914eae21b8d477447533e7db9d6a36ecc",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "60ad3f0207d218b9d0a266b74b2c797914eae21b8d477447533e7db9d6a36ecc.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:6a60db42a9c68da13883790c57b882a0509d87c405c89691896cd76ad33b722d",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "path": "6a60db42a9c68da13883790c57b882a0509d87c405c89691896cd76ad33b722d.smt2",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:712c12308b5e503a4ab4f7d3e5aa02737b86a6296f4f27ee0c41b7762861f3e1",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "712c12308b5e503a4ab4f7d3e5aa02737b86a6296f4f27ee0c41b7762861f3e1.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:71dd5d0bf24c1e2750b33f3868167c0629ce5fcc590e9965d3372db9baa2a4ce",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "71dd5d0bf24c1e2750b33f3868167c0629ce5fcc590e9965d3372db9baa2a4ce.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:7208a061d590eb50370633207b794c771d0cf8deccab8e81e2827f8a990b2902",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "7208a061d590eb50370633207b794c771d0cf8deccab8e81e2827f8a990b2902.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:76c87e48e2af6a22f4f62966a655562bd711bca5bdc0d08c32661e0d9a0086ad",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "path": "76c87e48e2af6a22f4f62966a655562bd711bca5bdc0d08c32661e0d9a0086ad.smt2",
+      "tiers": [
+        "diagnostic",
+        "z3-decided",
+        "representative"
+      ]
+    },
+    {
+      "content_hash": "sha256:77738208121b5ec171a0713c8480d5a078f2189582982b708a98bd2c07365645",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "77738208121b5ec171a0713c8480d5a078f2189582982b708a98bd2c07365645.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided",
+        "representative"
+      ]
+    },
+    {
+      "content_hash": "sha256:7e69a21cd6e098db35bba7eb3749d483f9adc3e75160931a8004c099df0d6c2d",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "7e69a21cd6e098db35bba7eb3749d483f9adc3e75160931a8004c099df0d6c2d.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:82cfa590340eab9de07c5227faadd1ba86d28630ea1f3154f207c31943a38bb0",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "82cfa590340eab9de07c5227faadd1ba86d28630ea1f3154f207c31943a38bb0.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:84208d79dcd39a8d089e12918952ad1e61d94abe5ac178b1f793a16918083912",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "84208d79dcd39a8d089e12918952ad1e61d94abe5ac178b1f793a16918083912.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:8fa1ec57fd229dc0d839ee2faab66e24281946a7628c1bb5a41c958e0ce7efe0",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "8fa1ec57fd229dc0d839ee2faab66e24281946a7628c1bb5a41c958e0ce7efe0.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:9239fedd30cb9ea7cc3b3d02a7fb6d2650c2517063539b748c9f711f828ebc9b",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "9239fedd30cb9ea7cc3b3d02a7fb6d2650c2517063539b748c9f711f828ebc9b.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:96545cdcfe08f18bb3c715675695f6c16a76b8e6e4fb8d4dd7011b937e88f9a6",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "96545cdcfe08f18bb3c715675695f6c16a76b8e6e4fb8d4dd7011b937e88f9a6.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:9773aceeb8d1aeac9ffe8dd884688e4fc7f07ac9f3328a32423e7dd27b1b03a5",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "9773aceeb8d1aeac9ffe8dd884688e4fc7f07ac9f3328a32423e7dd27b1b03a5.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:9fd430417a6230485dab5b3205aef8b4243941ef6eb449c678e2d08ada3860e0",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "9fd430417a6230485dab5b3205aef8b4243941ef6eb449c678e2d08ada3860e0.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:a31867a7faa5f1fda7b22fb10473c53980d073f2876497752de3e2f80b5c2dc0",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "a31867a7faa5f1fda7b22fb10473c53980d073f2876497752de3e2f80b5c2dc0.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:a52a4b13f8f4510351e27111f498aecbb776ea047a4556f0e3f3995057342fb9",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "a52a4b13f8f4510351e27111f498aecbb776ea047a4556f0e3f3995057342fb9.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:aa86f50af75b6fc1eb574da1d9cc14649fd7fa9e2275b297d5dda57dfd62362f",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "aa86f50af75b6fc1eb574da1d9cc14649fd7fa9e2275b297d5dda57dfd62362f.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:ad4443eb31bb83c7228126d01a71656957792e39fef884d3a928b750b231aa7a",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "ad4443eb31bb83c7228126d01a71656957792e39fef884d3a928b750b231aa7a.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:afa6de5bb08ec569ff1466b266c02f5b6f583038ff6ea4a9f5d92655759cc240",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "afa6de5bb08ec569ff1466b266c02f5b6f583038ff6ea4a9f5d92655759cc240.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:b6f6ebc1004233b04d14d28fec2c49c8094fd9229c828dc5832b43495bc71ba4",
+      "expected": "unsat",
+      "family": "shadow-axeyum-decided",
+      "path": "b6f6ebc1004233b04d14d28fec2c49c8094fd9229c828dc5832b43495bc71ba4.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided",
+        "representative"
+      ]
+    },
+    {
+      "content_hash": "sha256:bc16ddc1edd7ba9a856982aa1b22eb35650c6e2107bd4cca5fd6adc0d9f10376",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "bc16ddc1edd7ba9a856982aa1b22eb35650c6e2107bd4cca5fd6adc0d9f10376.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:c25bb4bd4cab6b6e7e18ae2b1bcc81429561416bbd0b1ece3a72a2702e2f55d1",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "path": "c25bb4bd4cab6b6e7e18ae2b1bcc81429561416bbd0b1ece3a72a2702e2f55d1.smt2",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:ced864a55ccecbf448f7c4eb0365c03c5dee71f31870671e993f2ca6fcf99377",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "ced864a55ccecbf448f7c4eb0365c03c5dee71f31870671e993f2ca6fcf99377.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:d0883a80b1e5fb3dc0159fdc442b97ba0dc5f7e6b1708118cc512e9d85e77fdd",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "d0883a80b1e5fb3dc0159fdc442b97ba0dc5f7e6b1708118cc512e9d85e77fdd.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:d0f57473999fefa3ff1377412e3ab961dd750b8fd82152f32ec664db2983d556",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "d0f57473999fefa3ff1377412e3ab961dd750b8fd82152f32ec664db2983d556.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:e3a9772d0432c59d6a37b083d95b10e7f1a1a14a52a2f409c0dd06bf3d53f1ff",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "e3a9772d0432c59d6a37b083d95b10e7f1a1a14a52a2f409c0dd06bf3d53f1ff.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:e830efbdfa3af2ac88ee5b7d3e5b4b8257aa637c9883430b3f4e1b7676f20c67",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "path": "e830efbdfa3af2ac88ee5b7d3e5b4b8257aa637c9883430b3f4e1b7676f20c67.smt2",
+      "tiers": [
+        "diagnostic",
+        "z3-decided",
+        "representative"
+      ]
+    },
+    {
+      "content_hash": "sha256:e8ea1da7f3dc32eb412ebe34f76eb11f7dac8f8044c0f5c08a2ffd31c3842eb2",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "e8ea1da7f3dc32eb412ebe34f76eb11f7dac8f8044c0f5c08a2ffd31c3842eb2.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:eaa3d4e69357c0a86c6e559abacbda483d583e3b7979c8089062d48f2a4dfe0c",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "eaa3d4e69357c0a86c6e559abacbda483d583e3b7979c8089062d48f2a4dfe0c.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:eb47740bbb6bb37ee5513e41f202db320e65325be6ca1fd2a77501db35e4753f",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "path": "eb47740bbb6bb37ee5513e41f202db320e65325be6ca1fd2a77501db35e4753f.smt2",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:fb2d2de22fd708972d6293009568f8a49d59e03cfcd498277bfa886b3dfac142",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "fb2d2de22fd708972d6293009568f8a49d59e03cfcd498277bfa886b3dfac142.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:fc6ae85504ee6e32f3d743232743472b5c8543c14ea7ae8d39594f61b4a22a78",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "path": "fc6ae85504ee6e32f3d743232743472b5c8543c14ea7ae8d39594f61b4a22a78.smt2",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "content_hash": "sha256:fce3d86801103edc615c8d638c73dc8468fe958b43bc365090f5e6a63784b399",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "path": "fce3d86801103edc615c8d638c73dc8468fe958b43bc365090f5e6a63784b399.smt2",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    }
+  ],
+  "logic": "QF_BV",
+  "name": "glaurung-tcpip-shadow-splits-post-concat-fix-v1",
+  "source": "Glaurung d60ed0f; Axeyum 4b81e4de; combined shadow, source-prefix direct lineage, 60 seconds per function; declared concat widths enforced; expected is the only backend-decided class",
+  "version": 1
+}

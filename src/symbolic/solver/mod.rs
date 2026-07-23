@@ -10,6 +10,8 @@
 //! All backends consume the bit-vector [`ExprPool`](crate::symbolic::ExprPool):
 //! solving needs no Python and no external protocol when `solver-z3` is on.
 
+#[cfg(feature = "solver-axeyum")]
+pub mod axeyum_backend;
 pub mod pipe;
 #[cfg(feature = "solver-z3")]
 pub mod z3_backend;
@@ -39,7 +41,8 @@ pub enum SolveResult {
     Error(String),
 }
 
-/// A constraint: a 1-bit predicate expression that must equal `expected`.
+/// A constraint using arbitrary-width bit-vector truthiness: `expected=true`
+/// requires a nonzero value, while `expected=false` requires zero.
 pub type Assert = (ExprId, bool);
 
 /// A solver backend.
@@ -48,7 +51,34 @@ pub trait Solver {
     fn check(&mut self, pool: &ExprPool, asserts: &[Assert]) -> SolveResult;
 }
 
-use std::cell::Cell;
+/// A genuinely retained solver session driven by assertion deltas.
+///
+/// Unlike [`Solver::check`], this contract never receives the complete active
+/// snapshot. Callers explicitly mutate the retained stack, then check it. A
+/// session is exclusive to one explorer owner; cloning or concurrently sharing
+/// mutable backend state is outside this interface.
+pub trait IncrementalSolver {
+    /// Add one persistent assertion to the current scope.
+    fn assert(&mut self, pool: &ExprPool, assertion: Assert) -> Result<(), String>;
+
+    /// Open a new assertion scope.
+    fn push(&mut self) -> Result<(), String>;
+
+    /// Close the latest assertion scope, returning `false` at the base scope.
+    fn pop(&mut self) -> bool;
+
+    /// Return the number of scopes above the base scope.
+    fn scope_depth(&self) -> usize;
+
+    /// Check the currently active persistent assertions.
+    fn check(&mut self) -> SolveResult;
+
+    /// Check with temporary assumptions that do not persist after this call.
+    fn check_assuming(&mut self, pool: &ExprPool, assumptions: &[Assert]) -> SolveResult;
+}
+
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Default per-function solver budget: `(max_solves, max_timeouts)`. The explorer
@@ -69,6 +99,233 @@ thread_local! {
     /// keeping the test suite deterministic; batch callers set a few seconds so a
     /// function with slow-but-not-timing-out solves still can't stall the scan.
     static TIME_BUDGET: Cell<Option<Duration>> = const { Cell::new(None) };
+    /// Per-call timing for the most recent solve on this worker. Ordered-trace
+    /// capture reads it immediately after `solve`; ordinary callers ignore it.
+    static LAST_SOLVE_TIMING: Cell<SolveTiming> = const { Cell::new(SolveTiming::ZERO) };
+    /// Explorer-owned logical path for the current solve. Only the opt-in
+    /// Axeyum lineage adapter consumes this; ordinary and snapshot solves ignore it.
+    static ACTIVE_WARM_PATH: Cell<Option<u64>> = const { Cell::new(None) };
+    /// Explicit persistent-prefix boundary for the opt-in direct-delta Axeyum
+    /// path. `persistent_assertions` partitions the full query slice from any
+    /// trailing one-shot assumptions.
+    static ACTIVE_WARM_DELTA: RefCell<Option<WarmDeltaContext>> = const { RefCell::new(None) };
+}
+
+/// Copy-on-write source ancestry for one explorer path's persistent assertions.
+///
+/// Every append creates a distinct node whose parent is the exact prior prefix;
+/// forks clone only the [`Arc`]. Pointer identity therefore proves shared source
+/// ancestry even when cloned expression pools later reuse the same [`ExprId`]
+/// for different nodes. No hash or depth is trusted as identity.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WarmAssertionPrefix(Option<Arc<WarmAssertionPrefixNode>>);
+
+#[derive(Debug)]
+struct WarmAssertionPrefixNode {
+    parent: Option<Arc<WarmAssertionPrefixNode>>,
+    depth: usize,
+}
+
+impl WarmAssertionPrefix {
+    /// Extend this path by one persistent source assertion.
+    pub(crate) fn push(&mut self) {
+        self.0 = Some(Arc::new(WarmAssertionPrefixNode {
+            parent: self.0.clone(),
+            depth: self.depth() + 1,
+        }));
+    }
+
+    /// Number of persistent source assertions represented by this prefix.
+    pub(crate) fn depth(&self) -> usize {
+        self.0.as_ref().map_or(0, |node| node.depth)
+    }
+
+    /// Exact common-ancestor depth of two source prefixes.
+    pub(crate) fn common_depth(&self, other: &Self) -> usize {
+        let mut left = self.0.clone();
+        let mut right = other.0.clone();
+        while node_depth(&left) > node_depth(&right) {
+            left = node_parent(left);
+        }
+        while node_depth(&right) > node_depth(&left) {
+            right = node_parent(right);
+        }
+        loop {
+            match (&left, &right) {
+                (Some(left), Some(right)) if Arc::ptr_eq(left, right) => return left.depth,
+                (Some(_), Some(_)) => {
+                    left = node_parent(left);
+                    right = node_parent(right);
+                }
+                _ => return 0,
+            }
+        }
+    }
+}
+
+fn node_depth(node: &Option<Arc<WarmAssertionPrefixNode>>) -> usize {
+    node.as_ref().map_or(0, |node| node.depth)
+}
+
+fn node_parent(node: Option<Arc<WarmAssertionPrefixNode>>) -> Option<Arc<WarmAssertionPrefixNode>> {
+    node.and_then(|node| node.parent.clone())
+}
+
+/// Explorer-to-backend direct-delta transition for one check.
+#[derive(Debug, Clone)]
+pub(crate) struct WarmDeltaContext {
+    pub(crate) retain_assertions: usize,
+    pub(crate) persistent_assertions: usize,
+    pub(crate) persistent_prefix: WarmAssertionPrefix,
+}
+
+fn active_warm_delta() -> Option<WarmDeltaContext> {
+    ACTIVE_WARM_DELTA.with(|active| active.borrow().clone())
+}
+
+/// Backend-separated timing for one solver call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SolveTiming {
+    pub(crate) total_nanos: u64,
+    pub(crate) z3_nanos: Option<u64>,
+    pub(crate) axeyum_nanos: Option<u64>,
+    pub(crate) z3_outcome: Option<SolveOutcome>,
+    pub(crate) axeyum_outcome: Option<SolveOutcome>,
+    pub(crate) axeyum_execution: Option<AxeyumExecutionClass>,
+    pub(crate) z3_cold_nanos: Option<u64>,
+    pub(crate) z3_warm_nanos: Option<u64>,
+    pub(crate) axeyum_cold_nanos: Option<u64>,
+    pub(crate) axeyum_warm_nanos: Option<u64>,
+    pub(crate) z3_cold_outcome: Option<SolveOutcome>,
+    pub(crate) z3_warm_outcome: Option<SolveOutcome>,
+    pub(crate) axeyum_cold_outcome: Option<SolveOutcome>,
+    pub(crate) axeyum_warm_outcome: Option<SolveOutcome>,
+    pub(crate) z3_warm_execution: Option<Z3ExecutionClass>,
+    pub(crate) axeyum_warm_execution: Option<AxeyumExecutionClass>,
+}
+
+impl SolveTiming {
+    pub(crate) const ZERO: Self = Self {
+        total_nanos: 0,
+        z3_nanos: None,
+        axeyum_nanos: None,
+        z3_outcome: None,
+        axeyum_outcome: None,
+        axeyum_execution: None,
+        z3_cold_nanos: None,
+        z3_warm_nanos: None,
+        axeyum_cold_nanos: None,
+        axeyum_warm_nanos: None,
+        z3_cold_outcome: None,
+        z3_warm_outcome: None,
+        axeyum_cold_outcome: None,
+        axeyum_warm_outcome: None,
+        z3_warm_execution: None,
+        axeyum_warm_execution: None,
+    };
+}
+
+/// Stable result class for one independently timed backend invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SolveOutcome {
+    Sat,
+    Unsat,
+    Unknown,
+    NoSolver,
+    Error,
+}
+
+impl SolveOutcome {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sat => "sat",
+            Self::Unsat => "unsat",
+            Self::Unknown => "unknown",
+            Self::NoSolver => "no-solver",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl From<&SolveResult> for SolveOutcome {
+    fn from(result: &SolveResult) -> Self {
+        match result {
+            SolveResult::Sat(_) => Self::Sat,
+            SolveResult::Unsat => Self::Unsat,
+            SolveResult::Unknown => Self::Unknown,
+            SolveResult::NoSolver => Self::NoSolver,
+            SolveResult::Error(_) => Self::Error,
+        }
+    }
+}
+
+/// Exact Axeyum execution population for one independently timed invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AxeyumExecutionClass {
+    ColdOneShot,
+    WarmSnapshot,
+    WarmCreated,
+    WarmRetained,
+    WarmTimeoutColdRetry,
+    FallbackMissingPath,
+    FallbackAutoProbe,
+    FallbackPathCap,
+    FallbackAssertionCap,
+    InvalidDirectDelta,
+}
+
+impl AxeyumExecutionClass {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ColdOneShot => "cold-one-shot",
+            Self::WarmSnapshot => "warm-snapshot",
+            Self::WarmCreated => "warm-created",
+            Self::WarmRetained => "warm-retained",
+            Self::WarmTimeoutColdRetry => "warm-timeout-cold-retry",
+            Self::FallbackMissingPath => "fallback-missing-path",
+            Self::FallbackAutoProbe => "fallback-auto-probe",
+            Self::FallbackPathCap => "fallback-path-cap",
+            Self::FallbackAssertionCap => "fallback-assertion-cap",
+            Self::InvalidDirectDelta => "invalid-direct-delta",
+        }
+    }
+}
+
+/// Exact persistent-session population for the fair-shadow Z3 warm cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Z3ExecutionClass {
+    WarmCreated,
+    WarmRetained,
+    FallbackMissingDelta,
+    InvalidDirectDelta,
+}
+
+impl Z3ExecutionClass {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::WarmCreated => "warm-created",
+            Self::WarmRetained => "warm-retained",
+            Self::FallbackMissingDelta => "fallback-missing-delta",
+            Self::InvalidDirectDelta => "invalid-direct-delta",
+        }
+    }
+}
+
+/// Timing for the immediately preceding [`solve`] call on this worker.
+pub(crate) fn last_solve_timing() -> SolveTiming {
+    LAST_SOLVE_TIMING.with(Cell::get)
+}
+
+/// Whether the opt-in four-cell cold/warm diagnostic is active.
+pub(crate) fn fair_shadow_enabled() -> bool {
+    #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+    {
+        std::env::var_os("GLAURUNG_FAIR_SHADOW").is_some()
+    }
+    #[cfg(not(all(feature = "solver-z3", feature = "solver-axeyum")))]
+    {
+        false
+    }
 }
 
 /// Set (or clear) the per-thread per-function wall-clock budget.
@@ -85,6 +342,326 @@ pub fn time_budget() -> Option<Duration> {
 pub fn reset_solver_meter() {
     SOLVE_COUNT.with(|c| c.set(0));
     TIMEOUT_COUNT.with(|c| c.set(0));
+}
+
+// ---------------------------------------------------------------------------
+// Cross-run solver-cost instrumentation (benchmarking; not reset per function).
+//
+// The per-thread meters above are reset before each function; these global
+// atomics accumulate across an entire analysis run so a benchmark can attribute
+// wall-clock to the solver specifically (isolating it from lifting/CFG cost).
+// Thread-safe so parallel scanning is counted correctly.
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TOTAL_SOLVE_COUNT: AtomicU64 = AtomicU64::new(0);
+static TOTAL_SOLVE_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// Reset the cross-run solver-cost accumulators. Call once before a run.
+pub fn reset_total_solver_stats() {
+    TOTAL_SOLVE_COUNT.store(0, Ordering::Relaxed);
+    TOTAL_SOLVE_NANOS.store(0, Ordering::Relaxed);
+}
+
+/// `(total_solves, total_solver_nanos)` since the last reset -- the time spent
+/// inside the solver backend across the whole run.
+pub fn total_solver_stats() -> (u64, u64) {
+    (
+        TOTAL_SOLVE_COUNT.load(Ordering::Relaxed),
+        TOTAL_SOLVE_NANOS.load(Ordering::Relaxed),
+    )
+}
+
+// Real-query corpus capture (for axeyum's GQ1/GQ10 client-performance lane).
+// When GLAURUNG_DUMP_QUERIES=<dir> is set (build with solver-z3, the trusted
+// oracle), every DECIDED query is written once as `<sha256>.smt2` and its
+// trusted verdict appended to `index.tsv`. Deduplicated by content hash so the
+// pack is the distinct real-formula distribution, not 13k near-duplicates.
+#[cfg(feature = "solver-z3")]
+fn maybe_dump_query(pool: &ExprPool, asserts: &[Assert], result: &SolveResult) {
+    use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    static SEEN: OnceLock<Mutex<HashMap<[u8; 32], &'static str>>> = OnceLock::new();
+
+    let dir = DIR.get_or_init(|| std::env::var_os("GLAURUNG_DUMP_QUERIES").map(PathBuf::from));
+    let Some(dir) = dir.as_ref() else { return };
+
+    // Only capture decided queries with a trusted sat/unsat verdict.
+    let verdict = match result {
+        SolveResult::Sat(_) => "sat",
+        SolveResult::Unsat => "unsat",
+        _ => return,
+    };
+
+    let (script, _names) = pipe::build_script(pool, asserts);
+    let hash: [u8; 32] = Sha256::digest(script.as_bytes()).into();
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+
+    // Serialize same-process publication so a query is indexed only after its
+    // complete bytes are visible. Separate capture processes may append the same
+    // row; the strict corpus builder reconciles duplicates and rejects verdict
+    // conflicts before producing a manifest.
+    let seen = SEEN.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut seen = seen.lock().unwrap();
+    if let Some(previous) = seen.get(&hash) {
+        if *previous != verdict {
+            // Preserve the contradictory observation in the index so strict
+            // ingestion fails closed instead of hiding oracle instability.
+            if let Err(error) = append_capture_index(dir, &hex, verdict) {
+                eprintln!("[glaurung-capture] failed to record verdict conflict: {error}");
+            }
+            eprintln!("[glaurung-capture] conflicting verdict for {hex}: {previous} vs {verdict}");
+        }
+        return;
+    }
+
+    if let Err(error) = publish_query_file(dir, &hex, script.as_bytes())
+        .and_then(|()| append_capture_index(dir, &hex, verdict))
+    {
+        eprintln!("[glaurung-capture] failed to publish {hex}: {error}");
+        return;
+    }
+    seen.insert(hash, verdict);
+}
+
+fn shadow_result_class(result: &SolveResult) -> &'static str {
+    match result {
+        SolveResult::Sat(_) => "sat",
+        SolveResult::Unsat => "unsat",
+        SolveResult::Unknown => "unknown",
+        SolveResult::NoSolver => "no-solver",
+        SolveResult::Error(_) => "error",
+    }
+}
+
+fn should_capture_shadow_split(z3: &SolveResult, axeyum: &SolveResult) -> bool {
+    fn decided(result: &SolveResult) -> bool {
+        matches!(result, SolveResult::Sat(_) | SolveResult::Unsat)
+    }
+    fn nondecided(result: &SolveResult) -> bool {
+        matches!(result, SolveResult::Unknown | SolveResult::Error(_))
+    }
+
+    (decided(z3) && nondecided(axeyum)) || (nondecided(z3) && decided(axeyum))
+}
+
+/// Persist exact SMT-LIB bytes only when one shadow backend decides and the
+/// other returns `Unknown`/`Error`. This diagnostic path is fully opt-in and
+/// does not tax ordinary or verdict-agreeing solves.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+fn maybe_dump_shadow_split(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    z3: &SolveResult,
+    axeyum: &SolveResult,
+) {
+    use sha2::{Digest, Sha256};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    type ShadowSplitIdentity = ([u8; 32], &'static str, &'static str);
+    type ShadowSplitSet = HashSet<ShadowSplitIdentity>;
+
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    static SEEN: OnceLock<Mutex<ShadowSplitSet>> = OnceLock::new();
+
+    if !should_capture_shadow_split(z3, axeyum) {
+        return;
+    }
+    let dir =
+        DIR.get_or_init(|| std::env::var_os("GLAURUNG_DUMP_SHADOW_SPLITS").map(PathBuf::from));
+    let Some(dir) = dir.as_ref() else { return };
+
+    let (script, _names) = pipe::build_script(pool, asserts);
+    let hash: [u8; 32] = Sha256::digest(script.as_bytes()).into();
+    let z3_class = shadow_result_class(z3);
+    let axeyum_class = shadow_result_class(axeyum);
+    let identity = (hash, z3_class, axeyum_class);
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut seen = seen.lock().unwrap();
+    if seen.contains(&identity) {
+        return;
+    }
+    let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+    if let Err(error) =
+        publish_shadow_split_bytes(dir, &hex, script.as_bytes(), z3_class, axeyum_class)
+    {
+        eprintln!("[glaurung-shadow-split] failed to publish {hex}: {error}");
+        return;
+    }
+    seen.insert(identity);
+}
+
+#[cfg(feature = "solver-z3")]
+fn publish_shadow_split_bytes(
+    dir: &std::path::Path,
+    hex: &str,
+    script: &[u8],
+    z3_class: &str,
+    axeyum_class: &str,
+) -> std::io::Result<()> {
+    publish_query_file(dir, hex, script)
+        .and_then(|()| append_shadow_split_index(dir, hex, z3_class, axeyum_class))
+}
+
+#[cfg(feature = "solver-z3")]
+fn append_shadow_split_index(
+    dir: &std::path::Path,
+    hex: &str,
+    z3_class: &str,
+    axeyum_class: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut index = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("shadow-splits.tsv"))?;
+    writeln!(index, "{hex}\t{z3_class}\t{axeyum_class}")
+}
+
+#[cfg(feature = "solver-z3")]
+fn publish_query_file(dir: &std::path::Path, hex: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind, Write};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    std::fs::create_dir_all(dir)?;
+    let destination = dir.join(format!("{hex}.smt2"));
+    match std::fs::read(&destination) {
+        Ok(existing) if existing == bytes => return Ok(()),
+        Ok(_) => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("existing query bytes do not match content hash {hex}"),
+            ));
+        }
+        Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
+        Err(_) => {}
+    }
+
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = dir.join(format!(".{hex}.{}.{}.tmp", std::process::id(), sequence));
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)?;
+    if let Err(error) = file.write_all(bytes) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    drop(file);
+
+    match std::fs::hard_link(&temporary, &destination) {
+        Ok(()) => {
+            std::fs::remove_file(&temporary)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&temporary)?;
+            let existing = std::fs::read(&destination)?;
+            if existing == bytes {
+                Ok(())
+            } else {
+                Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("concurrent query bytes do not match content hash {hex}"),
+                ))
+            }
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(feature = "solver-z3")]
+fn append_capture_index(dir: &std::path::Path, hex: &str, verdict: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let row = format!("{hex}\t{verdict}\n");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("index.tsv"))?;
+    file.write_all(row.as_bytes())
+}
+
+// Shadow differential: when both backends are compiled and
+// GLAURUNG_SHADOW_DIFF is set, every solve runs BOTH and records whether the
+// sat/unsat verdicts agree (unknowns tolerated). z3 stays authoritative so
+// exploration is deterministic. This tests verdict parity on the REAL query
+// stream (paper claim C1) independent of model-choice divergence.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_AGREE: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_DISAGREE: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_Z3_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_AX_NANOS: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static FAIR_SHADOW_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+// Model-divergence counters: of the queries where BOTH backends return Sat,
+// how many returned a DIFFERENT satisfying model. This directly measures the
+// mechanism behind finding divergence (model-based concretization), distinct
+// from verdict agreement.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_BOTH_SAT: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_MODEL_DIFF: AtomicU64 = AtomicU64::new(0);
+// Unknown/timeout divergence: a query one backend DECIDES (sat/unsat) but the
+// other returns Unknown (e.g. z3 hitting its 250ms per-solve timeout where
+// fast axeyum decides). This is a real behavioral divergence that steers
+// exploration even though it is not a sat-vs-unsat disagreement.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_Z3_UNK: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_AX_UNK: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+static SHADOW_UNK_SPLIT: AtomicU64 = AtomicU64::new(0);
+
+/// `(z3_unknown, axeyum_unknown, one_unknown_other_decided)`.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+pub fn shadow_unknown_stats() -> (u64, u64, u64) {
+    (
+        SHADOW_Z3_UNK.load(Ordering::Relaxed),
+        SHADOW_AX_UNK.load(Ordering::Relaxed),
+        SHADOW_UNK_SPLIT.load(Ordering::Relaxed),
+    )
+}
+
+/// `(both_sat, model_diff)`: of queries both backends found satisfiable, how
+/// many returned different models. High `model_diff` explains finding
+/// divergence without any verdict disagreement.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+pub fn shadow_model_stats() -> (u64, u64) {
+    (
+        SHADOW_BOTH_SAT.load(Ordering::Relaxed),
+        SHADOW_MODEL_DIFF.load(Ordering::Relaxed),
+    )
+}
+
+/// Shadow-differential stats on the IDENTICAL query stream:
+/// `(agreements, confident_disagreements, z3_total_nanos, axeyum_total_nanos)`.
+/// z3 and axeyum solve the same queries, so the two nanos are directly
+/// comparable (apples-to-apples, unlike two divergent single-backend runs).
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+pub fn shadow_diff_stats() -> (u64, u64, u64, u64) {
+    (
+        SHADOW_AGREE.load(Ordering::Relaxed),
+        SHADOW_DISAGREE.load(Ordering::Relaxed),
+        SHADOW_Z3_NANOS.load(Ordering::Relaxed),
+        SHADOW_AX_NANOS.load(Ordering::Relaxed),
+    )
 }
 
 /// `(solves, timeouts)` issued on this thread since the last [`reset_solver_meter`].
@@ -108,12 +685,441 @@ pub fn solver_budget() -> (u64, u64) {
 /// [`solver_meter`]) so the explorer can bound total solving work.
 pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     SOLVE_COUNT.with(|c| c.set(c.get() + 1));
+    let total_started = std::time::Instant::now();
+    // Shadow-differential mode: run both backends, record verdict agreement,
+    // return z3 authoritatively. Diagnostic only (env-gated).
+    #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+    {
+        if fair_shadow_enabled() {
+            let rotation = FAIR_SHADOW_SEQUENCE.fetch_add(1, Ordering::Relaxed) % 4;
+            let mut z3_cold = None;
+            let mut z3_warm = None;
+            let mut axeyum_cold = None;
+            let mut axeyum_warm = None;
+            let mut z3_cold_nanos = 0;
+            let mut z3_warm_nanos = 0;
+            let mut axeyum_cold_nanos = 0;
+            let mut axeyum_warm_nanos = 0;
+            let mut z3_warm_execution = None;
+            let mut axeyum_warm_execution = None;
+            for offset in 0..4 {
+                match (rotation + offset) % 4 {
+                    0 => {
+                        let started = std::time::Instant::now();
+                        z3_cold = Some(z3_backend::Z3Solver::new().check(pool, asserts));
+                        z3_cold_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    1 => {
+                        let started = std::time::Instant::now();
+                        let (result, execution) = z3_backend::check_warm_thread_local(
+                            pool,
+                            asserts,
+                            ACTIVE_WARM_PATH.with(Cell::get),
+                            active_warm_delta(),
+                        );
+                        z3_warm = Some(result);
+                        z3_warm_execution = Some(execution);
+                        z3_warm_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    2 => {
+                        let started = std::time::Instant::now();
+                        axeyum_cold =
+                            Some(axeyum_backend::AxeyumSolver::new().check(pool, asserts));
+                        axeyum_cold_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                    _ => {
+                        let started = std::time::Instant::now();
+                        let (result, execution) = axeyum_backend::check_fair_warm_thread_local(
+                            pool,
+                            asserts,
+                            ACTIVE_WARM_PATH.with(Cell::get),
+                            active_warm_delta(),
+                        );
+                        axeyum_warm = Some(result);
+                        axeyum_warm_execution = Some(execution);
+                        axeyum_warm_nanos = started.elapsed().as_nanos() as u64;
+                    }
+                }
+            }
+            let rz = z3_cold.expect("fair-shadow rotation runs cold Z3 exactly once");
+            let rzw = z3_warm.expect("fair-shadow rotation runs warm Z3 exactly once");
+            let rac = axeyum_cold.expect("fair-shadow rotation runs cold Axeyum exactly once");
+            let raw = axeyum_warm.expect("fair-shadow rotation runs warm Axeyum exactly once");
+
+            let same = matches!(
+                (&rz, &raw),
+                (SolveResult::Sat(_), SolveResult::Sat(_))
+                    | (SolveResult::Unsat, SolveResult::Unsat)
+            );
+            let nondecided = [&rz, &raw]
+                .into_iter()
+                .any(|result| matches!(result, SolveResult::Unknown | SolveResult::Error(_)));
+            if same || nondecided {
+                SHADOW_AGREE.fetch_add(1, Ordering::Relaxed);
+            } else {
+                SHADOW_DISAGREE.fetch_add(1, Ordering::Relaxed);
+            }
+            if let (SolveResult::Sat(z3_model), SolveResult::Sat(axeyum_model)) = (&rz, &raw) {
+                SHADOW_BOTH_SAT.fetch_add(1, Ordering::Relaxed);
+                if z3_model.values != axeyum_model.values {
+                    SHADOW_MODEL_DIFF.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            let z3_nondecided = matches!(rz, SolveResult::Unknown | SolveResult::Error(_));
+            let axeyum_nondecided = matches!(raw, SolveResult::Unknown | SolveResult::Error(_));
+            if z3_nondecided {
+                SHADOW_Z3_UNK.fetch_add(1, Ordering::Relaxed);
+            }
+            if axeyum_nondecided {
+                SHADOW_AX_UNK.fetch_add(1, Ordering::Relaxed);
+            }
+            if z3_nondecided != axeyum_nondecided {
+                SHADOW_UNK_SPLIT.fetch_add(1, Ordering::Relaxed);
+            }
+            SHADOW_Z3_NANOS.fetch_add(z3_cold_nanos, Ordering::Relaxed);
+            SHADOW_AX_NANOS.fetch_add(axeyum_warm_nanos, Ordering::Relaxed);
+            maybe_dump_shadow_split(pool, asserts, &rz, &raw);
+            LAST_SOLVE_TIMING.with(|timing| {
+                timing.set(SolveTiming {
+                    total_nanos: total_started.elapsed().as_nanos() as u64,
+                    // Backward-compatible aliases retain the original paired
+                    // population: cold Z3 versus selected warm Axeyum.
+                    z3_nanos: Some(z3_cold_nanos),
+                    axeyum_nanos: Some(axeyum_warm_nanos),
+                    z3_outcome: Some(SolveOutcome::from(&rz)),
+                    axeyum_outcome: Some(SolveOutcome::from(&raw)),
+                    axeyum_execution: axeyum_warm_execution,
+                    z3_cold_nanos: Some(z3_cold_nanos),
+                    z3_warm_nanos: Some(z3_warm_nanos),
+                    axeyum_cold_nanos: Some(axeyum_cold_nanos),
+                    axeyum_warm_nanos: Some(axeyum_warm_nanos),
+                    z3_cold_outcome: Some(SolveOutcome::from(&rz)),
+                    z3_warm_outcome: Some(SolveOutcome::from(&rzw)),
+                    axeyum_cold_outcome: Some(SolveOutcome::from(&rac)),
+                    axeyum_warm_outcome: Some(SolveOutcome::from(&raw)),
+                    z3_warm_execution,
+                    axeyum_warm_execution,
+                });
+            });
+            return rz;
+        }
+        if std::env::var_os("GLAURUNG_SHADOW_DIFF").is_some() {
+            // Time each backend on the SAME query for an apples-to-apples
+            // comparison. Alternate order per call to cancel warm-cache bias.
+            let z3_first = SHADOW_AGREE.load(Ordering::Relaxed) % 2 == 0;
+            let (rz, ra, z3_nanos, axeyum_nanos, axeyum_execution);
+            if z3_first {
+                let t = std::time::Instant::now();
+                rz = z3_backend::Z3Solver::new().check(pool, asserts);
+                z3_nanos = t.elapsed().as_nanos() as u64;
+                SHADOW_Z3_NANOS.fetch_add(z3_nanos, Ordering::Relaxed);
+                let t = std::time::Instant::now();
+                (ra, axeyum_execution) = if axeyum_backend::warm_reuse_enabled() {
+                    axeyum_backend::check_warm_thread_local(
+                        pool,
+                        asserts,
+                        ACTIVE_WARM_PATH.with(Cell::get),
+                        active_warm_delta(),
+                    )
+                } else {
+                    (
+                        axeyum_backend::AxeyumSolver::new().check(pool, asserts),
+                        AxeyumExecutionClass::ColdOneShot,
+                    )
+                };
+                axeyum_nanos = t.elapsed().as_nanos() as u64;
+                SHADOW_AX_NANOS.fetch_add(axeyum_nanos, Ordering::Relaxed);
+            } else {
+                let t = std::time::Instant::now();
+                (ra, axeyum_execution) = if axeyum_backend::warm_reuse_enabled() {
+                    axeyum_backend::check_warm_thread_local(
+                        pool,
+                        asserts,
+                        ACTIVE_WARM_PATH.with(Cell::get),
+                        active_warm_delta(),
+                    )
+                } else {
+                    (
+                        axeyum_backend::AxeyumSolver::new().check(pool, asserts),
+                        AxeyumExecutionClass::ColdOneShot,
+                    )
+                };
+                axeyum_nanos = t.elapsed().as_nanos() as u64;
+                SHADOW_AX_NANOS.fetch_add(axeyum_nanos, Ordering::Relaxed);
+                let t = std::time::Instant::now();
+                rz = z3_backend::Z3Solver::new().check(pool, asserts);
+                z3_nanos = t.elapsed().as_nanos() as u64;
+                SHADOW_Z3_NANOS.fetch_add(z3_nanos, Ordering::Relaxed);
+            }
+            let unknown = matches!(rz, SolveResult::Unknown)
+                || matches!(ra, SolveResult::Unknown)
+                || matches!(rz, SolveResult::Error(_))
+                || matches!(ra, SolveResult::Error(_));
+            let same = matches!(
+                (&rz, &ra),
+                (SolveResult::Sat(_), SolveResult::Sat(_))
+                    | (SolveResult::Unsat, SolveResult::Unsat)
+            );
+            if unknown || same {
+                SHADOW_AGREE.fetch_add(1, Ordering::Relaxed);
+            } else {
+                SHADOW_DISAGREE.fetch_add(1, Ordering::Relaxed);
+            }
+            if let (SolveResult::Sat(mz), SolveResult::Sat(ma)) = (&rz, &ra) {
+                SHADOW_BOTH_SAT.fetch_add(1, Ordering::Relaxed);
+                if mz.values != ma.values {
+                    SHADOW_MODEL_DIFF.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            // Diagnostic: print the first few axeyum non-decided reasons so
+            // we know WHY (Unknown budget vs Error translation) it punts.
+            if matches!(ra, SolveResult::Unknown | SolveResult::Error(_))
+                && SHADOW_AX_UNK.load(Ordering::Relaxed) < 5
+            {
+                eprintln!(
+                    "[ax-nondecided #{}] {:?}",
+                    SHADOW_AX_UNK.load(Ordering::Relaxed),
+                    ra
+                );
+            }
+            let z3_unk = matches!(rz, SolveResult::Unknown | SolveResult::Error(_));
+            let ax_unk = matches!(ra, SolveResult::Unknown | SolveResult::Error(_));
+            if z3_unk {
+                SHADOW_Z3_UNK.fetch_add(1, Ordering::Relaxed);
+            }
+            if ax_unk {
+                SHADOW_AX_UNK.fetch_add(1, Ordering::Relaxed);
+            }
+            if z3_unk != ax_unk {
+                SHADOW_UNK_SPLIT.fetch_add(1, Ordering::Relaxed);
+            }
+            maybe_dump_shadow_split(pool, asserts, &rz, &ra);
+            LAST_SOLVE_TIMING.with(|timing| {
+                timing.set(SolveTiming {
+                    total_nanos: total_started.elapsed().as_nanos() as u64,
+                    z3_nanos: Some(z3_nanos),
+                    axeyum_nanos: Some(axeyum_nanos),
+                    z3_outcome: Some(SolveOutcome::from(&rz)),
+                    axeyum_outcome: Some(SolveOutcome::from(&ra)),
+                    axeyum_execution: Some(axeyum_execution),
+                    ..SolveTiming::ZERO
+                });
+            });
+            return rz;
+        }
+    }
+
+    // Backend priority (ADR-002): explicitly-enabled z3 (perf) > axeyum
+    // (pure-Rust default) > pipe (zero-dep fallback).
+    let __solve_start = std::time::Instant::now();
     #[cfg(feature = "solver-z3")]
-    let result = z3_backend::Z3Solver::new().check(pool, asserts);
-    #[cfg(not(feature = "solver-z3"))]
-    let result = pipe::PipeSolver::new().check(pool, asserts);
+    let (result, axeyum_execution) = (z3_backend::Z3Solver::new().check(pool, asserts), None);
+    #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+    let (result, axeyum_execution) = if axeyum_backend::warm_reuse_enabled() {
+        let (result, execution) = axeyum_backend::check_warm_thread_local(
+            pool,
+            asserts,
+            ACTIVE_WARM_PATH.with(Cell::get),
+            active_warm_delta(),
+        );
+        (result, Some(execution))
+    } else {
+        (
+            axeyum_backend::AxeyumSolver::new().check(pool, asserts),
+            Some(AxeyumExecutionClass::ColdOneShot),
+        )
+    };
+    #[cfg(all(not(feature = "solver-z3"), not(feature = "solver-axeyum")))]
+    let (result, axeyum_execution) = (pipe::PipeSolver::new().check(pool, asserts), None);
+    let __elapsed = __solve_start.elapsed().as_nanos() as u64;
+    LAST_SOLVE_TIMING.with(|timing| {
+        timing.set(SolveTiming {
+            total_nanos: total_started.elapsed().as_nanos() as u64,
+            z3_nanos: {
+                #[cfg(feature = "solver-z3")]
+                {
+                    Some(__elapsed)
+                }
+                #[cfg(not(feature = "solver-z3"))]
+                {
+                    None
+                }
+            },
+            axeyum_nanos: {
+                #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+                {
+                    Some(__elapsed)
+                }
+                #[cfg(not(all(not(feature = "solver-z3"), feature = "solver-axeyum")))]
+                {
+                    None
+                }
+            },
+            z3_outcome: {
+                #[cfg(feature = "solver-z3")]
+                {
+                    Some(SolveOutcome::from(&result))
+                }
+                #[cfg(not(feature = "solver-z3"))]
+                {
+                    None
+                }
+            },
+            axeyum_outcome: {
+                #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+                {
+                    Some(SolveOutcome::from(&result))
+                }
+                #[cfg(not(all(not(feature = "solver-z3"), feature = "solver-axeyum")))]
+                {
+                    None
+                }
+            },
+            axeyum_execution,
+            ..SolveTiming::ZERO
+        });
+    });
+    TOTAL_SOLVE_COUNT.fetch_add(1, Ordering::Relaxed);
+    TOTAL_SOLVE_NANOS.fetch_add(__elapsed, Ordering::Relaxed);
     if matches!(result, SolveResult::Unknown) {
         TIMEOUT_COUNT.with(|c| c.set(c.get() + 1));
     }
+    #[cfg(feature = "solver-z3")]
+    maybe_dump_query(pool, asserts, &result);
     result
+}
+
+/// Solve in one path-owner context with an explicit persistent-prefix delta.
+///
+/// The full assertion slice remains available to one-shot/Z3 controls and
+/// trace capture. Only an opt-in direct-delta Axeyum session consumes the
+/// partition. The returned Boolean is true exactly when that retained session
+/// synchronized its persistent stack; callers must advance their retain marker
+/// only then.
+pub(crate) fn solve_for_path_delta(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    retain_assertions: usize,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+) -> (SolveResult, bool) {
+    if retain_assertions > persistent_assertions || persistent_assertions > asserts.len() {
+        return (
+            SolveResult::Error(format!(
+                "invalid warm delta: retain {retain_assertions}, persistent {persistent_assertions}, total {}",
+                asserts.len()
+            )),
+            false,
+        );
+    }
+    if persistent_prefix.depth() != persistent_assertions {
+        return (
+            SolveResult::Error(format!(
+                "invalid warm source prefix: depth {}, persistent {persistent_assertions}",
+                persistent_prefix.depth()
+            )),
+            false,
+        );
+    }
+    let previous_path = ACTIVE_WARM_PATH.with(|active| active.replace(Some(path_id)));
+    let previous_delta = ACTIVE_WARM_DELTA.with(|active| {
+        active.borrow_mut().replace(WarmDeltaContext {
+            retain_assertions,
+            persistent_assertions,
+            persistent_prefix: persistent_prefix.clone(),
+        })
+    });
+    #[cfg(feature = "solver-axeyum")]
+    axeyum_backend::reset_direct_delta_sync();
+    let result = solve(pool, asserts);
+    #[cfg(feature = "solver-axeyum")]
+    let synced = axeyum_backend::last_direct_delta_synced();
+    #[cfg(not(feature = "solver-axeyum"))]
+    let synced = false;
+    ACTIVE_WARM_DELTA.with(|active| {
+        *active.borrow_mut() = previous_delta;
+    });
+    ACTIVE_WARM_PATH.with(|active| active.set(previous_path));
+    (result, synced)
+}
+
+#[cfg(all(test, feature = "solver-z3"))]
+mod capture_tests {
+    use super::{
+        SolveResult, append_capture_index, publish_query_file, publish_shadow_split_bytes,
+        shadow_result_class, should_capture_shadow_split,
+    };
+
+    #[test]
+    fn query_publication_is_idempotent_and_collision_safe() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        publish_query_file(directory.path(), hash, b"first").unwrap();
+        publish_query_file(directory.path(), hash, b"first").unwrap();
+        let error = publish_query_file(directory.path(), hash, b"second").unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            std::fs::read(directory.path().join(format!("{hash}.smt2"))).unwrap(),
+            b"first"
+        );
+        assert!(std::fs::read_dir(directory.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+    }
+
+    #[test]
+    fn capture_index_appends_complete_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        append_capture_index(directory.path(), hash, "sat").unwrap();
+        append_capture_index(directory.path(), hash, "unsat").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("index.tsv")).unwrap(),
+            format!("{hash}\tsat\n{hash}\tunsat\n")
+        );
+    }
+
+    #[test]
+    fn shadow_split_capture_requires_exactly_one_nondecided_backend() {
+        let sat = SolveResult::Sat(Default::default());
+        let unsat = SolveResult::Unsat;
+        let unknown = SolveResult::Unknown;
+        let error = SolveResult::Error("diagnostic must not enter identity".to_string());
+
+        assert!(should_capture_shadow_split(&sat, &unknown));
+        assert!(should_capture_shadow_split(&error, &unsat));
+        assert!(!should_capture_shadow_split(&sat, &unsat));
+        assert!(!should_capture_shadow_split(&unknown, &error));
+        assert_eq!(shadow_result_class(&sat), "sat");
+        assert_eq!(shadow_result_class(&unsat), "unsat");
+        assert_eq!(shadow_result_class(&unknown), "unknown");
+        assert_eq!(shadow_result_class(&error), "error");
+    }
+
+    #[test]
+    fn shadow_split_publication_keeps_exact_bytes_and_backend_classes() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let script = b"(set-logic QF_BV)\n(check-sat)\n";
+
+        publish_shadow_split_bytes(directory.path(), hash, script, "sat", "unknown").unwrap();
+
+        assert_eq!(
+            std::fs::read(directory.path().join(format!("{hash}.smt2"))).unwrap(),
+            script
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("shadow-splits.tsv")).unwrap(),
+            format!("{hash}\tsat\tunknown\n")
+        );
+    }
 }

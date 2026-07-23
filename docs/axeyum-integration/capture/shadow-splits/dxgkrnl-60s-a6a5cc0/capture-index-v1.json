@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "name": "glaurung-dxgkrnl-shadow-splits-60s-v1",
+  "source": "Glaurung a6a5cc0; Axeyum 4b81e4de; combined shadow, source-prefix direct lineage, 60 seconds per function; expected is the only backend-decided class",
+  "logic": "QF_BV",
+  "files": [
+    {
+      "path": "03a3f348087ddfcbec0360f3e37673255bc7ffa248a2a9d254260da493ea87de.smt2",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided",
+        "axeyum-error",
+        "representative",
+        "axeyum-error-representative"
+      ]
+    },
+    {
+      "path": "0f4e6d3fc7e6d0d29b2763271a6ebd96f7a1c05d5c5e1de356b36cd2c05a67ed.smt2",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided",
+        "representative"
+      ]
+    },
+    {
+      "path": "230903e8ffb1b54e037457aea0d13d953a53c257d124ce44e577916cbdd71c80.smt2",
+      "expected": "unsat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided",
+        "axeyum-error"
+      ]
+    },
+    {
+      "path": "9e45981b1dd579fd8665baba762ffd46dcba9004d502095fed56fd9ca1f1695c.smt2",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided"
+      ]
+    }
+  ]
+}

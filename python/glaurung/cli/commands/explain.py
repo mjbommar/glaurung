@@ -148,6 +148,7 @@ def _rewrite_idiomatic(
     role: Optional[str],
     target_language: str,
     timeout_ms: int,
+    pseudocode: Optional[str] = None,
     variable_names: Optional[dict[str, str]] = None,
     string_names: Optional[dict[str, str]] = None,
     constant_labels: Optional[dict[str, str]] = None,
@@ -183,6 +184,7 @@ def _rewrite_idiomatic(
         ctx.kb,
         RewriteFunctionArgs(
             entry_va=int(va),
+            pseudocode=pseudocode,
             c_prototype=c_prototype,
             role=role,
             fidelity=fidelity,  # type: ignore[arg-type]
@@ -246,6 +248,27 @@ class ExplainCommand(BaseCommand):
             default=None,
             help="Entry VA of the function to explain (hex or decimal). "
             "If omitted, the detected entry point is used.",
+        )
+        parser.add_argument(
+            "--range-start",
+            dest="range_start",
+            type=lambda x: int(x, 0),
+            default=None,
+            help="Start VA of a byte window to disassemble (hex/decimal). "
+            "Use with --range-end to seed the decompiler at an arbitrary "
+            "VA without whole-binary function discovery -- required on "
+            "large stripped binaries where auto-discovery is slow or "
+            "misses the target (e.g. 'no function at entry VA'). "
+            "Defaults to --func when --range-end is given.",
+        )
+        parser.add_argument(
+            "--range-end",
+            dest="range_end",
+            type=lambda x: int(x, 0),
+            default=None,
+            help="End VA (exclusive) of the byte window. Required when "
+            "--range-start is set. A window of ~0x4000 past the entry is "
+            "typical for one function.",
         )
         parser.add_argument(
             "--style",
@@ -381,13 +404,33 @@ class ExplainCommand(BaseCommand):
         # don't pass it explicitly, but doing it here lets us share with
         # the role classifier and lets --pdb-cache flow through.
         try:
-            pseudocode = g.ir.decompile_at(
-                str(path),
-                int(func_va),
-                timeout_ms=max(int(args.timeout_ms), 500),
-                style="",
-                pdb_cache=args.pdb_cache or "",
-            )
+            range_start = getattr(args, "range_start", None)
+            range_end = getattr(args, "range_end", None)
+            if range_end is not None or range_start is not None:
+                if range_start is None:
+                    range_start = int(func_va)
+                if range_end is None:
+                    formatter.output_plain(
+                        "Error: --range-end is required with --range-start"
+                    )
+                    return 2
+                pseudocode = g.ir.decompile_range_at(
+                    str(path),
+                    int(func_va),
+                    int(range_start),
+                    int(range_end),
+                    timeout_ms=max(int(args.timeout_ms), 500),
+                    style="",
+                    pdb_cache=args.pdb_cache or "",
+                )
+            else:
+                pseudocode = g.ir.decompile_at(
+                    str(path),
+                    int(func_va),
+                    timeout_ms=max(int(args.timeout_ms), 500),
+                    style="",
+                    pdb_cache=args.pdb_cache or "",
+                )
         except Exception as exc:
             formatter.output_plain(f"Error: decompile failed: {exc}")
             return 1
@@ -456,6 +499,7 @@ class ExplainCommand(BaseCommand):
                 role=role,
                 target_language=args.style,
                 timeout_ms=int(args.timeout_ms),
+                pseudocode=pseudocode,
                 variable_names=(
                     layer0_result.variable_names if layer0_result else None
                 ),
