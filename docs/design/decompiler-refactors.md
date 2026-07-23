@@ -59,6 +59,25 @@ def (also v0) collide. Fix = seed an entry-def v0 and start the counter at 1.
 Safest path: ship Stage 0 → Stage 1, measure, then 2–4 behind a per-program
 type_match guard. Validation: `cargo test` + `/tmp/claude-1000/local_eval.py`.
 
+## byte_match: empirical divergence analysis (2026-07-23)
+
+Recompile our C at the original's `-O0` and diff assembly to find the drivers:
+- **Parameter spill duplication** — FIXED (`coalesce_param_spills`): we emitted
+  `local_X = argN` and used the slot, adding a param→slot copy the compiler never
+  makes. `sum_to` now recompiles byte-IDENTICAL. byte 0.169→0.192.
+- **Array-access idiom (the pointer-function class: arrays/matrix/sort/strops/
+  linkedlist/structs, ~0.12–0.23).** `s += a[i]` lowers to
+  `t0 = i*4; ret = (long)a + t0; *(int*)ret` across statements with `(long)`
+  casts; the compiler emits `cltq; lea 0x0(,i,4),%rdx; add a; mov (%rax)`. To
+  match, need: (a) expression propagation to fold the single-use address temps
+  into one `*(int*)((long)a + i*4)`, then (b) render it as `a[i]` (typed pointer
+  indexing) instead of the byte-offset form — which lets the compiler use its own
+  scaled-addressing idiom and drops the `(long)` casts/`cltq`. This is the next
+  concrete byte lever (medium effort: expr-prop pass + array-index render).
+- Deeper: `cltq`/sign-extend and 64-bit ops from our `long`-typed intermediates;
+  local→local redundant copies (`local_14 = local_10`) copy-prop doesn't fold
+  (it only handles register copies, not promoted-local value numbering).
+
 ## Progress log
 - IR opt passes (#3): copy-prop + dead-store `ir/copy_prop.rs` — DONE.
 - Render width/casts (bridges to #1/#5): load-width casts + pointer-arg
