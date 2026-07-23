@@ -326,12 +326,19 @@ fn rename(
     let mut phi_dst: Vec<HashMap<VReg, u32>> = vec![HashMap::new(); n];
     let mut phi_inputs: Vec<HashMap<VReg, HashMap<usize, u32>>> = vec![HashMap::new(); n];
 
+    // Explicit definitions are numbered from 1. Version 0 is reserved as the
+    // implicit *entry-def* of every register — the value that is live-in at the
+    // function entry (a parameter for an ABI argument register). A use with no
+    // reaching in-function def reads version 0 (see `top_version`), so a live-in
+    // parameter and the first scratch redefinition of the same physical register
+    // no longer collide at version 0 — which is what lets later passes tell a
+    // parameter apart from a reused-as-scratch argument register.
     fn new_version(
         counter: &mut HashMap<VReg, u32>,
         stack: &mut HashMap<VReg, Vec<u32>>,
         v: &VReg,
     ) -> u32 {
-        let c = counter.entry(v.clone()).or_insert(0);
+        let c = counter.entry(v.clone()).or_insert(1);
         let ver = *c;
         *c += 1;
         stack.entry(v.clone()).or_default().push(ver);
@@ -556,6 +563,55 @@ mod tests {
             0,
         )];
         assert_eq!(read_ver, defs_b);
+    }
+
+    #[test]
+    fn live_in_use_reads_entry_def_version_zero() {
+        // B0: %rbx = rdi ; %rdi = 5 ; %rcx = rdi
+        // The first read of rdi is a live-in parameter -> version 0 (entry-def).
+        // The reassignment is version 1, and the later read sees version 1.
+        // A parameter and a scratch redefinition of the same register must not
+        // collide at version 0.
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::Assign {
+                    dst: VReg::phys("rbx"),
+                    src: Value::Reg(VReg::phys("rdi")),
+                },
+                assign("rdi", 5),
+                Op::Assign {
+                    dst: VReg::phys("rcx"),
+                    src: Value::Reg(VReg::phys("rdi")),
+                },
+            ],
+            vec![],
+        )]);
+        let info = compute_ssa(&lf);
+        // Live-in read of rdi (in `rbx = rdi`) is the entry-def, version 0.
+        let param_read = info.use_versions[&(
+            InstrAddr {
+                block_idx: 0,
+                instr_idx: 0,
+            },
+            0,
+        )];
+        assert_eq!(param_read, 0, "live-in parameter read must be version 0");
+        // The reassignment `rdi = 5` is a distinct (non-zero) version.
+        let redef = info.def_versions[&InstrAddr {
+            block_idx: 0,
+            instr_idx: 1,
+        }];
+        assert_ne!(redef, 0, "an explicit redefinition must not be version 0");
+        // The read after the redef sees the redef's version, not the param.
+        let scratch_read = info.use_versions[&(
+            InstrAddr {
+                block_idx: 0,
+                instr_idx: 2,
+            },
+            0,
+        )];
+        assert_eq!(scratch_read, redef);
     }
 
     #[test]
