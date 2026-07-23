@@ -910,6 +910,16 @@ fn is_promoted_local(name: &str) -> bool {
     name.starts_with("local_") || name.starts_with("stack_")
 }
 
+/// The C scalar type of a given memory-access byte width, for load/store casts.
+fn width_ctype(size: u8) -> &'static str {
+    match size {
+        1 => "char",
+        2 => "short",
+        4 => "int",
+        _ => "long",
+    }
+}
+
 /// Collapse `Stmt::Assign { dst: return_reg, src: E }` immediately followed
 /// by `Stmt::Return { value: None }` into `Stmt::Return { value: Some(E) }`.
 ///
@@ -2313,8 +2323,12 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             disp,
             ..
         } => write_addr_arith_dec(base, index, *scale, *disp, out),
-        Expr::Deref { addr, .. } => {
-            out.push_str("*(long *)(");
+        Expr::Deref { addr, size } => {
+            // Use the recovered access width for the load cast (`*(int *)` for a
+            // 4-byte read, not a blanket `*(long *)`). The width picks the
+            // recompiled load instruction (`mov eax` vs `mov rax`), so matching
+            // it to the original narrows byte_match's assembly diff.
+            let _ = write!(out, "*({} *)(", width_ctype(*size));
             write_expr_dec(addr, out);
             out.push(')');
         }
