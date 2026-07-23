@@ -1928,6 +1928,210 @@ pub fn render_decbench(f: &Function) -> String {
 /// arguments from `tm` (a TypeMap already remapped to the AST's role names —
 /// `arg0`, `ret`, …). Locals stay `long` for now (their TypeMap keys do not
 /// survive register renaming; a later pass will type stack slots by size).
+/// Coalesce a parameter's spill slot with the parameter. At `-O0` the compiler
+/// spills each parameter to a frame slot and reads it back; our lifting turns
+/// that slot into a *separate* named local and emits `local_X = argN`, so the
+/// recompiled code copies the parameter into a second stack slot the original
+/// never used (extra `mov`s + a shifted stack layout that diverges byte_match).
+///
+/// When a promoted local is the home of exactly one argument — its only
+/// register-sourced store is `local_X = argN` — that local *is* the parameter:
+/// rename every `local_X` to `argN` and drop the resulting self-assignment. The
+/// parameter is then used directly, matching the compiler's own `-O0` codegen.
+fn coalesce_param_spills(body: &mut Vec<Stmt>) {
+    // local name -> the single argument it is spilled from ("" = disqualified).
+    let mut home: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    collect_param_homes(body, &mut home);
+    let map: std::collections::HashMap<String, String> = home
+        .into_iter()
+        .filter(|(_, arg)| !arg.is_empty())
+        .collect();
+    if map.is_empty() {
+        return;
+    }
+    rename_phys_in_body(body, &map);
+    drop_self_stores(body);
+}
+
+/// Populate `home[local] = arg` for promoted locals whose only register-sourced
+/// store is `Store { local, Reg(argN) }`. A local spilled from two different
+/// args, or also stored from another register, is disqualified (value "").
+fn collect_param_homes(body: &[Stmt], home: &mut std::collections::HashMap<String, String>) {
+    for s in body {
+        match s {
+            Stmt::Store {
+                addr: Expr::Reg(VReg::Phys(local)),
+                src: Expr::Reg(VReg::Phys(src)),
+            } if is_promoted_local(local) => {
+                let arg_ok = parse_arg_index(src).is_some();
+                let entry = home.entry(local.clone());
+                match entry {
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        v.insert(if arg_ok { src.clone() } else { String::new() });
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut o) => {
+                        // A second register store to this slot: only OK if it is
+                        // the same arg; otherwise disqualify.
+                        if !(arg_ok && o.get() == src) {
+                            o.insert(String::new());
+                        }
+                    }
+                }
+            }
+            // A store to a promoted local from a NON-register expression is a
+            // real reassignment of the parameter (`n = n - 1`) — allowed, it does
+            // not disqualify the home. Recurse into nested bodies.
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_param_homes(then_body, home);
+                if let Some(eb) = else_body {
+                    collect_param_homes(eb, home);
+                }
+            }
+            Stmt::While { body, .. } => collect_param_homes(body, home),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, b) in cases {
+                    collect_param_homes(b, home);
+                }
+                if let Some(b) = default {
+                    collect_param_homes(b, home);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Rename physical-register names per `map` throughout `body` (all positions).
+fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String, String>) {
+    fn rn(v: &mut VReg, map: &std::collections::HashMap<String, String>) {
+        if let VReg::Phys(n) = v {
+            if let Some(nn) = map.get(n) {
+                *n = nn.clone();
+            }
+        }
+    }
+    fn re(e: &mut Expr, map: &std::collections::HashMap<String, String>) {
+        match e {
+            Expr::Reg(v) => rn(v, map),
+            Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+                if let Some(v) = base {
+                    rn(v, map);
+                }
+                if let Some(v) = index {
+                    rn(v, map);
+                }
+            }
+            Expr::Deref { addr, .. } => re(addr, map),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                re(lhs, map);
+                re(rhs, map);
+            }
+            Expr::Un { src, .. } => re(src, map),
+            Expr::Const(_)
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Unknown(_) => {}
+        }
+    }
+    for s in body.iter_mut() {
+        match s {
+            Stmt::Assign { dst, src } => {
+                rn(dst, map);
+                re(src, map);
+            }
+            Stmt::Store { addr, src } => {
+                re(addr, map);
+                re(src, map);
+            }
+            Stmt::Call { target, args } => {
+                re(target, map);
+                for a in args.iter_mut() {
+                    re(a, map);
+                }
+            }
+            Stmt::Return { value } => {
+                if let Some(e) = value {
+                    re(e, map);
+                }
+            }
+            Stmt::Push { value } => re(value, map),
+            Stmt::Pop { target } => rn(target, map),
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                re(cond, map);
+                rename_phys_in_body(then_body, map);
+                if let Some(eb) = else_body {
+                    rename_phys_in_body(eb, map);
+                }
+            }
+            Stmt::While { cond, body } => {
+                re(cond, map);
+                rename_phys_in_body(body, map);
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                re(discriminant, map);
+                for (_, b) in cases.iter_mut() {
+                    rename_phys_in_body(b, map);
+                }
+                if let Some(b) = default {
+                    rename_phys_in_body(b, map);
+                }
+            }
+            Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+        }
+    }
+}
+
+/// Drop `Store { addr: Reg(x), src: Reg(x) }` self-assignments (recursively) —
+/// what a coalesced spill `local = arg` collapses to once `local` became `arg`.
+fn drop_self_stores(body: &mut Vec<Stmt>) {
+    body.retain(|s| {
+        !matches!(
+            s,
+            Stmt::Store {
+                addr: Expr::Reg(VReg::Phys(a)),
+                src: Expr::Reg(VReg::Phys(b)),
+            } if a == b
+        )
+    });
+    for s in body.iter_mut() {
+        match s {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                drop_self_stores(then_body);
+                if let Some(eb) = else_body {
+                    drop_self_stores(eb);
+                }
+            }
+            Stmt::While { body, .. } => drop_self_stores(body),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, b) in cases.iter_mut() {
+                    drop_self_stores(b);
+                }
+                if let Some(b) = default {
+                    drop_self_stores(b);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
     // Work on a private copy so the cleanups below don't perturb other renders.
     // First give bare returns (value computed in another block) their ABI return
@@ -1936,6 +2140,10 @@ pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
     // and condition-setup temporaries that otherwise inflate the emitted CFG.
     let mut owned = f.clone();
     default_return_to_reg(&mut owned.body);
+    // Fold each parameter's spill slot back into the parameter before copy-prop,
+    // so the emitted C uses `argN` directly instead of a redundant `local = argN`
+    // copy (which recompiles to extra stack traffic the original never emits).
+    coalesce_param_spills(&mut owned.body);
     crate::ir::copy_prop::propagate_copies(&mut owned);
     let f = &owned;
 
