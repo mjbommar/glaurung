@@ -1,0 +1,621 @@
+//! Copy propagation + dead-copy elimination on the structured AST.
+//!
+//! `-O0` code (and our own lifting) is full of short-lived copies: every switch
+//! comparison reloads its discriminant into a scratch register
+//! (`t10 = local_3; if (t10 == K)`), and the loop-condition setup copies locals
+//! into temporaries (`ret = local_c; t11 = local_4; while (ret < t11)`). Left
+//! alone these copies survive into the rendered C as extra statements, which
+//! inflates the control-flow graph the GED metric compares against ground truth
+//! and clutters the output.
+//!
+//! This pass performs conservative, within-linear-run copy propagation: a copy
+//! `A = <pure>` (a register/local/constant source) is substituted into later
+//! uses of `A` until `A` or the source is overwritten. Copies do not cross
+//! control-flow edges (the active set is cleared at `if`/`while`/`switch`,
+//! labels, gotos, and calls), so the transform is sound without dataflow
+//! analysis. A follow-up dead-copy elimination drops register copies whose
+//! destination is then never read.
+
+use std::collections::HashMap;
+
+use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::types::VReg;
+
+/// Run copy propagation then dead-copy elimination over `f`'s body.
+pub fn propagate_copies(f: &mut Function) {
+    propagate_run(&mut f.body);
+    // Iterate DCE to a fixpoint: removing one dead copy can make the copy that
+    // fed it dead too. Bounded to keep it cheap.
+    for _ in 0..8 {
+        if !eliminate_dead_copies(&mut f.body) {
+            break;
+        }
+    }
+    // Copy propagation exposes local dead stores (`ret = local_c; ret =
+    // (local_c >> 1)` — the first write is overwritten before any read once the
+    // reload was folded away). Remove those within each straight-line run.
+    dead_store_runs(&mut f.body);
+}
+
+/// Is `e` safe to record as a copy source and duplicate into use sites? Only
+/// pure, stable values: a register/local reference, a constant, or a resolved
+/// address/name. Memory loads (`Deref`) and arithmetic are excluded — their
+/// value can change or their operands be clobbered before the use.
+fn is_pure_copyable(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Reg(_) | Expr::Const(_) | Expr::Addr(_) | Expr::Named { .. } | Expr::StringLit { .. }
+    )
+}
+
+type Copies = HashMap<VReg, Expr>;
+
+/// Invalidate every copy whose destination *is* `written`, or whose source
+/// *reads* `written` (its recorded value is now stale).
+fn invalidate(copies: &mut Copies, written: &VReg) {
+    copies.retain(|dst, src| dst != written && !contains_reg(src, written));
+}
+
+fn propagate_run(stmts: &mut [Stmt]) {
+    let mut copies: Copies = HashMap::new();
+    for s in stmts.iter_mut() {
+        match s {
+            Stmt::Assign { dst, src } => {
+                subst(src, &copies);
+                invalidate(&mut copies, dst);
+                if is_pure_copyable(src) && !is_self_ref(dst, src) {
+                    copies.insert(dst.clone(), src.clone());
+                }
+            }
+            Stmt::Store { addr, src } => {
+                subst(addr, &copies);
+                subst(src, &copies);
+                // A store to a bare promoted local writes that variable.
+                if let Expr::Reg(r) = addr {
+                    invalidate(&mut copies, r);
+                }
+            }
+            Stmt::Push { value } => subst(value, &copies),
+            Stmt::Return { value } => {
+                if let Some(e) = value {
+                    subst(e, &copies);
+                }
+            }
+            Stmt::Pop { target } => invalidate(&mut copies, target),
+            Stmt::Call { target, args } => {
+                subst(target, &copies);
+                for a in args.iter_mut() {
+                    subst(a, &copies);
+                }
+                // A call clobbers caller-saved registers — drop everything.
+                copies.clear();
+            }
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                subst(cond, &copies);
+                propagate_run(then_body);
+                if let Some(eb) = else_body {
+                    propagate_run(eb);
+                }
+                copies.clear();
+            }
+            Stmt::While { cond, body } => {
+                subst(cond, &copies);
+                propagate_run(body);
+                copies.clear();
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                subst(discriminant, &copies);
+                for (_, body) in cases.iter_mut() {
+                    propagate_run(body);
+                }
+                if let Some(b) = default {
+                    propagate_run(b);
+                }
+                copies.clear();
+            }
+            // Control-flow boundaries: a label may be a join target and a goto
+            // leaves the run — clear so nothing propagates across the edge.
+            Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
+            Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+        }
+    }
+}
+
+fn is_self_ref(dst: &VReg, src: &Expr) -> bool {
+    matches!(src, Expr::Reg(r) if r == dst)
+}
+
+/// Within each straight-line run, drop a scratch-register write that is
+/// overwritten by a later write before any intervening read (a dead store).
+/// Conservative: resets at every control-flow boundary and only removes writes
+/// whose source is side-effect-free.
+fn dead_store_runs(body: &mut Vec<Stmt>) {
+    // last_write[reg] = index of the most recent not-yet-consumed removable
+    // write to `reg` in this run.
+    let mut last_write: HashMap<VReg, usize> = HashMap::new();
+    let mut dead: Vec<usize> = Vec::new();
+    for (i, s) in body.iter().enumerate() {
+        match s {
+            Stmt::Assign { dst, src } => {
+                // Reads in `src` consume any pending write of those regs.
+                let mut r: HashMap<VReg, usize> = HashMap::new();
+                count_reads_expr(src, &mut r);
+                for reg in r.keys() {
+                    last_write.remove(reg);
+                }
+                // This write shadows a pending one to `dst` with no read between.
+                if let Some(prev) = last_write.remove(dst) {
+                    dead.push(prev);
+                }
+                if is_pure_copyable(src) && is_scratch_reg(dst) && !is_self_ref(dst, src) {
+                    last_write.insert(dst.clone(), i);
+                }
+            }
+            other => {
+                // Any read anywhere consumes pending writes; be safe and clear
+                // on anything that isn't a pure Assign (stores, calls, control
+                // flow, returns all either read or branch).
+                let mut r: HashMap<VReg, usize> = HashMap::new();
+                count_reads_stmt(other, &mut r);
+                for reg in r.keys() {
+                    last_write.remove(reg);
+                }
+                if !matches!(other, Stmt::Nop | Stmt::Comment(_)) {
+                    last_write.clear();
+                }
+            }
+        }
+    }
+    if !dead.is_empty() {
+        let dead: std::collections::HashSet<usize> = dead.into_iter().collect();
+        let mut i = 0;
+        body.retain(|_| {
+            let keep = !dead.contains(&i);
+            i += 1;
+            keep
+        });
+    }
+    // Recurse into nested bodies.
+    for s in body.iter_mut() {
+        match s {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                dead_store_runs(then_body);
+                if let Some(eb) = else_body {
+                    dead_store_runs(eb);
+                }
+            }
+            Stmt::While { body, .. } => dead_store_runs(body),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, b) in cases.iter_mut() {
+                    dead_store_runs(b);
+                }
+                if let Some(b) = default {
+                    dead_store_runs(b);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Remove register copies (`A = <pure>`) whose destination is never read in the
+/// whole body. Returns whether anything was removed. Promoted stack locals
+/// (`local_*`/`stack_*`) are left to the dedicated dead-store pass; here we only
+/// clean scratch registers/temporaries the copy-prop just made dead.
+fn eliminate_dead_copies(body: &mut Vec<Stmt>) -> bool {
+    // Count reads of every register across the whole (nested) body.
+    let mut reads: HashMap<VReg, usize> = HashMap::new();
+    count_reads_body(body, &mut reads);
+    remove_dead(body, &reads)
+}
+
+fn remove_dead(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
+    let mut changed = false;
+    body.retain(|s| {
+        if let Stmt::Assign { dst, src } = s {
+            if is_pure_copyable(src) && is_scratch_reg(dst) && reads.get(dst).copied().unwrap_or(0) == 0
+            {
+                changed = true;
+                return false;
+            }
+        }
+        true
+    });
+    for s in body.iter_mut() {
+        match s {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                changed |= remove_dead(then_body, reads);
+                if let Some(eb) = else_body {
+                    changed |= remove_dead(eb, reads);
+                }
+            }
+            Stmt::While { body, .. } => changed |= remove_dead(body, reads),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, b) in cases.iter_mut() {
+                    changed |= remove_dead(b, reads);
+                }
+                if let Some(b) = default {
+                    changed |= remove_dead(b, reads);
+                }
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
+/// A register we're willing to delete a dead copy to: physical scratch/role
+/// registers and temporaries, but NOT promoted stack locals (owned by
+/// dead-store elimination) and NOT flags.
+fn is_scratch_reg(v: &VReg) -> bool {
+    match v {
+        VReg::Temp(_) => true,
+        VReg::Phys(n) => !n.starts_with("local_") && !n.starts_with("stack_"),
+        VReg::Flag(_) => false,
+    }
+}
+
+// --- expression/statement read-counting and substitution ---------------------
+
+fn contains_reg(e: &Expr, target: &VReg) -> bool {
+    count_reg_uses(e, target) > 0
+}
+
+fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
+    match e {
+        Expr::Reg(r) => (r == target) as usize,
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => 0,
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            (base.as_ref() == Some(target)) as usize + (index.as_ref() == Some(target)) as usize
+        }
+        Expr::Deref { addr, .. } => count_reg_uses(addr, target),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            count_reg_uses(lhs, target) + count_reg_uses(rhs, target)
+        }
+        Expr::Un { src, .. } => count_reg_uses(src, target),
+    }
+}
+
+fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
+    match e {
+        Expr::Reg(r) => *reads.entry(r.clone()).or_insert(0) += 1,
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => {}
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            if let Some(r) = base {
+                *reads.entry(r.clone()).or_insert(0) += 1;
+            }
+            if let Some(r) = index {
+                *reads.entry(r.clone()).or_insert(0) += 1;
+            }
+        }
+        Expr::Deref { addr, .. } => count_reads_expr(addr, reads),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            count_reads_expr(lhs, reads);
+            count_reads_expr(rhs, reads);
+        }
+        Expr::Un { src, .. } => count_reads_expr(src, reads),
+    }
+}
+
+fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
+    match s {
+        // The destination of an Assign is a WRITE, not a read.
+        Stmt::Assign { src, .. } => count_reads_expr(src, reads),
+        Stmt::Store { addr, src } => {
+            count_reads_expr(addr, reads);
+            count_reads_expr(src, reads);
+        }
+        Stmt::Call { target, args } => {
+            count_reads_expr(target, reads);
+            for a in args {
+                count_reads_expr(a, reads);
+            }
+        }
+        Stmt::Return { value } => {
+            if let Some(e) = value {
+                count_reads_expr(e, reads);
+            }
+        }
+        Stmt::Push { value } => count_reads_expr(value, reads),
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            count_reads_expr(cond, reads);
+            count_reads_body(then_body, reads);
+            if let Some(eb) = else_body {
+                count_reads_body(eb, reads);
+            }
+        }
+        Stmt::While { cond, body } => {
+            count_reads_expr(cond, reads);
+            count_reads_body(body, reads);
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            count_reads_expr(discriminant, reads);
+            for (_, b) in cases {
+                count_reads_body(b, reads);
+            }
+            if let Some(b) = default {
+                count_reads_body(b, reads);
+            }
+        }
+        Stmt::Pop { .. }
+        | Stmt::Goto { .. }
+        | Stmt::Label(_)
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => {}
+    }
+}
+
+fn count_reads_body(body: &[Stmt], reads: &mut HashMap<VReg, usize>) {
+    for s in body {
+        count_reads_stmt(s, reads);
+    }
+}
+
+/// Substitute every active copy `dst -> src` into `e`.
+fn subst(e: &mut Expr, copies: &Copies) {
+    if copies.is_empty() {
+        return;
+    }
+    match e {
+        Expr::Reg(r) => {
+            if let Some(src) = copies.get(r) {
+                *e = src.clone();
+            }
+        }
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => {}
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            // Only substitute when the replacement is itself a bare register
+            // (an Lea base/index must stay a register).
+            if let Some(r) = base {
+                if let Some(Expr::Reg(nr)) = copies.get(r) {
+                    *base = Some(nr.clone());
+                }
+            }
+            if let Some(r) = index {
+                if let Some(Expr::Reg(nr)) = copies.get(r) {
+                    *index = Some(nr.clone());
+                }
+            }
+        }
+        Expr::Deref { addr, .. } => subst(addr, copies),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            subst(lhs, copies);
+            subst(rhs, copies);
+        }
+        Expr::Un { src, .. } => subst(src, copies),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ast::{Function, Stmt};
+    use crate::ir::types::{BinOp, CmpOp};
+
+    fn reg(n: &str) -> VReg {
+        VReg::phys(n)
+    }
+
+    #[test]
+    fn reload_temp_is_propagated_and_removed() {
+        // t10 = local_3; zf = (t10 == 7)  ->  zf = (local_3 == 7)  (t10 dropped)
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("t10"),
+                    src: Expr::Reg(reg("local_3")),
+                },
+                Stmt::Assign {
+                    dst: reg("zf"),
+                    src: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(reg("t10"))),
+                        rhs: Box::new(Expr::Const(7)),
+                    },
+                },
+            ],
+        };
+        propagate_copies(&mut f);
+        // The temp copy is gone; the comparison reads local_3 directly.
+        assert_eq!(f.body.len(), 1, "dead reload copy should be removed: {:?}", f.body);
+        match &f.body[0] {
+            Stmt::Assign { src: Expr::Cmp { lhs, .. }, .. } => {
+                assert_eq!(**lhs, Expr::Reg(reg("local_3")));
+            }
+            other => panic!("expected folded cmp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn copy_invalidated_when_source_overwritten() {
+        // ret = local_c; local_c = local_c + 1; x = ret
+        // The `x = ret` must NOT become `x = local_c` (local_c changed).
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Reg(reg("local_c")),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_c")),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("local_c"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("x"),
+                    src: Expr::Reg(reg("ret")),
+                },
+                // Keep `x` live so it isn't dead-eliminated; we want to inspect it.
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("x"))),
+                },
+            ],
+        };
+        propagate_copies(&mut f);
+        // The returned value must be `ret` (which captured local_c *before* the
+        // store), never the post-store `local_c`. That's the invalidation
+        // invariant: the stale copy was not propagated across the write.
+        let ret_val = f
+            .body
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Return { value } => value.clone(),
+                _ => None,
+            })
+            .expect("a return");
+        assert_eq!(
+            ret_val,
+            Expr::Reg(reg("ret")),
+            "return must use captured `ret`, not the overwritten local_c"
+        );
+    }
+
+    #[test]
+    fn overwritten_scratch_write_is_dead_store_eliminated() {
+        // ret = local_c; ret = (local_c >> 1); return ret
+        // The first write is overwritten before any read -> dead, removed.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Reg(reg("local_c")),
+                },
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Bin {
+                        op: BinOp::Shr,
+                        lhs: Box::new(Expr::Reg(reg("local_c"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("ret"))),
+                },
+            ],
+        };
+        propagate_copies(&mut f);
+        assert_eq!(f.body.len(), 2, "dead first write should be removed: {:?}", f.body);
+        assert!(
+            matches!(&f.body[0], Stmt::Assign { dst, src: Expr::Bin { .. } } if *dst == reg("ret")),
+            "surviving write must be the shift: {:?}",
+            f.body[0]
+        );
+    }
+
+    #[test]
+    fn write_read_before_overwrite_is_kept() {
+        // ret = local_c; x = ret; ret = 5; return x  -> first write is READ, kept.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Reg(reg("local_c")),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_9")),
+                    src: Expr::Reg(reg("ret")),
+                },
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Const(5),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("ret"))),
+                },
+            ],
+        };
+        propagate_copies(&mut f);
+        // The store consumes the first `ret`, so it must not be eliminated; the
+        // store keeps a value derived from local_c.
+        assert!(
+            f.body.iter().any(|s| matches!(s, Stmt::Store { .. })),
+            "store must remain: {:?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn copies_do_not_cross_control_flow() {
+        // t = local_0; if (...) { store local_5 = t }  -> the copy is cleared at
+        // the `if`, so the store inside the branch keeps `t` (NOT local_0).
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("t"),
+                    src: Expr::Reg(reg("local_0")),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("zf")),
+                    then_body: vec![Stmt::Store {
+                        addr: Expr::Reg(reg("local_5")),
+                        src: Expr::Reg(reg("t")),
+                    }],
+                    else_body: None,
+                },
+            ],
+        };
+        propagate_copies(&mut f);
+        if let Stmt::If { then_body, .. } = &f.body[1] {
+            assert_eq!(
+                then_body[0],
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_5")),
+                    src: Expr::Reg(reg("t"))
+                },
+                "copy must not cross the if boundary"
+            );
+        } else {
+            panic!("expected if");
+        }
+    }
+}

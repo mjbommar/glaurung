@@ -1919,17 +1919,15 @@ pub fn render_decbench(f: &Function) -> String {
 /// `arg0`, `ret`, …). Locals stay `long` for now (their TypeMap keys do not
 /// survive register renaming; a later pass will type stack slots by size).
 pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
-    // Give bare returns (value computed in another block) their ABI return
-    // register, so this always-non-void renderer emits `return ret;` rather than
-    // the value-losing `return 0;`. Only clone when there is a bare return.
-    let mut owned;
-    let f = if body_has_bare_return(&f.body) {
-        owned = f.clone();
-        default_return_to_reg(&mut owned.body);
-        &owned
-    } else {
-        f
-    };
+    // Work on a private copy so the cleanups below don't perturb other renders.
+    // First give bare returns (value computed in another block) their ABI return
+    // register — so this always-non-void renderer emits `return ret;` not the
+    // value-losing `return 0;` — then copy-propagate away the short-lived reload
+    // and condition-setup temporaries that otherwise inflate the emitted CFG.
+    let mut owned = f.clone();
+    default_return_to_reg(&mut owned.body);
+    crate::ir::copy_prop::propagate_copies(&mut owned);
+    let f = &owned;
 
     let mut ids = DecIdents::default();
     for s in &f.body {

@@ -27,6 +27,7 @@ pub mod ast;
 pub mod call_args;
 pub mod canary;
 pub mod const_fold;
+pub mod copy_prop;
 pub mod dce;
 pub mod dead_stores;
 pub mod expr_reconstruct;
