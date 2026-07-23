@@ -141,8 +141,8 @@ fn map_inner(data: &[u8]) -> Option<LinuxIoctlSurface> {
         let name = sym.name().unwrap_or("");
         // A `file_operations` instance is a data object conventionally named
         // `*_fops`. (Also accept `*fops` to be forgiving.)
-        let looks_fops = sym.kind() == SymbolKind::Data
-            && (name.ends_with("_fops") || name.ends_with("fops"));
+        let looks_fops =
+            sym.kind() == SymbolKind::Data && (name.ends_with("_fops") || name.ends_with("fops"));
         if !looks_fops {
             continue;
         }
@@ -205,9 +205,11 @@ fn map_inner(data: &[u8]) -> Option<LinuxIoctlSurface> {
     }
 
     // Stable ordering: by fops name then slot.
-    surface
-        .handlers
-        .sort_by(|a, b| a.fops_symbol.cmp(&b.fops_symbol).then(a.slot_offset.cmp(&b.slot_offset)));
+    surface.handlers.sort_by(|a, b| {
+        a.fops_symbol
+            .cmp(&b.fops_symbol)
+            .then(a.slot_offset.cmp(&b.slot_offset))
+    });
     Some(surface)
 }
 

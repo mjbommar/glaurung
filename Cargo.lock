@@ -98,10 +98,12 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "axeyum-aig"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 
 [[package]]
 name = "axeyum-bv"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 dependencies = [
  "axeyum-aig",
  "axeyum-ir",
@@ -111,6 +113,7 @@ dependencies = [
 [[package]]
 name = "axeyum-cnf"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 dependencies = [
  "axeyum-aig",
  "batsat",
@@ -122,10 +125,12 @@ dependencies = [
 [[package]]
 name = "axeyum-egraph"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 
 [[package]]
 name = "axeyum-fp"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 dependencies = [
  "axeyum-ir",
 ]
@@ -133,6 +138,7 @@ dependencies = [
 [[package]]
 name = "axeyum-ir"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 dependencies = [
  "num-bigint",
  "num-integer",
@@ -143,10 +149,12 @@ dependencies = [
 [[package]]
 name = "axeyum-lean-kernel"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 
 [[package]]
 name = "axeyum-query"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 dependencies = [
  "axeyum-ir",
 ]
@@ -154,6 +162,7 @@ dependencies = [
 [[package]]
 name = "axeyum-rewrite"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 dependencies = [
  "axeyum-ir",
 ]
@@ -161,6 +170,7 @@ dependencies = [
 [[package]]
 name = "axeyum-smtlib"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 dependencies = [
  "axeyum-fp",
  "axeyum-ir",
@@ -170,6 +180,7 @@ dependencies = [
 [[package]]
 name = "axeyum-solver"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 dependencies = [
  "axeyum-aig",
  "axeyum-bv",
@@ -188,6 +199,7 @@ dependencies = [
 [[package]]
 name = "axeyum-strings"
 version = "0.1.0"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=c38a9515e68e7427b1a41a7598805cf60686bd58#c38a9515e68e7427b1a41a7598805cf60686bd58"
 dependencies = [
  "axeyum-ir",
 ]

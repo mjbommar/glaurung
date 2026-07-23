@@ -16,21 +16,174 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::exec::domain::{BranchDecision, Domain};
-use crate::exec::{Concrete, Flow, Halt, Machine};
+use crate::exec::{Concrete, Flow, Halt, Machine, RegArch};
 use crate::ir::types::{
     BinOp, CallTarget, CmpOp, Endian, LlirBlock, LlirFunction, Op, VReg, Value, Width,
 };
-use crate::symbolic::Symbolic;
+use crate::symbolic::concretization::{
+    active_concretization_policy, ConcretizationChoice, ConcretizationPolicy,
+    ConcretizationRequest, ConcretizationSite, UnsignedExtremum,
+};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::ordered_trace::{TracePath, WarmReplayCheck};
 use crate::symbolic::solver::{
-    Assert, Model, SolveResult, WarmAssertionPrefix, last_solve_timing, solve_for_path_delta,
+    last_solve_timing, solve_for_path_delta, Assert, Model, SolveResult, WarmAssertionPrefix,
 };
+use crate::symbolic::Symbolic;
 
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+
+static CANONICAL_MODEL_CHOICE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_COMPLETED: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_INFEASIBLE: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_PROBES: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_INCONCLUSIVE: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_UNSUPPORTED_WIDTH: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_UNKNOWN: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_NO_SOLVER: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_ERROR: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_MODEL_CHOICE_FINAL_UNSAT: AtomicU64 = AtomicU64::new(0);
+
+/// Process-wide accounting for backend-independent model choices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalModelChoiceStats {
+    /// Active model-selection policy.
+    pub policy: &'static str,
+    /// Expressions for which an unsigned extremum was requested.
+    pub attempts: u64,
+    /// Attempts that produced and rechecked an extremum.
+    pub completed: u64,
+    /// Attempts made on a path that was already infeasible.
+    pub infeasible: u64,
+    /// Temporary solver checks issued by the minimizer.
+    pub probes: u64,
+    /// Attempts that failed closed because no checked minimum was available.
+    pub inconclusive: u64,
+    /// Attempts whose expression exceeded the concrete-value representation.
+    pub unsupported_width: u64,
+    /// Attempts stopped by a solver `unknown` result.
+    pub unknown: u64,
+    /// Attempts stopped because no solver was available.
+    pub no_solver: u64,
+    /// Attempts stopped by a backend error.
+    pub error: u64,
+    /// Attempts whose final equality unexpectedly returned UNSAT.
+    pub final_unsat: u64,
+}
+
+/// Process-local accounting for how symbolic worklists finish.
+///
+/// A function can be counted as selected by a caller while its internal
+/// exploration is only partial. Keeping these stop classes explicit prevents a
+/// wall-clock safety cutoff from being mistaken for deterministic fixed work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExplorationLimitStats {
+    /// Worklists started by this process.
+    pub runs: u64,
+    /// Worklists that exhausted all reachable states under the path semantics.
+    pub completed: u64,
+    /// Worklists stopped by their state-count ceiling.
+    pub state_budget: u64,
+    /// Worklists stopped by their solver-call ceiling.
+    pub solve_budget: u64,
+    /// Worklists stopped by their solver-unknown/timeout ceiling.
+    pub timeout_budget: u64,
+    /// Worklists stopped by their per-function wall-clock safety deadline.
+    pub deadline: u64,
+}
+
+/// Process-local accounting for terminal symbolic paths.
+///
+/// Exhausting a worklist is not enough to establish complete execution: every
+/// path may have stopped at an unsupported intrinsic, residual unknown, or
+/// unavailable model.  This partition makes those semantic stops visible to
+/// evidence producers instead of collapsing them into `completed` worklists.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExecutionPathStats {
+    /// Paths that reached an architectural return.
+    pub returned: u64,
+    /// Paths that reached an architectural trap instruction.
+    pub traps: BTreeMap<String, u64>,
+    /// Paths that transferred outside the admitted CFG.
+    pub off_cfg: u64,
+    /// Paths cut by the deterministic per-block visit ceiling.
+    pub loop_limit: u64,
+    /// Paths stopped because a required concrete model was unavailable.
+    pub model_unavailable: u64,
+    /// Paths stopped because a symbolic memory address could not be resolved.
+    pub unresolved_symbolic_memory: u64,
+    /// Unregistered non-trap intrinsics reached by execution.
+    pub unsupported_intrinsics: BTreeMap<String, u64>,
+    /// Residual unknown operations reached by execution.
+    pub residual_unknowns: BTreeMap<String, u64>,
+    /// Paths that unexpectedly requested an interpreter fork.
+    pub unexpected_fork: u64,
+    /// Paths stopped by an interpreter instruction budget.
+    pub budget_exhausted: u64,
+    /// Unexpected interpreter flow outcomes after frontend normalization.
+    pub unexpected_flow: u64,
+    /// Dynamic calls that used the explorer's implicit return-value havoc
+    /// fallback instead of a registered callee summary.
+    pub unmodeled_calls: BTreeMap<u64, u64>,
+    /// Exact terminal instruction/PC sites, partitioned by stable stop reason.
+    pub stop_sites: BTreeMap<u64, BTreeMap<String, u64>>,
+    /// Dynamic memory-access counts by instruction VA.
+    pub memory_access_sites: BTreeMap<u64, u64>,
+    /// Dynamic accesses whose address was concretely inside the first page.
+    pub low_page_access_sites: BTreeMap<u64, u64>,
+    /// Concrete dynamic addresses observed at each memory-access instruction.
+    pub concrete_access_addresses: BTreeMap<u64, BTreeMap<u64, u64>>,
+}
+
+impl ExecutionPathStats {
+    /// Number of semantic/infrastructure stops that make execution incomplete.
+    pub fn incomplete_stops(&self) -> u64 {
+        self.off_cfg
+            + self.loop_limit
+            + self.model_unavailable
+            + self.unresolved_symbolic_memory
+            + self.unsupported_intrinsics.values().sum::<u64>()
+            + self.residual_unknowns.values().sum::<u64>()
+            + self.unexpected_fork
+            + self.budget_exhausted
+            + self.unexpected_flow
+            + self.unmodeled_calls.values().sum::<u64>()
+    }
+
+    /// Number of paths that ended with modeled architectural control flow.
+    pub fn modeled_terminal_paths(&self) -> u64 {
+        self.returned + self.traps.values().sum::<u64>()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorklistStop {
+    Complete,
+    StateBudget,
+    SolveBudget,
+    TimeoutBudget,
+    Deadline,
+}
+
+/// Return the active canonical-model policy and its process-wide counters.
+pub fn canonical_model_choice_stats() -> CanonicalModelChoiceStats {
+    CanonicalModelChoiceStats {
+        policy: active_concretization_policy().policy_id(),
+        attempts: CANONICAL_MODEL_CHOICE_ATTEMPTS.load(Ordering::Relaxed),
+        completed: CANONICAL_MODEL_CHOICE_COMPLETED.load(Ordering::Relaxed),
+        infeasible: CANONICAL_MODEL_CHOICE_INFEASIBLE.load(Ordering::Relaxed),
+        probes: CANONICAL_MODEL_CHOICE_PROBES.load(Ordering::Relaxed),
+        inconclusive: CANONICAL_MODEL_CHOICE_INCONCLUSIVE.load(Ordering::Relaxed),
+        unsupported_width: CANONICAL_MODEL_CHOICE_UNSUPPORTED_WIDTH.load(Ordering::Relaxed),
+        unknown: CANONICAL_MODEL_CHOICE_UNKNOWN.load(Ordering::Relaxed),
+        no_solver: CANONICAL_MODEL_CHOICE_NO_SOLVER.load(Ordering::Relaxed),
+        error: CANONICAL_MODEL_CHOICE_ERROR.load(Ordering::Relaxed),
+        final_unsat: CANONICAL_MODEL_CHOICE_FINAL_UNSAT.load(Ordering::Relaxed),
+    }
+}
 
 thread_local! {
     /// Per-function wall-clock deadline, set by [`run_worklist`] and checked
@@ -38,6 +191,26 @@ thread_local! {
     /// expressions can still be interrupted — coarser checks at block boundaries
     /// are not enough when one block takes minutes.
     static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+
+    /// Set only when [`process_block`] observes the per-function deadline. This
+    /// distinguishes an interrupted final state from a naturally exhausted
+    /// worklist whose last instruction happened to finish near the deadline.
+    static DEADLINE_OBSERVED: Cell<bool> = const { Cell::new(false) };
+
+    /// Process-thread accounting used by the single-threaded analysis examples.
+    static EXPLORATION_LIMIT_STATS: Cell<ExplorationLimitStats> =
+        const { Cell::new(ExplorationLimitStats {
+            runs: 0,
+            completed: 0,
+            state_budget: 0,
+            solve_budget: 0,
+            timeout_budget: 0,
+            deadline: 0,
+        }) };
+
+    /// Terminal-path accounting for the current analysis thread.
+    static EXECUTION_PATH_STATS: RefCell<ExecutionPathStats> =
+        RefCell::new(ExecutionPathStats::default());
 
     /// Summaries keyed by CALL-INSTRUCTION VA (not callee VA). Used for indirect
     /// calls whose callee cannot be resolved statically — notably KMDF WDF
@@ -48,6 +221,94 @@ thread_local! {
     /// buffer as `SystemBuffer` (the KMDF analogue of IRP.AssociatedIrp.SystemBuffer).
     static CALL_SITE_SUMMARIES: RefCell<BTreeMap<u64, ApiSummary>> =
         const { RefCell::new(BTreeMap::new()) };
+}
+
+/// Return cumulative worklist stop accounting for this analysis thread.
+pub fn exploration_limit_stats() -> ExplorationLimitStats {
+    EXPLORATION_LIMIT_STATS.with(Cell::get)
+}
+
+/// Clear cumulative worklist stop accounting before a new top-level analysis.
+pub fn reset_exploration_limit_stats() {
+    EXPLORATION_LIMIT_STATS.with(|stats| stats.set(ExplorationLimitStats::default()));
+}
+
+/// Return cumulative terminal-path accounting for this analysis thread.
+pub fn execution_path_stats() -> ExecutionPathStats {
+    EXECUTION_PATH_STATS.with(|stats| stats.borrow().clone())
+}
+
+/// Clear cumulative terminal-path accounting before a new top-level analysis.
+pub fn reset_execution_path_stats() {
+    EXECUTION_PATH_STATS.with(|stats| *stats.borrow_mut() = ExecutionPathStats::default());
+}
+
+fn record_path_stat(update: impl FnOnce(&mut ExecutionPathStats)) {
+    EXECUTION_PATH_STATS.with(|stats| update(&mut stats.borrow_mut()));
+}
+
+fn record_named(counter: &mut BTreeMap<String, u64>, name: &str) {
+    *counter.entry(name.to_string()).or_default() += 1;
+}
+
+fn record_stop_site(stats: &mut ExecutionPathStats, va: u64, reason: impl Into<String>) {
+    *stats
+        .stop_sites
+        .entry(va)
+        .or_default()
+        .entry(reason.into())
+        .or_default() += 1;
+}
+
+fn is_architectural_trap(name: &str) -> bool {
+    matches!(
+        name,
+        "brk" | "hlt" | "svc" | "hvc" | "smc" | "udf" | "dcps1" | "dcps2" | "dcps3"
+    )
+}
+
+fn record_execution_halt(va: u64, halt: &Halt) {
+    record_path_stat(|stats| match halt {
+        Halt::UnsupportedIntrinsic(name) if is_architectural_trap(name) => {
+            record_named(&mut stats.traps, name);
+            record_stop_site(stats, va, format!("trap:{name}"));
+        }
+        Halt::UnsupportedIntrinsic(name) => {
+            record_named(&mut stats.unsupported_intrinsics, name);
+            record_stop_site(stats, va, format!("unsupported-intrinsic:{name}"));
+        }
+        Halt::ResidualUnknown(mnemonic) => {
+            record_named(&mut stats.residual_unknowns, mnemonic);
+            record_stop_site(stats, va, format!("residual-unknown:{mnemonic}"));
+        }
+        Halt::UnexpectedFork => {
+            stats.unexpected_fork += 1;
+            record_stop_site(stats, va, "unexpected-fork");
+        }
+        Halt::UnresolvedAddress => {
+            stats.unresolved_symbolic_memory += 1;
+            record_stop_site(stats, va, "unresolved-symbolic-memory");
+        }
+        Halt::BudgetExhausted => {
+            stats.budget_exhausted += 1;
+            record_stop_site(stats, va, "budget-exhausted");
+        }
+    });
+}
+
+fn record_worklist_stop(stop: WorklistStop) {
+    EXPLORATION_LIMIT_STATS.with(|stats| {
+        let mut next = stats.get();
+        next.runs += 1;
+        match stop {
+            WorklistStop::Complete => next.completed += 1,
+            WorklistStop::StateBudget => next.state_budget += 1,
+            WorklistStop::SolveBudget => next.solve_budget += 1,
+            WorklistStop::TimeoutBudget => next.timeout_budget += 1,
+            WorklistStop::Deadline => next.deadline += 1,
+        }
+        stats.set(next);
+    });
 }
 
 fn deadline_passed() -> bool {
@@ -87,9 +348,17 @@ pub enum Severity {
 /// labelled with provenance (e.g. an address built from `SystemBuffer`).
 /// Symbols not present here are engine-internal (not attacker-controlled), so a
 /// sink whose address touches no marked symbol is *not* a controlled primitive.
+#[derive(Debug, Clone)]
+struct TaintedMemoryRegion {
+    base: u64,
+    end_exclusive: u64,
+    label: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TaintSpec {
-    labels: BTreeMap<u32, String>,
+    labels: BTreeMap<u32, BTreeSet<String>>,
+    memory_regions: Vec<TaintedMemoryRegion>,
 }
 
 impl TaintSpec {
@@ -98,13 +367,44 @@ impl TaintSpec {
     }
 
     /// Mark symbol `sym_id` as attacker-controlled input named `label`.
+    ///
+    /// A value derived from more than one attacker source retains every source;
+    /// adding a label never overwrites provenance already attached to the symbol.
     pub fn mark(&mut self, sym_id: u32, label: impl Into<String>) {
-        self.labels.insert(sym_id, label.into());
+        self.labels.entry(sym_id).or_default().insert(label.into());
     }
 
-    /// The label for a symbol, if it is attacker-controlled.
+    /// Mark data loaded from a concrete memory interval as attacker-controlled
+    /// without claiming that the interval's base pointer is attacker-selected.
+    ///
+    /// This distinction is required for I/O-manager-owned buffers such as a
+    /// WDM `AssociatedIrp.SystemBuffer`: user input controls its contents, while
+    /// Windows chooses and validates the kernel address itself.
+    pub fn mark_memory_region(&mut self, base: u64, len: u64, label: impl Into<String>) {
+        let Some(end_exclusive) = base.checked_add(len) else {
+            return;
+        };
+        if base == end_exclusive {
+            return;
+        }
+        self.memory_regions.push(TaintedMemoryRegion {
+            base,
+            end_exclusive,
+            label: label.into(),
+        });
+        self.memory_regions
+            .sort_by(|left, right| (left.base, &left.label).cmp(&(right.base, &right.label)));
+    }
+
+    /// The first stable label for a symbol, if it is attacker-controlled.
+    ///
+    /// Use sink provenance rather than this compatibility accessor when every
+    /// source matters; symbols may carry multiple labels.
     pub fn label(&self, sym_id: u32) -> Option<&str> {
-        self.labels.get(&sym_id).map(String::as_str)
+        self.labels
+            .get(&sym_id)
+            .and_then(|labels| labels.first())
+            .map(String::as_str)
     }
 
     /// The distinct attacker-input labels an expression's free symbols carry.
@@ -112,7 +412,24 @@ impl TaintSpec {
         let mut syms = BTreeMap::new();
         pool.collect_syms(root, &mut syms);
         syms.keys()
-            .filter_map(|id| self.label(*id).map(str::to_string))
+            .filter_map(|id| self.labels.get(id))
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Stable provenance for an access wholly contained in a marked concrete
+    /// memory region. Partial overlap is deliberately rejected.
+    fn memory_provenance(&self, addr: u64, size: u8) -> Vec<String> {
+        let Some(end_exclusive) = addr.checked_add(u64::from(size)) else {
+            return Vec::new();
+        };
+        self.memory_regions
+            .iter()
+            .filter(|region| addr >= region.base && end_exclusive <= region.end_exclusive)
+            .map(|region| region.label.clone())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -167,6 +484,8 @@ pub enum SinkKind {
     /// a platform reset (unauth DoS); general access enables firmware / PCI-config
     /// manipulation. (IOCTLance "arbitrary out".)
     PortAccess,
+    /// A signed scalar reaches a fixed-size table outside its valid index range.
+    OutOfBoundsIndex,
 }
 
 /// A summary for a known callee, letting the explorer detect attacker-controlled
@@ -176,6 +495,9 @@ pub enum SinkKind {
 /// engine stays import-agnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiSummary {
+    /// An explicitly accepted opaque callee: preserve memory and path state,
+    /// but conservatively havoc its return register.
+    HavocReturn,
     /// `memcpy` / `RtlCopyMemory` / `memmove` with the MS x64 ABI
     /// `(dst = rcx, src = rdx, len = r8)`: `dst` is written and `src` is read,
     /// so an attacker-derived `dst`/`src` is a controlled write/read primitive.
@@ -205,6 +527,14 @@ pub enum ApiSummary {
     /// — the KMDF analogue of seeding `IRP.AssociatedIrp.SystemBuffer`. Used via the
     /// call-site-keyed map (the WDF callee is a dynamic function-table thunk).
     RetrieveBuffer { out_ptr_arg: u8 },
+    /// A callee that indexes a fixed-size table with a signed scalar argument.
+    /// Reaching it with an index outside `[min, max]` is an out-of-bounds sink.
+    BoundedSignedIndex {
+        index_arg: u8,
+        width: Width,
+        min: i64,
+        max: i64,
+    },
 }
 
 /// Maps a call-target VA to its [`ApiSummary`]. Populated by the analysis layer
@@ -599,6 +929,161 @@ fn solve_probe_traced(
     result
 }
 
+/// Select an unsigned extremum of `value` under the current path condition.
+///
+/// Every bound is a temporary assertion, so the search cannot mutate the path.
+/// The final equality probe both rechecks the selected value and leaves an
+/// immediately preceding SAT event for ordered model-choice tracing. Widths
+/// above 128 bits cannot be represented by this engine's concrete value type
+/// and therefore fail closed.
+fn select_unsigned_extremum(
+    st: &mut State,
+    value: ExprId,
+    purpose: &str,
+    location: u64,
+    extremum: UnsignedExtremum,
+) -> Option<u128> {
+    CANONICAL_MODEL_CHOICE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+    let width = st.machine.dom.pool.width_of(value);
+    let bits = width.bits();
+    if bits == 0 || bits > 128 {
+        CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+        CANONICAL_MODEL_CHOICE_UNSUPPORTED_WIDTH.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+
+    CANONICAL_MODEL_CHOICE_PROBES.fetch_add(1, Ordering::Relaxed);
+    match solve_traced(st, "canonical-model-choice-feasibility", location) {
+        SolveResult::Sat(_) => {}
+        SolveResult::Unsat => {
+            CANONICAL_MODEL_CHOICE_INFEASIBLE.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        SolveResult::Unknown => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        SolveResult::NoSolver => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_NO_SOLVER.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        SolveResult::Error(_) => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_ERROR.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+    }
+
+    let mut low = 0u128;
+    let mut high = if bits == 128 {
+        u128::MAX
+    } else {
+        (1u128 << bits) - 1
+    };
+    while low < high {
+        let distance = high - low;
+        let midpoint = match extremum {
+            UnsignedExtremum::Minimum => low + (distance >> 1),
+            UnsignedExtremum::Maximum => low + (distance >> 1) + (distance & 1),
+        };
+        let bound = st.machine.dom.constant(width, midpoint);
+        let probe = match extremum {
+            UnsignedExtremum::Minimum => st.machine.dom.cmp(CmpOp::Ule, &value, &bound, width),
+            UnsignedExtremum::Maximum => st.machine.dom.cmp(CmpOp::Ule, &bound, &value, width),
+        };
+        CANONICAL_MODEL_CHOICE_PROBES.fetch_add(1, Ordering::Relaxed);
+        match solve_probe_traced(
+            st,
+            (probe, true),
+            purpose,
+            "canonical-model-choice-bound",
+            location,
+        ) {
+            SolveResult::Sat(_) => match extremum {
+                UnsignedExtremum::Minimum => high = midpoint,
+                UnsignedExtremum::Maximum => low = midpoint,
+            },
+            SolveResult::Unsat => match extremum {
+                UnsignedExtremum::Minimum => low = midpoint + 1,
+                UnsignedExtremum::Maximum => high = midpoint - 1,
+            },
+            SolveResult::Unknown => {
+                CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+                CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            SolveResult::NoSolver => {
+                CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+                CANONICAL_MODEL_CHOICE_NO_SOLVER.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            SolveResult::Error(_) => {
+                CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+                CANONICAL_MODEL_CHOICE_ERROR.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+        }
+    }
+
+    let selected = st.machine.dom.constant(width, low);
+    let equal = st.machine.dom.cmp(CmpOp::Eq, &value, &selected, width);
+    CANONICAL_MODEL_CHOICE_PROBES.fetch_add(1, Ordering::Relaxed);
+    match solve_probe_traced(
+        st,
+        (equal, true),
+        purpose,
+        "canonical-model-choice-final",
+        location,
+    ) {
+        SolveResult::Sat(_) => {
+            CANONICAL_MODEL_CHOICE_COMPLETED.fetch_add(1, Ordering::Relaxed);
+            Some(low)
+        }
+        SolveResult::Unsat => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_FINAL_UNSAT.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+        SolveResult::Unknown => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+        SolveResult::NoSolver => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_NO_SOLVER.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+        SolveResult::Error(_) => {
+            CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
+            CANONICAL_MODEL_CHOICE_ERROR.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+fn minimize_unsigned_value(
+    st: &mut State,
+    value: ExprId,
+    purpose: &str,
+    location: u64,
+) -> Option<u128> {
+    select_unsigned_extremum(st, value, purpose, location, UnsignedExtremum::Minimum)
+}
+
+#[cfg(test)]
+fn maximize_unsigned_value(
+    st: &mut State,
+    value: ExprId,
+    purpose: &str,
+    location: u64,
+) -> Option<u128> {
+    select_unsigned_extremum(st, value, purpose, location, UnsignedExtremum::Maximum)
+}
+
 /// Search for an input that reaches `target`, starting from `lf`'s entry with the
 /// machine seeded by `seed` (e.g. marking argument registers symbolic). Returns
 /// the solver result for the first path that reaches `target`:
@@ -656,12 +1141,25 @@ pub fn find_sinks(
     apis: &CallModel,
     max_states: usize,
 ) -> Vec<Sink> {
+    find_sinks_with_arch(lf, RegArch::X86_64, seed, apis, max_states)
+}
+
+/// Architecture-explicit variant of [`find_sinks`]. The original API remains
+/// the MS-x64 default; Linux AArch64 frontends must opt into AAPCS64 register
+/// and return semantics rather than writing AArch64 names into an x64 machine.
+pub fn find_sinks_with_arch(
+    lf: &LlirFunction,
+    arch: RegArch,
+    seed: impl FnOnce(&mut Machine<Symbolic>) -> TaintSpec,
+    apis: &CallModel,
+    max_states: usize,
+) -> Vec<Sink> {
     let blocks: HashMap<u64, LlirBlock> =
         lf.blocks.iter().map(|b| (b.start_va, b.clone())).collect();
 
-    let mut machine = Machine::new(Symbolic::new());
+    let mut machine = Machine::new_with_arch(Symbolic::new(), arch);
     let taint = seed(&mut machine);
-    let (sinks, _) = run_worklist(
+    let (sinks, _, _) = run_worklist(
         &blocks,
         State::root(machine, lf.entry_va, taint),
         apis,
@@ -702,16 +1200,18 @@ fn run_worklist(
     root: State,
     apis: &CallModel,
     max_states: usize,
-) -> (Vec<Sink>, Option<State>) {
+) -> (Vec<Sink>, Option<State>, WorklistStop) {
     use crate::symbolic::solver::{reset_solver_meter, solver_budget, solver_meter, time_budget};
     reset_solver_meter();
     let (max_solves, max_timeouts) = solver_budget();
     let deadline = time_budget().map(|d| Instant::now() + d);
     DEADLINE.with(|c| c.set(deadline)); // checked per-instruction in process_block
+    DEADLINE_OBSERVED.with(|observed| observed.set(false));
     let mut work = vec![root];
     let mut explored = 0usize;
     let mut out = Vec::new();
     let mut best: Option<State> = None;
+    let mut stop = WorklistStop::Complete;
 
     while let Some(mut st) = work.pop() {
         if explored >= max_states {
@@ -719,32 +1219,51 @@ fn run_worklist(
             for pending in &mut work {
                 pending.end_trace("state-budget");
             }
+            stop = WorklistStop::StateBudget;
             break;
         }
         let (solves, timeouts) = solver_meter();
-        if solves >= max_solves || timeouts >= max_timeouts {
+        if solves >= max_solves {
             st.end_trace("solver-budget");
             for pending in &mut work {
                 pending.end_trace("solver-budget");
             }
+            stop = WorklistStop::SolveBudget;
             break; // solver budget spent: bail with partial findings
+        }
+        if timeouts >= max_timeouts {
+            st.end_trace("timeout-budget");
+            for pending in &mut work {
+                pending.end_trace("timeout-budget");
+            }
+            stop = WorklistStop::TimeoutBudget;
+            break;
         }
         if deadline.is_some_and(|dl| std::time::Instant::now() >= dl) {
             st.end_trace("deadline");
             for pending in &mut work {
                 pending.end_trace("deadline");
             }
+            stop = WorklistStop::Deadline;
             break; // wall-clock budget spent: bail with partial findings
         }
         explored += 1;
         let mut sinks = Vec::new();
         let succs = process_block(blocks, st, apis, &mut sinks, &mut best);
         out.append(&mut sinks);
+        if DEADLINE_OBSERVED.with(Cell::get) {
+            for pending in &mut work {
+                pending.end_trace("deadline");
+            }
+            stop = WorklistStop::Deadline;
+            break;
+        }
         for s in succs {
             work.push(s);
         }
     }
-    (out, best)
+    record_worklist_stop(stop);
+    (out, best, stop)
 }
 
 /// Stateful, multi-invocation exploration: run the handler `rounds` times,
@@ -788,7 +1307,7 @@ pub fn find_sinks_stateful(
             }
         };
 
-        let (sinks, best) = run_worklist(&blocks, root, apis, max_states);
+        let (sinks, best, _) = run_worklist(&blocks, root, apis, max_states);
         for s in sinks {
             if seen.insert((s.va, s.kind as u8)) {
                 out.push(s);
@@ -813,6 +1332,10 @@ fn process_block(
 ) -> Vec<State> {
     let Some(block) = blocks.get(&st.pc).cloned() else {
         consider_terminal(&st, best); // ran off the known CFG
+        record_path_stat(|stats| {
+            stats.off_cfg += 1;
+            record_stop_site(stats, st.pc, "off-cfg");
+        });
         st.end_trace("off-cfg");
         return Vec::new();
     };
@@ -824,6 +1347,10 @@ fn process_block(
     *visits += 1;
     if *visits > MAX_BLOCK_VISITS {
         consider_terminal(&st, best);
+        record_path_stat(|stats| {
+            stats.loop_limit += 1;
+            record_stop_site(stats, st.pc, "loop-limit");
+        });
         st.end_trace("loop-limit");
         return Vec::new();
     }
@@ -832,6 +1359,7 @@ fn process_block(
         // Per-instruction wall-clock guard: a block built from huge obfuscated
         // expressions can take a long time in a single op, so bail mid-block.
         if deadline_passed() {
+            DEADLINE_OBSERVED.with(|observed| observed.set(true));
             consider_terminal(&st, best);
             st.end_trace("deadline");
             return Vec::new();
@@ -907,6 +1435,10 @@ fn process_block(
                 // Checked before callee resolution; args are still in registers here.
                 if let Some(summary) = call_site_summary(ins.va) {
                     if !apply_summary(&mut st, ins.va, summary, sinks) {
+                        record_path_stat(|stats| {
+                            stats.model_unavailable += 1;
+                            record_stop_site(stats, ins.va, "model-unavailable");
+                        });
                         st.end_trace("model-unavailable");
                         return Vec::new();
                     }
@@ -922,6 +1454,10 @@ fn process_block(
                         if syms.is_empty() {
                             // Concrete function pointer (e.g. loaded from the IAT).
                             let Some(callee) = eval_concrete(&mut st, tv) else {
+                                record_path_stat(|stats| {
+                                    stats.model_unavailable += 1;
+                                    record_stop_site(stats, ins.va, "model-unavailable");
+                                });
                                 st.end_trace("model-unavailable");
                                 return Vec::new();
                             };
@@ -938,6 +1474,10 @@ fn process_block(
                 match callee.and_then(|va| apis.get(&va).copied()) {
                     Some(summary) => {
                         if !apply_summary(&mut st, ins.va, summary, sinks) {
+                            record_path_stat(|stats| {
+                                stats.model_unavailable += 1;
+                                record_stop_site(stats, ins.va, "model-unavailable");
+                            });
                             st.end_trace("model-unavailable");
                             return Vec::new();
                         }
@@ -946,36 +1486,48 @@ fn process_block(
                     // treated as opaque: havoc the return and continue, rather than
                     // ending the path. Ending here would cut off everything after a
                     // `DbgPrint`/helper call — including the bug.
-                    None => havoc_rax(&mut st),
+                    None => {
+                        record_path_stat(|stats| {
+                            *stats.unmodeled_calls.entry(ins.va).or_default() += 1;
+                        });
+                        havoc_return(&mut st);
+                    }
                 }
                 continue;
             }
             Op::Return => {
-                // Controllable-PC check: `ret` pops the saved return address from
-                // [rsp]. If a stack-buffer overflow (or any attacker write) has made
-                // that slot attacker-controlled, this is the classic
-                // stack-overflow -> hijacked-return primitive (ioctlance reports it
-                // as "Buffer Overflow - Controllable PC"). Mirrors the Shellcode
-                // check on attacker-controlled indirect-call targets.
-                let rsp_v = st
-                    .machine
-                    .regs
-                    .read(&mut st.machine.dom, &VReg::phys("rsp"));
-                let Some(rsp) = eval_concrete(&mut st, rsp_v) else {
-                    st.end_trace("model-unavailable");
-                    return Vec::new();
-                };
-                if rsp != 0 {
-                    let ret = st
+                if st.machine.regs.arch() == RegArch::X86_64 {
+                    // MS x64 `ret` pops [rsp]. AArch64 returns through x30 and
+                    // needs separate spill/reload provenance; treating [sp] as
+                    // the return slot would be a false detector.
+                    let rsp_v = st
                         .machine
-                        .mem
-                        .load(&mut st.machine.dom, rsp, 8, Endian::Little);
-                    let prov = st.taint.provenance_of(&st.machine.dom.pool, ret);
-                    if !prov.is_empty() {
-                        push_sink(&mut st, ins.va, SinkKind::StackOverflow, ret, prov, sinks);
+                        .regs
+                        .read(&mut st.machine.dom, &VReg::phys("rsp"));
+                    let Some(rsp) = eval_concrete(&mut st, rsp_v) else {
+                        record_path_stat(|stats| {
+                            stats.model_unavailable += 1;
+                            record_stop_site(stats, ins.va, "model-unavailable");
+                        });
+                        st.end_trace("model-unavailable");
+                        return Vec::new();
+                    };
+                    if rsp != 0 {
+                        let ret = st
+                            .machine
+                            .mem
+                            .load(&mut st.machine.dom, rsp, 8, Endian::Little);
+                        let prov = st.taint.provenance_of(&st.machine.dom.pool, ret);
+                        if !prov.is_empty() {
+                            push_sink(&mut st, ins.va, SinkKind::StackOverflow, ret, prov, sinks);
+                        }
                     }
                 }
                 consider_terminal(&st, best);
+                record_path_stat(|stats| {
+                    stats.returned += 1;
+                    record_stop_site(stats, ins.va, "return");
+                });
                 st.end_trace("return");
                 return Vec::new();
             }
@@ -1018,12 +1570,44 @@ fn process_block(
                 // Use-after-free is temporal, not address-symbolic: check every
                 // load/store target (concrete or symbolic) against freed blocks,
                 // so a deref of a freed pointer held in a global is caught.
-                if let Op::Load { addr, .. } | Op::Store { addr, .. } = other {
+                if let Op::Load { addr, .. } = other {
                     let av = st.machine.eval_addr(addr);
+                    record_access(&mut st, ins.va, av, false, sinks);
                     if !uaf_check(&mut st, ins.va, av, sinks) {
+                        record_path_stat(|stats| {
+                            stats.model_unavailable += 1;
+                            record_stop_site(stats, ins.va, "model-unavailable");
+                        });
                         st.end_trace("model-unavailable");
                         return Vec::new();
                     }
+                } else if let Op::Store { addr, .. } = other {
+                    let av = st.machine.eval_addr(addr);
+                    record_access(&mut st, ins.va, av, true, sinks);
+                    if !uaf_check(&mut st, ins.va, av, sinks) {
+                        record_path_stat(|stats| {
+                            stats.model_unavailable += 1;
+                            record_stop_site(stats, ins.va, "model-unavailable");
+                        });
+                        st.end_trace("model-unavailable");
+                        return Vec::new();
+                    }
+                }
+                // Route every memory operation through the same handler. A
+                // symbol-free address DAG is concrete without a solver, but it
+                // must still receive taint-through-memory semantics for marked
+                // regions such as WDM SystemBuffer.
+                if matches!(other, Op::Load { .. } | Op::Store { .. }) {
+                    if execute_memory_op(&mut st, other).is_none() {
+                        consider_terminal(&st, best);
+                        record_path_stat(|stats| {
+                            stats.unresolved_symbolic_memory += 1;
+                            record_stop_site(stats, ins.va, "unresolved-symbolic-memory");
+                        });
+                        st.end_trace("unresolved-symbolic-memory");
+                        return Vec::new();
+                    }
+                    continue;
                 }
                 match st.machine.step(other) {
                     Flow::Next => continue,
@@ -1034,18 +1618,33 @@ fn process_block(
                     // A load/store through a symbolic address: concretize it and
                     // execute the op manually, then continue the path.
                     Flow::Halt(Halt::UnresolvedAddress) => {
-                        if symbolic_mem_op(&mut st, other, ins.va, sinks).is_none() {
+                        if execute_memory_op(&mut st, other).is_none() {
                             consider_terminal(&st, best);
+                            record_path_stat(|stats| {
+                                stats.unresolved_symbolic_memory += 1;
+                                record_stop_site(stats, ins.va, "unresolved-symbolic-memory");
+                            });
                             st.end_trace("unresolved-symbolic-memory");
                             return Vec::new();
                         }
                         continue;
                     }
-                    // Branch shouldn't occur (CondJump handled above); other
-                    // halts / return / call end the path.
-                    _ => {
+                    Flow::Halt(halt) => {
                         consider_terminal(&st, best);
+                        record_execution_halt(ins.va, &halt);
                         st.end_trace("execution-halt");
+                        return Vec::new();
+                    }
+                    // These operation kinds are normalized and handled before
+                    // `Machine::step`; seeing their flow here is a frontend or
+                    // executor contract violation, not a successful path end.
+                    Flow::Branch { .. } | Flow::Call(_) | Flow::Return => {
+                        consider_terminal(&st, best);
+                        record_path_stat(|stats| {
+                            stats.unexpected_flow += 1;
+                            record_stop_site(stats, ins.va, "unexpected-execution-flow");
+                        });
+                        st.end_trace("unexpected-execution-flow");
                         return Vec::new();
                     }
                 }
@@ -1064,19 +1663,46 @@ fn process_block(
 /// later refinement). Returns `None` when no satisfying model is available; in
 /// that case the caller must stop the path rather than inventing a value.
 fn concretize_addr(st: &mut State, addr_val: ExprId) -> Option<u64> {
-    let model = match solve_traced(st, "address-concretization", st.pc) {
-        SolveResult::Sat(m) => m.values,
-        _ => return None,
+    let policy = active_concretization_policy();
+    concretize_addr_with_policy(st, addr_val, &policy)
+}
+
+fn concretize_addr_with_policy(
+    st: &mut State,
+    addr_val: ExprId,
+    policy: &dyn ConcretizationPolicy,
+) -> Option<u64> {
+    let site = ConcretizationSite::Address;
+    let purpose = "canonical-address-extremum";
+    let request = ConcretizationRequest {
+        site,
+        purpose,
+        location: st.pc,
     };
-    let mut c = Concrete;
-    let a = eval_expr(&st.machine.dom.pool, addr_val, &model, &mut c);
+    let a = match policy.choose(request) {
+        ConcretizationChoice::AnyModel => {
+            let model = match solve_traced(st, "address-concretization", st.pc) {
+                SolveResult::Sat(m) => m.values,
+                _ => return None,
+            };
+            let mut concrete = Concrete;
+            eval_expr(&st.machine.dom.pool, addr_val, &model, &mut concrete)
+        }
+        ConcretizationChoice::UnsignedExtremum(extremum) => {
+            select_unsigned_extremum(st, addr_val, purpose, st.pc, extremum)?
+        }
+        // A3 must fork states for every checked boundary. A2 must change the
+        // memory model. Until those execution paths land, neither choice may be
+        // collapsed to one value here.
+        ConcretizationChoice::BoundarySet(_) | ConcretizationChoice::Defer => return None,
+    };
     if let Some(trace) = &mut st.trace {
         trace.model_choice(
             &st.machine.dom.pool,
             addr_val,
             a,
             true,
-            "glaurung-any-address-v1",
+            policy.trace_policy_id(site),
             st.pc,
         );
     }
@@ -1109,13 +1735,26 @@ fn witness_for_value(st: &mut State, addr_val: ExprId, value: u128) -> Option<Mo
 /// The MS x64 integer argument register for parameter index `n` (0-based).
 /// Only the first four parameters are register-passed; index >=4 lives on the
 /// stack (see [`read_arg`]).
-fn arg_reg(n: u8) -> Option<&'static str> {
-    match n {
-        0 => Some("rcx"),
-        1 => Some("rdx"),
-        2 => Some("r8"),
-        3 => Some("r9"),
-        _ => None,
+fn arg_reg(arch: RegArch, n: u8) -> Option<&'static str> {
+    match arch {
+        RegArch::X86_64 => match n {
+            0 => Some("rcx"),
+            1 => Some("rdx"),
+            2 => Some("r8"),
+            3 => Some("r9"),
+            _ => None,
+        },
+        RegArch::AArch64 => match n {
+            0 => Some("x0"),
+            1 => Some("x1"),
+            2 => Some("x2"),
+            3 => Some("x3"),
+            4 => Some("x4"),
+            5 => Some("x5"),
+            6 => Some("x6"),
+            7 => Some("x7"),
+            _ => None,
+        },
     }
 }
 
@@ -1127,18 +1766,20 @@ fn arg_reg(n: u8) -> Option<&'static str> {
 /// attacker-controlled CreateDisposition (param 7) of `ZwCreateFile`, which the
 /// handler spills from the IRP system buffer into `[rsp+0x38]`.
 fn read_arg(st: &mut State, n: u8) -> Option<ExprId> {
-    match arg_reg(n) {
+    let arch = st.machine.regs.arch();
+    match arg_reg(arch, n) {
         Some(r) => Some(st.machine.regs.read(&mut st.machine.dom, &VReg::phys(r))),
         None => {
-            let rsp = st
+            let (stack_register, stack_offset) = match arch {
+                RegArch::X86_64 => ("rsp", 0x20 + (n as u128 - 4) * 8),
+                RegArch::AArch64 => ("sp", (n as u128 - 8) * 8),
+            };
+            let stack = st
                 .machine
                 .regs
-                .read(&mut st.machine.dom, &VReg::phys("rsp"));
-            let off = st
-                .machine
-                .dom
-                .constant(Width::W64, 0x20 + (n as u128 - 4) * 8);
-            let addr = st.machine.dom.binop(BinOp::Add, &rsp, &off, Width::W64);
+                .read(&mut st.machine.dom, &VReg::phys(stack_register));
+            let off = st.machine.dom.constant(Width::W64, stack_offset);
+            let addr = st.machine.dom.binop(BinOp::Add, &stack, &off, Width::W64);
             let a = concretize_addr(st, addr)?;
             Some(
                 st.machine
@@ -1149,25 +1790,78 @@ fn read_arg(st: &mut State, n: u8) -> Option<ExprId> {
     }
 }
 
+fn read_arg_with_width(st: &mut State, n: u8, width: Width) -> Option<ExprId> {
+    if st.machine.regs.arch() == RegArch::AArch64 && width == Width::W32 {
+        let register = match n {
+            0 => "w0",
+            1 => "w1",
+            2 => "w2",
+            3 => "w3",
+            4 => "w4",
+            5 => "w5",
+            6 => "w6",
+            7 => "w7",
+            _ => return None,
+        };
+        return Some(
+            st.machine
+                .regs
+                .read(&mut st.machine.dom, &VReg::phys(register)),
+        );
+    }
+    read_arg(st, n)
+}
+
+fn witness_for_predicate(st: &mut State, predicate: ExprId) -> Option<Model> {
+    match solve_probe_traced(st, (predicate, true), "predicate-witness", "other", st.pc) {
+        SolveResult::Sat(model) => Some(model),
+        _ => None,
+    }
+}
+
 /// Concretely evaluate `val` under a model of the current path *without* binding
 /// it (a read-only probe, unlike [`concretize_addr`]). Used by the lifecycle
 /// checks (free/UAF/stack) that only need a representative concrete value.
 /// Returns `None` for UNSAT, unknown, unavailable, or failed solver results;
 /// none of those outcomes authorizes a model-driven exploration choice.
 fn eval_concrete(st: &mut State, val: ExprId) -> Option<u64> {
-    let model = match solve_traced(st, "concrete-evaluation", st.pc) {
-        SolveResult::Sat(m) => m.values,
-        _ => return None,
+    let policy = active_concretization_policy();
+    eval_concrete_with_policy(st, val, &policy)
+}
+
+fn eval_concrete_with_policy(
+    st: &mut State,
+    val: ExprId,
+    policy: &dyn ConcretizationPolicy,
+) -> Option<u64> {
+    let site = ConcretizationSite::Representative;
+    let purpose = "canonical-representative-extremum";
+    let request = ConcretizationRequest {
+        site,
+        purpose,
+        location: st.pc,
     };
-    let mut c = Concrete;
-    let value = eval_expr(&st.machine.dom.pool, val, &model, &mut c);
+    let value = match policy.choose(request) {
+        ConcretizationChoice::AnyModel => {
+            let model = match solve_traced(st, "concrete-evaluation", st.pc) {
+                SolveResult::Sat(m) => m.values,
+                _ => return None,
+            };
+            let mut concrete = Concrete;
+            eval_expr(&st.machine.dom.pool, val, &model, &mut concrete)
+        }
+        ConcretizationChoice::UnsignedExtremum(extremum) => {
+            select_unsigned_extremum(st, val, purpose, st.pc, extremum)?
+        }
+        ConcretizationChoice::BoundarySet(_) | ConcretizationChoice::Defer => return None,
+    };
     if let Some(trace) = &mut st.trace {
         trace.model_choice(
             &st.machine.dom.pool,
             val,
             value,
             true,
-            "glaurung-representative-value-v1",
+            policy.trace_policy_id(site),
             st.pc,
         );
     }
@@ -1292,27 +1986,92 @@ fn push_sink(
     }
 }
 
+fn path_provenance(st: &State) -> Vec<String> {
+    let mut symbols = BTreeMap::new();
+    for (constraint, _) in &st.constraints {
+        st.machine.dom.pool.collect_syms(*constraint, &mut symbols);
+    }
+    symbols
+        .keys()
+        .filter_map(|id| st.taint.labels.get(id))
+        .flatten()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Record the sink(s) for a memory access at `va` through `addr_val`. Emits a
 /// controlled read/write (severity from the sentinel test), a double-fetch if the
-/// same attacker pointer was read before, a null-deref if the pointer can be NULL
-/// on this path, and a use-after-free if it lands in a freed block. An address
-/// touching no attacker input — or one already validated by a probe — is not a
-/// primitive and is skipped (the precision gate).
+/// same attacker pointer was read before, and a null-page dereference when either
+/// the address or the reaching path is attacker-controlled. This last distinction
+/// covers command-selected dereferences of an internal NULL field: the pointer is
+/// not tainted, but attacker input controls whether it is dereferenced.
 fn record_access(st: &mut State, va: u64, addr_val: ExprId, write: bool, sinks: &mut Vec<Sink>) {
+    let concrete_address = st.machine.dom.as_u64(&addr_val);
+    let concrete_low_page = concrete_address.is_some_and(|address| address < 0x1000);
+    record_path_stat(|stats| {
+        *stats.memory_access_sites.entry(va).or_default() += 1;
+        if let Some(address) = concrete_address {
+            *stats
+                .concrete_access_addresses
+                .entry(va)
+                .or_default()
+                .entry(address)
+                .or_default() += 1;
+        }
+        if concrete_low_page {
+            *stats.low_page_access_sites.entry(va).or_default() += 1;
+        }
+    });
+
     // A deref entirely covered by a probed (validated) region is trusted.
     if is_validated(st, addr_val) {
         return;
     }
     let tainted_by = st.taint.provenance_of(&st.machine.dom.pool, addr_val);
-    if tainted_by.is_empty() {
-        return; // internally-symbolic address: not an attacker primitive
-    }
+    let path_tainted_by = path_provenance(st);
     // Solve the path condition once and reuse it for every sink at this access
     // (controlled R/W, double-fetch, null-deref) instead of re-solving per sink.
     let Some(reach) = reach_model(st) else {
         return; // path infeasible
     };
     let free_addr = freely_controllable(st, addr_val);
+
+    // Linux NULL-member dereferences are commonly a small nonzero address
+    // (`NULL + field_offset`), so treat the first page as the null page. For a
+    // symbolic address, retain the exact-zero witness used historically.
+    let null_witness = if concrete_low_page || free_addr {
+        Some(reach.clone())
+    } else if tainted_by.is_empty() {
+        None
+    } else {
+        witness_for_value(st, addr_val, 0)
+    };
+    if let Some(witness) = null_witness {
+        let null_provenance = if tainted_by.is_empty() {
+            path_tainted_by
+        } else {
+            tainted_by.clone()
+        };
+        if !null_provenance.is_empty() {
+            sinks.push(Sink {
+                va,
+                kind: SinkKind::NullDeref,
+                witness,
+                severity: if free_addr {
+                    Severity::Arbitrary
+                } else {
+                    Severity::Constrained
+                },
+                tainted_by: null_provenance,
+            });
+        }
+    }
+
+    if tainted_by.is_empty() {
+        return; // no attacker control over the address itself
+    }
     let severity = if free_addr {
         Severity::Arbitrary
     } else {
@@ -1339,23 +2098,6 @@ fn record_access(st: &mut State, va: u64, addr_val: ExprId, write: bool, sinks: 
             witness: reach.clone(),
             severity,
             tainted_by: tainted_by.clone(),
-        });
-    }
-
-    // Null deref: trivially possible for a freely-controllable pointer (no solve);
-    // otherwise only if the path does not already guard it non-null.
-    let null_witness = if free_addr {
-        Some(reach)
-    } else {
-        witness_for_value(st, addr_val, 0)
-    };
-    if let Some(w) = null_witness {
-        sinks.push(Sink {
-            va,
-            kind: SinkKind::NullDeref,
-            witness: w,
-            severity: Severity::Arbitrary,
-            tainted_by,
         });
     }
 }
@@ -1394,6 +2136,7 @@ const STACK_WINDOW: u64 = 0x1_0000;
 /// exposes, then modeling its return value.
 fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<Sink>) -> bool {
     match summary {
+        ApiSummary::HavocReturn => havoc_return(st),
         ApiSummary::CopyMemory => {
             let Some(dst) = read_arg(st, 0) else {
                 return false;
@@ -1412,7 +2155,7 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             if !stack_overflow_check(st, va, dst, len, sinks) {
                 return false;
             }
-            havoc_rax(st);
+            havoc_return(st);
         }
         ApiSummary::Alloc { size_arg } => {
             let Some(size_val) = read_arg(st, size_arg) else {
@@ -1431,9 +2174,10 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
                 freed: false,
             });
             let ret = st.machine.dom.constant(Width::W64, base as u128);
+            let register = return_reg(st);
             st.machine
                 .regs
-                .write(&mut st.machine.dom, &VReg::phys("rax"), ret);
+                .write(&mut st.machine.dom, &VReg::phys(register), ret);
         }
         ApiSummary::Free { ptr_arg } => {
             let Some(ptr) = read_arg(st, ptr_arg) else {
@@ -1442,7 +2186,7 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             if !do_free(st, va, ptr, sinks) {
                 return false;
             }
-            havoc_rax(st);
+            havoc_return(st);
         }
         ApiSummary::Probe { addr_arg, len_arg } => {
             let Some(addr) = read_arg(st, addr_arg) else {
@@ -1462,13 +2206,13 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
             for id in syms.keys() {
                 st.validated.insert(*id);
             }
-            havoc_rax(st);
+            havoc_return(st);
         }
         ApiSummary::DangerousCall { args, kind } => {
             if !dangerous_call(st, va, args, kind, sinks) {
                 return false;
             }
-            havoc_rax(st);
+            havoc_return(st);
         }
         ApiSummary::RetrieveBuffer { out_ptr_arg } => {
             // *arg[out_ptr_arg] := fresh SystemBuffer-tainted pointer.
@@ -1488,19 +2232,53 @@ fn apply_summary(st: &mut State, va: u64, summary: ApiSummary, sinks: &mut Vec<S
                     .mem
                     .store(&mut st.machine.dom, addr, &e, 8, Endian::Little);
             }
-            havoc_rax(st); // returns NTSTATUS
+            havoc_return(st); // returns a status/value
+        }
+        ApiSummary::BoundedSignedIndex {
+            index_arg,
+            width,
+            min,
+            max,
+        } => {
+            let Some(index) = read_arg_with_width(st, index_arg, width) else {
+                return false;
+            };
+            let min_value = st.machine.dom.constant(width, min as u128);
+            let max_value = st.machine.dom.constant(width, max as u128);
+            let below = st.machine.dom.cmp(CmpOp::Slt, &index, &min_value, width);
+            let above = st.machine.dom.cmp(CmpOp::Slt, &max_value, &index, width);
+            let outside = st.machine.dom.binop(BinOp::Or, &below, &above, Width::W1);
+            if let Some(witness) = witness_for_predicate(st, outside) {
+                let tainted_by = st.taint.provenance_of(&st.machine.dom.pool, index);
+                sinks.push(Sink {
+                    va,
+                    kind: SinkKind::OutOfBoundsIndex,
+                    witness,
+                    severity: Severity::Constrained,
+                    tainted_by,
+                });
+            }
+            havoc_return(st);
         }
     }
     true
 }
 
-/// Havoc the return register (`rax`) with a fresh symbol — the sound
+fn return_reg(st: &State) -> &'static str {
+    match st.machine.regs.arch() {
+        RegArch::X86_64 => "rax",
+        RegArch::AArch64 => "x0",
+    }
+}
+
+/// Havoc the architecture's return register with a fresh symbol — the sound
 /// over-approximation for a summarized callee whose result we don't model.
-fn havoc_rax(st: &mut State) {
+fn havoc_return(st: &mut State) {
+    let register = return_reg(st);
     let ret = st.machine.dom.fresh(Width::W64);
     st.machine
         .regs
-        .write(&mut st.machine.dom, &VReg::phys("rax"), ret);
+        .write(&mut st.machine.dom, &VReg::phys(register), ret);
 }
 
 /// `ExFreePool(ptr)`: a second free of an already-freed block is a double-free;
@@ -1521,6 +2299,75 @@ fn do_free(st: &mut State, va: u64, ptr: ExprId, sinks: &mut Vec<Sink>) -> bool 
 
 /// Flag a [`SinkKind::StackOverflow`] when a `memcpy` destination is on the stack
 /// and the length is attacker-controlled (an unbounded copy onto the frame).
+fn expression_contains(pool: &ExprPool, root: ExprId, needle: ExprId) -> bool {
+    if root == needle {
+        return true;
+    }
+    // Constants and free symbols are too common to establish stack ancestry by
+    // DAG membership alone. Free-symbol sharing is handled separately below.
+    if matches!(pool.get(needle), Expr::Const { .. } | Expr::Sym { .. }) {
+        return false;
+    }
+    let mut pending = vec![root];
+    let mut seen = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        match *pool.get(id) {
+            Expr::Bin { a, b, .. } | Expr::Cmp { a, b, .. } => {
+                if a == needle || b == needle {
+                    return true;
+                }
+                pending.extend([a, b]);
+            }
+            Expr::Un { a, .. }
+            | Expr::ZExt { a, .. }
+            | Expr::SExt { a, .. }
+            | Expr::Trunc { a, .. }
+            | Expr::Extract { a, .. } => {
+                if a == needle {
+                    return true;
+                }
+                pending.push(a);
+            }
+            Expr::Concat { hi, lo, .. } => {
+                if hi == needle || lo == needle {
+                    return true;
+                }
+                pending.extend([hi, lo]);
+            }
+            Expr::Ite { c, t, e, .. } => {
+                if c == needle || t == needle || e == needle {
+                    return true;
+                }
+                pending.extend([c, t, e]);
+            }
+            Expr::Const { .. } | Expr::Sym { .. } => {}
+        }
+    }
+    false
+}
+
+fn shares_structural_origin(pool: &ExprPool, lhs: ExprId, rhs: ExprId) -> bool {
+    if lhs == rhs {
+        return true;
+    }
+    if expression_contains(pool, lhs, rhs) {
+        return true;
+    }
+    let mut lhs_symbols = BTreeMap::new();
+    pool.collect_syms(lhs, &mut lhs_symbols);
+    if lhs_symbols.is_empty() {
+        return false;
+    }
+    let mut rhs_symbols = BTreeMap::new();
+    pool.collect_syms(rhs, &mut rhs_symbols);
+    lhs_symbols
+        .keys()
+        .any(|symbol| rhs_symbols.contains_key(symbol))
+}
+
 fn stack_overflow_check(
     st: &mut State,
     va: u64,
@@ -1532,10 +2379,23 @@ fn stack_overflow_check(
     if len_prov.is_empty() {
         return true; // a fixed-length copy can't overflow under attacker control
     }
+    let (stack_register, frame_register) = match st.machine.regs.arch() {
+        RegArch::X86_64 => ("rsp", "rbp"),
+        RegArch::AArch64 => ("sp", "x29"),
+    };
     let rsp_v = st
         .machine
         .regs
-        .read(&mut st.machine.dom, &VReg::phys("rsp"));
+        .read(&mut st.machine.dom, &VReg::phys(stack_register));
+    let rbp_v = st
+        .machine
+        .regs
+        .read(&mut st.machine.dom, &VReg::phys(frame_register));
+    if !shares_structural_origin(&st.machine.dom.pool, dst, rsp_v)
+        && !shares_structural_origin(&st.machine.dom.pool, dst, rbp_v)
+    {
+        return true;
+    }
     let Some(rsp) = eval_concrete(st, rsp_v) else {
         return false;
     };
@@ -1650,15 +2510,14 @@ fn dangerous_call(
     true
 }
 
-/// Execute a memory op whose address is symbolic by concretizing the address,
-/// recording any attacker-controlled access as a sink first. Returns `Some(())`
-/// when handled.
-fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> Option<()> {
+/// Execute a memory op through the symbolic explorer's single address and taint
+/// policy. Symbol-free addresses avoid a solver, while symbolic addresses use
+/// the configured concretization policy. Returns `Some(())` when handled.
+fn execute_memory_op(st: &mut State, op: &Op) -> Option<()> {
     match op {
         Op::Load { dst, addr } => {
             let av = st.machine.eval_addr(addr);
-            let addr_tainted = !st.taint.provenance_of(&st.machine.dom.pool, av).is_empty();
-            record_access(st, va, av, false, sinks);
+            let address_provenance = st.taint.provenance_of(&st.machine.dom.pool, av);
             let a = concretize_addr(st, av)?;
             // Taint-through-memory: a load from an attacker-controlled pointer into
             // *uninitialized* memory yields fresh attacker data (mirrors a
@@ -1668,27 +2527,33 @@ fn symbolic_mem_op(st: &mut State, op: &Op, va: u64, sinks: &mut Vec<Sink>) -> O
             // detected. Detect "uninitialized" via the memory map, not the loaded
             // value, since an uninitialized multi-byte load is a `Concat` of zero
             // bytes (never a bare `Const`).
-            let val = if addr_tainted && !st.machine.mem.is_initialized(a, addr.size) {
-                let w = Width::from_bytes(addr.size as u16);
-                let fresh = st.machine.dom.fresh(w);
-                if let Expr::Sym { id, .. } = *st.machine.dom.pool.get(fresh) {
-                    st.taint.mark(id, "*attacker");
-                }
-                st.machine
-                    .mem
-                    .store(&mut st.machine.dom, a, &fresh, addr.size, addr.endian);
-                fresh
-            } else {
-                st.machine
-                    .mem
-                    .load(&mut st.machine.dom, a, addr.size, addr.endian)
-            };
+            let mut content_provenance = address_provenance.clone();
+            content_provenance.extend(st.taint.memory_provenance(a, addr.size));
+            content_provenance.sort();
+            content_provenance.dedup();
+            let val =
+                if !content_provenance.is_empty() && !st.machine.mem.is_initialized(a, addr.size) {
+                    let w = Width::from_bytes(addr.size as u16);
+                    let fresh = st.machine.dom.fresh(w);
+                    if let Expr::Sym { id, .. } = *st.machine.dom.pool.get(fresh) {
+                        for source in &content_provenance {
+                            st.taint.mark(id, format!("*{source}"));
+                        }
+                    }
+                    st.machine
+                        .mem
+                        .store(&mut st.machine.dom, a, &fresh, addr.size, addr.endian);
+                    fresh
+                } else {
+                    st.machine
+                        .mem
+                        .load(&mut st.machine.dom, a, addr.size, addr.endian)
+                };
             st.machine.regs.write(&mut st.machine.dom, dst, val);
             Some(())
         }
         Op::Store { addr, src } => {
             let av = st.machine.eval_addr(addr);
-            record_access(st, va, av, true, sinks);
             let a = concretize_addr(st, av)?;
             let w = Width::from_bytes(addr.size as u16);
             let v = st.machine.read(src, w);
@@ -1820,6 +2685,131 @@ mod tests {
     }
 
     #[test]
+    fn taint_through_uninitialized_memory_preserves_every_address_source() {
+        use crate::ir::types::MemOp;
+
+        let mut machine = Machine::new(Symbolic::new());
+        let base = machine.dom.fresh(Width::W64);
+        let index = machine.dom.fresh(Width::W64);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rdi"), base);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rsi"), index);
+
+        let mut taint = TaintSpec::new();
+        let Expr::Sym { id: base_id, .. } = *machine.dom.pool.get(base) else {
+            panic!("fresh base must be a symbol");
+        };
+        let Expr::Sym { id: index_id, .. } = *machine.dom.pool.get(index) else {
+            panic!("fresh index must be a symbol");
+        };
+        taint.mark(base_id, "Arg0");
+        taint.mark(index_id, "SystemBuffer");
+
+        let mut state = State::root(machine, 0x1000, taint);
+        let op = Op::Load {
+            dst: VReg::phys("rax"),
+            addr: MemOp::plain(Some(VReg::phys("rdi")), Some(VReg::phys("rsi")), 1, 0, 8),
+        };
+        assert_eq!(execute_memory_op(&mut state, &op), Some(()));
+
+        let loaded = state
+            .machine
+            .regs
+            .read(&mut state.machine.dom, &VReg::phys("rax"));
+        assert_eq!(
+            state.taint.provenance_of(&state.machine.dom.pool, loaded),
+            vec!["*Arg0".to_string(), "*SystemBuffer".to_string()],
+            "taint-through-memory must not launder generic ArgN provenance into a high-confidence attacker label",
+        );
+    }
+
+    #[test]
+    fn attacker_pointer_constrained_near_rsp_is_not_structural_stack_storage() {
+        let mut machine = Machine::new(Symbolic::new());
+        let rsp = machine.dom.fresh(Width::W64);
+        let dst = machine.dom.fresh(Width::W64);
+        let len = machine.dom.fresh(Width::W64);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rsp"), rsp);
+
+        let Expr::Sym { id: dst_id, .. } = *machine.dom.pool.get(dst) else {
+            panic!("fresh destination must be a symbol");
+        };
+        let Expr::Sym { id: len_id, .. } = *machine.dom.pool.get(len) else {
+            panic!("fresh length must be a symbol");
+        };
+        let mut taint = TaintSpec::new();
+        taint.mark(dst_id, "*SystemBuffer");
+        taint.mark(len_id, "*SystemBuffer");
+
+        let stack_value = machine.dom.constant(Width::W64, 0x20_0000);
+        let adjacent_value = machine.dom.constant(Width::W64, 0x1f_8000);
+        let rsp_fixed = machine.dom.cmp(CmpOp::Eq, &rsp, &stack_value, Width::W64);
+        let dst_fixed = machine
+            .dom
+            .cmp(CmpOp::Eq, &dst, &adjacent_value, Width::W64);
+        let mut state = State::root(machine, 0x1000, taint);
+        state.assert((rsp_fixed, true), "test", state.pc);
+        state.assert((dst_fixed, true), "test", state.pc);
+        let mut sinks = Vec::new();
+
+        assert!(stack_overflow_check(
+            &mut state, 0x1010, dst, len, &mut sinks,
+        ));
+        assert!(
+            sinks.iter().all(|sink| sink.kind != SinkKind::StackOverflow),
+            "numeric proximity under one model does not make an attacker pointer a stack object: {sinks:?}",
+        );
+    }
+
+    #[test]
+    fn frame_pointer_destination_is_structural_stack_storage() {
+        let mut machine = Machine::new(Symbolic::new());
+        // Mirror the real test_stack_overflow.sys expression shape: the executor
+        // starts from a modeled zero stack, then preserves the pre-allocation
+        // stack value in rbp while rsp moves down for the frame.
+        let zero = machine.dom.constant(Width::W64, 0);
+        let eight = machine.dom.constant(Width::W64, 8);
+        let rbp = machine.dom.binop(BinOp::Sub, &zero, &eight, Width::W64);
+        let frame_size = machine.dom.constant(Width::W64, 0x90);
+        let rsp = machine.dom.binop(BinOp::Sub, &rbp, &frame_size, Width::W64);
+        let local_offset = machine.dom.constant(Width::W64, 0x70);
+        let dst = machine
+            .dom
+            .binop(BinOp::Sub, &rbp, &local_offset, Width::W64);
+        let len = machine.dom.fresh(Width::W64);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rsp"), rsp);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("rbp"), rbp);
+
+        let Expr::Sym { id: len_id, .. } = *machine.dom.pool.get(len) else {
+            panic!("fresh length must be a symbol");
+        };
+        let mut taint = TaintSpec::new();
+        taint.mark(len_id, "InputBufferLength");
+
+        let mut state = State::root(machine, 0x1000, taint);
+        let mut sinks = Vec::new();
+
+        assert!(stack_overflow_check(
+            &mut state, 0x1010, dst, len, &mut sinks,
+        ));
+        assert!(
+            sinks
+                .iter()
+                .any(|sink| sink.kind == SinkKind::StackOverflow),
+            "an rbp-derived destination with attacker length is stack storage: {sinks:?}",
+        );
+    }
+
+    #[test]
     fn model_driven_choices_require_a_satisfying_model() {
         let mut machine = Machine::new(Symbolic::new());
         let value = machine.dom.fresh(Width::W64);
@@ -1833,6 +2823,152 @@ mod tests {
         let constraints_before = state.constraints.clone();
         assert_eq!(concretize_addr(&mut state, value), None);
         assert_eq!(state.constraints, constraints_before);
+    }
+
+    #[test]
+    fn explicit_concretization_policy_drives_both_value_selection_seams() {
+        use crate::symbolic::concretization::BuiltinConcretizationPolicy;
+
+        let mut representative_machine = Machine::new(Symbolic::new());
+        let representative = representative_machine.dom.fresh(Width::W8);
+        let five = representative_machine.dom.constant(Width::W8, 5);
+        let ten = representative_machine.dom.constant(Width::W8, 10);
+        let at_least_five =
+            representative_machine
+                .dom
+                .cmp(CmpOp::Ule, &five, &representative, Width::W8);
+        let at_most_ten =
+            representative_machine
+                .dom
+                .cmp(CmpOp::Ule, &representative, &ten, Width::W8);
+        let mut representative_state =
+            State::root(representative_machine, 0x1000, TaintSpec::new());
+        representative_state.assert((at_least_five, true), "test", 0x1000);
+        representative_state.assert((at_most_ten, true), "test", 0x1000);
+        let representative_constraints = representative_state.constraints.clone();
+
+        assert_eq!(
+            eval_concrete_with_policy(
+                &mut representative_state,
+                representative,
+                &BuiltinConcretizationPolicy::LeastUnsigned,
+            ),
+            Some(5),
+        );
+        assert_eq!(
+            representative_state.constraints, representative_constraints,
+            "read-only representative selection must not bind the path",
+        );
+
+        let mut address_machine = Machine::new(Symbolic::new());
+        let address = address_machine.dom.fresh(Width::W64);
+        let low = address_machine.dom.constant(Width::W64, 0x1000);
+        let high = address_machine.dom.constant(Width::W64, 0x2000);
+        let at_least_low = address_machine
+            .dom
+            .cmp(CmpOp::Ule, &low, &address, Width::W64);
+        let at_most_high = address_machine
+            .dom
+            .cmp(CmpOp::Ule, &address, &high, Width::W64);
+        let mut address_state = State::root(address_machine, 0x2000, TaintSpec::new());
+        address_state.assert((at_least_low, true), "test", 0x2000);
+        address_state.assert((at_most_high, true), "test", 0x2000);
+        let address_constraint_count = address_state.constraints.len();
+
+        assert_eq!(
+            concretize_addr_with_policy(
+                &mut address_state,
+                address,
+                &BuiltinConcretizationPolicy::GreatestUnsigned,
+            ),
+            Some(0x2000),
+        );
+        assert_eq!(
+            address_state.constraints.len(),
+            address_constraint_count + 1,
+            "address selection must bind exactly the chosen value",
+        );
+    }
+
+    #[test]
+    fn unsigned_model_choice_minimizes_the_expression_without_persisting_probes() {
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W8);
+        let five = machine.dom.constant(Width::W8, 5);
+        let ten = machine.dom.constant(Width::W8, 10);
+        let at_least_five = machine.dom.cmp(CmpOp::Ule, &five, &value, Width::W8);
+        let at_most_ten = machine.dom.cmp(CmpOp::Ule, &value, &ten, Width::W8);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        state.assert((at_least_five, true), "test", state.pc);
+        state.assert((at_most_ten, true), "test", state.pc);
+        let constraints_before = state.constraints.clone();
+        let location = state.pc;
+
+        assert_eq!(
+            minimize_unsigned_value(&mut state, value, "test-minimize", location),
+            Some(5)
+        );
+        assert_eq!(state.constraints, constraints_before);
+    }
+
+    #[test]
+    fn unsigned_model_choice_maximizes_the_expression_without_persisting_probes() {
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W8);
+        let five = machine.dom.constant(Width::W8, 5);
+        let ten = machine.dom.constant(Width::W8, 10);
+        let at_least_five = machine.dom.cmp(CmpOp::Ule, &five, &value, Width::W8);
+        let at_most_ten = machine.dom.cmp(CmpOp::Ule, &value, &ten, Width::W8);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        state.assert((at_least_five, true), "test", state.pc);
+        state.assert((at_most_ten, true), "test", state.pc);
+        let constraints_before = state.constraints.clone();
+        let location = state.pc;
+
+        assert_eq!(
+            maximize_unsigned_value(&mut state, value, "test-maximize", location),
+            Some(10)
+        );
+        assert_eq!(state.constraints, constraints_before);
+    }
+
+    #[test]
+    fn unsigned_model_choice_fails_closed_on_an_infeasible_path() {
+        let before = canonical_model_choice_stats();
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W8);
+        let zero = machine.dom.constant(Width::W8, 0);
+        let one = machine.dom.constant(Width::W8, 1);
+        let contradiction = machine.dom.cmp(CmpOp::Eq, &zero, &one, Width::W8);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        state.assert((contradiction, true), "test", state.pc);
+        let constraints_before = state.constraints.clone();
+        let location = state.pc;
+
+        assert_eq!(
+            minimize_unsigned_value(&mut state, value, "test-minimize", location),
+            None
+        );
+        assert_eq!(state.constraints, constraints_before);
+        let after = canonical_model_choice_stats();
+        assert!(after.infeasible > before.infeasible);
+    }
+
+    #[test]
+    fn unsigned_model_choice_fails_closed_above_the_concrete_value_width() {
+        let before = canonical_model_choice_stats();
+        let mut machine = Machine::new(Symbolic::new());
+        let value = machine.dom.fresh(Width::W256);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+        let location = state.pc;
+
+        assert_eq!(
+            minimize_unsigned_value(&mut state, value, "test-minimize", location),
+            None
+        );
+        let after = canonical_model_choice_stats();
+        assert!(after.inconclusive > before.inconclusive);
+        assert!(after.unsupported_width > before.unsupported_width);
     }
 
     #[test]
@@ -1955,7 +3091,7 @@ mod tests {
     /// *solver* budget is what stops it — proving the safety cap engages.
     #[test]
     fn solver_budget_bails_on_runaway_exploration() {
-        use crate::symbolic::solver::{DEFAULT_SOLVER_BUDGET, set_solver_budget, solver_meter};
+        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
         let lf = func(vec![
             (
                 0x1000,
@@ -1998,12 +3134,103 @@ mod tests {
         assert!(sinks.is_empty(), "no attacker memory ops in the loop");
     }
 
+    #[test]
+    fn worklist_reports_a_per_function_deadline_stop() {
+        use std::time::Duration;
+
+        use crate::symbolic::solver::set_time_budget;
+
+        let lf = func(vec![(0x1000, vec![Op::Return], 0x1004)]);
+        let blocks: HashMap<u64, LlirBlock> = lf
+            .blocks
+            .iter()
+            .map(|block| (block.start_va, block.clone()))
+            .collect();
+        let root = State::root(Machine::new(Symbolic::new()), lf.entry_va, TaintSpec::new());
+
+        reset_exploration_limit_stats();
+        set_time_budget(Some(Duration::ZERO));
+        let (_, _, stop) = run_worklist(&blocks, root, &CallModel::new(), 1);
+        set_time_budget(None);
+
+        assert_eq!(stop, WorklistStop::Deadline);
+        assert_eq!(
+            exploration_limit_stats(),
+            ExplorationLimitStats {
+                runs: 1,
+                deadline: 1,
+                ..ExplorationLimitStats::default()
+            }
+        );
+    }
+
+    #[test]
+    fn completed_worklist_still_reports_unsupported_semantic_stop() {
+        let lf = func(vec![(
+            0x1000,
+            vec![Op::Intrinsic {
+                name: "unmodeled_vector_op".into(),
+                ins: Vec::new(),
+                outs: Vec::new(),
+                reads_mem: false,
+                writes_mem: false,
+            }],
+            0x1004,
+        )]);
+
+        reset_exploration_limit_stats();
+        reset_execution_path_stats();
+        let _ = find_sinks(&lf, |_| TaintSpec::new(), &CallModel::new(), 8);
+
+        assert_eq!(exploration_limit_stats().completed, 1);
+        assert_eq!(
+            execution_path_stats(),
+            ExecutionPathStats {
+                unsupported_intrinsics: BTreeMap::from([("unmodeled_vector_op".to_string(), 1,)]),
+                stop_sites: BTreeMap::from([(
+                    0x1000,
+                    BTreeMap::from([("unsupported-intrinsic:unmodeled_vector_op".to_string(), 1,)]),
+                )]),
+                ..ExecutionPathStats::default()
+            }
+        );
+        assert_eq!(execution_path_stats().incomplete_stops(), 1);
+    }
+
+    #[test]
+    fn architectural_trap_is_a_modeled_terminal_not_an_unsupported_stop() {
+        let lf = func(vec![(
+            0x1000,
+            vec![Op::Intrinsic {
+                name: "brk".into(),
+                ins: Vec::new(),
+                outs: Vec::new(),
+                reads_mem: false,
+                writes_mem: false,
+            }],
+            0x1004,
+        )]);
+
+        reset_execution_path_stats();
+        let _ = find_sinks(&lf, |_| TaintSpec::new(), &CallModel::new(), 8);
+
+        let stats = execution_path_stats();
+        assert_eq!(stats.traps, BTreeMap::from([("brk".to_string(), 1)]));
+        assert_eq!(
+            stats.stop_sites,
+            BTreeMap::from([(0x1000, BTreeMap::from([("trap:brk".to_string(), 1)]))])
+        );
+        assert!(stats.unsupported_intrinsics.is_empty());
+        assert_eq!(stats.incomplete_stops(), 0);
+        assert_eq!(stats.modeled_terminal_paths(), 1);
+    }
+
     /// The per-path loop bound alone (with the *default*, huge solver budget)
     /// stops a self-looping function quickly — bounding symbolic expression growth
     /// at its source. Without it, the loop would fork up to the state cap.
     #[test]
     fn loop_bound_cuts_runaway_path() {
-        use crate::symbolic::solver::{DEFAULT_SOLVER_BUDGET, set_solver_budget, solver_meter};
+        use crate::symbolic::solver::{set_solver_budget, solver_meter, DEFAULT_SOLVER_BUDGET};
         let lf = func(vec![
             (
                 0x1000,

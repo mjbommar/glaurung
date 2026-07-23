@@ -35,7 +35,7 @@ pub enum RegArch {
 /// at 0..=16 and AArch64 `x0`..`x30`,`sp`,`pc` at 0..=32).
 const NUM_PARENTS: usize = 40;
 /// Number of processor flags ([`Flag`] variants).
-const NUM_FLAGS: usize = 9;
+const NUM_FLAGS: usize = 10;
 
 /// How a physical register name maps onto a canonical full-width cell.
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +60,7 @@ fn flag_idx(f: Flag) -> usize {
         Flag::O => 6,
         Flag::P => 7,
         Flag::A => 8,
+        Flag::Bit => 9,
     }
 }
 
@@ -324,6 +325,33 @@ impl<D: Domain> RegFile<D> {
         }
     }
 
+    /// The ISA register layout used by this file.
+    pub fn arch(&self) -> RegArch {
+        self.arch
+    }
+
+    /// Natural width of a register in this file's selected architecture.
+    /// This is architecture-aware for ambiguous names such as `sp`.
+    pub(crate) fn width(&self, reg: &VReg) -> Option<Width> {
+        match reg {
+            VReg::Flag(_) => Some(Width::W1),
+            VReg::Temp(_) => None,
+            VReg::Phys(name) => {
+                let name = lower(name);
+                if self.arch == RegArch::AArch64 && is_aarch64_zero_reg(&name) {
+                    return Some(if name.as_ref() == "wzr" {
+                        Width::W32
+                    } else {
+                        Width::W64
+                    });
+                }
+                self.slot(&name)
+                    .map(|slot| Width(slot.width))
+                    .or_else(|| reg.width())
+            }
+        }
+    }
+
     /// Resolve a physical register name to its canonical slot for this arch.
     fn slot(&self, name: &str) -> Option<RegSlot> {
         match self.arch {
@@ -479,6 +507,13 @@ mod tests {
         r.write(&mut d, &VReg::phys("eax"), eax_val);
         assert_eq!(r.read(&mut d, &VReg::phys("rax")), 0x1234_5678);
         assert_eq!(r.read(&mut d, &VReg::phys("eax")), 0x1234_5678);
+    }
+
+    #[test]
+    fn aarch64_sp_width_is_not_the_x86_word_alias() {
+        let regs: RegFile<Concrete> = RegFile::with_arch(RegArch::AArch64);
+        assert_eq!(regs.width(&VReg::phys("sp")), Some(Width::W64));
+        assert_eq!(regs.width(&VReg::phys("wsp")), Some(Width::W32));
     }
 
     #[test]

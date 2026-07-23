@@ -107,9 +107,9 @@ impl<D: Domain + Clone> Clone for Machine<D> {
     }
 }
 
-fn value_width(v: &Value) -> Option<Width> {
+fn value_width<D: Domain>(regs: &RegFile<D>, v: &Value) -> Option<Width> {
     match v {
-        Value::Reg(r) => r.width(),
+        Value::Reg(r) => regs.width(r),
         Value::Const(_) => None,
         Value::Addr(_) => Some(Width::W64),
     }
@@ -118,9 +118,9 @@ fn value_width(v: &Value) -> Option<Width> {
 /// Operation width: prefer the destination's width, else the first operand with
 /// a known width, else 64 bits. (Resolves the Q1 "temp width" gap pragmatically;
 /// see STATUS.md.)
-fn op_width(dst: &VReg, operands: &[&Value]) -> Width {
-    dst.width()
-        .or_else(|| operands.iter().find_map(|v| value_width(v)))
+fn op_width<D: Domain>(regs: &RegFile<D>, dst: &VReg, operands: &[&Value]) -> Width {
+    regs.width(dst)
+        .or_else(|| operands.iter().find_map(|v| value_width(regs, v)))
         .unwrap_or(Width::W64)
 }
 
@@ -210,7 +210,7 @@ impl<D: Domain> Machine<D> {
         match op {
             Op::Nop => Flow::Next,
             Op::Assign { dst, src } => {
-                let w = op_width(dst, &[src]);
+                let w = op_width(&self.regs, dst, &[src]);
                 let v = self.read(src, w);
                 self.regs.write(&mut self.dom, dst, v);
                 Flow::Next
@@ -218,14 +218,14 @@ impl<D: Domain> Machine<D> {
             Op::CondAssign { dst, cond, src } => {
                 let c = self.regs.read(&mut self.dom, cond);
                 if let BranchDecision::Taken = self.dom.as_branch(&c) {
-                    let w = op_width(dst, &[src]);
+                    let w = op_width(&self.regs, dst, &[src]);
                     let v = self.read(src, w);
                     self.regs.write(&mut self.dom, dst, v);
                 }
                 Flow::Next
             }
             Op::Bin { dst, op, lhs, rhs } => {
-                let w = op_width(dst, &[lhs, rhs]);
+                let w = op_width(&self.regs, dst, &[lhs, rhs]);
                 let a = self.read(lhs, w);
                 let b = self.read(rhs, w);
                 let r = self.dom.binop(*op, &a, &b, w);
@@ -233,7 +233,7 @@ impl<D: Domain> Machine<D> {
                 Flow::Next
             }
             Op::Un { dst, op, src } => {
-                let w = op_width(dst, &[src]);
+                let w = op_width(&self.regs, dst, &[src]);
                 let a = self.read(src, w);
                 let r = self.dom.unop(*op, &a, w);
                 self.regs.write(&mut self.dom, dst, r);
@@ -241,8 +241,8 @@ impl<D: Domain> Machine<D> {
             }
             Op::Cmp { dst, op, lhs, rhs } => {
                 // Comparison width comes from the operands (dst is a 1-bit flag).
-                let w = value_width(lhs)
-                    .or_else(|| value_width(rhs))
+                let w = value_width(&self.regs, lhs)
+                    .or_else(|| value_width(&self.regs, rhs))
                     .unwrap_or(Width::W64);
                 let a = self.read(lhs, w);
                 let b = self.read(rhs, w);
@@ -269,15 +269,15 @@ impl<D: Domain> Machine<D> {
                 Flow::Next
             }
             Op::Extract { dst, src, hi, lo } => {
-                let w = value_width(src).unwrap_or(Width(*hi));
+                let w = value_width(&self.regs, src).unwrap_or(Width(*hi));
                 let v = self.read(src, w);
                 let r = self.dom.extract(&v, *hi, *lo);
                 self.regs.write(&mut self.dom, dst, r);
                 Flow::Next
             }
             Op::Concat { dst, hi, lo } => {
-                let hw = value_width(hi).unwrap_or(Width::W8);
-                let lw = value_width(lo).unwrap_or(Width::W8);
+                let hw = value_width(&self.regs, hi).unwrap_or(Width::W8);
+                let lw = value_width(&self.regs, lo).unwrap_or(Width::W8);
                 let h = self.read(hi, hw);
                 let l = self.read(lo, lw);
                 let r = self.dom.concat(&h, &l, hw, lw);

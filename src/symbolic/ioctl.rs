@@ -13,10 +13,11 @@
 
 use std::collections::BTreeMap;
 
-use crate::exec::{Domain, Machine};
+use crate::exec::{Domain, Machine, RegArch};
 use crate::ir::types::{Endian, LlirFunction, VReg, Width};
 use crate::symbolic::explore::{
-    find_sinks, find_sinks_stateful, ApiSummary, CallModel, Sink, SinkKind, TaintSpec,
+    find_sinks, find_sinks_stateful, find_sinks_with_arch, ApiSummary, CallModel, Sink, SinkKind,
+    TaintSpec,
 };
 use crate::symbolic::{Expr, Symbolic};
 
@@ -34,6 +35,132 @@ const SL_TYPE3_BUFFER: u64 = 0x20; // Parameters.DeviceIoControl.Type3InputBuffe
 const DEVICE_OBJECT: u64 = 0x1_0000;
 const IRP: u64 = 0x2_0000;
 const STACK_LOC: u64 = 0x3_0000;
+// Windows owns the kernel VA for METHOD_BUFFERED requests. Keep it well away
+// from the synthetic IRP, stack-location, IAT, stack, and heap ranges.
+const SYSTEM_BUFFER: u64 = 0x4_0000_0000;
+// InputBufferLength and OutputBufferLength are 32-bit. Mark the maximum possible
+// I/O-manager allocation as content-tainted; actual bounds remain a separate
+// length-aware memory-safety analysis rather than pointer-control taint.
+const SYSTEM_BUFFER_MAX_LEN: u64 = u32::MAX as u64 + 1;
+
+// Linux AArch64 `file_operations::unlocked_ioctl` execution environment.
+const LINUX_FILE: u64 = 0x5_0000_0000;
+const LINUX_STACK: u64 = 0x6_0000_0000;
+const LINUX_PCI_ENDPOINT_TEST: u64 = 0x5_1000_0000;
+const LINUX_PCI_DEVICE: u64 = 0x5_2000_0000;
+
+/// A named, reviewable kernel-object precondition for a Linux ioctl run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxIoctlEnvironment {
+    /// Only the generic AAPCS64 file/cmd/arg and stack contract.
+    Generic,
+    /// Valid `file->private_data`, enclosing `pci_endpoint_test`, and non-AM654
+    /// `pci_dev` for the registered PCI endpoint-test CVE row.
+    PciEndpointTest,
+}
+
+impl LinuxIoctlEnvironment {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Generic => "generic",
+            Self::PciEndpointTest => "pci-endpoint-test",
+        }
+    }
+}
+
+/// Attacker-controlled inputs of Linux's AAPCS64 ioctl handler ABI:
+/// `x0 = struct file *`, `w1 = cmd`, `x2 = arg`.
+#[derive(Debug, Clone, Copy)]
+pub struct LinuxIoctlSeed {
+    pub cmd_sym: u32,
+    pub arg_sym: u32,
+}
+
+impl LinuxIoctlSeed {
+    pub fn taint_spec(&self) -> TaintSpec {
+        let mut taint = TaintSpec::new();
+        taint.mark(self.cmd_sym, "IoctlCmd");
+        taint.mark(self.arg_sym, "IoctlArg");
+        taint
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum LinuxIoctlSeedError {
+    #[error("Linux ioctl seeding requires an AArch64 machine, found {0:?}")]
+    WrongArchitecture(RegArch),
+}
+
+/// Seed one Linux AArch64 `unlocked_ioctl` invocation without reusing the
+/// Windows IRP model. The kernel-owned `struct file *` and stack/frame pointers
+/// are deterministic concrete environment values; the 32-bit command and
+/// 64-bit user argument retain distinct symbolic widths and provenance.
+pub fn seed_linux_ioctl(
+    machine: &mut Machine<Symbolic>,
+) -> Result<LinuxIoctlSeed, LinuxIoctlSeedError> {
+    if machine.regs.arch() != RegArch::AArch64 {
+        return Err(LinuxIoctlSeedError::WrongArchitecture(machine.regs.arch()));
+    }
+    Ok(seed_linux_ioctl_aarch64(machine))
+}
+
+fn seed_linux_ioctl_aarch64(machine: &mut Machine<Symbolic>) -> LinuxIoctlSeed {
+    let file = machine.dom.constant(Width::W64, LINUX_FILE as u128);
+    machine
+        .regs
+        .write(&mut machine.dom, &VReg::phys("x0"), file);
+
+    let cmd = machine.dom.fresh(Width::W32);
+    let cmd_sym = match machine.dom.pool.get(cmd) {
+        Expr::Sym { id, .. } => *id,
+        _ => unreachable!("fresh() returns a Sym"),
+    };
+    machine.regs.write(&mut machine.dom, &VReg::phys("w1"), cmd);
+
+    let arg = machine.dom.fresh(Width::W64);
+    let arg_sym = match machine.dom.pool.get(arg) {
+        Expr::Sym { id, .. } => *id,
+        _ => unreachable!("fresh() returns a Sym"),
+    };
+    machine.regs.write(&mut machine.dom, &VReg::phys("x2"), arg);
+
+    for register in ["sp", "x29"] {
+        let value = machine.dom.constant(Width::W64, LINUX_STACK as u128);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys(register), value);
+    }
+    LinuxIoctlSeed { cmd_sym, arg_sym }
+}
+
+fn seed_linux_ioctl_environment(
+    machine: &mut Machine<Symbolic>,
+    environment: LinuxIoctlEnvironment,
+) {
+    match environment {
+        LinuxIoctlEnvironment::Generic => {}
+        LinuxIoctlEnvironment::PciEndpointTest => {
+            // `file->private_data` is the embedded `miscdevice` at test+0x90;
+            // `to_endpoint_test()` subtracts that offset. The AArch64 object
+            // reads `test->pdev` at +0 and `pdev->device` at +0x3e.
+            store_const(
+                machine,
+                LINUX_FILE + 0x18,
+                LINUX_PCI_ENDPOINT_TEST + 0x90,
+                Width::W64,
+            );
+            store_const(
+                machine,
+                LINUX_PCI_ENDPOINT_TEST,
+                LINUX_PCI_DEVICE,
+                Width::W64,
+            );
+            // Any non-AM654 device keeps BAR_0 out of the target-specific
+            // exclusion while retaining a valid `pci_dev` object.
+            store_const(machine, LINUX_PCI_DEVICE + 0x3e, 0, Width::W16);
+        }
+    }
+}
 
 /// The free-symbol ids of the attacker-controlled IRP fields, so a witness
 /// [`Model`](crate::symbolic::Model) can be interpreted (e.g. which value of the
@@ -41,7 +168,7 @@ const STACK_LOC: u64 = 0x3_0000;
 #[derive(Debug, Clone, Copy)]
 pub struct IrpSeed {
     pub ioctl_code_sym: u32,
-    pub system_buffer_sym: u32,
+    pub system_buffer_base: u64,
     pub input_len_sym: u32,
     pub output_len_sym: u32,
     pub type3_buffer_sym: u32,
@@ -54,7 +181,11 @@ impl IrpSeed {
     /// `SystemBuffer`") and undecorated internal symbols are not flagged.
     pub fn taint_spec(&self) -> TaintSpec {
         let mut t = TaintSpec::new();
-        t.mark(self.system_buffer_sym, "SystemBuffer");
+        t.mark_memory_region(
+            self.system_buffer_base,
+            SYSTEM_BUFFER_MAX_LEN,
+            "SystemBuffer",
+        );
         t.mark(self.user_buffer_sym, "UserBuffer");
         t.mark(self.type3_buffer_sym, "Type3InputBuffer");
         t.mark(self.ioctl_code_sym, "IoControlCode");
@@ -84,8 +215,10 @@ fn store_const(m: &mut Machine<Symbolic>, addr: u64, val: u64, width: Width) {
 }
 
 /// Seed a symbolic IRP for the dispatch routine: `rcx`=DeviceObject,
-/// `rdx`=Irp (both concrete), with the attacker-controlled IRP fields symbolic.
-/// The Irp→IO_STACK_LOCATION pointer is concrete so the handler can chase it.
+/// `rdx`=Irp (both concrete), with attacker-controlled scalar/request fields
+/// symbolic. The Irp→IO_STACK_LOCATION pointer and I/O-manager-owned
+/// `METHOD_BUFFERED` SystemBuffer pointer are concrete so the handler can chase
+/// them. SystemBuffer *contents* are marked attacker-controlled separately.
 pub fn seed_irp(m: &mut Machine<Symbolic>) -> IrpSeed {
     let dev = m.dom.constant(Width::W64, DEVICE_OBJECT as u128);
     m.regs.write(&mut m.dom, &VReg::phys("rcx"), dev);
@@ -95,7 +228,7 @@ pub fn seed_irp(m: &mut Machine<Symbolic>) -> IrpSeed {
     // IRP.Tail.Overlay.CurrentStackLocation → a concrete, chase-able pointer.
     store_const(m, IRP + IRP_STACK_LOCATION, STACK_LOC, Width::W64);
 
-    let system_buffer_sym = store_sym(m, IRP + IRP_SYSTEM_BUFFER, Width::W64);
+    store_const(m, IRP + IRP_SYSTEM_BUFFER, SYSTEM_BUFFER, Width::W64);
     let user_buffer_sym = store_sym(m, IRP + IRP_USER_BUFFER, Width::W64);
     let output_len_sym = store_sym(m, STACK_LOC + SL_OUTPUT_LEN, Width::W32);
     let input_len_sym = store_sym(m, STACK_LOC + SL_INPUT_LEN, Width::W32);
@@ -104,7 +237,7 @@ pub fn seed_irp(m: &mut Machine<Symbolic>) -> IrpSeed {
 
     IrpSeed {
         ioctl_code_sym,
-        system_buffer_sym,
+        system_buffer_base: SYSTEM_BUFFER,
         input_len_sym,
         output_len_sym,
         type3_buffer_sym,
@@ -150,6 +283,55 @@ fn seed_iat(m: &mut Machine<Symbolic>, apis: &CallModel) {
 /// only).
 pub fn find_ioctl_sinks(lf: &LlirFunction, max_states: usize) -> Vec<Sink> {
     find_ioctl_sinks_with_apis(lf, &CallModel::new(), max_states)
+}
+
+/// Execute a Linux AArch64 `unlocked_ioctl` handler with the exact AAPCS64 seed
+/// and architecture-aware modeled-callee ABI. This does not reuse the WDM IRP
+/// environment or the MS x64 return-address detector.
+pub fn find_linux_ioctl_sinks_with_apis(
+    lf: &LlirFunction,
+    apis: &CallModel,
+    max_states: usize,
+) -> Vec<Sink> {
+    find_sinks_with_arch(
+        lf,
+        RegArch::AArch64,
+        |machine| seed_linux_ioctl_aarch64(machine).taint_spec(),
+        apis,
+        max_states,
+    )
+}
+
+/// Execute a Linux AArch64 `unlocked_ioctl` handler for one registered command.
+/// The argument remains symbolic and attacker-tainted; only `w1` is fixed. This
+/// is an environment selection for a preregistered CVE row, not a search-policy
+/// heuristic.
+pub fn find_linux_ioctl_sinks_for_command_with_apis(
+    lf: &LlirFunction,
+    command: u32,
+    environment: LinuxIoctlEnvironment,
+    apis: &CallModel,
+    max_states: usize,
+) -> Vec<Sink> {
+    find_sinks_with_arch(
+        lf,
+        RegArch::AArch64,
+        |machine| {
+            let seed = seed_linux_ioctl_aarch64(machine);
+            let command = machine.dom.constant(Width::W32, command as u128);
+            machine
+                .regs
+                .write(&mut machine.dom, &VReg::phys("w1"), command);
+            seed_linux_ioctl_environment(machine, environment);
+            seed.taint_spec()
+        },
+        apis,
+        max_states,
+    )
+}
+
+pub fn find_linux_ioctl_sinks(lf: &LlirFunction, max_states: usize) -> Vec<Sink> {
+    find_linux_ioctl_sinks_with_apis(lf, &CallModel::new(), max_states)
 }
 
 /// Mark the four integer-argument registers (`rcx`/`rdx`/`r8`/`r9`) as attacker
@@ -292,6 +474,51 @@ pub fn driver_api_model(imports: &BTreeMap<String, u64>) -> CallModel {
     model
 }
 
+/// Build the narrow Linux kernel-call model used by admitted AArch64 ioctl
+/// handlers. The frontend supplies deterministic target-VA to ELF-symbol names;
+/// unsupported calls remain conservative return-value havoc in the explorer.
+pub fn linux_driver_api_model(external_calls: &BTreeMap<u64, String>) -> CallModel {
+    let mut model = CallModel::new();
+    for (&va, name) in external_calls {
+        let summary = match name.as_str() {
+            // Synchronization is an explicit environment no-op for the
+            // single-threaded handler run; the return is conservatively havoced.
+            "mutex_lock" | "mutex_unlock" | "_printk" => ApiSummary::HavocReturn,
+            "__arch_copy_from_user" | "copy_from_user" | "copy_to_user" | "memcpy" | "memmove" => {
+                ApiSummary::CopyMemory
+            }
+            "__kmalloc_noprof" | "kmalloc" | "kzalloc" => ApiSummary::Alloc { size_arg: 0 },
+            "memdup_user" => ApiSummary::Alloc { size_arg: 1 },
+            "kfree" => ApiSummary::Free { ptr_arg: 0 },
+            _ => continue,
+        };
+        model.insert(va, summary);
+    }
+    model
+}
+
+/// Build the narrow same-object helper model used by admitted Linux handlers.
+/// Local helpers are never inferred by signature: each accepted symbol is an
+/// explicit environment contract for the corresponding driver family.
+pub fn linux_local_api_model(local_calls: &BTreeMap<u64, String>) -> CallModel {
+    let mut model = CallModel::new();
+    for (&va, name) in local_calls {
+        let summary = match name.as_str() {
+            // `enum pci_barno` has the valid signed range BAR_0..BAR_5. The
+            // vulnerable helper uses this argument as a fixed-table index.
+            "pci_endpoint_test_bar" => ApiSummary::BoundedSignedIndex {
+                index_arg: 1,
+                width: Width::W32,
+                min: 0,
+                max: 5,
+            },
+            _ => continue,
+        };
+        model.insert(va, summary);
+    }
+    model
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +526,211 @@ mod tests {
         BinOp, CallTarget, CmpOp, Flag, LlirBlock, LlirInstr, MemOp, Op, Value,
     };
     use crate::symbolic::explore::{ApiSummary, Severity, SinkKind};
+
+    #[test]
+    fn linux_ioctl_seed_uses_aapcs64_registers_and_precise_widths() {
+        let mut machine = Machine::new_with_arch(Symbolic::new(), crate::exec::RegArch::AArch64);
+        let seed = seed_linux_ioctl(&mut machine).expect("seed AArch64 ioctl ABI");
+
+        assert_eq!(machine.regs.arch(), crate::exec::RegArch::AArch64);
+        let x0 = machine.regs.read(&mut machine.dom, &VReg::phys("x0"));
+        assert_eq!(machine.dom.as_u64(&x0), Some(LINUX_FILE));
+
+        let w1 = machine.regs.read(&mut machine.dom, &VReg::phys("w1"));
+        let mut cmd_symbols = BTreeMap::new();
+        machine.dom.pool.collect_syms(w1, &mut cmd_symbols);
+        assert_eq!(cmd_symbols.get(&seed.cmd_sym), Some(&Width::W32));
+        assert_eq!(seed.taint_spec().label(seed.cmd_sym), Some("IoctlCmd"));
+
+        let x2 = machine.regs.read(&mut machine.dom, &VReg::phys("x2"));
+        let mut arg_symbols = BTreeMap::new();
+        machine.dom.pool.collect_syms(x2, &mut arg_symbols);
+        assert_eq!(arg_symbols.get(&seed.arg_sym), Some(&Width::W64));
+        assert_eq!(seed.taint_spec().label(seed.arg_sym), Some("IoctlArg"));
+
+        let sp = machine.regs.read(&mut machine.dom, &VReg::phys("sp"));
+        assert_eq!(machine.dom.as_u64(&sp), Some(LINUX_STACK));
+        let rcx = machine.regs.read(&mut machine.dom, &VReg::phys("rcx"));
+        assert_eq!(machine.dom.as_u64(&rcx), Some(0));
+    }
+
+    #[test]
+    fn linux_ioctl_explorer_uses_aapcs64_call_arguments() {
+        let lf = func(vec![(
+            0x1000,
+            vec![
+                Op::Call {
+                    target: CallTarget::Direct(0x9000),
+                },
+                Op::Return,
+            ],
+            0x1008,
+            vec![],
+        )]);
+        let mut apis = CallModel::new();
+        apis.insert(
+            0x9000,
+            ApiSummary::DangerousCall {
+                args: &[2],
+                kind: SinkKind::PhysicalMemory,
+            },
+        );
+
+        let sinks = find_linux_ioctl_sinks_with_apis(&lf, &apis, 32);
+        assert_eq!(sinks.len(), 1);
+        assert_eq!(sinks[0].kind, SinkKind::PhysicalMemory);
+        assert_eq!(sinks[0].tainted_by, vec!["IoctlArg".to_string()]);
+    }
+
+    #[test]
+    fn linux_ioctl_path_accounting_rejects_implicit_call_havoc() {
+        let lf = func(vec![(
+            0x1000,
+            vec![
+                Op::Call {
+                    target: CallTarget::Direct(0x9000),
+                },
+                Op::Return,
+            ],
+            0x1008,
+            vec![],
+        )]);
+
+        crate::symbolic::reset_execution_path_stats();
+        find_linux_ioctl_sinks(&lf, 32);
+        let implicit = crate::symbolic::execution_path_stats();
+        assert_eq!(implicit.unmodeled_calls.get(&0x1000), Some(&1));
+        assert_eq!(implicit.incomplete_stops(), 1);
+
+        let apis = CallModel::from([(0x9000, ApiSummary::HavocReturn)]);
+        crate::symbolic::reset_execution_path_stats();
+        find_linux_ioctl_sinks_with_apis(&lf, &apis, 32);
+        let explicit = crate::symbolic::execution_path_stats();
+        assert!(explicit.unmodeled_calls.is_empty());
+        assert_eq!(explicit.incomplete_stops(), 0);
+    }
+
+    #[test]
+    fn linux_ioctl_reports_path_controlled_null_page_deref() {
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("w1")),
+                        rhs: Value::Const(6),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x2000,
+                        inverted: false,
+                    },
+                ],
+                0x1008,
+                vec![0x1008, 0x2000],
+            ),
+            (0x1008, vec![Op::Return], 0x100c, vec![]),
+            (
+                0x2000,
+                vec![
+                    Op::Load {
+                        dst: VReg::phys("w8"),
+                        addr: MemOp::plain(None, None, 1, 0x20, 1),
+                    },
+                    Op::Return,
+                ],
+                0x2008,
+                vec![],
+            ),
+        ]);
+        let sinks = find_linux_ioctl_sinks(&lf, 32);
+        let null = sinks
+            .iter()
+            .find(|sink| sink.kind == SinkKind::NullDeref)
+            .expect("cmd-controlled low-page dereference");
+        assert_eq!(null.tainted_by, vec!["IoctlCmd".to_string()]);
+        assert_eq!(null.severity, Severity::Constrained);
+    }
+
+    #[test]
+    fn linux_driver_api_model_recognizes_usercopy_alloc_and_free() {
+        let calls = BTreeMap::from([
+            (0x1000, "__arch_copy_from_user".to_string()),
+            (0x2000, "memdup_user".to_string()),
+            (0x3000, "kfree".to_string()),
+            (0x4000, "mutex_lock".to_string()),
+            (0x5000, "_printk".to_string()),
+        ]);
+        let model = linux_driver_api_model(&calls);
+        assert_eq!(model.get(&0x1000), Some(&ApiSummary::CopyMemory));
+        assert_eq!(model.get(&0x2000), Some(&ApiSummary::Alloc { size_arg: 1 }));
+        assert_eq!(model.get(&0x3000), Some(&ApiSummary::Free { ptr_arg: 0 }));
+        assert_eq!(model.get(&0x4000), Some(&ApiSummary::HavocReturn));
+        assert_eq!(model.get(&0x5000), Some(&ApiSummary::HavocReturn));
+    }
+
+    #[test]
+    fn linux_local_api_model_recognizes_registered_pci_bar_helper_only() {
+        let calls = BTreeMap::from([
+            (0x1000, "pci_endpoint_test_bar".to_string()),
+            (0x2000, "unregistered_local_helper".to_string()),
+        ]);
+        let model = linux_local_api_model(&calls);
+        assert_eq!(
+            model.get(&0x1000),
+            Some(&ApiSummary::BoundedSignedIndex {
+                index_arg: 1,
+                width: Width::W32,
+                min: 0,
+                max: 5,
+            })
+        );
+        assert!(!model.contains_key(&0x2000));
+    }
+
+    #[test]
+    fn registered_command_preserves_symbolic_ioctl_argument_for_local_summary() {
+        let lf = func(vec![(
+            0x1000,
+            vec![
+                Op::Assign {
+                    dst: VReg::phys("w1"),
+                    src: Value::Reg(VReg::phys("w2")),
+                },
+                Op::Call {
+                    target: CallTarget::Direct(0x9000),
+                },
+                Op::Return,
+            ],
+            0x100c,
+            vec![],
+        )]);
+        let mut apis = CallModel::new();
+        apis.insert(
+            0x9000,
+            ApiSummary::BoundedSignedIndex {
+                index_arg: 1,
+                width: Width::W32,
+                min: 0,
+                max: 5,
+            },
+        );
+
+        let sinks = find_linux_ioctl_sinks_for_command_with_apis(
+            &lf,
+            0x5001,
+            LinuxIoctlEnvironment::Generic,
+            &apis,
+            32,
+        );
+        let sink = sinks
+            .iter()
+            .find(|sink| sink.kind == SinkKind::OutOfBoundsIndex)
+            .expect("symbolic ioctl arg can violate registered helper range");
+        assert_eq!(sink.tainted_by, vec!["IoctlArg".to_string()]);
+    }
 
     fn kinds(sinks: &[Sink]) -> std::collections::BTreeSet<&'static str> {
         sinks.iter().map(|s| kind_str(s.kind)).collect()
@@ -323,6 +755,7 @@ mod tests {
             SinkKind::ArbitraryMsrWrite => "wrmsr",
             SinkKind::ArbitraryMsrRead => "rdmsr",
             SinkKind::PortAccess => "portio",
+            SinkKind::OutOfBoundsIndex => "oob_index",
         }
     }
 
@@ -356,13 +789,13 @@ mod tests {
         }
     }
 
-    /// A synthetic vulnerable IOCTL handler:
+    /// A synthetic vulnerable METHOD_NEITHER IOCTL handler:
     ///   stack = [Irp+0xB8]; code = [stack+0x18];
-    ///   if (code == 0x800) { buf = [Irp+0x18]; *buf = 0x41414141; }  // arb write
-    /// The engine must find the write and report the IOCTL code 0x800 as witness.
+    ///   if (code == 0x803) { buf = [stack+0x20]; *buf = 0x41414141; } // arb write
+    /// The engine must find the write and report the IOCTL code 0x803 as witness.
     #[test]
-    fn finds_arbitrary_write_with_ioctl_witness() {
-        const MAGIC: i64 = 0x800;
+    fn finds_method_neither_arbitrary_write_with_ioctl_witness() {
+        const MAGIC: i64 = 0x803;
         let lf = func(vec![
             // B0: load StackLoc + IoControlCode; branch on code == MAGIC
             (
@@ -391,7 +824,8 @@ mod tests {
             (
                 0x1020,
                 vec![
-                    load("rdi", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // SystemBuffer (symbolic ptr)
+                    load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
+                    load("rdi", "r10", SL_TYPE3_BUFFER as i64, 8),
                     Op::Store {
                         addr: MemOp::plain(Some(VReg::phys("rdi")), None, 1, 0, 8),
                         src: Value::Const(0x4141_4141),
@@ -410,17 +844,17 @@ mod tests {
         let writes = find_arbitrary_writes(&lf, 1000);
         assert_eq!(writes.len(), 1, "expected exactly one controlled write");
         let w = &writes[0];
-        assert_eq!(w.va, 0x1024, "store VA");
+        assert_eq!(w.va, 0x1028, "store VA");
         assert_eq!(
             w.witness.values.get(&seed.ioctl_code_sym).copied(),
             Some(MAGIC as u128),
             "witness must drive IoControlCode = {:#x}",
             MAGIC
         );
-        // The store goes through the unconstrained SystemBuffer pointer → the
-        // address is fully attacker-chosen (write-where), tagged with provenance.
+        // METHOD_NEITHER passes the raw caller pointer in Type3InputBuffer, so
+        // the address is fully attacker-chosen (write-where).
         assert_eq!(w.severity, Severity::Arbitrary, "expected write-where");
-        assert_eq!(w.tainted_by, vec!["SystemBuffer".to_string()]);
+        assert_eq!(w.tainted_by, vec!["Type3InputBuffer".to_string()]);
     }
 
     /// Positive control for the KMDF `WdfRequestRetrieveInputBuffer` model
@@ -520,17 +954,17 @@ mod tests {
     }
 
     /// End-to-end on **real x86-64 machine bytes** (not hand-built LLIR): lift a
-    /// tiny handler that reads the attacker-controlled SystemBuffer pointer and
-    /// writes through it, then confirm the symbolic engine flags the controlled
+    /// tiny METHOD_NEITHER handler that reads the caller-controlled UserBuffer
+    /// pointer and writes through it, then confirm the engine flags the controlled
     /// write. Proves the machine-code → lift → symbolic-detect pipeline.
     #[test]
-    fn finds_controlled_write_from_machine_bytes() {
+    fn finds_method_neither_controlled_write_from_machine_bytes() {
         use crate::ir::lift_x86::lift_bytes;
-        // mov rax, [rdx+0x18]      ; rax = IRP.SystemBuffer (symbolic)
-        // mov qword ptr [rax], 0x41414141   ; *SystemBuffer = ...  (controlled write)
+        // mov rax, [rdx+0x30]      ; rax = IRP.UserBuffer (caller pointer)
+        // mov qword ptr [rax], 0x41414141   ; *UserBuffer = ...  (controlled write)
         // ret
         let code: &[u8] = &[
-            0x48, 0x8B, 0x42, 0x18, // mov rax, [rdx+0x18]
+            0x48, 0x8B, 0x42, 0x30, // mov rax, [rdx+0x30]
             0x48, 0xC7, 0x00, 0x41, 0x41, 0x41, 0x41, // mov qword [rax], 0x41414141
             0xC3, // ret
         ];
@@ -549,20 +983,21 @@ mod tests {
         assert_eq!(
             writes.len(),
             1,
-            "expected the store through SystemBuffer to be flagged"
+            "expected the store through UserBuffer to be flagged"
         );
     }
 
-    /// A read *through* the attacker-controlled SystemBuffer pointer is both an
+    /// A read through a METHOD_NEITHER caller pointer is both an
     /// arbitrary-read primitive and (since the pointer is unconstrained) a
     /// null-deref. Both must be reported.
     #[test]
-    fn read_through_system_buffer_is_arbitrary_read_and_nulldef() {
+    fn read_through_type3_input_buffer_is_arbitrary_read_and_nulldef() {
         let lf = func(vec![(
             0x1000,
             vec![
-                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // rax = SystemBuffer
-                load("rbx", "rax", 0, 8),                        // rbx = *rax (symbolic addr)
+                load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
+                load("rax", "r10", SL_TYPE3_BUFFER as i64, 8),
+                load("rbx", "rax", 0, 8), // rbx = *rax (symbolic addr)
                 Op::Return,
             ],
             0x100C,
@@ -576,13 +1011,83 @@ mod tests {
             .find(|s| s.kind == SinkKind::ControlledRead)
             .unwrap();
         assert_eq!(read.severity, Severity::Arbitrary);
-        assert_eq!(read.tainted_by, vec!["SystemBuffer".to_string()]);
+        assert_eq!(read.tainted_by, vec!["Type3InputBuffer".to_string()]);
         // No write sink for a pure read.
         assert!(find_arbitrary_writes(&lf, 1000).is_empty());
     }
 
-    /// A handler that null-checks the pointer before dereferencing
-    /// (`if (SystemBuffer == 0) return; *SystemBuffer = x;`) must NOT report a
+    /// Regression for the complete Windows 11 `usbprint.sys` authority control.
+    /// `AssociatedIrp.SystemBuffer` for a `METHOD_BUFFERED` request is an
+    /// I/O-manager-owned kernel pointer, not an attacker-selected address.  Once
+    /// the handler has rejected NULL and required at least three bytes, ordinary
+    /// reads at offsets 2, 1, and 0 are neither controlled-address reads nor
+    /// null dereferences.  Buffer *contents* remain attacker-controlled and are
+    /// covered independently by the taint-through-memory tests below.
+    #[test]
+    fn guarded_method_buffered_reads_are_not_pointer_control_findings() {
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
+                    load("r15", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                    load("edi", "r10", SL_OUTPUT_LEN as i64, 4),
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("r15")),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1030,
+                        inverted: false,
+                    },
+                ],
+                0x1018,
+                vec![0x1030, 0x1018],
+            ),
+            (
+                0x1018,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::C),
+                        op: CmpOp::Ult,
+                        lhs: Value::Reg(VReg::phys("edi")),
+                        rhs: Value::Const(3),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::C),
+                        target: 0x1030,
+                        inverted: false,
+                    },
+                ],
+                0x1020,
+                vec![0x1030, 0x1020],
+            ),
+            (
+                0x1020,
+                vec![
+                    load("eax", "r15", 2, 1),
+                    load("r8d", "r15", 1, 1),
+                    load("edx", "r15", 0, 1),
+                    Op::Return,
+                ],
+                0x1030,
+                vec![],
+            ),
+            (0x1030, vec![Op::Return], 0x1034, vec![]),
+        ]);
+
+        let sinks = find_ioctl_sinks(&lf, 1000);
+        assert!(
+            sinks.is_empty(),
+            "kernel-owned guarded SystemBuffer reads must not be pointer-control findings: {sinks:?}"
+        );
+    }
+
+    /// A handler that null-checks a METHOD_NEITHER pointer before dereferencing
+    /// (`if (Type3InputBuffer == 0) return; *Type3InputBuffer = x;`) must NOT report a
     /// null deref on the storing path — the path condition already guards it
     /// non-null — while still reporting the controlled write. This is the
     /// path-sensitive guard suppression our static `ioctl_taint` approximates and
@@ -593,7 +1098,8 @@ mod tests {
             (
                 0x1000,
                 vec![
-                    load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                    load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
+                    load("rax", "r10", SL_TYPE3_BUFFER as i64, 8),
                     Op::Cmp {
                         dst: VReg::Flag(Flag::Z),
                         op: CmpOp::Eq,
@@ -634,16 +1140,16 @@ mod tests {
     }
 
     /// The classic primitive that never appears as a raw symbolic store:
-    /// `memcpy(SystemBuffer, local, len)` — a controlled write hidden inside an
+    /// `memcpy(UserBuffer, local, len)` — a controlled write hidden inside an
     /// API call. With the callee VA modeled as `CopyMemory`, the engine must
     /// flag the attacker-controlled destination.
     #[test]
-    fn memcpy_to_system_buffer_is_detected_via_api_summary() {
+    fn memcpy_to_method_neither_user_buffer_is_detected_via_api_summary() {
         const MEMCPY_VA: u64 = 0x9000;
         let lf = func(vec![(
             0x1000,
             vec![
-                load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // dst = SystemBuffer
+                load("rcx", "rdx", IRP_USER_BUFFER as i64, 8), // dst = UserBuffer
                 Op::Assign {
                     dst: VReg::phys("rdx"),
                     src: Value::Const(0x60000),
@@ -676,7 +1182,7 @@ mod tests {
         let w = writes[0];
         assert_eq!(w.va, 0x1008, "the call site VA");
         assert_eq!(w.severity, Severity::Arbitrary);
-        assert_eq!(w.tainted_by, vec!["SystemBuffer".to_string()]);
+        assert_eq!(w.tainted_by, vec!["UserBuffer".to_string()]);
         // The concrete `src` buffer is not attacker-derived → no read sink.
         assert!(!sinks.iter().any(|s| s.kind == SinkKind::ControlledRead));
     }
@@ -704,12 +1210,15 @@ mod tests {
     fn tainted_handle_to_zwterminateprocess() {
         const API: u64 = 0x9000;
         let lf = handler_calling(
-            vec![load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], // arg0 = SystemBuffer
+            vec![
+                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rcx", "rax", 0, 8), // arg0 = attacker-controlled buffer content
+            ],
             API,
         );
         let sinks = find_ioctl_sinks_with_apis(&lf, &model("ZwTerminateProcess", API), 1000);
         assert_eq!(kinds(&sinks), ["proc_term"].into_iter().collect());
-        assert_eq!(sinks[0].tainted_by, vec!["SystemBuffer".to_string()]);
+        assert_eq!(sinks[0].tainted_by, vec!["*SystemBuffer".to_string()]);
     }
 
     /// The full real-MSVC pattern, end to end: a handle read from buffer contents
@@ -755,7 +1264,8 @@ mod tests {
         const API: u64 = 0x9000;
         let lf = handler_calling(
             vec![
-                load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // arg0 = phys addr
+                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rcx", "rax", 0, 8), // arg0 = phys addr from buffer contents
                 load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
                 load("rdx", "r10", SL_INPUT_LEN as i64, 4), // arg1 = size
             ],
@@ -765,7 +1275,7 @@ mod tests {
         assert_eq!(kinds(&sinks), ["phys_mem"].into_iter().collect());
         assert_eq!(
             sinks[0].tainted_by,
-            vec!["InputBufferLength".to_string(), "SystemBuffer".to_string()]
+            vec!["*SystemBuffer".to_string(), "InputBufferLength".to_string(),]
         );
     }
 
@@ -773,9 +1283,15 @@ mod tests {
     #[test]
     fn tainted_path_to_zwcreatefile() {
         const API: u64 = 0x9000;
-        // rdx (arg1 = DesiredAccess) = SystemBuffer: an attacker-controlled file-op
-        // parameter. (arg0 is the output FileHandle and is no longer a trigger.)
-        let lf = handler_calling(vec![load("rdx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], API);
+        // rdx (arg1 = DesiredAccess) comes from SystemBuffer contents. (arg0 is
+        // the output FileHandle and is no longer a trigger.)
+        let lf = handler_calling(
+            vec![
+                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rdx", "rax", 0, 8),
+            ],
+            API,
+        );
         let sinks = find_ioctl_sinks_with_apis(&lf, &model("ZwCreateFile", API), 1000);
         assert_eq!(kinds(&sinks), ["file_op"].into_iter().collect());
     }
@@ -784,8 +1300,14 @@ mod tests {
     #[test]
     fn tainted_format_string_to_sprintf() {
         const API: u64 = 0x9000;
-        // rdx (arg1 = format) = SystemBuffer.
-        let lf = handler_calling(vec![load("rdx", "rdx", IRP_SYSTEM_BUFFER as i64, 8)], API);
+        // rdx (arg1 = format) is a caller pointer read from SystemBuffer contents.
+        let lf = handler_calling(
+            vec![
+                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rdx", "rax", 0, 8),
+            ],
+            API,
+        );
         let sinks = find_ioctl_sinks_with_apis(&lf, &model("sprintf", API), 1000);
         assert_eq!(kinds(&sinks), ["format_string"].into_iter().collect());
     }
@@ -824,11 +1346,12 @@ mod tests {
     /// An indirect call through an attacker-controlled function pointer is a
     /// control-flow hijack (shellcode).
     #[test]
-    fn indirect_call_through_attacker_pointer_is_shellcode() {
+    fn indirect_call_through_buffer_derived_pointer_is_shellcode() {
         let lf = func(vec![(
             0x1000,
             vec![
-                load("rax", "rdx", IRP_SYSTEM_BUFFER as i64, 8), // rax = attacker fn ptr
+                load("rcx", "rdx", IRP_SYSTEM_BUFFER as i64, 8),
+                load("rax", "rcx", 0, 8), // rax = attacker fn ptr from contents
                 Op::Call {
                     target: CallTarget::Indirect(Value::Reg(VReg::phys("rax"))),
                 },
@@ -957,8 +1480,8 @@ mod tests {
             },
             Op::Assign {
                 dst: VReg::phys("rcx"),
-                src: Value::Const(0x1F8000),
-            }, // dst on the stack
+                src: Value::Reg(VReg::phys("rsp")),
+            }, // dst is structurally the stack pointer
             load("r10", "rdx", IRP_STACK_LOCATION as i64, 8),
             load("r8", "r10", SL_INPUT_LEN as i64, 4), // len = InputBufferLength (attacker, arg2)
             call(MEMCPY),

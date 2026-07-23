@@ -41,6 +41,7 @@ fn kind_str(k: SinkKind) -> &'static str {
         SinkKind::ArbitraryMsrWrite => "arbitrary-wrmsr",
         SinkKind::ArbitraryMsrRead => "arbitrary-rdmsr",
         SinkKind::PortAccess => "arbitrary-portio",
+        SinkKind::OutOfBoundsIndex => "out-of-bounds-index",
     }
 }
 

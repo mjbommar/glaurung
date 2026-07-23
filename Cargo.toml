@@ -38,9 +38,10 @@ capstone = "0.12"
 # Native in-process SMT solver (feature `solver-z3`); links libz3. Optional.
 z3 = { version = "0.12", optional = true }
 # Pure-Rust in-process SMT solver (feature `solver-axeyum`); no C dependency.
-# Dev: absolute path dep (ADR-001); pin to a git rev before release.
-axeyum-solver = { path = "/home/mjbommar/projects/personal/axeyum/crates/axeyum-solver", optional = true, default-features = false, features = ["qfbv"] }
-axeyum-ir = { path = "/home/mjbommar/projects/personal/axeyum/crates/axeyum-ir", optional = true }
+# The exact git revision keeps recall builds independent of a machine-local
+# sibling checkout while preserving the minimal QF_BV consumer profile.
+axeyum-solver = { git = "https://github.com/mjbommar/axeyum.git", rev = "c38a9515e68e7427b1a41a7598805cf60686bd58", optional = true, default-features = false, features = ["qfbv"] }
+axeyum-ir = { git = "https://github.com/mjbommar/axeyum.git", rev = "c38a9515e68e7427b1a41a7598805cf60686bd58", optional = true }
 
 # DEV-ONLY differential-test oracle (feature `dev-oracle`); links the system
 # Unicorn engine via pkg-config (libunicorn-dev). Never shipped in the wheel.
@@ -139,6 +140,10 @@ required-features = ["solver-axeyum"]
 [[example]]
 name = "ioctlance"
 required-features = ["symbolic"]
+
+[[example]]
+name = "linux_symbolic_cve"
+required-features = ["solver-axeyum"]
 
 [[example]]
 name = "axeyum_diff"

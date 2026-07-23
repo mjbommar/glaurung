@@ -2026,6 +2026,8 @@ fn flag_ident(fl: &Flag) -> &'static str {
         Flag::O => "of",
         Flag::P => "pf",
         Flag::A => "af",
+        // internal one-bit predicate for flag-preserving ISA branches (adr0302)
+        Flag::Bit => "bitpred",
     }
 }
 

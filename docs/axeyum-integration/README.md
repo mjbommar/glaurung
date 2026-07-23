@@ -47,6 +47,8 @@ concentrated in performance and QF_BV coverage, not in wiring.
 | `05-risks-and-open-questions.md` | Perf gap, QF_BV coverage gaps, AArch64-lift gap, WASM, versioning, fallback policy |
 | `06-validation-and-ci.md` | Differential oracle (reuse the Unicorn-oracle pattern), corpora, golden tests, proof checking |
 | `07-decision-log.md` | ADR-style records of the load-bearing choices |
+| `08-concretization-policy.md` | A0 policy contract, configuration compatibility, trace IDs, and A3/A2 boundaries |
+| `09-taint-provenance-and-finding-labels.md` | Why raw sinks are not finding ground truth; provenance correction and policy-sweep gates |
 
 ## Status
 
@@ -86,3 +88,16 @@ AArch64/Android reachability endgame (P6).
 Placement note: this lives in glaurung because glaurung is the integrator;
 Axeyum supplies the additive retained-session contract, while ownership,
 ordered capture, and production admission remain Glaurung responsibilities.
+
+The A0 concretization refactor, provenance correction, and machine-readable
+finding-confidence partition are isolated on branch
+`axeyum-concretization-policy-a0` at `931d8a8`: `AnyModel` remains the default, all accepted
+least/greatest/site-hash policies implement one `ConcretizationPolicy` seam,
+and the preferred `GLAURUNG_CONCRETIZATION_POLICY` config coexists with the
+legacy experiment variable. Boundary-set forking is A3 execution work;
+deferred symbolic memory is the separate, conditional A2 architecture project.
+Policy sweeps must report raw diagnostics separately from confidence-gated and
+validated findings; the first-15 tcpip slice now has zero high-confidence rows
+under both authorities after exact taint provenance is preserved. Opt-in
+`IOCTLANCE_ANNOTATE_CONFIDENCE=1` supplies an exhaustive versioned partition
+without changing legacy finding bytes.

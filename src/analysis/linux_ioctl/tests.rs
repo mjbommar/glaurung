@@ -9,8 +9,8 @@
 use super::*;
 
 fn load_ko() -> Option<Vec<u8>> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/android/foo_drv.ko");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/android/foo_drv.ko");
     std::fs::read(path).ok()
 }
 
@@ -76,8 +76,7 @@ fn enumerates_command_surface_from_handler() {
         .find(|h| h.handler_symbol == "foo_ioctl")
         .expect("foo_ioctl");
 
-    let raws: std::collections::BTreeSet<u32> =
-        unlocked.commands.iter().map(|c| c.raw).collect();
+    let raws: std::collections::BTreeSet<u32> = unlocked.commands.iter().map(|c| c.raw).collect();
     let expected: std::collections::BTreeSet<u32> =
         [FOO_GET, FOO_SET, FOO_RST, FOO_XCHG].into_iter().collect();
     assert_eq!(raws, expected, "recovered ioctl command surface");

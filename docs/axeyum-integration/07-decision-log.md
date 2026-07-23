@@ -906,3 +906,207 @@ authority nor benchmark semantics.
 **Alternatives rejected:** delete the useful reference bridge; expand `qfbv` to
 include the whole SMT-LIB/multi-theory facade; duplicate a parser in Glaurung;
 or describe the dependency as minimal while continuing to activate `full`.
+
+## ADR-026 - Make concretization a first-class policy
+
+**Status:** Accepted.
+**Context:** The accepted authority experiments show that arbitrary, least,
+greatest, and two site-hash choices are settings of one model-value knob, not
+separate solver algorithms. They were nevertheless implemented as an enum and
+environment parser embedded in `explore.rs`, duplicating selection logic at
+`concretize_addr` and `eval_concrete`. The publication plan requires a measured
+policy sweep, while symbolic memory must remain a separate architecture item.
+**Decision:** Extract a public, `Send + Sync` `ConcretizationPolicy` contract.
+Give each request only a stable seam, semantic purpose, and instruction address.
+Keep checked solving, model evaluation, address binding, and ordered tracing in
+the explorer. Route both value-selection seams through injectable policy-aware
+helpers. Make `GLAURUNG_CONCRETIZATION_POLICY` the preferred built-in selector,
+retain `GLAURUNG_CANONICAL_MODEL_CHOICE` exactly for preregistered campaigns,
+and reject simultaneous use. Preserve every existing policy ID and both legacy
+AnyModel trace IDs. Represent `BoundarySet` and `Defer` in the contract, but
+fail closed until A3 state forking and A2 symbolic memory actually implement
+their distinct semantics.
+**Evidence:** The TDD red gate failed on the absent policy types and resolver,
+then six contract tests passed for the AnyModel default and trace IDs, every new
+and legacy alias, precise invalid/conflicting config errors, complementary
+site-hash decisions, and custom set/defer policy values. Seventeen focused
+explorer tests pass, including explicit least/greatest injection at both seams,
+path binding versus read-only evaluation, infeasible-path handling, unsupported
+widths, and all prior extrema. On the exact tcpip 15-of-338 boundary, two clean
+A0 Axeyum runs reproduce the three accepted pre-A0 runs: 126 findings, ordered
+hash `a67d7bca28602ab20bbc46d9a5d42705463bd340067dc8e6ec660b35d58ba265`,
+2,991 solves, and identical AnyModel counters. The expected two Z3-only rows
+remain. A separate one-function gate proves preferred and legacy minimum config
+produce identical output and work: 13 completed choices, 858 probes, 869 solves,
+and zero failure partition.
+**Consequences:** A0 is behavior-preserving enabling infrastructure. The next
+coverage work is a preregistered sweep over policy configurations. A3 must add
+bounded set forking before `BoundarySet` becomes production-selectable. A2 must
+change the memory model and starts only if the cheap sweep leaves measured
+coverage headroom. Existing experiment scripts can migrate to the preferred
+variable without invalidating archived commands.
+**Alternatives rejected:** keep adding one-off enum branches in the explorer;
+rename the legacy variable without compatibility; collapse a boundary set to
+its first value; treat deferred symbolic memory as another scalar policy;
+change default traces while claiming byte-for-byte reproduction.
+
+## ADR-027 - Preserve taint provenance before scoring policy coverage
+
+**Status:** Accepted.
+**Context:** The first-15 tcpip AnyModel authority control has two stable Z3-only
+double-fetch rows, and the four-schedule experiments used raw sink-set growth as
+a bounded coverage observation. Exact trace inspection showed both rows occur
+inside `TcpSendTrackerMarkTransmits` and depend only on generic `Arg0` ancestry
+plus fresh values loaded through it. The explorer nevertheless relabeled every
+uninitialized load through any tainted address as `*attacker`, bypassing the
+normal high-confidence rejection of `ArgN` pointer noise.
+**Decision:** Store every stable source label on a tainted symbol and propagate
+an uninitialized load by prefixing each exact address source. Never replace
+specific provenance with generic `*attacker`. Keep raw diagnostics available,
+but score future concretization-policy coverage on a preregistered nonzero
+labeled-positive population while reporting raw, confidence-gated, and
+validated partitions separately.
+**Evidence:** The red regression expected an uninitialized mixed-source load to
+retain `*Arg0` and `*SystemBuffer` but observed only `*attacker`; it passes after
+the correction, together with all 18 explorer tests. Both sole-authority
+release builds complete two clean repetitions on the exact 15-of-338 tcpip
+boundary. AnyModel remains deterministically 128 Z3 versus 126 Axeyum raw rows,
+with the two differences relabeled `**Arg0`; least unsigned remains exactly
+110/110. Normal confidence-gated execution reports zero findings for both
+authorities, and every least-unsigned raw row carries only `Arg0`, `Arg1`, or a
+dereference thereof. PDB symbols map the sites to the 2,104-byte internal
+`TcpSendTrackerMarkTransmits` function; disassembly shows tree-node field reads
+at offsets `-0xc` and `+0x8`.
+**Consequences:** ADR-026's A0 abstraction remains accepted. The older raw
+authority artifacts remain deterministic exploration evidence, but their
+interpretation as a true-positive coverage frontier is superseded. Do not
+select BoundarySet, DiverseEnum, or symbolic memory to recover these two rows
+or maximize the arbitrary-model raw union. First select and label a corpus with
+nonzero accepted findings; begin symbolic memory only if the corrected cheap
+policy sweep leaves validated recall headroom.
+**Alternatives rejected:** suppress the two addresses by special case; keep
+`*attacker` and document the false positives; treat every `ArgN` dereference as
+attacker-controlled; discard raw output; or call least-unsigned preservation
+because its two authorities emit the same zero-confidence diagnostic set.
+
+## ADR-028 - Emit an exhaustive finding-confidence partition
+
+**Status:** Accepted.
+**Context:** ADR-027 requires policy experiments to report raw diagnostics and
+confidence-gated findings separately. `IOCTLANCE_ALL=1` exposed raw rows, but
+the producer emitted no row-level classification and its summary labeled the
+raw count as high confidence. A downstream harness would otherwise have to
+reimplement Glaurung's confidence policy or run separate processes whose
+exploration could not be proven identical.
+**Decision:** Add opt-in `IOCTLANCE_ANNOTATE_CONFIDENCE=1` output. Classify each
+finding with the producer's existing `is_attacker_real` policy after sorting,
+append `confidence=high|diagnostic` only at print time, and emit the exhaustive
+versioned footer `glaurung-ioctlance-confidence-v1`. Keep every unannotated
+legacy byte unchanged. Report actual high and diagnostic counts even when all
+raw findings are displayed.
+**Evidence:** The red tests first failed because nested `ArgN` output had no
+machine-readable class. The accepted implementation proves nested generic
+ancestry remains diagnostic and that both annotations can be stripped to the
+exact historical finding bytes. Both focused tests pass. Two independently
+built release binaries are then consumable by Axeyum's fail-closed v5 authority
+harness, which validates the footer and the exhaustive row partition.
+**Consequences:** One process now supplies raw, high-confidence, and diagnostic
+sets over exactly the same exploration. Raw hashes remain comparable to prior
+artifacts. A high-confidence acceptance run must reject a missing or malformed
+partition; legacy raw-only consumers may continue without the opt-in variable.
+Manual or independent validation remains a third population and is not
+manufactured by this annotation.
+**Alternatives rejected:** duplicate the filter in Axeyum; compare separate
+normal and show-all processes; change default output bytes; infer confidence
+from taint strings; or equate producer confidence with ground-truth validity.
+
+## ADR-029 - Separate WDM SystemBuffer address ownership from content taint
+
+**Status:** Accepted.
+**Context:** ADR-028 selected complete x64 Windows 11 `usbprint.sys` as the first
+nonzero producer-confidence population: five Z3 versus four Axeyum rows, with
+one Z3-only `SystemBuffer` null dereference. Public symbols and disassembly place
+all five in `HPUsbIOCTLVendorGetCommand`, behind explicit non-null and
+three-byte length guards for IOCTL `0x0022003c` (`METHOD_BUFFERED`). Windows owns
+the kernel SystemBuffer pointer and allocates the larger input/output size; the
+old IRP seed instead made that pointer a free attacker-controlled 64-bit value.
+**Decision:** Store a fixed, chaseable synthetic kernel address in
+`AssociatedIrp.SystemBuffer`. Extend `TaintSpec` with stable concrete memory
+regions so uninitialized data loaded from that allocation remains exactly
+`*SystemBuffer`-tainted without tainting the address. Preserve symbolic
+`Type3InputBuffer` and `UserBuffer` pointers for genuine `METHOD_NEITHER`
+pointer-control checks. Keep request-length-aware out-of-bounds analysis a
+separate future primitive; never approximate it by calling the kernel pointer
+attacker-selected.
+**Evidence:** The exact reduced regression first emitted the same three
+controlled reads and two null dereferences as the real driver and now emits
+none. All 22 focused IOCTL tests pass independently with Z3 and Axeyum; positive
+write/read/null controls now use raw `METHOD_NEITHER` pointers, while downstream
+dangerous-value controls load attacker bytes from SystemBuffer. Ordered traces
+show Z3 selecting `SystemBuffer+2 = 1` and Axeyum selecting `3`; only Z3's
+representative makes the next synthetic `+1` address wrap to zero. On the
+complete 18-of-21 real boundary, both corrected release binaries execute 16,537
+solves and emit 214 raw diagnostics, zero high-confidence rows, and zero
+accepted-row difference. The only raw-set difference is one generic-`ArgN`
+`memcpy` implementation store per authority (`0x140009793` versus
+`0x14000969a`).
+**Consequences:** The prior five-versus-four result is retained as evidence of
+an environment-model defect and AnyModel steering, not finding recall. Usbprint
+is retired as the nonzero policy-sweep target; a new independently labeled
+positive population is required before preregistration. A0 remains one cheap
+configuration mechanism, and symbolic memory remains conditional. The KMDF
+retrieve-buffer summary still needs the same address/content correction before
+its SystemBuffer rows can be treated as validated positives.
+**Alternatives rejected:** canonicalize both solvers to Z3's representative;
+special-case the five instruction addresses; suppress only null dereferences;
+keep pointer taint and call the rows high confidence; make the buffer constant
+and discard content taint; or treat OutputBufferLength guards as proof for
+unrelated METHOD_NEITHER pointers.
+
+## ADR-030 - Require structural stack origin before stack-overflow classification
+
+**Status:** Accepted.
+**Context:** ADR-0245's preregistered Axeyum-side policy sweep failed closed at
+maximum's positive-control validation. Both authorities and repetitions retained
+all 14 expected rows but added `StackOverflow` at the arbitrary-pointer
+`RtlCopyMemory` in `test_physical_memory.sys`. Source review proves
+`TargetAddress` is loaded from METHOD_BUFFERED user content, not a local stack
+object. The detector had separately concretized `dst` and `rsp` and interpreted
+proximity within 64 KiB as semantic stack membership.
+**Decision:** Require the destination and current stack or frame pointer to be
+the same expression, require the destination DAG to contain the non-leaf stack
+expression, or require both expressions to share at least one free symbol
+before applying the existing bounded proximity check. Constants and free-symbol
+leaves do not establish DAG ancestry on their own. Keep attacker-controlled
+destinations classified by the independent arbitrary-read/write/null detectors.
+Do not let any concretization policy manufacture a memory-region label from
+unrelated scalar witnesses.
+**Evidence:** The TDD regression constrains independent attacker `dst` and
+internal `rsp` symbols to adjacent concrete values; it reproduces the false
+stack sink before the change and emits none afterward. The existing positive
+control now models `dst = rsp` structurally and continues to emit
+`StackOverflow` for attacker-controlled length. A first `rsp`-only candidate
+then failed the real source-backed control at the genuine `[rbp-0x70]` fixture.
+A second candidate admitted `rbp` but still failed because the real executor
+represents `rbp` and `rsp` as constant-base expression DAGs with no free
+symbols; its simplified fresh-symbol unit fixture had hidden that distinction.
+An environment-gated diagnostic trace exposed the real terms, was removed, and
+the replacement TDD fixture reproduced `rbp = 0 - 8`, `rsp = rbp - 0x90`, and
+`dst = rbp - 0x70`. That test failed before non-leaf DAG ancestry was admitted
+and passes afterward, while the independent attacker-pointer regression stays
+clean. The exact two-repetition maximum-policy control at `0581f57` then
+restored all 14 expected high-confidence rows with precision and recall 1.0,
+zero false negatives, zero unexpected rows, and exact Z3/Axeyum parity. The
+final dual-backend library run passes 992/994 tests; the two remaining WinAPI
+signature-render failures are outside the changed symbolic/IOCTL files and
+reproduce on the untouched baseline.
+**Consequences:** Policy selection remains a cheap A0 configuration surface,
+but semantic detector facts must be model-robust. The failed v2 prefix remains
+rejected, and the unobserved site-hash cells cannot be spliced onto it. The
+source-backed maximum-policy repair gate is now accepted; preregister a new
+five-policy sweep at the corrected revision and rerun every cell. Symbolic
+memory is still gated on independently validated residual coverage.
+**Alternatives rejected:** suppress the one address; downgrade every
+stack-overflow row; accept 14/15 precision as policy diversity; require only an
+untainted destination; or continue comparing independently chosen concrete
+addresses without structural origin evidence.

@@ -8,6 +8,7 @@
 //! caller to fork.
 
 use crate::exec::domain::{BranchDecision, Domain};
+use crate::exec::Concrete;
 use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 
@@ -30,6 +31,61 @@ impl Symbolic {
     /// Render a value as an SMT-LIB2 term (for tests / solver lowering).
     pub fn render(&self, v: ExprId) -> String {
         self.pool.render_smtlib(v)
+    }
+
+    /// Evaluate a symbol-free expression DAG without asking a solver or changing
+    /// its interned shape. This is intentionally separate from construction-time
+    /// folding so trace/formula identities remain stable.
+    fn constant_value(&self, id: ExprId) -> Option<u128> {
+        fn evaluate(pool: &ExprPool, id: ExprId, dom: &mut Concrete) -> Option<u128> {
+            Some(match *pool.get(id) {
+                Expr::Const { value, .. } => value,
+                Expr::Sym { .. } => return None,
+                Expr::Bin { op, a, b, width } => {
+                    let a = evaluate(pool, a, dom)?;
+                    let b = evaluate(pool, b, dom)?;
+                    dom.binop(op, &a, &b, width)
+                }
+                Expr::Un { op, a, width } => {
+                    let a = evaluate(pool, a, dom)?;
+                    dom.unop(op, &a, width)
+                }
+                Expr::Cmp { op, a, b, width } => {
+                    let a = evaluate(pool, a, dom)?;
+                    let b = evaluate(pool, b, dom)?;
+                    dom.cmp(op, &a, &b, width)
+                }
+                Expr::ZExt { a, from, to } => {
+                    let a = evaluate(pool, a, dom)?;
+                    dom.zext(&a, from, to)
+                }
+                Expr::SExt { a, from, to } => {
+                    let a = evaluate(pool, a, dom)?;
+                    dom.sext(&a, from, to)
+                }
+                Expr::Trunc { a, to } => {
+                    let a = evaluate(pool, a, dom)?;
+                    dom.trunc(&a, to)
+                }
+                Expr::Extract { a, hi, lo } => {
+                    let a = evaluate(pool, a, dom)?;
+                    dom.extract(&a, hi, lo)
+                }
+                Expr::Concat { hi, lo, hi_w, lo_w } => {
+                    let hi = evaluate(pool, hi, dom)?;
+                    let lo = evaluate(pool, lo, dom)?;
+                    dom.concat(&hi, &lo, hi_w, lo_w)
+                }
+                Expr::Ite { c, t, e, width } => {
+                    let cond = evaluate(pool, c, dom)?;
+                    let selected = if cond == 0 { e } else { t };
+                    let value = evaluate(pool, selected, dom)?;
+                    dom.constant(width, value)
+                }
+            })
+        }
+
+        evaluate(&self.pool, id, &mut Concrete)
     }
 }
 
@@ -109,7 +165,7 @@ impl Domain for Symbolic {
     fn as_branch(&mut self, cond: &ExprId) -> BranchDecision {
         // If the condition folded to a constant we can decide; otherwise both
         // successors are feasible and the caller must fork.
-        match self.pool.as_const(*cond) {
+        match self.constant_value(*cond) {
             Some(0) => BranchDecision::NotTaken,
             Some(_) => BranchDecision::Taken,
             None => BranchDecision::Fork,
@@ -117,9 +173,10 @@ impl Domain for Symbolic {
     }
 
     fn as_u64(&mut self, v: &ExprId) -> Option<u64> {
-        // Only constants concretize without a solver/strategy (Phase 5 adds
-        // concretization strategies).
-        self.pool.as_const(*v).map(|c| c as u64)
+        // Symbol-free DAGs are concrete too. Recognizing them here preserves
+        // deterministic environment values such as an unmapped global pointer
+        // assembled from zero bytes; model selection must not replace those.
+        self.constant_value(*v).map(|c| c as u64)
     }
 }
 
@@ -159,6 +216,19 @@ mod tests {
         let zero = d.constant(Width::W32, 0);
         let cond = d.cmp(CmpOp::Eq, &x, &zero, Width::W32);
         assert_eq!(d.as_branch(&cond), BranchDecision::Fork);
+    }
+
+    #[test]
+    fn symbol_free_expression_dag_concretizes_without_a_solver() {
+        let mut d = Symbolic::new();
+        let zero8 = d.constant(Width::W8, 0);
+        let zero16 = d.concat(&zero8, &zero8, Width::W8, Width::W8);
+        let zero32 = d.concat(&zero16, &zero16, Width::W16, Width::W16);
+        let zero64 = d.concat(&zero32, &zero32, Width::W32, Width::W32);
+        let field = d.constant(Width::W64, 0x1e);
+        let address = d.binop(BinOp::Add, &zero64, &field, Width::W64);
+
+        assert_eq!(d.as_u64(&address), Some(0x1e));
     }
 
     /// The keystone: the SAME interpreter (`Machine`/`run_block`) that runs the

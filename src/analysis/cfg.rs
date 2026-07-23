@@ -1145,7 +1145,10 @@ fn scan_aarch64_prologue_function_starts(
                     let start = match va.checked_sub(4) {
                         Some(prev)
                             if prev >= region.start
-                                && matches!(read_word(prev), Some(AARCH64_BTI_C | AARCH64_BTI_JC)) =>
+                                && matches!(
+                                    read_word(prev),
+                                    Some(AARCH64_BTI_C | AARCH64_BTI_JC)
+                                ) =>
                         {
                             prev
                         }

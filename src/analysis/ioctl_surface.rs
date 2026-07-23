@@ -320,9 +320,7 @@ fn resolve_jump_table(
             match m {
                 "lea" => {
                     if let Some(o) = x.operands.get(1) {
-                        if o.kind == OperandKind::Memory
-                            && o.base.as_deref() == Some("rip")
-                        {
+                        if o.kind == OperandKind::Memory && o.base.as_deref() == Some("rip") {
                             // iced resolves rip-relative displacement to absolute
                             if let Some(d) = o.displacement {
                                 anchor = Some(d as u64);
@@ -332,9 +330,7 @@ fn resolve_jump_table(
                 }
                 "mov" => {
                     if let (Some(o), Some(a)) = (x.operands.get(1), anchor) {
-                        if o.kind == OperandKind::Memory
-                            && o.scale == Some(4)
-                            && o.index.is_some()
+                        if o.kind == OperandKind::Memory && o.scale == Some(4) && o.index.is_some()
                         {
                             dword_t = Some((a as i64 + o.displacement.unwrap_or(0)) as u64);
                         }
@@ -469,8 +465,12 @@ pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> 
             let mut i = 0usize;
             while i + 6 <= bytes.len() {
                 if bytes[i] == 0xFF && bytes[i + 1] == 0x25 {
-                    let disp =
-                        i32::from_le_bytes([bytes[i + 2], bytes[i + 3], bytes[i + 4], bytes[i + 5]]);
+                    let disp = i32::from_le_bytes([
+                        bytes[i + 2],
+                        bytes[i + 3],
+                        bytes[i + 4],
+                        bytes[i + 5],
+                    ]);
                     let va = base + i as u64;
                     let target = va.wrapping_add(6).wrapping_add(disp as i64 as u64);
                     import_thunks.insert(va, target);
@@ -704,13 +704,13 @@ mod tests {
         assert!(!is_ioctl_shaped(0x41424344)); // "ABCD" ascii signature
         assert!(!is_ioctl_shaped(0xC0000001)); // NTSTATUS error-shaped (0xC top)
         assert!(!is_ioctl_shaped(0x00220000)); // func==0, too round
-        // Customer/vendor DeviceType 0x8000 range: these ARE real CTL_CODEs (gna.sys,
-        // many OEM drivers) and must pass despite the 0x8 top nibble.
+                                               // Customer/vendor DeviceType 0x8000 range: these ARE real CTL_CODEs (gna.sys,
+                                               // many OEM drivers) and must pass despite the 0x8 top nibble.
         assert!(is_ioctl_shaped(0x80002400)); // gna.sys EvtIoDeviceControl code
         assert!(is_ioctl_shaped(0x80002808)); // gna.sys code
         assert!(is_ioctl_shaped(0x8000e00c)); // ISH/Tee customer IOCTL
-        // ...but facility-0 NTSTATUS *warnings* (0x8000_00xx, tiny code field) must
-        // still be rejected so a pair of them is not a false dispatcher.
+                                              // ...but facility-0 NTSTATUS *warnings* (0x8000_00xx, tiny code field) must
+                                              // still be rejected so a pair of them is not a false dispatcher.
         assert!(!is_ioctl_shaped(0x80000005)); // STATUS_BUFFER_OVERFLOW
         assert!(!is_ioctl_shaped(0x80000001)); // NTSTATUS warning
     }
