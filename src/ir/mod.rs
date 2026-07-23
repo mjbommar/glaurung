@@ -47,6 +47,7 @@ pub mod structure;
 pub mod types;
 pub mod types_recover;
 pub mod use_def;
+pub mod value_number;
 pub mod value_split;
 pub mod verify;
 pub mod winapi_prototypes;

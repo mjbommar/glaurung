@@ -1,0 +1,324 @@
+//! SSA value numbering for the LLIR (Stage 2 of the value-model refactor —
+//! docs/design/decompiler-refactors.md #1).
+//!
+//! Naming and typing key on the *physical register*, so a register reused for
+//! two purposes (an argument spilled then reused as a scratch integer; the
+//! return register used as an address-computation scratch and then as the
+//! result) is one variable with one type — the source of the int↔pointer
+//! conflicts and of the incorrect address folding an AST rewrite cannot avoid.
+//!
+//! This pass rewrites each physical register occurrence to a **value-tagged**
+//! name `reg#version` using the already-computed [`SsaInfo`], so every SSA value
+//! becomes a distinct variable. Version 0 is the implicit entry-def (a live-in
+//! parameter), which stays the bare register so downstream argument/return
+//! naming is unchanged; explicit definitions (version ≥ 1) and the uses that
+//! read them get the tagged name. Temporaries and flags are left alone.
+//!
+//! This pass is pure (returns a rewritten copy) and is validated in isolation
+//! before being threaded into the lowering pipeline.
+
+use crate::ir::types::{LlirFunction, Op, VReg, Value};
+use crate::ir::use_def::{def_uses, InstrAddr};
+
+/// The value-tagged name of a physical register at a given SSA version.
+fn tag_phys(v: &mut VReg, version: u32) {
+    if version == 0 {
+        return; // entry-def / live-in — keep the bare register
+    }
+    if let VReg::Phys(n) = v {
+        *n = format!("{}#{}", n, version);
+    }
+}
+
+/// Rewrite a `Value`'s register (if any) to the version at `use_vers[*ui]`,
+/// advancing the use cursor exactly as [`def_uses`] enumerated it.
+fn tag_value(v: &mut Value, use_vers: &[u32], ui: &mut usize) {
+    if let Value::Reg(r) = v {
+        if let Some(&ver) = use_vers.get(*ui) {
+            tag_phys(r, ver);
+        }
+        *ui += 1;
+    }
+}
+
+fn tag_memop_uses(m: &mut crate::ir::types::MemOp, use_vers: &[u32], ui: &mut usize) {
+    if let Some(b) = &mut m.base {
+        if let Some(&ver) = use_vers.get(*ui) {
+            tag_phys(b, ver);
+        }
+        *ui += 1;
+    }
+    if let Some(idx) = &mut m.index {
+        if let Some(&ver) = use_vers.get(*ui) {
+            tag_phys(idx, ver);
+        }
+        *ui += 1;
+    }
+}
+
+/// Apply the def version and the ordered use versions to one op's registers.
+/// The use order mirrors `use_def::def_uses` exactly (memory base before index,
+/// operands left-to-right), so the SSA `use_versions` line up by index.
+fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32]) {
+    let mut ui = 0usize;
+    match op {
+        Op::Assign { dst, src } => {
+            tag_value(src, use_vers, &mut ui);
+            tag_phys(dst, def_ver);
+        }
+        Op::CondAssign { dst, cond, src } => {
+            // def_uses order: cond, then src.
+            if let Some(&ver) = use_vers.first() {
+                tag_phys(cond, ver);
+            }
+            ui = 1;
+            tag_value(src, use_vers, &mut ui);
+            tag_phys(dst, def_ver);
+        }
+        Op::Bin { dst, lhs, rhs, .. } => {
+            tag_value(lhs, use_vers, &mut ui);
+            tag_value(rhs, use_vers, &mut ui);
+            tag_phys(dst, def_ver);
+        }
+        Op::Un { dst, src, .. } => {
+            tag_value(src, use_vers, &mut ui);
+            tag_phys(dst, def_ver);
+        }
+        Op::Cmp { dst, lhs, rhs, .. } => {
+            tag_value(lhs, use_vers, &mut ui);
+            tag_value(rhs, use_vers, &mut ui);
+            tag_phys(dst, def_ver);
+        }
+        Op::Load { dst, addr } => {
+            tag_memop_uses(addr, use_vers, &mut ui);
+            tag_phys(dst, def_ver);
+        }
+        Op::Store { addr, src } => {
+            tag_memop_uses(addr, use_vers, &mut ui);
+            tag_value(src, use_vers, &mut ui);
+        }
+        Op::CondJump { cond, .. } => {
+            if let Some(&ver) = use_vers.first() {
+                tag_phys(cond, ver);
+            }
+        }
+        Op::Call {
+            target: crate::ir::types::CallTarget::Indirect(v),
+        } => {
+            tag_value(v, use_vers, &mut ui);
+        }
+        Op::ZExt { dst, src, .. }
+        | Op::SExt { dst, src, .. }
+        | Op::Trunc { dst, src, .. }
+        | Op::Extract { dst, src, .. } => {
+            tag_value(src, use_vers, &mut ui);
+            tag_phys(dst, def_ver);
+        }
+        Op::Concat { dst, hi, lo } => {
+            tag_value(hi, use_vers, &mut ui);
+            tag_value(lo, use_vers, &mut ui);
+            tag_phys(dst, def_ver);
+        }
+        Op::Ite { dst, cond, t, e, .. } => {
+            // def_uses order: cond, then t, then e.
+            if let Some(&ver) = use_vers.first() {
+                tag_phys(cond, ver); // a flag in practice — no-op
+            }
+            ui = 1;
+            tag_value(t, use_vers, &mut ui);
+            tag_value(e, use_vers, &mut ui);
+            tag_phys(dst, def_ver);
+        }
+        // Multi-output intrinsics (`cpuid`, ...) don't fit the single-def SSA
+        // model cleanly, so leave them untagged for now; a function that uses one
+        // must be excluded before this pass is wired into lowering.
+        Op::Intrinsic { .. }
+        | Op::Jump { .. }
+        | Op::Return
+        | Op::Nop
+        | Op::Unknown { .. }
+        | Op::Call { .. } => {}
+    }
+}
+
+/// Return a copy of `lf` with every physical register occurrence rewritten to
+/// its SSA-value-tagged name.
+pub fn value_number(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo) -> LlirFunction {
+    let mut out = lf.clone();
+    for (bi, block) in out.blocks.iter_mut().enumerate() {
+        for (ii, ins) in block.instrs.iter_mut().enumerate() {
+            let addr = InstrAddr {
+                block_idx: bi,
+                instr_idx: ii,
+            };
+            let def_ver = ssa.def_versions.get(&addr).copied().unwrap_or(0);
+            let (_, uses) = def_uses(&ins.op);
+            let use_vers: Vec<u32> = (0..uses.len())
+                .map(|k| ssa.use_versions.get(&(addr, k)).copied().unwrap_or(0))
+                .collect();
+            tag_op(&mut ins.op, def_ver, &use_vers);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ssa::compute_ssa;
+    use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+    fn mk(ops: Vec<Op>) -> LlirFunction {
+        LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1100,
+                instrs: ops
+                    .into_iter()
+                    .enumerate()
+                    .map(|(j, op)| LlirInstr {
+                        va: 0x1000 + (j as u64) * 4,
+                        op,
+                    })
+                    .collect(),
+                succs: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn distinct_defs_of_a_register_get_distinct_tags() {
+        // rax = 1 ; rax = 2 ; rbx = rax  -> rax#1, rax#2, rbx#1 = rax#2
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("rax"),
+                src: Value::Const(1),
+            },
+            Op::Assign {
+                dst: VReg::phys("rax"),
+                src: Value::Const(2),
+            },
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rax")),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa);
+        let ops = &out.blocks[0].instrs;
+        assert_eq!(
+            ops[0].op,
+            Op::Assign {
+                dst: VReg::phys("rax#1"),
+                src: Value::Const(1)
+            }
+        );
+        assert_eq!(
+            ops[1].op,
+            Op::Assign {
+                dst: VReg::phys("rax#2"),
+                src: Value::Const(2)
+            }
+        );
+        // The read of rax sees the second version; rbx is its own first def.
+        assert_eq!(
+            ops[2].op,
+            Op::Assign {
+                dst: VReg::phys("rbx#1"),
+                src: Value::Reg(VReg::phys("rax#2"))
+            }
+        );
+    }
+
+    #[test]
+    fn live_in_use_keeps_bare_register() {
+        // rbx = rdi ; rdi = 5   -> rbx#1 = rdi (v0, bare) ; rdi#1 = 5
+        // The parameter read (live-in rdi) stays bare; the reassignment is a new
+        // distinct value.
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Assign {
+                dst: VReg::phys("rdi"),
+                src: Value::Const(5),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa);
+        let ops = &out.blocks[0].instrs;
+        assert_eq!(
+            ops[0].op,
+            Op::Assign {
+                dst: VReg::phys("rbx#1"),
+                src: Value::Reg(VReg::phys("rdi")) // bare: the live-in parameter
+            }
+        );
+        assert_eq!(
+            ops[1].op,
+            Op::Assign {
+                dst: VReg::phys("rdi#1"),
+                src: Value::Const(5)
+            }
+        );
+    }
+
+    #[test]
+    fn address_chain_reuse_becomes_distinct_values() {
+        // The exact reused-`rax` shape that made AST folding unsafe:
+        //   rax = rax + rcx ; rax = load[rax] ; rbx = rbx + rax
+        // Each rax def is a distinct value, so no folding can conflate them.
+        use crate::ir::types::{BinOp, MemOp};
+        let lf = mk(vec![
+            Op::Bin {
+                dst: VReg::phys("rax"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("rax")),
+                rhs: Value::Reg(VReg::phys("rcx")),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rax")),
+                    index: None,
+                    scale: 0,
+                    disp: 0,
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+            Op::Bin {
+                dst: VReg::phys("rbx"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("rbx")),
+                rhs: Value::Reg(VReg::phys("rax")),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa);
+        let ops = &out.blocks[0].instrs;
+        // First rax def is version 1 (its lhs reads the live-in rax v0).
+        match &ops[0].op {
+            Op::Bin { dst, lhs, .. } => {
+                assert_eq!(*dst, VReg::phys("rax#1"));
+                assert_eq!(*lhs, Value::Reg(VReg::phys("rax"))); // live-in
+            }
+            other => panic!("{:?}", other),
+        }
+        // The load reads rax#1 and defines rax#2 — a distinct value.
+        match &ops[1].op {
+            Op::Load { dst, addr } => {
+                assert_eq!(*dst, VReg::phys("rax#2"));
+                assert_eq!(addr.base, Some(VReg::phys("rax#1")));
+            }
+            other => panic!("{:?}", other),
+        }
+        // The accumulate reads rax#2 (the loaded value), never conflated with #1.
+        match &ops[2].op {
+            Op::Bin { rhs, .. } => assert_eq!(*rhs, Value::Reg(VReg::phys("rax#2"))),
+            other => panic!("{:?}", other),
+        }
+    }
+}
