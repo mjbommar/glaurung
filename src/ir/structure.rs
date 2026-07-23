@@ -135,6 +135,18 @@ struct Cfg {
     /// Cached: true iff block `a` dominates block `b`.
     /// We precompute a dense bitset because functions are small.
     dom: Vec<Vec<bool>>,
+    /// Immediate post-dominator of each block (the nearest block through which
+    /// every path from it to a function exit must pass), or `None` when the
+    /// block has no post-dominator (e.g. it can diverge without reaching an
+    /// exit). Used to recover conditional regions whose arms reconverge only at
+    /// a distant join — the `-O0` switch/comparison-ladder shape.
+    ipostdom: Vec<Option<usize>>,
+    /// For a block ending in a conditional branch, the successor index that is
+    /// the branch's *taken* target (the `if (cond)` arm). `None` for blocks
+    /// that don't end in a conditional branch. Lets conditional structuring put
+    /// the taken arm in the `then` slot so the rendered condition polarity is
+    /// correct regardless of block address ordering.
+    cond_taken: Vec<Option<usize>>,
 }
 
 impl Cfg {
@@ -179,12 +191,86 @@ impl Cfg {
                 }
             }
         }
-        Cfg { succs, preds, dom }
+        let ipostdom = compute_ipostdom(n, &succs);
+        // Record each conditional block's taken-branch successor index.
+        let mut cond_taken: Vec<Option<usize>> = vec![None; n];
+        for (i, b) in lf.blocks.iter().enumerate() {
+            if let Some(crate::ir::types::LlirInstr {
+                op: crate::ir::types::Op::CondJump { target, .. },
+                ..
+            }) = b.instrs.last()
+            {
+                cond_taken[i] = va_to_idx.get(target).copied();
+            }
+        }
+        Cfg {
+            succs,
+            preds,
+            dom,
+            ipostdom,
+            cond_taken,
+        }
     }
 
     fn dominates(&self, a: usize, b: usize) -> bool {
         self.dom[a][b]
     }
+}
+
+/// Immediate post-dominators via an iterative set fixpoint on the reversed CFG.
+/// Blocks are few, so a dense set-per-node fixpoint is simplest and fast enough.
+/// `pdom[n] = {n} ∪ (⋂ over succs s of pdom[s])`, seeded so exit blocks
+/// post-dominate only themselves; a node whose successors never converge (can
+/// diverge without exiting) keeps no post-dominator (`None`).
+fn compute_ipostdom(n: usize, succs: &[Vec<usize>]) -> Vec<Option<usize>> {
+    use std::collections::BTreeSet;
+    let universe: BTreeSet<usize> = (0..n).collect();
+    let mut pdom: Vec<BTreeSet<usize>> = (0..n)
+        .map(|i| {
+            if succs[i].is_empty() {
+                let mut s = BTreeSet::new();
+                s.insert(i);
+                s
+            } else {
+                universe.clone()
+            }
+        })
+        .collect();
+    let mut changed = true;
+    let mut guard = 0;
+    while changed && guard < n + 4 {
+        changed = false;
+        guard += 1;
+        for i in 0..n {
+            if succs[i].is_empty() {
+                continue;
+            }
+            let mut inter: Option<BTreeSet<usize>> = None;
+            for &s in &succs[i] {
+                inter = Some(match inter {
+                    None => pdom[s].clone(),
+                    Some(acc) => acc.intersection(&pdom[s]).copied().collect(),
+                });
+            }
+            let mut new = inter.unwrap_or_default();
+            new.insert(i);
+            if new != pdom[i] {
+                pdom[i] = new;
+                changed = true;
+            }
+        }
+    }
+    // ipostdom[n] = the closest strict post-dominator: the member of
+    // pdom[n]\{n} with the largest pdom set (deepest in the post-dom tree).
+    (0..n)
+        .map(|i| {
+            pdom[i]
+                .iter()
+                .filter(|&&p| p != i)
+                .max_by_key(|&&p| pdom[p].len())
+                .copied()
+        })
+        .collect()
 }
 
 /// Single public entry point — build a region tree for the function.
@@ -525,6 +611,37 @@ fn detect_if_shape(
         ));
     }
 
+    // --- General conditional via immediate post-dominator ------------------
+    // The arms reconverge only at a *distant* join (not an immediate diamond):
+    // the classic gcc -O0 comparison-ladder / switch shape, where each case
+    // body jumps to a shared end block. Structuring it against the post-dominator
+    // collapses the whole ladder into nested if/else with a single exit instead
+    // of goto soup. Runs only after every tighter pattern above has declined.
+    if let Some(join) = cfg.ipostdom[cond] {
+        if join != cond && t != join && e != join {
+            // Order the arms by the branch's taken target so the rendered
+            // condition polarity is correct: `if (cond)` must guard the arm the
+            // branch jumps to when taken. Without this the ladder inverts (block
+            // address order is not taken/fallthrough order).
+            let (then_a, else_a) = match cfg.cond_taken[cond] {
+                Some(tk) if tk == e => (e, t),
+                _ => (t, e),
+            };
+            visited.insert(cond);
+            let then_r = build(then_a, cfg, visited, Some(join));
+            let else_r = build(else_a, cfg, visited, Some(join));
+            return Some((
+                Region::IfThenElse {
+                    cond,
+                    then_r: Box::new(then_r),
+                    else_r: Box::new(else_r),
+                    join: Some(join),
+                },
+                Some(join),
+            ));
+        }
+    }
+
     None
 }
 
@@ -639,6 +756,42 @@ mod tests {
     fn recover_for(lf: &LlirFunction) -> Region {
         let ssa = compute_ssa(lf);
         recover(lf, &ssa)
+    }
+
+    #[test]
+    fn comparison_ladder_recovers_as_nested_if_else() {
+        use crate::ir::types::{Flag, VReg};
+        let cj = |target: u64| Op::CondJump {
+            cond: VReg::Flag(Flag::Z),
+            target,
+            inverted: false,
+        };
+        // A -O0 switch comparison ladder: two conditional blocks whose case
+        // bodies reconverge at a distant join (b5), not an immediate diamond.
+        // The post-dominator fallback must fold this into nested if/else instead
+        // of leaving it Unstructured (goto soup).
+        //   b0 -> b1(fall) / b3(taken)     b1 -> b2(fall) / b4(taken)
+        //   b2,b3,b4 -> b5(join); b5 returns.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![cj(0x1030)], vec![0x1010, 0x1030]), // 0
+            (0x1010, vec![cj(0x1040)], vec![0x1020, 0x1040]), // 1
+            (0x1020, vec![Op::Nop], vec![0x1050]),            // 2 default
+            (0x1030, vec![Op::Nop], vec![0x1050]),            // 3 case
+            (0x1040, vec![Op::Nop], vec![0x1050]),            // 4 case
+            (0x1050, vec![Op::Return], vec![]),               // 5 join
+        ]);
+        let r = recover_for(&lf);
+        let dbg = format!("{:?}", r);
+        assert!(
+            dbg.matches("IfThenElse").count() >= 2,
+            "ladder should nest into >=2 if-else, got: {}",
+            dbg
+        );
+        assert!(
+            !dbg.contains("Unstructured"),
+            "ladder must be fully structured, got: {}",
+            dbg
+        );
     }
 
     #[test]
