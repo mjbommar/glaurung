@@ -32,6 +32,85 @@ fn return_reg_names(cc: CallConv) -> &'static [&'static str] {
     }
 }
 
+/// Argument-passing registers in positional order (with width sub-names) per `cc`.
+fn arg_slot_names(cc: CallConv) -> &'static [&'static [&'static str]] {
+    match cc {
+        CallConv::SysVAmd64 => &[
+            &["rdi", "edi", "di", "dil"],
+            &["rsi", "esi", "si", "sil"],
+            &["rdx", "edx", "dx", "dl"],
+            &["rcx", "ecx", "cx", "cl"],
+            &["r8", "r8d", "r8w", "r8b"],
+            &["r9", "r9d", "r9w", "r9b"],
+        ],
+        CallConv::Win64 => &[
+            &["rcx", "ecx", "cx", "cl"],
+            &["rdx", "edx", "dx", "dl"],
+            &["r8", "r8d", "r8w", "r8b"],
+            &["r9", "r9d", "r9w", "r9b"],
+        ],
+        CallConv::Aarch64 => &[
+            &["x0", "w0"],
+            &["x1", "w1"],
+            &["x2", "w2"],
+            &["x3", "w3"],
+            &["x4", "w4"],
+            &["x5", "w5"],
+            &["x6", "w6"],
+            &["x7", "w7"],
+        ],
+        CallConv::Arm => &[&["r0"], &["r1"], &["r2"], &["r3"]],
+    }
+}
+
+/// The argument slots of `lf` that are genuine **live-in parameters**: a slot is
+/// a parameter iff the *first touch* of its register (in program order) is a read,
+/// not a write. A register in an argument slot that is written before it is read
+/// is scratch reuse (e.g. an O2 function using `rdx`/`rcx` as temporaries) and
+/// must NOT inflate the recovered arity.
+///
+/// Works on the value-numbered LLIR: register names may carry a `#version` tag,
+/// which is stripped for slot matching, and it sees parameters whose only later
+/// uses were dropped by structuring/DCE (the LLIR predates those passes). Mirrors
+/// `naming::live_in_arg_slots` but authoritative for the signature arity + typing.
+pub fn live_in_arg_slots_llir(
+    lf: &LlirFunction,
+    cc: CallConv,
+) -> std::collections::HashSet<usize> {
+    let mut slot_of: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (i, names) in arg_slot_names(cc).iter().enumerate() {
+        for n in *names {
+            slot_of.insert(n, i);
+        }
+    }
+    // slot -> is_param (true = first touch was a read). First touch wins.
+    let mut decided: std::collections::HashMap<usize, bool> = std::collections::HashMap::new();
+    let base_slot = |name: &str| slot_of.get(name.split('#').next().unwrap_or(name)).copied();
+    for block in &lf.blocks {
+        for ins in &block.instrs {
+            let (def, uses) = def_uses(&ins.op);
+            // Reads first, then the def — a use and a def of the same slot in one
+            // op (`rdx = rdx + 1`) counts as a read (the incoming value is used).
+            for u in &uses {
+                if let VReg::Phys(n) = u {
+                    if let Some(slot) = base_slot(n) {
+                        decided.entry(slot).or_insert(true);
+                    }
+                }
+            }
+            if let Some(VReg::Phys(n)) = &def {
+                if let Some(slot) = base_slot(n) {
+                    decided.entry(slot).or_insert(false);
+                }
+            }
+        }
+    }
+    decided
+        .into_iter()
+        .filter_map(|(slot, is_param)| is_param.then_some(slot))
+        .collect()
+}
+
 /// `(register, version)` pairs kept bare despite version ≥ 1 — the value a
 /// return register holds when it reaches a `Return`, so downstream naming still
 /// maps it to `ret` rather than a scratch `varN`.
@@ -394,6 +473,45 @@ mod tests {
                 dst: VReg::phys("rdi#1"),
                 src: Value::Const(5)
             }
+        );
+    }
+
+    #[test]
+    fn live_in_arg_slots_excludes_subregister_scratch() {
+        use crate::ir::types::BinOp;
+        // The -O2 shape that fools an AST-based analysis:
+        //   rax = rdi + 1   ; reads rdi  (slot 0 -> parameter)
+        //   edx = rsi - 2   ; writes edx (a sub-register of rdx / slot 2) FIRST
+        //   r8  = rdx * 4   ; reads rdx  (slot 2) — but it was already written
+        // rdi/rsi are parameters; rdx is scratch (its 32-bit view was written
+        // before any read) and must NOT be a parameter.
+        let lf = mk(vec![
+            Op::Bin {
+                op: BinOp::Add,
+                dst: VReg::phys("rax"),
+                lhs: Value::Reg(VReg::phys("rdi")),
+                rhs: Value::Const(1),
+            },
+            Op::Bin {
+                op: BinOp::Sub,
+                dst: VReg::phys("edx"),
+                lhs: Value::Reg(VReg::phys("rsi")),
+                rhs: Value::Const(2),
+            },
+            Op::Bin {
+                op: BinOp::Mul,
+                dst: VReg::phys("r8"),
+                lhs: Value::Reg(VReg::phys("rdx")),
+                rhs: Value::Const(4),
+            },
+        ]);
+        let params = live_in_arg_slots_llir(&lf, CallConv::SysVAmd64);
+        assert!(params.contains(&0), "rdi (slot 0) is a parameter: {:?}", params);
+        assert!(params.contains(&1), "rsi (slot 1) is a parameter: {:?}", params);
+        assert!(
+            !params.contains(&2),
+            "rdx (slot 2) is sub-register scratch, not a parameter: {:?}",
+            params
         );
     }
 

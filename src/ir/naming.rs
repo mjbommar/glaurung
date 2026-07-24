@@ -70,16 +70,26 @@ fn arg_slot_tables(cc: CallConv) -> &'static [&'static [&'static str]] {
 
 /// Rename registers in `f` according to the given calling convention.
 pub fn apply_role_names(f: &mut Function, cc: CallConv) {
+    // Default: recover the live-in parameter slots from the AST body.
+    let param_slots = live_in_arg_slots(&f.body, cc);
+    apply_role_names_with_params(f, cc, &param_slots);
+}
+
+/// As [`apply_role_names`], but with an authoritative live-in parameter-slot set
+/// supplied by the caller. The AST-based [`live_in_arg_slots`] is fooled at -O2,
+/// where an argument-slot register is reused as scratch through a sub-register
+/// `lea` (`lea -0x2(%rsi),%ecx`) and mis-read as a live-in parameter; a set
+/// computed on the LLIR (see `value_number::live_in_arg_slots_llir`) is reliable
+/// there. Using it prevents a scratch `rdx`/`rcx` from becoming a spurious `argN`
+/// and inflating the recovered arity.
+pub fn apply_role_names_with_params(
+    f: &mut Function,
+    cc: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+) {
     // Build the role map: raw name → friendly name. We build it up-front so
     // that every substitution is consistent across the function.
     let mut role: HashMap<String, String> = HashMap::new();
-
-    // Only arg-passing registers that are genuine *live-in parameters* become
-    // `argN`. A register in an argument slot that is written before it is ever
-    // read is just scratch reuse of that ABI register (e.g. `cl` as a variable
-    // shift count reuses `rcx`, the 4th SysV arg slot) and must NOT inflate the
-    // recovered arity — it falls through to a `varN` alias below.
-    let param_slots = live_in_arg_slots(&f.body, cc);
     // On AArch64 x0 serves as both arg0 and return value. We prefer `arg0`
     // because in a called function it's more often referenced as the input
     // than as the output slot.

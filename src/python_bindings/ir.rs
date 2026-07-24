@@ -434,6 +434,9 @@ fn decompile_at_py(
     } else {
         lf
     };
+    // Live-in argument slots (authoritative parameter set) for the type-map
+    // remap, so scratch reuse of an arg register never becomes a spurious `argN`.
+    let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
     // Build the address map first so we can apply a PDB public-symbol name
     // to the *outer* function header before lowering. The map already
     // includes PDB symbols when a cache is configured, plus exports / IAT
@@ -466,7 +469,7 @@ fn decompile_at_py(
         None
     };
     crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
-    crate::ir::naming::apply_role_names(&mut f, cc);
+    crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
     crate::ir::canary::collapse_canary_save(&mut f);
     if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
         crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
@@ -506,8 +509,8 @@ fn decompile_at_py(
         // AST's role names (`arg0`, `ret`, ...) before rendering.
         let mut renamed = tm
             .as_ref()
-            .map(|t| remap_type_map(t, &f, cc))
-            .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc));
+            .map(|t| remap_type_map(t, &f, cc, &param_slots))
+            .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc, &param_slots));
         merge_slot_sizes(&mut renamed, &slot_sizes);
         crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
     } else if style == "c" {
@@ -521,7 +524,7 @@ fn decompile_at_py(
             Some(tm) => {
                 // Remap the TypeMap keys from raw physical regs into the
                 // role-based names the AST now uses.
-                let renamed = remap_type_map(&tm, &f, cc);
+                let renamed = remap_type_map(&tm, &f, cc, &param_slots);
                 render_with_types(&f, &renamed)
             }
             None => render(&f),
@@ -614,6 +617,7 @@ fn decompile_range_at_py(
     } else {
         lf
     };
+    let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
     let mut f = lower(&lf, &region, func.name.clone());
     reconstruct(&mut f);
     crate::ir::const_fold::fold_constants(&mut f);
@@ -635,7 +639,7 @@ fn decompile_range_at_py(
         None
     };
     crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
-    crate::ir::naming::apply_role_names(&mut f, cc);
+    crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
     crate::ir::canary::collapse_canary_save(&mut f);
     if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
         crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
@@ -655,8 +659,8 @@ fn decompile_range_at_py(
     Ok(if style == "decbench" {
         let mut renamed = tm
             .as_ref()
-            .map(|t| remap_type_map(t, &f, cc))
-            .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc));
+            .map(|t| remap_type_map(t, &f, cc, &param_slots))
+            .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc, &param_slots));
         merge_slot_sizes(&mut renamed, &slot_sizes);
         crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
     } else if style == "c" {
@@ -664,7 +668,7 @@ fn decompile_range_at_py(
     } else {
         match tm {
             Some(tm) => {
-                let renamed = remap_type_map(&tm, &f, cc);
+                let renamed = remap_type_map(&tm, &f, cc, &param_slots);
                 render_with_types(&f, &renamed)
             }
             None => render(&f),
@@ -703,6 +707,7 @@ fn remap_type_map(
     tm: &crate::ir::types_recover::TypeMap,
     _f: &crate::ir::ast::Function,
     cc: crate::ir::call_args::CallConv,
+    param_slots: &std::collections::HashSet<usize>,
 ) -> crate::ir::types_recover::TypeMap {
     // Reconstruct the alias table the naming pass used for arg/ret slots;
     // `varN` aliases are assigned by first-appearance order and we can't
@@ -736,6 +741,13 @@ fn remap_type_map(
         crate::ir::call_args::CallConv::Arm => &[&["r0"], &["r1"], &["r2"], &["r3"]],
     };
     for (slot, names) in arg_slots.iter().enumerate() {
+        // Only alias a slot's registers to `argN` when it is a genuine live-in
+        // parameter. An argument-slot register reused as scratch (common at -O2,
+        // e.g. `rdx`/`rcx`) must not become a spurious `argN` and inflate the
+        // recovered arity/typing.
+        if !param_slots.contains(&slot) {
+            continue;
+        }
         for n in *names {
             alias
                 .entry(n.to_string())
@@ -823,6 +835,7 @@ fn decompile_all_py(
         } else {
             lf
         };
+        let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
         reconstruct(&mut f);
@@ -834,7 +847,7 @@ fn decompile_all_py(
         crate::ir::canary::recognise_canary(&mut f);
         let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
         crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
-        crate::ir::naming::apply_role_names(&mut f, cc);
+        crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
         crate::ir::canary::collapse_canary_save(&mut f);
         if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
             crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
@@ -851,7 +864,7 @@ fn decompile_all_py(
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
         let text = if style == "decbench" {
-            let mut renamed = remap_type_map(&recover_types_for(&lf, cc), &f, cc);
+            let mut renamed = remap_type_map(&recover_types_for(&lf, cc), &f, cc, &param_slots);
             merge_slot_sizes(&mut renamed, &slot_sizes);
             crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
         } else {
@@ -938,6 +951,7 @@ fn decompile_many_py(
         } else {
             lf
         };
+        let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         let mut f = lower(&lf, &region, outer_name);
         reconstruct(&mut f);
@@ -954,7 +968,7 @@ fn decompile_many_py(
             None
         };
         crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
-        crate::ir::naming::apply_role_names(&mut f, cc);
+        crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
         crate::ir::canary::collapse_canary_save(&mut f);
         if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
             crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
@@ -978,8 +992,8 @@ fn decompile_many_py(
         let text = if style == "decbench" {
             let mut renamed = tm
                 .as_ref()
-                .map(|t| remap_type_map(t, &f, cc))
-                .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc));
+                .map(|t| remap_type_map(t, &f, cc, &param_slots))
+                .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc, &param_slots));
             merge_slot_sizes(&mut renamed, &slot_sizes);
             crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
         } else if style == "c" {
@@ -991,7 +1005,7 @@ fn decompile_many_py(
         } else {
             match tm {
                 Some(tm) => {
-                    let renamed = remap_type_map(&tm, &f, cc);
+                    let renamed = remap_type_map(&tm, &f, cc, &param_slots);
                     render_with_types(&f, &renamed)
                 }
                 None => render(&f),
