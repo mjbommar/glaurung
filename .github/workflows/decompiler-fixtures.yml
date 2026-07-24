@@ -1,0 +1,93 @@
+name: Decompiler Fixture Gate
+
+# Semantic-fidelity regression gate for the decompiler (see
+# tests/decompiler_fixtures/). Fast fail-closed unit + strict-compile checks run
+# on every PR; the slow execution-differential matrix and structural lane run
+# when decompiler or fixture files change. Nothing is skipped silently.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: decompiler-fixtures-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-22.04
+    outputs:
+      decompiler: ${{ steps.filter.outputs.decompiler }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            decompiler:
+              - 'src/ir/**'
+              - 'src/analysis/**'
+              - 'src/disasm/**'
+              - 'src/decompiler/**'
+              - 'tools/diff_decompile.py'
+              - 'tools/fixture_harness.py'
+              - 'tools/gen_structural_baseline.py'
+              - 'tests/decompiler_fixtures/**'
+              - 'python/tests/test_decompiler_fixture_*.py'
+
+  # Fast, fail-closed checks on every PR: harness unit tests (no decompiler
+  # needed) and the strict compile gate for all ten fixtures in all four lanes.
+  fast:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (gcc, g++, clang + C++ runtime)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc g++ clang libstdc++-12-dev
+          # clang++ links libstdc++ provided by g++/libstdc++-*-dev
+          echo 'int main(){ try{ throw 1; }catch(int){} return 0; }' > /tmp/p.cpp
+          clang++ /tmp/p.cpp -o /tmp/p && echo "clang++ C++ runtime OK"
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync deps (includes pyelftools)
+        run: uv sync --all-extras --dev
+      - name: Verify pyelftools is provisioned
+        run: uv run python -c "import elftools; print('pyelftools', elftools.__version__)"
+      - name: Fail-closed harness unit tests + strict compile gate
+        run: |
+          uv run python -m pytest -p no:cacheprovider \
+            python/tests/test_decompiler_fixture_harness.py \
+            python/tests/test_decompiler_fixture_compile.py -v
+
+  # Slow lanes: run the full execution-differential matrix and the structural
+  # lane only when decompiler/fixture files change. The committed per-function
+  # baseline makes known bugs visible while any regression (or unrecorded
+  # improvement) fails the gate.
+  matrix:
+    needs: changes
+    if: needs.changes.outputs.decompiler == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (gcc, g++, clang + C++ runtime)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc g++ clang libstdc++-12-dev
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync deps
+        run: uv sync --all-extras --dev
+      - name: Build the native extension (glaurung CLI)
+        run: uv run maturin develop --release
+      - name: Semantic matrix + structural lane (fail-closed, ratcheting)
+        env:
+          GLAURUNG_FIXTURE_TMPDIR: ${{ runner.temp }}
+        run: |
+          source .venv/bin/activate
+          python -m pytest -p no:cacheprovider -m slow -v \
+            python/tests/test_decompiler_fixture_matrix.py \
+            python/tests/test_decompiler_fixture_structural.py

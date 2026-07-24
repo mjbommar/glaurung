@@ -25,9 +25,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 import fixture_harness as H
+import manifest as M
 
 BASELINE = ROOT / "tests" / "decompiler_fixtures" / "baseline.json"
+VALID_STATUSES = {"pass", "fail", "structural", "missing", "nocases"}
 
 pytestmark = pytest.mark.slow
 
@@ -47,12 +50,18 @@ def baseline():
 
 @pytest.fixture(scope="session")
 def current():
-    # Run exactly the toolchain lanes present in the baseline (so a gcc-O0-only
-    # baseline is compared against a gcc-O0-only run, and a full-matrix baseline
-    # against the full matrix) — keeps the gate consistent and no slower than the
-    # committed baseline.
+    # Run exactly the toolchain lanes present in the baseline. Same FIXTURE_FUZZ
+    # as the baseline generator -> identical vectors -> no phantom diffs.
     lanes = sorted({tuple(k.split(":")[1:]) for k in _baseline_data() if ":" in k})
-    return H.run_matrix([(cc, opt) for cc, opt in lanes], fuzz=12)
+    return H.run_matrix([(cc, opt) for cc, opt in lanes], fuzz=M.FIXTURE_FUZZ)
+
+
+def test_baseline_schema_is_valid(baseline):
+    """The committed baseline must cover all ten fixtures with valid statuses and
+    must never bake in infrastructure failures (lane errors / missing / nocases)."""
+    probs = H.schema_problems(baseline, sorted({tuple(k.split(":")[1:]) for k in baseline}))
+    probs += H.baseline_problems(baseline)
+    assert not probs, "BASELINE SCHEMA INVALID:\n  " + "\n  ".join(probs)
 
 
 def test_no_lane_became_broken(current, baseline):
@@ -69,7 +78,8 @@ def test_no_lane_became_broken(current, baseline):
 
 
 def test_no_function_regressions(current, baseline):
-    """No function that passed in the baseline may now fail or go missing."""
+    """No function that passed in the baseline may now fail, go missing, or turn
+    into an infra status."""
     regressions, missing = [], []
     for lane, base in baseline.items():
         if "__lane__" in base:
@@ -81,24 +91,26 @@ def test_no_function_regressions(current, baseline):
             cur_status = cur.get(func)
             if cur_status is None:
                 missing.append(f"{lane}:{func}")
-            elif base_status == "pass" and cur_status == "fail":
-                regressions.append(f"{lane}:{func}")
+            elif base_status == "pass" and cur_status != "pass":
+                regressions.append(f"{lane}:{func} ({base_status}->{cur_status})")
     assert not missing, "RESULTS MISSING (fail-closed):\n  " + "\n  ".join(missing)
-    assert not regressions, "SEMANTIC REGRESSIONS (pass->fail):\n  " + "\n  ".join(regressions)
+    assert not regressions, "SEMANTIC REGRESSIONS:\n  " + "\n  ".join(regressions)
 
 
-def test_report_improvements(current, baseline):
-    """Not a failure: surface functions that now pass but the baseline says fail,
-    so the baseline can be regenerated to lock the improvement in."""
+def test_improvements_require_a_baseline_refresh(current, baseline):
+    """Ratchet: a function that now passes but the baseline records as failing
+    must FAIL the gate, forcing a baseline refresh (after verifying the fix). This
+    is what makes the gate ratchet upward — an improvement can never silently
+    regress later because the baseline is stale."""
     improved = []
     for lane, base in baseline.items():
         if "__lane__" in base:
             continue
         cur = current.get(lane, {})
         for func, base_status in base.items():
-            if base_status == "fail" and cur.get(func) == "pass":
-                improved.append(f"{lane}:{func}")
-    if improved:
-        print("\nIMPROVED since baseline (regenerate baseline.json to lock in):")
-        for i in improved:
-            print(f"  {i}")
+            if base_status != "pass" and cur.get(func) == "pass":
+                improved.append(f"{lane}:{func} ({base_status}->pass)")
+    assert not improved, (
+        "IMPROVEMENTS — verify the differential, then refresh baseline.json:\n  "
+        + "\n  ".join(improved)
+    )

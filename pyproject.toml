@@ -63,7 +63,5 @@ dev = [
     "pytest-benchmark>=5.1.0",
 ]
 
-[tool.pytest.ini_options]
-markers = [
-    "slow: end-to-end decompiler fixture matrix (compiles + executes the corpus)",
-]
+# NOTE: pytest configuration lives in pytest.ini (its presence makes pytest
+# ignore [tool.pytest.ini_options] here). The `slow` marker is registered there.

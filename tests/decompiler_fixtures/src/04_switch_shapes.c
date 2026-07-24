@@ -140,7 +140,7 @@ int explicit_fallthrough(unsigned x) {
     switch (x & 3u) {
         case 0:
             r += 7;
-            /* fallthrough */
+            __attribute__((fallthrough));   /* intentional fallthrough into case 1 */
         case 1:
             r += 30;
             break;
@@ -160,9 +160,9 @@ int explicit_fallthrough(unsigned x) {
 int fallthrough_chain(unsigned x) {
     int r = 0;
     switch (x & 3u) {
-        case 0: r += 1;
-        case 1: r += 20;
-        case 2: r += 300;
+        case 0: r += 1; __attribute__((fallthrough));
+        case 1: r += 20; __attribute__((fallthrough));
+        case 2: r += 300; __attribute__((fallthrough));
         case 3: r += 4000; break;
         default: r = -1;
     }
