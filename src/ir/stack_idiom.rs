@@ -98,6 +98,7 @@ fn rematerialise_body(body: &mut Vec<Stmt>) {
             if let Stmt::Store {
                 addr: Expr::Reg(slot),
                 src,
+                ..
             } = &body[i + 1]
             {
                 if is_stack_top(slot) {
@@ -214,6 +215,7 @@ mod tests {
                 Stmt::Store {
                     addr: Expr::Reg(reg("stack_top")),
                     src: Expr::Reg(reg("rbp")),
+                    size: 8,
                 },
             ],
         };
@@ -270,6 +272,7 @@ mod tests {
                 Stmt::Store {
                     addr: Expr::Reg(reg("stack_5")),
                     src: Expr::Reg(reg("rbp")),
+                    size: 8,
                 },
             ],
         };
@@ -353,6 +356,7 @@ mod tests {
                     Stmt::Store {
                         addr: Expr::Reg(reg("stack_top")),
                         src: Expr::Reg(reg("r12")),
+                        size: 8,
                     },
                 ],
                 else_body: None,

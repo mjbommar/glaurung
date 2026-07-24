@@ -209,6 +209,7 @@ fn collapse_body(body: &mut Vec<Stmt>) {
             Stmt::Store {
                 addr: Expr::Reg(crate::ir::types::VReg::Phys(slot)),
                 src: Expr::Reg(src),
+                ..
             } if slot.starts_with("stack_") && src == &load_dst => Some(slot.clone()),
             _ => None,
         };
@@ -224,7 +225,7 @@ fn rewrite_body(body: &mut [Stmt]) {
     for s in body.iter_mut() {
         match s {
             Stmt::Assign { src, .. } => rewrite_expr(src),
-            Stmt::Store { addr, src } => {
+            Stmt::Store { addr, src, .. } => {
                 rewrite_expr(addr);
                 rewrite_expr(src);
             }
@@ -521,6 +522,7 @@ mod tests {
                 Stmt::Store {
                     addr: Expr::Reg(VReg::phys("stack_0")),
                     src: Expr::Reg(VReg::phys("rax")),
+                    size: 8,
                 },
             ],
         };
@@ -616,6 +618,7 @@ mod tests {
                 Stmt::Store {
                     addr: Expr::Reg(VReg::phys("stack_0")),
                     src: Expr::Reg(VReg::phys("rbx")),
+                    size: 8,
                 },
             ],
         };

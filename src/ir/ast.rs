@@ -117,6 +117,10 @@ pub enum Stmt {
     Store {
         addr: Expr,
         src: Expr,
+        /// Access width in bytes (from the LLIR `MemOp.size`), so the printer
+        /// emits the correct pointee type (`*(int *)` for a 4-byte store, not a
+        /// blanket `*(long *)` that clobbers adjacent memory).
+        size: u8,
     },
     Call {
         target: Expr,
@@ -287,6 +291,7 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
                 segment: addr.segment.clone(),
             },
             src: lower_value(src),
+            size: addr.size,
         }],
         Op::Jump { target } => vec![Stmt::Goto { target: *target }],
         // A CondJump on its own (not absorbed into a structured If/While)
@@ -677,7 +682,7 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
 fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
     match s {
         Stmt::Assign { src, .. } => count_reg_uses_in_expr(src, target),
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             count_reg_uses_in_expr(addr, target) + count_reg_uses_in_expr(src, target)
         }
         Stmt::Call { target: t, args } => {
@@ -1421,7 +1426,7 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
             }
             out.push_str(";\n");
         }
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             indent(out, level);
             out.push_str("store ");
             write_expr_ctx(addr, tm, out);
@@ -1848,7 +1853,7 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             write_expr_c(src, out);
             out.push_str(";\n");
         }
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             indent(out, level);
             write_expr_c(addr, out);
             out.push_str(" = ");
@@ -2055,6 +2060,17 @@ fn int_ctype(signed: bool, width: u8) -> &'static str {
     }
 }
 
+/// The pointee C type for a store of `size` bytes, so `*(T *)(addr) = v` writes
+/// exactly `size` bytes (a 4-byte store must be `*(int *)`, not `*(long *)`).
+fn store_pointee_ctype(size: u8) -> &'static str {
+    match size {
+        1 => "signed char",
+        2 => "short",
+        4 => "int",
+        _ => "long",
+    }
+}
+
 fn hint_to_ctype(hint: TypeHint) -> &'static str {
     match hint {
         TypeHint::Int { signed, width } => match (signed, width) {
@@ -2211,6 +2227,7 @@ fn collect_param_homes(body: &[Stmt], home: &mut std::collections::HashMap<Strin
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(local)),
                 src: Expr::Reg(VReg::Phys(src)),
+                ..
             } if is_promoted_local(local) => {
                 let arg_ok = parse_arg_index(src).is_some();
                 let entry = home.entry(local.clone());
@@ -2294,7 +2311,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                 rn(dst, map);
                 re(src, map);
             }
-            Stmt::Store { addr, src } => {
+            Stmt::Store { addr, src, .. } => {
                 re(addr, map);
                 re(src, map);
             }
@@ -2353,6 +2370,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(a)),
                 src: Expr::Reg(VReg::Phys(b)),
+                ..
             } if a == b
         )
     });
@@ -2610,7 +2628,7 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             collect_reg(dst, ids);
             collect_idents_expr(src, ids);
         }
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             collect_idents_expr(addr, ids);
             collect_idents_expr(src, ids);
         }
@@ -3033,7 +3051,7 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             write_expr_dec(src, out);
             out.push_str(";\n");
         }
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, size } => {
             indent(out, level);
             // A store whose address is a bare promoted stack local (`local_0`,
             // `stack_1`, …) is a plain variable assignment, not a pointer
@@ -3047,7 +3065,9 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
                     return;
                 }
             }
-            out.push_str("*(long *)(");
+            // Use the access width so a 4-byte store emits `*(int *)`, not a
+            // blanket `*(long *)` that would clobber the adjacent element.
+            let _ = write!(out, "*({} *)(", store_pointee_ctype(*size));
             write_expr_dec(addr, out);
             out.push_str(") = ");
             write_expr_dec(src, out);
@@ -3280,6 +3300,7 @@ mod tests {
                         segment: None,
                     },
                     src: Expr::Reg(VReg::phys("rax")),
+                    size: 8,
                 },
             ],
         };
@@ -4142,6 +4163,7 @@ function f @ 0x1000 {
                     segment: None,
                 },
                 src: Expr::Reg(VReg::phys("arg0")),
+                size: 8,
             }],
         };
         let text = render_decbench(&f);
@@ -4354,6 +4376,7 @@ function f @ 0x1000 {
                         segment: None,
                     },
                     src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
                 },
             ],
         };

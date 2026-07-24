@@ -132,6 +132,7 @@ impl Splitter {
         if let Stmt::Store {
             addr: Expr::Reg(VReg::Phys(dst)),
             src: Expr::Reg(VReg::Phys(srcname)),
+            ..
         } = s
         {
             if is_promoted_local(dst) {
@@ -158,7 +159,7 @@ impl Splitter {
                     self.rename_reg(dst);
                     self.rename_expr(src);
                 }
-                Stmt::Store { addr, src } => {
+                Stmt::Store { addr, src, .. } => {
                     self.rename_expr(addr);
                     // For the spill store itself, keep the parameter register.
                     if spill.is_none() {
@@ -239,6 +240,7 @@ mod tests {
                 Stmt::Store {
                     addr: Expr::Reg(reg("local_18")),
                     src: Expr::Reg(reg("rdx")),
+                    size: 8,
                 },
                 Stmt::Assign {
                     dst: reg("rdx"),
@@ -256,7 +258,8 @@ mod tests {
             f.body[0],
             Stmt::Store {
                 addr: Expr::Reg(reg("local_18")),
-                src: Expr::Reg(reg("rdx"))
+                src: Expr::Reg(reg("rdx")),
+                size: 8,
             }
         );
         // The reuse def and its later read are renamed to the scratch alias.

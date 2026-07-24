@@ -211,8 +211,8 @@
     "loop_continue": "pass",
     "loop_early_return": "fail",
     "loop_return_on_neg": "fail",
-    "mutate_prefix": "fail",
-    "mutate_reverse": "fail",
+    "mutate_prefix": "pass",
+    "mutate_reverse": "pass",
     "nested_carry": "pass",
     "nested_pairs": "pass",
     "two_latches": "pass",
@@ -467,14 +467,14 @@
   },
   "09_memory_effects:gcc:O0": {
     "cas_update": "pass",
-    "mem_copy": "fail",
-    "mem_set": "fail",
+    "mem_copy": "pass",
+    "mem_set": "pass",
     "read_counter": "fail",
     "reset_counter": "structural",
     "tick": "structural",
     "tick_n": "structural",
     "vec_sum": "pass",
-    "vec_transform": "fail"
+    "vec_transform": "pass"
   },
   "09_memory_effects:gcc:O2": {
     "cas_update": "pass",
@@ -530,11 +530,11 @@
     "_ZN7DerivedD0Ev": "structural",
     "_ZN7DerivedD1Ev": "structural",
     "_ZN7DerivedD2Ev": "structural",
-    "cpp_ctor_dtor": "fail",
+    "cpp_ctor_dtor": "pass",
     "cpp_exception": "structural",
     "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
-    "cpp_raii_guard": "fail",
+    "cpp_raii_guard": "pass",
     "cpp_virtual_dispatch": "fail"
   }
 }

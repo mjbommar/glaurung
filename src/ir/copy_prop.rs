@@ -75,7 +75,7 @@ fn propagate_run(stmts: &mut [Stmt]) {
                     copies.insert(dst.clone(), src.clone());
                 }
             }
-            Stmt::Store { addr, src } => {
+            Stmt::Store { addr, src, .. } => {
                 subst(addr, &copies);
                 subst(src, &copies);
                 // A store to a bare promoted local writes that variable.
@@ -160,7 +160,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) {
                     }
                 }
             }
-            Stmt::Store { addr, src } => {
+            Stmt::Store { addr, src, .. } => {
                 subst(addr, &copies);
                 subst(src, &copies);
                 if let Expr::Reg(r) = addr {
@@ -449,7 +449,7 @@ fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
     match s {
         // The destination of an Assign is a WRITE, not a read.
         Stmt::Assign { src, .. } => count_reads_expr(src, reads),
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             count_reads_expr(addr, reads);
             count_reads_expr(src, reads);
         }
@@ -690,6 +690,7 @@ mod tests {
                 Stmt::Store {
                     addr: Expr::Reg(reg("q")),
                     src: Expr::Const(5),
+                    size: 8,
                 },
                 Stmt::Return {
                     value: Some(Expr::Reg(reg("t0"))),
@@ -733,6 +734,7 @@ mod tests {
                         lhs: Box::new(Expr::Reg(reg("local_c"))),
                         rhs: Box::new(Expr::Const(1)),
                     },
+                    size: 8,
                 },
                 Stmt::Assign {
                     dst: reg("x"),
@@ -813,6 +815,7 @@ mod tests {
                 Stmt::Store {
                     addr: Expr::Reg(reg("local_9")),
                     src: Expr::Reg(reg("ret")),
+                    size: 8,
                 },
                 Stmt::Assign {
                     dst: reg("ret"),
@@ -850,6 +853,7 @@ mod tests {
                     then_body: vec![Stmt::Store {
                         addr: Expr::Reg(reg("local_5")),
                         src: Expr::Reg(reg("t")),
+                        size: 8,
                     }],
                     else_body: None,
                 },
@@ -861,7 +865,8 @@ mod tests {
                 then_body[0],
                 Stmt::Store {
                     addr: Expr::Reg(reg("local_5")),
-                    src: Expr::Reg(reg("t"))
+                    src: Expr::Reg(reg("t")),
+                    size: 8,
                 },
                 "copy must not cross the if boundary"
             );

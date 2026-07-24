@@ -275,7 +275,7 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
 fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
     match s {
         Stmt::Assign { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             mark_arg_reads_in_expr(addr, arch, read_between);
             mark_arg_reads_in_expr(src, arch, read_between);
         }
@@ -677,6 +677,7 @@ mod tests {
                         segment: None,
                     },
                     src: Expr::Reg(reg("rbx")),
+                    size: 8,
                 },
                 assign("r8", 3),
                 assign("rdx", 256),
@@ -689,6 +690,7 @@ mod tests {
                         segment: None,
                     },
                     src: Expr::Reg(reg("r11")),
+                    size: 8,
                 },
                 Stmt::Call {
                     target: Expr::Named {
@@ -790,6 +792,7 @@ mod tests {
                         segment: None,
                     },
                     src: Expr::Const(99),
+                    size: 8,
                 },
                 assign("rdx", 2),
                 Stmt::Call {

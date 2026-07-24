@@ -88,7 +88,7 @@ fn rewrite_body(
     for s in body.iter_mut() {
         match s {
             Stmt::Assign { src, .. } => rewrite_expr(src, map, stack_counter, local_counter),
-            Stmt::Store { addr, src } => {
+            Stmt::Store { addr, src, .. } => {
                 // Store's addr is an Lea — we need to rewrite the Lea itself
                 // into a Reg reference when the lea points to a stack slot.
                 try_promote_lea_to_local(addr, map, stack_counter, local_counter);
@@ -308,10 +308,11 @@ mod tests {
             body: vec![Stmt::Store {
                 addr: lea("rsp", 0x10),
                 src: Expr::Reg(reg("rax")),
+                size: 8,
             }],
         };
         promote_stack_locals(&mut f);
-        if let Stmt::Store { addr, src } = &f.body[0] {
+        if let Stmt::Store { addr, src, .. } = &f.body[0] {
             assert_eq!(*addr, Expr::Reg(reg("stack_0")));
             assert_eq!(*src, Expr::Reg(reg("rax")));
         }
@@ -326,6 +327,7 @@ mod tests {
                 Stmt::Store {
                     addr: lea("rsp", 0x10),
                     src: Expr::Const(1),
+                    size: 8,
                 },
                 Stmt::Assign {
                     dst: reg("rax"),
@@ -356,10 +358,12 @@ mod tests {
                 Stmt::Store {
                     addr: lea("rsp", 0x10),
                     src: Expr::Const(1),
+                    size: 8,
                 },
                 Stmt::Store {
                     addr: lea("rsp", 0x18),
                     src: Expr::Const(2),
+                    size: 8,
                 },
             ],
         };
@@ -404,6 +408,7 @@ mod tests {
                 Stmt::Store {
                     addr: lea("rbp", -0xc),
                     src: Expr::Const(0),
+                    size: 8,
                 },
                 Stmt::Assign {
                     dst: reg("rax"),

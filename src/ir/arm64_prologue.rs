@@ -46,6 +46,7 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(slot)),
                 src: Expr::Reg(VReg::Phys(reg)),
+                ..
             } if slot.starts_with("stack_") => {
                 if reg == "fp" || reg == "x29" {
                     saw_fp_save = true;
@@ -187,6 +188,7 @@ mod tests {
         Stmt::Store {
             addr: Expr::Reg(reg(stack_name)),
             src: Expr::Reg(reg(value_reg)),
+            size: 8,
         }
     }
 
