@@ -187,6 +187,7 @@ fn rewrite_expr(
             rewrite_expr(rhs, map, stack_counter, local_counter);
         }
         Expr::Un { src, .. } => rewrite_expr(src, map, stack_counter, local_counter),
+        Expr::Cast { expr, .. } => rewrite_expr(expr, map, stack_counter, local_counter),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::Addr(_)

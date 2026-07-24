@@ -131,6 +131,7 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
             contains_reg(lhs, target) || contains_reg(rhs, target)
         }
         Expr::Un { src, .. } => contains_reg(src, target),
+        Expr::Cast { expr, .. } => contains_reg(expr, target),
     }
 }
 
@@ -157,6 +158,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
             count_reg_uses(lhs, target) + count_reg_uses(rhs, target)
         }
         Expr::Un { src, .. } => count_reg_uses(src, target),
+        Expr::Cast { expr, .. } => count_reg_uses(expr, target),
     }
 }
 
@@ -247,6 +249,18 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
         Expr::Un { op, mut src } => {
             substitute_in_expr(&mut src, target, with);
             Expr::Un { op, src }
+        }
+        Expr::Cast {
+            signed,
+            width,
+            mut expr,
+        } => {
+            substitute_in_expr(&mut expr, target, with);
+            Expr::Cast {
+                signed,
+                width,
+                expr,
+            }
         }
         Expr::Cmp {
             op,

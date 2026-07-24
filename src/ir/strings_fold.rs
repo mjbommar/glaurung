@@ -200,6 +200,7 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
             fold_expr(rhs, pool);
         }
         Expr::Un { src, .. } => fold_expr(src, pool),
+        Expr::Cast { expr, .. } => fold_expr(expr, pool),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::Lea { .. }

@@ -93,6 +93,15 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    /// A width/sign-changing cast: `(<ctype>)(expr)`. Carries the *target* integer
+    /// type so zero/sign extension and truncation are preserved through lowering
+    /// instead of collapsing to a bare assignment. `signed` picks the C type's
+    /// signedness; `width` is the byte width (1/2/4/8).
+    Cast {
+        signed: bool,
+        width: u8,
+        expr: Box<Expr>,
+    },
     /// Target of an indirect call / computed value we couldn't simplify.
     Unknown(String),
 }
@@ -316,14 +325,37 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
             }]
         }
         Op::Return => vec![Stmt::Return { value: None }],
-        // Width changes render as a plain assignment of the source — the cast is
-        // implicit in the higher-level form (`dst = src`).
-        Op::ZExt { dst, src, .. } | Op::SExt { dst, src, .. } | Op::Trunc { dst, src, .. } => {
-            vec![Stmt::Assign {
-                dst: dst.clone(),
-                src: lower_value(src),
-            }]
-        }
+        // Width changes must preserve their semantics, not collapse to `dst = src`.
+        //   ZExt from W: reinterpret the low W bits as *unsigned*, then widen  ->
+        //     `dst = (uint<W>)src` (the assignment to the wider `dst` zero-fills).
+        //   SExt from W: reinterpret the low W bits as *signed*, then widen     ->
+        //     `dst = (int<W>)src` (sign-fills).
+        //   Trunc to W:  keep the low W bits                                     ->
+        //     `dst = (uint<W>)src`.
+        Op::ZExt { dst, src, from, .. } => vec![Stmt::Assign {
+            dst: dst.clone(),
+            src: Expr::Cast {
+                signed: false,
+                width: (from.bits() / 8).max(1) as u8,
+                expr: Box::new(lower_value(src)),
+            },
+        }],
+        Op::SExt { dst, src, from, .. } => vec![Stmt::Assign {
+            dst: dst.clone(),
+            src: Expr::Cast {
+                signed: true,
+                width: (from.bits() / 8).max(1) as u8,
+                expr: Box::new(lower_value(src)),
+            },
+        }],
+        Op::Trunc { dst, src, to, .. } => vec![Stmt::Assign {
+            dst: dst.clone(),
+            src: Expr::Cast {
+                signed: false,
+                width: (to.bits() / 8).max(1) as u8,
+                expr: Box::new(lower_value(src)),
+            },
+        }],
         // Bit-slice `src[lo:hi]` → (src >> lo) & ((1<<(hi-lo))-1).
         Op::Extract { dst, src, hi, lo } => {
             let shifted = if *lo == 0 {
@@ -641,6 +673,7 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
             count_reg_uses_in_expr(lhs, target) + count_reg_uses_in_expr(rhs, target)
         }
         Expr::Un { src, .. } => count_reg_uses_in_expr(src, target),
+        Expr::Cast { expr, .. } => count_reg_uses_in_expr(expr, target),
     }
 }
 
@@ -1238,6 +1271,11 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
             write_expr_ctx(src, tm, out);
             out.push(')');
         }
+        Expr::Cast { signed, width, expr } => {
+            let _ = write!(out, "({})(", int_ctype(*signed, *width));
+            write_expr_ctx(expr, tm, out);
+            out.push(')');
+        }
         Expr::Cmp { op, lhs, rhs } => {
             out.push('(');
             write_expr_ctx(lhs, tm, out);
@@ -1701,6 +1739,11 @@ fn write_expr_c(e: &Expr, out: &mut String) {
             write_expr_c(src, out);
             out.push(')');
         }
+        Expr::Cast { signed, width, expr } => {
+            let _ = write!(out, "({})(", int_ctype(*signed, *width));
+            write_expr_c(expr, out);
+            out.push(')');
+        }
         Expr::Cmp { op, lhs, rhs } => {
             out.push('(');
             write_expr_c(lhs, out);
@@ -1915,6 +1958,21 @@ fn cmpop_sym_c(op: CmpOp) -> &'static str {
 /// signedness come from `types_recover`; pointers carry a pointee-width-derived
 /// element type. This is what turns the blanket `long` into `int`/`unsigned
 /// int`/`char *`/… for the DecBench renderer.
+/// The C integer type for a `(signed, byte-width)` pair — used to render
+/// `Expr::Cast` (`(int)`, `(unsigned char)`, …).
+fn int_ctype(signed: bool, width: u8) -> &'static str {
+    match (signed, width) {
+        (true, 1) => "signed char",
+        (false, 1) => "unsigned char",
+        (true, 2) => "short",
+        (false, 2) => "unsigned short",
+        (true, 4) => "int",
+        (false, 4) => "unsigned int",
+        (false, 8) => "unsigned long",
+        _ => "long",
+    }
+}
+
 fn hint_to_ctype(hint: TypeHint) -> &'static str {
     match hint {
         TypeHint::Int { signed, width } => match (signed, width) {
@@ -2140,6 +2198,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                 re(rhs, map);
             }
             Expr::Un { src, .. } => re(src, map),
+            Expr::Cast { expr, .. } => re(expr, map),
             Expr::Const(_)
             | Expr::Addr(_)
             | Expr::Named { .. }
@@ -2459,6 +2518,7 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
             collect_idents_expr(rhs, ids);
         }
         Expr::Un { src, .. } => collect_idents_expr(src, ids),
+        Expr::Cast { expr, .. } => collect_idents_expr(expr, ids),
     }
 }
 
@@ -2798,6 +2858,11 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         Expr::Un { op, src } => {
             let _ = write!(out, "({}", unop_sym(*op));
             write_expr_dec(src, out);
+            out.push(')');
+        }
+        Expr::Cast { signed, width, expr } => {
+            let _ = write!(out, "({})(", int_ctype(*signed, *width));
+            write_expr_dec(expr, out);
             out.push(')');
         }
         Expr::Cmp { op, lhs, rhs } => {
@@ -4066,6 +4131,48 @@ function f @ 0x1000 {
             text
         );
         assert!(text.contains("return 0;"), "void return:\n{}", text);
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_cast_preserves_extension_width_and_sign() {
+        // A width/sign cast must render as `(ctype)(expr)`, preserving the
+        // extension semantics that a bare `dst = src` would lose.
+        let f = Function {
+            name: "ext".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                // sign-extend from 8 bits: (signed char)(arg0)
+                Stmt::Assign {
+                    dst: VReg::phys("local_4"),
+                    src: Expr::Cast {
+                        signed: true,
+                        width: 1,
+                        expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    },
+                },
+                // zero-extend from 32 bits: (unsigned int)(arg1)
+                Stmt::Assign {
+                    dst: VReg::phys("local_8"),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                    },
+                },
+            ],
+        };
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("(signed char)(arg0)"),
+            "sign cast not rendered:\n{}",
+            text
+        );
+        assert!(
+            text.contains("(unsigned int)(arg1)"),
+            "zero-extend cast not rendered:\n{}",
+            text
+        );
         assert_looks_like_c(&text);
     }
 

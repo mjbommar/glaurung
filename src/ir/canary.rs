@@ -160,6 +160,7 @@ fn expr_mentions_guard(e: &Expr) -> bool {
             expr_mentions_guard(lhs) || expr_mentions_guard(rhs)
         }
         Expr::Un { src, .. } => expr_mentions_guard(src),
+        Expr::Cast { expr, .. } => expr_mentions_guard(expr),
         Expr::Deref { addr, .. } => expr_mentions_guard(addr),
         _ => false,
     }
@@ -296,6 +297,7 @@ fn rewrite_expr(e: &mut Expr) {
             rewrite_expr(rhs);
         }
         Expr::Un { src, .. } => rewrite_expr(src),
+        Expr::Cast { expr, .. } => rewrite_expr(expr),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::Addr(_)

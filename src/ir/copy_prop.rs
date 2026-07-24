@@ -389,6 +389,7 @@ fn contains_deref(e: &Expr) -> bool {
             contains_deref(lhs) || contains_deref(rhs)
         }
         Expr::Un { src, .. } => contains_deref(src),
+        Expr::Cast { expr, .. } => contains_deref(expr),
     }
 }
 
@@ -414,6 +415,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
             count_reg_uses(lhs, target) + count_reg_uses(rhs, target)
         }
         Expr::Un { src, .. } => count_reg_uses(src, target),
+        Expr::Cast { expr, .. } => count_reg_uses(expr, target),
     }
 }
 
@@ -439,6 +441,7 @@ fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
             count_reads_expr(rhs, reads);
         }
         Expr::Un { src, .. } => count_reads_expr(src, reads),
+        Expr::Cast { expr, .. } => count_reads_expr(expr, reads),
     }
 }
 
@@ -561,6 +564,7 @@ fn subst(e: &mut Expr, copies: &Copies) {
             subst(rhs, copies);
         }
         Expr::Un { src, .. } => subst(src, copies),
+        Expr::Cast { expr, .. } => subst(expr, copies),
     }
 }
 

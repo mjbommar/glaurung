@@ -187,6 +187,7 @@ fn annotate_expr(expr: &mut Expr, field_map: &PdbFieldMap) {
             annotate_expr(rhs, field_map);
         }
         Expr::Un { src, .. } => annotate_expr(src, field_map),
+        Expr::Cast { expr, .. } => annotate_expr(expr, field_map),
         Expr::Lea {
             base,
             index,

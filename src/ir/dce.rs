@@ -93,6 +93,7 @@ fn count_reads_in_expr(e: &Expr, target: &VReg) -> usize {
             count_reads_in_expr(lhs, target) + count_reads_in_expr(rhs, target)
         }
         Expr::Un { src, .. } => count_reads_in_expr(src, target),
+        Expr::Cast { expr, .. } => count_reads_in_expr(expr, target),
     }
 }
 

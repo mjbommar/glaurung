@@ -349,6 +349,7 @@ fn walk_expr_phys(e: &Expr, cb: &mut impl FnMut(&str)) {
             walk_expr_phys(rhs, cb);
         }
         Expr::Un { src, .. } => walk_expr_phys(src, cb),
+        Expr::Cast { expr, .. } => walk_expr_phys(expr, cb),
     }
 }
 
@@ -382,6 +383,7 @@ fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
             rewrite_expr(rhs, role);
         }
         Expr::Un { src, .. } => rewrite_expr(src, role),
+        Expr::Cast { expr, .. } => rewrite_expr(expr, role),
     }
 }
 

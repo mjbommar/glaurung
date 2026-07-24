@@ -122,6 +122,7 @@ impl Splitter {
                 self.rename_expr(rhs);
             }
             Expr::Un { src, .. } => self.rename_expr(src),
+            Expr::Cast { expr, .. } => self.rename_expr(expr),
         }
     }
 

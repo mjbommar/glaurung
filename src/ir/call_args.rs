@@ -268,6 +268,7 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
             mark_arg_reads_in_expr(rhs, arch, read_between);
         }
         Expr::Un { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
+        Expr::Cast { expr, .. } => mark_arg_reads_in_expr(expr, arch, read_between),
     }
 }
 
@@ -401,6 +402,7 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
             reads_reg_in_expr(lhs, target) || reads_reg_in_expr(rhs, target)
         }
         Expr::Un { src, .. } => reads_reg_in_expr(src, target),
+        Expr::Cast { expr, .. } => reads_reg_in_expr(expr, target),
     }
 }
 

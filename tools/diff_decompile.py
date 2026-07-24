@@ -228,7 +228,7 @@ def main() -> int:
         return 2
 
     failures = 0
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         workdir = Path(td)
         for sig in sigs:
             c = decompiled_c(args.binary, sig.va)

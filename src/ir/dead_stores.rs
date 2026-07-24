@@ -274,6 +274,7 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
             expr_reads(lhs, dst) || expr_reads(rhs, dst)
         }
         Expr::Un { src, .. } => expr_reads(src, dst),
+        Expr::Cast { expr, .. } => expr_reads(expr, dst),
     }
 }
 
