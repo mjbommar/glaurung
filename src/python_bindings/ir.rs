@@ -401,7 +401,7 @@ fn decompile_at_py(
     use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
-    use crate::ir::structure::recover;
+    use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
 
     let data = std::fs::read(&path)
@@ -428,7 +428,7 @@ fn decompile_at_py(
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
     let ssa = compute_ssa(&lf);
-    let region = recover(&lf, &ssa);
+    let region = recover_verified(&lf, &ssa);
     let lf = if style == "decbench" {
         crate::ir::value_number::value_number(&lf, &ssa, cc)
     } else {
@@ -555,7 +555,7 @@ fn decompile_range_at_py(
     use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
-    use crate::ir::structure::recover;
+    use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
 
     if range_end <= range_start {
@@ -611,7 +611,7 @@ fn decompile_range_at_py(
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
     let ssa = compute_ssa(&lf);
-    let region = recover(&lf, &ssa);
+    let region = recover_verified(&lf, &ssa);
     let lf = if style == "decbench" {
         crate::ir::value_number::value_number(&lf, &ssa, cc)
     } else {
@@ -803,7 +803,7 @@ fn decompile_all_py(
     use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
-    use crate::ir::structure::recover;
+    use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
 
     let data = std::fs::read(&path)
@@ -829,7 +829,7 @@ fn decompile_all_py(
             continue;
         };
         let ssa = compute_ssa(&lf);
-        let region = recover(&lf, &ssa);
+        let region = recover_verified(&lf, &ssa);
         let lf = if style == "decbench" {
             crate::ir::value_number::value_number(&lf, &ssa, cc)
         } else {
@@ -905,7 +905,7 @@ fn decompile_many_py(
     use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
-    use crate::ir::structure::recover;
+    use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
     use std::collections::HashSet;
 
@@ -945,7 +945,7 @@ fn decompile_many_py(
             continue;
         };
         let ssa = compute_ssa(&lf);
-        let region = recover(&lf, &ssa);
+        let region = recover_verified(&lf, &ssa);
         let lf = if style == "decbench" {
             crate::ir::value_number::value_number(&lf, &ssa, cc)
         } else {

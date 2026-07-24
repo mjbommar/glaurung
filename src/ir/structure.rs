@@ -287,11 +287,185 @@ pub fn recover(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
         return Region::Unstructured(Vec::new());
     }
     let cfg = Cfg::from(lf, ssa);
-    let mut visited: HashSet<usize> = HashSet::new();
-    let region = build(0, &cfg, &mut visited, None);
+    build_full(lf, &cfg)
+}
 
-    // Any blocks we never visited (unreachable or in an irreducible knot)
-    // get tacked on as an Unstructured sibling so nothing is lost.
+fn flatten_seq(r: Region) -> Vec<Region> {
+    match r {
+        Region::Seq(parts) => parts,
+        other => vec![other],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structure verifier (semantics-preserving-structuring §5)
+// ---------------------------------------------------------------------------
+
+/// A structural-analysis invariant violation. A non-empty result means the
+/// region tree does not faithfully represent the CFG — control flow was dropped
+/// or mis-attached, which renders as missing/empty branches (e.g. the
+/// short-circuit `&&`/`||` empty-arm bug). This is the check the design doc asks
+/// to run before/around the structurer so silent corruption becomes loud.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StructError {
+    /// A block reachable in the CFG never appears in the region tree.
+    BlockDropped { block: usize },
+    /// A conditional block's CFG successor edge is represented by neither an arm
+    /// nor the join — the branch to it is silently dropped (empty arm).
+    CondEdgeUncovered { cond: usize, missing_succ: usize },
+}
+
+/// The first block a region begins executing at, or `None` if the region is
+/// empty (renders nothing).
+fn entry_block(r: &Region) -> Option<usize> {
+    match r {
+        Region::Block(b) => Some(*b),
+        Region::Seq(parts) => parts.iter().find_map(entry_block),
+        Region::IfThen { cond, .. } | Region::IfThenElse { cond, .. } => Some(*cond),
+        Region::While { header, .. } => Some(*header),
+        Region::Switch { dispatch, .. } => Some(*dispatch),
+        Region::Unstructured(bs) => bs.first().copied(),
+    }
+}
+
+/// Verify a region tree against the CFG successor relation. Pure over `succs`
+/// so it is unit-testable without SSA/dominators.
+///
+/// Invariants:
+///  * **block coverage** — every block reachable from `entry` appears at least
+///    once in the region tree;
+///  * **conditional edge coverage** — for every `IfThen`/`IfThenElse`, each of
+///    the condition block's two CFG successors is represented (as an arm entry
+///    or, for `IfThen`, the join). A successor represented by neither is an
+///    uncovered edge — the branch is dropped and that arm renders empty.
+pub fn verify_region(succs: &[Vec<usize>], entry: usize, region: &Region) -> Vec<StructError> {
+    let mut errors = Vec::new();
+
+    // Block coverage.
+    let reachable = {
+        let mut seen = HashSet::new();
+        let mut stack = vec![entry];
+        while let Some(b) = stack.pop() {
+            if b < succs.len() && seen.insert(b) {
+                stack.extend(succs[b].iter().copied());
+            }
+        }
+        seen
+    };
+    let present: HashSet<usize> = region.blocks().into_iter().collect();
+    let mut dropped: Vec<usize> = reachable.difference(&present).copied().collect();
+    dropped.sort_unstable();
+    for b in dropped {
+        errors.push(StructError::BlockDropped { block: b });
+    }
+
+    // Conditional edge coverage.
+    fn walk(r: &Region, succs: &[Vec<usize>], out: &mut Vec<StructError>) {
+        match r {
+            Region::Seq(parts) => parts.iter().for_each(|p| walk(p, succs, out)),
+            Region::IfThenElse {
+                cond,
+                then_r,
+                else_r,
+                ..
+            } => {
+                let covered: HashSet<usize> = [entry_block(then_r), entry_block(else_r)]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                report_uncovered(*cond, succs, &covered, out);
+                walk(then_r, succs, out);
+                walk(else_r, succs, out);
+            }
+            Region::IfThen {
+                cond, then_r, join, ..
+            } => {
+                let mut covered: HashSet<usize> = HashSet::new();
+                covered.extend(entry_block(then_r));
+                covered.extend(*join);
+                // With no join the second edge is the (non-local) continuation;
+                // only require the then-arm edge to be represented.
+                if join.is_some() {
+                    report_uncovered(*cond, succs, &covered, out);
+                } else if let Some(e) = entry_block(then_r) {
+                    if e < succs.len() && !succs[*cond].contains(&e) {
+                        out.push(StructError::CondEdgeUncovered {
+                            cond: *cond,
+                            missing_succ: e,
+                        });
+                    }
+                }
+                walk(then_r, succs, out);
+            }
+            Region::While { body, .. } => walk(body, succs, out),
+            Region::Switch { arms, .. } => arms.iter().for_each(|a| walk(a, succs, out)),
+            Region::Block(_) | Region::Unstructured(_) => {}
+        }
+    }
+    fn report_uncovered(
+        cond: usize,
+        succs: &[Vec<usize>],
+        covered: &HashSet<usize>,
+        out: &mut Vec<StructError>,
+    ) {
+        if cond >= succs.len() {
+            return;
+        }
+        for &s in &succs[cond] {
+            if !covered.contains(&s) {
+                out.push(StructError::CondEdgeUncovered {
+                    cond,
+                    missing_succ: s,
+                });
+            }
+        }
+    }
+    walk(region, succs, &mut errors);
+    errors
+}
+
+/// Verify the region tree [`recover`] produces for `lf`. Empty == the structure
+/// faithfully covers every reachable block and conditional edge.
+pub fn verify_structure(lf: &LlirFunction, ssa: &SsaInfo) -> Vec<StructError> {
+    if lf.blocks.is_empty() {
+        return Vec::new();
+    }
+    let cfg = Cfg::from(lf, ssa);
+    let region = recover(lf, ssa);
+    verify_region(&cfg.succs, 0, &region)
+}
+
+/// [`recover`] plus a non-fatal structural self-check: any invariant violation
+/// (dropped block / uncovered conditional edge — e.g. the short-circuit empty-arm
+/// bug) is emitted as a `tracing` diagnostic rather than reaching the rendered
+/// output silently. Non-fatal by design while the known structurer defects are
+/// burned down (see docs/design/semantics-preserving-structuring.md); the total
+/// structurer will make these hard failures. This is the single production entry
+/// the decompile paths should call.
+pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
+    let cfg = Cfg::from(lf, ssa);
+    let region = build_full(lf, &cfg);
+    let errors = verify_region(&cfg.succs, 0, &region);
+    if !errors.is_empty() {
+        tracing::debug!(
+            entry_va = format_args!("{:#x}", lf.entry_va),
+            count = errors.len(),
+            "structure verifier: {} unfaithful region(s): {:?}",
+            errors.len(),
+            errors
+        );
+    }
+    region
+}
+
+/// The block-losing-leftover-aware region build shared by [`recover`] and
+/// [`recover_verified`], so both see the identical tree.
+fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
+    if lf.blocks.is_empty() {
+        return Region::Unstructured(Vec::new());
+    }
+    let mut visited: HashSet<usize> = HashSet::new();
+    let region = build(0, cfg, &mut visited, None);
     let leftover: Vec<usize> = (0..lf.blocks.len())
         .filter(|b| !visited.contains(b))
         .collect();
@@ -301,13 +475,6 @@ pub fn recover(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
         let mut parts = flatten_seq(region);
         parts.push(Region::Unstructured(leftover));
         Region::Seq(parts)
-    }
-}
-
-fn flatten_seq(r: Region) -> Vec<Region> {
-    match r {
-        Region::Seq(parts) => parts,
-        other => vec![other],
     }
 }
 
@@ -1245,5 +1412,108 @@ mod tests {
                 }
             }
         }
+    }
+
+    // --- structure verifier (§5) -------------------------------------------
+
+    #[test]
+    fn verify_region_flags_an_empty_arm_edge() {
+        // succs: 0 -> {1,3}, 1 -> {2,3}, 2 -> {4}, 3 -> {4}, 4 -> {}.
+        // A region that structures block 1 as an if whose then-arm is EMPTY
+        // drops the edge 1->3: verify_region must report it.
+        let succs = vec![vec![1, 3], vec![2, 3], vec![4], vec![4], vec![]];
+        let bad = Region::Seq(vec![
+            Region::IfThenElse {
+                cond: 0,
+                then_r: Box::new(Region::Block(3)),
+                else_r: Box::new(Region::IfThenElse {
+                    cond: 1,
+                    then_r: Box::new(Region::Seq(vec![])), // <-- empty arm, drops 1->3
+                    else_r: Box::new(Region::Block(2)),
+                    join: Some(4),
+                    invert: false,
+                }),
+                join: Some(4),
+                invert: false,
+            },
+            Region::Block(4),
+        ]);
+        let errs = verify_region(&succs, 0, &bad);
+        assert!(
+            errs.contains(&StructError::CondEdgeUncovered {
+                cond: 1,
+                missing_succ: 3
+            }),
+            "expected the dropped 1->3 edge to be flagged; got {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn verify_region_flags_a_dropped_block() {
+        // Block 2 is reachable (0->2) but absent from the region tree.
+        let succs = vec![vec![1, 2], vec![3], vec![3], vec![]];
+        let region = Region::Seq(vec![
+            Region::IfThen {
+                cond: 0,
+                then_r: Box::new(Region::Block(1)),
+                join: Some(3),
+                invert: false,
+            },
+            Region::Block(3),
+        ]);
+        let errs = verify_region(&succs, 0, &region);
+        assert!(errs.contains(&StructError::BlockDropped { block: 2 }));
+    }
+
+    #[test]
+    fn verify_region_clean_on_well_formed_diamond() {
+        let succs = vec![vec![1, 2], vec![3], vec![3], vec![]];
+        let region = Region::Seq(vec![
+            Region::IfThenElse {
+                cond: 0,
+                then_r: Box::new(Region::Block(1)),
+                else_r: Box::new(Region::Block(2)),
+                join: Some(3),
+                invert: false,
+            },
+            Region::Block(3),
+        ]);
+        assert!(verify_region(&succs, 0, &region).is_empty());
+    }
+
+    #[test]
+    fn verify_structure_clean_on_recovered_diamond() {
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100, 0x1200]),
+            (0x1100, vec![Op::Nop], vec![0x1300]),
+            (0x1200, vec![Op::Nop], vec![0x1300]),
+            (0x1300, vec![Op::Return], vec![]),
+        ]);
+        let ssa = compute_ssa(&lf);
+        assert!(verify_structure(&lf, &ssa).is_empty());
+    }
+
+    #[test]
+    fn verify_structure_catches_short_circuit_dropped_edge() {
+        // The `x>0 && y>0` shape: two conditionals share a common false block.
+        //   B0 -> {B1, Bfalse}   B1 -> {Btrue, Bfalse}
+        //   Btrue -> Bend  Bfalse -> Bend  Bend: return
+        // The current structurer drops the second edge to the shared Bfalse and
+        // renders an empty arm; the verifier must catch it as a dropped edge or a
+        // dropped block (rather than the bug reaching the output silently).
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100, 0x1300]), // B0 cond
+            (0x1100, vec![Op::Nop], vec![0x1200, 0x1300]), // B1 cond
+            (0x1200, vec![Op::Nop], vec![0x1400]),         // Btrue
+            (0x1300, vec![Op::Nop], vec![0x1400]),         // Bfalse (shared)
+            (0x1400, vec![Op::Return], vec![]),            // Bend
+        ]);
+        let ssa = compute_ssa(&lf);
+        let errs = verify_structure(&lf, &ssa);
+        assert!(
+            !errs.is_empty(),
+            "verifier must catch the short-circuit shared-join drop; got clean"
+        );
     }
 }
