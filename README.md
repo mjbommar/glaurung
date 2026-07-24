@@ -12,23 +12,39 @@ Glaurung aims to be what Ghidra would look like if built today: a modern archite
 
 ## At a Glance: Capability Comparison
 
-| Capability | Glaurung | IDA Pro | Ghidra | Cutter/r2 |
+A high-level orientation for newcomers, **not a benchmark**. Glaurung is young (pre-1.0); the mature
+tools below lead on architecture coverage, decompiler quality, signatures, similarity, and ecosystem.
+Several corrections to an earlier version of this table were kindly provided by the radare2 maintainer
+in [glaurung#2](https://github.com/mjbommar/glaurung/issues/2) and are reflected below — see **Notes & sources**.
+
+| Capability | Glaurung | IDA Pro | Ghidra | radare2 / rizin |
 |---|---|---|---|---|
-| Core intent | AI‑native, automation‑first | Interactive RE | Interactive RE | Interactive RE |
-| Disassembly | x86/x64, ARM64/ARM, RISC‑V | Very broad | Broad | Broad |
-| Function discovery | Heuristic + DWARF + FLIRT‑lite + vtable walker | Yes | Yes | Yes |
-| Function chunks | Native (`<fn>.cold`, `.part.N` auto‑folded) | Yes | Yes | Limited |
-| Decompilation | IR → C‑like pseudocode (rough) | Hex‑Rays (best) | P‑Code (very good) | Yes |
-| Type system | Persistent KB + DWARF + stdlib bundles + auto‑recovery | TIL files | GDT files | Limited |
-| Stack‑frame vars | Persistent + auto‑discovery + propagation | Yes | Yes | Yes |
-| Symbol borrowing | Cross‑binary (FLIRT + sibling‑debug donor) | FLIRT + Lumina | FunctionID + BSim | Limited |
-| Demangler | Itanium / Rust v0+legacy / MSVC | Yes | Yes | Yes |
-| Persistence | SQLite `.glaurung` project files (sessions, names, types, comments, xrefs) | IDB | GZF | Limited |
-| Bench/regression harness | Per‑commit deterministic scorecard (`python -m glaurung.bench`) | — | — | — |
-| AI integration | Built‑in `pydantic-ai` agent with 50+ memory tools | 3rd‑party | 3rd‑party | 3rd‑party |
-| Plugin/scripting | REPL (`glaurung repl`), Python API | SDK, IDC/Python | Headless/Java/Python | r2pipe/CLI |
-| UI | CLI + REPL; UI planned | Mature GUI | Mature GUI | Mature GUI |
-| License/Cost | OSS (MIT) | Commercial | OSS | OSS |
+| Core intent | AI-native, automation-first | Interactive RE | Interactive RE | Scriptable, automation-first framework |
+| Disassembly | x86/x64, ARM64/ARM, RISC-V | Very broad | Broad (SLEIGH) | Very broad (dozens of ISAs) |
+| Decompilation | IR -> C-like pseudocode (rough, early) | Hex-Rays (best-in-class) | P-Code + C (strong)[^ghidra] | External: r2ghidra / rz-ghidra, r2dec[^r2dec] |
+| Type system | Persistent KB + DWARF + stdlib bundles + auto-recovery | TIL | GDT | DWARF/PDB/Java/Dalvik import, pluggable parser[^r2types] |
+| Signatures / symbol ID | FLIRT-lite (exact-prologue) + sibling-debug donor | FLIRT + Lumina | FunctionID + BSim[^bsim] | FLIRT + sigdb; radare2 also zignatures; BN sigs via warrp[^r2sig] |
+| Persistence | SQLite `.glaurung` project files | IDB | GZF / Server | Versioned project files (radare2 since 2023; rizin SDB)[^r2proj] |
+| Testing / regression | Per-commit analysis-quality scorecard (`python -m glaurung.bench`) | Internal suites | Internal suites | Unit / API / ASan / fuzz, continuous[^r2ci] |
+| AI integration | Built-in `pydantic-ai` agent (~160 tools) | 3rd-party | 3rd-party (MCP bridges) | r2ai, decai, r2mcp[^r2ai] |
+| Scripting / embedding | Python API + REPL | SDK, IDC/IDAPython | Headless, Java/Python | r2pipe (35+ langs), native bindings (20+ langs), r2js, rlang[^r2script] |
+| UI | CLI + REPL (UI planned) | Mature GUI | Mature GUI | CLI-first; iaito GUI; web UIs[^r2ui] |
+| License | OSS (Apache-2.0) | Commercial | OSS (Apache-2.0) | OSS (LGPL-3.0) |
+
+**Notes & sources.** Glaurung's decompiler lifts x86/x64/ARM only (RISC-V is disassembly-only today), and
+its signature layer is exact-prologue matching ("FLIRT-lite"), weaker than a full masked-byte FLIRT.
+Sourcing for the mature-tool cells:
+
+[^ghidra]: Ghidra decompiler and P-Code IR — <https://ghidra-sre.org>, [SLEIGH docs](https://ghidra.re/ghidra_docs/languages/html/sleigh.html).
+[^r2dec]: radare2/rizin decompile via external plugins: [r2ghidra](https://github.com/radareorg/r2ghidra) / rz-ghidra (which embed Ghidra's decompiler) and [r2dec](https://github.com/wargio/r2dec-js).
+[^r2types]: radare2 and rizin import DWARF/PDB/Java/Dalvik debug info and support pluggable demanglers and header parsing (per the radare2 maintainer, [glaurung#2](https://github.com/mjbommar/glaurung/issues/2)).
+[^bsim]: Ghidra [BSim](https://github.com/NationalSecurityAgency/ghidra/blob/master/GhidraDocs/GhidraClass/BSim/BSimTutorial_Intro.md) — feature-vector (high P-Code) function similarity with an LSH index; ahead of Glaurung's CTPH.
+[^r2sig]: rizin ships a full masked-byte [FLIRT](https://github.com/rizinorg/rizin/tree/dev/librz/sign) implementation + a community sigdb; radare2 additionally has zignatures; and Binary Ninja's open **WARP** signature format imports via the [r2warp](https://github.com/radareorg/warrp) plugin.
+[^r2proj]: radare2 has had chunk-versionable binary project files since 2023; rizin uses a versioned SDB project format.
+[^r2ci]: radare2 and rizin run unit, API, memory-leak, ASan, and fuzz suites continuously (per [glaurung#2](https://github.com/mjbommar/glaurung/issues/2)); IDA and Ghidra maintain their own regression suites. Glaurung's harness additionally tracks aggregate *analysis-quality* metrics (named %, decompile success, type recovery) per commit.
+[^r2ai]: radare2 AI: [r2ai and the decai decompiler plugin](https://github.com/radareorg/r2ai), plus [r2mcp](https://github.com/radareorg/radare2-mcp).
+[^r2script]: radare2 scripting/embedding spans r2pipe, native API bindings, the r2js runtime, and rlang — see the [radare2 book](https://book.rada.re). The "35+ / 20+ languages" figures are the maintainer's ([glaurung#2](https://github.com/mjbommar/glaurung/issues/2)), counting community ports; the book enumerates a smaller core set.
+[^r2ui]: radare2's GUI is [iaito](https://github.com/radareorg/iaito); it also ships web UIs. [Cutter](https://github.com/rizinorg/cutter) is the GUI of the **rizin** fork (a separate project) — it is not radare2's UI.
 
 ## Current Status
 
@@ -47,7 +63,7 @@ Active development. Foundations and analyst‑facing surface area are largely in
 **Persistent knowledge base** (`.glaurung` SQLite project files)
 - Session‑scoped: function names, comments (per‑VA), data labels, struct/enum/typedef definitions, xrefs, stack‑frame vars, function prototypes
 - `set_by` provenance (manual / dwarf / stdlib / flirt / propagated / auto / borrowed) with manual‑always‑wins precedence
-- Schema migrations applied transparently on open
+- Additive schema created on open (`CREATE TABLE IF NOT EXISTS`); versioned migration is not yet implemented
 
 **Type system**
 - DWARF type ingestion (struct/union/enum/typedef with field bodies and resolved c_type)
@@ -58,10 +74,10 @@ Active development. Foundations and analyst‑facing surface area are largely in
 
 **Cross‑binary**
 - Symbol borrowing from a debug‑build sibling: `glaurung repl` `borrow <donor>`
-- FLIRT‑style signature library + matcher (default library committed at `data/sigs/glaurung-base.x86_64.flirt.json`)
+- Exact-prologue ("FLIRT-lite") signature library + matcher (default library committed at `data/sigs/glaurung-base.x86_64.flirt.json`)
 
 **LLM tools**
-- 50+ deterministic memory tools registered with the `pydantic-ai` agent: `view_hex`, `search_byte_pattern`, `scan_until_byte`, `decompile_function`, `view_function`, `view_strings`, `list_xrefs_*`, `propose_types_for_function`, `verify_semantic_equivalence`, etc.
+- ~160 deterministic memory tools registered with the `pydantic-ai` agent (roughly 50 general-purpose, plus Windows- and Java-specific toolkits): `view_hex`, `search_byte_pattern`, `scan_until_byte`, `decompile_function`, `view_function`, `view_strings`, `list_xrefs_*`, `propose_types_for_function`, `verify_semantic_equivalence`, etc.
 - Source‑recovery orchestrator (`scripts/recover_source.py`) — multi‑LLM pipeline that lifts a binary into idiomatic C/C++/Rust source with audit report
 
 **Operator tooling — daily-basics floor (the IDA/Ghidra parity floor)**
@@ -302,7 +318,8 @@ Apache License 2.0 - See [LICENSE](LICENSE) for details.
 
 Standing on the shoulders of:
 - [Ghidra](https://github.com/NationalSecurityAgency/ghidra) - The inspiration and target to beat
-- [Radare2](https://github.com/radareorg/radare2) - Demonstrating what's possible in open source RE
+- [radare2](https://github.com/radareorg/radare2) - Demonstrating what's possible in open-source, automation-first RE
+- [rizin](https://github.com/rizinorg/rizin) - RzIL and a thoroughly documented framework, with the [Cutter](https://github.com/rizinorg/cutter) GUI
 - [LIEF](https://github.com/lief-project/LIEF) - Excellence in format parsing
 - [Capstone](https://github.com/capstone-engine/capstone) - Multi-architecture disassembly
 

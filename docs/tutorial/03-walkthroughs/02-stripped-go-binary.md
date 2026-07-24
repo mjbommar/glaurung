@@ -1,13 +1,13 @@
 # §N — Walkthrough 2: stripped Go binary
 
-The "Glaurung does what IDA can't out of the box" walkthrough. We
-load a stripped Go binary and use the `gopclntab` walker (#212) to
-recover **1801 fully-qualified function names** that the symbol
-table doesn't expose.
+A Go-recovery walkthrough. We load a stripped Go binary and use the
+`gopclntab` walker (#212) to recover **1801 fully-qualified function
+names** that the symbol table doesn't expose.
 
-If you've ever opened a stripped Go binary in IDA Pro and seen
-nothing but `sub_<hex>` everywhere, this is the chapter that shows
-you what's possible without an external plugin.
+Modern IDA Pro (its shipped [Golang plugin](https://docs.hex-rays.com/user-guide/plugins/plugins-shipped-with-ida/golang-plugin))
+and Ghidra (its built-in Go analyzer) also parse `.gopclntab`. What this
+chapter shows is Glaurung doing the same recovery **headless — no GUI and
+no external plugin — as one scriptable step** in an automation-first pipeline.
 
 > **Verified output.** Every block is captured by
 > `scripts/verify_tutorial.py` and stored under
@@ -35,8 +35,10 @@ Key callouts:
 - **Go BuildID** — the Go toolchain stamps this; how `file` even
   knows it's Go.
 
-The binary is a 1.4 MB stripped Go program. Out of IDA's box, you'd
-see hundreds of `sub_<hex>` functions and no clue how to navigate.
+The binary is a 1.4 MB stripped Go program: hundreds of functions with
+no symbol-table names. A raw disassembler (or IDA/Ghidra without their
+Go analysis enabled) shows `sub_<hex>` everywhere; here we recover the
+real names from `.gopclntab` in a single headless command.
 
 ## Phase 1: Triage
 

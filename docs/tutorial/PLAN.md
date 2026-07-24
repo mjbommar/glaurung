@@ -390,8 +390,9 @@ Demonstrates **#212 Go gopclntab walker**. Reader sees:
 - `main.main`, `runtime.gopanic`, `internal/abi.Kind.String` all present
 - `glaurung find <db> main.` lists every user function
 
-This chapter is the strongest "Glaurung does what IDA can't out of
-the box" demo we have today.
+This chapter is our strongest headless Go-recovery demo: `.gopclntab`
+name recovery in a scriptable pipeline (IDA's shipped Golang plugin and
+Ghidra's Go analyzer perform the same recovery in-GUI).
 
 ### § O — `03-managed-dotnet-pe.md` (rung 3: managed PE)
 
