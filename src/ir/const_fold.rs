@@ -34,7 +34,7 @@ fn fold_body(body: &mut [Stmt]) {
     for s in body.iter_mut() {
         match s {
             Stmt::Assign { src, .. } => fold_expr(src),
-            Stmt::Store { addr, src } => {
+            Stmt::Store { addr, src, .. } => {
                 fold_expr(addr);
                 fold_expr(src);
             }

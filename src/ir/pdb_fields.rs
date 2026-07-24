@@ -116,7 +116,7 @@ pub fn annotate_function_fields(function: &mut Function, field_map: &PdbFieldMap
 fn annotate_stmt(stmt: &mut Stmt, field_map: &PdbFieldMap) {
     match stmt {
         Stmt::Assign { src, .. } => annotate_expr(src, field_map),
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             annotate_expr(addr, field_map);
             annotate_expr(src, field_map);
         }

@@ -29,7 +29,7 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
     for s in body.iter_mut() {
         match s {
             Stmt::Assign { src, .. } => resolve_expr(src, addr_map),
-            Stmt::Store { addr, src } => {
+            Stmt::Store { addr, src, .. } => {
                 resolve_expr(addr, addr_map);
                 resolve_expr(src, addr_map);
             }

@@ -100,7 +100,7 @@ fn count_reads_in_expr(e: &Expr, target: &VReg) -> usize {
 fn count_reads_in_stmt(s: &Stmt, target: &VReg) -> usize {
     match s {
         Stmt::Assign { src, .. } => count_reads_in_expr(src, target),
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             count_reads_in_expr(addr, target) + count_reads_in_expr(src, target)
         }
         Stmt::Call { target: t, args } => {

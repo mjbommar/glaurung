@@ -179,7 +179,7 @@ fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
                 cb(n, true);
             }
         }
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             walk_expr_phys(addr, &mut |n| cb(n, false));
             walk_expr_phys(src, &mut |n| cb(n, false));
         }
@@ -263,7 +263,7 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
             }
             walk_expr_phys(src, cb);
         }
-        Stmt::Store { addr, src } => {
+        Stmt::Store { addr, src, .. } => {
             walk_expr_phys(addr, cb);
             walk_expr_phys(src, cb);
         }
@@ -394,7 +394,7 @@ fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
                 rename_vreg(dst, role);
                 rewrite_expr(src, role);
             }
-            Stmt::Store { addr, src } => {
+            Stmt::Store { addr, src, .. } => {
                 rewrite_expr(addr, role);
                 rewrite_expr(src, role);
             }

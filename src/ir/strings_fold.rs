@@ -128,7 +128,7 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
     for s in body.iter_mut() {
         match s {
             Stmt::Assign { src, .. } => fold_expr(src, pool),
-            Stmt::Store { addr, src } => {
+            Stmt::Store { addr, src, .. } => {
                 fold_expr(addr, pool);
                 fold_expr(src, pool);
             }
