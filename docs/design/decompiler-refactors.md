@@ -18,26 +18,47 @@ type; recovered (and pushed past baseline to 0.879) by back-propagating pointer-
 through the address `add`, identifying the base by frame-slot-reload / scaled-index
 structure rather than by (default) type. See the three `ir:` commits on this branch.
 
-## Top 5 projects (by leverage)
+## Top 5 projects (re-prioritized 2026-07-23, after the value-model landing)
 
-1. **SSA value model** — name & type by SSA value, not physical register. The
-   keystone: a reused register becomes distinct typed variables; a parameter is
-   the arg register's SSA entry-def; spill slots unify with their source value.
-   Unblocks byte_match (register-reuse codegen), O2 register args, and deletes
-   most of the naming/typing glue (`remap_type_map`, the `DEC_PTR_ARGS` cast).
-2. **Constraint-based type inference (Retypd/TIE-lite)** on top of #1 — type
-   variables + constraints (copy=equality, deref=pointer, arith=width), solve by
-   union-find, **split on conflict, never int↔ptr**.
-3. **IR optimization passes** — copy-prop + dead-store (DONE, `ir/copy_prop.rs`);
-   next: const-prop, redundant-load elimination, broader DCE.
-4. **Unified structuring engine** (DREAM condition-based + SAILR de-opt) —
-   replaces the pattern-by-pattern `structure.rs`; needed for `statemachine`
-   (switch-in-loop, multi-exit) and real `switch` clustering.
-5. **Structured variable / typed-IR output model** — emit `VariableInfo`
-   (name/type/size/stack_offset/arg_index/kind), render from that; strictly
-   better DecBench scoring + the evidence-retention/LLM-refine substrate.
+The re-ranking is grounded in the walls hit while landing value-numbering: every
+one was the *same* wall — name, type, return-ness, and render are each decided by
+a separate heuristic pass that string-matches physical-register / role names, and
+those passes collide (the int→long return regression from `ctype_for("ret")`, the
+`max_ret`/KeepBare thrash, the `DEC_PTR_ARGS`/`remap_type_map` casts, the four
+heuristic pointer passes in `types_recover.rs`, the fold not firing on `var5`).
 
-Sequence: **#3 → #1 → #2 → #5**, with **#4** alongside.
+**Already landed** (was old #1/#3): SSA value model stages 0–2 (`ssa.rs` entry-def,
+`value_split.rs`, `value_number.rs`) + IR opt passes (copy-prop, dead-store,
+single-use fold with aliasing barrier) + partial per-value pointer typing.
+
+1. **Value-keyed variable model** (keystone; = old #1 naming/typing half + old #5).
+   One `VariableInfo { name, type, width, storage, role }` per SSA value, decided
+   *once*; naming, typing, return-detection, and render all read from it. Deletes
+   the collision-prone string passes: `remap_type_map`, `DEC_PTR_ARGS`,
+   `apply_role_names` string-matching, the `max_ret`/KeepBare heuristic,
+   `ctype_for("ret")`'s default-long, `find_written_return_reg`. "Is this the
+   return value / a pointer / scratch" becomes a value property, not a name lookup.
+2. **Expression re-materialization + typed-pointer render** (the byte closer). Sink
+   single-use value-expressions into their use site and render
+   `*(T*)(base + i*sizeof(T))` as `base[i]`. Replaces the ad-hoc `copy_prop` fold;
+   kills the measured byte driver (temps materialized as `long` locals that gcc
+   -O0 spills+reloads, ~4 extra insns/iter). Needs #1's value identity to be safe.
+3. **Constraint-based type inference (Retypd/TIE-lite)** on #1 — type variables +
+   constraints (copy=equality, deref=pointer, arith=width), union-find, **split on
+   conflict, never int↔ptr**. Subsumes the four heuristic pointer passes in
+   `types_recover.rs` (ends the special-case treadmill).
+4. **Lifter correctness for aggregate/struct access** (NEW; upstream of the value
+   model). `dist2`/`rect_area` lower `a->x - b->x` as `arg0 - arg1` and read stack
+   locals before defining them — caps `structs` at type 0.25 / byte 0.36 no matter
+   what runs downstream. A correctness smell, isolated + testable, orthogonal to #1.
+5. **Unified structuring engine** (DREAM condition-based + SAILR de-opt) — replaces
+   pattern-by-pattern `structure.rs`; the GED outliers `statemachine` (35) and
+   `switch_jt` (42) dominate the mean. Lower priority now (GED already beats angr)
+   but it is the robustness story for real, non-toy binaries.
+
+Sequence: **#1 first** (multiplier — 2/3/beyond get simpler + safer on top of it),
+with **#4 in parallel** (independent, unblocks `structs`). Then **#2** (byte jump),
+**#3** (retire pointer heuristics), **#5** (real-binary robustness).
 
 ## #1 SSA value model — staged plan (from design analysis)
 
