@@ -1918,6 +1918,74 @@ fn ctype_for(ident: &str, tm: Option<&TypeMap>) -> &'static str {
         .unwrap_or("long")
 }
 
+/// The C type of an expression from recovered types, when determinable. Value-
+/// keyed: types the value the expression denotes, not a fixed register name.
+fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
+    match e {
+        Expr::Reg(VReg::Phys(n)) => tm
+            .and_then(|m| m.get(&VReg::Phys(n.clone())))
+            .map(hint_to_ctype),
+        _ => None,
+    }
+}
+
+/// The function's C return type, derived from the value *actually returned*
+/// rather than from a register literally named `ret`. Walks to the first
+/// `return <expr>` and types that expression; falls back to `ctype_for("ret")`
+/// (finally `long`) when the returned value has no recovered type.
+///
+/// This is the value-keyed replacement for the bare-`ret` string lookup, which
+/// silently defaulted to `long` whenever value renaming moved the return value
+/// off the `ret` name (e.g. a return computed as a promoted local `local_8`).
+fn infer_return_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> &'static str {
+    first_return_value_ctype(body, tm).unwrap_or_else(|| ctype_for("ret", tm))
+}
+
+fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'static str> {
+    for s in body {
+        match s {
+            Stmt::Return { value: Some(e) } => {
+                if let Some(t) = expr_ctype(e, tm) {
+                    return Some(t);
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                if let Some(t) = first_return_value_ctype(then_body, tm) {
+                    return Some(t);
+                }
+                if let Some(eb) = else_body {
+                    if let Some(t) = first_return_value_ctype(eb, tm) {
+                        return Some(t);
+                    }
+                }
+            }
+            Stmt::While { body, .. } => {
+                if let Some(t) = first_return_value_ctype(body, tm) {
+                    return Some(t);
+                }
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, b) in cases {
+                    if let Some(t) = first_return_value_ctype(b, tm) {
+                        return Some(t);
+                    }
+                }
+                if let Some(b) = default {
+                    if let Some(t) = first_return_value_ctype(b, tm) {
+                        return Some(t);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Untyped entry point (blanket `long`) — used by unit tests and any consumer
 /// that has no recovered types.
 pub fn render_decbench(f: &Function) -> String {
@@ -2162,7 +2230,7 @@ pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
     // Signature: recovered return + argument types. Record which arguments are
     // pointers so the body can cast their int↔pointer reuse (see DEC_PTR_ARGS).
     DEC_PTR_ARGS.with(|m| m.borrow_mut().clear());
-    out.push_str(ctype_for("ret", tm));
+    out.push_str(infer_return_ctype(&f.body, tm));
     out.push(' ');
     out.push_str(&name);
     out.push('(');
@@ -3582,6 +3650,35 @@ function f @ 0x1000 {
             untyped.contains("long add_one(long arg0) {"),
             "untyped fallback changed:\n{}",
             untyped
+        );
+    }
+
+    #[test]
+    fn decbench_return_type_comes_from_returned_value_not_bare_ret() {
+        // Value-keyed return typing: the returned value is a promoted local
+        // (`local_8`, an `int`) and there is *no* `ret` entry in the type map.
+        // The signature return type must come from `local_8`, not silently
+        // default to `long` because the bare `ret` name is untyped.
+        let f = Function {
+            name: "get".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("local_8"))),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("local_8"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let text = render_decbench_typed(&f, Some(&tm));
+        assert!(
+            text.contains("int get(") && text.contains("return local_8;"),
+            "return type should be `int` from the returned local, got:\n{}",
+            text
         );
     }
 
