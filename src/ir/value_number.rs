@@ -330,6 +330,41 @@ fn def_reaches_return(
     false
 }
 
+/// True when the return-register def at (`def_bi`, `def_ii`) — whose register is
+/// `def_name` — has its value read via a DIFFERENT-name family alias (a
+/// sub-register, e.g. a `%eax` def read back as `%al`) before the next
+/// return-register def in the same block.
+///
+/// Such a def must stay BARE: value_number renames a scratch def by SSA version
+/// (`%eax` -> `%eax#1`) but the SSA tracks `al`/`ax`/`eax` as independent
+/// registers, so a bare sub-register read is NOT renamed with it — and the later
+/// naming pass then maps that orphaned `%al` to the `ret` role, producing a
+/// use-before-def (`local_1 = ret` before `ret` is assigned). Keeping the def
+/// bare matches the correct register-level lowering. Same-name reuse (a loop
+/// address `%rax` read as `%rax`) is unaffected, so address-chain folding stays.
+fn def_read_by_alias_before_redef(
+    lf: &LlirFunction,
+    ret_names: &[&str],
+    def_bi: usize,
+    def_ii: usize,
+    def_name: &str,
+) -> bool {
+    for ins in &lf.blocks[def_bi].instrs[def_ii + 1..] {
+        let (_, uses) = def_uses(&ins.op);
+        for u in &uses {
+            if let VReg::Phys(n) = u {
+                if ret_names.contains(&n.as_str()) && n != def_name {
+                    return true;
+                }
+            }
+        }
+        if defs_return_reg(&ins.op, ret_names) {
+            return false;
+        }
+    }
+    false
+}
+
 /// Return a copy of `lf` with every physical register occurrence rewritten to
 /// its SSA-value-tagged name. `cc` identifies the return registers whose final
 /// (returned) value is kept bare so it still names `ret`.
@@ -353,7 +388,8 @@ pub fn value_number(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo, cc: CallCo
         for (ii, ins) in block.instrs.iter().enumerate() {
             if let (Some(VReg::Phys(n)), _) = def_uses(&ins.op) {
                 if ret_names.contains(&n.as_str())
-                    && def_reaches_return(lf, ret_names, &va_to_idx, bi, ii)
+                    && (def_reaches_return(lf, ret_names, &va_to_idx, bi, ii)
+                        || def_read_by_alias_before_redef(lf, ret_names, bi, ii, &n))
                 {
                     let v = ssa
                         .def_versions
@@ -531,6 +567,44 @@ mod tests {
             Op::Assign {
                 dst: VReg::phys("rdi#1"),
                 src: Value::Const(5)
+            }
+        );
+    }
+
+    #[test]
+    fn return_reg_def_read_via_subregister_stays_bare() {
+        // The `return (uint8_t)x` shape:
+        //   eax = rdi      (return-reg def; overwritten below, so it does NOT
+        //                   reach the Return — normally scratch-versioned)
+        //   rcx = al       (its value read back via the sub-register `al`)
+        //   eax = 5        (the real returned value)
+        //   return
+        // Versioning the first `eax` to `eax#1` would orphan the bare `al` read
+        // (SSA tracks al independently), which the naming pass then mis-maps to
+        // `ret` -> use-before-def. So the first def must stay BARE.
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("eax"),
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Assign {
+                dst: VReg::phys("rcx"),
+                src: Value::Reg(VReg::phys("al")),
+            },
+            Op::Assign {
+                dst: VReg::phys("eax"),
+                src: Value::Const(5),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        // First def stays bare `eax` (not `eax#1`) because `al` reads it.
+        assert_eq!(
+            out.blocks[0].instrs[0].op,
+            Op::Assign {
+                dst: VReg::phys("eax"),
+                src: Value::Reg(VReg::phys("rdi")),
             }
         );
     }
