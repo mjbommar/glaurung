@@ -143,13 +143,22 @@ fn is_structural_reg(n: &str) -> bool {
 fn tag_phys(v: &mut VReg, version: u32, ctx: &VnCtx) {
     match v {
         VReg::Phys(n) => {
+            // Canonicalize a GP sub-register to its 64-bit parent so a value
+            // written as `%rax` and read back as `%eax` (or vice versa) renders
+            // as ONE name at the shared SSA version — otherwise the two views get
+            // distinct names and the read dangles.
+            let canon = crate::ir::ssa::parent64(n)
+                .map(str::to_string)
+                .unwrap_or_else(|| n.clone());
             if version == 0 {
-                return; // entry-def / live-in — keep the bare register
-            }
-            if is_structural_reg(n) || ctx.keep.contains(&(n.clone(), version)) {
+                *n = canon; // entry-def / live-in — bare (canonical) register
                 return;
             }
-            *n = format!("{}#{}", n, version);
+            if is_structural_reg(&canon) || ctx.keep.contains(&(canon.clone(), version)) {
+                *n = canon;
+                return;
+            }
+            *n = format!("{}#{}", canon, version);
         }
         VReg::Temp(base) => {
             if let Some(&nid) = ctx.temps.get(&(*base, version)) {
@@ -399,7 +408,11 @@ pub fn value_number(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo, cc: CallCo
                         })
                         .copied()
                         .unwrap_or(0);
-                    keep.insert((n.clone(), v));
+                    // Key by the canonical (64-bit) name to match tag_phys.
+                    let canon = crate::ir::ssa::parent64(&n)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| n.clone());
+                    keep.insert((canon, v));
                 }
             }
         }
@@ -599,11 +612,12 @@ mod tests {
         ]);
         let ssa = compute_ssa(&lf);
         let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
-        // First def stays bare `eax` (not `eax#1`) because `al` reads it.
+        // First def stays bare (not versioned) because `al` reads it — and the
+        // GP sub-register `eax` is canonicalized to its 64-bit parent `rax`.
         assert_eq!(
             out.blocks[0].instrs[0].op,
             Op::Assign {
-                dst: VReg::phys("eax"),
+                dst: VReg::phys("rax"),
                 src: Value::Reg(VReg::phys("rdi")),
             }
         );

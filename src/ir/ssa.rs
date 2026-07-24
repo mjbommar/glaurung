@@ -62,17 +62,57 @@ fn is_ssa_reg(v: &VReg) -> bool {
     matches!(v, VReg::Phys(_) | VReg::Temp(_))
 }
 
+/// The 64-bit parent of a general-purpose x86-64 register name, for the 32-bit
+/// (and 64-bit identity) views. A 32-bit write ZERO-EXTENDS into the 64-bit
+/// register, and a 32-bit read is the low half — so `eax` and `rax` are ONE SSA
+/// value: versioning them together lets a `%rax` write shadow a later `%eax`
+/// read (and vice versa), fixing the "64-bit value read via a 32-bit view reads
+/// a stale sub-register" corruption. 8/16-bit views (`al`/`ax`) are partial
+/// (they preserve the high bits) so they are intentionally NOT merged here.
+pub fn parent64(n: &str) -> Option<&'static str> {
+    Some(match n {
+        "rax" | "eax" => "rax",
+        "rbx" | "ebx" => "rbx",
+        "rcx" | "ecx" => "rcx",
+        "rdx" | "edx" => "rdx",
+        "rsi" | "esi" => "rsi",
+        "rdi" | "edi" => "rdi",
+        "rbp" | "ebp" => "rbp",
+        "rsp" | "esp" => "rsp",
+        "r8" | "r8d" => "r8",
+        "r9" | "r9d" => "r9",
+        "r10" | "r10d" => "r10",
+        "r11" | "r11d" => "r11",
+        "r12" | "r12d" => "r12",
+        "r13" | "r13d" => "r13",
+        "r14" | "r14d" => "r14",
+        "r15" | "r15d" => "r15",
+        _ => return None,
+    })
+}
+
+/// Canonicalize a GP sub-register VReg to its 64-bit parent (identity otherwise).
+pub fn canon_gpr(v: &VReg) -> VReg {
+    if let VReg::Phys(n) = v {
+        if let Some(p) = parent64(n) {
+            return VReg::Phys(p.to_string());
+        }
+    }
+    v.clone()
+}
+
 /// Walk operand values and memops for *register* uses in source order,
-/// returning each as a VReg. Order must match [`def_uses`] so that
-/// `use_index` aligns between the two modules.
+/// returning each as a VReg (GP sub-registers canonicalized to their 64-bit
+/// parent so aliased widths share a version). Order must match [`def_uses`] so
+/// that `use_index` aligns between the two modules.
 fn uses_of_op_ordered(op: &Op) -> Vec<VReg> {
     let (_, uses) = def_uses(op);
-    uses
+    uses.iter().map(canon_gpr).collect()
 }
 
 fn write_reg(op: &Op) -> Option<VReg> {
     let (def, _) = def_uses(op);
-    def.filter(is_ssa_reg)
+    def.filter(is_ssa_reg).map(|d| canon_gpr(&d))
 }
 
 /// Compute predecessor lists derived from each block's `succs`.
