@@ -3443,7 +3443,8 @@ function f @ 0x1000 {
 
     #[test]
     fn decbench_emits_signature_locals_and_return() {
-        // arg0 flows to a local `var0`, which is returned.
+        // arg0 flows to a local `var0` used twice (so it is not folded away),
+        // which is then returned as `var0 * var0`.
         let f = Function {
             name: "add_one".to_string(),
             entry_va: 0x1230,
@@ -3457,7 +3458,11 @@ function f @ 0x1000 {
                     },
                 },
                 Stmt::Return {
-                    value: Some(Expr::Reg(VReg::phys("var0"))),
+                    value: Some(Expr::Bin {
+                        op: BinOp::Mul,
+                        lhs: Box::new(Expr::Reg(VReg::phys("var0"))),
+                        rhs: Box::new(Expr::Reg(VReg::phys("var0"))),
+                    }),
                 },
             ],
         };
@@ -3473,7 +3478,7 @@ function f @ 0x1000 {
             "body wrong:\n{}",
             text
         );
-        assert!(text.contains("return var0;"), "return wrong:\n{}", text);
+        assert!(text.contains("return (var0 * var0);"), "return wrong:\n{}", text);
         assert_looks_like_c(&text);
     }
 
@@ -3538,7 +3543,11 @@ function f @ 0x1000 {
                     },
                 },
                 Stmt::Return {
-                    value: Some(Expr::Reg(VReg::phys("var0"))),
+                    value: Some(Expr::Bin {
+                        op: BinOp::Mul,
+                        lhs: Box::new(Expr::Reg(VReg::phys("var0"))),
+                        rhs: Box::new(Expr::Reg(VReg::phys("var0"))),
+                    }),
                 },
             ],
         };
@@ -3693,13 +3702,9 @@ function f @ 0x1000 {
         };
         let text = render_decbench(&f);
         assert!(text.contains("/* asm: cpuid */"), "unknown stmt:\n{}", text);
+        // var0 is single-use, so it folds into the indirect call target.
         assert!(
-            text.contains("var0 = __unknown(0);"),
-            "unknown expr:\n{}",
-            text
-        );
-        assert!(
-            text.contains("((long (*)())(var0))(arg0);"),
+            text.contains("((long (*)())(__unknown(0)))(arg0);"),
             "indirect call:\n{}",
             text
         );
@@ -3769,6 +3774,22 @@ function f @ 0x1000 {
                         lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
                         rhs: Box::new(Expr::Const(10)),
                     },
+                },
+                // Use var0/var1 twice each so they survive DCE as declared locals.
+                Stmt::Return {
+                    value: Some(Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Bin {
+                            op: BinOp::Mul,
+                            lhs: Box::new(Expr::Reg(VReg::phys("var0"))),
+                            rhs: Box::new(Expr::Reg(VReg::phys("var0"))),
+                        }),
+                        rhs: Box::new(Expr::Bin {
+                            op: BinOp::Mul,
+                            lhs: Box::new(Expr::Reg(VReg::phys("var1"))),
+                            rhs: Box::new(Expr::Reg(VReg::phys("var1"))),
+                        }),
+                    }),
                 },
             ],
         };

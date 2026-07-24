@@ -23,6 +23,14 @@ use crate::ir::types::VReg;
 
 /// Run copy propagation then dead-copy elimination over `f`'s body.
 pub fn propagate_copies(f: &mut Function) {
+    // Global read counts. With SSA value-numbering upstream every scratch value
+    // is single-def, so a value read exactly once can have its defining
+    // *expression* propagated to that one use without duplicating any work — this
+    // reassembles a split address computation (`t = i*4; p = base + t; *p`) into
+    // `*(base + i*4)` and removes the scratch locals value-numbering created.
+    let mut reads: HashMap<VReg, usize> = HashMap::new();
+    count_reads_body(&f.body, &mut reads);
+    propagate_run_counted(&mut f.body, &reads);
     propagate_run(&mut f.body);
     // Iterate DCE to a fixpoint: removing one dead copy can make the copy that
     // fed it dead too. Bounded to keep it cheap.
@@ -133,6 +141,89 @@ fn is_self_ref(dst: &VReg, src: &Expr) -> bool {
     matches!(src, Expr::Reg(r) if r == dst)
 }
 
+/// Like [`propagate_run`], but also propagates a *non-pure* expression whose
+/// scratch destination is read exactly once in the whole body — safe because
+/// value-numbering makes each such destination single-def, so folding it in
+/// duplicates no computation. Copies still do not cross control-flow edges.
+fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) {
+    let mut copies: Copies = HashMap::new();
+    for s in stmts.iter_mut() {
+        match s {
+            Stmt::Assign { dst, src } => {
+                subst(src, &copies);
+                invalidate(&mut copies, dst);
+                if !is_self_ref(dst, src) {
+                    let record = is_pure_copyable(src)
+                        || (is_scratch_reg(dst) && reads.get(dst).copied().unwrap_or(0) == 1);
+                    if record {
+                        copies.insert(dst.clone(), src.clone());
+                    }
+                }
+            }
+            Stmt::Store { addr, src } => {
+                subst(addr, &copies);
+                subst(src, &copies);
+                if let Expr::Reg(r) = addr {
+                    invalidate(&mut copies, r);
+                }
+                // The store may alias a pending single-use load; folding that
+                // load past this point would read the post-store value.
+                invalidate_loads(&mut copies);
+            }
+            Stmt::Push { value } => {
+                subst(value, &copies);
+                invalidate_loads(&mut copies);
+            }
+            Stmt::Return { value } => {
+                if let Some(e) = value {
+                    subst(e, &copies);
+                }
+            }
+            Stmt::Pop { target } => invalidate(&mut copies, target),
+            Stmt::Call { target, args } => {
+                subst(target, &copies);
+                for a in args.iter_mut() {
+                    subst(a, &copies);
+                }
+                copies.clear();
+            }
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                subst(cond, &copies);
+                propagate_run_counted(then_body, reads);
+                if let Some(eb) = else_body {
+                    propagate_run_counted(eb, reads);
+                }
+                copies.clear();
+            }
+            Stmt::While { cond, body } => {
+                subst(cond, &copies);
+                propagate_run_counted(body, reads);
+                copies.clear();
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                subst(discriminant, &copies);
+                for (_, body) in cases.iter_mut() {
+                    propagate_run_counted(body, reads);
+                }
+                if let Some(b) = default {
+                    propagate_run_counted(b, reads);
+                }
+                copies.clear();
+            }
+            Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
+            Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+        }
+    }
+}
+
 /// Within each straight-line run, drop a scratch-register write that is
 /// overwritten by a later write before any intervening read (a dead store).
 /// Conservative: resets at every control-flow boundary and only removes writes
@@ -224,9 +315,11 @@ fn eliminate_dead_copies(body: &mut Vec<Stmt>) -> bool {
 fn remove_dead(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
     let mut changed = false;
     body.retain(|s| {
-        if let Stmt::Assign { dst, src } = s {
-            if is_pure_copyable(src) && is_scratch_reg(dst) && reads.get(dst).copied().unwrap_or(0) == 0
-            {
+        // Every `Assign` source is side-effect-free (registers, constants,
+        // arithmetic, loads — never a call), so a scratch destination that is
+        // never read is dead and safe to drop, whatever the source shape.
+        if let Stmt::Assign { dst, .. } = s {
+            if is_scratch_reg(dst) && reads.get(dst).copied().unwrap_or(0) == 0 {
                 changed = true;
                 return false;
             }
@@ -275,6 +368,34 @@ fn is_scratch_reg(v: &VReg) -> bool {
 
 fn contains_reg(e: &Expr, target: &VReg) -> bool {
     count_reg_uses(e, target) > 0
+}
+
+/// True if `e` reads memory (contains a `Deref`). A recorded copy whose source
+/// reads memory must be dropped at any intervening store/push, since the store
+/// may alias the loaded location — folding the load past it would read the
+/// post-store value.
+fn contains_deref(e: &Expr) -> bool {
+    match e {
+        Expr::Deref { .. } => true,
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_)
+        | Expr::Reg(_)
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => false,
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            contains_deref(lhs) || contains_deref(rhs)
+        }
+        Expr::Un { src, .. } => contains_deref(src),
+    }
+}
+
+/// Drop every recorded copy whose source reads memory (a pending load that a
+/// store/push could alias).
+fn invalidate_loads(copies: &mut Copies) {
+    copies.retain(|_, src| !contains_deref(src));
 }
 
 fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
@@ -435,7 +556,9 @@ mod tests {
 
     #[test]
     fn reload_temp_is_propagated_and_removed() {
-        // t10 = local_3; zf = (t10 == 7)  ->  zf = (local_3 == 7)  (t10 dropped)
+        // t10 = local_3; zf = (t10 == 7); return zf
+        // t10 folds into the comparison (reading local_3); zf, read once, folds
+        // into the return -> `return (local_3 == 7)`.
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
@@ -452,17 +575,62 @@ mod tests {
                         rhs: Box::new(Expr::Const(7)),
                     },
                 },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("zf"))),
+                },
             ],
         };
         propagate_copies(&mut f);
-        // The temp copy is gone; the comparison reads local_3 directly.
-        assert_eq!(f.body.len(), 1, "dead reload copy should be removed: {:?}", f.body);
+        assert_eq!(f.body.len(), 1, "temps should be folded away: {:?}", f.body);
         match &f.body[0] {
-            Stmt::Assign { src: Expr::Cmp { lhs, .. }, .. } => {
-                assert_eq!(**lhs, Expr::Reg(reg("local_3")));
-            }
-            other => panic!("expected folded cmp, got {:?}", other),
+            Stmt::Return {
+                value: Some(Expr::Cmp { lhs, .. }),
+            } => assert_eq!(**lhs, Expr::Reg(reg("local_3"))),
+            other => panic!("expected folded `return (local_3 == 7)`, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn single_use_load_not_folded_across_store() {
+        // t = *p; *q = 5; return t
+        // Even though `t` is read exactly once, its defining load must NOT be
+        // folded past the store (the store may alias `p`). The load stays put.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("t0"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Reg(reg("p"))),
+                        size: 8,
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("q")),
+                    src: Expr::Const(5),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("t0"))),
+                },
+            ],
+        };
+        propagate_copies(&mut f);
+        // The load must survive as its own statement (t0 = *p), read by the
+        // return — it must not have been substituted into the return expression.
+        assert!(
+            f.body.iter().any(|s| matches!(
+                s,
+                Stmt::Assign { dst, src: Expr::Deref { .. } } if *dst == reg("t0")
+            )),
+            "load must not be folded across the store: {:?}",
+            f.body
+        );
+        assert!(
+            matches!(f.body.last(), Some(Stmt::Return { value: Some(Expr::Reg(r)) }) if *r == reg("t0")),
+            "return must still read the loaded temp, not the moved load: {:?}",
+            f.body
+        );
     }
 
     #[test]
@@ -540,10 +708,12 @@ mod tests {
             ],
         };
         propagate_copies(&mut f);
-        assert_eq!(f.body.len(), 2, "dead first write should be removed: {:?}", f.body);
+        // The dead first write is removed and the shift (read once by the return)
+        // folds into it -> `return (local_c >> 1)`.
+        assert_eq!(f.body.len(), 1, "dead write removed + shift folded: {:?}", f.body);
         assert!(
-            matches!(&f.body[0], Stmt::Assign { dst, src: Expr::Bin { .. } } if *dst == reg("ret")),
-            "surviving write must be the shift: {:?}",
+            matches!(&f.body[0], Stmt::Return { value: Some(Expr::Bin { op: BinOp::Shr, .. }) }),
+            "surviving statement must be the folded return: {:?}",
             f.body[0]
         );
     }
