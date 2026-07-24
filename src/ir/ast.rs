@@ -1925,6 +1925,11 @@ fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
         Expr::Reg(VReg::Phys(n)) => tm
             .and_then(|m| m.get(&VReg::Phys(n.clone())))
             .map(hint_to_ctype),
+        // A bare integer literal return (`return 0;`) — most often a function
+        // whose real return value was lost to structuring — is an `int`. Only
+        // claim this on the typed render path; the untyped path (`tm` is None)
+        // stays blanket-`long` by contract.
+        Expr::Const(_) if tm.is_some() => Some("int"),
         _ => None,
     }
 }
@@ -1949,6 +1954,10 @@ fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'sta
                     return Some(t);
                 }
             }
+            // A bare return with no recoverable return register renders as the
+            // synthesized `return 0;` — an `int`, not the `long` default (only on
+            // the typed path; the untyped path keeps blanket-`long`).
+            Stmt::Return { value: None } if tm.is_some() => return Some("int"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -2221,7 +2230,22 @@ pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
     }
 
     let name = sanitize_c_ident(&f.name);
-    let arg_count = ids.max_arg.map(|m| m + 1).unwrap_or(0);
+    // Signature arity: the highest `argN` referenced in the body, *or* recovered
+    // in the type map — whichever is larger. Types are recovered from the full
+    // pre-structuring IR, so an argument whose only uses were dropped by dead-code
+    // elimination (e.g. a `switch` whose cases were lost to `goto`s) still has a
+    // type-map entry and must still appear in the signature (an ABI/prototype
+    // property, not a "still referenced after DCE" one).
+    let mut arg_count = ids.max_arg.map(|m| m + 1).unwrap_or(0);
+    if let Some(tm) = tm {
+        for (v, _) in tm.iter() {
+            if let VReg::Phys(n) = v {
+                if let Some(idx) = parse_arg_index(n) {
+                    arg_count = arg_count.max(idx + 1);
+                }
+            }
+        }
+    }
 
     let mut out = String::new();
     // Provenance as a C comment (valid, and the harness maps by address anyway).
