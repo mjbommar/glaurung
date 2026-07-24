@@ -133,6 +133,10 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    /// `break;` out of the nearest enclosing loop. Emitted when a loop whose
+    /// per-iteration header work (test setup, or a do-while body) must run each
+    /// iteration is lowered as `while (1) { <header work>; if (!cond) break; body }`.
+    Break,
     Nop,
     /// Reserved for ops the lifter marked `Op::Unknown` — the raw mnemonic
     /// travels through so the printer can still show it.
@@ -662,7 +666,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Nop
+        | Stmt::Break | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => 0,
         Stmt::Switch { discriminant, .. } => count_reg_uses_in_expr(discriminant, target),
@@ -722,17 +726,36 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
             let cond_stmts = lower_block(&lf.blocks[*header]);
             let (cond_expr, pre) = extract_cond_and_strip(&lf.blocks[*header], cond_stmts);
             let body_stmts = lower_region(body, lf);
-            // Any "pre" stmts from the header that weren't the CondJump
-            // belong *inside* the loop head — they are the loop-invariant
-            // test setup that every iteration re-executes. We emit them
-            // once before the while and let the textual printer show the
-            // shape; future passes can hoist to a more faithful form.
-            let mut out = pre;
-            out.push(Stmt::While {
-                cond: cond_expr,
-                body: body_stmts,
-            });
-            out
+            if body_stmts.is_empty() && !pre.is_empty() {
+                // Do-while: the whole loop body sits in the self-looping header,
+                // so the `While` body is empty and `pre` is the body itself. The
+                // condition is *post*-tested. Emitting `pre; while (cond) {}` (the
+                // previous behaviour) is a semantic bug — the body runs once and
+                // the loop becomes an empty infinite/stale test. Lower to
+                //     while (1) { body; if (!cond) break; }
+                // so the body runs each iteration and the post-test exits.
+                let mut loop_body = pre;
+                loop_body.push(Stmt::If {
+                    cond: negate_cmp_expr(cond_expr),
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                });
+                vec![Stmt::While {
+                    cond: Expr::Const(1),
+                    body: loop_body,
+                }]
+            } else {
+                // Pre-tested loop. When `pre` is non-empty it is the header's
+                // per-iteration test setup (typically a reload of the loop
+                // variable) which copy-prop folds into the condition, so hoisting
+                // it once before the `while` is cleaned up downstream. Keep that.
+                let mut out = pre;
+                out.push(Stmt::While {
+                    cond: cond_expr,
+                    body: body_stmts,
+                });
+                out
+            }
         }
         Region::Switch { dispatch, arms, .. } => {
             // Lower the dispatch block as the prefix; the last
@@ -1313,6 +1336,10 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
                 None => out.push_str("return;\n"),
             }
         }
+        Stmt::Break => {
+            indent(out, level);
+            out.push_str("break;\n");
+        }
         Stmt::Nop => {
             indent(out, level);
             out.push_str("nop;\n");
@@ -1502,6 +1529,7 @@ pub fn compute_frame_size(body: &[Stmt]) -> Option<i64> {
             Stmt::Call { .. }
             | Stmt::Return { .. }
             | Stmt::Goto { .. }
+            | Stmt::Break
             | Stmt::If { .. }
             | Stmt::While { .. }
             | Stmt::Switch { .. } => break,
@@ -1726,6 +1754,10 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
                 }
                 None => out.push_str("return;\n"),
             }
+        }
+        Stmt::Break => {
+            indent(out, level);
+            out.push_str("break;\n");
         }
         Stmt::Nop => {
             indent(out, level);
@@ -2166,7 +2198,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                     rename_phys_in_body(b, map);
                 }
             }
-            Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
     }
 }
@@ -2501,7 +2533,7 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         // Push/Pop/Nop are elided by the renderer; Unknown/Comment become
         // comments; none introduce a declared identifier.
-        Stmt::Push { .. } | Stmt::Pop { .. } | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+        Stmt::Push { .. } | Stmt::Pop { .. } | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
     }
 }
 
@@ -2891,6 +2923,10 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             }
         }
         // No faithful, valid-C spelling — elide (Nop/Push/Pop) or comment out.
+        Stmt::Break => {
+            indent(out, level);
+            out.push_str("break;\n");
+        }
         Stmt::Nop | Stmt::Push { .. } | Stmt::Pop { .. } => {}
         Stmt::Unknown(mnemonic) => {
             indent(out, level);

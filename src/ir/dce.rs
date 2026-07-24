@@ -158,7 +158,7 @@ fn count_reads_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Nop
+        | Stmt::Break | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => 0,
     }

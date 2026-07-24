@@ -76,7 +76,7 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
-            | Stmt::Nop
+            | Stmt::Break | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
         }

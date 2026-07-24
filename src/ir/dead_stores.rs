@@ -235,7 +235,7 @@ fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
                     .as_ref()
                     .is_some_and(|b| b.iter().any(|s| stmt_reads(s, dst)))
         }
-        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {
+        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {
             false
         }
     }

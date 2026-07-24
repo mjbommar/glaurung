@@ -181,7 +181,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Nop
+        | Stmt::Break | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => 0,
     }
@@ -284,7 +284,7 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Nop
+        | Stmt::Break | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
     }

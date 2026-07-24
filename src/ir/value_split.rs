@@ -179,7 +179,7 @@ impl Splitter {
                 Stmt::Pop { target } => self.rename_reg(target),
                 Stmt::If { cond, .. } | Stmt::While { cond, .. } => self.rename_expr(cond),
                 Stmt::Switch { discriminant, .. } => self.rename_expr(discriminant),
-                Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+                Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
             }
 
             if let Some(slot) = spill {

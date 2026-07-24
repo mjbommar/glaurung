@@ -132,7 +132,7 @@ fn propagate_run(stmts: &mut [Stmt]) {
             // Control-flow boundaries: a label may be a join target and a goto
             // leaves the run — clear so nothing propagates across the edge.
             Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
-            Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
     }
 }
@@ -219,7 +219,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) {
                 copies.clear();
             }
             Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
-            Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
     }
 }
@@ -493,7 +493,7 @@ fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Nop
+        | Stmt::Break | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
     }

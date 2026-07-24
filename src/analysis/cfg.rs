@@ -768,6 +768,38 @@ fn discover_function(
         blocks.entry(start_va).or_insert((cur_va, instrs));
     }
 
+    // Split blocks that overlap a later leader. The linear sweep can run past a
+    // block start `t` that only becomes a leader when a *backward* branch to it
+    // is decoded later — the classic `-O0` do-while: the body block is entered
+    // by fall-through, but its own trailing `jne <body-top>` makes the body top
+    // a leader only after the sweep already ran through it. That block `[s, e)`
+    // then swallows the real `[t, e)` block and inherits its out-edges (so the
+    // setup block ends up with the loop's branch/exit edges, mis-structuring the
+    // loop). Truncate `[s, e)` to `[s, t)` with a single fall-through to `t`; the
+    // real `[t, e)` block was decoded separately from the queue.
+    {
+        use std::ops::Bound::Excluded;
+        let leaders: std::collections::BTreeSet<u64> = blocks.keys().copied().collect();
+        let truncations: Vec<(u64, u64)> = blocks
+            .iter()
+            .filter_map(|(&s, &(e, _))| {
+                leaders
+                    .range((Excluded(s), Excluded(e)))
+                    .next()
+                    .map(|&t| (s, t))
+            })
+            .collect();
+        for (s, t) in truncations {
+            if let Some(slot) = blocks.get_mut(&s) {
+                slot.0 = t;
+            }
+            // The out-edges recorded for `s` belonged to the swallowed `[t, e)`
+            // block; a block ending in a fall-through has exactly one successor.
+            edges.retain(|(src, _, _)| *src != s);
+            edges.push((s, t, ControlFlowEdgeKind::Fallthrough));
+        }
+    }
+
     // Build Function object
     let fname = format!("sub_{:x}", entry.value);
     let mut func = Function::new(fname, entry.clone(), FunctionKind::Normal).ok()?;
