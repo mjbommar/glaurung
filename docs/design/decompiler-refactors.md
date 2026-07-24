@@ -2,9 +2,21 @@
 
 Status tracking for the "big" refactors that keep surfacing as workarounds in the
 DecBench parity work. Current metrics on the local 14-program corpus (gcc -O0,
-`/tmp/claude-1000/local_eval.py`): **type_match 0.873** (angr 0.819),
-**GED 8.65** (angr 7.59), **byte_match ~0.17** (angr 0.586). type is beaten, GED
-is near; byte is the gap, and it needs the value-model refactor below.
+`/tmp/claude-1000/local_eval.py`): **type_match 0.879** (angr 0.819),
+**GED 7.25** (angr 7.59), **byte_match 0.277** (angr 0.586). type and GED both
+beat angr; byte is the remaining gap.
+
+Update (value-model landing): SSA value-numbering is now wired into the decbench
+lowering path (each reused register becomes a distinct SSA value). That unblocked
+a **safe single-use expression fold** (copy_prop) — distinct values are single-def,
+so folding `t = i*4; p = base + t; *p` into `*(base + i*4)` duplicates no work and
+lets the compiler re-emit its own scaled-addressing idiom: byte_match 0.192 -> 0.277,
+GED 8.65 -> 7.25. The fold carries a store/push aliasing barrier so a load is never
+moved across a write. Value-numbering initially cost type_match (0.861 -> 0.794)
+because a spilled pointer arg, used only as `*(param + i*scale)`, lost its pointer
+type; recovered (and pushed past baseline to 0.879) by back-propagating pointer-ness
+through the address `add`, identifying the base by frame-slot-reload / scaled-index
+structure rather than by (default) type. See the three `ir:` commits on this branch.
 
 ## Top 5 projects (by leverage)
 
@@ -101,3 +113,14 @@ Recompile our C at the original's `-O0` and diff assembly to find the drivers:
   arg-register scratch reuse into varN. Metric-neutral now (the DEC_PTR_ARGS cast
   already made it compile); value is architectural (foundation for stages 2-5,
   which remove the cast + match codegen for the real byte_match gains).
+- #1 Stage 2 (value-tagged lowering): DONE — `value_number` wired into the decbench
+  render path, keeping structural + return regs bare. Enabled the single-use fold
+  (copy_prop) that reassembles split address chains: byte 0.192→0.277, GED 8.65→7.25.
+- #1 Stage 4 (per-value pointer typing, partial): DONE — `types_recover`
+  back-propagates pointer-ness through address `add`s (frame-slot-reload / scaled-index
+  base identification), recovering spilled pointer args used only as `*(param + i*scale)`.
+  type 0.861→0.879 (beats angr). Still ad-hoc, not yet the full Retypd/union-find (#2).
+- Remaining byte gap drivers (byte 0.277 vs angr 0.586): struct-field access idiom
+  (`dist2`/`rect_area` still mis-lift `a->x` vs `arg0-arg1`; pre-existing, not value-model),
+  and residual `long`-typed 64-bit intermediates forcing `cltq`/sign-extend the compiler
+  wouldn't. Next: array-index render (`a[i]`) + struct-field recovery.
