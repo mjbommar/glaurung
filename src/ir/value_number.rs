@@ -33,9 +33,21 @@ fn return_reg_names(cc: CallConv) -> &'static [&'static str] {
 }
 
 /// `(register, version)` pairs kept bare despite version ≥ 1 — the value a
-/// return register holds at the end of the function (its highest version), so
-/// downstream naming still maps it to `ret` rather than a scratch `varN`.
+/// return register holds when it reaches a `Return`, so downstream naming still
+/// maps it to `ret` rather than a scratch `varN`.
 type KeepBare = HashSet<(String, u32)>;
+
+/// Remaps each reused lifter temporary `(Temp base, version)` to a fresh, unique
+/// temporary id. A lifter reuses one `Temp` for many unrelated values within a
+/// function; splitting them by SSA version makes each a single-def temporary, so
+/// the single-use expression fold downstream can reassemble split address chains.
+type TempRemap = std::collections::HashMap<(u32, u32), u32>;
+
+/// Immutable context threaded through the tagging recursion.
+struct VnCtx {
+    keep: KeepBare,
+    temps: TempRemap,
+}
 
 /// Stack/frame base registers must keep their bare names so stack-slot
 /// promotion (which pattern-matches `rbp`/`rsp`-relative addresses) still fires.
@@ -46,40 +58,50 @@ fn is_structural_reg(n: &str) -> bool {
     )
 }
 
-/// The value-tagged name of a physical register at a given SSA version.
-fn tag_phys(v: &mut VReg, version: u32, keep: &KeepBare) {
-    if version == 0 {
-        return; // entry-def / live-in — keep the bare register
-    }
-    if let VReg::Phys(n) = v {
-        if is_structural_reg(n) || keep.contains(&(n.clone(), version)) {
-            return;
+/// The value-tagged name of a register at a given SSA version. Physical
+/// registers get a `reg#version` name (version 0 / structural / kept-bare stay
+/// bare); reused temporaries are remapped to their split id.
+fn tag_phys(v: &mut VReg, version: u32, ctx: &VnCtx) {
+    match v {
+        VReg::Phys(n) => {
+            if version == 0 {
+                return; // entry-def / live-in — keep the bare register
+            }
+            if is_structural_reg(n) || ctx.keep.contains(&(n.clone(), version)) {
+                return;
+            }
+            *n = format!("{}#{}", n, version);
         }
-        *n = format!("{}#{}", n, version);
+        VReg::Temp(base) => {
+            if let Some(&nid) = ctx.temps.get(&(*base, version)) {
+                *base = nid;
+            }
+        }
+        _ => {}
     }
 }
 
 /// Rewrite a `Value`'s register (if any) to the version at `use_vers[*ui]`,
 /// advancing the use cursor exactly as [`def_uses`] enumerated it.
-fn tag_value(v: &mut Value, use_vers: &[u32], ui: &mut usize, keep: &KeepBare) {
+fn tag_value(v: &mut Value, use_vers: &[u32], ui: &mut usize, ctx: &VnCtx) {
     if let Value::Reg(r) = v {
         if let Some(&ver) = use_vers.get(*ui) {
-            tag_phys(r, ver, keep);
+            tag_phys(r, ver, ctx);
         }
         *ui += 1;
     }
 }
 
-fn tag_memop_uses(m: &mut crate::ir::types::MemOp, use_vers: &[u32], ui: &mut usize, keep: &KeepBare) {
+fn tag_memop_uses(m: &mut crate::ir::types::MemOp, use_vers: &[u32], ui: &mut usize, ctx: &VnCtx) {
     if let Some(b) = &mut m.base {
         if let Some(&ver) = use_vers.get(*ui) {
-            tag_phys(b, ver, keep);
+            tag_phys(b, ver, ctx);
         }
         *ui += 1;
     }
     if let Some(idx) = &mut m.index {
         if let Some(&ver) = use_vers.get(*ui) {
-            tag_phys(idx, ver, keep);
+            tag_phys(idx, ver, ctx);
         }
         *ui += 1;
     }
@@ -88,75 +110,75 @@ fn tag_memop_uses(m: &mut crate::ir::types::MemOp, use_vers: &[u32], ui: &mut us
 /// Apply the def version and the ordered use versions to one op's registers.
 /// The use order mirrors `use_def::def_uses` exactly (memory base before index,
 /// operands left-to-right), so the SSA `use_versions` line up by index.
-fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], keep: &KeepBare) {
+fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
     let mut ui = 0usize;
     match op {
         Op::Assign { dst, src } => {
-            tag_value(src, use_vers, &mut ui, keep);
-            tag_phys(dst, def_ver, keep);
+            tag_value(src, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
         }
         Op::CondAssign { dst, cond, src } => {
             // def_uses order: cond, then src.
             if let Some(&ver) = use_vers.first() {
-                tag_phys(cond, ver, keep);
+                tag_phys(cond, ver, ctx);
             }
             ui = 1;
-            tag_value(src, use_vers, &mut ui, keep);
-            tag_phys(dst, def_ver, keep);
+            tag_value(src, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
         }
         Op::Bin { dst, lhs, rhs, .. } => {
-            tag_value(lhs, use_vers, &mut ui, keep);
-            tag_value(rhs, use_vers, &mut ui, keep);
-            tag_phys(dst, def_ver, keep);
+            tag_value(lhs, use_vers, &mut ui, ctx);
+            tag_value(rhs, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
         }
         Op::Un { dst, src, .. } => {
-            tag_value(src, use_vers, &mut ui, keep);
-            tag_phys(dst, def_ver, keep);
+            tag_value(src, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
         }
         Op::Cmp { dst, lhs, rhs, .. } => {
-            tag_value(lhs, use_vers, &mut ui, keep);
-            tag_value(rhs, use_vers, &mut ui, keep);
-            tag_phys(dst, def_ver, keep);
+            tag_value(lhs, use_vers, &mut ui, ctx);
+            tag_value(rhs, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
         }
         Op::Load { dst, addr } => {
-            tag_memop_uses(addr, use_vers, &mut ui, keep);
-            tag_phys(dst, def_ver, keep);
+            tag_memop_uses(addr, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
         }
         Op::Store { addr, src } => {
-            tag_memop_uses(addr, use_vers, &mut ui, keep);
-            tag_value(src, use_vers, &mut ui, keep);
+            tag_memop_uses(addr, use_vers, &mut ui, ctx);
+            tag_value(src, use_vers, &mut ui, ctx);
         }
         Op::CondJump { cond, .. } => {
             if let Some(&ver) = use_vers.first() {
-                tag_phys(cond, ver, keep);
+                tag_phys(cond, ver, ctx);
             }
         }
         Op::Call {
             target: crate::ir::types::CallTarget::Indirect(v),
         } => {
-            tag_value(v, use_vers, &mut ui, keep);
+            tag_value(v, use_vers, &mut ui, ctx);
         }
         Op::ZExt { dst, src, .. }
         | Op::SExt { dst, src, .. }
         | Op::Trunc { dst, src, .. }
         | Op::Extract { dst, src, .. } => {
-            tag_value(src, use_vers, &mut ui, keep);
-            tag_phys(dst, def_ver, keep);
+            tag_value(src, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
         }
         Op::Concat { dst, hi, lo } => {
-            tag_value(hi, use_vers, &mut ui, keep);
-            tag_value(lo, use_vers, &mut ui, keep);
-            tag_phys(dst, def_ver, keep);
+            tag_value(hi, use_vers, &mut ui, ctx);
+            tag_value(lo, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
         }
         Op::Ite { dst, cond, t, e, .. } => {
             // def_uses order: cond, then t, then e.
             if let Some(&ver) = use_vers.first() {
-                tag_phys(cond, ver, keep); // a flag in practice — no-op
+                tag_phys(cond, ver, ctx); // a flag in practice — no-op
             }
             ui = 1;
-            tag_value(t, use_vers, &mut ui, keep);
-            tag_value(e, use_vers, &mut ui, keep);
-            tag_phys(dst, def_ver, keep);
+            tag_value(t, use_vers, &mut ui, ctx);
+            tag_value(e, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
         }
         // Multi-output intrinsics (`cpuid`, ...) don't fit the single-def SSA
         // model cleanly, so leave them untagged for now; a function that uses one
@@ -175,11 +197,18 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], keep: &KeepBare) {
 /// (returned) value is kept bare so it still names `ret`.
 pub fn value_number(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo, cc: CallConv) -> LlirFunction {
     let ret_names = return_reg_names(cc);
-    // Keep the highest-versioned definition of each return register bare — at
-    // `-O0` that is the value moved into the ABI return slot just before `ret`,
-    // while lower versions are scratch reuse of the same register.
-    let mut max_ret: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    // Keep bare exactly the return-register value that actually reaches a
+    // `Return`: the last return-register def preceding each `Return` in its
+    // block. At `-O0` that is the value the epilogue leaves in the ABI return
+    // slot, so downstream naming maps it to `ret`. A "highest version" heuristic
+    // is wrong when the same physical register is *also* reused for scratch —
+    // e.g. 64-bit `rax` computing a loop address while the real return is the
+    // 32-bit `eax` loaded just before `ret` — because the address def has the
+    // higher version and would be kept bare, materialising the address as `ret`
+    // (which then spills) instead of folding into its use.
+    let mut keep: KeepBare = KeepBare::new();
     for (bi, block) in lf.blocks.iter().enumerate() {
+        let mut last_ret_def: Option<(String, u32)> = None;
         for (ii, ins) in block.instrs.iter().enumerate() {
             if let (Some(VReg::Phys(n)), _) = def_uses(&ins.op) {
                 if ret_names.contains(&n.as_str()) {
@@ -191,15 +220,18 @@ pub fn value_number(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo, cc: CallCo
                         })
                         .copied()
                         .unwrap_or(0);
-                    max_ret
-                        .entry(n)
-                        .and_modify(|m| *m = (*m).max(v))
-                        .or_insert(v);
+                    last_ret_def = Some((n.clone(), v));
+                }
+            }
+            if matches!(ins.op, Op::Return) {
+                if let Some(rd) = last_ret_def.take() {
+                    keep.insert(rd);
                 }
             }
         }
     }
-    let keep: KeepBare = max_ret.into_iter().collect();
+    let temps = build_temp_remap(lf, ssa);
+    let ctx = VnCtx { keep, temps };
 
     let mut out = lf.clone();
     for (bi, block) in out.blocks.iter_mut().enumerate() {
@@ -213,10 +245,68 @@ pub fn value_number(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo, cc: CallCo
             let use_vers: Vec<u32> = (0..uses.len())
                 .map(|k| ssa.use_versions.get(&(addr, k)).copied().unwrap_or(0))
                 .collect();
-            tag_op(&mut ins.op, def_ver, &use_vers, &keep);
+            tag_op(&mut ins.op, def_ver, &use_vers, &ctx);
         }
     }
     out
+}
+
+/// Build the [`TempRemap`]: for every lifter temporary that is *reused* (has
+/// more than one SSA version across the function), assign each `(base, version)`
+/// a fresh, globally-unique temporary id. Temporaries with a single version are
+/// left unchanged (identity), keeping their original ids to minimise churn.
+///
+/// This is a pure SSA renaming keyed off the same [`SsaInfo`] used for physical
+/// registers: a use reading version `V` is remapped identically to the def that
+/// produced `V`, so dataflow is preserved by construction.
+fn build_temp_remap(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo) -> TempRemap {
+    let mut versions_by_base: std::collections::HashMap<u32, HashSet<u32>> =
+        std::collections::HashMap::new();
+    let mut max_temp_id = 0u32;
+    for (bi, block) in lf.blocks.iter().enumerate() {
+        for (ii, ins) in block.instrs.iter().enumerate() {
+            let addr = InstrAddr {
+                block_idx: bi,
+                instr_idx: ii,
+            };
+            let (def, uses) = def_uses(&ins.op);
+            if let Some(VReg::Temp(base)) = def {
+                max_temp_id = max_temp_id.max(base);
+                let v = ssa.def_versions.get(&addr).copied().unwrap_or(0);
+                versions_by_base.entry(base).or_default().insert(v);
+            }
+            for (k, u) in uses.iter().enumerate() {
+                if let VReg::Temp(base) = u {
+                    max_temp_id = max_temp_id.max(*base);
+                    let v = ssa.use_versions.get(&(addr, k)).copied().unwrap_or(0);
+                    versions_by_base.entry(*base).or_default().insert(v);
+                }
+            }
+        }
+    }
+    let mut remap = TempRemap::new();
+    let mut next_id = max_temp_id + 1;
+    for (base, versions) in &versions_by_base {
+        if versions.len() <= 1 {
+            for &v in versions {
+                remap.insert((*base, v), *base);
+            }
+            continue;
+        }
+        // Reused: the lowest version keeps the original id, the rest get fresh
+        // ids, so `Temp(base)` splits into distinct single-def temporaries.
+        let mut vs: Vec<u32> = versions.iter().copied().collect();
+        vs.sort_unstable();
+        for (i, v) in vs.into_iter().enumerate() {
+            if i == 0 {
+                remap.insert((*base, v), *base);
+            } else {
+                remap.insert((*base, v), next_id);
+                next_id += 1;
+            }
+        }
+    }
+    remap
 }
 
 #[cfg(test)]
