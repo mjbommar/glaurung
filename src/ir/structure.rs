@@ -68,6 +68,13 @@ pub enum Region {
         arms: Vec<Region>,
         join: Option<usize>,
     },
+    /// `goto <block>;` — an explicit jump to a block that is emitted (with a
+    /// label) elsewhere. Used when a conditional arm targets a *shared* join
+    /// block already consumed by a sibling arm: rather than drop the edge into an
+    /// empty arm (the short-circuit `&&`/`||` bug), we reference the shared block
+    /// so control still reaches it. The block's statements render exactly once at
+    /// their natural position; every other incoming edge is a `Goto` to its label.
+    Goto(usize),
     /// Fallback — a set of blocks that didn't fit any recognised pattern.
     Unstructured(Vec<usize>),
 }
@@ -125,6 +132,7 @@ impl Region {
                         out.push(*j);
                     }
                 }
+                Region::Goto(b) => out.push(*b),
                 Region::Unstructured(bs) => out.extend(bs.iter().copied()),
             }
         }
@@ -316,14 +324,16 @@ pub enum StructError {
 }
 
 /// The first block a region begins executing at, or `None` if the region is
-/// empty (renders nothing).
-fn entry_block(r: &Region) -> Option<usize> {
+/// empty (renders nothing). Public so the AST lowerer can place a `goto` label
+/// on whichever region (Block or a structured `if`/`while`) *begins* at a target.
+pub fn entry_block(r: &Region) -> Option<usize> {
     match r {
         Region::Block(b) => Some(*b),
         Region::Seq(parts) => parts.iter().find_map(entry_block),
         Region::IfThen { cond, .. } | Region::IfThenElse { cond, .. } => Some(*cond),
         Region::While { header, .. } => Some(*header),
         Region::Switch { dispatch, .. } => Some(*dispatch),
+        Region::Goto(b) => Some(*b),
         Region::Unstructured(bs) => bs.first().copied(),
     }
 }
@@ -399,7 +409,7 @@ pub fn verify_region(succs: &[Vec<usize>], entry: usize, region: &Region) -> Vec
             }
             Region::While { body, .. } => walk(body, succs, out),
             Region::Switch { arms, .. } => arms.iter().for_each(|a| walk(a, succs, out)),
-            Region::Block(_) | Region::Unstructured(_) => {}
+            Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => {}
         }
     }
     fn report_uncovered(
@@ -571,6 +581,25 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
     }
 }
 
+/// Build a conditional *arm* starting at `entry`. Identical to [`build`] except
+/// that when `entry` has already been consumed by a sibling (a *shared* join
+/// block, e.g. the common false block of `a && b`) we emit an explicit
+/// [`Region::Goto`] to it rather than letting [`build`] hit its visited-guard and
+/// return an empty region — which silently drops the edge (the short-circuit
+/// empty-arm bug). `stop_at` (the join) is never gotoed; it is emitted after the
+/// conditional.
+fn build_arm(
+    entry: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+    stop_at: Option<usize>,
+) -> Region {
+    if Some(entry) != stop_at && visited.contains(&entry) {
+        return Region::Goto(entry);
+    }
+    build(entry, cfg, visited, stop_at)
+}
+
 struct LoopRegion {
     region: Region,
     exit: Option<usize>,
@@ -687,8 +716,8 @@ fn detect_if_shape(
         let invert = invert_for(cfg, cond, t);
         // Mark cond consumed, recurse on arms.
         visited.insert(cond);
-        let then_r = build(t, cfg, visited, Some(join));
-        let else_r = build(e, cfg, visited, Some(join));
+        let then_r = build_arm(t, cfg, visited, Some(join));
+        let else_r = build_arm(e, cfg, visited, Some(join));
         return Some((
             Region::IfThenElse {
                 cond,
@@ -824,8 +853,8 @@ fn detect_if_shape(
             };
             let invert = invert_for(cfg, cond, then_a);
             visited.insert(cond);
-            let then_r = build(then_a, cfg, visited, Some(join));
-            let else_r = build(else_a, cfg, visited, Some(join));
+            let then_r = build_arm(then_a, cfg, visited, Some(join));
+            let else_r = build_arm(else_a, cfg, visited, Some(join));
             return Some((
                 Region::IfThenElse {
                     cond,
@@ -1266,6 +1295,7 @@ mod tests {
                     }
                     (count, bad)
                 }
+                Region::Goto(_) => (0, false),
                 Region::Unstructured(_) => (0, true),
             }
         }
@@ -1306,6 +1336,7 @@ mod tests {
                 Region::Switch { arms, .. } => {
                     arms.iter().for_each(assert_no_unstructured);
                 }
+                Region::Goto(_) => {}
                 Region::Unstructured(bs) => panic!("found Unstructured: {:?}", bs),
             }
         }
@@ -1495,13 +1526,13 @@ mod tests {
     }
 
     #[test]
-    fn verify_structure_catches_short_circuit_dropped_edge() {
+    fn short_circuit_shared_join_is_faithful_via_goto() {
         // The `x>0 && y>0` shape: two conditionals share a common false block.
         //   B0 -> {B1, Bfalse}   B1 -> {Btrue, Bfalse}
         //   Btrue -> Bend  Bfalse -> Bend  Bend: return
-        // The current structurer drops the second edge to the shared Bfalse and
-        // renders an empty arm; the verifier must catch it as a dropped edge or a
-        // dropped block (rather than the bug reaching the output silently).
+        // The shared Bfalse must not be dropped into an empty arm: build_arm
+        // references it via Region::Goto, so the region is faithful (verifier
+        // clean) and the edge to Bfalse is preserved.
         let lf = mk_cfg(vec![
             (0x1000, vec![Op::Nop], vec![0x1100, 0x1300]), // B0 cond
             (0x1100, vec![Op::Nop], vec![0x1200, 0x1300]), // B1 cond
@@ -1510,10 +1541,30 @@ mod tests {
             (0x1400, vec![Op::Return], vec![]),            // Bend
         ]);
         let ssa = compute_ssa(&lf);
-        let errs = verify_structure(&lf, &ssa);
+        let region = recover(&lf, &ssa);
         assert!(
-            !errs.is_empty(),
-            "verifier must catch the short-circuit shared-join drop; got clean"
+            verify_structure(&lf, &ssa).is_empty(),
+            "short-circuit region must be faithful after the goto fix; got {:?}",
+            verify_structure(&lf, &ssa)
+        );
+        // The shared false block (index 3) is referenced via a Goto somewhere.
+        fn has_goto(r: &Region, target: usize) -> bool {
+            match r {
+                Region::Goto(b) => *b == target,
+                Region::Seq(v) => v.iter().any(|p| has_goto(p, target)),
+                Region::IfThen { then_r, .. } => has_goto(then_r, target),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    has_goto(then_r, target) || has_goto(else_r, target)
+                }
+                Region::While { body, .. } => has_goto(body, target),
+                Region::Switch { arms, .. } => arms.iter().any(|a| has_goto(a, target)),
+                _ => false,
+            }
+        }
+        assert!(
+            has_goto(&region, 3),
+            "expected a Goto to the shared false block; region={:?}",
+            region
         );
     }
 }

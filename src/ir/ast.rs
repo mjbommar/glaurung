@@ -712,13 +712,38 @@ fn strip_trailing_goto(stmts: &mut Vec<Stmt>, target_va: u64) {
     }
 }
 
-fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
+fn lower_region(r: &Region, lf: &LlirFunction, targets: &std::collections::HashSet<u64>) -> Vec<Stmt> {
+    let mut out = lower_region_inner(r, lf, targets);
+    // A region that *emits* a goto-target block (any shape — a plain block or a
+    // structured `if`/`while` that begins at the target) gets a label at the
+    // start of its statements so the jump resolves. The block's statements render
+    // exactly once, here. A `Region::Goto` is a *reference*, not an emission —
+    // labelling it would produce `L: goto L;` self-loops and duplicate labels.
+    if !matches!(r, Region::Goto(_)) {
+        if let Some(e) = crate::ir::structure::entry_block(r) {
+            let va = lf.blocks[e].start_va;
+            if targets.contains(&va) && !matches!(out.first(), Some(Stmt::Label(l)) if *l == va) {
+                out.insert(0, Stmt::Label(va));
+            }
+        }
+    }
+    out
+}
+
+fn lower_region_inner(
+    r: &Region,
+    lf: &LlirFunction,
+    targets: &std::collections::HashSet<u64>,
+) -> Vec<Stmt> {
     match r {
         Region::Block(bi) => lower_block(&lf.blocks[*bi]),
+        Region::Goto(bi) => vec![Stmt::Goto {
+            target: lf.blocks[*bi].start_va,
+        }],
         Region::Seq(parts) => {
             let mut out = Vec::new();
             for (idx, p) in parts.iter().enumerate() {
-                let mut lowered = lower_region(p, lf);
+                let mut lowered = lower_region(p, lf, targets);
                 // Strip a redundant `goto <header>` when the next region is a
                 // loop headed at that VA: the `-O0` for-loop's entry jump to its
                 // condition block is just the natural fall-in to the `while`, so
@@ -748,7 +773,7 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
             } else {
                 cond_expr
             };
-            let mut then_stmts = lower_region(then_r, lf);
+            let mut then_stmts = lower_region(then_r, lf, targets);
             // The arm's trailing `goto <join>` is redundant — control falls
             // through to the join right after the `if`. Leaving it makes the arm
             // jump *past* the join's body (e.g. the epilogue's `return`) to a
@@ -777,8 +802,8 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
             } else {
                 cond_expr
             };
-            let mut then_stmts = lower_region(then_r, lf);
-            let mut else_stmts = lower_region(else_r, lf);
+            let mut then_stmts = lower_region(then_r, lf, targets);
+            let mut else_stmts = lower_region(else_r, lf, targets);
             if let Some(j) = join {
                 let jva = lf.blocks[*j].start_va;
                 strip_trailing_goto(&mut then_stmts, jva);
@@ -794,7 +819,7 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
         Region::While { header, body, .. } => {
             let cond_stmts = lower_block(&lf.blocks[*header]);
             let (cond_expr, pre) = extract_cond_and_strip(&lf.blocks[*header], cond_stmts);
-            let body_stmts = lower_region(body, lf);
+            let body_stmts = lower_region(body, lf, targets);
             if body_stmts.is_empty() && !pre.is_empty() {
                 // Do-while: the whole loop body sits in the self-looping header,
                 // so the `While` body is empty and `pre` is the body itself. The
@@ -844,7 +869,7 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
             let cases: Vec<(Option<i64>, Vec<Stmt>)> = arms
                 .iter()
                 .enumerate()
-                .map(|(i, arm)| (Some(i as i64), lower_region(arm, lf)))
+                .map(|(i, arm)| (Some(i as i64), lower_region(arm, lf, targets)))
                 .collect();
             // Discriminant is a placeholder — recovering the original
             // switched value requires walking the index computation
@@ -870,12 +895,33 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
     }
 }
 
+/// Collect the VAs of blocks referenced by a [`Region::Goto`] anywhere in the
+/// tree — these blocks must render a leading `Stmt::Label` so the jumps resolve.
+fn collect_goto_targets(r: &Region, lf: &LlirFunction, out: &mut std::collections::HashSet<u64>) {
+    match r {
+        Region::Goto(bi) => {
+            out.insert(lf.blocks[*bi].start_va);
+        }
+        Region::Seq(parts) => parts.iter().for_each(|p| collect_goto_targets(p, lf, out)),
+        Region::IfThen { then_r, .. } => collect_goto_targets(then_r, lf, out),
+        Region::IfThenElse { then_r, else_r, .. } => {
+            collect_goto_targets(then_r, lf, out);
+            collect_goto_targets(else_r, lf, out);
+        }
+        Region::While { body, .. } => collect_goto_targets(body, lf, out),
+        Region::Switch { arms, .. } => arms.iter().for_each(|a| collect_goto_targets(a, lf, out)),
+        Region::Block(_) | Region::Unstructured(_) => {}
+    }
+}
+
 /// Lower an entire function given its region tree.
 pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Function {
+    let mut targets = std::collections::HashSet::new();
+    collect_goto_targets(region, lf, &mut targets);
     let mut f = Function {
         name: name.into(),
         entry_va: lf.entry_va,
-        body: lower_region(region, lf),
+        body: lower_region(region, lf, &targets),
     };
     fold_returns(&mut f.body);
     f
