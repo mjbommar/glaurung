@@ -6,6 +6,30 @@ DecBench parity work. Current metrics on the local 14-program corpus (gcc -O0,
 **GED 7.16** (angr 7.59), **byte_match 0.366** (angr 0.586). type and GED both
 beat angr; byte is the remaining gap.
 
+## Breadth checkpoint (2026-07-24) — head-to-head vs angr, O0 + O2
+
+DecBench scores multiple opt levels, so O0-only numbers mislead. Full head-to-head
+on the local corpus (`EVAL_BACKEND=angr` for the baseline; `NO_COLOR=1`):
+
+| metric | glaurung O0 | angr O0 | glaurung O2 | angr O2 | glaurung avg | angr avg |
+|--------|-------------|---------|-------------|---------|--------------|----------|
+| GED (lower)| **7.16** | 7.59 | **9.08** | 17.51 | **8.48** | 12.55 |
+| type_match | **0.891**| 0.819| 0.413 | **0.543**| 0.590 | **0.686** |
+| byte_match | 0.366 | **0.586**| 0.216 | **0.291**| 0.271 | **0.438** |
+
+Takeaways: (1) **GED — we beat angr at both levels and crush it at O2** (angr's GED
+explodes to 17.5; ours only to 9.1); averaged we win handily. (2) **type — we win
+O0, angr wins O2**; angr wins averaged. (3) **byte — angr wins at both levels**; the
+real, opt-independent gap. So O2 is hard for *everyone* (angr collapses too); it is
+not a glaurung-specific disaster, and the strategic priority stays **byte**, not O2.
+
+O2 quality collapse is real though: no spill slots to type from (spill-slot pointer
+recovery is a no-op), heavy optimisation (vectorised `max_array`, tail-call'd
+`recursion`→`fib.localalias` with ~40 stack slots that Joern fails to parse → nan),
+and the type recovery has no O2 story yet. The one *self-inflicted* O2 bug —
+spurious `argN` from scratch arg-registers — is fixed (authoritative LLIR live-in
+param analysis, commit 480ec5f); the rest is deeper than arg counting.
+
 Note (eval env): the harness shell now sets `FORCE_COLOR=3`, which makes rich
 emit ANSI codes even in captured subprocesses, so `local_eval.py`'s metric regex
 sees `\x1b[..m2.00` and scores everything nan. Run the eval with `NO_COLOR=1`
