@@ -3,8 +3,20 @@
 Status tracking for the "big" refactors that keep surfacing as workarounds in the
 DecBench parity work. Current metrics on the local 14-program corpus (gcc -O0,
 `/tmp/claude-1000/local_eval.py`): **type_match 0.891** (angr 0.819),
-**GED 7.16** (angr 7.59), **byte_match 0.349** (angr 0.586). type and GED both
+**GED 7.16** (angr 7.59), **byte_match 0.366** (angr 0.586). type and GED both
 beat angr; byte is the remaining gap.
+
+Note (eval env): the harness shell now sets `FORCE_COLOR=3`, which makes rich
+emit ANSI codes even in captured subprocesses, so `local_eval.py`'s metric regex
+sees `\x1b[..m2.00` and scores everything nan. Run the eval with `NO_COLOR=1`
+(and `unset FORCE_COLOR`) — not a decompiler bug.
+
+Update (#2 array-index render, LANDED): a T-sized deref through
+`base + i*sizeof(T)` where `base` is a declared `T*` now renders `base[i]`
+(drops the `(long)` cast + explicit scale; gcc re-emits its own scaled
+addressing). sum_array's loop recompiles instruction-identical to the original.
+byte 0.349 -> 0.366 (arrays .39->.47, matrix .51->.58, sort .27->.37); type/GED
+unchanged.
 
 Update (value model #1, first wave): the address-chain fold now lands. Splitting
 reused lifter temporaries by SSA version + keeping only the *returned* value's
