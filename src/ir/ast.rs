@@ -2251,6 +2251,20 @@ pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
     // Provenance as a C comment (valid, and the harness maps by address anyway).
     let _ = writeln!(out, "// glaurung: {} @ 0x{:x}", f.name, f.entry_va);
 
+    // Record every name declared as a pointer (arguments + promoted pointer
+    // locals) with its pointee width, so the array-index render can rewrite
+    // `*(T*)(base + i*sizeof(T))` as `base[i]` for those bases.
+    DEC_PTRS.with(|m| m.borrow_mut().clear());
+    if let Some(tm) = tm {
+        for (v, hint) in tm.iter() {
+            if let (VReg::Phys(n), TypeHint::Pointer { pointee_width }) = (v, hint) {
+                if parse_arg_index(n).is_some() || is_promoted_local(n) {
+                    DEC_PTRS.with(|m| m.borrow_mut().insert(n.clone(), *pointee_width));
+                }
+            }
+        }
+    }
+
     // Signature: recovered return + argument types. Record which arguments are
     // pointers so the body can cast their int↔pointer reuse (see DEC_PTR_ARGS).
     DEC_PTR_ARGS.with(|m| m.borrow_mut().clear());
@@ -2502,10 +2516,89 @@ thread_local! {
     /// recovered signature. Scoped per render; renders are single-threaded.
     static DEC_PTR_ARGS: std::cell::RefCell<std::collections::HashMap<String, &'static str>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// Names that are *declared as pointers* in the current render (arguments and
+    /// promoted pointer locals) → their pointee width in bytes. Consulted by the
+    /// array-index render to rewrite `*(T*)(base + i*sizeof(T))` as `base[i]`.
+    /// Only declared pointers appear here, so `base[i]` is always valid C.
+    static DEC_PTRS: std::cell::RefCell<std::collections::HashMap<String, u8>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 fn dec_ptr_arg_type(name: &str) -> Option<&'static str> {
     DEC_PTR_ARGS.with(|m| m.borrow().get(name).copied())
+}
+
+/// The pointee width of `name` if it is declared as a pointer in this render.
+fn dec_ptr_width(name: &str) -> Option<u8> {
+    DEC_PTRS.with(|m| m.borrow().get(name).copied())
+}
+
+/// Recognise the array-index idiom `base + index*sizeof(T)` for a `T`-sized
+/// access, where `base` is a pointer declared with pointee width == `size`.
+/// Returns `(base name, index expr)` so the deref renders as `base[index]`,
+/// dropping the byte-offset arithmetic and `(long)` cast. Correct because
+/// `base[i]` is exactly `*(base + i)` and C scales the index by `sizeof(*base)`,
+/// which equals `size` — the guard we check.
+fn try_array_index<'a>(addr: &'a Expr, size: u8) -> Option<(&'a str, &'a Expr)> {
+    let (lhs, rhs) = match addr {
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => (lhs.as_ref(), rhs.as_ref()),
+        _ => return None,
+    };
+    for (base_side, off_side) in [(lhs, rhs), (rhs, lhs)] {
+        if let Expr::Reg(VReg::Phys(name)) = base_side {
+            if dec_ptr_width(name) == Some(size) {
+                if let Some(index) = scaled_index(off_side, size) {
+                    return Some((name.as_str(), index));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// If `off` is `index * size` — a multiply or an equivalent left shift, possibly
+/// wrapped in a redundant `+ 0` — return the (unscaled) index. `size == 1` needs
+/// no scaling, so any expression is the index.
+fn scaled_index<'a>(off: &'a Expr, size: u8) -> Option<&'a Expr> {
+    // Strip a redundant `0 + x` / `x + 0` the lifter leaves on scaled indices.
+    let off = match off {
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => match (lhs.as_ref(), rhs.as_ref()) {
+            (Expr::Const(0), x) | (x, Expr::Const(0)) => x,
+            _ => off,
+        },
+        _ => off,
+    };
+    if size == 1 {
+        return Some(off);
+    }
+    match off {
+        Expr::Bin {
+            op: BinOp::Mul,
+            lhs,
+            rhs,
+        } => match (lhs.as_ref(), rhs.as_ref()) {
+            (idx, Expr::Const(s)) | (Expr::Const(s), idx) if *s == size as i64 => Some(idx),
+            _ => None,
+        },
+        Expr::Bin {
+            op: BinOp::Shl,
+            lhs,
+            rhs,
+        } => match rhs.as_ref() {
+            Expr::Const(k) if *k >= 0 && *k < 63 && (1i64 << *k) == size as i64 => Some(lhs.as_ref()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Render a register in **rvalue** position. A pointer-typed argument is cast to
@@ -2624,13 +2717,24 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             ..
         } => write_addr_arith_dec(base, index, *scale, *disp, out),
         Expr::Deref { addr, size } => {
-            // Use the recovered access width for the load cast (`*(int *)` for a
-            // 4-byte read, not a blanket `*(long *)`). The width picks the
-            // recompiled load instruction (`mov eax` vs `mov rax`), so matching
-            // it to the original narrows byte_match's assembly diff.
-            let _ = write!(out, "*({} *)(", width_ctype(*size));
-            write_expr_dec(addr, out);
-            out.push(')');
+            // Array-index idiom: a `T`-sized read through `base + i*sizeof(T)`
+            // where `base` is a declared `T *` renders as `base[i]`. This drops
+            // the `(long)` cast + explicit scale, so the compiler re-emits its own
+            // scaled-addressing (`lea (%rax,%rdx,4)`) instead of our `shl`+`add`.
+            if let Some((base, index)) = try_array_index(addr, *size) {
+                out.push_str(base);
+                out.push('[');
+                write_expr_dec(index, out);
+                out.push(']');
+            } else {
+                // Use the recovered access width for the load cast (`*(int *)` for
+                // a 4-byte read, not a blanket `*(long *)`). The width picks the
+                // recompiled load instruction (`mov eax` vs `mov rax`), so matching
+                // it to the original narrows byte_match's assembly diff.
+                let _ = write!(out, "*({} *)(", width_ctype(*size));
+                write_expr_dec(addr, out);
+                out.push(')');
+            }
         }
         Expr::Bin { op, lhs, rhs } => {
             // Logical (unsigned) right shift has no direct signed-`long` C form;
@@ -3703,6 +3807,69 @@ function f @ 0x1000 {
             text.contains("int get(") && text.contains("return local_8;"),
             "return type should be `int` from the returned local, got:\n{}",
             text
+        );
+    }
+
+    #[test]
+    fn decbench_array_index_render_for_pointer_arg() {
+        // `*(int*)(arg0 + i*4)` with `arg0` a declared `int *` renders as
+        // `arg0[i]`, dropping the byte-offset arithmetic and `(long)` cast.
+        let deref = Expr::Deref {
+            addr: Box::new(Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Const(0)),
+                    rhs: Box::new(Expr::Bin {
+                        op: BinOp::Mul,
+                        lhs: Box::new(Expr::Reg(VReg::phys("local_4"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    }),
+                }),
+            }),
+            size: 4,
+        };
+        let f = Function {
+            name: "ai".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return { value: Some(deref) }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 4 });
+        let text = render_decbench_typed(&f, Some(&tm));
+        assert!(
+            text.contains("arg0[local_4]") && !text.contains("(long)arg0"),
+            "expected array-index render `arg0[local_4]`, got:\n{}",
+            text
+        );
+
+        // Guard: a mismatched access width (2-byte read through an int* base)
+        // must NOT array-index (the scale would be wrong) — keep the cast form.
+        let deref2 = Expr::Deref {
+            addr: Box::new(Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Reg(VReg::phys("local_4"))),
+                    rhs: Box::new(Expr::Const(4)),
+                }),
+            }),
+            size: 2,
+        };
+        let f2 = Function {
+            name: "ai2".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(deref2),
+            }],
+        };
+        let text2 = render_decbench_typed(&f2, Some(&tm));
+        assert!(
+            !text2.contains("arg0[local_4]"),
+            "width mismatch must not array-index, got:\n{}",
+            text2
         );
     }
 
