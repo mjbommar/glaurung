@@ -530,25 +530,22 @@ fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
 /// Anything else gets wrapped in `Expr::Un { Not, .. }` so semantics survive.
 fn negate_cmp_expr(expr: Expr) -> Expr {
     if let Expr::Cmp { op, lhs, rhs } = expr {
-        let inverted = match op {
-            CmpOp::Eq => Some(CmpOp::Ne),
-            CmpOp::Ne => Some(CmpOp::Eq),
-            // The remaining CmpOps don't have direct opposites in this
-            // enum (Ult, Ule, Slt, Sle); express the negation via a
-            // wrapping Not so the printer still shows the semantics.
-            _ => None,
-        };
-        match inverted {
-            Some(new_op) => Expr::Cmp {
-                op: new_op,
-                lhs,
-                rhs,
-            },
-            None => Expr::Un {
-                op: UnOp::Not,
-                src: Box::new(Expr::Cmp { op, lhs, rhs }),
-            },
+        // Invert the comparison itself so the result stays a boolean `Cmp`, not a
+        // wrapped `Un{Not}` — which would render as C's *bitwise* `~` and, applied
+        // to a 0/1 boolean, is always true. There are no `>`/`>=` ops in `CmpOp`,
+        // so negate `<`/`<=` by swapping the operands:
+        //   !(a <  b) == (b <= a)      !(a <= b) == (b <  a)
+        match op {
+            CmpOp::Eq => Expr::Cmp { op: CmpOp::Ne, lhs, rhs },
+            CmpOp::Ne => Expr::Cmp { op: CmpOp::Eq, lhs, rhs },
+            CmpOp::Slt => Expr::Cmp { op: CmpOp::Sle, lhs: rhs, rhs: lhs },
+            CmpOp::Sle => Expr::Cmp { op: CmpOp::Slt, lhs: rhs, rhs: lhs },
+            CmpOp::Ult => Expr::Cmp { op: CmpOp::Ule, lhs: rhs, rhs: lhs },
+            CmpOp::Ule => Expr::Cmp { op: CmpOp::Ult, lhs: rhs, rhs: lhs },
         }
+    } else if let Expr::Un { op: UnOp::Not, src } = expr {
+        // Double negation cancels.
+        *src
     } else {
         Expr::Un {
             op: UnOp::Not,
@@ -706,6 +703,15 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
     }
 }
 
+/// Drop a trailing `goto <target_va>` from a lowered arm — control already
+/// falls through to that block, so the jump is redundant (and, if it targets a
+/// join emitted after the `if`, actively harmful: it skips the join's body).
+fn strip_trailing_goto(stmts: &mut Vec<Stmt>, target_va: u64) {
+    if matches!(stmts.last(), Some(Stmt::Goto { target }) if *target == target_va) {
+        stmts.pop();
+    }
+}
+
 fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
     match r {
         Region::Block(bi) => lower_block(&lf.blocks[*bi]),
@@ -727,10 +733,29 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
             }
             out
         }
-        Region::IfThen { cond, then_r, .. } => {
+        Region::IfThen {
+            cond,
+            then_r,
+            join,
+            invert,
+        } => {
             let cond_stmts = lower_block(&lf.blocks[*cond]);
             let (cond_expr, mut pre) = extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
-            let then_stmts = lower_region(then_r, lf);
+            // The raw condition is true when the branch is taken; if `then_r` is
+            // the fall-through arm the structurer flagged `invert`, so negate.
+            let cond_expr = if *invert {
+                negate_cmp_expr(cond_expr)
+            } else {
+                cond_expr
+            };
+            let mut then_stmts = lower_region(then_r, lf);
+            // The arm's trailing `goto <join>` is redundant — control falls
+            // through to the join right after the `if`. Leaving it makes the arm
+            // jump *past* the join's body (e.g. the epilogue's `return`) to a
+            // dangling label, dropping the return value.
+            if let Some(j) = join {
+                strip_trailing_goto(&mut then_stmts, lf.blocks[*j].start_va);
+            }
             pre.push(Stmt::If {
                 cond: cond_expr,
                 then_body: then_stmts,
@@ -742,12 +767,23 @@ fn lower_region(r: &Region, lf: &LlirFunction) -> Vec<Stmt> {
             cond,
             then_r,
             else_r,
-            ..
+            join,
+            invert,
         } => {
             let cond_stmts = lower_block(&lf.blocks[*cond]);
             let (cond_expr, mut pre) = extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
-            let then_stmts = lower_region(then_r, lf);
-            let else_stmts = lower_region(else_r, lf);
+            let cond_expr = if *invert {
+                negate_cmp_expr(cond_expr)
+            } else {
+                cond_expr
+            };
+            let mut then_stmts = lower_region(then_r, lf);
+            let mut else_stmts = lower_region(else_r, lf);
+            if let Some(j) = join {
+                let jva = lf.blocks[*j].start_va;
+                strip_trailing_goto(&mut then_stmts, jva);
+                strip_trailing_goto(&mut else_stmts, jva);
+            }
             pre.push(Stmt::If {
                 cond: cond_expr,
                 then_body: then_stmts,

@@ -96,6 +96,7 @@ fn fold_expr(e: &mut Expr) {
             fold_expr(rhs);
         }
         Expr::Un { src, .. } => fold_expr(src),
+        Expr::Cast { expr, .. } => fold_expr(expr),
         Expr::Deref { addr, .. } => fold_expr(addr),
         _ => {}
     }

@@ -271,26 +271,90 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
     }
 }
 
+/// Does `op` define a return register under `ret_names`?
+fn defs_return_reg(op: &Op, ret_names: &[&str]) -> bool {
+    matches!(def_uses(op).0, Some(VReg::Phys(n)) if ret_names.contains(&n.as_str()))
+}
+
+/// Can the return-register def at (`def_bi`, `def_ii`) reach an `Op::Return`
+/// without an intervening return-register def overwriting it? Such a def is a
+/// value the function actually returns (the `if (c) ret=A; else ret=B; return`
+/// shape has TWO of them, both reaching the return via the join). A return
+/// register reused purely as scratch — a loop-address `rax` overwritten (or
+/// replaced by the real return load) before any `Return` — does NOT reach, so
+/// it stays foldable.
+fn def_reaches_return(
+    lf: &LlirFunction,
+    ret_names: &[&str],
+    va_to_idx: &std::collections::HashMap<u64, usize>,
+    def_bi: usize,
+    def_ii: usize,
+) -> bool {
+    // Rest of the def's own block first.
+    for ins in &lf.blocks[def_bi].instrs[def_ii + 1..] {
+        if matches!(ins.op, Op::Return) {
+            return true;
+        }
+        if defs_return_reg(&ins.op, ret_names) {
+            return false; // overwritten before any return
+        }
+    }
+    // Fell off the end of the block — BFS the successors.
+    let succ_idx = |b: usize| -> Vec<usize> {
+        lf.blocks[b]
+            .succs
+            .iter()
+            .filter_map(|va| va_to_idx.get(va).copied())
+            .collect()
+    };
+    let mut visited = std::collections::HashSet::new();
+    let mut stack = succ_idx(def_bi);
+    while let Some(b) = stack.pop() {
+        if !visited.insert(b) {
+            continue;
+        }
+        let mut killed = false;
+        for ins in &lf.blocks[b].instrs {
+            if matches!(ins.op, Op::Return) {
+                return true;
+            }
+            if defs_return_reg(&ins.op, ret_names) {
+                killed = true;
+                break;
+            }
+        }
+        if !killed {
+            stack.extend(succ_idx(b));
+        }
+    }
+    false
+}
+
 /// Return a copy of `lf` with every physical register occurrence rewritten to
 /// its SSA-value-tagged name. `cc` identifies the return registers whose final
 /// (returned) value is kept bare so it still names `ret`.
 pub fn value_number(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo, cc: CallConv) -> LlirFunction {
     let ret_names = return_reg_names(cc);
-    // Keep bare exactly the return-register value that actually reaches a
-    // `Return`: the last return-register def preceding each `Return` in its
-    // block. At `-O0` that is the value the epilogue leaves in the ABI return
-    // slot, so downstream naming maps it to `ret`. A "highest version" heuristic
-    // is wrong when the same physical register is *also* reused for scratch —
-    // e.g. 64-bit `rax` computing a loop address while the real return is the
-    // 32-bit `eax` loaded just before `ret` — because the address def has the
-    // higher version and would be kept bare, materialising the address as `ret`
-    // (which then spills) instead of folding into its use.
+    // Keep bare every return-register def that can reach a `Return` without being
+    // overwritten — the value(s) the function actually returns. Keeping ALL of
+    // them bare (not just one per block) is required for branch-merged returns
+    // (`if (c) return A; else return B;`), where each branch's `ret = N` must
+    // survive as `ret` and not be versioned into a scratch name (which the
+    // dead-store pass would then drop, losing the return value). Scratch reuse of
+    // a return register that never reaches a return stays versioned and foldable.
+    let va_to_idx: std::collections::HashMap<u64, usize> = lf
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.start_va, i))
+        .collect();
     let mut keep: KeepBare = KeepBare::new();
     for (bi, block) in lf.blocks.iter().enumerate() {
-        let mut last_ret_def: Option<(String, u32)> = None;
         for (ii, ins) in block.instrs.iter().enumerate() {
             if let (Some(VReg::Phys(n)), _) = def_uses(&ins.op) {
-                if ret_names.contains(&n.as_str()) {
+                if ret_names.contains(&n.as_str())
+                    && def_reaches_return(lf, ret_names, &va_to_idx, bi, ii)
+                {
                     let v = ssa
                         .def_versions
                         .get(&InstrAddr {
@@ -299,12 +363,7 @@ pub fn value_number(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo, cc: CallCo
                         })
                         .copied()
                         .unwrap_or(0);
-                    last_ret_def = Some((n.clone(), v));
-                }
-            }
-            if matches!(ins.op, Op::Return) {
-                if let Some(rd) = last_ret_def.take() {
-                    keep.insert(rd);
+                    keep.insert((n.clone(), v));
                 }
             }
         }

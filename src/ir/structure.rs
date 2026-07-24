@@ -37,6 +37,11 @@ pub enum Region {
         cond: usize,
         then_r: Box<Region>,
         join: Option<usize>,
+        /// When true the lowered condition must be negated: `then_r`'s entry is
+        /// the branch's *fall-through* arm, not its *taken* arm, so the raw
+        /// condition (which is true when the branch is taken) points the wrong
+        /// way. Set from `cond_taken` so polarity survives block-index ordering.
+        invert: bool,
     },
     /// `if (cond) then { then_r } else { else_r }` joining at `join`.
     IfThenElse {
@@ -44,6 +49,8 @@ pub enum Region {
         then_r: Box<Region>,
         else_r: Box<Region>,
         join: Option<usize>,
+        /// See [`Region::IfThen::invert`].
+        invert: bool,
     },
     /// `while (...) { body }` — header branches to body or exit; body's
     /// back-edge returns to header.
@@ -77,7 +84,7 @@ impl Region {
                         walk(p, out);
                     }
                 }
-                Region::IfThen { cond, then_r, join } => {
+                Region::IfThen { cond, then_r, join, .. } => {
                     out.push(*cond);
                     walk(then_r, out);
                     if let Some(j) = join {
@@ -89,6 +96,7 @@ impl Region {
                     then_r,
                     else_r,
                     join,
+                    ..
                 } => {
                     out.push(*cond);
                     walk(then_r, out);
@@ -483,6 +491,16 @@ fn natural_loop_body(header: usize, tail: usize, cfg: &Cfg) -> HashSet<usize> {
 /// Returns `Some((region, after))` when we can structurally absorb the whole
 /// conditional and continue at `after` (the join block, or None if one of
 /// the arms exits outright).
+/// Whether the lowered condition at block `cond` must be negated when
+/// `then_entry` is used as the `then` arm. The raw condition is true when the
+/// branch is *taken* (jumps to `cond_taken`); if `then_entry` is instead the
+/// fall-through arm, `if (cond) { then_entry }` would run it on the wrong edge,
+/// so the condition is inverted. This is THE fix for the polarity bug where arms
+/// were chosen by sorted block index rather than the taken edge.
+fn invert_for(cfg: &Cfg, cond: usize, then_entry: usize) -> bool {
+    cfg.cond_taken[cond] != Some(then_entry)
+}
+
 fn detect_if_shape(
     cond: usize,
     cfg: &Cfg,
@@ -499,6 +517,7 @@ fn detect_if_shape(
     let else_single = cfg.preds[e] == vec![cond] && cfg.succs[e].len() == 1;
     if then_single && else_single && cfg.succs[t][0] == cfg.succs[e][0] {
         let join = cfg.succs[t][0];
+        let invert = invert_for(cfg, cond, t);
         // Mark cond consumed, recurse on arms.
         visited.insert(cond);
         let then_r = build(t, cfg, visited, Some(join));
@@ -509,6 +528,7 @@ fn detect_if_shape(
                 then_r: Box::new(then_r),
                 else_r: Box::new(else_r),
                 join: Some(join),
+                invert,
             },
             Some(join),
         ));
@@ -519,6 +539,7 @@ fn detect_if_shape(
     for &(body, join) in &[(t, e), (e, t)] {
         let body_single = cfg.preds[body] == vec![cond] && cfg.succs[body] == vec![join];
         if body_single && cfg.preds[join].contains(&cond) {
+            let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
             let then_r = build(body, cfg, visited, Some(join));
             return Some((
@@ -526,6 +547,7 @@ fn detect_if_shape(
                     cond,
                     then_r: Box::new(then_r),
                     join: Some(join),
+                    invert,
                 },
                 Some(join),
             ));
@@ -544,6 +566,7 @@ fn detect_if_shape(
     for &(body, cont) in &[(t, e), (e, t)] {
         let body_terminates = cfg.preds[body] == vec![cond] && cfg.succs[body].is_empty();
         if body_terminates {
+            let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
             let then_r = build(body, cfg, visited, None);
             return Some((
@@ -551,6 +574,7 @@ fn detect_if_shape(
                     cond,
                     then_r: Box::new(then_r),
                     join: None,
+                    invert,
                 },
                 Some(cont),
             ));
@@ -572,6 +596,7 @@ fn detect_if_shape(
     for &(body, cont) in &[(t, e), (e, t)] {
         let body_is_shared_exit = cfg.succs[body].is_empty() && cfg.preds[body].len() > 1;
         if body_is_shared_exit {
+            let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
             // Don't mark `body` as visited — let outer recursion emit it
             // when we eventually fall through (or when another branch also
@@ -581,6 +606,7 @@ fn detect_if_shape(
                     cond,
                     then_r: Box::new(Region::Block(body)),
                     join: None,
+                    invert,
                 },
                 Some(cont),
             ));
@@ -597,6 +623,7 @@ fn detect_if_shape(
     let t_terminates = cfg.preds[t] == vec![cond] && cfg.succs[t].is_empty();
     let e_terminates = cfg.preds[e] == vec![cond] && cfg.succs[e].is_empty();
     if t_terminates && e_terminates {
+        let invert = invert_for(cfg, cond, t);
         visited.insert(cond);
         let then_r = build(t, cfg, visited, None);
         let else_r = build(e, cfg, visited, None);
@@ -606,6 +633,7 @@ fn detect_if_shape(
                 then_r: Box::new(then_r),
                 else_r: Box::new(else_r),
                 join: None,
+                invert,
             },
             None,
         ));
@@ -627,6 +655,7 @@ fn detect_if_shape(
                 Some(tk) if tk == e => (e, t),
                 _ => (t, e),
             };
+            let invert = invert_for(cfg, cond, then_a);
             visited.insert(cond);
             let then_r = build(then_a, cfg, visited, Some(join));
             let else_r = build(else_a, cfg, visited, Some(join));
@@ -636,6 +665,7 @@ fn detect_if_shape(
                     then_r: Box::new(then_r),
                     else_r: Box::new(else_r),
                     join: Some(join),
+                    invert,
                 },
                 Some(join),
             ));
@@ -856,6 +886,7 @@ mod tests {
                         then_r,
                         else_r,
                         join,
+                        ..
                     } => {
                         assert_eq!(*cond, 0);
                         assert_eq!(**then_r, Region::Block(1));
@@ -887,7 +918,7 @@ mod tests {
             Region::Seq(parts) => {
                 assert_eq!(parts.len(), 2);
                 match &parts[0] {
-                    Region::IfThen { cond, then_r, join } => {
+                    Region::IfThen { cond, then_r, join, .. } => {
                         assert_eq!(*cond, 0);
                         assert_eq!(**then_r, Region::Block(1));
                         assert_eq!(*join, Some(2));
@@ -971,7 +1002,7 @@ mod tests {
             Region::Seq(parts) => {
                 assert_eq!(parts.len(), 2);
                 match &parts[0] {
-                    Region::IfThen { cond, then_r, join } => {
+                    Region::IfThen { cond, then_r, join, .. } => {
                         assert_eq!(*cond, 0);
                         assert!(matches!(**then_r, Region::Block(1)));
                         assert_eq!(*join, None);
