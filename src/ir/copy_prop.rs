@@ -510,6 +510,26 @@ fn subst(e: &mut Expr, copies: &Copies) {
     if copies.is_empty() {
         return;
     }
+    // A trivial `Lea` — base only, no index, zero displacement — denotes exactly
+    // its base register. When that base has a recorded copy (which for a single-
+    // use address is an arithmetic expression, not a bare register), fold the
+    // whole `Lea` to the copied value. This is what lets a reassembled address
+    // (`p = base + i*4`) inline into its `*p` use, since an `Lea` base/index slot
+    // must otherwise stay a register.
+    let trivial_lea_repl = match e {
+        Expr::Lea {
+            base: Some(r),
+            index: None,
+            disp,
+            ..
+        } if *disp == 0 => copies.get(r).cloned(),
+        _ => None,
+    };
+    if let Some(repl) = trivial_lea_repl {
+        *e = repl;
+        subst(e, copies); // substitute within the inlined expression too
+        return;
+    }
     match e {
         Expr::Reg(r) => {
             if let Some(src) = copies.get(r) {
@@ -552,6 +572,63 @@ mod tests {
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
+    }
+
+    #[test]
+    fn single_use_address_folds_into_deref_inside_loop() {
+        // var5 = arg0 + (local_4 * 4); s = s + *var5   (var5 scratch, single-use)
+        // Expected: var5 folds into the deref -> s = s + *(arg0 + local_4*4).
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::While {
+                cond: Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(reg("local_4"))),
+                    rhs: Box::new(Expr::Reg(reg("arg1"))),
+                },
+                body: vec![
+                    Stmt::Assign {
+                        dst: reg("var5"),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("arg0"))),
+                            rhs: Box::new(Expr::Bin {
+                                op: BinOp::Mul,
+                                lhs: Box::new(Expr::Reg(reg("local_4"))),
+                                rhs: Box::new(Expr::Const(4)),
+                            }),
+                        },
+                    },
+                    Stmt::Assign {
+                        dst: reg("local_8"),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("local_8"))),
+                            // The lifter wraps the deref address in a trivial Lea
+                            // (base only) — the real shape the fold must see through.
+                            rhs: Box::new(Expr::Deref {
+                                addr: Box::new(Expr::Lea {
+                                    base: Some(reg("var5")),
+                                    index: None,
+                                    scale: 1,
+                                    disp: 0,
+                                    segment: None,
+                                }),
+                                size: 4,
+                            }),
+                        },
+                    },
+                ],
+            }],
+        };
+        propagate_copies(&mut f);
+        let dump = format!("{:?}", f.body);
+        assert!(
+            !dump.contains("var5"),
+            "var5 should have folded into its single use, got:\n{}",
+            dump
+        );
     }
 
     #[test]
