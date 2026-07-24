@@ -2,9 +2,19 @@
 
 Status tracking for the "big" refactors that keep surfacing as workarounds in the
 DecBench parity work. Current metrics on the local 14-program corpus (gcc -O0,
-`/tmp/claude-1000/local_eval.py`): **type_match 0.879** (angr 0.819),
-**GED 7.25** (angr 7.59), **byte_match 0.277** (angr 0.586). type and GED both
+`/tmp/claude-1000/local_eval.py`): **type_match 0.891** (angr 0.819),
+**GED 7.16** (angr 7.59), **byte_match 0.349** (angr 0.586). type and GED both
 beat angr; byte is the remaining gap.
+
+Update (value model #1, first wave): the address-chain fold now lands. Splitting
+reused lifter temporaries by SSA version + keeping only the *returned* value's
+return-register version bare makes the loop address scratch and single-def, and
+folding a trivial `Lea` into its single-use deref reassembles `t=i*4; p=base+t; *p`
+into `*(base+i*4)` — so gcc -O0 re-emits register-only scaled addressing instead
+of spilling/reloading `t` and `p` (byte 0.277->0.349, verified by recompile diff).
+Signature arity + return type are now value-keyed (recovered from the type map /
+returned value, not surviving body text), which recovered args/returns that DCE
+had dropped (type 0.879->0.891). Strict improvement on all three metrics.
 
 Update (value-model landing): SSA value-numbering is now wired into the decbench
 lowering path (each reused register becomes a distinct SSA value). That unblocked
