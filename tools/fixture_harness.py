@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Compile the decompiler fixture corpus and run the execution-differential gate.
+"""Compile the fixture corpus across a toolchain matrix and run the fail-closed
+execution-differential gate, producing a per-function result map.
 
-For every fixture in tests/decompiler_fixtures/src/, compile with each available
-toolchain/opt-level, then run tools/diff_decompile.py and aggregate pass/fail.
+Required PR matrix (x86-64): {gcc, clang} x {O0, O2}. A compiler that is missing,
+or a required-lane source that fails to compile, is a FAILURE — not a skip
+(fail-closed). Environment-only gaps (e.g. a missing clang C++ runtime) must be
+declared in ALLOWED_MISSING, which is itself asserted, so nothing is skipped
+silently.
 
-This is the semantic-correctness driver for the decompiler: unlike DecBench's
-type/GED/byte metrics, a failure here means the decompilation is behaviourally
-WRONG. Run after any structurer / lowering change.
-
-Usage:
-    python tools/fixture_harness.py [--opt O0,O2] [--cc gcc,clang] [glob]
+  python tools/fixture_harness.py                 # run required matrix, print
+  python tools/fixture_harness.py --write-baseline # regenerate baseline.json
+  python tools/fixture_harness.py --json           # machine-readable result map
 """
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -22,69 +24,107 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "tests" / "decompiler_fixtures" / "src"
 BUILD = ROOT / "tests" / "decompiler_fixtures" / "build"
 DIFF = ROOT / "tools" / "diff_decompile.py"
+BASELINE = ROOT / "tests" / "decompiler_fixtures" / "baseline.json"
+
+REQUIRED_MATRIX = [("gcc", "O0"), ("gcc", "O2"), ("clang", "O0"), ("clang", "O2")]
+
+# Declared environment gaps (compiler/runtime absent). Each entry is asserted to
+# still be a real gap; it is never a silent skip. (cc, opt, fixture-stem).
+ALLOWED_MISSING: set[tuple[str, str, str]] = set()
+
+RDTMP = "/nas4/data/workspace-infosec/rdtmp"
 
 
-def compile_one(src: Path, cc: str, opt: str) -> Path | None:
-    BUILD.mkdir(parents=True, exist_ok=True)
+def compile_fixture(src: Path, cc: str, opt: str) -> tuple[Path | None, str]:
     is_cpp = src.suffix == ".cpp"
     compiler = ("g++" if cc == "gcc" else "clang++") if is_cpp else cc
+    BUILD.mkdir(parents=True, exist_ok=True)
     out = BUILD / f"{src.stem}-{cc}-{opt}.so"
     cmd = [compiler, "-shared", "-fPIC", "-g", f"-{opt}", "-w", "-o", str(out), str(src)]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if r.returncode != 0:
-        print(f"  [build skip] {src.name} {cc} {opt}: {r.stderr.strip().splitlines()[-1] if r.stderr else '?'}")
-        return None
-    return out
+        return None, (r.stderr.strip().splitlines() or ["?"])[-1]
+    return out, ""
 
 
-def run_diff(binary: Path, src: Path) -> tuple[int, int, list[str]]:
-    r = subprocess.run(
-        [sys.executable, str(DIFF), str(binary), str(src), "--trials", "48"],
-        capture_output=True, text=True, timeout=600,
-    )
-    passes = fails = 0
-    detail: list[str] = []
-    for line in r.stdout.splitlines():
-        if line.startswith("PASS"):
-            passes += 1
-        elif line.startswith("FAIL"):
-            fails += 1
-            detail.append(line)
-    return passes, fails, detail
+def run_matrix(matrix, fuzz: int) -> dict:
+    """Return {f"{stem}:{cc}:{opt}": {func: status}} plus lane-level errors."""
+    result: dict = {}
+    srcs = sorted(list(SRC.glob("*.c")) + list(SRC.glob("*.cpp")))
+    for src in srcs:
+        for cc, opt in matrix:
+            key = f"{src.stem}:{cc}:{opt}"
+            so, err = compile_fixture(src, cc, opt)
+            if so is None:
+                if (cc, opt, src.stem) in ALLOWED_MISSING:
+                    result[key] = {"__lane__": "env-missing"}
+                else:
+                    result[key] = {"__lane__": f"compile-failed: {err}"}
+                continue
+            r = subprocess.run(
+                [sys.executable, str(DIFF), str(so), str(src),
+                 "--fixture", src.stem, "--fuzz", str(fuzz), "--json"],
+                capture_output=True, text=True, timeout=900, check=False,
+            )
+            try:
+                fns = json.loads(r.stdout)
+            except json.JSONDecodeError:
+                result[key] = {"__lane__": f"gate-crashed: {r.stderr.strip()[-160:]}"}
+                continue
+            if "__error__" in fns:
+                result[key] = {"__lane__": fns["__error__"]}
+                continue
+            result[key] = {name: v["status"] for name, v in fns.items()}
+    return result
+
+
+def summarize(result: dict) -> tuple[int, int, int, int]:
+    p = f = s = lanes = 0
+    for fns in result.values():
+        if "__lane__" in fns:
+            lanes += 1
+            continue
+        for st in fns.values():
+            p += st == "pass"
+            f += st == "fail"
+            s += st == "structural"
+    return p, f, s, lanes
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("glob", nargs="?", default="*.c*")
-    ap.add_argument("--opt", default="O0")
-    ap.add_argument("--cc", default="gcc")
-    ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--fuzz", type=int, default=16)
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--write-baseline", action="store_true")
+    ap.add_argument("--gcc-o0-only", action="store_true", help="fast local subset")
     args = ap.parse_args()
 
-    opts = args.opt.split(",")
-    ccs = args.cc.split(",")
-    srcs = sorted(SRC.glob(args.glob))
-    if not srcs:
-        print(f"no fixtures matching {args.glob} in {SRC}", file=sys.stderr)
-        return 2
+    matrix = [("gcc", "O0")] if args.gcc_o0_only else REQUIRED_MATRIX
+    result = run_matrix(matrix, args.fuzz)
 
-    grand_pass = grand_fail = 0
-    for src in srcs:
-        for cc in ccs:
-            for opt in opts:
-                binary = compile_one(src, cc, opt)
-                if binary is None:
-                    continue
-                p, f, detail = run_diff(binary, src)
-                grand_pass += p
-                grand_fail += f
-                flag = "" if f == 0 else "  <-- FAILURES"
-                print(f"{src.stem:32s} {cc:5s} {opt:4s}  {p:3d} pass  {f:3d} fail{flag}")
-                if args.verbose or f:
-                    for d in detail:
-                        print(f"      {d}")
-    print(f"\n=== TOTAL: {grand_pass} pass, {grand_fail} fail ===")
-    return 1 if grand_fail else 0
+    if args.write_baseline:
+        BASELINE.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        print(f"wrote {BASELINE}")
+        return 0
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    lane_errors = []
+    for key, fns in sorted(result.items()):
+        if "__lane__" in fns:
+            lane_errors.append((key, fns["__lane__"]))
+            print(f"{key:44s}  LANE: {fns['__lane__']}")
+            continue
+        pf = sum(1 for st in fns.values() if st == "pass")
+        ff = sum(1 for st in fns.values() if st == "fail")
+        sf = sum(1 for st in fns.values() if st == "structural")
+        flag = "" if ff == 0 else "  <-- FAILURES"
+        print(f"{key:44s}  {pf:3d} pass {ff:3d} fail {sf:3d} struct{flag}")
+    p, f, s, lanes = summarize(result)
+    print(f"\n=== TOTAL: {p} pass, {f} fail, {s} structural; {lanes} lane error(s) ===")
+    # Fail-closed: any lane error (compile/dep/gate failure) fails the run.
+    return 1 if (f or lanes) else 0
 
 
 if __name__ == "__main__":

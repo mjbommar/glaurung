@@ -57,7 +57,13 @@ module-name = "glaurung._native"
 
 [dependency-groups]
 dev = [
+    "pyelftools>=0.33",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
     "pytest-benchmark>=5.1.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: end-to-end decompiler fixture matrix (compiles + executes the corpus)",
 ]

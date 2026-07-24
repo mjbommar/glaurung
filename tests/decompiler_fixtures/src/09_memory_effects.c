@@ -8,13 +8,13 @@
  * an effect. Each observable path yields a UNIQUE value.
  *
  * Targets review #2c (dropped intrinsic effects / unsafe DSE / vectorizable
- * loops). Differential-testable functions are pure over their int*/int args:
+ * loops). Differential-testable functions are pure over their int* / int args:
  * given an 8-int input buffer they mutate it deterministically and/or return an
  * int, so the gate can diff both the return value and the buffer contents.
  *
  * Differential vs. structural:
  *   - cas_update(), mem_copy(), mem_set(), vec_sum(), vec_transform(): DIFFERENTIAL.
- *     Pure over their int*/int arguments; drive with an 8-int buffer.
+ *     Pure over their int* / int arguments; drive with an 8-int buffer.
  *   - tick()/tick_n()/read_counter(): the volatile global is a STRUCTURAL target
  *     (true MMIO-style volatile semantics / C11-atomic ordering are structural
  *     assertions), but the effect is made observable — and thus differential —
