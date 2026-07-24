@@ -324,6 +324,139 @@ pub fn recover_types_for(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) 
     tm
 }
 
+/// Registers whose value is a pure *offset / scaled index* — the index side of
+/// an `base + index` address computation, never the pointer base. A register is
+/// an offset if it is defined by a multiply or shift (`i * 4`, `i << 2`), or by
+/// an add/sub that only combines constants and other offset registers
+/// (`0 + i*4`, the `-O0` `lea` idiom). Computed to a fixpoint.
+fn offset_registers(lf: &LlirFunction) -> std::collections::HashSet<VReg> {
+    let mut offsets: std::collections::HashSet<VReg> = std::collections::HashSet::new();
+    let is_off = |offsets: &std::collections::HashSet<VReg>, v: &Value| match v {
+        Value::Const(_) => true,
+        Value::Reg(r) => offsets.contains(r),
+        Value::Addr(_) => false,
+    };
+    for _ in 0..8 {
+        let mut grew = false;
+        for block in &lf.blocks {
+            for ins in &block.instrs {
+                if let Op::Bin { op, dst, lhs, rhs } = &ins.op {
+                    let dst_is_off = match op {
+                        // A multiply/shift result is a scaled index.
+                        BinOp::Mul | BinOp::Shl => true,
+                        // An add/sub is an offset only if *both* sides are.
+                        BinOp::Add | BinOp::Sub => {
+                            is_off(&offsets, lhs) && is_off(&offsets, rhs)
+                        }
+                        _ => false,
+                    };
+                    if dst_is_off && offsets.insert(dst.clone()) {
+                        grew = true;
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    offsets
+}
+
+/// Registers that hold a *reload of a spilled value* — the destination of a
+/// `Load` from a frame-base slot with no index (`rax = [rbp-24]`). At `-O0` a
+/// spilled pointer argument is reloaded this way before each dereference, so a
+/// reload operand of an address `add` is the pointer base (the other operand is
+/// the index). Feeding these to [`propagate_spill_slot_pointers`] then carries
+/// the pointer type back to the incoming argument register.
+fn frame_slot_reloads(lf: &LlirFunction) -> std::collections::HashSet<VReg> {
+    let mut reloads = std::collections::HashSet::new();
+    for block in &lf.blocks {
+        for ins in &block.instrs {
+            if let Op::Load { dst, addr } = &ins.op {
+                if let Some(base) = &addr.base {
+                    if is_frame_base(base) && addr.index.is_none() {
+                        reloads.insert(dst.clone());
+                    }
+                }
+            }
+        }
+    }
+    reloads
+}
+
+/// Propagate pointer-ness backward through address arithmetic: if a register
+/// `p` is used as a pointer (dereferenced) and is defined by `p = base + off`,
+/// then `base` is a pointer too. This recovers `T *` argument types once the
+/// spill-slot has been coalesced away and the parameter is used directly as
+/// `*(base + i*scale)` — the shape value-numbering produces for `a[i]`. Iterated
+/// to a fixpoint so a chain of address additions all resolve.
+///
+/// The base is identified structurally, not by existing type (a spilled pointer
+/// parameter looks like a plain `long` until this pass runs, which a type-based
+/// heuristic gets backwards). Two complementary signals:
+///  * the *offset* operand is a constant or a scaled-index register
+///    ([`offset_registers`]) — so the other operand is the base; and
+///  * the *base* operand is a frame-slot reload ([`frame_slot_reloads`]) — the
+///    reloaded spilled pointer — so the other operand is the index.
+fn propagate_pointer_arithmetic(lf: &LlirFunction, tm: &mut TypeMap) {
+    let offsets = offset_registers(lf);
+    let reloads = frame_slot_reloads(lf);
+    let is_offset = |v: &Value| match v {
+        Value::Const(_) => true,
+        Value::Reg(r) => offsets.contains(r),
+        Value::Addr(_) => false,
+    };
+    let is_reload = |v: &Value| matches!(v, Value::Reg(r) if reloads.contains(r));
+    for _ in 0..8 {
+        let mut changed = false;
+        for block in &lf.blocks {
+            for ins in &block.instrs {
+                if let Op::Bin {
+                    op: BinOp::Add,
+                    dst,
+                    lhs,
+                    rhs,
+                } = &ins.op
+                {
+                    let pw = match tm.get(dst) {
+                        Some(TypeHint::Pointer { pointee_width }) => pointee_width,
+                        _ => continue,
+                    };
+                    // Prefer the reload signal (base is the reloaded pointer);
+                    // fall back to the offset signal (base is the non-offset
+                    // operand). Both agree in the common `*(reload + i*scale)`.
+                    let base = if is_reload(lhs) && !is_reload(rhs) {
+                        Some(lhs)
+                    } else if is_reload(rhs) && !is_reload(lhs) {
+                        Some(rhs)
+                    } else if is_offset(rhs) && !is_offset(lhs) {
+                        Some(lhs)
+                    } else if is_offset(lhs) && !is_offset(rhs) {
+                        Some(rhs)
+                    } else {
+                        // Can't tell base from index; leave it alone.
+                        None
+                    };
+                    if let Some(Value::Reg(r)) = base {
+                        // Don't downgrade / re-tag an already-pointer register.
+                        if !matches!(tm.get(r), Some(TypeHint::Pointer { .. })) {
+                            let before = tm.get(r);
+                            tm.upsert(r.clone(), TypeHint::Pointer { pointee_width: pw });
+                            if tm.get(r) != before {
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
 /// Produce a [`TypeMap`] for all register VRegs touched by `lf`.
 pub fn recover_types(lf: &LlirFunction) -> TypeMap {
     let mut tm = TypeMap::default();
@@ -431,7 +564,15 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
     // register. Link them: `reg -> slot` (the spill) and `slot -> pointer`
     // (a reload of that slot that is itself a pointer), then tag the spilled
     // register as the pointer. This is what recovers `T *` argument types.
-    propagate_spill_slot_pointers(lf, &mut tm);
+    // Address arithmetic first (`p = base + i` with `*p` -> `base` is a pointer),
+    // then spill-slot propagation (a slot reloaded into a pointer is a pointer,
+    // and so is the argument spilled into it) — so a pointer parameter used as
+    // `*(param + i*scale)` resolves through the reload to the parameter. Iterated
+    // together so either order of discovery converges.
+    for _ in 0..4 {
+        propagate_pointer_arithmetic(lf, &mut tm);
+        propagate_spill_slot_pointers(lf, &mut tm);
+    }
 
     // Demote pointer / code-pointer classifications for regs that get a
     // constant assignment. They end up as generic ints — which the printer
@@ -493,6 +634,78 @@ mod tests {
         assert_eq!(
             tm.get(&VReg::phys("rbp")),
             Some(TypeHint::Pointer { pointee_width: 8 })
+        );
+    }
+
+    #[test]
+    fn spilled_pointer_arg_recovered_through_address_add() {
+        use crate::ir::types::BinOp;
+        // The `-O0` array-index idiom, post value-numbering:
+        //   store [rbp-24] = rdi      ; spill the pointer argument
+        //   rdx = rcx * 4             ; scaled index (an offset register)
+        //   rax = [rbp-24]            ; reload the spilled pointer
+        //   r8  = rax + rdx           ; base + index  (the address)
+        //   r9  = *r8                 ; dereference   -> r8 is a pointer
+        // Nothing dereferences rdi directly, so the pointer type on the argument
+        // can only be recovered by: r8 pointer -> rax (the reload) is the base ->
+        // the spill slot -> rdi. Regression guard for that whole chain.
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 1,
+                    disp: -24,
+                    size: 8,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Bin {
+                op: BinOp::Mul,
+                dst: VReg::phys("rdx"),
+                lhs: Value::Reg(VReg::phys("rcx")),
+                rhs: Value::Const(4),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 1,
+                    disp: -24,
+                    size: 8,
+                    ..Default::default()
+                },
+            },
+            Op::Bin {
+                op: BinOp::Add,
+                dst: VReg::phys("r8"),
+                lhs: Value::Reg(VReg::phys("rax")),
+                rhs: Value::Reg(VReg::phys("rdx")),
+            },
+            Op::Load {
+                dst: VReg::phys("r9"),
+                addr: MemOp {
+                    base: Some(VReg::phys("r8")),
+                    index: None,
+                    scale: 1,
+                    disp: 0,
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+        ]);
+        let tm = recover_types(&lf);
+        assert!(
+            matches!(tm.get(&VReg::phys("rdi")), Some(TypeHint::Pointer { .. })),
+            "spilled pointer argument rdi should be recovered as a pointer, got {:?}",
+            tm.get(&VReg::phys("rdi"))
+        );
+        // The scaled index must NOT be mistaken for a pointer.
+        assert!(
+            !matches!(tm.get(&VReg::phys("rdx")), Some(TypeHint::Pointer { .. })),
+            "scaled index rdx must not be typed as a pointer"
         );
     }
 
