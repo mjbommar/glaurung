@@ -449,18 +449,36 @@ fn decompile_at_py(
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
     let mut f = lower(&lf, &region, outer_name);
+    // Pass-by-pass AST dump for debugging the decbench lowering pipeline. Set
+    // GLAURUNG_DUMP_PASSES=1 to print the rendered body after each pass to stderr
+    // (bisect which pass corrupts a function). No-op otherwise.
+    let dump_passes = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
+    macro_rules! dp {
+        ($n:expr) => {
+            if dump_passes {
+                eprintln!("\n===== after {} =====\n{}", $n, crate::ir::ast::render(&f));
+            }
+        };
+    }
+    dp!("lower");
     reconstruct(&mut f);
+    dp!("reconstruct");
     crate::ir::const_fold::fold_constants(&mut f);
+    dp!("fold_constants");
     crate::ir::dce::prune_dead_flags(&mut f);
+    dp!("prune_dead_flags");
     crate::ir::call_args::reconstruct_args(&mut f, cc);
+    dp!("reconstruct_args");
     crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
     crate::ir::canary::recognise_canary(&mut f);
+    dp!("canary+strings");
     // Stack-slot promotion runs before register renaming so the aliases
     // (`stack_0`, `local_0`, ...) it allocates don't collide with the role
     // names (`arg0`, `ret`, `varN`) that the naming pass introduces.
     let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
+    dp!("promote_stack_locals");
     // Type recovery runs on the raw LLIR (before register renaming) so we
     // can cross-reference the renamed AST against the recovered types.
     let tm = if types {
@@ -469,7 +487,9 @@ fn decompile_at_py(
         None
     };
     crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
+    dp!("split_spilled_arg_reuse");
     crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
+    dp!("apply_role_names");
     crate::ir::canary::collapse_canary_save(&mut f);
     if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
         crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
@@ -479,8 +499,10 @@ fn decompile_at_py(
     // physical register. This removes the common pre-call `%ret = 0`
     // idiom entirely.
     crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
+    dp!("eliminate_dead_stores");
     crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
     crate::ir::label_prune::prune_unreferenced_labels(&mut f);
+    dp!("stack_idiom+label_prune");
     if matches!(
         cc,
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
