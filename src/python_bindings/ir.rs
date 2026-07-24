@@ -429,6 +429,11 @@ fn decompile_at_py(
     })?;
     let ssa = compute_ssa(&lf);
     let region = recover(&lf, &ssa);
+    let lf = if style == "decbench" {
+        crate::ir::value_number::value_number(&lf, &ssa, cc)
+    } else {
+        lf
+    };
     // Build the address map first so we can apply a PDB public-symbol name
     // to the *outer* function header before lowering. The map already
     // includes PDB symbols when a cache is configured, plus exports / IAT
@@ -604,6 +609,11 @@ fn decompile_range_at_py(
     })?;
     let ssa = compute_ssa(&lf);
     let region = recover(&lf, &ssa);
+    let lf = if style == "decbench" {
+        crate::ir::value_number::value_number(&lf, &ssa, cc)
+    } else {
+        lf
+    };
     let mut f = lower(&lf, &region, func.name.clone());
     reconstruct(&mut f);
     crate::ir::const_fold::fold_constants(&mut f);
@@ -808,6 +818,11 @@ fn decompile_all_py(
         };
         let ssa = compute_ssa(&lf);
         let region = recover(&lf, &ssa);
+        let lf = if style == "decbench" {
+            crate::ir::value_number::value_number(&lf, &ssa, cc)
+        } else {
+            lf
+        };
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
         reconstruct(&mut f);
@@ -918,6 +933,11 @@ fn decompile_many_py(
         };
         let ssa = compute_ssa(&lf);
         let region = recover(&lf, &ssa);
+        let lf = if style == "decbench" {
+            crate::ir::value_number::value_number(&lf, &ssa, cc)
+        } else {
+            lf
+        };
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         let mut f = lower(&lf, &region, outer_name);
         reconstruct(&mut f);
