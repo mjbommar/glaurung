@@ -1018,10 +1018,66 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 }],
             }
         }
-        Mnemonic::Cdqe => vec![Op::Assign {
+        // Accumulator sign-extension: `cbw`/`cwde`/`cdqe` (AT&T `cbtw`/`cwtl`/`cltq`)
+        // widen the accumulator IN PLACE, sign-filling. `cdqe` was lifted as the plain
+        // assignment `rax = eax`, which zero-extends — so every negative `int` promoted
+        // to `long` became a huge positive. gcc emits this constantly for `int`->`long`
+        // promotion and for array indexing, so the error was everywhere it mattered.
+        Mnemonic::Cbw => vec![Op::SExt {
+            dst: VReg::phys("ax"),
+            src: Value::Reg(VReg::phys("al")),
+            from: Width::W8,
+            to: Width::W16,
+        }],
+        Mnemonic::Cwde => vec![Op::SExt {
+            dst: VReg::phys("eax"),
+            src: Value::Reg(VReg::phys("ax")),
+            from: Width::W16,
+            to: Width::W32,
+        }],
+        Mnemonic::Cdqe => vec![Op::SExt {
             dst: VReg::phys("rax"),
             src: Value::Reg(VReg::phys("eax")),
+            from: Width::W32,
+            to: Width::W64,
         }],
+        // Sign-broadcast into the high half before a signed divide: `cwd`/`cdq`/`cqo`
+        // (AT&T `cwtd`/`cltd`/`cqto`) set dx/edx/rdx to all-ones or all-zeros according
+        // to the accumulator's sign bit — exactly an arithmetic shift by width-1.
+        //
+        // These were unlifted (38 `cqo` in the cross-compiled corpus), which left the
+        // high half undefined. That is not harmless even though our `idiv` lift only
+        // models the quotient: `rdx` is also the third SysV argument register, so an
+        // undefined value there can be picked up as a call argument.
+        Mnemonic::Cwd | Mnemonic::Cdq | Mnemonic::Cqo => {
+            let (hi, lo, shift) = match mnem {
+                Mnemonic::Cwd => ("dx", "ax", 15),
+                Mnemonic::Cdq => ("edx", "eax", 31),
+                _ => ("rdx", "rax", 63),
+            };
+            let ops = vec![Op::Bin {
+                dst: VReg::phys(hi),
+                op: BinOp::Sar,
+                lhs: Value::Reg(VReg::phys(lo)),
+                rhs: Value::Const(shift),
+            }];
+            // A 16-bit destination is a bit-preserving partial write of `rdx`.
+            match partial_gp_view(hi) {
+                Some(v) => {
+                    let t = VReg::Temp(5);
+                    vec![Op::Bin {
+                        dst: t.clone(),
+                        op: BinOp::Sar,
+                        lhs: Value::Reg(VReg::phys(lo)),
+                        rhs: Value::Const(shift),
+                    }]
+                    .into_iter()
+                    .chain(partial_write_ops(v, Value::Reg(t)))
+                    .collect()
+                }
+                None => ops,
+            }
+        }
         // 3-operand imul: `imul dst, src, imm` → dst = src * imm. (The 2-operand
         // form is handled by the binary-op path above.)
         Mnemonic::Imul => {
@@ -2586,16 +2642,28 @@ mod tests {
     }
 
     #[test]
-    fn cdqe_lifts_to_rax_from_eax_assign() {
+    fn cdqe_sign_extends_eax_into_rax() {
+        // This test previously asserted `cdqe` lifts to the plain assignment
+        // `rax = eax` — it PINNED THE BUG. `cdqe` (AT&T `cltq`) sign-extends; a plain
+        // assignment zero-extends, so every negative `int` promoted to `long` became a
+        // huge positive, wherever gcc emits it for `int`->`long` conversion and array
+        // indexing. Executing the lift is what settles it: see
+        // `tests/register_view_semantics.rs::cdqe_sign_extends_a_negative_int_into_the_full_register`.
         let ops = lift64(&[0x48, 0x98]);
         assert_eq!(ops.len(), 1, "got: {ops:#?}");
-        assert!(matches!(
-            &ops[0].op,
-            Op::Assign {
-                dst,
-                src: Value::Reg(src),
-            } if *dst == VReg::phys("rax") && *src == VReg::phys("eax")
-        ));
+        assert!(
+            matches!(
+                &ops[0].op,
+                Op::SExt {
+                    dst,
+                    src: Value::Reg(src),
+                    from: Width::W32,
+                    to: Width::W64,
+                } if *dst == VReg::phys("rax") && *src == VReg::phys("eax")
+            ),
+            "got: {:?}",
+            ops[0].op
+        );
     }
 
     #[test]

@@ -220,7 +220,11 @@ fn xor_of_a_high_byte_with_itself_clears_only_that_byte() {
         0x1122_3344_5566_0088,
         "clearing %ah must clear bits 8..15 of %rax and nothing else"
     );
-    assert_eq!(reg(&mut m, "eax"), 0x5566_0088, "the 32-bit view sees the clear");
+    assert_eq!(
+        reg(&mut m, "eax"),
+        0x5566_0088,
+        "the 32-bit view sees the clear"
+    );
 }
 
 #[test]
@@ -291,6 +295,75 @@ fn a_32_bit_alu_destination_still_zero_extends() {
 }
 
 // ---------------------------------------------------------------------------
+// Accumulator sign-extension and sign-broadcast
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cdqe_sign_extends_a_negative_int_into_the_full_register() {
+    // movabs $0xFFFFFFFF, %rax ; cdqe    (eax = -1 as int)
+    // `cdqe` was lifted as the plain assignment `rax = eax`, which ZERO-extends, so
+    // -1 became 0x00000000FFFFFFFF. gcc emits this for every `int`->`long` promotion
+    // and for array indexing, so the error appeared wherever it mattered most.
+    let mut code = movabs_rax(0xFFFF_FFFF);
+    code.extend_from_slice(&[0x48, 0x98]); // cdqe
+    let mut m = run_x86(&code);
+    assert_eq!(
+        reg(&mut m, "rax"),
+        0xFFFF_FFFF_FFFF_FFFF,
+        "cdqe must sign-fill the upper half, not zero-fill it"
+    );
+}
+
+#[test]
+fn cdqe_leaves_a_positive_int_alone() {
+    let mut code = movabs_rax(0x7FFF_FFFF);
+    code.extend_from_slice(&[0x48, 0x98]);
+    let mut m = run_x86(&code);
+    assert_eq!(reg(&mut m, "rax"), 0x7FFF_FFFF);
+}
+
+#[test]
+fn cwde_sign_extends_the_16_bit_accumulator() {
+    // movabs $0x8000,%rax ; cwde   (ax = -32768)
+    let mut code = movabs_rax(0x8000);
+    code.extend_from_slice(&[0x98]); // cwde
+    let mut m = run_x86(&code);
+    assert_eq!(
+        reg(&mut m, "eax"),
+        0xFFFF_8000,
+        "cwde sign-extends ax into eax"
+    );
+}
+
+#[test]
+fn cqo_broadcasts_the_sign_of_rax_into_rdx() {
+    // movabs $-1,%rax ; cqo   -> rdx = all ones
+    let mut code = movabs_rax(0xFFFF_FFFF_FFFF_FFFF);
+    code.extend_from_slice(&[0x48, 0x99]); // cqo
+    let mut m = run_x86(&code);
+    assert_eq!(reg(&mut m, "rdx"), 0xFFFF_FFFF_FFFF_FFFF);
+    // and a positive dividend clears it
+    let mut code2 = movabs_rax(5);
+    code2.extend_from_slice(&[0x48, 0x99]);
+    let mut m2 = run_x86(&code2);
+    assert_eq!(
+        reg(&mut m2, "rdx"),
+        0,
+        "an unlifted cqo left rdx undefined — and rdx is also the third SysV \
+         argument register, so the stale value could be read as a call argument"
+    );
+}
+
+#[test]
+fn cdq_broadcasts_the_sign_of_eax_into_edx() {
+    // movabs $0xFFFFFFFF,%rax ; cdq   -> edx = 0xFFFFFFFF
+    let mut code = movabs_rax(0xFFFF_FFFF);
+    code.extend_from_slice(&[0x99]); // cdq
+    let mut m = run_x86(&code);
+    assert_eq!(reg(&mut m, "edx"), 0xFFFF_FFFF);
+}
+
+// ---------------------------------------------------------------------------
 // AArch64: wN writes zero-extend into xN
 // ---------------------------------------------------------------------------
 
@@ -320,7 +393,7 @@ fn aarch64_w0_write_zero_extends_into_x0() {
 
 #[test]
 fn view_widths_come_from_the_shared_descriptor() {
-    use glaurung::ir::regview::{Arch, view};
+    use glaurung::ir::regview::{view, Arch};
     for (name, parent, offset, width) in [
         ("rax", "rax", 0, 64),
         ("eax", "rax", 0, 32),
