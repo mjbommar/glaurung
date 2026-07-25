@@ -21,6 +21,7 @@ Marked `slow` (builds 10 fixtures + decompiles each in 3 styles); run with -m sl
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -67,6 +68,41 @@ def test_every_structural_only_function_has_an_assertion(report):
     )
 
 
+def test_verify_diagnostics_are_opt_in():
+    """The decbench render is an ARTIFACT other tools consume, parse and score.
+
+    `// glaurung-verify:` lines are instrumentation for this gate, not decompiler
+    output. Emitted unconditionally they travel into every consumer — including the
+    C submitted to an external benchmark, where each line is a note announcing our
+    own bug inside the code being scored. So they are off unless asked for, and this
+    lane asks (see `structural.decompile_all`).
+    """
+    import os
+    import subprocess
+
+    _td = M.tmpdir()
+    with tempfile.TemporaryDirectory(**({"dir": _td} if _td else {})) as td:
+        so = S._build("06_calling_conventions", Path(td))
+        cmd = ["glaurung", "decompile", str(so), "--all", "--limit", "50",
+               "--style", "decbench", "--no-color"]
+        clean = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                               check=True).stdout
+        asked = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                               check=True,
+                               env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"}).stdout
+
+    assert "glaurung-verify" not in clean, (
+        "diagnostics leaked into the default render — they would ship inside a "
+        "submitted artifact"
+    )
+    assert "glaurung-verify" in asked, (
+        "opting in produced no diagnostics; this lane's ratchet would silently stop "
+        "checking def-before-use"
+    )
+    # Same code either way: the diagnostics are additive comment lines only.
+    assert [l for l in asked.splitlines() if "glaurung-verify" not in l] == clean.splitlines()
+
+
 def test_all_and_vas_agree():
     """`decompile --all` and `decompile --vas <list>` must produce the same functions.
 
@@ -108,6 +144,11 @@ def test_all_and_vas_agree():
             text=True,
             timeout=300,
             check=True,
+            # `S.decompile_all` opts in to the verify diagnostics, so this side must
+            # too, or the comparison is between two different CONFIGURATIONS rather
+            # than two pipelines. Comparing with diagnostics on is strictly stronger:
+            # the two paths then have to agree about the violations as well as the code.
+            env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
         )
         per_va = _split_functions(p.stdout)
         from_all = {k: v.strip() for k, v in S.decompile_all(so, "decbench").items()}

@@ -846,6 +846,15 @@ fn decbench_text(
         count = violations.len(),
         "def-before-use verification found violations"
     );
+    // The comments are INSTRUMENTATION, not decompiler output, so they are opt-in.
+    // Emitted unconditionally they end up in whatever consumes this render — including
+    // the artifact submitted to an external benchmark, where each one is a note
+    // announcing our own bug inside the C we are asking someone to score. The fixture
+    // gate's structural lane opts in (see `structural.decompile_all`) so its ratchet
+    // still sees every violation.
+    if std::env::var_os("GLAURUNG_VERIFY_DEFS").is_none() {
+        return body;
+    }
     crate::ir::verify_defs::splice_verify_comments(&body, &violations)
 }
 

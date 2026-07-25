@@ -16,6 +16,7 @@ cannot be reasoned about — that is a structural bug regardless of execution.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -41,6 +42,10 @@ def decompile_all(so: str | Path, style: str, timeout: int = 180) -> dict[str, s
         ["glaurung", "decompile", str(so), "--all", "--limit", "1000",
          "--style", style, "--no-color"],
         capture_output=True, text=True, timeout=timeout, check=False,
+        # Opt in to the `// glaurung-verify:` diagnostics. They are deliberately OFF by
+        # default — they are instrumentation, and the decbench render is an artifact
+        # other tools consume and score — so this lane asks for them explicitly.
+        env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
     )
     if p.returncode != 0:
         raise RuntimeError(f"glaurung decompile failed ({style}): {p.stderr.strip()[-200:]}")
