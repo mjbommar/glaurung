@@ -39,6 +39,10 @@ FIXTURE_FUZZ = 12
 #                          buffer; clamped to [0, ptr_len].
 #   extra_vectors:[[...]]— explicit arg tuples (scalar=int, pointer=list[int]).
 #                          NOT clamped — used for exact case/boundary/packet inputs.
+#   arg_values:   {i:[v]}— restrict scalar param `i` to exactly these values, in
+#                          BOTH the boundary sweep and the seeded fuzz. For a
+#                          parameter that guards an unbounded/very long path: the
+#                          verdict must not depend on how fast the machine is.
 #   skip_exec:    bool   — not safely executable; checked structurally instead.
 OVERRIDES: dict[tuple[str, str], dict] = {
     ("01_conditional_polarity", "early_return_ge"): {
@@ -103,6 +107,15 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     ("09_memory_effects", "vec_transform"): {"len_args": [1]},
     # 08: apply() takes a function pointer — not int-differential; check structurally.
     ("08_indirect_dispatch", "apply"): {"skip_exec": True},
+    # 06: guarded_spin's `spin` guard MUST stay 0, which is the contract its source
+    # comment already states ("the harness always passes 0"). It was never enforced,
+    # so the boundary sweep and fuzz drove `spin` nonzero and every such vector ran
+    # `volatile x += 1` until the 32-bit wraparound — seconds per vector, twice
+    # (original + recompiled). The verdict then depended on machine speed: it passed
+    # on a 24-core workstation and hit the worker's wall-clock timeout on a 4-vCPU
+    # CI runner, i.e. a flaky gate. The loop still has to be STRUCTURED correctly;
+    # that is what the structural lane checks.
+    ("06_calling_conventions", "guarded_spin"): {"arg_values": {0: [0]}},
 }
 
 # Structural expectations for the structural lane (checked on decompiled text, not

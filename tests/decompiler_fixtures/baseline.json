@@ -331,7 +331,7 @@
     "fact_mod": "fail",
     "fib": "fail",
     "forward_sum6": "fail",
-    "guarded_spin": "fail",
+    "guarded_spin": "pass",
     "sum_arg0": "pass",
     "sum_arg1": "pass",
     "sum_arg10": "fail",

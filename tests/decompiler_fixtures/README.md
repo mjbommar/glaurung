@@ -14,7 +14,7 @@ does, and that structural facts an analyst relies on survive lowering.
 | `manifest.py` | declarative oracle: required (exported) functions, pointer buffer sizes, length-arg clamping, exact boundary/switch/packet vectors, `skip_exec`, and per-function `STRUCTURAL` assertions |
 | `baseline.json` | committed per-function status for every `{fixture}:{cc}:{opt}` lane, plus the `__toolchain__` fingerprint that produced it |
 | `structural_baseline.json` | committed structural map (closure per style, effect predicates, fabricated-name flags, def-before-use violations) |
-| `toolchain/Dockerfile` | the digest-pinned compile toolchain (see below) |
+| `toolchain/Dockerfile` | the fingerprinted compile toolchain (see below) |
 | `../../tools/diff_decompile.py` | the execution-differential worker: recompile decompiled C, call original vs. recompiled with identical inputs in an isolated subprocess, diff full-width return + every mutable buffer |
 | `../../tools/fixture_harness.py` | compiles the matrix, runs the gate, writes/validates baselines |
 | `../../tools/fixture_toolchain.py` | runs every compile inside the pinned toolchain; fingerprints it |
@@ -38,9 +38,19 @@ Run the slow lanes with `-m slow` (they build + decompile the whole corpus).
 `pass` / `fail` are decompiler results (a known `fail` stays visible in the
 baseline). `structural` means not execution-differential (a callback, a
 void-no-buffer effect, a pointer return) — the structural lane must carry an
-assertion for it. `missing` (a required export absent) and `nocases` (no vectors
-generated) are **infrastructure** failures: they fail CI and `--write-baseline`
-refuses to record them.
+assertion for it. `missing` (a required export absent), `nocases` (no vectors
+generated) and `timeout` (the worker exceeded its wall clock) are
+**infrastructure** failures: they fail CI and `--write-baseline` refuses to record
+them.
+
+`timeout` is deliberately NOT `fail`: exceeding a wall clock is not evidence that
+a decompilation is wrong, and recording it as a semantic verdict bakes machine
+speed into the baseline. This is not hypothetical — `guarded_spin`'s `spin` guard
+was driven nonzero by the boundary sweep, so every such vector ran a `volatile`
+increment loop to 32-bit wraparound (~0.9s per vector, per binary). It passed on a
+24-core workstation and timed out on a 4-vCPU CI runner. A parameter guarding an
+unbounded path must be pinned with the manifest's `arg_values`, so the verdict
+depends on the decompilation and not on the hardware.
 
 ## Ratchet: refreshing a baseline
 
@@ -59,7 +69,7 @@ python tools/gen_structural_baseline.py
 Both share `manifest.FIXTURE_FUZZ` so the committed baseline and the gate
 exercise identical (stable-seeded) vectors.
 
-## The pinned compile toolchain
+## The fingerprinted compile toolchain
 
 Two different compilers decide a verdict: the one that builds the fixture (its
 codegen idioms are what the decompiler must recover) and the one that rebuilds our
@@ -69,10 +79,14 @@ whatever a developer's host ships, the per-function baseline is a snapshot of on
 machine and cannot reproduce in CI.
 
 So **every** compile the gate performs — fixture builds, the strict compile lane,
-and the recompile of our own output — runs inside the image built from
-`toolchain/Dockerfile` (Ubuntu 22.04 pinned by digest: gcc/g++ 11.4, clang/clang++
+the recompile of our own output, and the structural lane's builds — runs inside the
+image built from `toolchain/Dockerfile` (Ubuntu 22.04: gcc/g++ 11.4, clang/clang++
 14, glibc 2.35). Only compilation is containerised; the objects execute natively,
 which is safe because the image's glibc floor is older than any host we build on.
+
+The image is not bit-reproducible: its base is pinned by digest, but the compiler
+packages come from the live Ubuntu archive. The guarantee is the **fingerprint**,
+not the image — see below.
 
 `baseline.json` records the observed compiler versions under `__toolchain__`, and
 the gate asserts they match before comparing any verdict — a mismatch fails loudly

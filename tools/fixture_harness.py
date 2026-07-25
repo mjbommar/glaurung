@@ -8,7 +8,7 @@ or a required-lane source that fails to compile, is a FAILURE — not a skip
 declared in ALLOWED_MISSING, which is itself asserted, so nothing is skipped
 silently.
 
-Every compile runs under the digest-pinned toolchain (`tools/fixture_toolchain.py`)
+Every compile runs under the fingerprinted toolchain (`tools/fixture_toolchain.py`)
 and the resulting result map carries that toolchain's fingerprint, because a
 per-function verdict recorded against one host's compiler releases cannot be
 compared against another's.
@@ -200,7 +200,7 @@ def run_matrix(matrix, fuzz: int, allowed_missing=None, jobs: int | None = None)
     return result
 
 
-STATUS_KINDS = ("pass", "fail", "structural", "missing", "nocases")
+STATUS_KINDS = ("pass", "fail", "structural", "missing", "nocases", "timeout")
 
 
 def summarize(result: dict) -> dict:
@@ -217,8 +217,10 @@ def summarize(result: dict) -> dict:
 
 def baseline_problems(result: dict) -> list[str]:
     """Reasons a result must NOT be written as a baseline: a non-env lane error
-    (compile/gate/infra) or any infra status (a missing required function or a
-    zero-case function). Known decompiler fails/structurals are fine to record."""
+    (compile/gate/infra) or any infra status — a missing required function, a
+    zero-case function, or a worker TIMEOUT (which says the machine was too slow,
+    not that the decompilation is wrong). Known decompiler fails/structurals are
+    fine to record."""
     problems = []
     for key, fns in sorted(lanes(result).items()):
         if "__lane__" in fns:
@@ -226,7 +228,7 @@ def baseline_problems(result: dict) -> list[str]:
                 problems.append(f"{key}: lane error ({fns['__lane__']})")
             continue
         for func, st in sorted(fns.items()):
-            if st in ("missing", "nocases"):
+            if st in ("missing", "nocases", "timeout"):
                 problems.append(f"{key}:{func}: {st}")
     return problems
 

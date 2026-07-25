@@ -36,7 +36,7 @@ import fixture_toolchain as TC
 import manifest as M
 
 BASELINE = ROOT / "tests" / "decompiler_fixtures" / "baseline.json"
-VALID_STATUSES = {"pass", "fail", "structural", "missing", "nocases"}
+VALID_STATUSES = set(H.STATUS_KINDS)
 
 pytestmark = pytest.mark.slow
 
@@ -94,6 +94,24 @@ def test_env_availability_matches_the_baseline(current, baseline):
     assert not probs, "LANE ENVIRONMENT CHANGED:\n  " + "\n  ".join(probs)
 
 
+def test_no_function_timed_out(current):
+    """A worker timeout is an INFRASTRUCTURE result, not a verdict: it means the
+    machine was too slow (or a fixture drives an unbounded path), not that the
+    decompilation is wrong. Recording it as `fail` would make the baseline
+    machine-dependent, so it must fail the gate loudly and visibly instead."""
+    timed_out = [
+        f"{lane}:{func}"
+        for lane, fns in H.lanes(current).items()
+        for func, st in fns.items()
+        if st == "timeout"
+    ]
+    assert not timed_out, (
+        "WORKER TIMEOUTS (infrastructure, not a verdict — pin the guard parameter "
+        "with the manifest's `arg_values`, or investigate the slowdown):\n  "
+        + "\n  ".join(timed_out)
+    )
+
+
 def test_no_lane_became_broken(current, baseline):
     """A lane that compiled + ran in the baseline must not start erroring."""
     broken = []
@@ -125,6 +143,30 @@ def test_no_function_regressions(current, baseline):
                 regressions.append(f"{lane}:{func} ({base_status}->{cur_status})")
     assert not missing, "RESULTS MISSING (fail-closed):\n  " + "\n  ".join(missing)
     assert not regressions, "SEMANTIC REGRESSIONS:\n  " + "\n  ".join(regressions)
+
+
+def test_every_function_the_run_produced_is_recorded(current, baseline):
+    """Fail closed on a function the baseline does not know about.
+
+    Every other comparison iterates the BASELINE's function list, so a function
+    that newly appears — one added to a fixture source, or an export the compiler
+    started emitting — would be completely ungated: no regression could ever be
+    detected for it until somebody happened to refresh. The baseline must be the
+    exact set of functions the run produces."""
+    unrecorded = []
+    for lane, cur in H.lanes(current).items():
+        if "__lane__" in cur:
+            continue
+        base = H.lanes(baseline).get(lane, {})
+        if "__lane__" in base:
+            continue  # env-availability change; covered by its own test
+        for func in cur:
+            if func not in base:
+                unrecorded.append(f"{lane}:{func} ({cur[func]})")
+    assert not unrecorded, (
+        "FUNCTIONS NOT IN THE BASELINE (ungated — refresh baseline.json):\n  "
+        + "\n  ".join(unrecorded)
+    )
 
 
 def test_improvements_require_a_baseline_refresh(current, baseline):

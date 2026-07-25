@@ -232,6 +232,8 @@ def test_exit_code_distinguishes_infra_from_semantic():
     assert D.exit_code({"f": {"status": "fail"}}) == 1
     assert D.exit_code({"f": {"status": "missing"}}) == 2
     assert D.exit_code({"f": {"status": "nocases"}}) == 2
+    # A timeout is infrastructure (machine too slow), never a semantic verdict.
+    assert D.exit_code({"f": {"status": "timeout"}}) == 2
     assert D.exit_code({"__error__": "no dwarf"}) == 2
 
 
@@ -256,12 +258,58 @@ def test_write_baseline_refuses_lane_errors_and_infra_statuses():
     assert H.baseline_problems(bad_status), "must refuse a missing required function"
     nocases = {"x:gcc:O0": {"f": "nocases"}}
     assert H.baseline_problems(nocases), "must refuse a zero-case function"
+    timeout = {"x:gcc:O0": {"f": "timeout"}}
+    assert H.baseline_problems(timeout), (
+        "must refuse a timeout — recording it would bake machine speed into the "
+        "baseline"
+    )
 
 
 def test_schema_requires_all_ten_fixtures():
     # A baseline covering only some fixtures is rejected.
     partial = {"01_conditional_polarity:gcc:O0": {"cmp_signed": "pass"}}
     assert H.schema_problems(partial, [("gcc", "O0")]), "must require all ten fixtures"
+
+
+def test_a_pinned_argument_never_takes_another_value():
+    # `arg_values` exists so a guard parameter cannot send execution down an
+    # unbounded path: guarded_spin's `spin` must be 0 in EVERY vector, boundary
+    # sweep and seeded fuzz alike. Driven nonzero it ran a volatile loop to 32-bit
+    # wraparound, which passed on a fast machine and timed out on a CI runner.
+    sig = {"name": "guarded_spin", "va": 0, "params": ["int", "int"], "ret": "int"}
+    ov = D.M.override("06_calling_conventions", "guarded_spin")
+    assert ov.get("arg_values") == {0: [0]}, "the guard must be declared pinned"
+    vecs = D.make_vectors(sig, ov, seed=1234, fuzz=12)
+    assert vecs, "vectors must still be generated"
+    assert {v[0] for v in vecs} == {0}, f"spin escaped its pinned value: {vecs}"
+    # The other argument is untouched: still swept and fuzzed.
+    assert len({v[1] for v in vecs}) > 3
+
+
+def test_pinned_arguments_are_reproducible():
+    sig = {"name": "f", "va": 0, "params": ["int"], "ret": "int"}
+    ov = {"arg_values": {0: [3, 4]}}
+    a = D.make_vectors(sig, ov, seed=7, fuzz=8)
+    b = D.make_vectors(sig, ov, seed=7, fuzz=8)
+    assert a == b
+    assert {v[0] for v in a} <= {3, 4}
+
+
+def test_an_invalid_pinned_argument_is_rejected():
+    # A manifest that pins a parameter but declares no value (or pins something
+    # that is not a scalar, or does not exist) would silently generate vectors that
+    # do not exercise what it claims. Fail closed on all three.
+    sig = {"name": "f", "va": 0, "params": ["int", "ptr"], "ret": "int"}
+    for bad, why in [
+        ({0: []}, "empty value list"),
+        ({5: [0]}, "index out of range"),
+        ({1: [0]}, "pins a pointer parameter"),
+    ]:
+        try:
+            D.make_vectors(sig, {"arg_values": bad}, seed=1, fuzz=2)
+        except ValueError:
+            continue
+        raise AssertionError(f"arg_values {bad!r} must be rejected ({why})")
 
 
 def test_length_args_are_clamped_to_buffer():

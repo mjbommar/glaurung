@@ -12,8 +12,14 @@ FAIL-CLOSED contract (every one of these is a FAILURE, never a silent skip):
   * a required dependency is missing (module import fails);
   * zero DWARF signatures are discovered in the binary;
   * the decompiled C fails to compile;
-  * the worker subprocess exits non-zero, is killed by a signal, or times out;
+  * the worker subprocess exits non-zero or is killed by a signal;
   * zero executable cases were produced for a function.
+
+A worker that exceeds its wall clock is reported `timeout`, an INFRASTRUCTURE
+status — not `fail`. Being too slow is not evidence that a decompilation is wrong,
+and recording it as a semantic verdict would bake machine speed into the baseline
+(it did: `guarded_spin` passed on a 24-core workstation and "failed" on a 4-vCPU
+runner). `--write-baseline` refuses it and the gate reports it distinctly.
 
 Functions the manifest marks `skip_exec` (e.g. function-pointer callbacks) are
 reported as `structural`, a distinct status the structural lane checks — never a
@@ -254,6 +260,32 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
     params = [_as_desc(p) for p in sig["params"]]
     ptr_len = ov.get("ptr_len", M.DEFAULT_PTR_LEN)
     len_args = set(ov.get("len_args", []))
+    # A parameter restricted to declared values: used for a guard that would
+    # otherwise send execution down an unbounded/very long path, where the verdict
+    # would depend on machine speed instead of on the decompilation. Validated
+    # fail-closed: an empty or non-scalar restriction would silently produce vectors
+    # that do not exercise what the manifest claims (or divide by zero below), and a
+    # manifest that lies is worse than no manifest.
+    arg_values: dict[int, list[int]] = {}
+    for k, v in ov.get("arg_values", {}).items():
+        i = int(k)
+        vals = list(v)
+        if not vals:
+            raise ValueError(
+                f"{sig['name']}: arg_values[{i}] is empty — a pinned parameter must "
+                f"declare at least one value"
+            )
+        if i < 0 or i >= len(params):
+            raise ValueError(
+                f"{sig['name']}: arg_values[{i}] is out of range for "
+                f"{len(params)} parameter(s)"
+            )
+        if params[i]["k"] != "int":
+            raise ValueError(
+                f"{sig['name']}: arg_values[{i}] pins a non-scalar parameter "
+                f"({params[i]['k']}); use extra_vectors for pointer contents"
+            )
+        arg_values[i] = vals
     forced_u8 = ov.get("ptr_elem") == "u8"
     rng = random.Random(_stable_seed(sig["name"], seed))
 
@@ -261,6 +293,10 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         return forced_u8 or d.get("pw") == 1
 
     def scalar(i, v, d):
+        if i in arg_values:
+            # Deterministic cycle through the declared values, seed-independent.
+            allowed = arg_values[i]
+            return _wrap(allowed[abs(v) % len(allowed)], d["w"], d["s"])
         v = _wrap(v, d["w"], d["s"])
         return max(0, min(ptr_len, v)) if i in len_args else v
 
@@ -453,10 +489,13 @@ def run_function(sig, fixture, binary, workdir, seed, fuzz) -> dict:
     try:
         r = subprocess.run(
             [sys.executable, __file__, "--worker", str(spec_path)],
-            capture_output=True, text=True, timeout=60, check=False,
+            capture_output=True, text=True, timeout=WORKER_TIMEOUT_S, check=False,
         )
     except subprocess.TimeoutExpired:
-        return {"status": "fail", "detail": "worker timed out"}
+        # NOT `fail`: exceeding a wall clock is not evidence that the
+        # decompilation is wrong, and recording it as a semantic verdict bakes
+        # machine speed into the baseline (see `timeout` in the fixture README).
+        return {"status": "timeout", "detail": f"worker exceeded {WORKER_TIMEOUT_S}s"}
     if r.returncode != 0:
         return {"status": "fail", "detail": f"worker crashed (exit {r.returncode}; {r.stderr.strip()[-120:]})"}
     try:
@@ -466,7 +505,14 @@ def run_function(sig, fixture, binary, workdir, seed, fuzz) -> dict:
     return {"status": "pass" if verdict["ok"] else "fail", "detail": verdict["detail"]}
 
 
-INFRA_STATUSES = {"missing", "nocases"}
+#: Wall clock for one function's differential worker. Generous: a slow-but-correct
+#: function must not be reported as broken because the machine is busy. A function
+#: that needs more than this is a fixture-design problem (pin the guard parameter
+#: with the manifest's `arg_values`), not something to paper over with a bigger
+#: number.
+WORKER_TIMEOUT_S = 180
+
+INFRA_STATUSES = {"missing", "nocases", "timeout"}
 
 
 def exit_code(results: dict) -> int:
@@ -544,13 +590,14 @@ def main() -> int:
         print(f"ERROR: {results['__error__']}", file=sys.stderr)
         return 2
     tags = {"pass": "PASS", "fail": "FAIL", "structural": "STRUCT",
-            "missing": "MISSING", "nocases": "NOCASES"}
+            "missing": "MISSING", "nocases": "NOCASES", "timeout": "TIMEOUT"}
     counts = {k: 0 for k in tags}
     for name, r in sorted(results.items()):
         counts[r["status"]] += 1
         print(f"{tags[r['status']]} {name}: {r['detail']}")
     print(f"\n{counts['pass']} pass, {counts['fail']} fail, {counts['structural']} structural, "
-          f"{counts['missing']} missing, {counts['nocases']} no-cases")
+          f"{counts['missing']} missing, {counts['nocases']} no-cases, "
+          f"{counts['timeout']} timed out")
     return exit_code(results)
 
 
