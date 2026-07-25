@@ -43,6 +43,95 @@ fn reg_size(r: Register) -> u8 {
     }
 }
 
+/// For an 8- or 16-bit *low* GP sub-register, the 32-bit parent name and the
+/// sub-register width in bits. A write to `al`/`ax` preserves the upper bits of
+/// `eax` (x86 partial-register semantics), unlike a 32-bit write which
+/// zero-extends. High-byte registers (`ah`/`bh`/...) address a different byte
+/// and are deliberately excluded (rare in compiler output, and merging them
+/// with the low byte would be wrong).
+fn partial_gp_parent(name: &str) -> Option<(&'static str, u32)> {
+    let pair = match name {
+        "al" => ("eax", 8),
+        "ax" => ("eax", 16),
+        "bl" => ("ebx", 8),
+        "bx" => ("ebx", 16),
+        "cl" => ("ecx", 8),
+        "cx" => ("ecx", 16),
+        "dl" => ("edx", 8),
+        "dx" => ("edx", 16),
+        "sil" => ("esi", 8),
+        "si" => ("esi", 16),
+        "dil" => ("edi", 8),
+        "di" => ("edi", 16),
+        "bpl" => ("ebp", 8),
+        "bp" => ("ebp", 16),
+        "spl" => ("esp", 8),
+        "sp" => ("esp", 16),
+        "r8b" => ("r8d", 8),
+        "r8w" => ("r8d", 16),
+        "r9b" => ("r9d", 8),
+        "r9w" => ("r9d", 16),
+        "r10b" => ("r10d", 8),
+        "r10w" => ("r10d", 16),
+        "r11b" => ("r11d", 8),
+        "r11w" => ("r11d", 16),
+        "r12b" => ("r12d", 8),
+        "r12w" => ("r12d", 16),
+        "r13b" => ("r13d", 8),
+        "r13w" => ("r13d", 16),
+        "r14b" => ("r14d", 8),
+        "r14w" => ("r14d", 16),
+        "r15b" => ("r15d", 8),
+        "r15w" => ("r15d", 16),
+        _ => return None,
+    };
+    Some(pair)
+}
+
+/// Lift a partial-register write `subreg = src` (where `subreg` is an 8-/16-bit
+/// low GP register with 32-bit `parent`) as a bit-preserving read-modify-write
+/// of the parent: `parent = (parent & keep) | (src & value_mask)`. The `& keep`
+/// clears exactly the sub-register's bits so the parent's other bits survive —
+/// the semantics a later `eax`/`rax` read must observe. A constant-zero source
+/// collapses to the mask alone (the common `mov $0, %al` low-byte clear).
+fn partial_write_ops(parent: &str, wbits: u32, src: Value) -> Vec<Op> {
+    let p = VReg::phys(parent);
+    let keep = (0xFFFF_FFFFu64 & !((1u64 << wbits) - 1)) as i64;
+    let value_mask = ((1u64 << wbits) - 1) as i64;
+    let mut ops = vec![Op::Bin {
+        dst: p.clone(),
+        op: BinOp::And,
+        lhs: Value::Reg(p.clone()),
+        rhs: Value::Const(keep),
+    }];
+    let masked = match src {
+        Value::Const(c) => {
+            let m = c & value_mask;
+            if m == 0 {
+                return ops;
+            }
+            Value::Const(m)
+        }
+        other => {
+            let t = VReg::Temp(0);
+            ops.push(Op::Bin {
+                dst: t.clone(),
+                op: BinOp::And,
+                lhs: other,
+                rhs: Value::Const(value_mask),
+            });
+            Value::Reg(t)
+        }
+    };
+    ops.push(Op::Bin {
+        dst: p.clone(),
+        op: BinOp::Or,
+        lhs: Value::Reg(p),
+        rhs: masked,
+    });
+    ops
+}
+
 /// Translate an iced register operand to a VReg. `Register::None` maps to None
 /// so callers can distinguish "no base" from "base is some register".
 fn maybe_reg(r: Register) -> Option<VReg> {
@@ -749,16 +838,23 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     }
                 }
                 (OpKind::Register, _) => {
-                    if let Some(src) = value_of_operand(instr, 1) {
-                        vec![Op::Assign {
-                            dst: VReg::phys(reg_name(instr.op_register(0))),
-                            src,
-                        }]
-                    } else {
-                        vec![Op::Unknown {
+                    let Some(src) = value_of_operand(instr, 1) else {
+                        return vec![Op::Unknown {
                             mnemonic: "mov".into(),
-                        }]
+                        }];
+                    };
+                    let dst_name = reg_name(instr.op_register(0));
+                    // A partial (8-/16-bit low) GP write preserves the parent's
+                    // other bits; a plain Assign would drop them and later
+                    // `eax`/`rax` reads would see a stale value (e.g. gcc's
+                    // low-byte-clear `mov $0, %al` = `& 0xFFFFFF00`).
+                    if let Some((parent, wbits)) = partial_gp_parent(&dst_name) {
+                        return partial_write_ops(parent, wbits, src);
                     }
+                    vec![Op::Assign {
+                        dst: VReg::phys(dst_name),
+                        src,
+                    }]
                 }
                 _ => vec![Op::Unknown {
                     mnemonic: "mov".into(),

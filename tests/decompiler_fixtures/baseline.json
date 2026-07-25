@@ -110,7 +110,7 @@
   "02_integer_widths:gcc:O0": {
     "add_wrap32": "pass",
     "deposit_byte1": "fail",
-    "deposit_low_byte": "fail",
+    "deposit_low_byte": "pass",
     "extract_byte1": "pass",
     "extract_byte3": "pass",
     "mul_widen": "pass",
