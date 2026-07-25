@@ -104,7 +104,7 @@
     "shr_via_cast": "pass",
     "trunc_u16_after_mul": "pass",
     "trunc_u8": "pass",
-    "wrap_sub_u32": "fail",
+    "wrap_sub_u32": "pass",
     "zext_u32_to_u64": "pass"
   },
   "02_integer_widths:gcc:O0": {
@@ -156,7 +156,7 @@
     "shr_via_cast": "pass",
     "trunc_u16_after_mul": "fail",
     "trunc_u8": "structural",
-    "wrap_sub_u32": "fail",
+    "wrap_sub_u32": "pass",
     "zext_u32_to_u64": "pass"
   },
   "03_loop_shapes:clang:O0": {

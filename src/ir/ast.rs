@@ -2771,29 +2771,62 @@ fn unsigned_ctype(size: u8) -> &'static str {
     }
 }
 
-/// The unsigned-cast width for a logical right shift's left operand. When the
-/// operand is a single integer-typed identifier whose declared width is known,
-/// the shift must happen at that width (so a negative narrow value is not
-/// sign-extended into the high half). Anything else falls back to `unsigned
-/// long`, which is correct for genuine 64-bit values and the conservative
-/// default for compound expressions.
-fn shift_operand_ctype(lhs: &Expr) -> &'static str {
-    if let Some(name) = expr_ident_name(lhs) {
-        if let Some(w) = dec_int_width(name) {
+/// The unsigned-cast width for a logical right shift `lhs >> rhs`. The shift
+/// must happen at the operand's machine width so a negative narrow value is not
+/// sign-extended into the high half before the zero-fill. Narrowing is applied
+/// only when (a) the operand's width is positively known from narrow-typed
+/// identifiers, and (b) the shift amount is a constant that fits inside that
+/// width — a `>> 32` on a value that is genuinely 64-bit (e.g. `mul_widen`'s
+/// `(uint64_t)a*b`) must keep `unsigned long`. Everything else falls back to
+/// `unsigned long`, correct for genuine 64-bit values.
+fn shift_operand_ctype(lhs: &Expr, rhs: &Expr) -> &'static str {
+    if let (Some(w), Expr::Const(k)) = (expr_machine_width(lhs), rhs) {
+        if *k >= 0 && (*k as u64) < (w as u64) * 8 {
             return unsigned_ctype(w);
         }
     }
     "unsigned long"
 }
 
-/// The identifier name of an expression that is a single named value
-/// (`Expr::Named` role name, or a physical register), else `None`.
-fn expr_ident_name(e: &Expr) -> Option<&str> {
+/// The machine byte-width of an integer expression, when it can be established
+/// from narrow-typed identifiers. Single identifiers read their declared width
+/// from `DEC_INT_WIDTHS`; width-preserving arithmetic (`a - b`, `a & b`, ...)
+/// takes the wider operand, treating a bare constant as width-agnostic. Any
+/// operand of unknown width (a load, an untyped local) yields `None`, so the
+/// shift render conservatively keeps `unsigned long`.
+fn expr_machine_width(e: &Expr) -> Option<u8> {
     match e {
-        Expr::Named { name, .. } => Some(name),
-        Expr::Reg(VReg::Phys(n)) => Some(n),
+        Expr::Named { name, .. } => dec_int_width(name),
+        Expr::Reg(VReg::Phys(n)) => dec_int_width(n),
+        Expr::Const(_) => None,
+        Expr::Bin { op, lhs, rhs } if is_width_preserving_arith(*op) => {
+            let lw = expr_machine_width(lhs);
+            let rw = expr_machine_width(rhs);
+            // A `None` is acceptable only when it comes from a bare constant;
+            // any other unknown-width operand could be 64-bit, so bail out.
+            let ok = |w: Option<u8>, e: &Expr| w.is_some() || matches!(e, Expr::Const(_));
+            if !ok(lw, lhs) || !ok(rw, rhs) {
+                return None;
+            }
+            match (lw, rw) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            }
+        }
         _ => None,
     }
+}
+
+/// Arithmetic whose result width is the width of its (widest) operand — so a
+/// shift of the result can be narrowed to that width. Shifts are excluded (a
+/// nested shift's width is subtler) and so is division.
+fn is_width_preserving_arith(op: BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor
+    )
 }
 
 /// Recognise the array-index idiom `base + index*sizeof(T)` for a `T`-sized
@@ -3003,7 +3036,7 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             // cast the operand to `unsigned long` so `>>` is the zero-filling
             // shift the IR means. Arithmetic shift (`Sar`) is plain `>>`.
             if matches!(op, BinOp::Shr) {
-                let _ = write!(out, "(({})(", shift_operand_ctype(lhs));
+                let _ = write!(out, "(({})(", shift_operand_ctype(lhs, rhs));
                 write_expr_dec(lhs, out);
                 out.push_str(") >> ");
                 write_expr_dec(rhs, out);
