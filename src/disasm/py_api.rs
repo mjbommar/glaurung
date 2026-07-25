@@ -206,7 +206,7 @@ pub fn disassemble_window_at_py(
     // Read full file and map VA->file offset via shared helper
     let data =
         std::fs::read(&path).map_err(|e| PyValueError::new_err(format!("read error: {}", e)))?;
-    let foff = match crate::analysis::entry::va_to_file_offset(&data, start_va) {
+    let foff = match crate::analysis::entry::va_to_code_file_offset(&data, start_va) {
         Some(v) => v,
         None => {
             return Err(PyValueError::new_err(format!(

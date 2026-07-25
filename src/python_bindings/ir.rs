@@ -337,7 +337,7 @@ fn lift_window_at_py(
 ) -> PyResult<PyObject> {
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
-    let foff = crate::analysis::entry::va_to_file_offset(&data, start_va).ok_or_else(|| {
+    let foff = crate::analysis::entry::va_to_code_file_offset(&data, start_va).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!("no mapping for VA 0x{:x}", start_va))
     })?;
     let end = foff.saturating_add(window_bytes).min(data.len());

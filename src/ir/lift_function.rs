@@ -8,7 +8,7 @@
 //! other architectures return `None` so callers can handle the unsupported
 //! case explicitly rather than receive a silently-incomplete result.
 
-use crate::analysis::entry::va_to_file_offset;
+use crate::analysis::entry::va_to_code_file_offset;
 use crate::core::binary::Arch;
 use crate::core::function::Function;
 use crate::ir::types::*;
@@ -52,7 +52,7 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
         if end <= start {
             continue;
         }
-        let Some(foff) = va_to_file_offset(data, start) else {
+        let Some(foff) = va_to_code_file_offset(data, start) else {
             continue;
         };
         let size = (end - start) as usize;

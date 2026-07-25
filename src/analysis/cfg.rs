@@ -667,8 +667,10 @@ fn discover_function(
                 blocks.insert(start_va, (cur_va, instrs));
                 break 'block;
             }
-            // Map VA -> file offset using shared helper for robustness
-            let fo = match crate::analysis::entry::va_to_file_offset(data, cur_va) {
+            // Map VA -> file offset using shared helper for robustness. The CODE
+            // resolver: in a relocatable object every section shares address 0, and
+            // the general one would hand back whichever section is listed first.
+            let fo = match crate::analysis::entry::va_to_code_file_offset(data, cur_va) {
                 Some(v) => v,
                 None => break 'block,
             };
@@ -1172,7 +1174,8 @@ fn scan_aarch64_prologue_function_starts(
         return Vec::new();
     }
     let read_word = |va: u64| -> Option<u32> {
-        let off = crate::analysis::entry::va_to_file_offset(data, va)?;
+        // Scanning for function starts reads instructions, so resolve as code.
+        let off = crate::analysis::entry::va_to_code_file_offset(data, va)?;
         let b = data.get(off..off + 4)?;
         Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     };
