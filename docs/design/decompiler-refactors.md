@@ -1,12 +1,55 @@
 # Decompiler foundational refactors (roadmap)
 
 Status tracking for the "big" refactors that keep surfacing as workarounds in the
-DecBench parity work. Current metrics on the local 14-program corpus (gcc -O0,
-`/tmp/claude-1000/local_eval.py`): **type_match 0.891** (angr 0.819),
-**GED 7.16** (angr 7.59), **byte_match 0.366** (angr 0.586). type and GED both
-beat angr; byte is the remaining gap.
+DecBench parity work.
+
+## Current metrics (2026-07-25, local 14-program corpus, gcc -O0)
+
+Measured with `/tmp/claude-1000/local_eval.py` (`NO_COLOR=1`, `unset FORCE_COLOR`).
+The angr column is a control run through the identical path, so any harness or
+metric drift would move both.
+
+| metric | glaurung | angr | previously recorded (2026-07-24) |
+|--------|----------|------|----------------------------------|
+| GED (lower)| 10.63 | **7.59** | 7.16 |
+| type_match | **0.873** | 0.819 | 0.891 |
+| byte_match | 0.314 | **0.586** | 0.366 |
+
+**type — we beat angr.** Ten of the fourteen programs now score 1.0; the two low
+ones (`structs` 0.25, `linkedlist` 0.5) are aggregates we do not recover at all.
+This is where declarations were restored to their true machine width (0.490 ->
+0.873); see `ir::widen`.
+
+**GED — we now trail angr, and this is a real regression against our own recorded
+7.16.** It is concentrated in one program: `switch_jt` scores 84, and
+`(84 - 34) / 14 ≈ 3.6` accounts for essentially the whole 7.16 -> 10.63 move.
+`dispatch`'s `switch` is emitted as a nested if/else tree with seven `goto`s into
+a shared `default` arm. Two things are true about that shape and only one of them
+is our bug:
+
+  * gcc `-O0` really did emit a comparison **decision tree**, not a jump table —
+    there is no table to recover, and the if/else nesting mirrors the machine.
+  * the seven `goto`s are ours. They arrive from 1f7a488's shared-join fallback,
+    which fixed eight fixture functions that had been returning garbage
+    (`sc_and(20,-12)` among them). That was a correct trade to make; its GED cost
+    simply was not measured at the time.
+
+The fix is not to revert it: recognising a ladder of equality comparisons against
+distinct constants, converging on shared arms, as an actual `switch` removes the
+gotos AND matches the source shape. That is roadmap item #13.
+
+**byte — still the opt-independent gap**, and it moved the wrong way against the
+recorded 0.366 (0.281 -> 0.314 within this session's own before/after, so the
+width work improved it; the loss relative to 0.366 predates that measurement).
+
+Historic head-to-head at O0+O2 is below; its glaurung column is the 2026-07-24
+state, not today's.
 
 ## Breadth checkpoint (2026-07-24) — head-to-head vs angr, O0 + O2
+
+HISTORIC. The glaurung column is the 2026-07-24 state; see "Current metrics"
+above for today's O0 figures. The O2 and angr columns have not been re-measured
+since, so the O2 row is the outstanding breadth gap.
 
 DecBench scores multiple opt levels, so O0-only numbers mislead. Full head-to-head
 on the local corpus (`EVAL_BACKEND=angr` for the baseline; `NO_COLOR=1`):
