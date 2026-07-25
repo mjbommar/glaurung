@@ -45,6 +45,16 @@ FIXTURE_FUZZ = 12
 #                          verdict must not depend on how fast the machine is.
 #   skip_exec:    bool   — not safely executable; checked structurally instead.
 OVERRIDES: dict[tuple[str, str], dict] = {
+    # 12: drive each trip count across its masked range, including the zero-trip
+    # case a wrongly-polarised loop condition turns into a full run (and back).
+    ("12_loop_rotation", "factorial_while"): {"extra_vectors": [[0], [1], [2], [15], [16], [-1]]},
+    ("12_loop_rotation", "count_up"): {"extra_vectors": [[0], [1], [15], [16], [-1]]},
+    ("12_loop_rotation", "for_accumulate"): {"extra_vectors": [[0], [1], [15], [-1]]},
+    ("12_loop_rotation", "do_while_control"): {"extra_vectors": [[0], [1], [15], [-1]]},
+    ("12_loop_rotation", "find_first_set"): {"extra_vectors": [[0], [1], [0x80000000], [0xFFFFFFFF]]},
+    ("12_loop_rotation", "skip_odd_sum"): {"extra_vectors": [[0], [1], [2], [15]]},
+    ("12_loop_rotation", "nested_rotated"): {"extra_vectors": [[0, 0], [1, 1], [7, 7], [0, 7], [7, 0]]},
+    ("12_loop_rotation", "down_by_negative_imm"): {"extra_vectors": [[0], [1], [15], [-1]]},
     # 11: drive the boundaries where a wrong width is visible — the 8-bit wrap,
     # the 32-bit product that needs 64 bits, and the sign flip in the callee.
     ("11_call_shapes", "wrap_byte"): {
@@ -193,6 +203,13 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     "10_cpp_runtime_shapes": [
         "cpp_virtual_dispatch", "cpp_ctor_dtor", "cpp_raii_guard", "cpp_exception",
         "cpp_lambda_capture", "cpp_move",
+    ],
+    # Every function is a loop SHAPE; a decompiler that drops the back-edge returns
+    # the first iteration's value, which every one of these makes visible.
+    "12_loop_rotation": [
+        "factorial_while", "count_up", "for_accumulate", "do_while_control",
+        "find_first_set", "skip_odd_sum", "nested_rotated",
+        "down_by_negative_imm",
     ],
     # Callees are required too: a callee whose own recovery is wrong makes every
     # caller's verdict meaningless.

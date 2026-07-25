@@ -626,6 +626,46 @@
     "widen_mul": "fail",
     "wrap_byte": "pass"
   },
+  "12_loop_rotation:clang:O0": {
+    "count_up": "fail",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "fail",
+    "factorial_while": "fail",
+    "find_first_set": "fail",
+    "for_accumulate": "fail",
+    "nested_rotated": "fail",
+    "skip_odd_sum": "fail"
+  },
+  "12_loop_rotation:clang:O2": {
+    "count_up": "pass",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "fail",
+    "factorial_while": "fail",
+    "find_first_set": "fail",
+    "for_accumulate": "fail",
+    "nested_rotated": "fail",
+    "skip_odd_sum": "fail"
+  },
+  "12_loop_rotation:gcc:O0": {
+    "count_up": "pass",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "pass",
+    "factorial_while": "pass",
+    "find_first_set": "fail",
+    "for_accumulate": "pass",
+    "nested_rotated": "pass",
+    "skip_odd_sum": "pass"
+  },
+  "12_loop_rotation:gcc:O2": {
+    "count_up": "fail",
+    "do_while_control": "fail",
+    "down_by_negative_imm": "fail",
+    "factorial_while": "fail",
+    "find_first_set": "fail",
+    "for_accumulate": "fail",
+    "nested_rotated": "fail",
+    "skip_odd_sum": "fail"
+  },
   "__toolchain__": {
     "clang": "Ubuntu clang version 14.0.0-1ubuntu1.1",
     "clangpp": "Ubuntu clang version 14.0.0-1ubuntu1.1",

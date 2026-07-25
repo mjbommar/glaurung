@@ -218,7 +218,31 @@
     "11_call_shapes:widen_mul:plain": "closed",
     "11_call_shapes:wrap_byte:c": "closed",
     "11_call_shapes:wrap_byte:decbench": "closed",
-    "11_call_shapes:wrap_byte:plain": "closed"
+    "11_call_shapes:wrap_byte:plain": "closed",
+    "12_loop_rotation:count_up:c": "closed",
+    "12_loop_rotation:count_up:decbench": "closed",
+    "12_loop_rotation:count_up:plain": "closed",
+    "12_loop_rotation:do_while_control:c": "closed",
+    "12_loop_rotation:do_while_control:decbench": "closed",
+    "12_loop_rotation:do_while_control:plain": "closed",
+    "12_loop_rotation:down_by_negative_imm:c": "closed",
+    "12_loop_rotation:down_by_negative_imm:decbench": "closed",
+    "12_loop_rotation:down_by_negative_imm:plain": "closed",
+    "12_loop_rotation:factorial_while:c": "closed",
+    "12_loop_rotation:factorial_while:decbench": "closed",
+    "12_loop_rotation:factorial_while:plain": "closed",
+    "12_loop_rotation:find_first_set:c": "closed",
+    "12_loop_rotation:find_first_set:decbench": "closed",
+    "12_loop_rotation:find_first_set:plain": "closed",
+    "12_loop_rotation:for_accumulate:c": "closed",
+    "12_loop_rotation:for_accumulate:decbench": "closed",
+    "12_loop_rotation:for_accumulate:plain": "closed",
+    "12_loop_rotation:nested_rotated:c": "closed",
+    "12_loop_rotation:nested_rotated:decbench": "closed",
+    "12_loop_rotation:nested_rotated:plain": "closed",
+    "12_loop_rotation:skip_odd_sum:c": "closed",
+    "12_loop_rotation:skip_odd_sum:decbench": "closed",
+    "12_loop_rotation:skip_odd_sum:plain": "closed"
   },
   "effects": {
     "08_indirect_dispatch:apply": {
@@ -332,7 +356,15 @@
     "11_call_shapes:signed_step": false,
     "11_call_shapes:spill_combine": false,
     "11_call_shapes:widen_mul": false,
-    "11_call_shapes:wrap_byte": false
+    "11_call_shapes:wrap_byte": false,
+    "12_loop_rotation:count_up": false,
+    "12_loop_rotation:do_while_control": false,
+    "12_loop_rotation:down_by_negative_imm": false,
+    "12_loop_rotation:factorial_while": false,
+    "12_loop_rotation:find_first_set": false,
+    "12_loop_rotation:for_accumulate": false,
+    "12_loop_rotation:nested_rotated": false,
+    "12_loop_rotation:skip_odd_sum": false
   },
   "verify": {
     "01_conditional_polarity:classify": [],
@@ -431,6 +463,16 @@
     "11_call_shapes:signed_step": [],
     "11_call_shapes:spill_combine": [],
     "11_call_shapes:widen_mul": [],
-    "11_call_shapes:wrap_byte": []
+    "11_call_shapes:wrap_byte": [],
+    "12_loop_rotation:count_up": [],
+    "12_loop_rotation:do_while_control": [],
+    "12_loop_rotation:down_by_negative_imm": [],
+    "12_loop_rotation:factorial_while": [],
+    "12_loop_rotation:find_first_set": [
+      "var4 is read but never defined"
+    ],
+    "12_loop_rotation:for_accumulate": [],
+    "12_loop_rotation:nested_rotated": [],
+    "12_loop_rotation:skip_odd_sum": []
   }
 }

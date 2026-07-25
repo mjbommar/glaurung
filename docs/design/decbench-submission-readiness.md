@@ -72,10 +72,20 @@ behind on clang -O0 and on recompiled-byte similarity everywhere.**
 
 Stated here so it is not discovered instead.
 
-* **clang -O0 is our worst lane and we do not know why.** GED 9.79 against
-  angr's 3.19 — a bigger gap than anything at O2, on the *unoptimised* build where
-  we should be strongest. Every structuring change this session was validated
-  against gcc. Largest single opportunity on the board, and unexplained.
+* **clang -O0 is our worst lane: GED 9.79 against angr's 3.19.** A bigger gap
+  than anything at O2, on the *unoptimised* build where we should be strongest.
+  Partly explained now. Reading the simplest program in that lane found two real
+  defects, and the distinction between them matters:
+    - a lifter bug (`add eax,-1` read as `+255`, since iced's `immediate32()`
+      returns the raw byte for an `Immediate8to32`) — **fixed**, and it repaired
+      six fixture functions, but it moved these metrics by *nothing*: GED measures
+      graph structure and a wrong constant is not graph structure.
+    - clang emits **rotated** loops (test at the top with a branch out, jump back
+      at the bottom) where gcc tests at the bottom. We invert the condition and
+      emit the back-edge as a `goto` to a label placed after the `return`, so
+      `factorial` returns the wrong value for every input. **Not fixed.** This one
+      is graph structure, so it is the part that costs GED. Fixture
+      `12_loop_rotation` now measures it per lane.
 * **O2 costs type recovery.** 0.816 at O0 against 0.523 at O2; gcc/O2 type is
   0.404 against angr's 0.543. The width work lifted O2 type_match from the 0.413
   measured on 2026-07-24 but nowhere near the O0 figure: no spill slots to type
