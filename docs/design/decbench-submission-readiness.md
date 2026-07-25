@@ -69,7 +69,10 @@ Stated here so it is not discovered instead.
   committed baseline, not hidden.
 * **The fixture gate carries 246 known failures** against 215 passes. It is a
   ratchet, not a claim of correctness: it fails on NEW regressions while keeping
-  known bugs visible per function per lane.
+  known bugs visible per function per lane. It is green — the matrix and
+  structural lanes both pass, meaning nothing in this series regressed anything
+  the gate had already measured — but "green" here means "no new breakage", not
+  "the decompiler is correct".
 * **Relocatable objects are only partly handled.** Code addresses now resolve
   through executable sections, but under `-ffunction-sections` every `.text.*`
   still shares address 0 and the first one wins.
