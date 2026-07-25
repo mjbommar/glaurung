@@ -86,6 +86,21 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
     for block in &lf.blocks {
         for ins in &block.instrs {
             let (def, uses) = def_uses(&ins.op);
+            // A CALL's argument-register uses say what the CALLEE may read. They are
+            // not evidence that THIS function has a parameter. Over-approximating uses
+            // is right for liveness and dead-code elimination, which is why `def_uses`
+            // reports them; it is wrong for inferring a signature, which is what this
+            // function does.
+            //
+            // Honest scope: this is a correctness argument, not a measured fix. It was
+            // written expecting it to explain a DecBench type_match drop; measuring
+            // before and after showed NO difference on that corpus (arities were right
+            // either way — the first touch of an argument register in these functions
+            // is its `-O0` spill, which precedes any call). Kept because the inference
+            // should not depend on `def_uses` continuing to under-report call effects.
+            if matches!(ins.op, Op::Call { .. }) {
+                continue;
+            }
             // Reads first, then the def — a use and a def of the same slot in one
             // op (`rdx = rdx + 1`) counts as a read (the incoming value is used).
             for u in &uses {
