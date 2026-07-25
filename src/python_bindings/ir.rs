@@ -836,11 +836,23 @@ fn decbench_text(
         count = violations.len(),
         "def-before-use verification found violations"
     );
-    let mut out = String::new();
+    // AFTER the `// glaurung: <name> @ <va>` header, never before it. Every consumer
+    // splits multi-function output on that header (the structural lane, the CLI's
+    // `--all` and multi-`--vas` renders), so a comment ahead of it is attributed to
+    // the PREVIOUS function — which is how the first version of this misfiled every
+    // violation by one function.
+    let mut lines = body.splitn(2, '\n');
+    let header = lines.next().unwrap_or("");
+    let rest = lines.next();
+    let mut out = String::with_capacity(body.len() + 64 * violations.len());
+    out.push_str(header);
+    out.push('\n');
     for v in &violations {
         out.push_str(&format!("// glaurung-verify: {v}\n"));
     }
-    out.push_str(&body);
+    if let Some(rest) = rest {
+        out.push_str(rest);
+    }
     out
 }
 
@@ -933,8 +945,16 @@ fn decompile_all_py(
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
         reconstruct(&mut f);
-        crate::ir::dce::prune_dead_flags(&mut f);
+        // This sequence MUST match the other decompile entry points. It did not:
+        // this one ran dead-flag pruning before constant folding and never pruned
+        // unreferenced labels, so `--all` produced different output from `--vas` for
+        // the same function — and the fixture gate's structural lane (which uses
+        // `--all`) was measuring a different pipeline from its execution lane (which
+        // uses `--vas`). Factoring these four copies into one core pipeline is the
+        // real fix; until then they are kept identical and asserted by
+        // `test_decompiler_fixture_structural.py::test_all_and_vas_agree`.
         crate::ir::const_fold::fold_constants(&mut f);
+        crate::ir::dce::prune_dead_flags(&mut f);
         crate::ir::call_args::reconstruct_args(&mut f, cc);
         crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
         crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
@@ -948,6 +968,7 @@ fn decompile_all_py(
         }
         crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
         crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
+        crate::ir::label_prune::prune_unreferenced_labels(&mut f);
         if matches!(
             cc,
             crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64

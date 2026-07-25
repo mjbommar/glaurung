@@ -307,7 +307,9 @@
     "03_loop_shapes:loop_break": [],
     "03_loop_shapes:loop_continue": [],
     "03_loop_shapes:nested_pairs": [],
-    "03_loop_shapes:while_reload_header": [],
+    "03_loop_shapes:while_reload_header": [
+      "var16 is read but never defined"
+    ],
     "04_switch_shapes:dense_jumptable": [],
     "04_switch_shapes:explicit_fallthrough": [],
     "04_switch_shapes:negative_cases": [],
@@ -319,18 +321,23 @@
     "06_calling_conventions:fact_mod": [
       "var0 is read but never defined"
     ],
-    "06_calling_conventions:fib": [],
+    "06_calling_conventions:fib": [
+      "var0 is read but never defined"
+    ],
     "06_calling_conventions:sum_arg0": [],
     "06_calling_conventions:sum_arg1": [],
     "06_calling_conventions:sum_arg10": [],
     "06_calling_conventions:sum_arg2": [],
     "06_calling_conventions:sum_arg6": [],
     "06_calling_conventions:sum_arg7": [],
-    "07_packet_parser:parse_packet": [],
-    "07_packet_parser:validate_header": [
-      "local_5 is read before it is defined",
-      "var25 is read but never defined"
+    "07_packet_parser:parse_packet": [
+      "local_12 is read but never defined",
+      "local_14 is read but never defined",
+      "local_15 is read but never defined",
+      "local_16 is read but never defined",
+      "local_a is read but never defined"
     ],
+    "07_packet_parser:validate_header": [],
     "08_indirect_dispatch:apply": [],
     "08_indirect_dispatch:dispatch": [],
     "08_indirect_dispatch:dispatch_switch": [],
@@ -343,12 +350,17 @@
     "09_memory_effects:vec_sum": [],
     "09_memory_effects:vec_transform": [],
     "10_cpp_runtime_shapes:cpp_ctor_dtor": [],
-    "10_cpp_runtime_shapes:cpp_exception": [],
-    "10_cpp_runtime_shapes:cpp_lambda_capture": [
-      "var6 is read but never defined"
+    "10_cpp_runtime_shapes:cpp_exception": [
+      "var0 is read but never defined"
     ],
-    "10_cpp_runtime_shapes:cpp_move": [],
+    "10_cpp_runtime_shapes:cpp_lambda_capture": [],
+    "10_cpp_runtime_shapes:cpp_move": [
+      "local_18 is read but never defined"
+    ],
     "10_cpp_runtime_shapes:cpp_raii_guard": [],
-    "10_cpp_runtime_shapes:cpp_virtual_dispatch": []
+    "10_cpp_runtime_shapes:cpp_virtual_dispatch": [
+      "var0 is read but never defined",
+      "var10 is read but never defined"
+    ]
   }
 }

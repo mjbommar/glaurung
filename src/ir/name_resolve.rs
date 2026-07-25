@@ -128,26 +128,59 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
 /// Mach-O stubs, ELF GOT, and the defined-symbol address map. Later sources
 /// overwrite earlier ones so — for example — a PLT entry hides a less
 /// specific GOT name at the same address.
+/// How good a name is for an address, when several symbols share it.
+///
+/// gcc emits `fib.localalias` (a LOCAL alias so a self-call can skip the PLT)
+/// alongside the GLOBAL `fib`, at the same address. Taking whichever the symbol
+/// iteration happened to reach first made a recursive function call
+/// `fib_localalias()` — a name nothing declares, so the decompiled C did not even
+/// compile. Compilers emit several such internal suffixes (`.cold`, `.part.N`,
+/// `.isra.N`, `.constprop.N`) for clones and split-out paths; the plain name is the
+/// one a reader — and a C compiler — can use.
+///
+/// Higher is better: a global plain name beats a local plain name beats a global
+/// internal alias beats a local internal alias.
+fn symbol_rank(name: &str, is_global: bool) -> u8 {
+    const INTERNAL_SUFFIXES: &[&str] = &[
+        ".localalias", ".cold", ".part.", ".isra.", ".constprop.", ".lto_priv.",
+    ];
+    let internal = INTERNAL_SUFFIXES.iter().any(|s| name.contains(s));
+    match (is_global, internal) {
+        (true, false) => 3,
+        (false, false) => 2,
+        (true, true) => 1,
+        (false, true) => 0,
+    }
+}
+
 pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
     let mut out = HashMap::new();
-    // Defined symbols (functions + exported vars).
+    // Defined symbols (functions + exported vars). Several symbols routinely share
+    // one address, so the FIRST one seen must not simply win — see `symbol_rank`.
     if let Ok(obj) = object::read::File::parse(data) {
         use object::{Object, ObjectSymbol};
+        let mut rank: HashMap<u64, u8> = HashMap::new();
+        let mut consider = |addr: u64, name: &str, is_global: bool, out: &mut HashMap<u64, String>| {
+            if name.is_empty() || addr == 0 {
+                return;
+            }
+            let r = symbol_rank(name, is_global);
+            if rank.get(&addr).is_none_or(|&best| r > best) {
+                rank.insert(addr, r);
+                out.insert(addr, name.to_string());
+            }
+        };
         for sym in obj.symbols() {
             if sym.is_definition() {
                 if let (Ok(name), addr) = (sym.name(), sym.address()) {
-                    if !name.is_empty() && addr != 0 {
-                        out.entry(addr).or_insert_with(|| name.to_string());
-                    }
+                    consider(addr, name, sym.is_global(), &mut out);
                 }
             }
         }
         for sym in obj.dynamic_symbols() {
             if sym.is_definition() {
                 if let (Ok(name), addr) = (sym.name(), sym.address()) {
-                    if !name.is_empty() && addr != 0 {
-                        out.entry(addr).or_insert_with(|| name.to_string());
-                    }
+                    consider(addr, name, sym.is_global(), &mut out);
                 }
             }
         }
@@ -532,5 +565,33 @@ mod tests {
             map.get(&0x140a92840).map(String::as_str),
             Some("KiInitializeKernelShadowStacks")
         );
+    }
+
+    #[test]
+    fn symbol_rank_prefers_the_plain_name_a_caller_can_use() {
+        // The exact collision that made a recursive call render `fib_localalias()`:
+        // gcc emits GLOBAL `fib` and LOCAL `fib.localalias` at one address. The plain
+        // global name must outrank the internal local alias regardless of iteration
+        // order.
+        assert!(symbol_rank("fib", true) > symbol_rank("fib.localalias", false));
+        // Full ordering: global-plain > local-plain > global-internal > local-internal.
+        assert!(symbol_rank("f", true) > symbol_rank("f", false));
+        assert!(symbol_rank("f", false) > symbol_rank("f.cold", true));
+        assert!(symbol_rank("f.cold", true) > symbol_rank("f.cold", false));
+        // Every internal suffix a compiler emits for clones/split-out paths is
+        // recognised as internal, so none of them can shadow the plain name.
+        for internal in [
+            "f.localalias",
+            "f.cold",
+            "f.part.0",
+            "f.isra.3",
+            "f.constprop.1",
+            "f.lto_priv.42",
+        ] {
+            assert!(
+                symbol_rank("f", false) > symbol_rank(internal, true),
+                "plain local name must outrank the internal alias {internal}"
+            );
+        }
     }
 }

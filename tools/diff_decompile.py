@@ -48,7 +48,7 @@ from elftools.elf.elffile import ELFFile
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 sys.path.insert(0, str(ROOT / "tools"))
-import fixture_toolchain as TC  # ty: ignore[unresolved-import]  # added to sys.path above
+import fixture_toolchain as TC
 import manifest as M  # ty: ignore[unresolved-import]  # added to sys.path above
 
 PRELUDE = """

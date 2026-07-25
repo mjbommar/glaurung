@@ -63,6 +63,66 @@ def test_every_structural_only_function_has_an_assertion(report):
     assert report["gaps"] == [], f"structural-only functions with no assertion: {report['gaps']}"
 
 
+def test_all_and_vas_agree():
+    """`decompile --all` and `decompile --vas <list>` must produce the same functions.
+
+    They did not. The four decompile entry points in `python_bindings/ir.rs` each
+    reproduce the pass sequence by hand, and the `--all` one ran dead-flag pruning
+    before constant folding and never pruned unreferenced labels. That is a product
+    bug — two CLI modes disagreeing about the same function — and it quietly
+    undermined this gate: the structural lane reads `--all` while the execution lane
+    reads `--vas`, so the two lanes were grading different pipelines.
+
+    `03_loop_shapes` is the fixture chosen because it WITNESSES that drift: with
+    label pruning removed from `--all` again, two of its functions differ (fixtures
+    01 and 05 have no unreferenced labels and cannot detect it). One multi-VA call
+    covers all 19 functions, so this invariant costs a couple of seconds.
+    """
+    import subprocess
+    import sys as _sys
+
+    _sys.path.insert(0, str(ROOT / "tools"))
+    import diff_decompile as D  # ty: ignore[unresolved-import]
+
+    _td = M.tmpdir()
+    with tempfile.TemporaryDirectory(**({"dir": _td} if _td else {})) as td:
+        so = S._build("03_loop_shapes", Path(td))
+        vas = [hex(sig["va"]) for sig in D.signatures(str(so))]
+        assert vas, "no DWARF signatures recovered — the comparison would be vacuous"
+        p = subprocess.run(
+            ["glaurung", "decompile", str(so), "--vas", ",".join(vas),
+             "--style", "decbench", "--no-color"],
+            capture_output=True, text=True, timeout=300, check=True,
+        )
+        per_va = _split_functions(p.stdout)
+        from_all = {k: v.strip() for k, v in S.decompile_all(so, "decbench").items()}
+
+    assert len(per_va) == len(vas), (
+        f"--vas returned {len(per_va)} functions for {len(vas)} addresses"
+    )
+    mismatched = []
+    for name, one in sorted(per_va.items()):
+        many = from_all.get(name)
+        if many is None:
+            mismatched.append(f"{name}: absent from --all")
+        elif many != one:
+            mismatched.append(f"{name}:\n--- --vas ---\n{one}\n--- --all ---\n{many}")
+    assert not mismatched, (
+        "`--all` and `--vas` disagree (the four hand-copied pass sequences have "
+        "drifted apart):\n" + "\n".join(mismatched)
+    )
+
+
+def _split_functions(text: str) -> dict[str, str]:
+    """Split a multi-function decbench render into {name: block}."""
+    parts = list(S._HDR.finditer(text))
+    out = {}
+    for i, m in enumerate(parts):
+        end = parts[i + 1].start() if i + 1 < len(parts) else len(text)
+        out[m.group("a") or m.group("b")] = text[m.start():end].strip()
+    return out
+
+
 def test_decbench_output_is_control_flow_closed(report):
     broken = {k: v for k, v in report["closure"].items()
               if k.endswith(":decbench") and v != "closed"}
