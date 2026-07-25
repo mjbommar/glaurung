@@ -128,6 +128,19 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
 /// Mach-O stubs, ELF GOT, and the defined-symbol address map. Later sources
 /// overwrite earlier ones so — for example — a PLT entry hides a less
 /// specific GOT name at the same address.
+/// True when a symbol name is a compiler-internal alias or clone rather than the
+/// name a reader (or a C compiler) would use.
+///
+/// gcc emits `fib.localalias` — a LOCAL alias so a self-call can skip the PLT —
+/// at the same address as the GLOBAL `fib`, and several more suffixes for clones
+/// and split-out paths. One list, because two copies is how they drift.
+pub(crate) fn is_internal_alias(name: &str) -> bool {
+    const INTERNAL_SUFFIXES: &[&str] = &[
+        ".localalias", ".cold", ".part.", ".isra.", ".constprop.", ".lto_priv.",
+    ];
+    INTERNAL_SUFFIXES.iter().any(|s| name.contains(s))
+}
+
 /// How good a name is for an address, when several symbols share it.
 ///
 /// gcc emits `fib.localalias` (a LOCAL alias so a self-call can skip the PLT)
@@ -140,11 +153,11 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
 ///
 /// Higher is better: a global plain name beats a local plain name beats a global
 /// internal alias beats a local internal alias.
+///
+/// The suffix list lives in [`is_internal_alias`] so the ranking and every other
+/// consumer cannot drift apart.
 fn symbol_rank(name: &str, is_global: bool) -> u8 {
-    const INTERNAL_SUFFIXES: &[&str] = &[
-        ".localalias", ".cold", ".part.", ".isra.", ".constprop.", ".lto_priv.",
-    ];
-    let internal = INTERNAL_SUFFIXES.iter().any(|s| name.contains(s));
+    let internal = is_internal_alias(name);
     match (is_global, internal) {
         (true, false) => 3,
         (false, false) => 2,
@@ -596,5 +609,111 @@ mod tests {
                 "plain local name must outrank the internal alias {internal}"
             );
         }
+    }
+}
+
+/// Pick the best name for the outer function being decompiled.
+///
+/// `discovered_name` is whatever the CFG discovery pass produced
+/// (`sub_<va>` for stripped binaries, a real symbol when one was available
+/// at scan time). `addr_map` has been overlaid with PE/PDB public symbols
+/// when a `--pdb-cache` was supplied, so this gives the PDB name priority
+/// over the placeholder `sub_<va>` -- the exact scenario Phase F2 / A3
+/// targets. When `discovered_name` already looks real (anything other than
+/// `sub_<hex>`) we keep it so we don't trample a stronger DWARF / FLIRT /
+/// IAT label that the CFG pass already applied.
+pub(crate) fn resolve_outer_function_name(
+    discovered_name: &str,
+    func_va: u64,
+    addr_map: &std::collections::HashMap<u64, String>,
+) -> String {
+    // The address map is already best-ranked per address (`name_resolve::symbol_rank`),
+    // so it is consulted whenever the discovered name is one we would rather not use:
+    // a synthesised `sub_`, OR a compiler-internal alias.
+    //
+    // gcc -O2 emits `fib.localalias` at the SAME address as the global `fib`, and
+    // discovery can pick either. Taking the alias renamed the function
+    // `fib_localalias`, which no source declares — so DecBench could not match it to
+    // `fib` and scored NO graph edit distance for the whole binary, while angr scored
+    // it normally. A name nobody else uses is not a cosmetic problem.
+    let unwanted = discovered_name.starts_with("sub_")
+        || is_internal_alias(discovered_name);
+    if !unwanted {
+        return discovered_name.to_string();
+    }
+    match addr_map.get(&func_va) {
+        Some(name)
+            if !name.is_empty()
+                && !name.starts_with("sub_")
+                && !is_internal_alias(name) =>
+        {
+            name.clone()
+        }
+        _ => discovered_name.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod outer_name_tests {
+    use super::resolve_outer_function_name;
+    use std::collections::HashMap;
+
+    fn map(pairs: &[(u64, &str)]) -> HashMap<u64, String> {
+        pairs.iter().map(|(a, n)| (*a, n.to_string())).collect()
+    }
+
+    /// The bug this fixes, exactly: gcc -O2 emits `fib.localalias` at the same
+    /// address as the global `fib`. Naming the function `fib_localalias` means no
+    /// source declares it, DecBench cannot match it, and the binary scores NO graph
+    /// edit distance at all while angr scores it normally.
+    #[test]
+    fn an_internal_alias_loses_to_the_plain_name_at_the_same_address() {
+        let m = map(&[(0x1100, "fib")]);
+        assert_eq!(resolve_outer_function_name("fib.localalias", 0x1100, &m), "fib");
+    }
+
+    /// Every internal suffix the ranking knows about, not just `.localalias`.
+    #[test]
+    fn every_internal_suffix_loses_to_the_plain_name() {
+        let m = map(&[(0x2000, "work")]);
+        for alias in [
+            "work.cold",
+            "work.part.0",
+            "work.isra.3",
+            "work.constprop.1",
+            "work.lto_priv.42",
+        ] {
+            assert_eq!(resolve_outer_function_name(alias, 0x2000, &m), "work", "{alias}");
+        }
+    }
+
+    /// A synthesised name still defers to a real symbol — the original behaviour.
+    #[test]
+    fn a_synthesised_name_still_defers_to_a_real_symbol() {
+        let m = map(&[(0x1100, "fib")]);
+        assert_eq!(resolve_outer_function_name("sub_1100", 0x1100, &m), "fib");
+    }
+
+    /// A perfectly good discovered name is never second-guessed.
+    #[test]
+    fn a_plain_discovered_name_is_kept() {
+        let m = map(&[(0x1100, "something_else")]);
+        assert_eq!(resolve_outer_function_name("fib", 0x1100, &m), "fib");
+    }
+
+    /// If the ONLY symbol at the address is itself an alias, keep what we had
+    /// rather than swapping one unusable name for another.
+    #[test]
+    fn an_alias_is_kept_when_the_map_offers_no_better_name() {
+        let m = map(&[(0x1100, "fib.cold")]);
+        assert_eq!(
+            resolve_outer_function_name("fib.localalias", 0x1100, &m),
+            "fib.localalias"
+        );
+        let empty = map(&[]);
+        assert_eq!(
+            resolve_outer_function_name("fib.localalias", 0x1100, &empty),
+            "fib.localalias"
+        );
     }
 }

@@ -1146,29 +1146,8 @@ fn decompile_many_py(
     Ok(list.into())
 }
 
-/// Pick the best name for the outer function being decompiled.
-///
-/// `discovered_name` is whatever the CFG discovery pass produced
-/// (`sub_<va>` for stripped binaries, a real symbol when one was available
-/// at scan time). `addr_map` has been overlaid with PE/PDB public symbols
-/// when a `--pdb-cache` was supplied, so this gives the PDB name priority
-/// over the placeholder `sub_<va>` -- the exact scenario Phase F2 / A3
-/// targets. When `discovered_name` already looks real (anything other than
-/// `sub_<hex>`) we keep it so we don't trample a stronger DWARF / FLIRT /
-/// IAT label that the CFG pass already applied.
-fn resolve_outer_function_name(
-    discovered_name: &str,
-    func_va: u64,
-    addr_map: &std::collections::HashMap<u64, String>,
-) -> String {
-    if !discovered_name.starts_with("sub_") {
-        return discovered_name.to_string();
-    }
-    match addr_map.get(&func_va) {
-        Some(name) if !name.is_empty() && !name.starts_with("sub_") => name.clone(),
-        _ => discovered_name.to_string(),
-    }
-}
+use crate::ir::name_resolve::resolve_outer_function_name;
+
 
 /// Register LLIR-related Python bindings under the `ir` submodule.
 pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1182,3 +1161,4 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
     m.add_submodule(&ir_mod)?;
     Ok(())
 }
+
