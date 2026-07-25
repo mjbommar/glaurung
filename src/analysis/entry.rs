@@ -206,10 +206,10 @@ mod tests {
 
         // (name-index, sh_type, sh_flags, sh_offset, sh_size)
         let secs: [(u32, u32, u64, usize, usize); 4] = [
-            (0, 0, 0, 0, 0),                       // SHT_NULL
-            (1, 3, 0, strtab_off, strtab.len()),   // .strtab   SHT_STRTAB
-            (9, 1, 0x6, text_off, text.len()),     // .text     SHT_PROGBITS, ALLOC|EXECINSTR
-            (15, 3, 0, shstr_off, shstr.len()),    // .shstrtab SHT_STRTAB
+            (0, 0, 0, 0, 0),                     // SHT_NULL
+            (1, 3, 0, strtab_off, strtab.len()), // .strtab   SHT_STRTAB
+            (9, 1, 0x6, text_off, text.len()),   // .text     SHT_PROGBITS, ALLOC|EXECINSTR
+            (15, 3, 0, shstr_off, shstr.len()),  // .shstrtab SHT_STRTAB
         ];
         for (i, (name, kind, flags, off, size)) in secs.iter().enumerate() {
             let b = shoff + i * SHDR;
@@ -256,7 +256,8 @@ mod tests {
     /// not change those answers.
     #[test]
     fn a_linked_image_resolves_identically_through_both_resolvers() {
-        let path = std::path::Path::new("tests/decompiler_fixtures/build/02_integer_widths-gcc-O0.so");
+        let path =
+            std::path::Path::new("tests/decompiler_fixtures/build/02_integer_widths-gcc-O0.so");
         if !path.exists() {
             return; // fixture build is optional for this crate's unit tests
         }

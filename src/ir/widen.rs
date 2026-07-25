@@ -28,7 +28,7 @@
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, VReg};
-use crate::ir::types_recover::{TypeHint, TypeMap};
+use crate::ir::types_recover::TypeMap;
 
 /// Width, in bytes, at which a subexpression's value is consumed. `None` means
 /// "no widening applies here" — recurse, but do not insert casts at this level.
@@ -47,7 +47,7 @@ pub fn insert_widening_casts(f: &mut Function, tm: &TypeMap) {
     rewrite_body(&mut f.body, ret_width, tm);
 }
 
-fn rewrite_body(body: &mut Vec<Stmt>, ret_width: u8, tm: &TypeMap) {
+fn rewrite_body(body: &mut [Stmt], ret_width: u8, tm: &TypeMap) {
     for s in body.iter_mut() {
         rewrite_stmt(s, ret_width, tm);
     }
@@ -224,6 +224,7 @@ fn declared_int(name: Option<&str>, tm: &TypeMap) -> Option<(bool, u8)> {
 mod tests {
     use super::*;
     use crate::ir::ast::render_decbench_typed;
+    use crate::ir::types_recover::TypeHint;
 
     fn tm_of(pairs: &[(&str, bool, u8)]) -> TypeMap {
         let mut m = TypeMap::default();
@@ -271,8 +272,9 @@ mod tests {
         insert_widening_casts(&mut f, &tm);
         let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
         assert!(
-            out.contains("(unsigned long)((unsigned int)(arg0)) * (unsigned long)((unsigned int)(arg1))")
-                || out.contains("(unsigned long)((unsigned int)(arg0))"),
+            out.contains(
+                "(unsigned long)((unsigned int)(arg0)) * (unsigned long)((unsigned int)(arg1))"
+            ) || out.contains("(unsigned long)((unsigned int)(arg0))"),
             "both operands must widen before the multiply:\n{out}"
         );
     }
@@ -288,7 +290,10 @@ mod tests {
         }]);
         insert_widening_casts(&mut f, &tm);
         let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
-        assert!(out.contains("(unsigned long)"), "shifted value must widen:\n{out}");
+        assert!(
+            out.contains("(unsigned long)"),
+            "shifted value must widen:\n{out}"
+        );
     }
 
     /// The count of a shift is not a wide operand — widening it is pure noise.
