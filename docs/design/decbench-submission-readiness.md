@@ -48,8 +48,18 @@ flatter us. The honest picture:
 | O2 | 27 | 10.40 | 0.523 | 0.127 |
 | **overall** | **55** | **9.12** | **0.678** | **0.184** |
 
-One O2 binary produced no result (27 of 28), which is itself a finding and is not
-averaged away.
+One O2 binary is missing from the GED column (27 of 28), and it is named rather
+than averaged away: **`recursion-gcc-O2`**. DecBench reports *"No DWARF ground
+truth types … may not have been compiled with -g"* and scores only byte_match for
+it — no GED, no type_match. It WAS built with `-g`, and DWARF subprograms for
+`fib` and `ackermann` are present; at `-O2` gcc also emits `fib.localalias` and
+`ackermann.localalias` at the *same addresses* as the exported symbols, which is a
+plausible cause but is not confirmed.
+
+What matters for the submission is that this is a ground-truth-side gap, not a
+glaurung failure: any decompiler evaluated on that binary loses the same two
+metrics. The angr control across the same 55 evaluations should therefore also
+show 27 at O2 — if it shows 28, this diagnosis is wrong and the number is ours.
 
 ### The gcc/O0 slice, where the work of this session was done
 
