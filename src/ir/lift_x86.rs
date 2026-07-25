@@ -1026,16 +1026,53 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // form is handled by the binary-op path above.)
         Mnemonic::Imul => {
             if instr.op_count() == 3 && instr.op_kind(0) == OpKind::Register {
-                let dst = VReg::phys(reg_name(instr.op_register(0)));
-                if let (Some(lhs), Some(rhs)) =
-                    (value_of_operand(instr, 1), value_of_operand(instr, 2))
-                {
-                    return vec![Op::Bin {
-                        dst,
-                        op: BinOp::Mul,
-                        lhs,
-                        rhs,
-                    }];
+                let dst_name = reg_name(instr.op_register(0));
+                let dst = VReg::phys(&dst_name);
+                if let Some(rhs) = value_of_operand(instr, 2) {
+                    // The multiplicand may be MEMORY: clang at -O0 spills each
+                    // parameter and multiplies straight out of the slot
+                    // (`imul $0x3,-0xc(%rbp),%ecx`). Requiring a register source
+                    // dropped the whole multiply — `a2 * 3` vanished from
+                    // `sum_arg3` and the surrounding expression silently reused
+                    // another term.
+                    let mut ops = Vec::new();
+                    let lhs = match (value_of_operand(instr, 1), instr.op_kind(1)) {
+                        (Some(v), _) => v,
+                        (None, OpKind::Memory) => {
+                            let t = VReg::Temp(3);
+                            ops.push(Op::Load {
+                                dst: t.clone(),
+                                addr: mem_op_of(instr),
+                            });
+                            Value::Reg(t)
+                        }
+                        _ => {
+                            return vec![Op::Unknown {
+                                mnemonic: "imul".into(),
+                            }]
+                        }
+                    };
+                    // A partial-view destination is a bit-preserving write of the
+                    // product, not a write of a register of its own.
+                    match partial_gp_view(&dst_name) {
+                        Some(v) => {
+                            let t = VReg::Temp(4);
+                            ops.push(Op::Bin {
+                                dst: t.clone(),
+                                op: BinOp::Mul,
+                                lhs,
+                                rhs,
+                            });
+                            ops.extend(partial_write_ops(v, Value::Reg(t)));
+                        }
+                        None => ops.push(Op::Bin {
+                            dst,
+                            op: BinOp::Mul,
+                            lhs,
+                            rhs,
+                        }),
+                    }
+                    return ops;
                 }
             }
             vec![Op::Unknown {
@@ -2086,6 +2123,40 @@ mod tests {
                 assert_eq!(*rhs, Value::Const(5));
             }
             other => panic!("expected Bin, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn three_operand_imul_from_memory_is_lifted() {
+        // imul $0x3,-0xc(%rbp),%ecx — clang at -O0 multiplies straight out of a
+        // parameter's spill slot. Requiring a REGISTER multiplicand dropped the whole
+        // instruction to `Unknown`, so `a2 * 3` silently vanished from `sum_arg3` and
+        // the surrounding expression reused another term instead.
+        let ops = lift64(&[0x6b, 0x4d, 0xf4, 0x03]);
+        assert_eq!(ops.len(), 2, "expected a load then a multiply: {ops:?}");
+        assert!(matches!(&ops[0].op, Op::Load { .. }), "{:?}", ops[0].op);
+        match &ops[1].op {
+            Op::Bin {
+                op: BinOp::Mul,
+                rhs: Value::Const(3),
+                ..
+            } => {}
+            other => panic!("expected a multiply by 3, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn three_operand_imul_from_a_register_still_lifts_to_one_op() {
+        // imul $0x5,%ecx,%eax  (6b c1 05)
+        let ops = lift64(&[0x6b, 0xc1, 0x05]);
+        assert_eq!(ops.len(), 1);
+        match &ops[0].op {
+            Op::Bin {
+                op: BinOp::Mul,
+                rhs: Value::Const(5),
+                ..
+            } => {}
+            other => panic!("expected a multiply by 5, got {other:?}"),
         }
     }
 
