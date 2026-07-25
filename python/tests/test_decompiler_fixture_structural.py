@@ -17,6 +17,7 @@ Hard, non-baselined invariants (must always hold):
 
 Marked `slow` (builds 10 fixtures + decompiles each in 3 styles); run with -m slow.
 """
+
 from __future__ import annotations
 
 import json
@@ -57,10 +58,13 @@ def baseline() -> dict:
 
 # --- hard invariants --------------------------------------------------------
 
+
 def test_every_structural_only_function_has_an_assertion(report):
     # A function the exec gate can only mark `structural` MUST have a structural
     # assertion — otherwise it is completely untested.
-    assert report["gaps"] == [], f"structural-only functions with no assertion: {report['gaps']}"
+    assert report["gaps"] == [], (
+        f"structural-only functions with no assertion: {report['gaps']}"
+    )
 
 
 def test_all_and_vas_agree():
@@ -90,9 +94,20 @@ def test_all_and_vas_agree():
         vas = [hex(sig["va"]) for sig in D.signatures(str(so))]
         assert vas, "no DWARF signatures recovered — the comparison would be vacuous"
         p = subprocess.run(
-            ["glaurung", "decompile", str(so), "--vas", ",".join(vas),
-             "--style", "decbench", "--no-color"],
-            capture_output=True, text=True, timeout=300, check=True,
+            [
+                "glaurung",
+                "decompile",
+                str(so),
+                "--vas",
+                ",".join(vas),
+                "--style",
+                "decbench",
+                "--no-color",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
         )
         per_va = _split_functions(p.stdout)
         from_all = {k: v.strip() for k, v in S.decompile_all(so, "decbench").items()}
@@ -119,13 +134,16 @@ def _split_functions(text: str) -> dict[str, str]:
     out = {}
     for i, m in enumerate(parts):
         end = parts[i + 1].start() if i + 1 < len(parts) else len(text)
-        out[m.group("a") or m.group("b")] = text[m.start():end].strip()
+        out[m.group("a") or m.group("b")] = text[m.start() : end].strip()
     return out
 
 
 def test_decbench_output_is_control_flow_closed(report):
-    broken = {k: v for k, v in report["closure"].items()
-              if k.endswith(":decbench") and v != "closed"}
+    broken = {
+        k: v
+        for k, v in report["closure"].items()
+        if k.endswith(":decbench") and v != "closed"
+    }
     assert not broken, f"DecBench render not control-flow closed: {broken}"
 
 
@@ -145,6 +163,7 @@ def test_declared_structural_predicates_are_all_present(report):
 
 
 # --- baseline comparison (fail closed on regression) ------------------------
+
 
 def _closure_regressed(base: str, cur: str) -> bool:
     if base == cur:
