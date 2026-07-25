@@ -424,15 +424,22 @@ fn decompile_at_py(
             ))
         })?;
     let (arch, cc) = detect_arch_and_call_conv(&data);
-    let lf = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
+    let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
-    let ssa = compute_ssa(&lf);
-    let region = recover_verified(&lf, &ssa);
+    let ssa = compute_ssa(&lf_raw);
+    let region = recover_verified(&lf_raw, &ssa);
+    // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
+    // -> `rdi`) so def/use versions line up for value correctness. But the
+    // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
+    // canonicalisation erases it. So type recovery runs on `lf_raw` (widths
+    // intact) while everything downstream uses the canonicalised `lf`; the
+    // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
+    // narrower width.
     let lf = if style == "decbench" {
-        crate::ir::value_number::value_number(&lf, &ssa, cc)
+        crate::ir::value_number::value_number(&lf_raw, &ssa, cc)
     } else {
-        lf
+        lf_raw.clone()
     };
     // Live-in argument slots (authoritative parameter set) for the type-map
     // remap, so scratch reuse of an arg register never becomes a spurious `argN`.
@@ -479,13 +486,6 @@ fn decompile_at_py(
     // names (`arg0`, `ret`, `varN`) that the naming pass introduces.
     let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
     dp!("promote_stack_locals");
-    // Type recovery runs on the raw LLIR (before register renaming) so we
-    // can cross-reference the renamed AST against the recovered types.
-    let tm = if types {
-        Some(recover_types_for(&lf, cc))
-    } else {
-        None
-    };
     crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
     dp!("split_spilled_arg_reuse");
     crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
@@ -529,28 +529,27 @@ fn decompile_at_py(
         // DecBench wants concrete C types. Reuse the recovered TypeMap when it
         // was computed, else recover on demand, then remap raw-reg keys to the
         // AST's role names (`arg0`, `ret`, ...) before rendering.
-        let mut renamed = tm
-            .as_ref()
-            .map(|t| remap_type_map(t, &f, cc, &param_slots))
-            .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc, &param_slots));
-        merge_slot_sizes(&mut renamed, &slot_sizes);
-        crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
+        let maps =
+            types.then(|| decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes));
+        let (decl, width) = match &maps {
+            Some((d, w)) => (Some(d), Some(w)),
+            None => (None, None),
+        };
+        crate::ir::ast::render_decbench_typed(&f, decl, width)
     } else if style == "c" {
         let body = crate::ir::ast::render_c(&f);
         match pdb_outer_name {
             Some(name) => format!("// PDB: {}\n{}", name, body),
             None => body,
         }
+    } else if types {
+        // Plain-with-types style. Non-decbench paths skip `value_number`, so the
+        // raw LLIR is the canonical one; remap the TypeMap keys from raw physical
+        // regs into the role-based names the AST now uses.
+        let renamed = remap_type_map(&recover_types_for(&lf_raw, cc), &f, cc, &param_slots);
+        render_with_types(&f, &renamed)
     } else {
-        match tm {
-            Some(tm) => {
-                // Remap the TypeMap keys from raw physical regs into the
-                // role-based names the AST now uses.
-                let renamed = remap_type_map(&tm, &f, cc, &param_slots);
-                render_with_types(&f, &renamed)
-            }
-            None => render(&f),
-        }
+        render(&f)
     })
 }
 
@@ -629,15 +628,22 @@ fn decompile_range_at_py(
         Some(Vec::new()),
     ));
 
-    let lf = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
+    let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
-    let ssa = compute_ssa(&lf);
-    let region = recover_verified(&lf, &ssa);
+    let ssa = compute_ssa(&lf_raw);
+    let region = recover_verified(&lf_raw, &ssa);
+    // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
+    // -> `rdi`) so def/use versions line up for value correctness. But the
+    // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
+    // canonicalisation erases it. So type recovery runs on `lf_raw` (widths
+    // intact) while everything downstream uses the canonicalised `lf`; the
+    // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
+    // narrower width.
     let lf = if style == "decbench" {
-        crate::ir::value_number::value_number(&lf, &ssa, cc)
+        crate::ir::value_number::value_number(&lf_raw, &ssa, cc)
     } else {
-        lf
+        lf_raw.clone()
     };
     let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
     let mut f = lower(&lf, &region, func.name.clone());
@@ -655,11 +661,6 @@ fn decompile_range_at_py(
     crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
     crate::ir::canary::recognise_canary(&mut f);
     let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
-    let tm = if types {
-        Some(recover_types_for(&lf, cc))
-    } else {
-        None
-    };
     crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
     crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
     crate::ir::canary::collapse_canary_save(&mut f);
@@ -679,22 +680,20 @@ fn decompile_range_at_py(
         crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
     }
     Ok(if style == "decbench" {
-        let mut renamed = tm
-            .as_ref()
-            .map(|t| remap_type_map(t, &f, cc, &param_slots))
-            .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc, &param_slots));
-        merge_slot_sizes(&mut renamed, &slot_sizes);
-        crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
+        let maps =
+            types.then(|| decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes));
+        let (decl, width) = match &maps {
+            Some((d, w)) => (Some(d), Some(w)),
+            None => (None, None),
+        };
+        crate::ir::ast::render_decbench_typed(&f, decl, width)
     } else if style == "c" {
         crate::ir::ast::render_c(&f)
+    } else if types {
+        let renamed = remap_type_map(&recover_types_for(&lf_raw, cc), &f, cc, &param_slots);
+        render_with_types(&f, &renamed)
     } else {
-        match tm {
-            Some(tm) => {
-                let renamed = remap_type_map(&tm, &f, cc, &param_slots);
-                render_with_types(&f, &renamed)
-            }
-            None => render(&f),
-        }
+        render(&f)
     })
 }
 
@@ -801,6 +800,33 @@ fn remap_type_map(
     out
 }
 
+/// Build the `(declaration, width)` type-map pair the DecBench renderer needs.
+///
+/// Declarations come from the canonicalised LLIR (`lf`, sub-registers folded to
+/// their 64-bit parent) so def/use versions align and no value is wrongly
+/// narrowed where it feeds widening arithmetic. The logical-shift cast instead
+/// needs each operand's *machine* width (`edi`=4), which only survives in the
+/// pre-canonicalisation LLIR (`lf_raw`); that becomes the width map. Both are
+/// remapped to AST role names and augmented with promoted-slot sizes.
+fn decbench_type_maps(
+    lf: &crate::ir::types::LlirFunction,
+    lf_raw: &crate::ir::types::LlirFunction,
+    f: &crate::ir::ast::Function,
+    cc: crate::ir::call_args::CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    slot_sizes: &std::collections::HashMap<String, u8>,
+) -> (
+    crate::ir::types_recover::TypeMap,
+    crate::ir::types_recover::TypeMap,
+) {
+    use crate::ir::types_recover::recover_types_for;
+    let mut decl = remap_type_map(&recover_types_for(lf, cc), f, cc, param_slots);
+    merge_slot_sizes(&mut decl, slot_sizes);
+    let mut width = remap_type_map(&recover_types_for(lf_raw, cc), f, cc, param_slots);
+    merge_slot_sizes(&mut width, slot_sizes);
+    (decl, width)
+}
+
 /// Decompile the first `limit` discovered functions. Returns a list of
 /// `(func_name, entry_va, pseudocode)` triples.
 ///
@@ -847,15 +873,17 @@ fn decompile_all_py(
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {
-        let Some(lf) = lift_function_from_bytes(&data, func, arch) else {
+        let Some(lf_raw) = lift_function_from_bytes(&data, func, arch) else {
             continue;
         };
-        let ssa = compute_ssa(&lf);
-        let region = recover_verified(&lf, &ssa);
+        let ssa = compute_ssa(&lf_raw);
+        let region = recover_verified(&lf_raw, &ssa);
+        // Recover types on the pre-canonicalisation LLIR (sub-register widths
+        // intact); see the note in `decompile_at`.
         let lf = if style == "decbench" {
-            crate::ir::value_number::value_number(&lf, &ssa, cc)
+            crate::ir::value_number::value_number(&lf_raw, &ssa, cc)
         } else {
-            lf
+            lf_raw.clone()
         };
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
@@ -886,9 +914,9 @@ fn decompile_all_py(
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
         let text = if style == "decbench" {
-            let mut renamed = remap_type_map(&recover_types_for(&lf, cc), &f, cc, &param_slots);
-            merge_slot_sizes(&mut renamed, &slot_sizes);
-            crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
+            let (decl, width) =
+                decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
+            crate::ir::ast::render_decbench_typed(&f, Some(&decl), Some(&width))
         } else {
             render(&f)
         };
@@ -963,15 +991,17 @@ fn decompile_many_py(
         if !wanted.contains(&func_va) {
             continue;
         }
-        let Some(lf) = lift_function_from_bytes(&data, func, arch) else {
+        let Some(lf_raw) = lift_function_from_bytes(&data, func, arch) else {
             continue;
         };
-        let ssa = compute_ssa(&lf);
-        let region = recover_verified(&lf, &ssa);
+        let ssa = compute_ssa(&lf_raw);
+        let region = recover_verified(&lf_raw, &ssa);
+        // Recover types on the pre-canonicalisation LLIR (sub-register widths
+        // intact); see the note in `decompile_at`.
         let lf = if style == "decbench" {
-            crate::ir::value_number::value_number(&lf, &ssa, cc)
+            crate::ir::value_number::value_number(&lf_raw, &ssa, cc)
         } else {
-            lf
+            lf_raw.clone()
         };
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
@@ -985,7 +1015,7 @@ fn decompile_many_py(
         crate::ir::canary::recognise_canary(&mut f);
         let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
         let tm = if types {
-            Some(recover_types_for(&lf, cc))
+            Some(recover_types_for(&lf_raw, cc))
         } else {
             None
         };
@@ -1012,12 +1042,9 @@ fn decompile_many_py(
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
         let text = if style == "decbench" {
-            let mut renamed = tm
-                .as_ref()
-                .map(|t| remap_type_map(t, &f, cc, &param_slots))
-                .unwrap_or_else(|| remap_type_map(&recover_types_for(&lf, cc), &f, cc, &param_slots));
-            merge_slot_sizes(&mut renamed, &slot_sizes);
-            crate::ir::ast::render_decbench_typed(&f, Some(&renamed))
+            let (decl, width) =
+                decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
+            crate::ir::ast::render_decbench_typed(&f, Some(&decl), Some(&width))
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);
             match pdb_outer_name {

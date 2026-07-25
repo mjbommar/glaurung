@@ -2186,7 +2186,7 @@ fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'sta
 /// Untyped entry point (blanket `long`) — used by unit tests and any consumer
 /// that has no recovered types.
 pub fn render_decbench(f: &Function) -> String {
-    render_decbench_typed(f, None)
+    render_decbench_typed(f, None, None)
 }
 
 /// Render `f` as parseable C for DecBench, typing the return value and
@@ -2400,7 +2400,11 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
     }
 }
 
-pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
+pub fn render_decbench_typed(
+    f: &Function,
+    tm: Option<&TypeMap>,
+    width_tm: Option<&TypeMap>,
+) -> String {
     // Work on a private copy so the cleanups below don't perturb other renders.
     // First give bare returns (value computed in another block) their ABI return
     // register — so this always-non-void renderer emits `return ret;` not the
@@ -2446,11 +2450,27 @@ pub fn render_decbench_typed(f: &Function, tm: Option<&TypeMap>) -> String {
     // locals) with its pointee width, so the array-index render can rewrite
     // `*(T*)(base + i*sizeof(T))` as `base[i]` for those bases.
     DEC_PTRS.with(|m| m.borrow_mut().clear());
+    DEC_INT_WIDTHS.with(|m| m.borrow_mut().clear());
     if let Some(tm) = tm {
         for (v, hint) in tm.iter() {
             if let (VReg::Phys(n), TypeHint::Pointer { pointee_width }) = (v, hint) {
                 if parse_arg_index(n).is_some() || is_promoted_local(n) {
                     DEC_PTRS.with(|m| m.borrow_mut().insert(n.clone(), *pointee_width));
+                }
+            }
+        }
+    }
+    // The logical-shift cast needs each operand's *machine* width (`edi`=4),
+    // which the pre-canonicalisation `width_tm` carries; it is deliberately
+    // decoupled from the recovered *declaration* type in `tm` (canonicalised to
+    // 64-bit parents to keep def/use versions aligned). Narrowing only the
+    // shift cast — not the declaration or the surrounding arithmetic — avoids
+    // changing the width at which a widened value (`(uint64_t)a * b`) computes.
+    if let Some(wtm) = width_tm.or(tm) {
+        for (v, hint) in wtm.iter() {
+            if let (VReg::Phys(n), TypeHint::Int { width, .. }) = (v, hint) {
+                if *width > 0 && (parse_arg_index(n).is_some() || is_promoted_local(n)) {
+                    DEC_INT_WIDTHS.with(|m| m.borrow_mut().insert(n.clone(), *width));
                 }
             }
         }
@@ -2715,6 +2735,15 @@ thread_local! {
     /// Only declared pointers appear here, so `base[i]` is always valid C.
     static DEC_PTRS: std::cell::RefCell<std::collections::HashMap<String, u8>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// Integer-typed names in the current render (arguments and promoted scalar
+    /// locals) → their declared byte width. Consulted by the logical-shift render
+    /// so `(unsigned)x >> k` on a 32-bit operand casts to `unsigned int` rather
+    /// than a blanket `unsigned long`: a blanket 64-bit cast sign-extends a
+    /// negative narrow value into the high half before the zero-filling shift,
+    /// producing a different result than the original narrow shift.
+    static DEC_INT_WIDTHS: std::cell::RefCell<std::collections::HashMap<String, u8>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 fn dec_ptr_arg_type(name: &str) -> Option<&'static str> {
@@ -2724,6 +2753,47 @@ fn dec_ptr_arg_type(name: &str) -> Option<&'static str> {
 /// The pointee width of `name` if it is declared as a pointer in this render.
 fn dec_ptr_width(name: &str) -> Option<u8> {
     DEC_PTRS.with(|m| m.borrow().get(name).copied())
+}
+
+/// The declared integer byte-width of `name` if it is an integer-typed
+/// argument/local in this render (see `DEC_INT_WIDTHS`).
+fn dec_int_width(name: &str) -> Option<u8> {
+    DEC_INT_WIDTHS.with(|m| m.borrow().get(name).copied())
+}
+
+/// The C spelling of an `size`-byte *unsigned* integer, for logical-shift casts.
+fn unsigned_ctype(size: u8) -> &'static str {
+    match size {
+        1 => "unsigned char",
+        2 => "unsigned short",
+        4 => "unsigned int",
+        _ => "unsigned long",
+    }
+}
+
+/// The unsigned-cast width for a logical right shift's left operand. When the
+/// operand is a single integer-typed identifier whose declared width is known,
+/// the shift must happen at that width (so a negative narrow value is not
+/// sign-extended into the high half). Anything else falls back to `unsigned
+/// long`, which is correct for genuine 64-bit values and the conservative
+/// default for compound expressions.
+fn shift_operand_ctype(lhs: &Expr) -> &'static str {
+    if let Some(name) = expr_ident_name(lhs) {
+        if let Some(w) = dec_int_width(name) {
+            return unsigned_ctype(w);
+        }
+    }
+    "unsigned long"
+}
+
+/// The identifier name of an expression that is a single named value
+/// (`Expr::Named` role name, or a physical register), else `None`.
+fn expr_ident_name(e: &Expr) -> Option<&str> {
+    match e {
+        Expr::Named { name, .. } => Some(name),
+        Expr::Reg(VReg::Phys(n)) => Some(n),
+        _ => None,
+    }
 }
 
 /// Recognise the array-index idiom `base + index*sizeof(T)` for a `T`-sized
@@ -2933,7 +3003,7 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             // cast the operand to `unsigned long` so `>>` is the zero-filling
             // shift the IR means. Arithmetic shift (`Sar`) is plain `>>`.
             if matches!(op, BinOp::Shr) {
-                out.push_str("((unsigned long)(");
+                let _ = write!(out, "(({})(", shift_operand_ctype(lhs));
                 write_expr_dec(lhs, out);
                 out.push_str(") >> ");
                 write_expr_dec(rhs, out);
@@ -3966,7 +4036,7 @@ function f @ 0x1000 {
                 width: 4,
             },
         );
-        let text = render_decbench_typed(&f, Some(&tm));
+        let text = render_decbench_typed(&f, Some(&tm), None);
         assert!(
             text.contains("int add_one(int arg0) {"),
             "typed signature wrong:\n{}",
@@ -4006,7 +4076,7 @@ function f @ 0x1000 {
                 width: 4,
             },
         );
-        let text = render_decbench_typed(&f, Some(&tm));
+        let text = render_decbench_typed(&f, Some(&tm), None);
         assert!(
             text.contains("int get(") && text.contains("return local_8;"),
             "return type should be `int` from the returned local, got:\n{}",
@@ -4041,7 +4111,7 @@ function f @ 0x1000 {
         };
         let mut tm = TypeMap::default();
         tm.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 4 });
-        let text = render_decbench_typed(&f, Some(&tm));
+        let text = render_decbench_typed(&f, Some(&tm), None);
         assert!(
             text.contains("arg0[local_4]") && !text.contains("(long)arg0"),
             "expected array-index render `arg0[local_4]`, got:\n{}",
@@ -4069,7 +4139,7 @@ function f @ 0x1000 {
                 value: Some(deref2),
             }],
         };
-        let text2 = render_decbench_typed(&f2, Some(&tm));
+        let text2 = render_decbench_typed(&f2, Some(&tm), None);
         assert!(
             !text2.contains("arg0[local_4]"),
             "width mismatch must not array-index, got:\n{}",
