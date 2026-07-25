@@ -108,7 +108,100 @@ fn return_reg(arch: CallConv) -> &'static str {
     }
 }
 
-/// Record, on every call, WHERE its result lands.
+/// Is the return register read after the call at `call_idx`, before anything
+/// overwrites it? Nested bodies are treated as opaque reads (conservative): if a
+/// branch might read it, the result is consumed.
+fn return_value_is_read(body: &[Stmt], call_idx: usize, ret: &str) -> bool {
+    for s in &body[call_idx + 1..] {
+        let mut reads = false;
+        let mut writes = false;
+        walk_stmt_regs(s, ret, &mut reads, &mut writes);
+        if reads {
+            return true;
+        }
+        if writes {
+            return false;
+        }
+    }
+    // Fell off the end of this block: control continues where this walk cannot see.
+    true
+}
+
+/// Note reads and writes of `name` in `s`. A statement with a nested body reports a
+/// read if the name appears anywhere inside it, so a conditional consumer counts.
+fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
+    let mut expr_reads = |e: &Expr| {
+        if reads_reg_in_expr(e, &VReg::phys(name)) {
+            *reads = true;
+        }
+    };
+    match s {
+        Stmt::Assign { dst, src } => {
+            expr_reads(src);
+            if matches!(dst, VReg::Phys(n) if n == name) {
+                *writes = true;
+            }
+        }
+        Stmt::Store { addr, src, .. } => {
+            expr_reads(addr);
+            expr_reads(src);
+        }
+        Stmt::Call { target, args, dst } => {
+            expr_reads(target);
+            for a in args {
+                expr_reads(a);
+            }
+            // A later call clobbers the register whether or not it took the value.
+            if dst.is_none() || matches!(dst, Some(VReg::Phys(n)) if n == name) {
+                *writes = true;
+            }
+        }
+        Stmt::Return { value } => {
+            if let Some(e) = value {
+                expr_reads(e);
+            }
+        }
+        Stmt::Push { value } => expr_reads(value),
+        Stmt::Pop { target } => {
+            if matches!(target, VReg::Phys(n) if n == name) {
+                *writes = true;
+            }
+        }
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            expr_reads(cond);
+            for b in then_body.iter().chain(else_body.iter().flatten()) {
+                walk_stmt_regs(b, name, reads, writes);
+            }
+        }
+        Stmt::While { cond, body } => {
+            expr_reads(cond);
+            for b in body {
+                walk_stmt_regs(b, name, reads, writes);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            expr_reads(discriminant);
+            for b in cases
+                .iter()
+                .flat_map(|(_, b)| b)
+                .chain(default.iter().flatten())
+            {
+                walk_stmt_regs(b, name, reads, writes);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Record, on a call whose result is USED, where that result lands.
 ///
 /// A call produces a value; until this ran, the AST had no way to say so, and the
 /// emitted C dropped the result on the floor — `fib` called itself and then used the
@@ -116,15 +209,35 @@ fn return_reg(arch: CallConv) -> &'static str {
 /// register, so the naming pass turns it into `ret` alongside every other use of that
 /// register and the renderer can print `ret = f(...)`.
 ///
-/// This is deliberately unconditional: the machine clobbers the return register on
-/// every call whether the C source used the result or not, and a decompilation that
-/// pretends otherwise is claiming the register survived the call.
+/// Two different facts must not be conflated here:
+///
+/// * the ABI **clobbers** the return register on every call, used or not. That is a
+///   property of the machine and belongs in the value model (`def_uses`/SSA), where a
+///   post-call read must not see the pre-call value;
+/// * the **source consumed** the result. That is a property of this program, and it
+///   is the only one that justifies printing an assignment.
+///
+/// A first version set the destination unconditionally, which asserted the second
+/// fact everywhere the first held: `void`-returning calls rendered as `ret = puts(..)`,
+/// claiming a result the source never took. So the destination is attached only when
+/// the register is actually read before being overwritten.
+///
+/// The scan errs toward attaching it: falling off the end of the enclosing block is
+/// treated as consumed, because control continues somewhere this walk cannot see, and
+/// the costs are asymmetric — a spurious assignment is dead code a later pass can
+/// drop, while a missing one makes the reader take a stale value.
 fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
-    for s in body.iter_mut() {
+    let ret = return_reg(arch);
+    let consumed: Vec<bool> = (0..body.len())
+        .map(|i| {
+            matches!(&body[i], Stmt::Call { dst: None, .. }) && return_value_is_read(body, i, ret)
+        })
+        .collect();
+    for (i, s) in body.iter_mut().enumerate() {
         match s {
             Stmt::Call { dst, .. } => {
-                if dst.is_none() {
-                    *dst = Some(VReg::phys(return_reg(arch)));
+                if dst.is_none() && consumed[i] {
+                    *dst = Some(VReg::phys(ret));
                 }
             }
             Stmt::If {
@@ -385,7 +498,8 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Break | Stmt::Nop
+        | Stmt::Break
+        | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
     }
@@ -433,7 +547,8 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
         | Stmt::Push { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Break | Stmt::Nop
+        | Stmt::Break
+        | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
     }
@@ -915,28 +1030,120 @@ mod tests {
         assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("rdi")));
     }
 
+    fn call_to(name: &str) -> Stmt {
+        Stmt::Call {
+            target: Expr::Named {
+                va: 0x2000,
+                name: name.into(),
+            },
+            args: vec![],
+            dst: None,
+        }
+    }
+
+    fn dst_of(s: &Stmt) -> &Option<VReg> {
+        match s {
+            Stmt::Call { dst, .. } => dst,
+            other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn a_call_records_where_its_result_lands() {
+    fn a_consumed_call_result_records_where_it_lands() {
         // A call PRODUCES a value. Until the AST could say so, the emitted C dropped
         // it: `fib` called itself and then used the ARGUMENT where the returned value
         // belonged.
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
-            body: vec![Stmt::Call {
-                target: Expr::Named {
-                    va: 0x2000,
-                    name: "g".into(),
+            body: vec![
+                call_to("g"),
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("rax"))),
                 },
-                args: vec![],
-                dst: None,
-            }],
+            ],
         };
         reconstruct_args(&mut f, CallConv::SysVAmd64);
-        match &f.body[0] {
-            Stmt::Call { dst, .. } => assert_eq!(*dst, Some(VReg::phys("rax"))),
-            other => panic!("expected a call, got {other:?}"),
-        }
+        assert_eq!(*dst_of(&f.body[0]), Some(VReg::phys("rax")));
+    }
+
+    #[test]
+    fn a_result_nobody_reads_is_not_an_assignment() {
+        // The ABI clobbers the return register on EVERY call — that belongs in the
+        // value model. Printing `ret = puts(..)` claims something else: that the
+        // source took the result. Here the register is overwritten before any read.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                call_to("puts"),
+                Stmt::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Expr::Const(0),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("rax"))),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+        assert_eq!(*dst_of(&f.body[0]), None);
+    }
+
+    #[test]
+    fn a_later_call_clobbers_the_register_so_the_earlier_result_is_unread() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                call_to("first"),
+                call_to("second"),
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("rax"))),
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+        assert_eq!(*dst_of(&f.body[0]), None, "first result is never read");
+        assert_eq!(
+            *dst_of(&f.body[1]),
+            Some(VReg::phys("rax")),
+            "second result is returned"
+        );
+    }
+
+    #[test]
+    fn a_conditional_reader_counts_as_consuming_the_result() {
+        // The scan errs toward attaching the destination: a spurious assignment is
+        // dead code, a missing one makes the reader take a stale value.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                call_to("g"),
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("rdi")),
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Reg(VReg::phys("rax"))),
+                    }],
+                    else_body: None,
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+        assert_eq!(*dst_of(&f.body[0]), Some(VReg::phys("rax")));
+    }
+
+    #[test]
+    fn a_call_at_the_end_of_a_block_is_treated_as_consumed() {
+        // Control continues where this walk cannot see.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![call_to("g")],
+        };
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+        assert_eq!(*dst_of(&f.body[0]), Some(VReg::phys("rax")));
     }
 
     #[test]
@@ -956,6 +1163,8 @@ mod tests {
                     dst: None,
                 }],
             };
+            // A call at the end of a block counts as consumed, so this exercises the
+            // ABI's choice of register rather than the liveness scan.
             reconstruct_args(&mut f, cc);
             match &f.body[0] {
                 Stmt::Call { dst, .. } => assert_eq!(*dst, Some(VReg::phys(reg_name)), "{cc:?}"),
