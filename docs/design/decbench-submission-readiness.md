@@ -31,85 +31,55 @@ and `models/decompilation.py`). The 5 tests pass before and after that rebase.
 |---|-------------|-------|
 | A | output is clean C, no diagnostic noise | **done** — verifier comments are behind `GLAURUNG_VERIFY_DEFS` |
 | B | harness works against *current* upstream, on a branch | **done** — rebased, 5/5 green |
-| C | metrics measured, not remembered | **done** — gcc+clang × O0+O2, 55 evaluations; angr control running |
+| C | metrics measured, not remembered | **done** — gcc+clang × O0+O2, 56 evaluations each, angr control through the identical path |
 | D | no panics / parseable output corpus-wide | **done** — re-run after the ET_REL fix: 1646 functions, 99.7 % gcc-parse, 0 panics |
 | E | claims in the docs match what the code does | **done** — `docs/GLAURUNG.md` no longer advertises a blanket `long` signature |
 
 ## 3. What the numbers actually say
 
-### Breadth: gcc + clang, O0 + O2 (55 evaluations)
+### Head-to-head, per lane (56 evaluations each, same harness, same corpus)
 
-DecBench scores multiple optimisation levels, so a gcc/O0-only number would
-flatter us. The honest picture:
+Bold is the better number. angr is run through the identical path, so harness or
+metric drift would move both columns.
 
-| lane | n | GED (lower) | type_match | byte_match |
-|------|---|-------------|------------|------------|
-| O0 | 28 | 7.89 | 0.816 | 0.240 |
-| O2 | 27 | 10.40 | 0.523 | 0.127 |
-| **overall** | **55** | **9.12** | **0.678** | **0.184** |
+| lane | GED us | GED angr | type us | type angr | byte us | byte angr |
+|------|--------|----------|---------|-----------|---------|-----------|
+| gcc/O0 | **5.99** | 7.59 | **0.873** | 0.819 | 0.323 | **0.586** |
+| clang/O0 | 9.79 | **3.19** | 0.760 | **0.848** | 0.158 | **0.184** |
+| gcc/O2 | **17.29** | 17.51 | 0.404 | **0.543** | 0.216 | **0.291** |
+| clang/O2 | 11.56 | **11.40** | **0.652** | 0.534 | 0.036 | 0.036 |
+| **overall** | 11.16 | **9.93** | 0.678 | **0.694** | 0.183 | **0.274** |
 
-**Correction.** An earlier revision of this note recorded the one missing O2 GED
-(`recursion-gcc-O2`, 27 of 28) as a ground-truth-side gap that "any decompiler
-would lose". That was wrong, and the check that caught it was the falsifiable one
-written down at the time: angr should also show 27 at O2, and **angr showed 28**.
+By optimisation level: O0 7.89 / 0.816 / 0.240, O2 14.42 / 0.523 / 0.126.
 
-The missing GED was ours. At `-O2` gcc emits `fib.localalias` at the same address
-as the global `fib`, discovery picked the alias, and we named the function
-`fib_localalias` — a name no source declares, so DecBench could not match it and
-scored no graph edit distance for the whole binary. Fixed in
-`ir::name_resolve::resolve_outer_function_name`; that binary now returns
-ged=123.0.
+Three binaries have no `type_match` on **either** side — `recursion` at gcc/O2 and
+clang/O2, `matrix` at clang/O2. DecBench reports "No DWARF ground truth types"
+despite `-g` and present `DW_TAG_subprogram` entries. Identical on both sides is
+what makes it a ground-truth gap rather than a decompiler one; every other metric
+is 56 of 56 for both.
 
-Only the missing *type_match* is genuinely ground-truth-side: DecBench reports
-"No DWARF ground truth types" for `recursion-gcc-O2` despite `-g` and present
-DW_TAG_subprogram entries, and angr loses type_match on the same binary plus two
-clang -O2 ones.
+**What this says, without spin.** angr wins the overall on all three metrics,
+narrowly on GED (11.16 vs 9.93) and type (0.678 vs 0.694), clearly on byte (0.183
+vs 0.274). We win **gcc/O0 on GED and type** — the single lane every change this
+session was tuned against — and **clang/O2 on type** (0.652 vs 0.534). The two O2
+GED lanes are ties. Our worst relative result by far is **clang/O0: GED 9.79
+against angr's 3.19**, which is now the largest single opportunity on the board.
 
-The consequence is not small: our O2 GED of 10.40 was computed WITHOUT the binary
-we score worst on. Including it moves that figure to roughly 14.4 — level with
-angr's 14.46 rather than ahead of it. A full re-measurement with the fix is in
-flight; the tables below are being replaced by it.
-
-### The angr control, per lane (56 evaluations, same harness, same corpus)
-
-| lane | GED (lower) | type_match | byte_match |
-|------|-------------|------------|------------|
-| clang/O0 | 3.19 | 0.848 | 0.184 |
-| gcc/O0 | 7.59 | 0.819 | **0.586** |
-| clang/O2 | 11.40 | 0.534 | 0.036 |
-| gcc/O2 | 17.51 | 0.543 | 0.291 |
-| **overall** | **9.93** | **0.694** | **0.274** |
-
-angr loses type_match on three binaries (`recursion` at gcc/O2 and clang/O2,
-`matrix` at clang/O2) — the ground-truth-side gap described above.
-
-### The gcc/O0 slice, where the work of this session was done
-
-| metric | glaurung | angr |
-|--------|----------|------|
-| GED (lower better) | **5.99** | 7.59 |
-| type_match | **0.873** | 0.819 |
-| byte_match | 0.323 | **0.586** |
-
-**The gap between these tables is the whole point, and it does not flatter us.**
-gcc/O0 is the lane every change this session was tuned against, and it is the one
-lane we win. angr's clang/O0 GED is 3.19 against our combined-O0 7.89, so clang is
-markedly harder for us than for angr; angr's overall byte_match (0.274) is well
-ahead of ours; and the O2 GED figure we briefly held as a win was an artifact of
-the omission corrected above.
-
-So the honest summary is: **competitive at gcc -O0, behind elsewhere.** That is a
-defensible thing to submit and an indefensible thing to misrepresent. See
-`decompiler-refactors.md` for the per-metric diagnosis.
+So the honest summary is: **competitive at gcc -O0, roughly level at O2, and well
+behind on clang -O0 and on recompiled-byte similarity everywhere.**
 
 ## 4. What a reviewer would find if they looked hard
 
 Stated here so it is not discovered instead.
 
-* **O2 and clang are where we are weak.** type_match 0.816 at O0 against 0.523
-  at O2; byte_match 0.240 against 0.127. The width work lifted O2 type_match from
-  the 0.413 measured on 2026-07-24, but not to anywhere near the O0 figure. No
-  spill slots to type from, heavy optimisation, and no O2 story in type recovery.
+* **clang -O0 is our worst lane and we do not know why.** GED 9.79 against
+  angr's 3.19 — a bigger gap than anything at O2, on the *unoptimised* build where
+  we should be strongest. Every structuring change this session was validated
+  against gcc. Largest single opportunity on the board, and unexplained.
+* **O2 costs type recovery.** 0.816 at O0 against 0.523 at O2; gcc/O2 type is
+  0.404 against angr's 0.543. The width work lifted O2 type_match from the 0.413
+  measured on 2026-07-24 but nowhere near the O0 figure: no spill slots to type
+  from, and no O2 story in type recovery.
 * **Aggregates are not recovered.** `structs` scores type 0.25 and `linkedlist`
   0.5 because struct and array types are not reconstructed; an aggregate
   parameter appears as a pointer to its element type.
@@ -155,9 +125,10 @@ decoding three times as many genuine AArch64 functions.
 
 ## 6. Blocking work before a PR
 
-1. **Finish the angr control across the full breadth.** Our own 55-evaluation
-   numbers are measured; the comparative claim at O2 is not, because the only
-   angr O2 figure we hold is from a gcc-only run. Running now.
+1. ~~Finish the angr control across the full breadth.~~ **Done** — 56 evaluations
+   each, per lane, both directions. It is what corrected the O2 GED figure and
+   caught the `fib_localalias` naming bug. No blocking items remain; what is left
+   is quality work, not honesty work.
 2. ~~Decide on the GED regression.~~ **Done** — `ir::switch_ladder` landed:
    10.63 -> 5.99, ahead of angr and of our own previous 7.16, with zero changes
    against the fixture baseline.

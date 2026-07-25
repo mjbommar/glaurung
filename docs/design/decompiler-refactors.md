@@ -46,25 +46,38 @@ trailing after as goto soup. That one is roadmap item #13.
 Within today's own before/after it improved twice (0.281 -> 0.314 from the width
 work, -> 0.323 from switch recovery); the shortfall against 0.366 predates both.
 
-### Breadth, re-measured 2026-07-25 (gcc + clang, O0 + O2, 55 evaluations)
+### Breadth head-to-head, 2026-07-25 (gcc + clang, O0 + O2, 56 evaluations each)
 
-| lane | n | GED (lower) | type_match | byte_match |
-|------|---|-------------|------------|------------|
-| O0 | 28 | 7.89 | 0.816 | 0.240 |
-| O2 | 27 | 10.40 | 0.523 | 0.127 |
-| overall | 55 | 9.12 | 0.678 | 0.184 |
+| lane | GED us | GED angr | type us | type angr | byte us | byte angr |
+|------|--------|----------|---------|-----------|---------|-----------|
+| gcc/O0 | **5.99** | 7.59 | **0.873** | 0.819 | 0.323 | **0.586** |
+| clang/O0 | 9.79 | **3.19** | 0.760 | **0.848** | 0.158 | **0.184** |
+| gcc/O2 | **17.29** | 17.51 | 0.404 | **0.543** | 0.216 | **0.291** |
+| clang/O2 | 11.56 | **11.40** | **0.652** | 0.534 | 0.036 | 0.036 |
+| overall | 11.16 | **9.93** | 0.678 | **0.694** | 0.183 | **0.274** |
 
-The gcc/O0 slice above (5.99 / 0.873 / 0.323) is our best lane, not our average.
-Adding clang and O2 costs roughly a third of type_match and nearly half of
-byte_match. One O2 binary produced no result at all (27 of 28) — recorded rather
-than averaged away.
+gcc/O0 (5.99 / 0.873 / 0.323) is our BEST lane, not our average, and it is the
+one every change this session was tuned against. angr wins the overall on all
+three. The two O2 GED lanes are ties. **clang/O0 is our worst relative result —
+GED 9.79 against 3.19 — on the unoptimised build where we should be strongest,
+and it is unexplained.**
 
-The angr control for this breadth has not finished; the O2 comparison below is
-gcc-only and predates the width and switch work, so it cannot be read against
-these numbers.
+Three binaries have no type_match on EITHER side (`recursion` gcc/O2 + clang/O2,
+`matrix` clang/O2): DecBench finds no DWARF ground-truth types despite `-g`.
+Identical on both sides is what makes that a ground-truth gap.
+
+A fourth GED was missing on our side only, and that one WAS ours: at -O2 gcc emits
+`fib.localalias` at the same address as `fib`, we named the function
+`fib_localalias`, and DecBench could not match it — no GED for the whole binary.
+Fixed in `ir::name_resolve::resolve_outer_function_name`. Before the fix our O2
+GED read 10.40 over 27 binaries and looked like a win; with the binary included it
+is 14.42 against angr's 14.46. **An absent binary flatters an average, and the
+falsifiable check written into the readiness note (angr should also show 27) is
+what caught it.**
 
 Historic head-to-head at O0+O2 is below; its glaurung column is the 2026-07-24
-state, not today's.
+state and its angr column is gcc-only, so neither can be read against the table
+above.
 
 ## Breadth checkpoint (2026-07-24) — head-to-head vs angr, O0 + O2
 
