@@ -48,18 +48,40 @@ flatter us. The honest picture:
 | O2 | 27 | 10.40 | 0.523 | 0.127 |
 | **overall** | **55** | **9.12** | **0.678** | **0.184** |
 
-One O2 binary is missing from the GED column (27 of 28), and it is named rather
-than averaged away: **`recursion-gcc-O2`**. DecBench reports *"No DWARF ground
-truth types … may not have been compiled with -g"* and scores only byte_match for
-it — no GED, no type_match. It WAS built with `-g`, and DWARF subprograms for
-`fib` and `ackermann` are present; at `-O2` gcc also emits `fib.localalias` and
-`ackermann.localalias` at the *same addresses* as the exported symbols, which is a
-plausible cause but is not confirmed.
+**Correction.** An earlier revision of this note recorded the one missing O2 GED
+(`recursion-gcc-O2`, 27 of 28) as a ground-truth-side gap that "any decompiler
+would lose". That was wrong, and the check that caught it was the falsifiable one
+written down at the time: angr should also show 27 at O2, and **angr showed 28**.
 
-What matters for the submission is that this is a ground-truth-side gap, not a
-glaurung failure: any decompiler evaluated on that binary loses the same two
-metrics. The angr control across the same 55 evaluations should therefore also
-show 27 at O2 — if it shows 28, this diagnosis is wrong and the number is ours.
+The missing GED was ours. At `-O2` gcc emits `fib.localalias` at the same address
+as the global `fib`, discovery picked the alias, and we named the function
+`fib_localalias` — a name no source declares, so DecBench could not match it and
+scored no graph edit distance for the whole binary. Fixed in
+`ir::name_resolve::resolve_outer_function_name`; that binary now returns
+ged=123.0.
+
+Only the missing *type_match* is genuinely ground-truth-side: DecBench reports
+"No DWARF ground truth types" for `recursion-gcc-O2` despite `-g` and present
+DW_TAG_subprogram entries, and angr loses type_match on the same binary plus two
+clang -O2 ones.
+
+The consequence is not small: our O2 GED of 10.40 was computed WITHOUT the binary
+we score worst on. Including it moves that figure to roughly 14.4 — level with
+angr's 14.46 rather than ahead of it. A full re-measurement with the fix is in
+flight; the tables below are being replaced by it.
+
+### The angr control, per lane (56 evaluations, same harness, same corpus)
+
+| lane | GED (lower) | type_match | byte_match |
+|------|-------------|------------|------------|
+| clang/O0 | 3.19 | 0.848 | 0.184 |
+| gcc/O0 | 7.59 | 0.819 | **0.586** |
+| clang/O2 | 11.40 | 0.534 | 0.036 |
+| gcc/O2 | 17.51 | 0.543 | 0.291 |
+| **overall** | **9.93** | **0.694** | **0.274** |
+
+angr loses type_match on three binaries (`recursion` at gcc/O2 and clang/O2,
+`matrix` at clang/O2) — the ground-truth-side gap described above.
 
 ### The gcc/O0 slice, where the work of this session was done
 
@@ -69,17 +91,16 @@ show 27 at O2 — if it shows 28, this diagnosis is wrong and the number is ours
 | type_match | **0.873** | 0.819 |
 | byte_match | 0.323 | **0.586** |
 
-The gap between the two tables is the point. On gcc/O0 we win two metrics of
-three; across the full breadth every metric is materially worse, because **clang
-is harder for us than gcc and O2 is harder than O0** — type_match falls from
-0.816 to 0.523 between the levels, and byte_match roughly halves.
+**The gap between these tables is the whole point, and it does not flatter us.**
+gcc/O0 is the lane every change this session was tuned against, and it is the one
+lane we win. angr's clang/O0 GED is 3.19 against our combined-O0 7.89, so clang is
+markedly harder for us than for angr; angr's overall byte_match (0.274) is well
+ahead of ours; and the O2 GED figure we briefly held as a win was an artifact of
+the omission corrected above.
 
-So: we would be submitting a decompiler that is competitive at -O0 on gcc, and
-degrades on optimised and clang-built code. That is a defensible thing to submit
-and an indefensible thing to misrepresent. An angr control across the same 55
-evaluations is required before claiming anything comparative at O2 — the only
-angr numbers we have at that level are from a gcc-only run and are not
-comparable. See `decompiler-refactors.md` for the per-metric diagnosis.
+So the honest summary is: **competitive at gcc -O0, behind elsewhere.** That is a
+defensible thing to submit and an indefensible thing to misrepresent. See
+`decompiler-refactors.md` for the per-metric diagnosis.
 
 ## 4. What a reviewer would find if they looked hard
 
