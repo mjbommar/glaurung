@@ -45,6 +45,20 @@ FIXTURE_FUZZ = 12
 #                          verdict must not depend on how fast the machine is.
 #   skip_exec:    bool   — not safely executable; checked structurally instead.
 OVERRIDES: dict[tuple[str, str], dict] = {
+    # 11: drive the boundaries where a wrong width is visible — the 8-bit wrap,
+    # the 32-bit product that needs 64 bits, and the sign flip in the callee.
+    ("11_call_shapes", "wrap_byte"): {
+        "extra_vectors": [[0], [8], [0xFF], [0x100], [0xFFFFFFFF]],
+    },
+    ("11_call_shapes", "widen_mul"): {
+        "extra_vectors": [[0xFFFFFFFF, 0xFFFFFFFF], [0x10000, 0x10000], [1, 0xFFFFFFFF]],
+    },
+    ("11_call_shapes", "call_fold_wide_result"): {
+        "extra_vectors": [[0xFFFFFFFF, 0xFFFFFFFF], [0x10000, 0x10000], [0, 5]],
+    },
+    ("11_call_shapes", "call_result_drives_branch"): {
+        "extra_vectors": [[999], [1000], [1001], [INT_MIN], [INT_MAX]],
+    },
     ("01_conditional_polarity", "early_return_ge"): {
         "extra_vectors": [[99], [100], [101], [INT_MIN], [INT_MAX]],
     },
@@ -179,6 +193,14 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     "10_cpp_runtime_shapes": [
         "cpp_virtual_dispatch", "cpp_ctor_dtor", "cpp_raii_guard", "cpp_exception",
         "cpp_lambda_capture", "cpp_move",
+    ],
+    # Callees are required too: a callee whose own recovery is wrong makes every
+    # caller's verdict meaningless.
+    "11_call_shapes": [
+        "widen_mul", "wrap_byte", "signed_step", "spill_combine",
+        "call_fold_wide_result", "call_accumulate_bytes", "call_result_drives_branch",
+        "call_nested", "call_twice_and_combine", "call_into_spill",
+        "call_chain_in_loop", "call_forward_result", "call_result_unused",
     ],
 }
 
