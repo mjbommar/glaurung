@@ -23,6 +23,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
+use crate::ir::regview;
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, InstrAddr};
 
@@ -69,26 +70,12 @@ fn is_ssa_reg(v: &VReg) -> bool {
 /// read (and vice versa), fixing the "64-bit value read via a 32-bit view reads
 /// a stale sub-register" corruption. 8/16-bit views (`al`/`ax`) are partial
 /// (they preserve the high bits) so they are intentionally NOT merged here.
+///
+/// The layout and the merge rule both come from [`crate::ir::regview`], the one
+/// register-view descriptor shared with the lifter and the execution engine — this
+/// is deliberately not a third private register table.
 pub fn parent64(n: &str) -> Option<&'static str> {
-    Some(match n {
-        "rax" | "eax" => "rax",
-        "rbx" | "ebx" => "rbx",
-        "rcx" | "ecx" => "rcx",
-        "rdx" | "edx" => "rdx",
-        "rsi" | "esi" => "rsi",
-        "rdi" | "edi" => "rdi",
-        "rbp" | "ebp" => "rbp",
-        "rsp" | "esp" => "rsp",
-        "r8" | "r8d" => "r8",
-        "r9" | "r9d" => "r9",
-        "r10" | "r10d" => "r10",
-        "r11" | "r11d" => "r11",
-        "r12" | "r12d" => "r12",
-        "r13" | "r13d" => "r13",
-        "r14" | "r14d" => "r14",
-        "r15" | "r15d" => "r15",
-        _ => return None,
-    })
+    regview::ssa_parent(regview::Arch::X86_64, n)
 }
 
 /// Canonicalize a GP sub-register VReg to its 64-bit parent (identity otherwise).

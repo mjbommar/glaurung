@@ -6,14 +6,21 @@
 //! through the [`Domain`], so partial-register aliasing is structural and
 //! correct for both the concrete and symbolic backends.
 //!
-//! The x86-64 partial-write rules are encoded here, where they belong (the
-//! arch's register layout), rather than forcing the lifter to emit explicit
-//! extends (this realizes the Phase-0 task-0.7 deferral noted in the plan):
+//! The partial-write rules are applied here, where they belong (the arch's
+//! register layout), rather than forcing the lifter to emit explicit extends
+//! (this realizes the Phase-0 task-0.7 deferral noted in the plan):
 //!
 //! * a 64-bit write replaces the whole cell;
 //! * a **32-bit write zeroes the upper 32 bits** of the 64-bit parent;
 //! * a 16-bit or 8-bit write **preserves** the unaffected high bits;
 //! * the legacy high-byte registers (`ah`/`bh`/`ch`/`dh`) write bits `[8:16)`.
+//!
+//! The *layout* those rules act on — which name is a view of which parent, at
+//! what offset and width — is NOT defined here. It comes from
+//! [`crate::ir::regview`], the single descriptor shared with the lifter and the
+//! SSA pass, so the emulator and the decompiler cannot disagree about what `al`
+//! means. This file owns only the mapping from a canonical parent to a dense cell
+//! index.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -21,15 +28,15 @@ use std::collections::HashMap;
 use once_cell::sync::Lazy;
 
 use crate::exec::domain::Domain;
+use crate::ir::regview;
 use crate::ir::types::{Flag, VReg, Width};
 
 /// Which ISA's register layout a [`RegFile`] uses. Selects how physical register
 /// names resolve to canonical cells (and disambiguates names like `sp`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RegArch {
-    X86_64,
-    AArch64,
-}
+///
+/// This is the shared [`regview::Arch`] — one architecture enum for the whole
+/// register-view story, not an execution-local copy.
+pub use crate::ir::regview::Arch as RegArch;
 
 /// Number of canonical full-width parent cells (covers x86-64 `rax`..`r15`,`rip`
 /// at 0..=16 and AArch64 `x0`..`x30`,`sp`,`pc` at 0..=32).
@@ -88,174 +95,57 @@ fn x86_64_parent_idx(name: &str) -> Option<u8> {
     })
 }
 
-/// x86-64 register views: (view name, canonical parent name, bit offset, width).
-const X86_64_VIEWS: &[(&str, &str, u16, u16)] = &[
-    ("rax", "rax", 0, 64),
-    ("eax", "rax", 0, 32),
-    ("ax", "rax", 0, 16),
-    ("al", "rax", 0, 8),
-    ("ah", "rax", 8, 8),
-    ("rbx", "rbx", 0, 64),
-    ("ebx", "rbx", 0, 32),
-    ("bx", "rbx", 0, 16),
-    ("bl", "rbx", 0, 8),
-    ("bh", "rbx", 8, 8),
-    ("rcx", "rcx", 0, 64),
-    ("ecx", "rcx", 0, 32),
-    ("cx", "rcx", 0, 16),
-    ("cl", "rcx", 0, 8),
-    ("ch", "rcx", 8, 8),
-    ("rdx", "rdx", 0, 64),
-    ("edx", "rdx", 0, 32),
-    ("dx", "rdx", 0, 16),
-    ("dl", "rdx", 0, 8),
-    ("dh", "rdx", 8, 8),
-    ("rsi", "rsi", 0, 64),
-    ("esi", "rsi", 0, 32),
-    ("si", "rsi", 0, 16),
-    ("sil", "rsi", 0, 8),
-    ("rdi", "rdi", 0, 64),
-    ("edi", "rdi", 0, 32),
-    ("di", "rdi", 0, 16),
-    ("dil", "rdi", 0, 8),
-    ("rbp", "rbp", 0, 64),
-    ("ebp", "rbp", 0, 32),
-    ("bp", "rbp", 0, 16),
-    ("bpl", "rbp", 0, 8),
-    ("rsp", "rsp", 0, 64),
-    ("esp", "rsp", 0, 32),
-    ("sp", "rsp", 0, 16),
-    ("spl", "rsp", 0, 8),
-    ("r8", "r8", 0, 64),
-    ("r8d", "r8", 0, 32),
-    ("r8w", "r8", 0, 16),
-    ("r8b", "r8", 0, 8),
-    ("r9", "r9", 0, 64),
-    ("r9d", "r9", 0, 32),
-    ("r9w", "r9", 0, 16),
-    ("r9b", "r9", 0, 8),
-    ("r10", "r10", 0, 64),
-    ("r10d", "r10", 0, 32),
-    ("r10w", "r10", 0, 16),
-    ("r10b", "r10", 0, 8),
-    ("r11", "r11", 0, 64),
-    ("r11d", "r11", 0, 32),
-    ("r11w", "r11", 0, 16),
-    ("r11b", "r11", 0, 8),
-    ("r12", "r12", 0, 64),
-    ("r12d", "r12", 0, 32),
-    ("r12w", "r12", 0, 16),
-    ("r12b", "r12", 0, 8),
-    ("r13", "r13", 0, 64),
-    ("r13d", "r13", 0, 32),
-    ("r13w", "r13", 0, 16),
-    ("r13b", "r13", 0, 8),
-    ("r14", "r14", 0, 64),
-    ("r14d", "r14", 0, 32),
-    ("r14w", "r14", 0, 16),
-    ("r14b", "r14", 0, 8),
-    ("r15", "r15", 0, 64),
-    ("r15d", "r15", 0, 32),
-    ("r15w", "r15", 0, 16),
-    ("r15b", "r15", 0, 8),
-    ("rip", "rip", 0, 64),
-    ("eip", "rip", 0, 32),
-];
+/// Canonical parent register name → dense cell index for an architecture.
+/// x86-64: `rax`=0..`r15`=15, `rip`=16. AArch64: `x0`..`x30`=0..30, `sp`=31,
+/// `pc`=32. Cell indices are an execution-engine concern; the register LAYOUT
+/// (which names view which parent) comes from [`regview`].
+fn parent_idx(arch: RegArch, name: &str) -> Option<u8> {
+    match arch {
+        RegArch::X86_64 => x86_64_parent_idx(name),
+        RegArch::AArch64 => Some(match name {
+            "sp" => 31,
+            "pc" => 32,
+            _ => {
+                let n: u8 = name.strip_prefix('x')?.parse().ok()?;
+                if n > 30 {
+                    return None;
+                }
+                n
+            }
+        }),
+    }
+}
 
-/// Name → slot map for x86-64 (built once; O(1) lookup, no allocation/scan).
-static X86_64_SLOTS: Lazy<HashMap<&'static str, RegSlot>> = Lazy::new(|| {
-    let mut m = HashMap::with_capacity(X86_64_VIEWS.len());
-    for (view, parent, offset, width) in X86_64_VIEWS {
-        let parent = x86_64_parent_idx(parent).expect("known x86-64 parent");
+/// Build the name → slot map for `arch` from the shared register-view descriptor.
+/// Every view the descriptor knows becomes a slot, so a name the lifter can emit
+/// can never be one the register file silently ignores.
+fn slots_for(arch: RegArch) -> HashMap<&'static str, RegSlot> {
+    let views = regview::views(arch);
+    let mut m = HashMap::with_capacity(views.len());
+    for v in views {
+        let parent = parent_idx(arch, v.parent)
+            .unwrap_or_else(|| panic!("no cell for canonical parent {}", v.parent));
         m.insert(
-            *view,
+            v.view,
             RegSlot {
                 parent,
-                offset: *offset,
-                width: *width,
+                offset: v.offset,
+                width: v.width,
             },
         );
     }
     m
-});
+}
 
-/// Canonical 64-bit AArch64 GPR names `x0`..`x30` and their 32-bit `w` views.
-const XREG_NAMES: [&str; 31] = [
-    "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14",
-    "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27",
-    "x28", "x29", "x30",
-];
-const WREG_NAMES: [&str; 31] = [
-    "w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w9", "w10", "w11", "w12", "w13", "w14",
-    "w15", "w16", "w17", "w18", "w19", "w20", "w21", "w22", "w23", "w24", "w25", "w26", "w27",
-    "w28", "w29", "w30",
-];
+/// Name → slot map for x86-64 (built once; O(1) lookup, no allocation/scan).
+static X86_64_SLOTS: Lazy<HashMap<&'static str, RegSlot>> =
+    Lazy::new(|| slots_for(RegArch::X86_64));
 
 /// Name → slot map for AArch64. `wN` writes zero-extend the 64-bit parent `xN`;
 /// `lr`=x30, `fp`=x29; `sp`/`pc` are their own cells. Zero registers (`xzr`/`wzr`)
 /// are handled directly by [`RegFile`].
-static AARCH64_SLOTS: Lazy<HashMap<&'static str, RegSlot>> = Lazy::new(|| {
-    let mut m = HashMap::new();
-    for i in 0..=30u8 {
-        m.insert(
-            XREG_NAMES[i as usize],
-            RegSlot {
-                parent: i,
-                offset: 0,
-                width: 64,
-            },
-        );
-        m.insert(
-            WREG_NAMES[i as usize],
-            RegSlot {
-                parent: i,
-                offset: 0,
-                width: 32,
-            },
-        );
-    }
-    m.insert(
-        "sp",
-        RegSlot {
-            parent: 31,
-            offset: 0,
-            width: 64,
-        },
-    );
-    m.insert(
-        "wsp",
-        RegSlot {
-            parent: 31,
-            offset: 0,
-            width: 32,
-        },
-    );
-    m.insert(
-        "lr",
-        RegSlot {
-            parent: 30,
-            offset: 0,
-            width: 64,
-        },
-    );
-    m.insert(
-        "fp",
-        RegSlot {
-            parent: 29,
-            offset: 0,
-            width: 64,
-        },
-    );
-    m.insert(
-        "pc",
-        RegSlot {
-            parent: 32,
-            offset: 0,
-            width: 64,
-        },
-    );
-    m
-});
+static AARCH64_SLOTS: Lazy<HashMap<&'static str, RegSlot>> =
+    Lazy::new(|| slots_for(RegArch::AArch64));
 
 /// Is `name` the AArch64 zero register (reads 0, writes discarded)?
 fn is_aarch64_zero_reg(name: &str) -> bool {

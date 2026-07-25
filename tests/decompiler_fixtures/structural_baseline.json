@@ -337,7 +337,7 @@
     "07_packet_parser:parse_packet": [],
     "07_packet_parser:validate_header": [
       "local_5 is read before it is defined",
-      "var24 is read but never defined"
+      "var25 is read but never defined"
     ],
     "08_indirect_dispatch:apply": [],
     "08_indirect_dispatch:dispatch": [],

@@ -28,10 +28,16 @@
 
 use iced_x86::{Code, Decoder, DecoderOptions, Mnemonic, OpKind, Register};
 
+use crate::ir::regview;
 use crate::ir::types::*;
 
 fn reg_name(r: Register) -> String {
-    format!("{:?}", r).to_ascii_lowercase()
+    let name = format!("{:?}", r).to_ascii_lowercase();
+    // iced spells the byte views of the extended registers `R8L`..`R15L`, while
+    // the canonical register-view layout (and every other tool) calls them
+    // `r8b`..`r15b`. Without this normalisation those names match no known
+    // register at all: writes to them vanish and reads return zero.
+    regview::canonical_name(&name)
 }
 
 fn reg_size(r: Register) -> u8 {
@@ -43,70 +49,39 @@ fn reg_size(r: Register) -> u8 {
     }
 }
 
-/// For an 8- or 16-bit *low* GP sub-register, the 32-bit parent name and the
-/// sub-register width in bits. A write to `al`/`ax` preserves the upper bits of
-/// `eax` (x86 partial-register semantics), unlike a 32-bit write which
-/// zero-extends. High-byte registers (`ah`/`bh`/...) address a different byte
-/// and are deliberately excluded (rare in compiler output, and merging them
-/// with the low byte would be wrong).
-fn partial_gp_parent(name: &str) -> Option<(&'static str, u32)> {
-    let pair = match name {
-        "al" => ("eax", 8),
-        "ax" => ("eax", 16),
-        "bl" => ("ebx", 8),
-        "bx" => ("ebx", 16),
-        "cl" => ("ecx", 8),
-        "cx" => ("ecx", 16),
-        "dl" => ("edx", 8),
-        "dx" => ("edx", 16),
-        "sil" => ("esi", 8),
-        "si" => ("esi", 16),
-        "dil" => ("edi", 8),
-        "di" => ("edi", 16),
-        "bpl" => ("ebp", 8),
-        "bp" => ("ebp", 16),
-        "spl" => ("esp", 8),
-        "sp" => ("esp", 16),
-        "r8b" => ("r8d", 8),
-        "r8w" => ("r8d", 16),
-        "r9b" => ("r9d", 8),
-        "r9w" => ("r9d", 16),
-        "r10b" => ("r10d", 8),
-        "r10w" => ("r10d", 16),
-        "r11b" => ("r11d", 8),
-        "r11w" => ("r11d", 16),
-        "r12b" => ("r12d", 8),
-        "r12w" => ("r12d", 16),
-        "r13b" => ("r13d", 8),
-        "r13w" => ("r13d", 16),
-        "r14b" => ("r14d", 8),
-        "r14w" => ("r14d", 16),
-        "r15b" => ("r15d", 8),
-        "r15w" => ("r15d", 16),
-        _ => return None,
-    };
-    Some(pair)
+/// The register-view descriptor for a partial (bit-preserving) GP write, or
+/// `None` when the destination is a full-width or zero-extending view that needs
+/// no read-modify-write. Covers the 8-/16-bit low views AND the legacy high bytes
+/// (`ah`/`bh`/`ch`/`dh`, bit offset 8).
+fn partial_gp_view(name: &str) -> Option<regview::RegView> {
+    regview::view(regview::Arch::X86_64, name).filter(|v| v.preserves_parent())
 }
 
-/// Lift a partial-register write `subreg = src` (where `subreg` is an 8-/16-bit
-/// low GP register with 32-bit `parent`) as a bit-preserving read-modify-write
-/// of the parent: `parent = (parent & keep) | (src & value_mask)`. The `& keep`
-/// clears exactly the sub-register's bits so the parent's other bits survive —
-/// the semantics a later `eax`/`rax` read must observe. A constant-zero source
-/// collapses to the mask alone (the common `mov $0, %al` low-byte clear).
-fn partial_write_ops(parent: &str, wbits: u32, src: Value) -> Vec<Op> {
-    let p = VReg::phys(parent);
-    let keep = (0xFFFF_FFFFu64 & !((1u64 << wbits) - 1)) as i64;
-    let value_mask = ((1u64 << wbits) - 1) as i64;
+/// Lift a partial-register write `view = src` as a bit-preserving read-modify-write
+/// of its CANONICAL 64-BIT parent:
+///
+/// ```text
+///   parent = (parent & keep_mask) | ((src & value_mask) << offset)
+/// ```
+///
+/// The masks come from the shared register-view descriptor, so `mov $0xAA,%al`
+/// keeps bits 8..63 of `rax` — not just bits 8..31. Modelling this against the
+/// 32-bit view instead (`eax`) was wrong twice over: a 32-bit write zero-extends,
+/// so it cleared bits 32..63 that the instruction must preserve, and the mask
+/// itself stopped at bit 31. A constant source whose masked value is zero
+/// collapses to the mask alone (gcc's `mov $0,%al` low-byte clear).
+fn partial_write_ops(v: regview::RegView, src: Value) -> Vec<Op> {
+    let p = VReg::phys(v.parent);
     let mut ops = vec![Op::Bin {
         dst: p.clone(),
         op: BinOp::And,
         lhs: Value::Reg(p.clone()),
-        rhs: Value::Const(keep),
+        rhs: Value::Const(v.keep_mask() as i64),
     }];
-    let masked = match src {
+    let value_mask = (v.value_mask() >> v.offset) as i64;
+    let positioned = match src {
         Value::Const(c) => {
-            let m = c & value_mask;
+            let m = (c & value_mask) << v.offset;
             if m == 0 {
                 return ops;
             }
@@ -120,6 +95,14 @@ fn partial_write_ops(parent: &str, wbits: u32, src: Value) -> Vec<Op> {
                 lhs: other,
                 rhs: Value::Const(value_mask),
             });
+            if v.offset != 0 {
+                ops.push(Op::Bin {
+                    dst: t.clone(),
+                    op: BinOp::Shl,
+                    lhs: Value::Reg(t.clone()),
+                    rhs: Value::Const(v.offset as i64),
+                });
+            }
             Value::Reg(t)
         }
     };
@@ -127,7 +110,114 @@ fn partial_write_ops(parent: &str, wbits: u32, src: Value) -> Vec<Op> {
         dst: p.clone(),
         op: BinOp::Or,
         lhs: Value::Reg(p),
-        rhs: masked,
+        rhs: positioned,
+    });
+    ops
+}
+
+/// Read a bit-preserving partial view out of its canonical parent into `dst`:
+/// `dst = (parent >> offset) & value_mask`.
+///
+/// Without this, a read of `ah` is just an unrelated register NAME to every
+/// consumer that does not implement view semantics itself — which is every
+/// decompiler pass. The execution engine's register file does implement them, so
+/// it was already correct; the decompiler was not.
+fn read_view_ops(v: regview::RegView, dst: VReg) -> Vec<Op> {
+    let p = Value::Reg(VReg::phys(v.parent));
+    let mask = (v.value_mask() >> v.offset) as i64;
+    let mut ops = Vec::new();
+    if v.offset == 0 {
+        ops.push(Op::Bin {
+            dst,
+            op: BinOp::And,
+            lhs: p,
+            rhs: Value::Const(mask),
+        });
+    } else {
+        ops.push(Op::Bin {
+            dst: dst.clone(),
+            op: BinOp::Shr,
+            lhs: p,
+            rhs: Value::Const(v.offset as i64),
+        });
+        ops.push(Op::Bin {
+            dst: dst.clone(),
+            op: BinOp::And,
+            lhs: Value::Reg(dst),
+            rhs: Value::Const(mask),
+        });
+    }
+    ops
+}
+
+/// Lift `op view, src` — an ALU operation whose destination is a bit-preserving
+/// partial register view — as a read-modify-write of the canonical parent:
+///
+/// ```text
+///   acc    = (parent >> offset) & value_mask     // read the view
+///   acc    = op(acc, src)                        // the operation, at view width
+///   parent = (parent & keep_mask) | ((acc & value_mask) << offset)
+/// ```
+///
+/// `partial_write_ops` covers `mov`; this covers the rest, and the gap between
+/// them was not academic: gcc clears a byte lane with `xor %ah,%ah`, which took
+/// the plain ALU path, wrote a register name unrelated to `rax`, and left the
+/// following read of `eax` seeing the UNCLEARED value — the whole point of the
+/// instruction, silently dropped (fixture `deposit_byte1`).
+///
+/// When `src` names the destination view itself (`xor %ah,%ah`), the accumulator is
+/// reused for both operands, so constant folding still recognises the idiom.
+fn partial_alu_ops(v: regview::RegView, op: BinOp, src: Value) -> Vec<Op> {
+    let parent = VReg::phys(v.parent);
+    let acc = VReg::Temp(0);
+    let mask = (v.value_mask() >> v.offset) as i64;
+    let mut ops = read_view_ops(v, acc.clone());
+
+    let rhs = match &src {
+        Value::Reg(VReg::Phys(n)) if n == v.view => Value::Reg(acc.clone()),
+        Value::Reg(VReg::Phys(n)) => match regview::view(regview::Arch::X86_64, n) {
+            // A partial-view SOURCE needs the same treatment, or it too is just a
+            // name (e.g. `add %ah,%al`).
+            Some(sv) if sv.preserves_parent() => {
+                let t = VReg::Temp(1);
+                ops.extend(read_view_ops(sv, t.clone()));
+                Value::Reg(t)
+            }
+            _ => src.clone(),
+        },
+        _ => src.clone(),
+    };
+    ops.push(Op::Bin {
+        dst: acc.clone(),
+        op,
+        lhs: Value::Reg(acc.clone()),
+        rhs,
+    });
+    ops.push(Op::Bin {
+        dst: parent.clone(),
+        op: BinOp::And,
+        lhs: Value::Reg(parent.clone()),
+        rhs: Value::Const(v.keep_mask() as i64),
+    });
+    ops.push(Op::Bin {
+        dst: acc.clone(),
+        op: BinOp::And,
+        lhs: Value::Reg(acc.clone()),
+        rhs: Value::Const(mask),
+    });
+    if v.offset != 0 {
+        ops.push(Op::Bin {
+            dst: acc.clone(),
+            op: BinOp::Shl,
+            lhs: Value::Reg(acc.clone()),
+            rhs: Value::Const(v.offset as i64),
+        });
+    }
+    ops.push(Op::Bin {
+        dst: parent.clone(),
+        op: BinOp::Or,
+        lhs: Value::Reg(parent),
+        rhs: Value::Reg(acc),
     });
     ops
 }
@@ -764,20 +854,33 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             // Destination: first operand (reg or mem).
             match instr.op_kind(0) {
                 OpKind::Register => {
-                    let dst = VReg::phys(reg_name(instr.op_register(0)));
+                    let dst_name = reg_name(instr.op_register(0));
+                    let dst = VReg::phys(&dst_name);
+                    // A bit-preserving partial destination (`al`, `ax`, `ah`, …) is
+                    // a read-modify-write of its 64-bit parent, not a write to a
+                    // register of its own — see `partial_alu_ops`.
+                    let partial = partial_gp_view(&dst_name);
                     if let Some(src) = value_of_operand(instr, 1) {
-                        return vec![emit_bin(dst, op, src)];
+                        return match partial {
+                            Some(v) => partial_alu_ops(v, op, src),
+                            None => vec![emit_bin(dst, op, src)],
+                        };
                     } else if instr.op_kind(1) == OpKind::Memory {
                         // dst_reg = op(dst_reg, load([mem]))
                         // We introduce a temp to keep three-address form.
-                        let tmp = VReg::Temp(0);
-                        return vec![
-                            Op::Load {
-                                dst: tmp.clone(),
-                                addr: mem_op_of(instr),
-                            },
-                            emit_bin(dst, op, Value::Reg(tmp)),
-                        ];
+                        let tmp = VReg::Temp(2);
+                        let load = Op::Load {
+                            dst: tmp.clone(),
+                            addr: mem_op_of(instr),
+                        };
+                        return match partial {
+                            Some(v) => {
+                                let mut ops = vec![load];
+                                ops.extend(partial_alu_ops(v, op, Value::Reg(tmp)));
+                                ops
+                            }
+                            None => vec![load, emit_bin(dst, op, Value::Reg(tmp))],
+                        };
                     }
                 }
                 OpKind::Memory => {
@@ -844,12 +947,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         }];
                     };
                     let dst_name = reg_name(instr.op_register(0));
-                    // A partial (8-/16-bit low) GP write preserves the parent's
-                    // other bits; a plain Assign would drop them and later
-                    // `eax`/`rax` reads would see a stale value (e.g. gcc's
-                    // low-byte-clear `mov $0, %al` = `& 0xFFFFFF00`).
-                    if let Some((parent, wbits)) = partial_gp_parent(&dst_name) {
-                        return partial_write_ops(parent, wbits, src);
+                    // A partial (8-/16-bit, low or high-byte) GP write preserves
+                    // the parent's other bits; a plain Assign would drop them and
+                    // later `eax`/`rax` reads would see a stale value (e.g. gcc's
+                    // low-byte-clear `mov $0, %al`).
+                    if let Some(v) = partial_gp_view(&dst_name) {
+                        return partial_write_ops(v, src);
                     }
                     vec![Op::Assign {
                         dst: VReg::phys(dst_name),

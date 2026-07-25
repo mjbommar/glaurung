@@ -2216,8 +2216,65 @@ fn coalesce_param_spills(body: &mut Vec<Stmt>) {
     if map.is_empty() {
         return;
     }
+    // Convert the slot's own stores to assignments BEFORE renaming, while the name
+    // still says `local_`/`stack_` — see `slot_stores_to_assigns`.
+    slot_stores_to_assigns(body, &map);
     rename_phys_in_body(body, &map);
     drop_self_stores(body);
+}
+
+/// Rewrite `Store { addr: Reg(slot), src }` as `Assign { dst: slot, src }` for every
+/// slot about to be renamed to its parameter.
+///
+/// The renderer can only recognise a slot assignment by its `local_`/`stack_` NAME
+/// (`write_stmt_dec`'s `is_promoted_local` arm). Once coalescing renames the slot to
+/// `argN`, that test fails and the same statement prints as a store *through* the
+/// parameter — a write through a value that is not a pointer. That is how `rotr32`
+/// segfaulted: `n &= 31u` on a spilled parameter is an `-O0` in-place memory update,
+/// and it rendered as `*(int *)(arg1) = (arg1 & 31)`.
+///
+/// Doing this before the rename is what makes it unambiguous: afterwards,
+/// `Store { addr: Reg(arg0) }` could equally be a genuine `*arg0 = v` through a
+/// pointer parameter, and converting that would silently turn a memory write into a
+/// local assignment. The pre-rename name cannot be confused that way.
+fn slot_stores_to_assigns(
+    body: &mut Vec<Stmt>,
+    slots: &std::collections::HashMap<String, String>,
+) {
+    for s in body.iter_mut() {
+        match s {
+            Stmt::Store {
+                addr: Expr::Reg(VReg::Phys(name)),
+                src,
+                ..
+            } if slots.contains_key(name) => {
+                *s = Stmt::Assign {
+                    dst: VReg::phys(name.clone()),
+                    src: src.clone(),
+                };
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                slot_stores_to_assigns(then_body, slots);
+                if let Some(eb) = else_body {
+                    slot_stores_to_assigns(eb, slots);
+                }
+            }
+            Stmt::While { body, .. } => slot_stores_to_assigns(body, slots),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, b) in cases.iter_mut() {
+                    slot_stores_to_assigns(b, slots);
+                }
+                if let Some(b) = default {
+                    slot_stores_to_assigns(b, slots);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Populate `home[local] = arg` for promoted locals whose only register-sourced
@@ -2373,6 +2430,14 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
                 addr: Expr::Reg(VReg::Phys(a)),
                 src: Expr::Reg(VReg::Phys(b)),
                 ..
+            } if a == b
+        ) && !matches!(
+            // Same collapse, in assignment form: the spill store is now an Assign
+            // (see `slot_stores_to_assigns`), so `arg0 = arg0` must go too.
+            s,
+            Stmt::Assign {
+                dst: VReg::Phys(a),
+                src: Expr::Reg(VReg::Phys(b)),
             } if a == b
         )
     });
@@ -4034,6 +4099,71 @@ function f @ 0x1000 {
         assert!(
             render_decbench(&f).contains("local_14"),
             "the renderer must not rewrite value identities"
+        );
+    }
+
+    #[test]
+    fn an_in_place_update_of_a_coalesced_slot_is_an_assignment_not_a_pointer_store() {
+        // The `-O0` shape of `n &= 31u` on a spilled parameter: the slot is stored
+        // to from the parameter, then updated IN PLACE (a memory read-modify-write).
+        // Coalescing renames the slot to `arg1`, after which the renderer can no
+        // longer tell the store apart from `*arg1 = v` — and emitted a write through
+        // a parameter that is not a pointer, segfaulting the recompiled function
+        // (fixture `rotr32`).
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_18")),
+                    src: Expr::Reg(VReg::phys("arg1")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_18")),
+                    src: Expr::Bin {
+                        op: BinOp::And,
+                        lhs: Box::new(Expr::Reg(VReg::phys("local_18"))),
+                        rhs: Box::new(Expr::Const(31)),
+                    },
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("local_18"))),
+                },
+            ],
+        };
+        let text = render_decbench(&prepare_for_decbench(&f));
+        assert!(
+            text.contains("arg1 = (arg1 & 31)"),
+            "the in-place update must be an assignment to the parameter:\n{text}"
+        );
+        assert!(
+            !text.contains("*(int *)(arg1)") && !text.contains("*(long *)(arg1)"),
+            "must not write THROUGH the parameter:\n{text}"
+        );
+        // The redundant spill store collapses; the parameter is used directly.
+        assert!(!text.contains("local_18"), "slot should be gone:\n{text}");
+    }
+
+    #[test]
+    fn a_genuine_store_through_a_pointer_parameter_is_preserved() {
+        // The other side of the same coin: with no slot coalesced into it, a store
+        // whose address is a parameter really is a store through a pointer and must
+        // stay one.
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x10,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("arg0")),
+                src: Expr::Const(7),
+                size: 4,
+            }],
+        };
+        let text = render_decbench(&prepare_for_decbench(&f));
+        assert!(
+            text.contains("*(int *)(arg0) = 7"),
+            "a pointer store must not become an assignment:\n{text}"
         );
     }
 

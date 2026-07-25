@@ -109,7 +109,7 @@
   },
   "02_integer_widths:gcc:O0": {
     "add_wrap32": "pass",
-    "deposit_byte1": "fail",
+    "deposit_byte1": "pass",
     "deposit_low_byte": "pass",
     "extract_byte1": "pass",
     "extract_byte3": "pass",
@@ -118,7 +118,7 @@
     "reconstruct_64": "pass",
     "rotl16_3": "pass",
     "rotl32_7": "pass",
-    "rotr32": "fail",
+    "rotr32": "pass",
     "rt_u16": "pass",
     "rt_u32": "pass",
     "rt_u64": "pass",
@@ -136,7 +136,7 @@
   "02_integer_widths:gcc:O2": {
     "add_wrap32": "pass",
     "deposit_byte1": "fail",
-    "deposit_low_byte": "fail",
+    "deposit_low_byte": "pass",
     "extract_byte1": "fail",
     "extract_byte3": "pass",
     "mul_widen": "pass",
