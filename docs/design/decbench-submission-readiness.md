@@ -32,7 +32,7 @@ and `models/decompilation.py`). The 5 tests pass before and after that rebase.
 | A | output is clean C, no diagnostic noise | **done** — verifier comments are behind `GLAURUNG_VERIFY_DEFS` |
 | B | harness works against *current* upstream, on a branch | **done** — rebased, 5/5 green |
 | C | metrics measured, not remembered | **done for gcc/O0**; O2 and clang breadth outstanding |
-| D | no panics / parseable output corpus-wide | **stale** — the 99.6 % figure predates the ET_REL fix |
+| D | no panics / parseable output corpus-wide | **done** — re-run after the ET_REL fix: 1646 functions, 99.7 % gcc-parse, 0 panics |
 | E | claims in the docs match what the code does | **done** — `docs/GLAURUNG.md` no longer advertises a blanket `long` signature |
 
 ## 3. What the numbers actually say
@@ -75,18 +75,39 @@ Stated here so it is not discovered instead.
   through executable sections, but under `-ffunction-sections` every `.text.*`
   still shares address 0 and the first one wins.
 
-## 5. Blocking work before a PR
+## 5. Corpus sweep (392 relocatable objects, 4 architectures)
 
-1. **Re-run the corpus-wide no-panic / parseability sweep.** The 99.6 % figure
-   was measured before code addresses resolved through `.text`, so it includes
-   function bodies decoded out of string tables. The number is probably better
-   now, but it is currently unsupported either way.
-2. **Measure O2 and clang.** Submitting O0-only numbers when DecBench scores
+Re-run after code addresses started resolving through executable sections. The
+corpus is `.o` files, so it is exactly the population that fix affects.
+
+| arch/compiler | objs | fns | empty | unk fns | gcc parse |
+|---|---|---|---|---|---|
+| aarch64/clang | 56 | 386 | 0 | 247 | 385/386 (99.7 %) |
+| aarch64/gcc | 56 | 392 | 0 | 101 | 388/392 (99.0 %) |
+| arm32/clang | 56 | 120 | 0 | 7 | 120/120 (100 %) |
+| arm32/gcc | 56 | 120 | 0 | 14 | 120/120 (100 %) |
+| cortexm/gcc | 56 | 120 | 0 | 12 | 120/120 (100 %) |
+| x86-64/clang | 56 | 128 | 0 | 19 | 128/128 (100 %) |
+| x86-64/gcc | 56 | 380 | 0 | 70 | 380/380 (100 %) |
+| **total** | **392** | **1646** | **0** | **470** | **1641/1646 (99.7 %)**, 0 panics |
+
+The previous run found **1368** functions at 99.6 %. The difference is not noise:
+`aarch64/clang` went from 133 functions to 386 and `x86-64/clang` from 103 to
+128, because those are the toolchains that list `.strtab` before `.text`. The
+clearest evidence is in the unknown-mnemonic tail — `insb` (31) and `insd` (13)
+were in the old top-15 and are simply gone. Those are what x86 decoding of ASCII
+looks like. The remaining unknowns are real instructions we do not model yet
+(`subs`, `sdiv`, `pshufd`, `umull`, NEON), and the rise in `unk fns` tracks
+decoding three times as many genuine AArch64 functions.
+
+## 6. Blocking work before a PR
+
+1. **Measure O2 and clang.** Submitting O0-only numbers when DecBench scores
    multiple optimisation levels would misrepresent the result.
-3. **Decide on the GED regression.** Either land the comparison-ladder-to-switch
+2. **Decide on the GED regression.** Either land the comparison-ladder-to-switch
    recovery (roadmap #13) or state the 10.63 plainly. Not both, and not neither.
 
-## 6. Non-blocking, but worth doing first
+## 7. Non-blocking, but worth doing first
 
 * Call-result modelling (roadmap #11/#12) — the largest single block of known
   failures, now measurable per lane.
