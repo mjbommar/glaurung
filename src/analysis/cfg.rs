@@ -783,6 +783,16 @@ fn discover_function(
         let truncations: Vec<(u64, u64)> = blocks
             .iter()
             .filter_map(|(&s, &(e, _))| {
+                // A leader whose first byte does not decode produces an EMPTY
+                // block (`e == s`): the sweep breaks before consuming an
+                // instruction. It has no interior to search, and asking a
+                // BTreeSet for `(Excluded(s), Excluded(s))` is a panic, not an
+                // empty range — which crashed the whole decompile of any binary
+                // with an undecodable branch target (a jump table read as code,
+                // padding, or data).
+                if s >= e {
+                    return None;
+                }
                 leaders
                     .range((Excluded(s), Excluded(e)))
                     .next()
@@ -3829,5 +3839,57 @@ mod chunk_tests {
         let merged = merge_compiler_split_chunks(&mut funcs);
         assert_eq!(merged, 0);
         assert_eq!(funcs.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod degenerate_block_tests {
+    use super::*;
+
+    /// A branch target whose first byte does not decode used to crash the whole
+    /// analysis. The sweep records that leader as an EMPTY block (`end == start`,
+    /// no instruction consumed), and the leader-split pass then asked a BTreeSet
+    /// for the range `(Excluded(s), Excluded(s))` — which panics ("range start and
+    /// end are equal and excluded") rather than yielding nothing.
+    ///
+    /// It is not a corner case: it took out every function in a gcc-11 `-O0`
+    /// switch binary (16/16 reported "decompile failed"), because one jump-table
+    /// target was decoded as code. Panicking on hostile or merely unusual bytes is
+    /// never acceptable in a reverse-engineering tool.
+    #[test]
+    fn an_undecodable_branch_target_does_not_panic() {
+        // 0x1000: 74 02   je 0x1004      (both arms become leaders)
+        // 0x1002: 90      nop
+        // 0x1003: c3      ret
+        // 0x1004: 06      push es -- INVALID in 64-bit mode: decodes to nothing,
+        //                 so this leader's block is empty.
+        let code: &[u8] = &[0x74, 0x02, 0x90, 0xc3, 0x06];
+        let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
+        let regions = [ExecRegion {
+            start: 0x1000,
+            end: 0x1000 + code.len() as u64,
+            _file_off_start: 0,
+        }];
+        let budgets = Budgets {
+            max_functions: 1,
+            max_blocks: 64,
+            max_instructions: 256,
+            timeout_ms: 1_000,
+        };
+        // The data buffer is VA-addressed by the region's file offset mapping.
+        let out = discover_function(
+            code,
+            BArch::X86_64,
+            Endianness::Little,
+            entry,
+            &regions,
+            &budgets,
+        );
+        let (func, _, _) = out.expect("discovery must succeed, not panic");
+        // The decodable blocks survive; the empty one contributes nothing.
+        assert!(
+            !func.basic_blocks.is_empty(),
+            "expected the decodable blocks to be recovered"
+        );
     }
 }
