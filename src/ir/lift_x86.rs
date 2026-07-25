@@ -275,16 +275,18 @@ fn value_of_operand(instr: &iced_x86::Instruction, idx: u32) -> Option<Value> {
     match instr.op_kind(idx) {
         OpKind::Register => Some(Value::Reg(VReg::phys(reg_name(instr.op_register(idx))))),
         OpKind::Immediate8 => Some(Value::Const(instr.immediate8() as i8 as i64)),
-        OpKind::Immediate16 | OpKind::Immediate8to16 => {
-            Some(Value::Const(instr.immediate16() as i16 as i64))
-        }
-        OpKind::Immediate32 | OpKind::Immediate8to32 => {
-            Some(Value::Const(instr.immediate32() as i32 as i64))
-        }
-        // Each sign-/zero-extended-to-64 form has its OWN accessor. Calling the
-        // plain `immediate64()` on an `Immediate32to64`/`Immediate8to64` operand
-        // returns garbage (iced only populates it for a true `Immediate64`), so
-        // `movq $0,[mem]` was lifting to a bogus constant.
+        OpKind::Immediate16 => Some(Value::Const(instr.immediate16() as i16 as i64)),
+        OpKind::Immediate32 => Some(Value::Const(instr.immediate32() as i32 as i64)),
+        // EVERY sign-extended form has its own accessor, not just the 64-bit ones.
+        // iced populates `immediate32()` only for a true `Immediate32`; on an
+        // `Immediate8to32` it hands back the raw byte, so `83 c0 ff`
+        // (`add eax, -1`) lifted as `+255`. clang -O0 spells `n--` exactly that
+        // way, which made a loop counter climb instead of fall.
+        OpKind::Immediate8to16 => Some(Value::Const(instr.immediate8to16() as i64)),
+        OpKind::Immediate8to32 => Some(Value::Const(instr.immediate8to32() as i64)),
+        // Calling the plain `immediate64()` on an `Immediate32to64`/`Immediate8to64`
+        // operand returns garbage for the same reason, so `movq $0,[mem]` was
+        // lifting to a bogus constant.
         OpKind::Immediate64 => Some(Value::Const(instr.immediate64() as i64)),
         OpKind::Immediate8to64 => Some(Value::Const(instr.immediate8to64())),
         OpKind::Immediate32to64 => Some(Value::Const(instr.immediate32to64())),
@@ -449,9 +451,11 @@ fn push_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         OpKind::Register => Value::Reg(VReg::phys(reg_name(instr.op_register(0)))),
         OpKind::Immediate8 => Value::Const(instr.immediate8() as i8 as i64),
         OpKind::Immediate16 => Value::Const(instr.immediate16() as i16 as i64),
-        OpKind::Immediate32 | OpKind::Immediate8to32 => {
-            Value::Const(instr.immediate32() as i32 as i64)
-        }
+        OpKind::Immediate32 => Value::Const(instr.immediate32() as i32 as i64),
+        // See `value_of_operand`: a sign-extended imm8 needs its own accessor or
+        // the sign is lost.
+        OpKind::Immediate8to16 => Value::Const(instr.immediate8to16() as i64),
+        OpKind::Immediate8to32 => Value::Const(instr.immediate8to32() as i64),
         OpKind::Immediate64 => Value::Const(instr.immediate64() as i64),
         OpKind::Immediate8to64 => Value::Const(instr.immediate8to64()),
         OpKind::Immediate32to64 => Value::Const(instr.immediate32to64()),
@@ -3258,6 +3262,42 @@ mod tests {
             )),
             "leave did not produce `rsp = rbp`: {:#?}",
             ops
+        );
+    }
+
+    /// `83 c0 ff` is `add eax, -1` — an imm8 SIGN-EXTENDED to 32 bits. iced only
+    /// populates `immediate32()` for a true `Immediate32`; on an `Immediate8to32`
+    /// it hands back the raw byte, so the decrement lifted as `+255`.
+    ///
+    /// clang -O0 spells `n--` exactly this way, so `factorial`'s loop counter went
+    /// up by 255 instead of down by one. The 64-bit forms already had this fixed —
+    /// the comment in `value_of_operand` says each extended form has its own
+    /// accessor — and the 8-to-32 and 8-to-16 forms were simply missed.
+    #[test]
+    fn an_imm8_sign_extended_to_32_bits_keeps_its_sign() {
+        // add eax, -1
+        let ops: Vec<Op> = lift64(&[0x83, 0xc0, 0xff]).into_iter().map(|i| i.op).collect();
+        let found = ops.iter().find_map(|o| match o {
+            Op::Bin { op: BinOp::Add, rhs: Value::Const(c), .. } => Some(*c),
+            _ => None,
+        });
+        assert_eq!(found, Some(-1), "expected `add eax, -1`, got:\n{ops:#?}");
+    }
+
+    /// The same encoding for a subtract, and for a 16-bit destination.
+    #[test]
+    fn other_sign_extended_imm8_forms_keep_their_sign() {
+        // sub eax, -8   (83 e8 f8)
+        let ops: Vec<Op> = lift64(&[0x83, 0xe8, 0xf8]).into_iter().map(|i| i.op).collect();
+        assert!(
+            ops.iter().any(|o| matches!(o, Op::Bin { op: BinOp::Sub, rhs: Value::Const(-8), .. })),
+            "expected `sub eax, -8`, got:\n{ops:#?}"
+        );
+        // add ax, -1    (66 83 c0 ff) — Immediate8to16
+        let ops16: Vec<Op> = lift64(&[0x66, 0x83, 0xc0, 0xff]).into_iter().map(|i| i.op).collect();
+        assert!(
+            format!("{ops16:#?}").contains("-1"),
+            "expected a -1 immediate for `add ax, -1`, got:\n{ops16:#?}"
         );
     }
 }
