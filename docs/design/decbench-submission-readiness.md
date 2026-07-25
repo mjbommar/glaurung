@@ -42,16 +42,15 @@ path (so harness or metric drift would move both columns):
 
 | metric | glaurung | angr |
 |--------|----------|------|
-| GED (lower better) | 10.63 | **7.59** |
+| GED (lower better) | **5.99** | 7.59 |
 | type_match | **0.873** | 0.819 |
-| byte_match | 0.314 | **0.586** |
+| byte_match | 0.323 | **0.586** |
 
-We would be submitting a decompiler that **wins on type accuracy and loses on
-structural distance and recompiled-byte similarity**. That is a defensible thing
-to submit and an indefensible thing to misrepresent. See
-`decompiler-refactors.md` for the per-metric diagnosis, including the fact that
-GED is a real regression against our own recorded 7.16, concentrated in one
-program (`switch_jt`), with an identified cause and a named fix.
+We would be submitting a decompiler that **wins on structural distance and type
+accuracy, and loses on recompiled-byte similarity**. That is a defensible thing to
+submit and an indefensible thing to misrepresent — byte_match is not close, and
+saying so is part of the submission. See `decompiler-refactors.md` for the
+per-metric diagnosis.
 
 ## 4. What a reviewer would find if they looked hard
 
@@ -104,8 +103,9 @@ decoding three times as many genuine AArch64 functions.
 
 1. **Measure O2 and clang.** Submitting O0-only numbers when DecBench scores
    multiple optimisation levels would misrepresent the result.
-2. **Decide on the GED regression.** Either land the comparison-ladder-to-switch
-   recovery (roadmap #13) or state the 10.63 plainly. Not both, and not neither.
+2. ~~Decide on the GED regression.~~ **Done** — `ir::switch_ladder` landed:
+   10.63 -> 5.99, ahead of angr and of our own previous 7.16, with zero changes
+   against the fixture baseline.
 
 ## 7. Non-blocking, but worth doing first
 

@@ -11,36 +11,40 @@ metric drift would move both.
 
 | metric | glaurung | angr | previously recorded (2026-07-24) |
 |--------|----------|------|----------------------------------|
-| GED (lower)| 10.63 | **7.59** | 7.16 |
+| GED (lower)| **5.99** | 7.59 | 7.16 |
 | type_match | **0.873** | 0.819 | 0.891 |
-| byte_match | 0.314 | **0.586** | 0.366 |
+| byte_match | 0.323 | **0.586** | 0.366 |
 
 **type — we beat angr.** Ten of the fourteen programs now score 1.0; the two low
 ones (`structs` 0.25, `linkedlist` 0.5) are aggregates we do not recover at all.
 This is where declarations were restored to their true machine width (0.490 ->
 0.873); see `ir::widen`.
 
-**GED — we now trail angr, and this is a real regression against our own recorded
-7.16.** It is concentrated in one program: `switch_jt` scores 84, and
-`(84 - 34) / 14 ≈ 3.6` accounts for essentially the whole 7.16 -> 10.63 move.
-`dispatch`'s `switch` is emitted as a nested if/else tree with seven `goto`s into
-a shared `default` arm. Two things are true about that shape and only one of them
-is our bug:
+**GED — we beat angr, and our own previous best.** This started the day at 10.63,
+a real regression against the recorded 7.16, concentrated entirely in one program:
+`switch_jt` scored 84 because `dispatch`'s `switch` came out as a nested if/else
+tree with seven `goto`s into a shared `default` arm.
 
-  * gcc `-O0` really did emit a comparison **decision tree**, not a jump table —
-    there is no table to recover, and the if/else nesting mirrors the machine.
-  * the seven `goto`s are ours. They arrive from 1f7a488's shared-join fallback,
-    which fixed eight fixture functions that had been returning garbage
-    (`sc_and(20,-12)` among them). That was a correct trade to make; its GED cost
-    simply was not measured at the time.
+Two things were true about that shape and only one of them was our bug. gcc `-O0`
+really did emit a comparison **decision tree**, not a jump table — there is no
+table to recover, and the nesting mirrors the machine. The seven `goto`s, though,
+were ours: they came from 1f7a488's shared-join fallback, which fixed eight
+fixture functions that had been returning garbage (`sc_and(20,-12)` among them).
+That was a correct trade; only its GED cost went unmeasured.
 
-The fix is not to revert it: recognising a ladder of equality comparisons against
-distinct constants, converging on shared arms, as an actual `switch` removes the
-gotos AND matches the source shape. That is roadmap item #13.
+Reverting it would have been the wrong fix. `ir::switch_ladder` instead recognises
+the ladder as the `switch` it is, which removes the `goto`s and matches the source
+shape: `switch_jt` 84 -> 19 (byte 0.10 -> 0.23), corpus GED 10.63 -> 5.99, and
+zero changes against the fixture baseline. `sparse_switch` in the fixture corpus
+recovers too.
 
-**byte — still the opt-independent gap**, and it moved the wrong way against the
-recorded 0.366 (0.281 -> 0.314 within this session's own before/after, so the
-width work improved it; the loss relative to 0.366 predates that measurement).
+The next-worst program is now `statemachine` at 36, and it is a different problem:
+`fsm`'s `switch` is hoisted OUT of the loop it belongs to, with the case analysis
+trailing after as goto soup. That one is roadmap item #13.
+
+**byte — still the opt-independent gap**, and still below the recorded 0.366.
+Within today's own before/after it improved twice (0.281 -> 0.314 from the width
+work, -> 0.323 from switch recovery); the shortfall against 0.366 predates both.
 
 Historic head-to-head at O0+O2 is below; its glaurung column is the 2026-07-24
 state, not today's.
