@@ -540,6 +540,7 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
                 // Indirect call target → code pointer.
                 Op::Call {
                     target: crate::ir::types::CallTarget::Indirect(Value::Reg(r)),
+                    ..
                 } => {
                     tm.upsert(r.clone(), TypeHint::CodePointer);
                 }
@@ -913,6 +914,7 @@ mod tests {
         use crate::ir::types::CallTarget;
         let lf = mk_block(vec![Op::Call {
             target: CallTarget::Indirect(Value::Reg(VReg::phys("rax"))),
+            effects: None,
         }]);
         let tm = recover_types(&lf);
         assert_eq!(tm.get(&VReg::phys("rax")), Some(TypeHint::CodePointer));

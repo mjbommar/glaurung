@@ -73,10 +73,7 @@ fn arg_slot_names(cc: CallConv) -> &'static [&'static [&'static str]] {
 /// which is stripped for slot matching, and it sees parameters whose only later
 /// uses were dropped by structuring/DCE (the LLIR predates those passes). Mirrors
 /// `naming::live_in_arg_slots` but authoritative for the signature arity + typing.
-pub fn live_in_arg_slots_llir(
-    lf: &LlirFunction,
-    cc: CallConv,
-) -> std::collections::HashSet<usize> {
+pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collections::HashSet<usize> {
     let mut slot_of: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (i, names) in arg_slot_names(cc).iter().enumerate() {
         for n in *names {
@@ -241,10 +238,26 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
                 tag_phys(cond, ver, ctx);
             }
         }
-        Op::Call {
-            target: crate::ir::types::CallTarget::Indirect(v),
-        } => {
-            tag_value(v, use_vers, &mut ui, ctx);
+        // A call's effects must be renamed like any other operand. They are the only
+        // place the op records its result and its argument reads, so leaving them at
+        // the raw ABI names desynchronises them from the renamed def/use they describe:
+        // the post-call read becomes `var4` while the call still claims to write
+        // `rax`, and the AST then has a value nobody defines.
+        Op::Call { target, effects } => {
+            if let crate::ir::types::CallTarget::Indirect(v) = target {
+                tag_value(v, use_vers, &mut ui, ctx);
+            }
+            if let Some(e) = effects {
+                for a in e.args.iter_mut() {
+                    if let Some(&ver) = use_vers.get(ui) {
+                        tag_phys(a, ver, ctx);
+                    }
+                    ui += 1;
+                }
+                if let Some(r) = e.result.as_mut() {
+                    tag_phys(r, def_ver, ctx);
+                }
+            }
         }
         Op::ZExt { dst, src, .. }
         | Op::SExt { dst, src, .. }
@@ -258,7 +271,9 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
             tag_value(lo, use_vers, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
-        Op::Ite { dst, cond, t, e, .. } => {
+        Op::Ite {
+            dst, cond, t, e, ..
+        } => {
             // def_uses order: cond, then t, then e.
             if let Some(&ver) = use_vers.first() {
                 tag_phys(cond, ver, ctx); // a flag in practice — no-op
@@ -271,12 +286,7 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
         // Multi-output intrinsics (`cpuid`, ...) don't fit the single-def SSA
         // model cleanly, so leave them untagged for now; a function that uses one
         // must be excluded before this pass is wired into lowering.
-        Op::Intrinsic { .. }
-        | Op::Jump { .. }
-        | Op::Return
-        | Op::Nop
-        | Op::Unknown { .. }
-        | Op::Call { .. } => {}
+        Op::Intrinsic { .. } | Op::Jump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => {}
     }
 }
 
@@ -377,7 +387,11 @@ fn def_read_by_alias_before_redef(
 /// Return a copy of `lf` with every physical register occurrence rewritten to
 /// its SSA-value-tagged name. `cc` identifies the return registers whose final
 /// (returned) value is kept bare so it still names `ret`.
-pub fn value_number(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo, cc: CallConv) -> LlirFunction {
+pub fn value_number(
+    lf: &LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    cc: CallConv,
+) -> LlirFunction {
     let ret_names = return_reg_names(cc);
     // Keep bare every return-register def that can reach a `Return` without being
     // overwritten — the value(s) the function actually returns. Keeping ALL of
@@ -542,11 +556,26 @@ mod tests {
         let ssa = compute_ssa(&lf);
         let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
         let ops = &out.blocks[0].instrs;
-        assert_eq!(ops[0].op, Op::Assign { dst: VReg::phys("rbx#1"), src: Value::Const(1) });
-        assert_eq!(ops[1].op, Op::Assign { dst: VReg::phys("rbx#2"), src: Value::Const(2) });
+        assert_eq!(
+            ops[0].op,
+            Op::Assign {
+                dst: VReg::phys("rbx#1"),
+                src: Value::Const(1)
+            }
+        );
+        assert_eq!(
+            ops[1].op,
+            Op::Assign {
+                dst: VReg::phys("rbx#2"),
+                src: Value::Const(2)
+            }
+        );
         assert_eq!(
             ops[2].op,
-            Op::Assign { dst: VReg::phys("rcx#1"), src: Value::Reg(VReg::phys("rbx#2")) }
+            Op::Assign {
+                dst: VReg::phys("rcx#1"),
+                src: Value::Reg(VReg::phys("rbx#2"))
+            }
         );
     }
 
@@ -653,8 +682,16 @@ mod tests {
             },
         ]);
         let params = live_in_arg_slots_llir(&lf, CallConv::SysVAmd64);
-        assert!(params.contains(&0), "rdi (slot 0) is a parameter: {:?}", params);
-        assert!(params.contains(&1), "rsi (slot 1) is a parameter: {:?}", params);
+        assert!(
+            params.contains(&0),
+            "rdi (slot 0) is a parameter: {:?}",
+            params
+        );
+        assert!(
+            params.contains(&1),
+            "rsi (slot 1) is a parameter: {:?}",
+            params
+        );
         assert!(
             !params.contains(&2),
             "rdx (slot 2) is sub-register scratch, not a parameter: {:?}",

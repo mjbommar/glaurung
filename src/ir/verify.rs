@@ -336,6 +336,7 @@ mod tests {
             },
             Op::Call {
                 target: CallTarget::Direct(0x2000),
+                effects: None,
             },
         ]);
         assert!(verify_function(&lf).is_empty());

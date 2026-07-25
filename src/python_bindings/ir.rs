@@ -175,7 +175,7 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("inverted", *inverted)?;
             d.set_item("target", *target)?;
         }
-        Op::Call { target } => {
+        Op::Call { target, .. } => {
             d.set_item("kind", "call")?;
             let tgt = PyDict::new(py);
             match target {
@@ -427,6 +427,11 @@ fn decompile_at_py(
     let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
+    // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
+    // call participates in def/use like any other instruction instead of every later
+    // pass having to special-case it (see `ir::abi`).
+    let mut lf_raw = lf_raw;
+    crate::ir::abi::annotate_calls(&mut lf_raw, cc);
     let ssa = compute_ssa(&lf_raw);
     let region = recover_verified(&lf_raw, &ssa);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
@@ -631,6 +636,11 @@ fn decompile_range_at_py(
     let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
+    // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
+    // call participates in def/use like any other instruction instead of every later
+    // pass having to special-case it (see `ir::abi`).
+    let mut lf_raw = lf_raw;
+    crate::ir::abi::annotate_calls(&mut lf_raw, cc);
     let ssa = compute_ssa(&lf_raw);
     let region = recover_verified(&lf_raw, &ssa);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
@@ -915,6 +925,9 @@ fn decompile_all_py(
         let Some(lf_raw) = lift_function_from_bytes(&data, func, arch) else {
             continue;
         };
+        // See `ir::abi`: the ABI's call effects go on the calls before SSA.
+        let mut lf_raw = lf_raw;
+        crate::ir::abi::annotate_calls(&mut lf_raw, cc);
         let ssa = compute_ssa(&lf_raw);
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
@@ -1042,6 +1055,9 @@ fn decompile_many_py(
         let Some(lf_raw) = lift_function_from_bytes(&data, func, arch) else {
             continue;
         };
+        // See `ir::abi`: the ABI's call effects go on the calls before SSA.
+        let mut lf_raw = lf_raw;
+        crate::ir::abi::annotate_calls(&mut lf_raw, cc);
         let ssa = compute_ssa(&lf_raw);
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths

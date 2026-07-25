@@ -101,11 +101,25 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
             uses.push(cond.clone());
             None
         }
-        Op::Call { target } => {
+        Op::Call { target, effects } => {
             if let CallTarget::Indirect(v) = target {
                 reads_of_value(v, &mut uses);
             }
-            None
+            // A call is an instruction like any other: it defines the ABI's return
+            // register and reads the ABI's argument registers. Reporting nothing (as
+            // this did before `CallEffects` existed) told every consumer that the
+            // return register survived the call, so a post-call read took the
+            // pre-call value, and it made the argument setup look dead — which is why
+            // `fib` used its own argument in place of the returned value.
+            match effects {
+                Some(e) => {
+                    uses.extend(e.args.iter().cloned());
+                    e.result.clone()
+                }
+                // Not annotated (see `abi::annotate_calls`): report what is certain
+                // rather than guessing at an ABI.
+                None => None,
+            }
         }
         Op::ZExt { dst, src, .. }
         | Op::SExt { dst, src, .. }
@@ -240,10 +254,46 @@ mod tests {
     fn call_indirect_records_register_use() {
         let op = Op::Call {
             target: CallTarget::Indirect(Value::Reg(VReg::phys("rax"))),
+            effects: None,
         };
         let (def, uses) = def_uses(&op);
+        // Unannotated: report only what is certain (the indirect target is read).
         assert!(def.is_none());
         assert_eq!(uses, vec![VReg::phys("rax")]);
+    }
+
+    #[test]
+    fn an_annotated_call_defines_the_return_register_and_reads_the_arguments() {
+        // The whole point: a call participates in def/use like any other instruction.
+        // Reporting nothing told every consumer the return register survived the call.
+        let op = Op::Call {
+            target: CallTarget::Direct(0x2000),
+            effects: Some(crate::ir::abi::call_effects(
+                crate::ir::call_args::CallConv::SysVAmd64,
+            )),
+        };
+        let (def, uses) = def_uses(&op);
+        assert_eq!(def, Some(VReg::phys("rax")), "a call defines its result");
+        assert_eq!(
+            uses.len(),
+            6,
+            "and reads the ABI argument registers: {uses:?}"
+        );
+        assert_eq!(uses[0], VReg::phys("rdi"));
+    }
+
+    #[test]
+    fn an_indirect_annotated_call_reads_its_target_as_well_as_the_arguments() {
+        let op = Op::Call {
+            target: CallTarget::Indirect(Value::Reg(VReg::phys("r11"))),
+            effects: Some(crate::ir::abi::call_effects(
+                crate::ir::call_args::CallConv::Aarch64,
+            )),
+        };
+        let (def, uses) = def_uses(&op);
+        assert_eq!(def, Some(VReg::phys("x0")));
+        assert!(uses.contains(&VReg::phys("r11")), "target: {uses:?}");
+        assert!(uses.contains(&VReg::phys("x7")), "args: {uses:?}");
     }
 
     #[test]

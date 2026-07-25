@@ -343,6 +343,7 @@ mod tests {
         let lf = mk_single_block(vec![
             Op::Call {
                 target: crate::ir::types::CallTarget::Direct(0x3fd8),
+                effects: None,
             },
             Op::Return,
         ]);
@@ -362,6 +363,7 @@ mod tests {
         let lf = mk_single_block(vec![
             Op::Call {
                 target: crate::ir::types::CallTarget::Direct(0xdead),
+                effects: None,
             },
             Op::Return,
         ]);
@@ -493,6 +495,7 @@ mod tests {
         let lf = mk_single_block(vec![
             Op::Call {
                 target: crate::ir::types::CallTarget::Direct(*thunk_va),
+                effects: None,
             },
             Op::Return,
         ]);

@@ -335,7 +335,7 @@ impl<D: Domain> Machine<D> {
                     BranchDecision::Fork => Flow::Halt(Halt::UnexpectedFork),
                 }
             }
-            Op::Call { target } => {
+            Op::Call { target, .. } => {
                 let resolved = match target {
                     CallTarget::Direct(a) => Some(*a),
                     CallTarget::Indirect(v) => {
@@ -551,6 +551,7 @@ mod tests {
         assert_eq!(
             m.step(&Op::Call {
                 target: CallTarget::Direct(0x4040),
+                effects: None,
             }),
             Flow::Call(Some(0x4040))
         );
@@ -667,6 +668,7 @@ mod tests {
             0x3000,
             vec![Op::Call {
                 target: CallTarget::Direct(0x9000),
+                effects: None,
             }],
             vec![],
         )]);

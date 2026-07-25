@@ -85,6 +85,7 @@ mod tests {
         // and execution continues to the next instruction.
         let f = m.step(&Op::Call {
             target: CallTarget::Direct(0x4000),
+            effects: None,
         });
         assert_eq!(f, Flow::Next, "modeled call continues instead of CalledOut");
         assert_eq!(m.regs.read(&mut m.dom, &VReg::phys("rax")), 42);
@@ -95,6 +96,7 @@ mod tests {
         let mut m = Machine::new(Concrete);
         let f = m.step(&Op::Call {
             target: CallTarget::Direct(0x9999),
+            effects: None,
         });
         assert_eq!(f, Flow::Call(Some(0x9999)));
     }
@@ -115,6 +117,7 @@ mod tests {
                         va: 0x1000,
                         op: Op::Call {
                             target: CallTarget::Direct(0x4000),
+                            effects: None,
                         },
                     },
                     LlirInstr {

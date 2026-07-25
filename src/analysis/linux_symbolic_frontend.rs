@@ -247,6 +247,7 @@ pub fn admit_linux_aarch64_handler(
         .filter_map(|instruction| match instruction.op {
             Op::Call {
                 target: CallTarget::Direct(target),
+                ..
             } => Some(target),
             _ => None,
         })
@@ -477,6 +478,7 @@ fn apply_control_relocations<'data, 'file>(
                 object::elf::R_AARCH64_CALL26 if matches!(instruction.op, Op::Call { .. }) => {
                     instruction.op = Op::Call {
                         target: CallTarget::Direct(target_va),
+                        effects: None,
                     };
                     matched = true;
                 }
@@ -732,7 +734,8 @@ mod tests {
         assert_eq!(
             call.op,
             Op::Call {
-                target: crate::ir::types::CallTarget::Direct(relocation.target_va)
+                target: crate::ir::types::CallTarget::Direct(relocation.target_va),
+                effects: None,
             }
         );
         assert_eq!(
@@ -751,6 +754,7 @@ mod tests {
                 instruction.op
                     == Op::Call {
                         target: crate::ir::types::CallTarget::Direct(local_target),
+                        effects: None,
                     }
             }));
 

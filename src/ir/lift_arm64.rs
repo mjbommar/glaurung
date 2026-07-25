@@ -918,6 +918,7 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             if let Some(target) = ins.operands.first().and_then(|o| o.immediate) {
                 return vec![Op::Call {
                     target: CallTarget::Direct(target as u64),
+                    effects: None,
                 }];
             }
             vec![Op::Unknown { mnemonic: mnem }]
@@ -926,6 +927,7 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             if let Some(reg) = ins.operands.first().and_then(operand_reg) {
                 return vec![Op::Call {
                     target: CallTarget::Indirect(Value::Reg(reg)),
+                    effects: None,
                 }];
             }
             vec![Op::Unknown { mnemonic: mnem }]
@@ -1108,6 +1110,7 @@ mod tests {
         match &out[0].op {
             Op::Call {
                 target: CallTarget::Direct(addr),
+                ..
             } => assert_eq!(*addr, 0x1020),
             other => panic!("expected Call Direct; got {:?}", other),
         }

@@ -561,6 +561,7 @@ mod tests {
             vec![
                 Op::Call {
                     target: CallTarget::Direct(0x9000),
+                    effects: None,
                 },
                 Op::Return,
             ],
@@ -589,6 +590,7 @@ mod tests {
             vec![
                 Op::Call {
                     target: CallTarget::Direct(0x9000),
+                    effects: None,
                 },
                 Op::Return,
             ],
@@ -701,6 +703,7 @@ mod tests {
                 },
                 Op::Call {
                     target: CallTarget::Direct(0x9000),
+                    effects: None,
                 },
                 Op::Return,
             ],
@@ -875,6 +878,7 @@ mod tests {
                 }, // va 0x2000: r9 = &buf
                 Op::Call {
                     target: CallTarget::Indirect(Value::Addr(0xDEAD)),
+                    effects: None,
                 }, // va 0x2004: WdfRequestRetrieveInputBuffer (call-site summarized)
                 load("rax", "r9", 0, 8), // va 0x2008: rax = *r9 = tainted buffer ptr
                 Op::Store {
@@ -1156,6 +1160,7 @@ mod tests {
                 }, // src = local buffer (concrete)
                 Op::Call {
                     target: CallTarget::Direct(MEMCPY_VA),
+                    effects: None,
                 },
                 Op::Return,
             ],
@@ -1193,6 +1198,7 @@ mod tests {
         let mut ops = setup;
         ops.push(Op::Call {
             target: CallTarget::Direct(api_va),
+            effects: None,
         });
         ops.push(Op::Return);
         let end = 0x1000 + ops.len() as u64 * 4;
@@ -1243,6 +1249,7 @@ mod tests {
                 }, // rax = mem[SLOT] = SLOT (seeded self-pointer)
                 Op::Call {
                     target: CallTarget::Indirect(Value::Reg(VReg::phys("rax"))),
+                    effects: None,
                 },
                 Op::Return,
             ],
@@ -1324,6 +1331,7 @@ mod tests {
             load("rdx", "r10", SL_INPUT_LEN as i64, 4), // len = InputBufferLength
             Op::Call {
                 target: CallTarget::Direct(API),
+                effects: None,
             },
             // after the probe, write through the (now validated) pointer
             Op::Store {
@@ -1354,6 +1362,7 @@ mod tests {
                 load("rax", "rcx", 0, 8), // rax = attacker fn ptr from contents
                 Op::Call {
                     target: CallTarget::Indirect(Value::Reg(VReg::phys("rax"))),
+                    effects: None,
                 },
                 Op::Return,
             ],
@@ -1383,6 +1392,7 @@ mod tests {
     fn call(va: u64) -> Op {
         Op::Call {
             target: CallTarget::Direct(va),
+            effects: None,
         }
     }
 

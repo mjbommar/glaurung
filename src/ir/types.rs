@@ -178,6 +178,24 @@ pub enum CallTarget {
     Indirect(Value),
 }
 
+/// What a call does to registers, in the terms the value model needs.
+///
+/// One explicit representation, consulted by every pass, rather than each pass
+/// deciding for itself what a call means. Filled from the calling convention by
+/// `abi::annotate_calls`; the lifter cannot fill it because an instruction stream does
+/// not say which ABI it obeys.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct CallEffects {
+    /// The register the callee leaves its return value in — always written, whether
+    /// or not this program uses it. This is the DEF that makes a post-call read a new
+    /// value.
+    pub result: Option<VReg>,
+    /// Argument registers the callee may read, in ABI order. These are the call's
+    /// USES: without them the argument setup looks dead, and the value model renames
+    /// it out from under argument reconstruction.
+    pub args: Vec<VReg>,
+}
+
 /// A single LLIR operation. Multiple LLIR ops may correspond to one machine
 /// instruction (e.g. `push rax` expands to a `sub rsp, 8` + `store [rsp], rax`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,6 +254,17 @@ pub enum Op {
     },
     Call {
         target: CallTarget,
+        /// The ABI effects of this call, filled by `abi::annotate_calls` once the
+        /// calling convention is known. `None` means "not yet annotated", NOT "no
+        /// effects": a call always clobbers its ABI's return register.
+        ///
+        /// Recording the effects on the op is what lets a call participate in
+        /// def/use and SSA like any other instruction. Without them
+        /// `use_def::def_uses` reported a call as defining nothing, so a read of the
+        /// return register after a call saw the pre-call value — `fib` recursed and
+        /// then used its ARGUMENT where the returned value belonged — and every
+        /// consumer that wanted the truth had to special-case calls for itself.
+        effects: Option<CallEffects>,
     },
     Return,
     Nop,
@@ -554,7 +583,7 @@ impl fmt::Display for Op {
                 let prefix = if *inverted { "!" } else { "" };
                 write!(f, "if {}{} jmp 0x{:x}", prefix, cond, target)
             }
-            Op::Call { target } => match target {
+            Op::Call { target, .. } => match target {
                 CallTarget::Direct(a) => write!(f, "call 0x{:x}", a),
                 CallTarget::Indirect(v) => write!(f, "call {}", v),
             },

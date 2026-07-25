@@ -353,9 +353,11 @@ pub fn llir_to_data_xrefs(
                     .or_else(|| memop_known_target(addr, &known_addrs)),
                 Op::Call {
                     target: crate::ir::types::CallTarget::Indirect(Value::Addr(v)),
+                    ..
                 } => Some(*v),
                 Op::Call {
                     target: crate::ir::types::CallTarget::Indirect(value),
+                    ..
                 } => value_known_addr(value, &known_addrs),
                 _ => None,
             };

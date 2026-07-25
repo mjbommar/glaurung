@@ -1456,6 +1456,7 @@ mod tests {
                         0x500e,
                         Op::Call {
                             target: CallTarget::Direct(0xDEAD),
+                            effects: None,
                         },
                     ),
                     // After call: rax must be Top, rdi must still be SystemBuffer

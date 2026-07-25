@@ -1447,7 +1447,7 @@ fn process_block(
             // IAT slot. A modeled callee is summarized and execution continues; a
             // register-indirect call through an *attacker-controlled* target is a
             // control-flow hijack (shellcode); anything else ends the path.
-            Op::Call { target } => {
+            Op::Call { target, .. } => {
                 // Call-site-keyed summary (indirect WDF function-table calls whose
                 // callee is a dynamic thunk, e.g. WdfRequestRetrieveInputBuffer).
                 // Checked before callee resolution; args are still in registers here.

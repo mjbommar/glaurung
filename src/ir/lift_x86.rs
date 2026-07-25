@@ -1957,12 +1957,14 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 target: CallTarget::Indirect(Value::Reg(VReg::phys(reg_name(
                     instr.op_register(0),
                 )))),
+                effects: None,
             }],
             OpKind::Memory => vec![Op::Call {
                 // See the register-indirect case above: model tail jumps
                 // through an import slot as indirect calls until LLIR grows a
                 // dedicated indirect-jump operation.
                 target: CallTarget::Indirect(Value::Addr(instr.memory_displacement64())),
+                effects: None,
             }],
             _ => vec![Op::Unknown {
                 mnemonic: "jmp".into(),
@@ -1972,17 +1974,20 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
                 vec![Op::Call {
                     target: CallTarget::Direct(instr.near_branch_target()),
+                    effects: None,
                 }]
             }
             OpKind::Register => vec![Op::Call {
                 target: CallTarget::Indirect(Value::Reg(VReg::phys(reg_name(
                     instr.op_register(0),
                 )))),
+                effects: None,
             }],
             OpKind::Memory => vec![Op::Call {
                 // Indirect call through memory: we surface it as Indirect
                 // with the memory operand recovered into a temp.
                 target: CallTarget::Indirect(Value::Addr(instr.memory_displacement64())),
+                effects: None,
             }],
             _ => vec![Op::Unknown {
                 mnemonic: "call".into(),
@@ -2218,6 +2223,7 @@ mod tests {
         match &ops[0].op {
             Op::Call {
                 target: CallTarget::Direct(addr),
+                ..
             } => {
                 assert_eq!(*addr, 0x1050);
             }
@@ -2244,6 +2250,7 @@ mod tests {
         match &ops[0].op {
             Op::Call {
                 target: CallTarget::Indirect(Value::Addr(addr)),
+                ..
             } => assert_eq!(*addr, 0x223a),
             other => panic!("expected indirect Call through memory, got {:?}", other),
         }

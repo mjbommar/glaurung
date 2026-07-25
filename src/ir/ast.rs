@@ -15,8 +15,8 @@ use std::fmt::{self, Write};
 
 use crate::ir::structure::Region;
 use crate::ir::types::{
-    BinOp, CallTarget, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, UnOp,
-    VReg, Value,
+    BinOp, CallTarget, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, UnOp, VReg,
+    Value,
 };
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -329,15 +329,20 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
                 else_body: None,
             }]
         }
-        Op::Call { target } => {
+        Op::Call { target, effects } => {
             let target = match target {
                 CallTarget::Direct(a) => Expr::Addr(*a),
                 CallTarget::Indirect(v) => lower_value(v),
             };
+            // Carry the call's own result register down from the LLIR, where value
+            // numbering has already renamed it to the same name the post-call read
+            // carries. Re-deriving it at the AST level from ABI register names does
+            // not work: after renaming, the read is `var4`, not `rax`, so the two
+            // never meet and the AST ends up with a value nobody defines.
             vec![Stmt::Call {
                 target,
                 args: Vec::new(),
-                dst: None,
+                dst: effects.as_ref().and_then(|e| e.result.clone()),
             }]
         }
         Op::Return => vec![Stmt::Return { value: None }],
@@ -552,12 +557,36 @@ fn negate_cmp_expr(expr: Expr) -> Expr {
         // so negate `<`/`<=` by swapping the operands:
         //   !(a <  b) == (b <= a)      !(a <= b) == (b <  a)
         match op {
-            CmpOp::Eq => Expr::Cmp { op: CmpOp::Ne, lhs, rhs },
-            CmpOp::Ne => Expr::Cmp { op: CmpOp::Eq, lhs, rhs },
-            CmpOp::Slt => Expr::Cmp { op: CmpOp::Sle, lhs: rhs, rhs: lhs },
-            CmpOp::Sle => Expr::Cmp { op: CmpOp::Slt, lhs: rhs, rhs: lhs },
-            CmpOp::Ult => Expr::Cmp { op: CmpOp::Ule, lhs: rhs, rhs: lhs },
-            CmpOp::Ule => Expr::Cmp { op: CmpOp::Ult, lhs: rhs, rhs: lhs },
+            CmpOp::Eq => Expr::Cmp {
+                op: CmpOp::Ne,
+                lhs,
+                rhs,
+            },
+            CmpOp::Ne => Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs,
+                rhs,
+            },
+            CmpOp::Slt => Expr::Cmp {
+                op: CmpOp::Sle,
+                lhs: rhs,
+                rhs: lhs,
+            },
+            CmpOp::Sle => Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: rhs,
+                rhs: lhs,
+            },
+            CmpOp::Ult => Expr::Cmp {
+                op: CmpOp::Ule,
+                lhs: rhs,
+                rhs: lhs,
+            },
+            CmpOp::Ule => Expr::Cmp {
+                op: CmpOp::Ult,
+                lhs: rhs,
+                rhs: lhs,
+            },
         }
     } else if let Expr::Un { op: UnOp::Not, src } = expr {
         // Double negation cancels.
@@ -611,11 +640,7 @@ fn extract_cond_and_strip<'a>(block: &LlirBlock, mut stmts: Vec<Stmt>) -> (Expr,
             }
             // If the cond is still `!flag` (no Cmp was available to fold),
             // keep the negation and fall through to the lookup.
-            if let Expr::Un {
-                op: UnOp::Not,
-                src,
-            } = cond
-            {
+            if let Expr::Un { op: UnOp::Not, src } = cond {
                 if matches!(src.as_ref(), Expr::Cmp { .. }) {
                     let cond_expr = cond.clone();
                     stmts.pop();
@@ -643,11 +668,7 @@ fn extract_cond_and_strip<'a>(block: &LlirBlock, mut stmts: Vec<Stmt>) -> (Expr,
                             .sum::<usize>();
                         if usages == 0 {
                             if let Stmt::Assign { src, .. } = stmts.remove(i) {
-                                let cond_expr = if inverted {
-                                    negate_cmp_expr(src)
-                                } else {
-                                    src
-                                };
+                                let cond_expr = if inverted { negate_cmp_expr(src) } else { src };
                                 return (cond_expr, stmts);
                             }
                         }
@@ -696,7 +717,9 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Store { addr, src, .. } => {
             count_reg_uses_in_expr(addr, target) + count_reg_uses_in_expr(src, target)
         }
-        Stmt::Call { target: t, args, .. } => {
+        Stmt::Call {
+            target: t, args, ..
+        } => {
             count_reg_uses_in_expr(t, target)
                 + args
                     .iter()
@@ -712,7 +735,8 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Break | Stmt::Nop
+        | Stmt::Break
+        | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => 0,
         Stmt::Switch { discriminant, .. } => count_reg_uses_in_expr(discriminant, target),
@@ -728,7 +752,11 @@ fn strip_trailing_goto(stmts: &mut Vec<Stmt>, target_va: u64) {
     }
 }
 
-fn lower_region(r: &Region, lf: &LlirFunction, targets: &std::collections::HashSet<u64>) -> Vec<Stmt> {
+fn lower_region(
+    r: &Region,
+    lf: &LlirFunction,
+    targets: &std::collections::HashSet<u64>,
+) -> Vec<Stmt> {
     let mut out = lower_region_inner(r, lf, targets);
     // A region that *emits* a goto-target block (any shape — a plain block or a
     // structured `if`/`while` that begins at the target) gets a label at the
@@ -1369,7 +1397,11 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
             write_expr_ctx(src, tm, out);
             out.push(')');
         }
-        Expr::Cast { signed, width, expr } => {
+        Expr::Cast {
+            signed,
+            width,
+            expr,
+        } => {
             let _ = write!(out, "({})(", int_ctype(*signed, *width));
             write_expr_ctx(expr, tm, out);
             out.push(')');
@@ -1837,7 +1869,11 @@ fn write_expr_c(e: &Expr, out: &mut String) {
             write_expr_c(src, out);
             out.push(')');
         }
-        Expr::Cast { signed, width, expr } => {
+        Expr::Cast {
+            signed,
+            width,
+            expr,
+        } => {
             let _ = write!(out, "({})(", int_ctype(*signed, *width));
             write_expr_c(expr, out);
             out.push(')');
@@ -2252,10 +2288,7 @@ fn coalesce_param_spills(body: &mut Vec<Stmt>) {
 /// `Store { addr: Reg(arg0) }` could equally be a genuine `*arg0 = v` through a
 /// pointer parameter, and converting that would silently turn a memory write into a
 /// local assignment. The pre-rename name cannot be confused that way.
-fn slot_stores_to_assigns(
-    body: &mut Vec<Stmt>,
-    slots: &std::collections::HashMap<String, String>,
-) {
+fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMap<String, String>) {
     for s in body.iter_mut() {
         match s {
             Stmt::Store {
@@ -2430,7 +2463,12 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                     rename_phys_in_body(b, map);
                 }
             }
-            Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Goto { .. }
+            | Stmt::Label(_)
+            | Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_) => {}
         }
     }
 }
@@ -2725,7 +2763,10 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
         // `Named` in a value position renders as a bare VA constant, and in a
         // call-target position as an (implicitly-declared) function name; either
         // way it is not a declared local, so nothing to collect here.
-        Expr::Const(_) | Expr::Addr(_) | Expr::Named { .. } | Expr::StringLit { .. }
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
         | Expr::Unknown(_) => {}
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             if let Some(b) = base {
@@ -2820,7 +2861,12 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         // Push/Pop/Nop are elided by the renderer; Unknown/Comment become
         // comments; none introduce a declared identifier.
-        Stmt::Push { .. } | Stmt::Pop { .. } | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+        Stmt::Push { .. }
+        | Stmt::Pop { .. }
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => {}
     }
 }
 
@@ -2996,7 +3042,9 @@ fn scaled_index<'a>(off: &'a Expr, size: u8) -> Option<&'a Expr> {
             lhs,
             rhs,
         } => match rhs.as_ref() {
-            Expr::Const(k) if *k >= 0 && *k < 63 && (1i64 << *k) == size as i64 => Some(lhs.as_ref()),
+            Expr::Const(k) if *k >= 0 && *k < 63 && (1i64 << *k) == size as i64 => {
+                Some(lhs.as_ref())
+            }
             _ => None,
         },
         _ => None,
@@ -3170,7 +3218,11 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             write_expr_dec(src, out);
             out.push(')');
         }
-        Expr::Cast { signed, width, expr } => {
+        Expr::Cast {
+            signed,
+            width,
+            expr,
+        } => {
             let _ = write!(out, "({})(", int_ctype(*signed, *width));
             write_expr_dec(expr, out);
             out.push(')');
@@ -3614,7 +3666,7 @@ function f @ 0x1000 {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
-                            inverted: false,
+                        inverted: false,
                     },
                 ],
                 vec![0x1100, 0x1200],
@@ -3697,7 +3749,7 @@ function f @ 0x1000 {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
-                            inverted: false,
+                        inverted: false,
                     },
                     Op::Nop,
                     Op::Cmp {
@@ -3709,7 +3761,7 @@ function f @ 0x1000 {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
-                            inverted: false,
+                        inverted: false,
                     },
                     Op::Return,
                 ],
@@ -3755,7 +3807,7 @@ function f @ 0x1000 {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
-                            inverted: false,
+                        inverted: false,
                     },
                 ],
                 vec![0x1100, 0x1200],
@@ -3809,7 +3861,7 @@ function f @ 0x1000 {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1200,
-                            inverted: false,
+                        inverted: false,
                     },
                 ],
                 vec![0x1200, 0x1300],
@@ -4319,18 +4371,14 @@ function f @ 0x1000 {
             ],
         };
         let text = render_decbench(&f);
-        assert!(
-            text.contains("long add_one(long arg0) {"),
-            "got:\n{}",
-            text
-        );
+        assert!(text.contains("long add_one(long arg0) {"), "got:\n{}", text);
         assert!(text.contains("long var0;"), "missing local decl:\n{}", text);
+        assert!(text.contains("var0 = (arg0 + 1);"), "body wrong:\n{}", text);
         assert!(
-            text.contains("var0 = (arg0 + 1);"),
-            "body wrong:\n{}",
+            text.contains("return (var0 * var0);"),
+            "return wrong:\n{}",
             text
         );
-        assert!(text.contains("return (var0 * var0);"), "return wrong:\n{}", text);
         assert_looks_like_c(&text);
     }
 
@@ -4853,11 +4901,23 @@ function f @ 0x1000 {
             body: vec![Stmt::Switch {
                 discriminant: Expr::Reg(VReg::phys("arg0")),
                 cases: vec![
-                    (Some(0), vec![Stmt::Return { value: Some(Expr::Const(1)) }]),
+                    (
+                        Some(0),
+                        vec![Stmt::Return {
+                            value: Some(Expr::Const(1)),
+                        }],
+                    ),
                     // Unlabelled arm -> folded into default.
-                    (None, vec![Stmt::Return { value: Some(Expr::Const(2)) }]),
+                    (
+                        None,
+                        vec![Stmt::Return {
+                            value: Some(Expr::Const(2)),
+                        }],
+                    ),
                 ],
-                default: Some(vec![Stmt::Return { value: Some(Expr::Const(3)) }]),
+                default: Some(vec![Stmt::Return {
+                    value: Some(Expr::Const(3)),
+                }]),
             }],
         };
         let text = render_decbench(&f);

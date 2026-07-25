@@ -22,6 +22,7 @@
 //!
 //! This file defines the IR; [`lift_x86`] contains the lifter.
 
+pub mod abi;
 pub mod arm64_prologue;
 pub mod ast;
 pub mod call_args;

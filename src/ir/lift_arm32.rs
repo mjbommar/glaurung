@@ -704,6 +704,7 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
             if let Some(target) = ops.first().and_then(|o| o.immediate) {
                 return vec![Op::Call {
                     target: CallTarget::Direct(target as u64),
+                    effects: None,
                 }];
             }
             vec![Op::Unknown { mnemonic: mnem.to_string() }]
@@ -712,11 +713,13 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
             if let Some(target) = ops.first().and_then(|o| o.immediate) {
                 return vec![Op::Call {
                     target: CallTarget::Direct(target as u64),
+                    effects: None,
                 }];
             }
             if let Some(reg) = ops.first().and_then(operand_reg) {
                 return vec![Op::Call {
                     target: CallTarget::Indirect(Value::Reg(reg)),
+                    effects: None,
                 }];
             }
             vec![Op::Unknown { mnemonic: mnem.to_string() }]
@@ -732,6 +735,7 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 }
                 return vec![Op::Call {
                     target: CallTarget::Indirect(Value::Reg(VReg::phys(name))),
+                    effects: None,
                 }];
             }
             vec![Op::Unknown { mnemonic: mnem.to_string() }]
