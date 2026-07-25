@@ -112,7 +112,11 @@ def strict_compile_problems(matrix=None, allowed_missing=None) -> list[str]:
         allowed_missing = detect_allowed_missing()
     problems = []
     srcs = sorted(list(SRC.glob("*.c")) + list(SRC.glob("*.cpp")))
-    assert len(srcs) == 10, f"expected 10 fixtures, found {len(srcs)}"
+    assert {p.stem for p in srcs} == set(M.REQUIRED_FUNCTIONS), (
+        f"fixture sources and the manifest disagree: "
+        f"only on disk {sorted({p.stem for p in srcs} - set(M.REQUIRED_FUNCTIONS))}, "
+        f"only declared {sorted(set(M.REQUIRED_FUNCTIONS) - {p.stem for p in srcs})}"
+    )
     for src in srcs:
         for cc, opt in matrix:
             so, err = compile_fixture(src, cc, opt, strict=True)
@@ -269,12 +273,23 @@ def env_lane_problems(current: dict, baseline: dict) -> list[str]:
 
 
 def schema_problems(result: dict, matrix) -> list[str]:
-    """All ten fixtures must be present across every matrix lane; every status a
-    recognized kind. Guards against a truncated/renamed baseline."""
+    """Every declared fixture must be present across every matrix lane; every
+    status a recognized kind. Guards against a truncated/renamed baseline.
+
+    The corpus size comes from the manifest rather than a literal: a hardcoded
+    count catches a fixture that silently disappeared, but it also fails whenever
+    one is legitimately added, which trains people to edit the guard. Comparing
+    the sources on disk against `REQUIRED_FUNCTIONS` catches both a vanished
+    fixture and one added without being declared."""
     problems = []
     stems = sorted(p.stem for p in list(SRC.glob("*.c")) + list(SRC.glob("*.cpp")))
-    if len(stems) != 10:
-        problems.append(f"expected 10 fixtures, found {len(stems)}")
+    declared = set(M.REQUIRED_FUNCTIONS)
+    if set(stems) != declared:
+        problems.append(
+            f"fixture sources and the manifest disagree: "
+            f"only on disk {sorted(set(stems) - declared)}, "
+            f"only declared {sorted(declared - set(stems))}"
+        )
     if TOOLCHAIN_KEY not in result:
         problems.append(
             f"no {TOOLCHAIN_KEY} fingerprint — the verdicts are not attributable to "
