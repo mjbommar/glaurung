@@ -179,7 +179,46 @@
     "10_cpp_runtime_shapes:cpp_raii_guard:plain": "closed",
     "10_cpp_runtime_shapes:cpp_virtual_dispatch:c": "goto_no_label:L_23c2",
     "10_cpp_runtime_shapes:cpp_virtual_dispatch:decbench": "closed",
-    "10_cpp_runtime_shapes:cpp_virtual_dispatch:plain": "goto_no_label:L_23c2"
+    "10_cpp_runtime_shapes:cpp_virtual_dispatch:plain": "goto_no_label:L_23c2",
+    "11_call_shapes:call_accumulate_bytes:c": "closed",
+    "11_call_shapes:call_accumulate_bytes:decbench": "closed",
+    "11_call_shapes:call_accumulate_bytes:plain": "closed",
+    "11_call_shapes:call_chain_in_loop:c": "closed",
+    "11_call_shapes:call_chain_in_loop:decbench": "closed",
+    "11_call_shapes:call_chain_in_loop:plain": "closed",
+    "11_call_shapes:call_fold_wide_result:c": "closed",
+    "11_call_shapes:call_fold_wide_result:decbench": "closed",
+    "11_call_shapes:call_fold_wide_result:plain": "closed",
+    "11_call_shapes:call_forward_result:c": "closed",
+    "11_call_shapes:call_forward_result:decbench": "closed",
+    "11_call_shapes:call_forward_result:plain": "closed",
+    "11_call_shapes:call_into_spill:c": "closed",
+    "11_call_shapes:call_into_spill:decbench": "closed",
+    "11_call_shapes:call_into_spill:plain": "closed",
+    "11_call_shapes:call_nested:c": "closed",
+    "11_call_shapes:call_nested:decbench": "closed",
+    "11_call_shapes:call_nested:plain": "closed",
+    "11_call_shapes:call_result_drives_branch:c": "closed",
+    "11_call_shapes:call_result_drives_branch:decbench": "closed",
+    "11_call_shapes:call_result_drives_branch:plain": "closed",
+    "11_call_shapes:call_result_unused:c": "closed",
+    "11_call_shapes:call_result_unused:decbench": "closed",
+    "11_call_shapes:call_result_unused:plain": "closed",
+    "11_call_shapes:call_twice_and_combine:c": "closed",
+    "11_call_shapes:call_twice_and_combine:decbench": "closed",
+    "11_call_shapes:call_twice_and_combine:plain": "closed",
+    "11_call_shapes:signed_step:c": "closed",
+    "11_call_shapes:signed_step:decbench": "closed",
+    "11_call_shapes:signed_step:plain": "closed",
+    "11_call_shapes:spill_combine:c": "closed",
+    "11_call_shapes:spill_combine:decbench": "closed",
+    "11_call_shapes:spill_combine:plain": "closed",
+    "11_call_shapes:widen_mul:c": "closed",
+    "11_call_shapes:widen_mul:decbench": "closed",
+    "11_call_shapes:widen_mul:plain": "closed",
+    "11_call_shapes:wrap_byte:c": "closed",
+    "11_call_shapes:wrap_byte:decbench": "closed",
+    "11_call_shapes:wrap_byte:plain": "closed"
   },
   "effects": {
     "08_indirect_dispatch:apply": {
@@ -280,7 +319,20 @@
     "10_cpp_runtime_shapes:cpp_lambda_capture": false,
     "10_cpp_runtime_shapes:cpp_move": false,
     "10_cpp_runtime_shapes:cpp_raii_guard": false,
-    "10_cpp_runtime_shapes:cpp_virtual_dispatch": false
+    "10_cpp_runtime_shapes:cpp_virtual_dispatch": false,
+    "11_call_shapes:call_accumulate_bytes": false,
+    "11_call_shapes:call_chain_in_loop": false,
+    "11_call_shapes:call_fold_wide_result": false,
+    "11_call_shapes:call_forward_result": false,
+    "11_call_shapes:call_into_spill": false,
+    "11_call_shapes:call_nested": false,
+    "11_call_shapes:call_result_drives_branch": false,
+    "11_call_shapes:call_result_unused": false,
+    "11_call_shapes:call_twice_and_combine": false,
+    "11_call_shapes:signed_step": false,
+    "11_call_shapes:spill_combine": false,
+    "11_call_shapes:widen_mul": false,
+    "11_call_shapes:wrap_byte": false
   },
   "verify": {
     "01_conditional_polarity:classify": [],
@@ -361,6 +413,24 @@
     "10_cpp_runtime_shapes:cpp_virtual_dispatch": [
       "var0 is read but never defined",
       "var10 is read but never defined"
-    ]
+    ],
+    "11_call_shapes:call_accumulate_bytes": [],
+    "11_call_shapes:call_chain_in_loop": [],
+    "11_call_shapes:call_fold_wide_result": [
+      "var4 is read before it is defined"
+    ],
+    "11_call_shapes:call_forward_result": [],
+    "11_call_shapes:call_into_spill": [],
+    "11_call_shapes:call_nested": [
+      "var0 is read but never defined",
+      "var9 is read before it is defined"
+    ],
+    "11_call_shapes:call_result_drives_branch": [],
+    "11_call_shapes:call_result_unused": [],
+    "11_call_shapes:call_twice_and_combine": [],
+    "11_call_shapes:signed_step": [],
+    "11_call_shapes:spill_combine": [],
+    "11_call_shapes:widen_mul": [],
+    "11_call_shapes:wrap_byte": []
   }
 }
