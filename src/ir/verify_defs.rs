@@ -66,6 +66,33 @@ impl std::fmt::Display for Violation {
     }
 }
 
+/// Insert each violation as a `// glaurung-verify:` line AFTER the
+/// `// glaurung: <name> @ <va>` header that `body` begins with, never before it.
+///
+/// Every consumer splits multi-function output on that header (the structural
+/// lane, the CLI's `--all` and multi-`--vas` renders), so a comment placed ahead
+/// of the header binds to the PREVIOUS function — which is how the first version of
+/// this reporting misfiled every violation by one function. Returns `body`
+/// unchanged when there is nothing to report.
+pub fn splice_verify_comments(body: &str, violations: &[Violation]) -> String {
+    if violations.is_empty() {
+        return body.to_string();
+    }
+    let mut lines = body.splitn(2, '\n');
+    let header = lines.next().unwrap_or("");
+    let rest = lines.next();
+    let mut out = String::with_capacity(body.len() + 64 * violations.len());
+    out.push_str(header);
+    out.push('\n');
+    for v in violations {
+        out.push_str(&format!("// glaurung-verify: {v}\n"));
+    }
+    if let Some(rest) = rest {
+        out.push_str(rest);
+    }
+    out
+}
+
 /// The name of a value the decompiler invents and is therefore responsible for
 /// defining, or `None` for parameters, machine registers, and flags.
 fn checked_name(v: &VReg) -> Option<String> {
@@ -717,5 +744,48 @@ mod tests {
             },
         ]);
         assert_eq!(check(&f), vec![]);
+    }
+
+    fn violation(name: &str) -> Violation {
+        Violation {
+            name: name.into(),
+            kind: ViolationKind::NeverDefined,
+        }
+    }
+
+    #[test]
+    fn verify_comments_follow_the_header_and_precede_the_code() {
+        // The exact shape a consumer splits on: one header line, then the code.
+        let body = "// glaurung: fib @ 0x1571\nlong fib(long arg0) {\n    return arg0;\n}";
+        let out = splice_verify_comments(body, &[violation("var0")]);
+        let lines: Vec<&str> = out.lines().collect();
+        // The header stays first — a comment before it would bind to the PREVIOUS
+        // function when the whole multi-function blob is split on the header.
+        assert_eq!(lines[0], "// glaurung: fib @ 0x1571");
+        assert_eq!(lines[1], "// glaurung-verify: var0 is read but never defined");
+        // ...and the code the header introduces still follows, unshifted.
+        assert_eq!(lines[2], "long fib(long arg0) {");
+    }
+
+    #[test]
+    fn no_violations_returns_the_body_unchanged() {
+        let body = "// glaurung: f @ 0x10\nvoid f(void) {\n}";
+        assert_eq!(splice_verify_comments(body, &[]), body);
+    }
+
+    #[test]
+    fn every_violation_sits_between_header_and_code() {
+        let body = "// glaurung: g @ 0x20\nint g(void) {\n    return x;\n}";
+        let vs = [violation("x"), violation("y")];
+        let out = splice_verify_comments(body, &vs);
+        let header_idx = out.lines().position(|l| l.starts_with("// glaurung:")).unwrap();
+        let code_idx = out.lines().position(|l| l.starts_with("int g(")).unwrap();
+        for v in &vs {
+            let vi = out
+                .lines()
+                .position(|l| l == format!("// glaurung-verify: {v}"))
+                .unwrap();
+            assert!(header_idx < vi && vi < code_idx, "violation {v} misplaced");
+        }
     }
 }

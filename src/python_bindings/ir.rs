@@ -836,24 +836,7 @@ fn decbench_text(
         count = violations.len(),
         "def-before-use verification found violations"
     );
-    // AFTER the `// glaurung: <name> @ <va>` header, never before it. Every consumer
-    // splits multi-function output on that header (the structural lane, the CLI's
-    // `--all` and multi-`--vas` renders), so a comment ahead of it is attributed to
-    // the PREVIOUS function — which is how the first version of this misfiled every
-    // violation by one function.
-    let mut lines = body.splitn(2, '\n');
-    let header = lines.next().unwrap_or("");
-    let rest = lines.next();
-    let mut out = String::with_capacity(body.len() + 64 * violations.len());
-    out.push_str(header);
-    out.push('\n');
-    for v in &violations {
-        out.push_str(&format!("// glaurung-verify: {v}\n"));
-    }
-    if let Some(rest) = rest {
-        out.push_str(rest);
-    }
-    out
+    crate::ir::verify_defs::splice_verify_comments(&body, &violations)
 }
 
 /// Build the `(declaration, width)` type-map pair the DecBench renderer needs.

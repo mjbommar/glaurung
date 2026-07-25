@@ -68,7 +68,10 @@ jobs:
           python3 tools/fixture_toolchain.py
       - uses: astral-sh/setup-uv@v5
         with:
-          cache-dependency-glob: 'uv.lock'
+          # Key the uv cache on pyproject.toml: uv.lock is gitignored, so it is
+          # never checked out and the glob matched nothing ("The cache will never
+          # get invalidated"). pyproject.toml is tracked and changes with the deps.
+          cache-dependency-glob: 'pyproject.toml'
       - name: Sync deps (includes pyelftools)
         run: uv sync --all-extras --dev
       - name: Verify pyelftools is provisioned
@@ -101,7 +104,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v5
         with:
-          cache-dependency-glob: 'uv.lock'
+          # Key the uv cache on pyproject.toml: uv.lock is gitignored, so it is
+          # never checked out and the glob matched nothing ("The cache will never
+          # get invalidated"). pyproject.toml is tracked and changes with the deps.
+          cache-dependency-glob: 'pyproject.toml'
       # maturin is a declared dev dependency (pyproject `[dependency-groups].dev`),
       # so the sync provisions it. `[build-system].requires` does NOT: it feeds the
       # PEP 517 backend, not PATH, which is why `uv run maturin develop` failed with
