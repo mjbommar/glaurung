@@ -253,10 +253,32 @@ Both halves have to land together, or the output gets worse rather than better:
 
 Landing (1) alone would make the value model honest and the output visibly wrong
 (the verifier would start reporting a read-before-definition where the call result
-should be), which is worse for a user than the current quiet wrongness. So the slice
-is: add the destination, thread the ABI's return register in
-(`call_args::reconstruct_args` already receives the `CallConv`), render `dst = f(...)`,
-teach `verify_defs` that a call with a destination defines it, and measure.
+should be), which is worse for a user than the current quiet wrongness.
+
+**Half 2 has landed.** `Stmt::Call { dst: Option<VReg> }`,
+`call_args::attribute_call_results` filling it from the ABI, the naming pass renaming
+it and reporting it as a write, both renderers printing the assignment, and
+`verify_defs` using the recorded destination. Measured verdict-neutral (189/224/74
+unchanged; every structural dimension unchanged). It cost 28 compiler-flagged sites,
+not the 85 feared — most matches already used `..`.
+
+**What doing it taught us about half 1.** Attaching the destination at the AST level
+is not sufficient, and the reason is instructive: `value_number` renames registers
+while rewriting the **LLIR**, and the AST is lowered from its output. `Op::Call` has
+no destination, so the rename cannot reach it; `attribute_call_results` therefore
+writes the *raw* ABI register name, which is not the name the renamed post-call read
+carries. The two never meet. The same mechanism explains why the call above still
+passes no arguments: `value_number` has already renamed the argument-register setup
+(`rdi = x` became `var2 = x`) by the time `reconstruct_args` looks for it, because
+`def_uses(Op::Call)` reports no uses, so nothing marks those registers as live into
+the call.
+
+So half 1 is really: **`Op::Call` needs the destination too**, at the LLIR level, where
+the value model can rename it — plus the ABI argument registers as uses. That is ~60
+references across 19 files, and unlike `Stmt::Call` it reaches `src/symbolic/` and
+`src/analysis/` — subsystems this fixture gate does not cover. It needs its own
+session with its own verification story (the symbolic ioctl tests, the Unicorn
+differential oracle under `--features dev-oracle`), not a corner of another change.
 
 `fib_localalias` is a separate, smaller defect: the self-call resolves to a local
 alias symbol rather than to `fib`, so the emitted C calls an undeclared function.
