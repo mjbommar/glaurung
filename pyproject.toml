@@ -57,6 +57,11 @@ module-name = "glaurung._native"
 
 [dependency-groups]
 dev = [
+    # `[build-system].requires` provisions the PEP 517 backend, NOT a runnable
+    # `maturin` command — assuming otherwise is what made the decompiler fixture
+    # gate's matrix job fail with "Failed to spawn: maturin" on every commit.
+    # Declaring and locking it here means `uv sync --dev` puts it on PATH.
+    "maturin>=1.9,<2.0",
     "pyelftools>=0.33",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",

@@ -1,4 +1,12 @@
-# Pinned compile toolchain for the decompiler fixture gate.
+# Fingerprinted compile toolchain for the decompiler fixture gate.
+#
+# REPRODUCIBILITY, PRECISELY: the base image is pinned by digest, but the compiler
+# packages installed below come from the live Ubuntu archive and are mutable, so
+# this image is NOT bit-reproducible over time. What the gate actually relies on is
+# the FINGERPRINT: the observed gcc/g++/clang/clang++/ld/libc version strings are
+# recorded in baseline.json under `__toolchain__` and asserted before any verdict
+# is compared. An archive update therefore fails the gate loudly with a refresh
+# instruction, instead of silently shifting what the baseline means.
 #
 # WHY THIS EXISTS
 # ---------------

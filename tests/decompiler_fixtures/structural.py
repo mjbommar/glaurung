@@ -127,19 +127,24 @@ HERE = Path(__file__).resolve().parent
 SRC = HERE / "src"
 sys.path.insert(0, str(HERE.parent.parent / "tools"))
 import diff_decompile as D  # ty: ignore[unresolved-import]
+import fixture_toolchain as TC  # ty: ignore[unresolved-import]
 
 
 def _build(stem: str, workdir: Path) -> Path:
-    """Compile one fixture with gcc -O0 -g for structural inspection."""
+    """Compile one fixture with gcc -O0 -g for structural inspection.
+
+    Under the pinned toolchain (`tools/fixture_toolchain.py`), for the same reason
+    the execution lane is: the structural baseline records decompiler OUTPUT, which
+    follows the compiled binary. Built with a host compiler it drifts with the
+    host's gcc release — labels move, indirect-call recovery changes — so the
+    committed map would only be checkable on the machine that wrote it.
+    """
     src = SRC / f"{stem}.c"
     if not src.exists():
         src = SRC / f"{stem}.cpp"
     cc = "g++" if src.suffix == ".cpp" else "gcc"
     so = workdir / f"{stem}.so"
-    r = subprocess.run(
-        [cc, "-shared", "-fPIC", "-g", "-O0", "-w", "-o", str(so), str(src)],
-        capture_output=True, text=True, check=False,
-    )
+    r = TC.run([cc, "-shared", "-fPIC", "-g", "-O0", "-w", "-o", str(so), str(src)])
     if r.returncode != 0:
         raise RuntimeError(f"compile {stem}: {r.stderr.strip()[-200:]}")
     return so

@@ -7,11 +7,14 @@ name: Decompiler Fixture Gate
 # skipped silently.
 #
 # Every fixture compile — and the rebuild of our own decompiled C — happens inside
-# the digest-pinned toolchain image (tests/decompiler_fixtures/toolchain), NOT with
+# the fingerprinted toolchain image (tests/decompiler_fixtures/toolchain), NOT with
 # the runner's compilers: the per-function baseline records verdicts that depend on
 # the compiler release, so a runner gcc/clang would produce phantom regressions and
 # phantom improvements. The image also provisions clang++'s C++ runtime, which is
 # what previously reduced the C++ fixture's clang lanes to an env-missing hole.
+# The image's base is digest-pinned, but the compilers it apt-installs are not, so
+# reproducibility rests on the fingerprint recorded in baseline.json and asserted
+# by the gate — drift fails loudly rather than moving the baseline silently.
 
 on:
   push:
@@ -99,21 +102,17 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           cache-dependency-glob: 'uv.lock'
-      - name: Sync deps
+      # maturin is a declared dev dependency (pyproject `[dependency-groups].dev`),
+      # so the sync provisions it. `[build-system].requires` does NOT: it feeds the
+      # PEP 517 backend, not PATH, which is why `uv run maturin develop` failed with
+      # "Failed to spawn: maturin" on every commit.
+      - name: Sync deps (provisions maturin via the dev group)
         run: uv sync --all-extras --dev
-      # `[build-system].requires` is used by the PEP 517 backend; it does NOT put a
-      # runnable `maturin` on PATH, which is why `uv run maturin develop` failed
-      # with "Failed to spawn: maturin". Install it into the project venv
-      # explicitly, then prove the command exists before relying on it.
-      - name: Provision maturin explicitly
-        run: |
-          uv pip install 'maturin>=1.9,<2.0'
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
       - name: Verify the maturin command is runnable
         run: |
-          command -v maturin
-          maturin --version
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          "$PWD/.venv/bin/maturin" --version
       - name: Build the native extension (glaurung CLI)
         run: maturin develop --release
       - name: Verify the glaurung CLI is runnable

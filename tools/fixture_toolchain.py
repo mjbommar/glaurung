@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The pinned compile toolchain used by every stage of the decompiler fixture gate.
+"""The fingerprinted compile toolchain used by every stage of the fixture gate.
 
 WHY
 ---
@@ -16,13 +16,18 @@ toolchain lane. Two different compilers reach that verdict:
 Recorded against whatever compilers a developer's host happens to ship, that
 baseline is not a regression gate: it is a snapshot of one machine, and it cannot
 reproduce on a CI runner with different compiler releases. Every compiler
-invocation therefore runs inside the digest-pinned image built from
+invocation therefore runs inside the image built from
 `tests/decompiler_fixtures/toolchain/Dockerfile`, whose observed compiler versions
 are recorded in the baseline and asserted by the gate.
 
 Only COMPILATION is containerised. The produced objects execute natively: the
 image is deliberately old (Ubuntu 22.04, glibc 2.35), so its output loads on any
 newer host or runner.
+
+The image is NOT bit-reproducible — its base is digest-pinned but the compilers it
+installs come from the live Ubuntu archive. What the gate relies on is the recorded
+fingerprint: an archive update changes the version strings and fails the comparison
+loudly, instead of silently changing what the baseline means.
 
 Escape hatch: `GLAURUNG_FIXTURE_TOOLCHAIN=host` runs the host compilers directly.
 It is never silent — the recorded fingerprint says `mode: host` plus the host
