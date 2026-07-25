@@ -45,7 +45,7 @@
     "classify": "fail",
     "cmp_signed": "fail",
     "cmp_unsigned": "fail",
-    "early_return": "fail",
+    "early_return": "pass",
     "early_return_ge": "fail",
     "elseif": "fail",
     "nested": "fail",
@@ -53,7 +53,7 @@
     "sc_mixed": "fail",
     "sc_or": "fail",
     "ternary": "fail",
-    "ternary_nested": "fail"
+    "ternary_nested": "pass"
   },
   "02_integer_widths:clang:O0": {
     "add_wrap32": "pass",
@@ -264,7 +264,7 @@
     "explicit_fallthrough": "fail",
     "fallthrough_chain": "fail",
     "negative_cases": "fail",
-    "negative_sparse": "fail",
+    "negative_sparse": "pass",
     "nested_switch": "fail",
     "no_default": "fail",
     "shared_bodies": "fail",
@@ -281,8 +281,8 @@
     "dense_jumptable": "fail",
     "explicit_fallthrough": "pass",
     "fallthrough_chain": "fail",
-    "negative_cases": "fail",
-    "negative_sparse": "fail",
+    "negative_cases": "pass",
+    "negative_sparse": "pass",
     "nested_switch": "pass",
     "no_default": "fail",
     "shared_bodies": "pass",
@@ -583,7 +583,7 @@
   },
   "11_call_shapes:clang:O2": {
     "call_accumulate_bytes": "fail",
-    "call_chain_in_loop": "fail",
+    "call_chain_in_loop": "pass",
     "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "pass",
