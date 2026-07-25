@@ -210,12 +210,56 @@ write into a local assignment. `rotr32` now renders `arg1 = (arg1 & 31);` instea
 writing through a non-pointer parameter, and the `02_integer_widths` gcc-`-O0` lane
 goes 22/24 to 24/24.
 
-### Still open: stack arguments
+### Fixed: stack arguments
 
-`sum_arg7`..`sum_arg10` need the parameter set to include stack-passed arguments
-(and the signature arity to follow), which is the ABI-descriptor work. The
-def-before-use verifier will confirm the fix: those `stack_N is read but never
-defined` entries must disappear from `structural_baseline.json`.
+`stack_locals::stack_arg_layout` states where each ABI puts the arguments that do
+not fit in registers (SysV AMD64: six registers, then `[rbp+16]` upward; AArch64:
+eight, then `[x29+16]`), so a positive frame-pointer offset at or above that slot is
+named `argN` instead of inventing a `stack_N` local the function never assigns. The
+naming pass had to stop rewriting those to `varN`. `06_calling_conventions:gcc:O0`
+went 8/17 to 13/17 (sum_arg7..10, sum_mixed_widths), and the verifier's
+`stack_N is read but never defined` entries disappeared — 9 violations in 6 functions
+down to 4 in 3.
+
+Win64 and ARM32 deliberately keep `stack_N`: their layouts differ (a 32-byte shadow
+space; a different frame record), no fixture exercises them, and guessing at an ABI
+is how a decompiler invents a parameter that does not exist.
+
+## 4. The next slice: a call defines a value
+
+The remaining `06` failures — `fib`, `fact_mod`, `forward_sum6`,
+`tailcall_to_sum4` — are one root cause, and it is not naming. `use_def::def_uses`
+reports that `Op::Call` defines NOTHING and uses nothing, so the value model believes
+the return register still holds whatever it held before the call. `fib` renders:
+
+```
+var2 = (arg0 - 1);
+fib_localalias();      // the argument is not passed
+var4 = var2;           // ... and the RESULT is not taken: this is the argument
+```
+
+Both halves have to land together, or the output gets worse rather than better:
+
+1. **the value model** must treat a call as defining the return register (a
+   CC-aware extension of `def_uses`, since the register depends on the ABI and
+   `def_uses` is deliberately CC-free), so a post-call read is a NEW value rather
+   than the stale pre-call one;
+2. **the AST** must be able to say which value that is. `Stmt::Call` currently has
+   no destination, so there is nowhere to put it. Adding `dst: Option<VReg>` is the
+   direct answer but touches ~85 match sites across 15 files, and this codebase has
+   already had one fixup commit for exactly that class of change (`b3bbac7`, a
+   missed `Stmt::Store` size arm). It wants its own pass with the gate green
+   before and after — not a corner of a larger change.
+
+Landing (1) alone would make the value model honest and the output visibly wrong
+(the verifier would start reporting a read-before-definition where the call result
+should be), which is worse for a user than the current quiet wrongness. So the slice
+is: add the destination, thread the ABI's return register in
+(`call_args::reconstruct_args` already receives the `CallConv`), render `dst = f(...)`,
+teach `verify_defs` that a call with a destination defines it, and measure.
+
+`fib_localalias` is a separate, smaller defect: the self-call resolves to a local
+alias symbol rather than to `fib`, so the emitted C calls an undeclared function.
 
 ## 4. Why the gate had to be repaired first
 
