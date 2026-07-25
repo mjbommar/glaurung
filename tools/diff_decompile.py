@@ -36,6 +36,7 @@ import ctypes
 import hashlib
 import json
 import random
+import signal
 import subprocess
 import sys
 import tempfile
@@ -372,6 +373,20 @@ def _pad_ptr(ev, params, ptr_len):
 # Worker (runs in an isolated subprocess)
 # ---------------------------------------------------------------------------
 
+#: Wall clock for one function's differential worker. Generous: a slow-but-correct
+#: function must not be reported as broken because the machine is busy. A function
+#: that needs more than this is a fixture-design problem (pin the guard parameter
+#: with the manifest's `arg_values`), not something to paper over with a bigger
+#: number.
+WORKER_TIMEOUT_S = 60
+
+#: Wall clock for ONE call into the recompiled decompilation, once the original has
+#: already returned for the same input. Generous by three orders of magnitude for
+#: this corpus (the slowest correct fixture call measured ~0.9s), so exceeding it
+#: means our version does not terminate on an input where the original does.
+DECOMPILED_CALL_BUDGET_S = 5.0
+
+
 _CTYPE = {
     (1, True): ctypes.c_int8, (1, False): ctypes.c_uint8,
     (2, True): ctypes.c_int16, (2, False): ctypes.c_uint16,
@@ -403,6 +418,8 @@ def _ctypes_fn(lib, sig, forced_u8):
 
 
 def worker(spec_path: str) -> int:
+    # Default disposition: SIGALRM terminates the process even inside a C call.
+    signal.signal(signal.SIGALRM, signal.SIG_DFL)
     spec = json.loads(Path(spec_path).read_text())
     sig = spec["sig"]
     forced_u8 = spec.get("ptr_elem") == "u8"
@@ -427,7 +444,18 @@ def worker(spec_path: str) -> int:
                 oargs.append(a)
                 dargs.append(a)
         ro = fo(*oargs)
-        rd = fd(*dargs)
+        # The ORIGINAL returned, so this input terminates. If our version does not,
+        # that is a behavioural divergence — the most severe kind — and it must be
+        # reported as such, not as "the machine was too slow". A Python signal
+        # handler cannot interrupt a hung C call, so use the default SIGALRM
+        # disposition: the kernel kills this worker, and the parent maps that exact
+        # signal to non-termination. It also bounds the gate's wall clock, which a
+        # per-function timeout does not (a hung call used to burn the whole budget).
+        signal.setitimer(signal.ITIMER_REAL, DECOMPILED_CALL_BUDGET_S)
+        try:
+            rd = fd(*dargs)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
         # restype is set to the exact DWARF width/signedness, so equality is a
         # FULL-width comparison (a dropped high 32 bits or a wrong sign extension
         # diverges here).
@@ -496,6 +524,11 @@ def run_function(sig, fixture, binary, workdir, seed, fuzz) -> dict:
         # decompilation is wrong, and recording it as a semantic verdict bakes
         # machine speed into the baseline (see `timeout` in the fixture README).
         return {"status": "timeout", "detail": f"worker exceeded {WORKER_TIMEOUT_S}s"}
+    if r.returncode == -signal.SIGALRM:
+        # See DECOMPILED_CALL_BUDGET_S: the original returned, ours did not.
+        return {"status": "fail",
+                "detail": f"decompiled function did not terminate within "
+                          f"{DECOMPILED_CALL_BUDGET_S}s on an input the original returned on"}
     if r.returncode != 0:
         return {"status": "fail", "detail": f"worker crashed (exit {r.returncode}; {r.stderr.strip()[-120:]})"}
     try:
@@ -504,13 +537,6 @@ def run_function(sig, fixture, binary, workdir, seed, fuzz) -> dict:
         return {"status": "fail", "detail": "worker produced no verdict"}
     return {"status": "pass" if verdict["ok"] else "fail", "detail": verdict["detail"]}
 
-
-#: Wall clock for one function's differential worker. Generous: a slow-but-correct
-#: function must not be reported as broken because the machine is busy. A function
-#: that needs more than this is a fixture-design problem (pin the guard parameter
-#: with the manifest's `arg_values`), not something to paper over with a bigger
-#: number.
-WORKER_TIMEOUT_S = 180
 
 INFRA_STATUSES = {"missing", "nocases", "timeout"}
 

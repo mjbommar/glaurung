@@ -96,6 +96,32 @@ def test_worker_crash_is_fail(monkeypatch, tmp_path):
     assert r["status"] == "fail", r
 
 
+def test_a_nonterminating_decompilation_is_a_divergence_not_a_timeout(monkeypatch):
+    """The original returns; ours loops forever. That is the most severe kind of
+    behavioural difference and must be reported as a FAIL against that function —
+    not as a worker `timeout`, which would say "the machine was too slow" and be
+    refused from the baseline as infrastructure. It also has to be bounded per CALL:
+    a per-function timeout lets one hung call burn the whole budget (raising it from
+    60s to 180s turned a 8-minute matrix into a 40-minute one).
+    """
+    orig = _compile_so("int spin(int a){ return a; }", "term")
+    monkeypatch.setattr(
+        D, "decompiled_c",
+        lambda *_a, **_k: "int spin(int a){ volatile int i=1; while(i){ i++; if(i==0) i=1; } return a; }")
+    sig = {"name": "spin", "va": 0, "params": ["int"], "ret": "int"}
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        import time
+        t0 = time.time()
+        r = D.run_function(sig, "fx", orig, Path(td), seed=1, fuzz=1)
+        elapsed = time.time() - t0
+    assert r["status"] == "fail", r
+    assert "did not terminate" in r["detail"], r
+    assert elapsed < D.WORKER_TIMEOUT_S, (
+        f"non-termination must be caught by the per-call budget "
+        f"({D.DECOMPILED_CALL_BUDGET_S}s), not the worker timeout: took {elapsed:.1f}s"
+    )
+
+
 def test_worker_nonzero_exit_is_fail(tmp_path):
     # Directly: a malformed worker spec makes the worker raise -> nonzero exit ->
     # the parent's subprocess check must treat it as a failure.
