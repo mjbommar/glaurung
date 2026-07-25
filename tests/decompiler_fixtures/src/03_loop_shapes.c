@@ -91,13 +91,19 @@ int dowhile_atleastonce(const int *p) {
 }
 
 /* do/while that runs exactly once for an entry that fails the test — this is
- * the case a while() would skip entirely. The header recomputes `t` each pass. */
+ * the case a while() would skip entirely. The header recomputes `t` each pass.
+ *
+ * `t` is UNSIGNED deliberately. With a signed `t`, `t >> 8` sign-extends, so any
+ * negative input parks `t` at -1 and the loop never terminates — the fixture would
+ * hang the differential for INT_MIN, -1, -2 (which the boundary sweep passes) and
+ * the "sum of the byte lanes" contract below would be false. The loop shape under
+ * test — a do/while whose header input is recomputed in the body — is unchanged. */
 int dowhile_recompute(int x) {
     int s = 0;
-    int t = x;
+    unsigned t = (unsigned)x;
     do {
-        s += t & 0xFF;
-        t = t >> 8;      /* per-iteration header input, recomputed in the body */
+        s += (int)(t & 0xFFu);
+        t >>= 8;         /* per-iteration header input, recomputed in the body */
     } while (t != 0);
     return s;            /* == sum of the byte lanes of x, at least one lane */
 }
