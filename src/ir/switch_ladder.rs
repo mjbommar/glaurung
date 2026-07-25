@@ -245,8 +245,14 @@ fn try_ladder(s: &Stmt) -> Option<Stmt> {
                         None => return None, // a jump to a label we have not seen
                     }
                 } else if default.is_none() {
+                    // The label STAYS in the body. Stripping it here would dangle
+                    // any `goto` from outside the tree — the renderer would pin the
+                    // orphan target past the end of the function and control flow
+                    // would be wrong. `prune_labels` drops it at the end iff
+                    // nothing references it any more, which is the same decision
+                    // made with the whole function in view.
                     default_label = leading_label(then_body);
-                    default = Some(strip_leading_label(then_body));
+                    default = Some(then_body.clone());
                 } else {
                     return None; // a second, different default
                 }
@@ -289,13 +295,6 @@ fn leading_label(body: &[Stmt]) -> Option<u64> {
         Stmt::Label(l) => Some(*l),
         _ => None,
     })
-}
-
-fn strip_leading_label(body: &[Stmt]) -> Vec<Stmt> {
-    body.iter()
-        .filter(|s| !matches!(s, Stmt::Label(_)))
-        .cloned()
-        .collect()
 }
 
 /// Every label still jumped to anywhere in `body`.
@@ -663,6 +662,42 @@ mod tests {
         let before = f.clone();
         recover_switches(&mut f);
         assert_eq!(f, before);
+    }
+
+    /// A `goto` from OUTSIDE the tree into the default arm must keep its target.
+    /// Dropping the label unconditionally would dangle that jump — the renderer
+    /// pins an orphaned target past the end of the function, so it would still
+    /// compile while branching to the wrong place.
+    #[test]
+    fn an_external_jump_into_the_default_arm_keeps_its_label() {
+        const L: u64 = 0x11a9;
+        let mut f = Function {
+            name: "dispatch".into(),
+            entry_va: 0x1000,
+            body: vec![
+                // Something before the ladder jumps straight into its default arm.
+                Stmt::If {
+                    cond: cmp(CmpOp::Eq, reg("arg1"), Expr::Const(0)),
+                    then_body: vec![Stmt::Goto { target: L }],
+                    else_body: None,
+                },
+                gcc_ladder(8),
+                Stmt::Return { value: None },
+            ],
+        };
+        recover_switches(&mut f);
+        let Stmt::Switch { default, .. } = &f.body[1] else {
+            panic!("expected a switch, got:\n{:#?}", f.body[1]);
+        };
+        let d = default.as_ref().expect("a default arm");
+        assert!(
+            d.iter().any(|s| matches!(s, Stmt::Label(l) if *l == L)),
+            "the externally-referenced label must survive inside the default arm:\n{d:#?}"
+        );
+        assert!(
+            goto_targets(&f.body).contains(&L),
+            "the external goto itself must survive"
+        );
     }
 
     /// A label that something OUTSIDE the ladder still jumps to must survive.
