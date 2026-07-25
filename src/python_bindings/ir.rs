@@ -535,7 +535,7 @@ fn decompile_at_py(
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
         };
-        crate::ir::ast::render_decbench_typed(&f, decl, width)
+        decbench_text(&f, decl, width)
     } else if style == "c" {
         let body = crate::ir::ast::render_c(&f);
         match pdb_outer_name {
@@ -686,7 +686,7 @@ fn decompile_range_at_py(
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
         };
-        crate::ir::ast::render_decbench_typed(&f, decl, width)
+        decbench_text(&f, decl, width)
     } else if style == "c" {
         crate::ir::ast::render_c(&f)
     } else if types {
@@ -797,6 +797,50 @@ fn remap_type_map(
             _ => out.upsert_public(reg.clone(), *hint),
         }
     }
+    out
+}
+
+/// Prepare, verify, and render one function as DecBench C.
+///
+/// The three stages are deliberately separate and in this order:
+///
+/// 1. [`crate::ir::ast::prepare_for_decbench`] performs the semantic AST
+///    transformation (bare-return ABI register, parameter-spill coalescing,
+///    copy-chain folding) that used to happen inside the renderer;
+/// 2. [`crate::ir::verify_defs::check`] verifies the result — the AST that is
+///    about to be printed, which is what makes the check trustworthy;
+/// 3. the renderer formats it, and nothing else.
+///
+/// Violations are reported as `// glaurung-verify:` comment lines ahead of the
+/// code. They are comments, so the emitted C is unchanged for recompilation, and
+/// the structural lane records them per function against a committed baseline —
+/// known ones stay visible, a new one fails the gate. Reporting rather than
+/// erroring is deliberate: a violation means the decompilation of THAT function is
+/// untrustworthy, not that the analyst's whole run should fail.
+///
+/// The type maps are computed by the caller from the UNPREPARED function, whose
+/// names the recovered `TypeMap` keys were remapped against.
+fn decbench_text(
+    f: &crate::ir::ast::Function,
+    decl: Option<&crate::ir::types_recover::TypeMap>,
+    width: Option<&crate::ir::types_recover::TypeMap>,
+) -> String {
+    let prepared = crate::ir::ast::prepare_for_decbench(f);
+    let violations = crate::ir::verify_defs::check(&prepared);
+    let body = crate::ir::ast::render_decbench_typed(&prepared, decl, width);
+    if violations.is_empty() {
+        return body;
+    }
+    tracing::debug!(
+        function = %prepared.name,
+        count = violations.len(),
+        "def-before-use verification found violations"
+    );
+    let mut out = String::new();
+    for v in &violations {
+        out.push_str(&format!("// glaurung-verify: {v}\n"));
+    }
+    out.push_str(&body);
     out
 }
 
@@ -916,7 +960,7 @@ fn decompile_all_py(
         let text = if style == "decbench" {
             let (decl, width) =
                 decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
-            crate::ir::ast::render_decbench_typed(&f, Some(&decl), Some(&width))
+            decbench_text(&f, Some(&decl), Some(&width))
         } else {
             render(&f)
         };
@@ -1044,7 +1088,7 @@ fn decompile_many_py(
         let text = if style == "decbench" {
             let (decl, width) =
                 decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
-            crate::ir::ast::render_decbench_typed(&f, Some(&decl), Some(&width))
+            decbench_text(&f, Some(&decl), Some(&width))
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);
             match pdb_outer_name {

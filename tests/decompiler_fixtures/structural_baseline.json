@@ -281,5 +281,82 @@
     "10_cpp_runtime_shapes:cpp_move": false,
     "10_cpp_runtime_shapes:cpp_raii_guard": false,
     "10_cpp_runtime_shapes:cpp_virtual_dispatch": false
+  },
+  "verify": {
+    "01_conditional_polarity:classify": [],
+    "01_conditional_polarity:cmp_signed": [],
+    "01_conditional_polarity:cmp_unsigned": [],
+    "01_conditional_polarity:early_return": [],
+    "01_conditional_polarity:early_return_ge": [],
+    "01_conditional_polarity:elseif": [],
+    "01_conditional_polarity:nested": [],
+    "01_conditional_polarity:sc_and": [],
+    "01_conditional_polarity:sc_or": [],
+    "01_conditional_polarity:ternary": [],
+    "02_integer_widths:rt_u16": [],
+    "02_integer_widths:rt_u32": [],
+    "02_integer_widths:rt_u64": [],
+    "02_integer_widths:rt_u8": [],
+    "02_integer_widths:sar_signed": [],
+    "02_integer_widths:sext_i8": [],
+    "02_integer_widths:shr_unsigned": [],
+    "02_integer_widths:trunc_u8": [],
+    "02_integer_widths:zext_u32_to_u64": [],
+    "03_loop_shapes:dowhile_atleastonce": [],
+    "03_loop_shapes:for_sum": [],
+    "03_loop_shapes:loop_break": [],
+    "03_loop_shapes:loop_continue": [],
+    "03_loop_shapes:nested_pairs": [],
+    "03_loop_shapes:while_reload_header": [],
+    "04_switch_shapes:dense_jumptable": [],
+    "04_switch_shapes:explicit_fallthrough": [],
+    "04_switch_shapes:negative_cases": [],
+    "04_switch_shapes:no_default": [],
+    "04_switch_shapes:shared_bodies": [],
+    "04_switch_shapes:sparse_switch": [],
+    "05_cleanup_and_state_machine:fsm": [],
+    "05_cleanup_and_state_machine:process": [],
+    "06_calling_conventions:fact_mod": [
+      "var0 is read but never defined"
+    ],
+    "06_calling_conventions:fib": [],
+    "06_calling_conventions:sum_arg0": [],
+    "06_calling_conventions:sum_arg1": [],
+    "06_calling_conventions:sum_arg10": [
+      "stack_0 is read but never defined",
+      "stack_1 is read but never defined"
+    ],
+    "06_calling_conventions:sum_arg2": [],
+    "06_calling_conventions:sum_arg6": [
+      "stack_0 is read but never defined"
+    ],
+    "06_calling_conventions:sum_arg7": [
+      "stack_0 is read but never defined",
+      "stack_1 is read but never defined"
+    ],
+    "07_packet_parser:parse_packet": [],
+    "07_packet_parser:validate_header": [
+      "local_5 is read before it is defined",
+      "var24 is read but never defined"
+    ],
+    "08_indirect_dispatch:apply": [],
+    "08_indirect_dispatch:dispatch": [],
+    "08_indirect_dispatch:dispatch_switch": [],
+    "08_indirect_dispatch:tail_dispatch": [],
+    "09_memory_effects:cas_update": [],
+    "09_memory_effects:mem_copy": [],
+    "09_memory_effects:mem_set": [],
+    "09_memory_effects:read_counter": [],
+    "09_memory_effects:tick": [],
+    "09_memory_effects:vec_sum": [],
+    "09_memory_effects:vec_transform": [],
+    "10_cpp_runtime_shapes:cpp_ctor_dtor": [],
+    "10_cpp_runtime_shapes:cpp_exception": [],
+    "10_cpp_runtime_shapes:cpp_lambda_capture": [
+      "var6 is read but never defined"
+    ],
+    "10_cpp_runtime_shapes:cpp_move": [],
+    "10_cpp_runtime_shapes:cpp_raii_guard": [],
+    "10_cpp_runtime_shapes:cpp_virtual_dispatch": []
   }
 }

@@ -113,6 +113,20 @@ def test_no_structural_regression(report, baseline):
             problems.append(f"placeholder {k}: MISSING")
         elif not bval and cur:
             problems.append(f"placeholder {k}: fabricated name newly introduced")
+    # Definition-before-use: known violations stay visible, a NEW one fails. The
+    # emitted C reading a value it never produced is real corruption, so this is
+    # baselined per function rather than merely logged.
+    for k, base in baseline.get("verify", {}).items():
+        cur = report["verify"].get(k)
+        if cur is None:
+            problems.append(f"verify {k}: MISSING")
+            continue
+        new = sorted(set(cur) - set(base))
+        if new:
+            problems.append(f"verify {k}: NEW def-before-use violation(s): {new}")
+    for k, cur in report["verify"].items():
+        if k not in baseline.get("verify", {}) and cur:
+            problems.append(f"verify {k}: unrecorded function with violation(s): {cur}")
     assert not problems, "STRUCTURAL REGRESSIONS:\n  " + "\n  ".join(problems)
 
 
@@ -132,6 +146,10 @@ def test_structural_improvements_require_a_baseline_refresh(report, baseline):
     for k, bval in baseline["placeholder"].items():
         if bval and not report["placeholder"].get(k):
             improved.append(f"placeholder {k}: fabricated name now gone")
+    for k, base in baseline.get("verify", {}).items():
+        fixed = sorted(set(base) - set(report["verify"].get(k, [])))
+        if fixed:
+            improved.append(f"verify {k}: violation(s) resolved: {fixed}")
     assert not improved, (
         "STRUCTURAL IMPROVEMENTS — refresh structural_baseline.json to ratchet:\n  "
         + "\n  ".join(improved)

@@ -50,6 +50,7 @@ pub mod use_def;
 pub mod value_number;
 pub mod value_split;
 pub mod verify;
+pub mod verify_defs;
 pub mod winapi_prototypes;
 pub mod x86_prologue;
 

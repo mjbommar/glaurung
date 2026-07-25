@@ -31,6 +31,11 @@ def main() -> int:
     print(f"wrote {OUT}")
     print(f"  closure: {sum(1 for v in cl.values() if v == 'closed')}/{len(cl)} closed")
     print(f"  effects: {len(rep['effects'])}, placeholders: {sum(rep['placeholder'].values())}")
+    viol = {k: v for k, v in rep["verify"].items() if v}
+    print(f"  def-before-use: {sum(len(v) for v in viol.values())} violation(s) "
+          f"in {len(viol)} function(s)")
+    for k, v in sorted(viol.items()):
+        print(f"    {k}: {'; '.join(v)}")
     return 0
 
 

@@ -2185,6 +2185,8 @@ fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'sta
 
 /// Untyped entry point (blanket `long`) — used by unit tests and any consumer
 /// that has no recovered types.
+/// Untyped DecBench rendering of an already-prepared function (see
+/// [`prepare_for_decbench`]). Formatting only.
 pub fn render_decbench(f: &Function) -> String {
     render_decbench_typed(f, None, None)
 }
@@ -2400,25 +2402,43 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
     }
 }
 
+/// The explicit AST transformation that precedes DecBench rendering.
+///
+/// These three steps change *definitions, uses and value identities* — they are
+/// semantic pipeline operations, not formatting:
+///
+/// 1. `default_return_to_reg` gives a bare `return` its ABI return register, so
+///    an always-non-void rendering emits `return ret;` instead of the
+///    value-losing `return 0;`;
+/// 2. `coalesce_param_spills` folds a parameter's spill slot back into the
+///    parameter, so the emitted C uses `argN` directly instead of a redundant
+///    `local_X = argN` copy (which recompiles to stack traffic the original never
+///    emits);
+/// 3. `copy_prop::propagate_copies` folds the short-lived reload and
+///    condition-setup copy chains that otherwise inflate the emitted CFG.
+///
+/// They used to run *inside* `render_decbench_typed`, which made that renderer
+/// impure: the AST that was checked or dumped was not the AST that was printed,
+/// so def-before-use verification against it produced false positives on correct
+/// functions and had to be reverted. Running them here, as a named pass whose
+/// output is the thing rendered, makes the emitted C verifiable — see
+/// [`crate::ir::verify_defs`].
+pub fn prepare_for_decbench(f: &Function) -> Function {
+    let mut owned = f.clone();
+    default_return_to_reg(&mut owned.body);
+    coalesce_param_spills(&mut owned.body);
+    crate::ir::copy_prop::propagate_copies(&mut owned);
+    owned
+}
+
+/// Render an already-prepared function as DecBench C. FORMATTING ONLY: this must
+/// not change definitions, uses, control flow, or value identities — run
+/// [`prepare_for_decbench`] first (the pipeline does).
 pub fn render_decbench_typed(
     f: &Function,
     tm: Option<&TypeMap>,
     width_tm: Option<&TypeMap>,
 ) -> String {
-    // Work on a private copy so the cleanups below don't perturb other renders.
-    // First give bare returns (value computed in another block) their ABI return
-    // register — so this always-non-void renderer emits `return ret;` not the
-    // value-losing `return 0;` — then copy-propagate away the short-lived reload
-    // and condition-setup temporaries that otherwise inflate the emitted CFG.
-    let mut owned = f.clone();
-    default_return_to_reg(&mut owned.body);
-    // Fold each parameter's spill slot back into the parameter before copy-prop,
-    // so the emitted C uses `argN` directly instead of a redundant `local = argN`
-    // copy (which recompiles to extra stack traffic the original never emits).
-    coalesce_param_spills(&mut owned.body);
-    crate::ir::copy_prop::propagate_copies(&mut owned);
-    let f = &owned;
-
     let mut ids = DecIdents::default();
     for s in &f.body {
         collect_idents_stmt(s, &mut ids);
@@ -3895,6 +3915,177 @@ function f @ 0x1000 {
     }
     // -- render_decbench (parseable-C) -----------------------------------------
 
+    /// The DecBench pipeline as the product runs it: the explicit semantic
+    /// transformation, then formatting. Tests that characterise the folding must go
+    /// through it — `render_decbench` alone is formatting-only by design.
+    fn dec_pipeline(f: &Function) -> String {
+        render_decbench(&prepare_for_decbench(f))
+    }
+
+    // -- the prepare/render boundary -------------------------------------------
+    //
+    // These characterise the transformation that used to happen while printing.
+    // Each asserts the AST ITSELF changes (so the change is verifiable), and that
+    // the renderer alone does not make it (so the renderer is formatting-only).
+
+    #[test]
+    fn prepare_gives_a_bare_return_the_abi_return_register() {
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Goto { target: 0x20 },
+                Stmt::Label(0x20),
+                Stmt::Return { value: None },
+            ],
+        };
+        let prepared = prepare_for_decbench(&f);
+        assert_eq!(
+            prepared.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("ret")))
+            }),
+            "prepare must materialise the ABI return value in the AST"
+        );
+        // The renderer must not do it on its own.
+        assert!(
+            !render_decbench(&f).contains("return ret;"),
+            "the renderer must not change what is returned"
+        );
+    }
+
+    #[test]
+    fn prepare_folds_a_copy_chain_in_the_ast_not_at_print_time() {
+        // var0 = arg0;  ret = var0;  return ret;   ->   ret = arg0
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Reg(VReg::phys("var0")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                },
+            ],
+        };
+        let prepared = prepare_for_decbench(&f);
+        let text = render_decbench(&prepared);
+        assert!(
+            !text.contains("var0"),
+            "the copy chain must be gone from the AST before rendering:\n{text}"
+        );
+        // And it is gone from the AST, not just from the printed text.
+        let mut names = Vec::new();
+        for s in &prepared.body {
+            if let Stmt::Assign { dst, .. } = s {
+                names.push(format!("{dst}"));
+            }
+        }
+        assert!(
+            !names.iter().any(|n| n.contains("var0")),
+            "var0 still defined in the prepared AST: {names:?}"
+        );
+    }
+
+    #[test]
+    fn prepare_coalesces_a_parameter_spill_slot_into_the_parameter() {
+        // The `-O0` shape: the parameter is spilled to its frame slot (a Store to
+        // the promoted local) and read back from it. That slot IS the parameter, so
+        // the emitted C must use `arg0` directly — emitting `local_14 = arg0` and
+        // then reading the slot recompiles to stack traffic the original never had.
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_14")),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("local_14"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                },
+            ],
+        };
+        let text = render_decbench(&prepare_for_decbench(&f));
+        assert!(
+            text.contains("arg0 + 1") && !text.contains("local_14"),
+            "the spill slot must be folded into the parameter:\n{text}"
+        );
+        // The renderer alone must not do it.
+        assert!(
+            render_decbench(&f).contains("local_14"),
+            "the renderer must not rewrite value identities"
+        );
+    }
+
+    #[test]
+    fn rendering_the_same_prepared_ast_twice_is_identical_and_leaves_it_unchanged() {
+        // Formatting-only means: no hidden state, no mutation, no dependence on
+        // render order (the thread-locals the renderer uses are reset per call).
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("local_14"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("local_14"))),
+                },
+            ],
+        };
+        let prepared = prepare_for_decbench(&f);
+        let before = prepared.clone();
+        let a = render_decbench(&prepared);
+        let b = render_decbench(&prepared);
+        assert_eq!(a, b, "rendering is not deterministic");
+        assert_eq!(prepared, before, "rendering mutated the AST");
+    }
+
+    #[test]
+    fn prepare_is_idempotent() {
+        let f = Function {
+            name: "f".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Reg(VReg::phys("var0")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                },
+            ],
+        };
+        let once = prepare_for_decbench(&f);
+        let twice = prepare_for_decbench(&once);
+        assert_eq!(once, twice, "prepare must reach a fixed point in one pass");
+    }
+
     /// Assertions that must hold for *any* `render_decbench` output: no
     /// register `%` sigils, no `&[...]` address forms, no `<...>` unknowns, a
     /// real `long` signature, and a balanced brace at the end.
@@ -4203,7 +4394,7 @@ function f @ 0x1000 {
                 Stmt::Return { value: None },
             ],
         };
-        let text = render_decbench(&f);
+        let text = dec_pipeline(&f);
         assert!(
             text.contains("return ret;"),
             "bare return should use the return register:\n{}",
@@ -4296,7 +4487,7 @@ function f @ 0x1000 {
                 },
             ],
         };
-        let text = render_decbench(&f);
+        let text = dec_pipeline(&f);
         assert!(text.contains("/* asm: cpuid */"), "unknown stmt:\n{}", text);
         // var0 is single-use, so it folds into the indirect call target.
         assert!(

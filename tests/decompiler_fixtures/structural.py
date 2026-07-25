@@ -87,6 +87,21 @@ def has_memory_store(block: str) -> bool:
                 or re.search(r"\*\s*\w+\s*=", body))
 
 
+_VERIFY = re.compile(r"(?m)^// glaurung-verify: (.+)$")
+
+
+def def_use_violations(block: str) -> list[str]:
+    """Definition-before-use violations the decompiler reported for this function.
+
+    `src/ir/verify_defs.rs` checks the post-transformation AST — the exact AST that
+    is printed — and the pipeline emits each violation as a `// glaurung-verify:`
+    comment. A violation means the emitted C reads a value it never produced, so
+    the recompiled function returns garbage: real corruption, invisible to
+    type_match / GED / byte_match, and worth gating per function.
+    """
+    return sorted(m.group(1).strip() for m in _VERIFY.finditer(block))
+
+
 def has_placeholder_dispatch(block: str) -> bool:
     """A fabricated target name like ``dispatch_0x1234`` / ``sub_401000`` / ``fn_...``
     invented in place of a recovered indirect callee — a semantic lie."""
@@ -156,17 +171,20 @@ def structural_report(workdir: Path) -> dict:
       {"closure":     {"fixture:func:style": status},
        "effects":     {"fixture:func": {predicate: bool}},
        "placeholder": {"fixture:func": bool},   # decbench emits a fabricated name
+       "verify":      {"fixture:func": [violation, ...]},  # def-before-use
        "gaps":        ["fixture:func", ...]}     # structural-only, no assertion
 
     `closure` covers every REQUIRED function in every style; `effects` runs the
-    predicates the manifest's STRUCTURAL map declares. `gaps` lists functions the
-    execution gate can only mark `structural` yet that carry NO structural
-    assertion — a structural label with nothing executed behind it. A non-empty
-    `gaps` list must fail the lane.
+    predicates the manifest's STRUCTURAL map declares. `verify` records the
+    definition-before-use violations the decompiler reported for the function (see
+    `def_use_violations`). `gaps` lists functions the execution gate can only mark
+    `structural` yet that carry NO structural assertion — a structural label with
+    nothing executed behind it. A non-empty `gaps` list must fail the lane.
     """
     closure: dict[str, str] = {}
     effects: dict[str, dict] = {}
     placeholder: dict[str, bool] = {}
+    verify: dict[str, list[str]] = {}
     gaps: list[str] = []
     for fixture, funcs in M.REQUIRED_FUNCTIONS.items():
         so = _build(fixture, workdir)
@@ -179,6 +197,7 @@ def structural_report(workdir: Path) -> dict:
                 )
             dec = per_style["decbench"].get(fn, "")
             placeholder[f"{fixture}:{fn}"] = has_placeholder_dispatch(dec)
+            verify[f"{fixture}:{fn}"] = def_use_violations(dec)
             spec = M.structural_spec(fixture, fn)
             if spec:
                 effects[f"{fixture}:{fn}"] = {
@@ -190,7 +209,7 @@ def structural_report(workdir: Path) -> dict:
             if sig is not None and D.exec_class(sig, fixture)[0] == "structural" and not spec:
                 gaps.append(f"{fixture}:{fn}")
     return {"closure": closure, "effects": effects,
-            "placeholder": placeholder, "gaps": sorted(gaps)}
+            "placeholder": placeholder, "verify": verify, "gaps": sorted(gaps)}
 
 
 _SIG_CACHE: dict[str, dict] = {}
