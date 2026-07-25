@@ -128,6 +128,16 @@ pub enum Stmt {
         /// convention order. Empty until the argument-reconstruction pass
         /// runs.
         args: Vec<Expr>,
+        /// Where the callee's return value lands, once the ABI says so
+        /// (`call_args::reconstruct_args`). `None` until then, and for a call whose
+        /// result provably goes unused.
+        ///
+        /// Without this the value model has nowhere to record that a call PRODUCES
+        /// something: `use_def::def_uses` reported `Op::Call` as defining nothing, so
+        /// a read of the return register after a call saw the stale pre-call value —
+        /// `fib` rendered `fib(); var4 = var2;`, taking the argument instead of the
+        /// result.
+        dst: Option<VReg>,
     },
     Return {
         value: Option<Expr>,
@@ -327,6 +337,7 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
             vec![Stmt::Call {
                 target,
                 args: Vec::new(),
+                dst: None,
             }]
         }
         Op::Return => vec![Stmt::Return { value: None }],
@@ -685,7 +696,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Store { addr, src, .. } => {
             count_reg_uses_in_expr(addr, target) + count_reg_uses_in_expr(src, target)
         }
-        Stmt::Call { target: t, args } => {
+        Stmt::Call { target: t, args, .. } => {
             count_reg_uses_in_expr(t, target)
                 + args
                     .iter()
@@ -1434,7 +1445,7 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
             write_expr_ctx(src, tm, out);
             out.push_str(";\n");
         }
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, .. } => {
             indent(out, level);
             out.push_str("call ");
             write_expr_ctx(target, tm, out);
@@ -1860,8 +1871,12 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             write_expr_c(src, out);
             out.push_str(";\n");
         }
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, dst } => {
             indent(out, level);
+            if let Some(d) = dst {
+                write_reg_c(d, out);
+                out.push_str(" = ");
+            }
             write_expr_c(target, out);
             out.push('(');
             for (i, a) in args.iter().enumerate() {
@@ -2374,7 +2389,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                 re(addr, map);
                 re(src, map);
             }
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 re(target, map);
                 for a in args.iter_mut() {
                     re(a, map);
@@ -2740,7 +2755,7 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             collect_idents_expr(addr, ids);
             collect_idents_expr(src, ids);
         }
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, dst } => {
             // A `Named` target is a callee name, not a local; other targets are
             // rendered as value expressions and their registers must be declared.
             if !matches!(target, Expr::Named { .. }) {
@@ -2748,6 +2763,10 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             }
             for a in args {
                 collect_idents_expr(a, ids);
+            }
+            // The destination is assigned here, so it needs a declaration.
+            if let Some(d) = dst {
+                collect_reg(d, ids);
             }
         }
         Stmt::Return { value } => {
@@ -3264,8 +3283,13 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             write_expr_dec(src, out);
             out.push_str(";\n");
         }
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, dst } => {
             indent(out, level);
+            // A call's result must land somewhere: dropping it emitted
+            // `f(x);` and then read the ARGUMENT where the return value belonged.
+            if let Some(VReg::Phys(n)) = dst {
+                let _ = write!(out, "{} = ", sanitize_c_ident(n));
+            }
             write_call_dec(target, args, out);
             out.push_str(";\n");
         }
@@ -3452,6 +3476,7 @@ mod tests {
                     Expr::Reg(VReg::phys("arg1")),
                     Expr::Reg(VReg::phys("arg2")),
                 ],
+                dst: None,
             }],
         };
 
@@ -4617,6 +4642,7 @@ function f @ 0x1000 {
                 Stmt::Call {
                     target: Expr::Reg(VReg::phys("var0")),
                     args: vec![Expr::Reg(VReg::phys("arg0"))],
+                    dst: None,
                 },
             ],
         };

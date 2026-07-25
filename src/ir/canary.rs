@@ -229,7 +229,7 @@ fn rewrite_body(body: &mut [Stmt]) {
                 rewrite_expr(addr);
                 rewrite_expr(src);
             }
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 rewrite_expr(target);
                 for a in args {
                     rewrite_expr(a);
@@ -550,6 +550,7 @@ mod tests {
                         name: "puts".into(),
                     },
                     args: vec![],
+                    dst: None,
                 },
                 // Exit-check shape:
                 Stmt::Assign {

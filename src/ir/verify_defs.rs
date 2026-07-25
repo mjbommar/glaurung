@@ -139,8 +139,11 @@ fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>) {
             Stmt::Assign { dst, .. } => out.extend(checked_name(dst)),
             Stmt::Store { addr, .. } => out.extend(stored_slot(addr)),
             Stmt::Pop { target } => out.extend(checked_name(target)),
-            // A call writes the return register.
-            Stmt::Call { .. } => {
+            // A call writes the register the ABI returns in — now recorded on the
+            // statement itself, so this is the real destination rather than an
+            // assumption about which register that is.
+            Stmt::Call { dst, .. } => {
+                out.extend(dst.as_ref().and_then(checked_name));
                 out.insert(RETURN_ROLE.to_string());
             }
             Stmt::If { then_body, else_body, .. } => {
@@ -210,7 +213,7 @@ fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<Stri
                     None => undefined_reads(addr, defined, found),
                 }
             }
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 undefined_reads(target, defined, found);
                 for a in args {
                     undefined_reads(a, defined, found);
@@ -292,7 +295,7 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
                 }
                 push(src, out);
             }
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 push(target, out);
                 for a in args {
                     push(a, out);
@@ -568,6 +571,7 @@ mod tests {
                     name: "foo".into(),
                 },
                 args: vec![],
+                dst: None,
             },
             Stmt::Return {
                 value: Some(reg("ret")),

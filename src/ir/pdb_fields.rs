@@ -120,7 +120,7 @@ fn annotate_stmt(stmt: &mut Stmt, field_map: &PdbFieldMap) {
             annotate_expr(addr, field_map);
             annotate_expr(src, field_map);
         }
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, .. } => {
             annotate_expr(target, field_map);
             for arg in args {
                 annotate_expr(arg, field_map);

@@ -38,7 +38,7 @@ fn fold_body(body: &mut [Stmt]) {
                 fold_expr(addr);
                 fold_expr(src);
             }
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 fold_expr(target);
                 for a in args {
                     fold_expr(a);

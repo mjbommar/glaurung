@@ -33,7 +33,7 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
                 resolve_expr(addr, addr_map);
                 resolve_expr(src, addr_map);
             }
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 resolve_expr(target, addr_map);
                 for a in args {
                     resolve_expr(a, addr_map);

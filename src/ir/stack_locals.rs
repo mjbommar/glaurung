@@ -118,7 +118,7 @@ fn rewrite_body(
                 try_promote_lea_to_local(addr, map, stack_counter, local_counter, cc);
                 rewrite_expr(src, map, stack_counter, local_counter, cc);
             }
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 rewrite_expr(target, map, stack_counter, local_counter, cc);
                 for a in args {
                     rewrite_expr(a, map, stack_counter, local_counter, cc);

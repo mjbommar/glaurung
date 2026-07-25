@@ -166,7 +166,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
     match s {
         Stmt::Assign { src, .. } => count_reg_uses(src, target),
         Stmt::Store { addr, src, .. } => count_reg_uses(addr, target) + count_reg_uses(src, target),
-        Stmt::Call { target: t, args } => {
+        Stmt::Call { target: t, args, .. } => {
             count_reg_uses(t, target)
                 + args
                     .iter()
@@ -281,7 +281,7 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
             substitute_in_expr(addr, target, with);
             substitute_in_expr(src, target, with);
         }
-        Stmt::Call { target: t, args } => {
+        Stmt::Call { target: t, args, .. } => {
             substitute_in_expr(t, target, with);
             for a in args {
                 substitute_in_expr(a, target, with);

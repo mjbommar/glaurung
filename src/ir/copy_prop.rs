@@ -90,7 +90,7 @@ fn propagate_run(stmts: &mut [Stmt]) {
                 }
             }
             Stmt::Pop { target } => invalidate(&mut copies, target),
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 subst(target, &copies);
                 for a in args.iter_mut() {
                     subst(a, &copies);
@@ -180,7 +180,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) {
                 }
             }
             Stmt::Pop { target } => invalidate(&mut copies, target),
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 subst(target, &copies);
                 for a in args.iter_mut() {
                     subst(a, &copies);
@@ -453,7 +453,7 @@ fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
             count_reads_expr(addr, reads);
             count_reads_expr(src, reads);
         }
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, .. } => {
             count_reads_expr(target, reads);
             for a in args {
                 count_reads_expr(a, reads);

@@ -96,6 +96,59 @@ fn incoming_arg_expr(arch: CallConv, slot: usize) -> Option<Expr> {
 /// Run argument reconstruction on `f` using the given calling convention.
 pub fn reconstruct_args(f: &mut Function, arch: CallConv) {
     fold_body(&mut f.body, arch);
+    attribute_call_results(&mut f.body, arch);
+}
+
+/// The register a callee leaves its return value in.
+fn return_reg(arch: CallConv) -> &'static str {
+    match arch {
+        CallConv::SysVAmd64 | CallConv::Win64 => "rax",
+        CallConv::Aarch64 => "x0",
+        CallConv::Arm => "r0",
+    }
+}
+
+/// Record, on every call, WHERE its result lands.
+///
+/// A call produces a value; until this ran, the AST had no way to say so, and the
+/// emitted C dropped the result on the floor — `fib` called itself and then used the
+/// ARGUMENT in place of the returned value. The destination is the ABI's return
+/// register, so the naming pass turns it into `ret` alongside every other use of that
+/// register and the renderer can print `ret = f(...)`.
+///
+/// This is deliberately unconditional: the machine clobbers the return register on
+/// every call whether the C source used the result or not, and a decompilation that
+/// pretends otherwise is claiming the register survived the call.
+fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
+    for s in body.iter_mut() {
+        match s {
+            Stmt::Call { dst, .. } => {
+                if dst.is_none() {
+                    *dst = Some(VReg::phys(return_reg(arch)));
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                attribute_call_results(then_body, arch);
+                if let Some(eb) = else_body {
+                    attribute_call_results(eb, arch);
+                }
+            }
+            Stmt::While { body, .. } => attribute_call_results(body, arch),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, b) in cases.iter_mut() {
+                    attribute_call_results(b, arch);
+                }
+                if let Some(b) = default {
+                    attribute_call_results(b, arch);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn fold_body(body: &mut Vec<Stmt>, arch: CallConv) {
@@ -279,7 +332,7 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
             mark_arg_reads_in_expr(addr, arch, read_between);
             mark_arg_reads_in_expr(src, arch, read_between);
         }
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, .. } => {
             mark_arg_reads_in_expr(target, arch, read_between);
             for arg in args {
                 mark_arg_reads_in_expr(arg, arch, read_between);
@@ -436,6 +489,7 @@ mod tests {
                         name: "main".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -465,6 +519,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -493,6 +548,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -522,6 +578,7 @@ mod tests {
                         name: "other".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
                 Stmt::Call {
                     target: Expr::Named {
@@ -529,6 +586,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -556,6 +614,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -582,6 +641,7 @@ mod tests {
                         name: "puts".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -608,6 +668,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -642,6 +703,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -698,6 +760,7 @@ mod tests {
                         name: "strcpy_s".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -736,6 +799,7 @@ mod tests {
                         name: "strnlen".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -763,6 +827,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -801,6 +866,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -839,6 +905,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -846,5 +913,79 @@ mod tests {
         // Since rdi can't fold, the slot-0 is empty, so nothing folds at all
         // (args are contiguous prefix).
         assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("rdi")));
+    }
+
+    #[test]
+    fn a_call_records_where_its_result_lands() {
+        // A call PRODUCES a value. Until the AST could say so, the emitted C dropped
+        // it: `fib` called itself and then used the ARGUMENT where the returned value
+        // belonged.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "g".into(),
+                },
+                args: vec![],
+                dst: None,
+            }],
+        };
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+        match &f.body[0] {
+            Stmt::Call { dst, .. } => assert_eq!(*dst, Some(VReg::phys("rax"))),
+            other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_result_register_follows_the_abi() {
+        for (cc, reg_name) in [
+            (CallConv::SysVAmd64, "rax"),
+            (CallConv::Win64, "rax"),
+            (CallConv::Aarch64, "x0"),
+            (CallConv::Arm, "r0"),
+        ] {
+            let mut f = Function {
+                name: "f".into(),
+                entry_va: 0,
+                body: vec![Stmt::Call {
+                    target: Expr::Addr(0x2000),
+                    args: vec![],
+                    dst: None,
+                }],
+            };
+            reconstruct_args(&mut f, cc);
+            match &f.body[0] {
+                Stmt::Call { dst, .. } => assert_eq!(*dst, Some(VReg::phys(reg_name)), "{cc:?}"),
+                other => panic!("expected a call, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_call_inside_a_branch_is_attributed_too() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(VReg::phys("rdi")),
+                then_body: vec![Stmt::Call {
+                    target: Expr::Addr(0x2000),
+                    args: vec![],
+                    dst: None,
+                }],
+                else_body: None,
+            }],
+        };
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+        match &f.body[0] {
+            Stmt::If { then_body, .. } => match &then_body[0] {
+                Stmt::Call { dst, .. } => assert_eq!(*dst, Some(VReg::phys("rax"))),
+                other => panic!("expected a call, got {other:?}"),
+            },
+            other => panic!("expected an if, got {other:?}"),
+        }
     }
 }

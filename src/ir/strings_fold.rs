@@ -132,7 +132,7 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 fold_expr(addr, pool);
                 fold_expr(src, pool);
             }
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, .. } => {
                 fold_expr(target, pool);
                 for a in args {
                     fold_expr(a, pool);
@@ -232,6 +232,7 @@ mod tests {
                     va: 0x2008,
                     name: "hello_str".into(),
                 }],
+                dst: None,
             }],
         };
         fold_string_literals(&mut f, &pool);

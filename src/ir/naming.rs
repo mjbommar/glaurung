@@ -192,10 +192,15 @@ fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
             walk_expr_phys(addr, &mut |n| cb(n, false));
             walk_expr_phys(src, &mut |n| cb(n, false));
         }
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, dst } => {
             walk_expr_phys(target, &mut |n| cb(n, false));
             for a in args {
                 walk_expr_phys(a, &mut |n| cb(n, false));
+            }
+            // A call WRITES its return register: reporting otherwise would let the
+            // live-in scan mistake a clobbered return register for a parameter.
+            if let Some(VReg::Phys(n)) = dst {
+                cb(n.as_str(), true);
             }
         }
         Stmt::Return { value } => {
@@ -276,10 +281,13 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
             walk_expr_phys(addr, cb);
             walk_expr_phys(src, cb);
         }
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, dst } => {
             walk_expr_phys(target, cb);
             for a in args {
                 walk_expr_phys(a, cb);
+            }
+            if let Some(VReg::Phys(n)) = dst {
+                cb(n.as_str());
             }
         }
         Stmt::Return { value } => {
@@ -407,10 +415,17 @@ fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
                 rewrite_expr(addr, role);
                 rewrite_expr(src, role);
             }
-            Stmt::Call { target, args } => {
+            Stmt::Call { target, args, dst } => {
                 rewrite_expr(target, role);
                 for a in args {
                     rewrite_expr(a, role);
+                }
+                // The call's destination is the same register every reader of the
+                // return value uses; leaving it raw would sever that connection.
+                if let Some(VReg::Phys(n)) = dst {
+                    if let Some(new) = role.get(n.as_str()) {
+                        *n = new.clone();
+                    }
                 }
             }
             Stmt::Return { value } => {
@@ -596,6 +611,7 @@ mod tests {
                     name: "puts".into(),
                 },
                 args: vec![Expr::Reg(reg("rdi"))],
+                dst: None,
             }],
         };
         apply_role_names(&mut f, CallConv::SysVAmd64);

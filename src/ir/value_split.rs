@@ -166,7 +166,7 @@ impl Splitter {
                         self.rename_expr(src);
                     }
                 }
-                Stmt::Call { target, args } => {
+                Stmt::Call { target, args, .. } => {
                     self.rename_expr(target);
                     for a in args.iter_mut() {
                         self.rename_expr(a);

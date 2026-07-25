@@ -202,7 +202,7 @@ fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
     match s {
         Stmt::Assign { src, .. } => expr_reads(src, dst),
         Stmt::Store { addr, src, .. } => expr_reads(addr, dst) || expr_reads(src, dst),
-        Stmt::Call { target, args } => {
+        Stmt::Call { target, args, .. } => {
             expr_reads(target, dst) || args.iter().any(|a| expr_reads(a, dst))
         }
         Stmt::Return { value } => value.as_ref().is_some_and(|e| expr_reads(e, dst)),
@@ -351,6 +351,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -376,6 +377,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: vec![Expr::Reg(reg("ret"))],
+                    dst: None,
                 },
             ],
         };
@@ -400,6 +402,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -425,6 +428,7 @@ mod tests {
                         name: "A".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
                 Stmt::Assign {
                     dst: reg("ret"),
@@ -436,6 +440,7 @@ mod tests {
                         name: "B".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -464,6 +469,7 @@ mod tests {
                             name: "foo".into(),
                         },
                         args: vec![Expr::Reg(reg("rax"))],
+                        dst: None,
                     }],
                     else_body: None,
                 },
@@ -493,6 +499,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
@@ -555,6 +562,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: vec![Expr::Reg(reg("fp"))],
+                    dst: None,
                 },
             ],
         };
@@ -582,6 +590,7 @@ mod tests {
                         name: "foo".into(),
                     },
                     args: Vec::new(),
+                    dst: None,
                 },
             ],
         };
