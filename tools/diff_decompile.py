@@ -40,6 +40,8 @@ from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
+sys.path.insert(0, str(ROOT / "tools"))
+import fixture_toolchain as TC  # ty: ignore[unresolved-import]  # added to sys.path above
 import manifest as M  # ty: ignore[unresolved-import]  # added to sys.path above
 
 PRELUDE = """
@@ -216,13 +218,15 @@ def decompiled_c(binary: str, va: int) -> str | None:
 
 
 def build_so(c_src: str, workdir: Path, tag: str) -> Path | None:
+    """Rebuild our decompiled C. Compiled under the PINNED toolchain: whether a
+    given rendering compiles at all is compiler-version dependent (gcc >= 14 turns
+    implicit declarations and int/pointer conversions into hard errors that gcc 11
+    only warns about), so a host gcc would make the `decompiled C failed to
+    compile` verdict — and therefore the baseline — host-specific."""
     src = workdir / f"{tag}.c"
     src.write_text(PRELUDE + "\n" + c_src + "\n")
     so = workdir / f"{tag}.so"
-    r = subprocess.run(
-        ["gcc", "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)],
-        capture_output=True, text=True, check=False,
-    )
+    r = TC.run(["gcc", "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)])
     return so if r.returncode == 0 else None
 
 

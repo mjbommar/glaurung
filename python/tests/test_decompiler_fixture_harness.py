@@ -20,6 +20,7 @@ sys.path.insert(0, str(TOOLS))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 import diff_decompile as D
 import fixture_harness as H
+import fixture_toolchain as TC
 
 # Portable scratch dir: whatever manifest.tmpdir() resolves (env-driven, with a
 # system-tempfile fallback) — never a hardcoded machine path.
@@ -29,14 +30,21 @@ WORKDIR_KW = {"dir": _td} if _td else {}
 _SO_KEEP = []  # keep NamedTemporaryFile handles alive for the test session
 
 
-def _compile_so(c_src: str, tag: str) -> str:
-    """Compile a snippet into a -g .so and return its path (kept for the run)."""
+def _compile_so(c_src: str, tag: str, debug: bool = True) -> str:
+    """Compile a snippet into a .so and return its path (kept for the run).
+
+    Uses the pinned toolchain, like every other compile the gate performs — these
+    reference binaries are compared against decompilations rebuilt by that same
+    compiler, and the host is not assumed to ship a C compiler at all.
+    """
     import os
     fd, path = tempfile.mkstemp(suffix=".so", prefix=f"h_{tag}_", **WORKDIR_KW)
     os.close(fd)
     src = path[:-3] + ".c"
     Path(src).write_text(c_src + "\n")
-    subprocess.run(["gcc", "-shared", "-fPIC", "-g", "-O0", "-o", path, src], check=True)
+    argv = ["gcc", "-shared", "-fPIC", *(["-g"] if debug else []), "-O0", "-o", path, src]
+    r = TC.run(argv)
+    assert r.returncode == 0, r.stderr
     _SO_KEEP.append(path)
     return path
 
@@ -54,11 +62,8 @@ def test_all_ten_sources_are_discovered():
 
 def test_zero_dwarf_signatures_is_an_error(tmp_path):
     # A stripped / DWARF-less binary must ERROR, never report a green empty run.
-    src = tmp_path / "x.c"
-    src.write_text("int f(int a){return a;}\n")
-    so = tmp_path / "x.so"
-    subprocess.run(["gcc", "-shared", "-fPIC", "-O0", "-o", str(so), str(src)], check=True)  # no -g
-    results = D.run(str(so), str(src), "nope", seed=1, fuzz=1)
+    so = _compile_so("int f(int a){return a;}", "nodwarf", debug=False)  # no -g
+    results = D.run(so, "unused.c", "nope", seed=1, fuzz=1)
     assert "__error__" in results
 
 
@@ -84,13 +89,10 @@ def test_worker_crash_is_fail(monkeypatch, tmp_path):
     # in its own process and the parent reports a FAIL.
     sig = {"name": "boom", "va": 0, "params": [], "ret": "int"}
     # Compile a real original + a decompilation that dereferences null on call.
-    orig = tmp_path / "o.c"
-    orig.write_text("int boom(void){return 1;}\n")
-    orig_so = tmp_path / "o.so"
-    subprocess.run(["gcc", "-shared", "-fPIC", "-O0", "-o", str(orig_so), str(orig)], check=True)
+    orig_so = _compile_so("int boom(void){return 1;}", "boom")
     monkeypatch.setattr(D, "decompiled_c", lambda *_a, **_k: "int boom(void){ int*p=0; return *p; }")
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
-        r = D.run_function(sig, "fx", str(orig_so), Path(td), seed=1, fuzz=1)
+        r = D.run_function(sig, "fx", orig_so, Path(td), seed=1, fuzz=1)
     assert r["status"] == "fail", r
 
 
@@ -179,7 +181,8 @@ def test_harness_runs_without_the_nas_scratch_path(monkeypatch):
         src = Path(bwd) / "o.c"
         src.write_text("int f(int a){return a;}\n")
         orig = Path(bwd) / "o.so"
-        subprocess.run(["gcc", "-shared", "-fPIC", "-O0", "-o", str(orig), str(src)], check=True)
+        r = TC.run(["gcc", "-shared", "-fPIC", "-O0", "-o", str(orig), str(src)])
+        assert r.returncode == 0, r.stderr
         r = D.run_function(sig, "fx", str(orig), Path(bwd), seed=1, fuzz=2)
     assert r["status"] == "pass", r
 
@@ -236,8 +239,7 @@ def test_json_mode_returns_two_on_infra(tmp_path):
     # A stripped binary -> no DWARF -> __error__ -> nonzero (infra) exit.
     src = tmp_path / "x.c"
     src.write_text("int f(int a){return a;}\n")
-    so = tmp_path / "x.so"
-    subprocess.run(["gcc", "-shared", "-fPIC", "-O0", "-o", str(so), str(src)], check=True)  # no -g
+    so = _compile_so("int f(int a){return a;}", "jsoninfra", debug=False)  # no -g
     r = subprocess.run([sys.executable, str(TOOLS / "diff_decompile.py"), str(so), str(src), "--json"],
                        capture_output=True, text=True, check=False)
     assert r.returncode == 2, r.stderr

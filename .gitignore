@@ -4,8 +4,15 @@
 # Rust
 /target/
 **/target/
+# Isolated per-worktree cargo target dirs (CARGO_TARGET_DIR=target-<name>)
+/target-*/
 **/*.rs.bk
 *.pdb
+
+# Scratch output from local gate/benchmark runs (result maps, dumps, logs).
+# Never a source of truth: the committed artifacts are baseline.json and
+# structural_baseline.json.
+/workspace/
 # Don't ignore Cargo.lock for binary projects
 # Cargo.lock
 

@@ -1,19 +1,19 @@
 """Compile-only gate: every fixture source must build cleanly in every required
-host lane (gcc/clang x O0/O2) with -Wall -Wextra -Werror.
+lane (gcc/clang x O0/O2) with -Wall -Wextra -Werror.
 
 This is deliberately fast (no decompilation/execution) so it runs on every PR and
 catches a malformed fixture immediately — e.g. the `int*/int` comment that once
 silently terminated fixture 09's block comment. Intentional switch fallthroughs
-are annotated with __attribute__((fallthrough)), not warning suppression. A clang
-C++ lane on a host lacking the C++ runtime is a probed, declared env gap.
+are annotated with __attribute__((fallthrough)), not warning suppression.
+
+The lanes compile under the pinned toolchain (`tools/fixture_toolchain.py`), which
+provisions gcc, g++, clang and clang++ with a working C++ runtime — so there is no
+"this host lacks a compiler" skip to take, and no env gap for the C++ lanes.
 """
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
@@ -21,8 +21,6 @@ sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 import fixture_harness as H
 
 
-@pytest.mark.skipif(not (shutil.which("gcc") and shutil.which("clang")),
-                    reason="requires gcc and clang")
 def test_all_fixtures_compile_strict_in_every_lane():
     problems = H.strict_compile_problems()
     assert not problems, "STRICT COMPILE FAILURES:\n  " + "\n  ".join(problems)

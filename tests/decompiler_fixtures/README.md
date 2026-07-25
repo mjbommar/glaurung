@@ -12,10 +12,12 @@ does, and that structural facts an analyst relies on survive lowering.
 |------|------|
 | `src/NN_*.c`, `src/10_*.cpp` | 10 fixtures, each targeting one bug class (conditional polarity, integer widths, loops, switches, cleanup/FSM, calling conventions, packet parsing, indirect dispatch, memory effects, C++ runtime shapes) |
 | `manifest.py` | declarative oracle: required (exported) functions, pointer buffer sizes, length-arg clamping, exact boundary/switch/packet vectors, `skip_exec`, and per-function `STRUCTURAL` assertions |
-| `baseline.json` | committed per-function status for every `{fixture}:{cc}:{opt}` lane |
-| `structural_baseline.json` | committed structural map (closure per style, effect predicates, fabricated-name flags) |
+| `baseline.json` | committed per-function status for every `{fixture}:{cc}:{opt}` lane, plus the `__toolchain__` fingerprint that produced it |
+| `structural_baseline.json` | committed structural map (closure per style, effect predicates, fabricated-name flags, def-before-use violations) |
+| `toolchain/Dockerfile` | the digest-pinned compile toolchain (see below) |
 | `../../tools/diff_decompile.py` | the execution-differential worker: recompile decompiled C, call original vs. recompiled with identical inputs in an isolated subprocess, diff full-width return + every mutable buffer |
 | `../../tools/fixture_harness.py` | compiles the matrix, runs the gate, writes/validates baselines |
+| `../../tools/fixture_toolchain.py` | runs every compile inside the pinned toolchain; fingerprints it |
 | `../../tools/gen_structural_baseline.py` | regenerates `structural_baseline.json` |
 
 ## Tests
@@ -57,9 +59,46 @@ python tools/gen_structural_baseline.py
 Both share `manifest.FIXTURE_FUZZ` so the committed baseline and the gate
 exercise identical (stable-seeded) vectors.
 
-## Portability
+## The pinned compile toolchain
+
+Two different compilers decide a verdict: the one that builds the fixture (its
+codegen idioms are what the decompiler must recover) and the one that rebuilds our
+decompiled C (gcc ≥ 14 turns several diagnostics gcc 11 only warns about into hard
+errors, so "decompiled C failed to compile" is a function of the compiler). Against
+whatever a developer's host ships, the per-function baseline is a snapshot of one
+machine and cannot reproduce in CI.
+
+So **every** compile the gate performs — fixture builds, the strict compile lane,
+and the recompile of our own output — runs inside the image built from
+`toolchain/Dockerfile` (Ubuntu 22.04 pinned by digest: gcc/g++ 11.4, clang/clang++
+14, glibc 2.35). Only compilation is containerised; the objects execute natively,
+which is safe because the image's glibc floor is older than any host we build on.
+
+`baseline.json` records the observed compiler versions under `__toolchain__`, and
+the gate asserts they match before comparing any verdict — a mismatch fails loudly
+with a refresh instruction instead of reporting phantom regressions. Because the
+image provisions clang++'s C++ runtime, no lane is `env-missing` any more; a lane
+whose environment availability changes in either direction is a hard failure
+(`fixture_harness.env_lane_problems`), so a lane can never silently drop out of the
+comparison.
+
+`GLAURUNG_FIXTURE_TOOLCHAIN=host` runs the host compilers instead. It is never
+silent: the fingerprint records `mode: host`, so such a run cannot be compared
+against the pinned baseline.
+
+## Definition-before-use
+
+`src/ir/verify_defs.rs` checks the AST that is actually printed (the output of
+`ast::prepare_for_decbench`, after which renderers are formatting-only) for reads
+of values the decompiler never defined — the emitted C reading an uninitialised
+variable, which recompiles to garbage and is invisible to type_match / GED /
+byte_match. Violations are emitted as `// glaurung-verify:` comments (comments, so
+the compiled C is unchanged) and recorded per function in
+`structural_baseline.json`: known ones stay visible, a new one fails the gate.
+
+## Portability and speed
 
 Scratch space resolves `GLAURUNG_FIXTURE_TMPDIR` → `TMPDIR` → system tempfile —
-no machine-specific path. A clang C++ lane on a host without the C++ runtime is a
-*probed, declared* env gap (never a silent skip); CI provisions the runtime so
-those lanes run.
+no machine-specific path. Lanes run concurrently (`--jobs`, default cores−1 capped
+at 8, or `GLAURUNG_FIXTURE_JOBS`): lanes are independent and per-function fuzz
+seeds are stable, so concurrency changes wall-clock, not verdicts.

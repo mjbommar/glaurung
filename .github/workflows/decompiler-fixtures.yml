@@ -2,8 +2,16 @@ name: Decompiler Fixture Gate
 
 # Semantic-fidelity regression gate for the decompiler (see
 # tests/decompiler_fixtures/). Fast fail-closed unit + strict-compile checks run
-# on every PR; the slow execution-differential matrix and structural lane run
-# when decompiler or fixture files change. Nothing is skipped silently.
+# on every PR; the slow execution-differential matrix and structural lane run on
+# every push to master and whenever decompiler or fixture files change. Nothing is
+# skipped silently.
+#
+# Every fixture compile — and the rebuild of our own decompiled C — happens inside
+# the digest-pinned toolchain image (tests/decompiler_fixtures/toolchain), NOT with
+# the runner's compilers: the per-function baseline records verdicts that depend on
+# the compiler release, so a runner gcc/clang would produce phantom regressions and
+# phantom improvements. The image also provisions clang++'s C++ runtime, which is
+# what previously reduced the C++ fixture's clang lanes to an env-missing hole.
 
 on:
   push:
@@ -20,7 +28,7 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       decompiler: ${{ steps.filter.outputs.decompiler }}
     steps:
@@ -34,60 +42,98 @@ jobs:
               - 'src/analysis/**'
               - 'src/disasm/**'
               - 'src/decompiler/**'
+              - 'src/exec/**'
               - 'tools/diff_decompile.py'
               - 'tools/fixture_harness.py'
+              - 'tools/fixture_toolchain.py'
               - 'tools/gen_structural_baseline.py'
               - 'tests/decompiler_fixtures/**'
               - 'python/tests/test_decompiler_fixture_*.py'
+              - '.github/workflows/decompiler-fixtures.yml'
 
-  # Fast, fail-closed checks on every PR: harness unit tests (no decompiler
-  # needed) and the strict compile gate for all ten fixtures in all four lanes.
+  # Fast, fail-closed checks on every PR: harness unit tests, the pinned-toolchain
+  # contract, and the strict compile gate for all ten fixtures in all four lanes.
   fast:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain (gcc, g++, clang + C++ runtime)
+      - name: Build the pinned compile toolchain image
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc g++ clang libstdc++-12-dev
-          # clang++ links libstdc++ provided by g++/libstdc++-*-dev
-          echo 'int main(){ try{ throw 1; }catch(int){} return 0; }' > /tmp/p.cpp
-          clang++ /tmp/p.cpp -o /tmp/p && echo "clang++ C++ runtime OK"
+          docker build -t glaurung-fixture-toolchain:1 \
+            tests/decompiler_fixtures/toolchain/
+          python3 tools/fixture_toolchain.py
       - uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-glob: 'uv.lock'
       - name: Sync deps (includes pyelftools)
         run: uv sync --all-extras --dev
       - name: Verify pyelftools is provisioned
         run: uv run python -c "import elftools; print('pyelftools', elftools.__version__)"
-      - name: Fail-closed harness unit tests + strict compile gate
+      - name: Fail-closed harness unit tests + toolchain + strict compile gate
         run: |
           uv run python -m pytest -p no:cacheprovider \
             python/tests/test_decompiler_fixture_harness.py \
+            python/tests/test_decompiler_fixture_toolchain.py \
             python/tests/test_decompiler_fixture_compile.py -v
 
-  # Slow lanes: run the full execution-differential matrix and the structural
-  # lane only when decompiler/fixture files change. The committed per-function
-  # baseline makes known bugs visible while any regression (or unrecorded
-  # improvement) fails the gate.
+  # Slow lanes: the full execution-differential matrix and the structural lane.
+  # The committed per-function baseline makes known bugs visible while any
+  # regression (or unrecorded improvement) fails the gate.
   matrix:
     needs: changes
-    if: needs.changes.outputs.decompiler == 'true'
-    runs-on: ubuntu-22.04
+    # Always on push to master and on manual dispatch (the baseline's authority
+    # comes from CI having actually run it); on PRs only when relevant paths move.
+    if: needs.changes.outputs.decompiler == 'true' || github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain (gcc, g++, clang + C++ runtime)
+      - name: Build the pinned compile toolchain image
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc g++ clang libstdc++-12-dev
+          docker build -t glaurung-fixture-toolchain:1 \
+            tests/decompiler_fixtures/toolchain/
+          python3 tools/fixture_toolchain.py
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-glob: 'uv.lock'
       - name: Sync deps
         run: uv sync --all-extras --dev
+      # `[build-system].requires` is used by the PEP 517 backend; it does NOT put a
+      # runnable `maturin` on PATH, which is why `uv run maturin develop` failed
+      # with "Failed to spawn: maturin". Install it into the project venv
+      # explicitly, then prove the command exists before relying on it.
+      - name: Provision maturin explicitly
+        run: |
+          uv pip install 'maturin>=1.9,<2.0'
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+      - name: Verify the maturin command is runnable
+        run: |
+          command -v maturin
+          maturin --version
       - name: Build the native extension (glaurung CLI)
-        run: uv run maturin develop --release
+        run: maturin develop --release
+      - name: Verify the glaurung CLI is runnable
+        run: |
+          command -v glaurung
+          glaurung --version
+      # GLAURUNG_FIXTURE_OBSERVED makes the run dump the result map it actually
+      # measured — the evidence for any baseline refresh, captured without a second
+      # 40-minute matrix run, and uploaded even (especially) when the gate fails.
       - name: Semantic matrix + structural lane (fail-closed, ratcheting)
         env:
           GLAURUNG_FIXTURE_TMPDIR: ${{ runner.temp }}
+          GLAURUNG_FIXTURE_OBSERVED: ${{ runner.temp }}/observed.json
         run: |
-          source .venv/bin/activate
           python -m pytest -p no:cacheprovider -m slow -v \
             python/tests/test_decompiler_fixture_matrix.py \
             python/tests/test_decompiler_fixture_structural.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fixture-matrix-observed
+          path: ${{ runner.temp }}/observed.json
+          if-no-files-found: warn
