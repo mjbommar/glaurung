@@ -484,7 +484,7 @@ fn decompile_at_py(
     // Stack-slot promotion runs before register renaming so the aliases
     // (`stack_0`, `local_0`, ...) it allocates don't collide with the role
     // names (`arg0`, `ret`, `varN`) that the naming pass introduces.
-    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
+    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(cc));
     dp!("promote_stack_locals");
     crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
     dp!("split_spilled_arg_reuse");
@@ -660,7 +660,7 @@ fn decompile_range_at_py(
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
     crate::ir::canary::recognise_canary(&mut f);
-    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
+    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(cc));
     crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
     crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
     crate::ir::canary::collapse_canary_save(&mut f);
@@ -939,7 +939,7 @@ fn decompile_all_py(
         crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
         crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
         crate::ir::canary::recognise_canary(&mut f);
-        let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
+        let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(cc));
         crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
         crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
         crate::ir::canary::collapse_canary_save(&mut f);
@@ -1057,7 +1057,7 @@ fn decompile_many_py(
         crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
         crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
         crate::ir::canary::recognise_canary(&mut f);
-        let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f);
+        let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(cc));
         let tm = if types {
             Some(recover_types_for(&lf_raw, cc))
         } else {

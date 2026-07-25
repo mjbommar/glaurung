@@ -322,18 +322,10 @@
     "06_calling_conventions:fib": [],
     "06_calling_conventions:sum_arg0": [],
     "06_calling_conventions:sum_arg1": [],
-    "06_calling_conventions:sum_arg10": [
-      "stack_0 is read but never defined",
-      "stack_1 is read but never defined"
-    ],
+    "06_calling_conventions:sum_arg10": [],
     "06_calling_conventions:sum_arg2": [],
-    "06_calling_conventions:sum_arg6": [
-      "stack_0 is read but never defined"
-    ],
-    "06_calling_conventions:sum_arg7": [
-      "stack_0 is read but never defined",
-      "stack_1 is read but never defined"
-    ],
+    "06_calling_conventions:sum_arg6": [],
+    "06_calling_conventions:sum_arg7": [],
     "07_packet_parser:parse_packet": [],
     "07_packet_parser:validate_header": [
       "local_5 is read before it is defined",

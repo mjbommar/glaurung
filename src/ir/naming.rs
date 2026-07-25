@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 
+use crate::ir::ast::parse_arg_index;
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::VReg;
@@ -120,6 +121,14 @@ pub fn apply_role_names_with_params(
         // (`stack_0`, `local_0`, `stack_top`) are meaningful — don't
         // rewrite them to generic varN.
         if name.starts_with("stack_") || name.starts_with("local_") {
+            return;
+        }
+        // Nor an `argN` the promotion pass recovered for a STACK-passed parameter
+        // (`[rbp+16]` upward on SysV). Renaming it to `varN` would turn the
+        // function's own seventh argument into an undefined scratch local — the
+        // signature would still grow (arity comes from the highest `argN`), so the
+        // parameter would be declared and then never read.
+        if parse_arg_index(name).is_some() {
             return;
         }
         if role.contains_key(name) {

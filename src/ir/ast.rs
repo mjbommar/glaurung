@@ -2633,7 +2633,10 @@ struct DecIdents {
 }
 
 /// If `name` is exactly `arg` followed by decimal digits, return that index.
-fn parse_arg_index(name: &str) -> Option<usize> {
+///
+/// Shared with the naming pass rather than duplicated there: the `argN` spelling is
+/// one convention with several consumers, and a second copy is how they drift.
+pub(crate) fn parse_arg_index(name: &str) -> Option<usize> {
     let rest = name.strip_prefix("arg")?;
     if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
         return None;
