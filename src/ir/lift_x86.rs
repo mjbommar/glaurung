@@ -843,20 +843,20 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: "imul".into(),
             }]
         }
-        // Rotate by an immediate: `rol`/`ror r, imm` lifts to
+        // Rotate `rol`/`ror r, {imm | cl}` lifts to the shift/shift/or identity
         // `(x << n) | (x >> (w-n))` (the consuming `or`'s width comes from the
-        // physical dst, so the temps need no explicit width). Rotate-by-cl and
-        // memory forms remain unmodelled for now.
+        // physical dst, so the temps need no explicit width). Memory forms
+        // remain unmodelled for now.
         Mnemonic::Rol | Mnemonic::Ror => {
             if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
+                let dst_name = reg_name(instr.op_register(0));
+                let w = phys_reg_width(&dst_name).unwrap_or(Width::W64).bits() as i64;
+                let dst = VReg::phys(dst_name);
                 if let Some(Value::Const(cnt)) = value_of_operand(instr, 1) {
-                    let dst_name = reg_name(instr.op_register(0));
-                    let w = phys_reg_width(&dst_name).unwrap_or(Width::W64).bits() as i64;
                     let n = ((cnt % w) + w) % w;
                     if n == 0 {
                         return vec![Op::Nop];
                     }
-                    let dst = VReg::phys(dst_name);
                     let (t1, t2) = (VReg::Temp(0), VReg::Temp(1));
                     let (a_op, a_sh, b_op, b_sh) = if matches!(mnem, Mnemonic::Rol) {
                         (BinOp::Shl, n, BinOp::Shr, w - n)
@@ -881,6 +881,70 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             op: BinOp::Or,
                             lhs: Value::Reg(t1),
                             rhs: Value::Reg(t2),
+                        },
+                    ];
+                } else if instr.op_kind(1) == OpKind::Register {
+                    // Rotate by `cl`. x86 variable shifts/rotates always take the
+                    // count in CL; use its 32-bit view ECX (identical low bits,
+                    // and it canonicalises to a versioned value that connects to
+                    // the count's definition -- CL itself is not sub-register
+                    // canonicalised and would dangle). Runtime count `n`, so the
+                    // rotate is the mask-and-recombine form, masked so `n == 0`
+                    // shifts by 0 rather than by `w` (which is C undefined):
+                    //   n  = count & (w-1)
+                    //   lo = x <first>  n
+                    //   hi = x <second> ((w - n) & (w-1))
+                    //   dst = lo | hi
+                    let mask = w - 1;
+                    let cnt = VReg::phys("ecx");
+                    let (t0, t1, t2, t3, t4) = (
+                        VReg::Temp(0),
+                        VReg::Temp(1),
+                        VReg::Temp(2),
+                        VReg::Temp(3),
+                        VReg::Temp(4),
+                    );
+                    let (first, second) = if matches!(mnem, Mnemonic::Ror) {
+                        (BinOp::Shr, BinOp::Shl)
+                    } else {
+                        (BinOp::Shl, BinOp::Shr)
+                    };
+                    return vec![
+                        Op::Bin {
+                            dst: t0.clone(),
+                            op: BinOp::And,
+                            lhs: Value::Reg(cnt),
+                            rhs: Value::Const(mask),
+                        },
+                        Op::Bin {
+                            dst: t1.clone(),
+                            op: first,
+                            lhs: Value::Reg(dst.clone()),
+                            rhs: Value::Reg(t0.clone()),
+                        },
+                        Op::Bin {
+                            dst: t2.clone(),
+                            op: BinOp::Sub,
+                            lhs: Value::Const(w),
+                            rhs: Value::Reg(t0),
+                        },
+                        Op::Bin {
+                            dst: t3.clone(),
+                            op: BinOp::And,
+                            lhs: Value::Reg(t2),
+                            rhs: Value::Const(mask),
+                        },
+                        Op::Bin {
+                            dst: t4.clone(),
+                            op: second,
+                            lhs: Value::Reg(dst.clone()),
+                            rhs: Value::Reg(t3),
+                        },
+                        Op::Bin {
+                            dst,
+                            op: BinOp::Or,
+                            lhs: Value::Reg(t1),
+                            rhs: Value::Reg(t4),
                         },
                     ];
                 }
