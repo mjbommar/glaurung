@@ -835,7 +835,13 @@ fn decbench_text(
     decl: Option<&crate::ir::types_recover::TypeMap>,
     width: Option<&crate::ir::types_recover::TypeMap>,
 ) -> String {
-    let prepared = crate::ir::ast::prepare_for_decbench(f);
+    let mut prepared = crate::ir::ast::prepare_for_decbench(f);
+    // Declarations are recovered at true machine width, so a value read in a wider
+    // context needs the extension the hardware performed made explicit. Runs before
+    // verification and rendering; it changes no definition, use, or value identity.
+    if let Some(tm) = decl {
+        crate::ir::widen::insert_widening_casts(&mut prepared, tm);
+    }
     let violations = crate::ir::verify_defs::check(&prepared);
     let body = crate::ir::ast::render_decbench_typed(&prepared, decl, width);
     if violations.is_empty() {
@@ -860,12 +866,13 @@ fn decbench_text(
 
 /// Build the `(declaration, width)` type-map pair the DecBench renderer needs.
 ///
-/// Declarations come from the canonicalised LLIR (`lf`, sub-registers folded to
-/// their 64-bit parent) so def/use versions align and no value is wrongly
-/// narrowed where it feeds widening arithmetic. The logical-shift cast instead
-/// needs each operand's *machine* width (`edi`=4), which only survives in the
-/// pre-canonicalisation LLIR (`lf_raw`); that becomes the width map. Both are
-/// remapped to AST role names and augmented with promoted-slot sizes.
+/// Both maps come from the PRE-canonicalisation LLIR (`lf_raw`), which is the only
+/// place each operand's true machine width survives (`edi`=4; canonicalisation folds
+/// it into `rdi`). That width is what the declaration should state — DWARF's
+/// `dispatch(int,int,int)`, not a blanket `long` — and what the logical-shift cast
+/// needs. Declaring the true width means the body no longer computes at the machine's
+/// 64 bits by accident, so `widen::insert_widening_casts` restores that explicitly.
+/// Both are remapped to AST role names and augmented with promoted-slot sizes.
 fn decbench_type_maps(
     lf: &crate::ir::types::LlirFunction,
     lf_raw: &crate::ir::types::LlirFunction,
@@ -878,7 +885,7 @@ fn decbench_type_maps(
     crate::ir::types_recover::TypeMap,
 ) {
     use crate::ir::types_recover::recover_types_for;
-    let mut decl = remap_type_map(&recover_types_for(lf, cc), f, cc, param_slots);
+    let mut decl = remap_type_map(&recover_types_for(lf_raw, cc), f, cc, param_slots);
     merge_slot_sizes(&mut decl, slot_sizes);
     let mut width = remap_type_map(&recover_types_for(lf_raw, cc), f, cc, param_slots);
     merge_slot_sizes(&mut width, slot_sizes);

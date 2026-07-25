@@ -2157,6 +2157,26 @@ fn ctype_for(ident: &str, tm: Option<&TypeMap>) -> &'static str {
         .unwrap_or("long")
 }
 
+/// The `(signed, byte-width)` an identifier is actually **declared** with in the
+/// DecBench render, or `None` when it is not an integer.
+///
+/// This is the one rule, shared with the declaration printer and with
+/// [`crate::ir::widen`]: only arguments and promoted stack slots take a recovered
+/// type. A raw machine register that survives as a local (`ret`, `varN`, temps)
+/// is declared `long` no matter what type recovery inferred for it. A second copy
+/// of that rule would let the widening pass insert a cast that *truncates* a value
+/// the printer had declared 64 bits wide.
+pub(crate) fn declared_int_type(ident: &str, tm: Option<&TypeMap>) -> Option<(bool, u8)> {
+    if parse_arg_index(ident).is_none() && !is_promoted_local(ident) {
+        // Declared `long`: already machine-wide, never narrowed.
+        return Some((true, 8));
+    }
+    match tm?.get(&VReg::Phys(ident.to_string()))? {
+        TypeHint::Int { signed, width } => Some((signed, width)),
+        _ => None,
+    }
+}
+
 /// The C type of an expression from recovered types, when determinable. Value-
 /// keyed: types the value the expression denotes, not a fixed register name.
 fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
@@ -2183,6 +2203,21 @@ fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
 /// off the `ret` name (e.g. a return computed as a promoted local `local_8`).
 fn infer_return_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> &'static str {
     first_return_value_ctype(body, tm).unwrap_or_else(|| ctype_for("ret", tm))
+}
+
+/// The byte width of the return type this render will declare.
+///
+/// [`crate::ir::widen`] needs it: a `return` is not automatically a 64-bit context.
+/// A function declared to return `int` returns a value the machine computed in 32
+/// bits, and widening its operands would compute at 64 (`wrap_sub_u32`'s borrow
+/// must not escape the low word).
+pub(crate) fn inferred_return_width(body: &[Stmt], tm: Option<&TypeMap>) -> u8 {
+    match infer_return_ctype(body, tm) {
+        "signed char" | "unsigned char" | "char" => 1,
+        "short" | "unsigned short" => 2,
+        "int" | "unsigned int" => 4,
+        _ => 8,
+    }
 }
 
 fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'static str> {
@@ -3191,9 +3226,19 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             // cast the operand to `unsigned long` so `>>` is the zero-filling
             // shift the IR means. Arithmetic shift (`Sar`) is plain `>>`.
             if matches!(op, BinOp::Shr) {
-                let _ = write!(out, "(({})(", shift_operand_ctype(lhs, rhs));
-                write_expr_dec(lhs, out);
-                out.push_str(") >> ");
+                // `widen::insert_widening_casts` states the reinterpretation
+                // structurally when it has recovered types; re-stating it here
+                // would only nest an identical cast.
+                let stated = matches!(lhs.as_ref(), Expr::Cast { signed: false, .. });
+                out.push('(');
+                if stated {
+                    write_expr_dec(lhs, out);
+                } else {
+                    let _ = write!(out, "({})(", shift_operand_ctype(lhs, rhs));
+                    write_expr_dec(lhs, out);
+                    out.push(')');
+                }
+                out.push_str(" >> ");
                 write_expr_dec(rhs, out);
                 out.push(')');
             } else {
