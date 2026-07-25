@@ -52,6 +52,7 @@ pub mod use_def;
 pub mod value_number;
 pub mod value_split;
 pub mod verify;
+pub mod switch_ladder;
 pub mod verify_defs;
 pub mod widen;
 pub mod winapi_prototypes;

@@ -2581,6 +2581,9 @@ pub fn prepare_for_decbench(f: &Function) -> Function {
     default_return_to_reg(&mut owned.body);
     coalesce_param_spills(&mut owned.body);
     crate::ir::copy_prop::propagate_copies(&mut owned);
+    // Before rendering and before widening (which already understands `Switch`):
+    // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
+    crate::ir::switch_ladder::recover_switches(&mut owned);
     owned
 }
 
