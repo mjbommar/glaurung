@@ -46,6 +46,23 @@ trailing after as goto soup. That one is roadmap item #13.
 Within today's own before/after it improved twice (0.281 -> 0.314 from the width
 work, -> 0.323 from switch recovery); the shortfall against 0.366 predates both.
 
+### Breadth, re-measured 2026-07-25 (gcc + clang, O0 + O2, 55 evaluations)
+
+| lane | n | GED (lower) | type_match | byte_match |
+|------|---|-------------|------------|------------|
+| O0 | 28 | 7.89 | 0.816 | 0.240 |
+| O2 | 27 | 10.40 | 0.523 | 0.127 |
+| overall | 55 | 9.12 | 0.678 | 0.184 |
+
+The gcc/O0 slice above (5.99 / 0.873 / 0.323) is our best lane, not our average.
+Adding clang and O2 costs roughly a third of type_match and nearly half of
+byte_match. One O2 binary produced no result at all (27 of 28) — recorded rather
+than averaged away.
+
+The angr control for this breadth has not finished; the O2 comparison below is
+gcc-only and predates the width and switch work, so it cannot be read against
+these numbers.
+
 Historic head-to-head at O0+O2 is below; its glaurung column is the 2026-07-24
 state, not today's.
 

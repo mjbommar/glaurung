@@ -31,14 +31,27 @@ and `models/decompilation.py`). The 5 tests pass before and after that rebase.
 |---|-------------|-------|
 | A | output is clean C, no diagnostic noise | **done** — verifier comments are behind `GLAURUNG_VERIFY_DEFS` |
 | B | harness works against *current* upstream, on a branch | **done** — rebased, 5/5 green |
-| C | metrics measured, not remembered | **done for gcc/O0**; O2 and clang breadth outstanding |
+| C | metrics measured, not remembered | **done** — gcc+clang × O0+O2, 55 evaluations; angr control running |
 | D | no panics / parseable output corpus-wide | **done** — re-run after the ET_REL fix: 1646 functions, 99.7 % gcc-parse, 0 panics |
 | E | claims in the docs match what the code does | **done** — `docs/GLAURUNG.md` no longer advertises a blanket `long` signature |
 
 ## 3. What the numbers actually say
 
-Local 14-program corpus, gcc -O0, angr run as a control through the identical
-path (so harness or metric drift would move both columns):
+### Breadth: gcc + clang, O0 + O2 (55 evaluations)
+
+DecBench scores multiple optimisation levels, so a gcc/O0-only number would
+flatter us. The honest picture:
+
+| lane | n | GED (lower) | type_match | byte_match |
+|------|---|-------------|------------|------------|
+| O0 | 28 | 7.89 | 0.816 | 0.240 |
+| O2 | 27 | 10.40 | 0.523 | 0.127 |
+| **overall** | **55** | **9.12** | **0.678** | **0.184** |
+
+One O2 binary produced no result (27 of 28), which is itself a finding and is not
+averaged away.
+
+### The gcc/O0 slice, where the work of this session was done
 
 | metric | glaurung | angr |
 |--------|----------|------|
@@ -46,19 +59,26 @@ path (so harness or metric drift would move both columns):
 | type_match | **0.873** | 0.819 |
 | byte_match | 0.323 | **0.586** |
 
-We would be submitting a decompiler that **wins on structural distance and type
-accuracy, and loses on recompiled-byte similarity**. That is a defensible thing to
-submit and an indefensible thing to misrepresent — byte_match is not close, and
-saying so is part of the submission. See `decompiler-refactors.md` for the
-per-metric diagnosis.
+The gap between the two tables is the point. On gcc/O0 we win two metrics of
+three; across the full breadth every metric is materially worse, because **clang
+is harder for us than gcc and O2 is harder than O0** — type_match falls from
+0.816 to 0.523 between the levels, and byte_match roughly halves.
+
+So: we would be submitting a decompiler that is competitive at -O0 on gcc, and
+degrades on optimised and clang-built code. That is a defensible thing to submit
+and an indefensible thing to misrepresent. An angr control across the same 55
+evaluations is required before claiming anything comparative at O2 — the only
+angr numbers we have at that level are from a gcc-only run and are not
+comparable. See `decompiler-refactors.md` for the per-metric diagnosis.
 
 ## 4. What a reviewer would find if they looked hard
 
 Stated here so it is not discovered instead.
 
-* **O2 and clang are not re-measured.** The only current numbers are gcc -O0.
-  The last O2 measurement (2026-07-24) had type_match collapsing to 0.413 — angr
-  wins O2 — and that has not been re-run since the width work.
+* **O2 and clang are where we are weak.** type_match 0.816 at O0 against 0.523
+  at O2; byte_match 0.240 against 0.127. The width work lifted O2 type_match from
+  the 0.413 measured on 2026-07-24, but not to anywhere near the O0 figure. No
+  spill slots to type from, heavy optimisation, and no O2 story in type recovery.
 * **Aggregates are not recovered.** `structs` scores type 0.25 and `linkedlist`
   0.5 because struct and array types are not reconstructed; an aggregate
   parameter appears as a pointer to its element type.
@@ -104,8 +124,9 @@ decoding three times as many genuine AArch64 functions.
 
 ## 6. Blocking work before a PR
 
-1. **Measure O2 and clang.** Submitting O0-only numbers when DecBench scores
-   multiple optimisation levels would misrepresent the result.
+1. **Finish the angr control across the full breadth.** Our own 55-evaluation
+   numbers are measured; the comparative claim at O2 is not, because the only
+   angr O2 figure we hold is from a gcc-only run. Running now.
 2. ~~Decide on the GED regression.~~ **Done** — `ir::switch_ladder` landed:
    10.63 -> 5.99, ahead of angr and of our own previous 7.16, with zero changes
    against the fixture baseline.
