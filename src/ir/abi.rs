@@ -35,7 +35,10 @@ pub fn return_register(cc: CallConv) -> &'static str {
     }
 }
 
-/// The integer argument registers, in ABI order.
+/// The integer argument registers, in ABI order — canonical (widest) names only.
+///
+/// Prefer [`argument_slots`] when matching a register NAME found in code: a 32-bit
+/// write (`%edi = …`) sets the same parameter slot, and this list does not say so.
 pub fn argument_registers(cc: CallConv) -> &'static [&'static str] {
     match cc {
         CallConv::SysVAmd64 => &["rdi", "rsi", "rdx", "rcx", "r8", "r9"],
@@ -44,6 +47,78 @@ pub fn argument_registers(cc: CallConv) -> &'static [&'static str] {
         CallConv::Arm => &["r0", "r1", "r2", "r3"],
     }
 }
+
+/// Every spelling of each argument slot, in ABI order: the 64-bit name first, then
+/// the narrower aliases that write the same logical parameter.
+///
+/// ONE table. It was previously written out in both `call_args` and `value_number`,
+/// and they disagreed about more than formatting — `call_args` matched these names
+/// literally while `value_number` had already renamed registers to `canon#version`,
+/// so an argument arriving as `rdi#3` matched nothing and every call on that path
+/// silently lost all of its arguments. Two copies of a fact are two chances to be
+/// out of step with a third thing.
+pub fn argument_slots(cc: CallConv) -> &'static [&'static [&'static str]] {
+    match cc {
+        CallConv::SysVAmd64 => &[
+            &["rdi", "edi", "di", "dil"],
+            &["rsi", "esi", "si", "sil"],
+            &["rdx", "edx", "dx", "dl"],
+            &["rcx", "ecx", "cx", "cl"],
+            &["r8", "r8d", "r8w", "r8b"],
+            &["r9", "r9d", "r9w", "r9b"],
+        ],
+        CallConv::Win64 => &[
+            &["rcx", "ecx", "cx", "cl"],
+            &["rdx", "edx", "dx", "dl"],
+            &["r8", "r8d", "r8w", "r8b"],
+            &["r9", "r9d", "r9w", "r9b"],
+        ],
+        CallConv::Aarch64 => &[
+            &["x0", "w0"],
+            &["x1", "w1"],
+            &["x2", "w2"],
+            &["x3", "w3"],
+            &["x4", "w4"],
+            &["x5", "w5"],
+            &["x6", "w6"],
+            &["x7", "w7"],
+        ],
+        CallConv::Arm => &[&["r0"], &["r1"], &["r2"], &["r3"]],
+    }
+}
+
+/// Every spelling of the return register, widest first.
+pub fn return_registers(cc: CallConv) -> &'static [&'static str] {
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
+        CallConv::Aarch64 => &["x0", "w0"],
+        CallConv::Arm => &["r0"],
+    }
+}
+
+/// A value-numbered register's underlying name: `rdi#3` -> `rdi`.
+///
+/// Canonicalising here rather than at each call site is what keeps the slot tables
+/// usable on both the value-numbered and the raw pipeline. Matching a versioned
+/// name against a bare table is the bug this exists to prevent.
+pub fn ssa_base(name: &str) -> &str {
+    name.split_once('#').map_or(name, |(base, _)| base)
+}
+
+/// The argument slot a register name denotes, tolerating SSA versions and
+/// sub-register spellings. `None` when the register is not an argument register.
+pub fn argument_slot_of(cc: CallConv, name: &str) -> Option<usize> {
+    let canon = ssa_base(name);
+    argument_slots(cc)
+        .iter()
+        .position(|names| names.contains(&canon))
+}
+
+/// Whether a register name is the return register, tolerating the same spellings.
+pub fn is_return_register(cc: CallConv, name: &str) -> bool {
+    return_registers(cc).contains(&ssa_base(name))
+}
+
 
 /// The effects of any call under `cc`.
 ///
@@ -158,6 +233,65 @@ mod tests {
                 assert_eq!(effects.as_ref().unwrap().args.len(), 1, "was overwritten");
             }
             other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    /// Every alias in a slot must map back to that slot, at every width. A missing
+    /// alias means a `%edi = …` write is not recognised as setting parameter 0.
+    #[test]
+    fn every_alias_maps_to_its_own_slot() {
+        for cc in [CallConv::SysVAmd64, CallConv::Win64, CallConv::Aarch64, CallConv::Arm] {
+            for (i, names) in argument_slots(cc).iter().enumerate() {
+                for n in *names {
+                    assert_eq!(argument_slot_of(cc, n), Some(i), "{cc:?} {n}");
+                }
+            }
+        }
+    }
+
+    /// The canonical list and the alias table must agree on order and length, or a
+    /// consumer of one disagrees with a consumer of the other about which parameter
+    /// a register is.
+    #[test]
+    fn the_canonical_list_is_the_first_alias_of_each_slot() {
+        for cc in [CallConv::SysVAmd64, CallConv::Win64, CallConv::Aarch64, CallConv::Arm] {
+            let canon = argument_registers(cc);
+            let slots = argument_slots(cc);
+            assert_eq!(canon.len(), slots.len(), "{cc:?}");
+            for (i, names) in slots.iter().enumerate() {
+                assert_eq!(names.first(), Some(&canon[i]), "{cc:?} slot {i}");
+            }
+        }
+    }
+
+    /// SSA versions must not defeat the lookup. This is the bug that lost every
+    /// call argument on the value-numbered pipeline.
+    #[test]
+    fn an_ssa_version_does_not_hide_a_slot() {
+        assert_eq!(argument_slot_of(CallConv::SysVAmd64, "rdi#3"), Some(0));
+        assert_eq!(argument_slot_of(CallConv::SysVAmd64, "edi#17"), Some(0));
+        assert_eq!(argument_slot_of(CallConv::Aarch64, "w7#2"), Some(7));
+        assert!(is_return_register(CallConv::SysVAmd64, "eax#9"));
+        assert!(!is_return_register(CallConv::SysVAmd64, "rbx#1"));
+        assert_eq!(ssa_base("rdi#3"), "rdi");
+        assert_eq!(ssa_base("rdi"), "rdi");
+    }
+
+    /// Win64 does not pass its first argument in `rdi`; a table that said otherwise
+    /// would silently mis-order every Windows call.
+    #[test]
+    fn the_conventions_do_not_share_a_first_argument() {
+        assert_eq!(argument_slot_of(CallConv::SysVAmd64, "rdi"), Some(0));
+        assert_eq!(argument_slot_of(CallConv::Win64, "rdi"), None);
+        assert_eq!(argument_slot_of(CallConv::Win64, "rcx"), Some(0));
+        assert_eq!(argument_slot_of(CallConv::SysVAmd64, "rcx"), Some(3));
+    }
+
+    /// The return register is the widest spelling, and the alias list leads with it.
+    #[test]
+    fn the_return_register_leads_its_alias_list() {
+        for cc in [CallConv::SysVAmd64, CallConv::Win64, CallConv::Aarch64, CallConv::Arm] {
+            assert_eq!(return_registers(cc).first(), Some(&return_register(cc)), "{cc:?}");
         }
     }
 }

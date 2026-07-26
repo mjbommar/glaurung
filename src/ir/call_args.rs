@@ -27,41 +27,8 @@
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::VReg;
 
-/// Calling-convention argument registers in positional order. We include the
-/// common 32-/8-bit sub-register names so a `%edi = ...` write is recognised
-/// as writing the same logical parameter slot as `%rdi = ...`.
-const X86_64_SYSV_ARG_SLOTS: &[&[&str]] = &[
-    &["rdi", "edi", "di", "dil"],
-    &["rsi", "esi", "si", "sil"],
-    &["rdx", "edx", "dx", "dl"],
-    &["rcx", "ecx", "cx", "cl"],
-    &["r8", "r8d", "r8w", "r8b"],
-    &["r9", "r9d", "r9w", "r9b"],
-];
-
-const X86_64_WIN64_ARG_SLOTS: &[&[&str]] = &[
-    &["rcx", "ecx", "cx", "cl"],
-    &["rdx", "edx", "dx", "dl"],
-    &["r8", "r8d", "r8w", "r8b"],
-    &["r9", "r9d", "r9w", "r9b"],
-];
-
-const AARCH64_ARG_SLOTS: &[&[&str]] = &[
-    &["x0", "w0"],
-    &["x1", "w1"],
-    &["x2", "w2"],
-    &["x3", "w3"],
-    &["x4", "w4"],
-    &["x5", "w5"],
-    &["x6", "w6"],
-    &["x7", "w7"],
-];
-
-// ARM32 AAPCS: the first four word-sized arguments are passed in r0-r3;
-// further arguments spill to the stack. (64-bit values use register pairs,
-// which v1 does not split out.)
-const ARM32_AAPCS_ARG_SLOTS: &[&[&str]] = &[&["r0"], &["r1"], &["r2"], &["r3"]];
-
+/// Which calling convention a function obeys. The register facts that follow from
+/// it live in [`crate::ir::abi`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallConv {
     SysVAmd64,
@@ -71,13 +38,13 @@ pub enum CallConv {
     Arm,
 }
 
+/// Argument slots come from [`crate::ir::abi`], which owns them. They were
+/// previously written out here AND in `value_number`, and the copies drifted in a
+/// way no test could see: this one matched names literally while the other had
+/// already renamed registers to `canon#version`, so `rdi#3` matched nothing and
+/// every call on that path silently lost all of its arguments.
 fn arg_slots(arch: CallConv) -> &'static [&'static [&'static str]] {
-    match arch {
-        CallConv::SysVAmd64 => X86_64_SYSV_ARG_SLOTS,
-        CallConv::Win64 => X86_64_WIN64_ARG_SLOTS,
-        CallConv::Aarch64 => AARCH64_ARG_SLOTS,
-        CallConv::Arm => ARM32_AAPCS_ARG_SLOTS,
-    }
+    crate::ir::abi::argument_slots(arch)
 }
 
 /// The calling-convention slot a register name denotes, if any.
@@ -90,15 +57,11 @@ fn arg_slots(arch: CallConv) -> &'static [&'static [&'static str]] {
 /// path does not value-number, which is exactly why the same function showed its
 /// arguments there and hid the bug.
 fn slot_of(arch: CallConv, name: &str) -> Option<usize> {
-    let canon = ssa_base(name);
-    arg_slots(arch)
-        .iter()
-        .position(|names| names.contains(&canon))
+    crate::ir::abi::argument_slot_of(arch, name)
 }
 
-/// A value-numbered register's underlying name: `rdi#3` -> `rdi`.
 fn ssa_base(name: &str) -> &str {
-    name.split_once('#').map_or(name, |(base, _)| base)
+    crate::ir::abi::ssa_base(name)
 }
 
 /// An expression naming the function's INCOMING value in `slot`, as that value is
@@ -247,11 +210,7 @@ pub fn reconstruct_args_with_params(
 
 /// The register a callee leaves its return value in.
 fn return_reg(arch: CallConv) -> &'static str {
-    match arch {
-        CallConv::SysVAmd64 | CallConv::Win64 => "rax",
-        CallConv::Aarch64 => "x0",
-        CallConv::Arm => "r0",
-    }
+    crate::ir::abi::return_register(arch)
 }
 
 /// Is the return register read after the call at `call_idx`, before anything

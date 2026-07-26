@@ -25,42 +25,12 @@ use crate::ir::use_def::{def_uses, InstrAddr};
 
 /// The registers that carry a return value under `cc` (all width sub-names).
 fn return_reg_names(cc: CallConv) -> &'static [&'static str] {
-    match cc {
-        CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
-        CallConv::Aarch64 => &["x0", "w0"],
-        CallConv::Arm => &["r0"],
-    }
+    crate::ir::abi::return_registers(cc)
 }
 
 /// Argument-passing registers in positional order (with width sub-names) per `cc`.
 fn arg_slot_names(cc: CallConv) -> &'static [&'static [&'static str]] {
-    match cc {
-        CallConv::SysVAmd64 => &[
-            &["rdi", "edi", "di", "dil"],
-            &["rsi", "esi", "si", "sil"],
-            &["rdx", "edx", "dx", "dl"],
-            &["rcx", "ecx", "cx", "cl"],
-            &["r8", "r8d", "r8w", "r8b"],
-            &["r9", "r9d", "r9w", "r9b"],
-        ],
-        CallConv::Win64 => &[
-            &["rcx", "ecx", "cx", "cl"],
-            &["rdx", "edx", "dx", "dl"],
-            &["r8", "r8d", "r8w", "r8b"],
-            &["r9", "r9d", "r9w", "r9b"],
-        ],
-        CallConv::Aarch64 => &[
-            &["x0", "w0"],
-            &["x1", "w1"],
-            &["x2", "w2"],
-            &["x3", "w3"],
-            &["x4", "w4"],
-            &["x5", "w5"],
-            &["x6", "w6"],
-            &["x7", "w7"],
-        ],
-        CallConv::Arm => &[&["r0"], &["r1"], &["r2"], &["r3"]],
-    }
+    crate::ir::abi::argument_slots(cc)
 }
 
 /// The argument slots of `lf` that are genuine **live-in parameters**: a slot is
