@@ -28,20 +28,29 @@ and `models/decompilation.py`). The 5 tests pass before and after that rebase.
 ## 1a. Validation state (kept separate on purpose)
 
 Different gates prove different things, and collapsing them into one word is how
-"green" starts meaning less than it should. As of `b8b09ac`:
+"green" starts meaning less than it should. As of `8a6993b`:
 
 | gate | state | what it covers |
 |------|-------|----------------|
-| Decompiler Fixture Gate (remote) | **success** at `b8b09ac` | harness unit tests, pinned toolchain, strict compile, semantic matrix, structural ratchet |
-| Fixture matrix + structural (local) | **pass** — 271 / 220 / 80, delta NONE | same, run under `scripts/decbench-local-gate.sh` |
-| `cargo test --lib` | **992 pass** | Rust core |
-| General CI (remote) | **QUEUED — not green, not red** | the light lanes; it has not run |
-| DecBench 56-cell matrix ratchet | **no baseline recorded yet** | per-cell metric regressions |
+| `cargo test --lib` | **1024 pass** | Rust core |
+| Fixture matrix + structural (local) | **pass**, delta NONE, baselines refreshed | 4 lanes, execution-differential per function; `scripts/decbench-local-gate.sh` |
+| Round-trip execution differential | **24 of 26 correct (92%)**, gcc -O0 | does the emitted C actually behave like the original |
+| Decompiler Fixture Gate (remote) | **running** at `8a6993b` (was success at `b8b09ac`) | the same gate on a clean checkout with a pinned toolchain |
+| General CI (remote) | **running** at `8a6993b` | the light lanes |
+| DecBench 56-cell metric ratchet | **NOT RUN — `DECBENCH_DIR` unset** | per-cell GED / type_match / byte_match regressions |
 
-Two of those are absences rather than passes and are written that way. General CI
-has been queued on every commit today (hosted-runner backlog), so nothing about it
-is known. The metric ratchet exists and its comparator is tested, but no baseline
-has been written, so it cannot fail yet either.
+The last row is the one to read carefully. There is no DecBench checkout in this
+environment, so lane 3 of the local gate has been SKIPPED on every run — the script
+prints "Skipping is a gap, not a pass" and I read past it for a whole session. Every
+"no regressions" statement made during that session therefore covers BEHAVIOUR only.
+There is currently no metric evidence at all, and the last measured head-to-head
+(GED 10.24 vs angr 9.93, type_match 0.678 vs 0.694, byte_match 0.183 vs 0.274 —
+behind on all three) predates every fix described below.
+
+A second, larger caveat about that comparison: angr is the only decompiler we have
+ever measured against, and it is the weakest credible baseline in the set. Ghidra is
+the production reference. Choosing the comparator that makes the numbers look
+survivable is a way of not asking the question.
 
 The earlier fixture-gate failures at `82283b4` and `ddddb8b` were real: the first
 because the branch was pushed before the improvements it created were recorded, the
@@ -76,11 +85,20 @@ Declaring the contracts (`DECBENCH_OVERRIDES` in
 `tests/decompiler_fixtures/manifest.py`, plus a `ptr_elem: "cstr"` element kind that
 guarantees a NUL and varies the string length) gives the honest number:
 
-**22 of 26 executed functions behave correctly at gcc -O0 (84%)** — measured at
-`0cf6ff6`, i.e. *before* the three lifter fixes and the out-of-SSA translation below.
-Two of the four failures it identified are fixed since, so the current figure is
-higher; it is left at the measured value rather than inferred, because quoting a
-number I did not run is how the `statemachine` GED claim went stale.
+**24 of 26 executed functions behave correctly at gcc -O0 (92%)**, measured at
+`8a6993b`. The declaration alone took it from 36% to 84% at `0cf6ff6`; the three
+lifter fixes and the out-of-SSA translation took it from 84% to 92%.
+
+Both remaining failures are `bsearch_i` and `fsm`, and both are the single Phase B
+structuring defect described below — so the behavioural backlog at gcc -O0 is now
+one bug, not four. `signs` and `fletcher16` are confirmed correct by execution, which
+is what makes the two lifter fixes real rather than plausible.
+
+The four `not checked` are not passes: `list_sum`/`list_find` are `skip_exec` (the
+harness cannot construct a linked list), and `dist2`/`rect_area` take a by-value
+struct, which stops the harness building a call signature at all. Those are exactly
+where the struct bugs are — `dist2` scores a perfect GED of 0.0 while reading two
+locals nothing assigns.
 
 Ten of the fourteen "failures" were the harness misusing the function. That is a
 measurement bug I introduced by pointing a differential at a corpus without
