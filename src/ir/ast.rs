@@ -5205,4 +5205,53 @@ function f @ 0x1000 {
         assert_eq!(callee_display_name("signed_step@plt"), "signed_step");
         assert_eq!(callee_display_name("foo@GLIBC_2.2.5"), "foo");
     }
+
+    /// `call_forward_result`: the argument is reconstructed correctly (the
+    /// register-style render shows `call signed_step@plt(%ret)`) and then
+    /// disappears on the decbench path, so the emitted C calls `signed_step()`
+    /// with no arguments at all.
+    #[test]
+    fn preparing_for_decbench_keeps_call_arguments() {
+        let f = Function {
+            name: "call_forward_result".to_string(),
+            entry_va: 0x1416,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_4")),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Reg(VReg::phys("local_4")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x10a0,
+                        name: "signed_step@plt".to_string(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("ret"))],
+                    dst: Some(VReg::phys("ret")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                },
+            ],
+        };
+        let prepared = prepare_for_decbench(&f);
+        let call = prepared
+            .body
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Call { args, .. } => Some(args.clone()),
+                _ => None,
+            })
+            .expect("the call must survive preparation");
+        assert!(
+            !call.is_empty(),
+            "the call lost its argument during preparation:\n{:#?}",
+            prepared.body
+        );
+    }
 }
+

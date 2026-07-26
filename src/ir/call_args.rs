@@ -80,10 +80,25 @@ fn arg_slots(arch: CallConv) -> &'static [&'static [&'static str]] {
     }
 }
 
+/// The calling-convention slot a register name denotes, if any.
+///
+/// The name may be SSA-VERSIONED. The decbench pipeline value-numbers the LLIR
+/// before lowering (`value_number` renames a register to `canon#version`), so an
+/// argument arrives here as `rdi#3`. Matching the slot table against the literal
+/// string found nothing and every call on that path silently lost all of its
+/// arguments — `signed_step(x)` rendered as `signed_step()`. The register-style
+/// path does not value-number, which is exactly why the same function showed its
+/// arguments there and hid the bug.
 fn slot_of(arch: CallConv, name: &str) -> Option<usize> {
+    let canon = ssa_base(name);
     arg_slots(arch)
         .iter()
-        .position(|names| names.contains(&name))
+        .position(|names| names.contains(&canon))
+}
+
+/// A value-numbered register's underlying name: `rdi#3` -> `rdi`.
+fn ssa_base(name: &str) -> &str {
+    name.split_once('#').map_or(name, |(base, _)| base)
 }
 
 fn incoming_arg_expr(arch: CallConv, slot: usize) -> Option<Expr> {
@@ -1197,4 +1212,56 @@ mod tests {
             other => panic!("expected an if, got {other:?}"),
         }
     }
+
+    /// The decbench pipeline value-numbers the LLIR before lowering, so an
+    /// argument register arrives as `rdi#3`, not `rdi`. Matching the slot table
+    /// against the literal name found NOTHING, and every call on that path lost
+    /// all of its arguments: `signed_step(x)` rendered as `signed_step()`.
+    ///
+    /// The register-style path does not value-number, which is why the same
+    /// function showed the argument there and hid the bug.
+    #[test]
+    fn an_ssa_versioned_argument_register_still_names_its_slot() {
+        assert_eq!(slot_of(CallConv::SysVAmd64, "rdi"), Some(0));
+        assert_eq!(slot_of(CallConv::SysVAmd64, "rdi#3"), Some(0));
+        assert_eq!(slot_of(CallConv::SysVAmd64, "esi#12"), Some(1));
+        assert_eq!(slot_of(CallConv::Aarch64, "x2#1"), Some(2));
+        // A non-argument register is still not an argument register.
+        assert_eq!(slot_of(CallConv::SysVAmd64, "rbx#2"), None);
+    }
+
+    /// End to end over the pass: a value-numbered argument write folds into the
+    /// call just as an unversioned one does.
+    #[test]
+    fn a_value_numbered_argument_write_folds_into_the_call() {
+        let mut f = Function {
+            name: "caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rdi#4"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "callee".to_string(),
+                    },
+                    args: vec![],
+                    dst: None,
+                },
+            ],
+        };
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+        let args = f
+            .body
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Call { args, .. } => Some(args.clone()),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert_eq!(args, vec![Expr::Const(7)], "body was:\n{:#?}", f.body);
+    }
 }
+
