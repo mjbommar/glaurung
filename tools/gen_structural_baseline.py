@@ -22,6 +22,10 @@ OUT = ROOT / "tests" / "decompiler_fixtures" / "structural_baseline.json"
 
 
 def main() -> int:
+    # Refuse to record a state that includes an undeclared fixture. This writer used
+    # to skip the check that fixture_harness.py performs, so an undeclared fixture
+    # landed in the structural baseline and not the execution one.
+    M.assert_fixtures_declared()
     _td = M.tmpdir()
     with tempfile.TemporaryDirectory(**({"dir": _td} if _td else {})) as td:
         rep = S.structural_report(Path(td))

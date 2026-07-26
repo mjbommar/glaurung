@@ -13,6 +13,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 TOOLS = ROOT / "tools"
 SRC = ROOT / "tests" / "decompiler_fixtures" / "src"
@@ -362,3 +364,58 @@ def test_length_args_are_clamped_to_buffer():
     for v in vecs:
         assert 0 <= v[1] <= ptr_len, f"length arg {v[1]} not clamped to {ptr_len}"
         assert isinstance(v[0], list) and len(v[0]) == ptr_len
+
+
+# ---------------------------------------------------------------------------
+# Both baseline writers must refuse an undeclared fixture
+# ---------------------------------------------------------------------------
+
+
+def test_both_baseline_writers_reject_an_undeclared_fixture(tmp_path, monkeypatch):
+    """A fixture on disk with no REQUIRED_FUNCTIONS entry must stop BOTH refreshers.
+
+    This is a regression test for an asymmetry, not for a missing check. Adding
+    `13_loop_early_exit.c` without declaring it made `fixture_harness.py
+    --write-baseline` refuse — correctly — while `gen_structural_baseline.py`, run in
+    the same command, wrote `structural_baseline.json` anyway. The two baselines then
+    disagreed about which fixtures exist, and the undeclared one's structural state
+    was silently blessed while its execution state was simply absent.
+
+    The check now lives in `manifest.assert_fixtures_declared`, which both writers
+    call. A guard only one writer honours is not a guard.
+    """
+    import manifest as MM
+
+    # A source file on disk that nothing declares.
+    stray = MM.FIXTURE_SRC / "99_undeclared_probe.c"
+    stray.write_text("int probe(void) { return 0; }\n")
+    try:
+        with pytest.raises(AssertionError) as ei:
+            MM.assert_fixtures_declared()
+        assert "99_undeclared_probe" in str(ei.value), (
+            f"the failure must name the offending fixture, got: {ei.value}"
+        )
+    finally:
+        stray.unlink()
+
+    # ...and the declared-but-missing direction, which is how a rename loses its
+    # contract: the fixture keeps its baseline entries under the old name.
+    monkeypatch.setitem(MM.REQUIRED_FUNCTIONS, "98_declared_but_absent", ["nope"])
+    with pytest.raises(AssertionError) as ei:
+        MM.assert_fixtures_declared()
+    assert "98_declared_but_absent" in str(ei.value)
+
+
+def test_both_writers_actually_call_the_shared_precondition():
+    """Guard against the check drifting back into only one writer.
+
+    Asserting on source text is blunt, but the failure being prevented is precisely
+    that one writer stops calling it — which no behavioural test of the OTHER writer
+    can catch.
+    """
+    for tool in ("fixture_harness.py", "gen_structural_baseline.py"):
+        text = (TOOLS / tool).read_text()
+        assert "assert_fixtures_declared()" in text, (
+            f"{tool} no longer calls the shared fixture-declaration precondition; "
+            f"an undeclared fixture would land in one baseline and not the other"
+        )

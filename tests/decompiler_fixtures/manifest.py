@@ -17,6 +17,7 @@ bugs stay visible. Everything here is data, read by `tools/diff_decompile.py`.
 from __future__ import annotations
 
 import os
+import pathlib as _pathlib
 
 INT_MIN = -(2**31)
 INT_MAX = 2**31 - 1
@@ -383,3 +384,32 @@ def scalar_boundaries(width: int = 4, signed: bool = True) -> list[int]:
             seen.add(v)
             out.append(v)
     return out
+
+
+#: Directory holding the fixture sources, resolved relative to this file so that
+#: every caller agrees on it regardless of where it was imported from.
+FIXTURE_SRC = _pathlib.Path(__file__).resolve().parent / "src"
+
+
+def assert_fixtures_declared() -> None:
+    """Every fixture on disk is declared, and every declared fixture exists.
+
+    A SHARED precondition, because it used to live inside one refresher and not the
+    other. `fixture_harness.py --write-baseline` checked it (inside a function about
+    compilation) and correctly refused when 13_loop_early_exit.c was added without a
+    REQUIRED_FUNCTIONS entry — while `gen_structural_baseline.py`, run in the same
+    breath, wrote structural_baseline.json anyway. The two baselines would then
+    disagree about which fixtures exist, with the undeclared one's structural state
+    silently blessed and its execution state absent.
+
+    Both refreshers call this now. A guard that only one writer honours is not a
+    guard; it is a way of finding out later.
+    """
+    on_disk = {p.stem for p in sorted(FIXTURE_SRC.glob("*.c")) + sorted(FIXTURE_SRC.glob("*.cpp"))}
+    declared = set(REQUIRED_FUNCTIONS)
+    if on_disk != declared:
+        raise AssertionError(
+            "fixture sources and the manifest disagree: "
+            f"only on disk {sorted(on_disk - declared)}, "
+            f"only declared {sorted(declared - on_disk)}"
+        )

@@ -112,11 +112,9 @@ def strict_compile_problems(matrix=None, allowed_missing=None) -> list[str]:
         allowed_missing = detect_allowed_missing()
     problems = []
     srcs = sorted(list(SRC.glob("*.c")) + list(SRC.glob("*.cpp")))
-    assert {p.stem for p in srcs} == set(M.REQUIRED_FUNCTIONS), (
-        f"fixture sources and the manifest disagree: "
-        f"only on disk {sorted({p.stem for p in srcs} - set(M.REQUIRED_FUNCTIONS))}, "
-        f"only declared {sorted(set(M.REQUIRED_FUNCTIONS) - {p.stem for p in srcs})}"
-    )
+    # Shared with gen_structural_baseline.py — see M.assert_fixtures_declared for why
+    # this must not live in only one of the two writers.
+    M.assert_fixtures_declared()
     for src in srcs:
         for cc, opt in matrix:
             so, err = compile_fixture(src, cc, opt, strict=True)
