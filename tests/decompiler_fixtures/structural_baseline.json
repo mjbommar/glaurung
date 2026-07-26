@@ -242,7 +242,25 @@
     "12_loop_rotation:nested_rotated:plain": "closed",
     "12_loop_rotation:skip_odd_sum:c": "closed",
     "12_loop_rotation:skip_odd_sum:decbench": "closed",
-    "12_loop_rotation:skip_odd_sum:plain": "closed"
+    "12_loop_rotation:skip_odd_sum:plain": "closed",
+    "13_loop_early_exit:bisect:c": "closed",
+    "13_loop_early_exit:bisect:decbench": "closed",
+    "13_loop_early_exit:bisect:plain": "closed",
+    "13_loop_early_exit:classify_run:c": "closed",
+    "13_loop_early_exit:classify_run:decbench": "closed",
+    "13_loop_early_exit:classify_run:plain": "closed",
+    "13_loop_early_exit:find_first:c": "closed",
+    "13_loop_early_exit:find_first:decbench": "closed",
+    "13_loop_early_exit:find_first:plain": "closed",
+    "13_loop_early_exit:has_pair:c": "closed",
+    "13_loop_early_exit:has_pair:decbench": "closed",
+    "13_loop_early_exit:has_pair:plain": "closed",
+    "13_loop_early_exit:sum_positive:c": "closed",
+    "13_loop_early_exit:sum_positive:decbench": "closed",
+    "13_loop_early_exit:sum_positive:plain": "closed",
+    "13_loop_early_exit:sum_until_zero:c": "goto_no_label:L_1356",
+    "13_loop_early_exit:sum_until_zero:decbench": "closed",
+    "13_loop_early_exit:sum_until_zero:plain": "goto_no_label:L_1356"
   },
   "effects": {
     "08_indirect_dispatch:apply": {
@@ -364,7 +382,13 @@
     "12_loop_rotation:find_first_set": false,
     "12_loop_rotation:for_accumulate": false,
     "12_loop_rotation:nested_rotated": false,
-    "12_loop_rotation:skip_odd_sum": false
+    "12_loop_rotation:skip_odd_sum": false,
+    "13_loop_early_exit:bisect": false,
+    "13_loop_early_exit:classify_run": false,
+    "13_loop_early_exit:find_first": false,
+    "13_loop_early_exit:has_pair": false,
+    "13_loop_early_exit:sum_positive": false,
+    "13_loop_early_exit:sum_until_zero": false
   },
   "verify": {
     "01_conditional_polarity:classify": [],
@@ -391,9 +415,7 @@
     "03_loop_shapes:loop_break": [],
     "03_loop_shapes:loop_continue": [],
     "03_loop_shapes:nested_pairs": [],
-    "03_loop_shapes:while_reload_header": [
-      "var16 is read but never defined"
-    ],
+    "03_loop_shapes:while_reload_header": [],
     "04_switch_shapes:dense_jumptable": [],
     "04_switch_shapes:explicit_fallthrough": [],
     "04_switch_shapes:negative_cases": [],
@@ -443,8 +465,7 @@
     ],
     "10_cpp_runtime_shapes:cpp_raii_guard": [],
     "10_cpp_runtime_shapes:cpp_virtual_dispatch": [
-      "var0 is read but never defined",
-      "var10 is read but never defined"
+      "var0 is read but never defined"
     ],
     "11_call_shapes:call_accumulate_bytes": [],
     "11_call_shapes:call_chain_in_loop": [],
@@ -473,6 +494,12 @@
     ],
     "12_loop_rotation:for_accumulate": [],
     "12_loop_rotation:nested_rotated": [],
-    "12_loop_rotation:skip_odd_sum": []
+    "12_loop_rotation:skip_odd_sum": [],
+    "13_loop_early_exit:bisect": [],
+    "13_loop_early_exit:classify_run": [],
+    "13_loop_early_exit:find_first": [],
+    "13_loop_early_exit:has_pair": [],
+    "13_loop_early_exit:sum_positive": [],
+    "13_loop_early_exit:sum_until_zero": []
   }
 }

@@ -72,10 +72,27 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
     # `matmul` indexes A[i*n+k] over THREE buffers, so n is bounded by sqrt(len):
     # n=4 fills a 16-element matrix exactly.
     ("matrix", "matmul"): {"arg_values": {3: [0, 1, 2, 3, 4]}},
-    # Divide-by-zero is undefined in the SOURCE: the original binary raises SIGFPE on
-    # `fp_div(1, 0)`, so there is nothing to compare against. Verified, not assumed.
+    # `fp_div(a, b)` is `((long)a << 16) / b`, and BOTH parameters need bounding:
+    #
+    #   b: divide-by-zero is undefined in the source — the original binary raises
+    #      SIGFPE on `fp_div(1, 0)`, so there is nothing to compare against.
+    #      Verified by running it, not assumed.
+    #   a: left-shifting a NEGATIVE value is undefined in C (C11 6.5.7p4). gcc and
+    #      clang both implement it as two's complement, so the original binary and a
+    #      recompile of our C usually agree — but "usually" is the problem: the
+    #      recompiled C puts that shift in a different context, where the optimiser
+    #      is entitled to exploit the UB differently. A differential that can fail
+    #      for reasons unrelated to the decompilation is not a gate.
+    #
+    # Negative-input coverage is not lost: `fp_mul` is `((long)a * b) >> 16`, whose
+    # RIGHT shift of a negative value is implementation-defined rather than
+    # undefined, so it exercises the sign-extension path — which is where the
+    # extension-width bug actually lived — without the UB.
     ("fixedpoint", "fp_div"): {
-        "arg_values": {1: [1, 2, 3, 7, 100, -1, -2, 65536, 2147483647]},
+        "arg_values": {
+            0: [0, 1, 2, 3, 7, 100, 65535, 65536, 1000000, 2147483647],
+            1: [1, 2, 3, 7, 100, -1, -2, 65536, 2147483647],
+        },
     },
     # `isqrt` overflows `(x+1)/2` for large n — signed overflow, undefined in the
     # source. Every DEFINED input already agreed; the original happens to return 0 at
@@ -303,6 +320,10 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "factorial_while", "count_up", "for_accumulate", "do_while_control",
         "find_first_set", "skip_odd_sum", "nested_rotated",
         "down_by_negative_imm",
+    ],
+    "13_loop_early_exit": [
+        "find_first", "bisect", "classify_run", "has_pair", "sum_until_zero",
+        "sum_positive",
     ],
     # Callees are required too: a callee whose own recovery is wrong makes every
     # caller's verdict meaningless.

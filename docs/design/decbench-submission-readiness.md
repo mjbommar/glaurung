@@ -49,6 +49,191 @@ second because of a second hardcoded fixture count, a harness link failure
 reported as a compile failure, and the host-dependent `cpp_ctor_dtor` verdict. All
 three are fixed at `b8b09ac`.
 
+## 1b. Behavioural correctness — and a figure I had to correct
+
+DecBench scores GED, `type_match`, and `byte_match`. None of them knows whether
+the code is right. `structs:dist2` scores a *perfect* graph edit distance of 0.0
+while its body reads two locals nothing assigns; `fixedpoint` scored GED 0.0 and
+`type_match` 1.0 with none of its three functions returning the right answer. So
+the execution differential — recompile our C, run it against the original on the
+same inputs — was pointed at the DecBench corpus, and `tools/roundtrip_review.py`
+puts source, our C, and the verdict side by side.
+
+The first number that produced was **9 of 25 functions correct (36%)**, against
+metrics reading as competitive with angr. That figure was wrong, and wrong in our
+disfavour.
+
+The DecBench corpus had no input manifest, so the harness invented the scalar
+arguments. `sum_array(const int *a, int n)` was handed a 16-element buffer and
+`n = 100`: both binaries read 84 elements past the end, disagreed about the
+garbage, and the differential said WRONG — with a *different* wrong value on every
+run, which is the signature of reading uninitialised memory, not of a logic error.
+`reverse` and `matmul` wrote past the end and segfaulted. `str_len` walked off a
+buffer with no NUL and agreed only because both libraries happened to read the same
+heap in the same process. The decompiled `sum_array` was, in fact, correct.
+
+Declaring the contracts (`DECBENCH_OVERRIDES` in
+`tests/decompiler_fixtures/manifest.py`, plus a `ptr_elem: "cstr"` element kind that
+guarantees a NUL and varies the string length) gives the honest number:
+
+**22 of 26 executed functions behave correctly at gcc -O0 (84%)** — measured at
+`0cf6ff6`, i.e. *before* the three lifter fixes and the out-of-SSA translation below.
+Two of the four failures it identified are fixed since, so the current figure is
+higher; it is left at the measured value rather than inferred, because quoting a
+number I did not run is how the `statemachine` GED claim went stale.
+
+Ten of the fourteen "failures" were the harness misusing the function. That is a
+measurement bug I introduced by pointing a differential at a corpus without
+declaring what its functions accept, and `python/tests/test_decbench_corpus_contracts.py`
+now fails closed on it: a corpus function taking a pointer and an integral scalar
+must declare `len_args` or `arg_values`, and a `char *` with no length must declare
+`cstr`. It found one case I had missed on its first run (`linkedlist:list_find`,
+where the scalar is a search value and the pointer is a data structure the harness
+cannot build at all — now `skip_exec`).
+
+Both directions of the lesson are worth stating. Metrics that look competitive can
+sit on top of code that does not work; and a correctness harness that fails open
+reports noise as signal, in this case making the decompiler look 48 points worse
+than it was. Neither is discoverable without reading the output.
+
+### The four real failures, and what they were
+
+| function | verdict | root cause | state |
+|---|---|---|---|
+| `checksum:fletcher16` | wrong answer | `mov $imm32,%eax` sign-extended instead of zero-extended | **fixed** |
+| `arith:signs` | wrong answer | `cmovcc` modelled as a conditional def; `neg` defined no flags | **fixed** |
+| `sort:bsearch_i` | wrong answer | structurer used a post-dominator outside the enclosing loop as a join | open |
+| `statemachine:fsm` | wrong answer | not yet diagnosed | open |
+
+`fletcher16` was one bit. `mov $0x80808081,%eax` zero-extends into `rax`, and we
+read the imm32 as `as i32 as i64`, producing 0xffffffff80808081. The two agree in
+the low 32 bits, so nothing showed until a 64-bit `imul %rdx,%rax` read the parent.
+0x80808081 is the magic reciprocal for division by 255 — so **every `x % 255`
+decompiled into different arithmetic**, emitting C that compiled, ran, and returned
+the wrong answer. `mod255` is now a one-line regression case.
+
+`signs` was two defects in one function. `Op::CondAssign` treats its destination as
+a pure def, so dataflow could not see that the false path keeps the destination's
+prior value; the producer had no reader, dead-code elimination removed it, and the
+emitted C conditionally assigned a variable nothing else wrote. `cmovcc` now lifts
+to `Op::Ite` — the same operation stated honestly, as a three-input select — which
+also renders as a two-armed `if` instead of a one-armed one. Separately, `neg`
+defined no flags at all, so the following `cmovs` read a stale one from an unrelated
+later comparison; the emitted C tested `sf` several statements before anything
+assigned it. `neg` now defines SF and ZF from the result **sign-extended at the
+operand's width**: the first attempt took the 64-bit temp at face value, which
+computes `-(u32)x` in 64 bits, and for `x = -1` gives -4294967295 (SF set) where the
+machine gives 1 (SF clear) — so `abs(-1)` came out as 4294967295. CF and OF are
+deliberately left undefined rather than guessed, since the conditions that read them
+need OF, which is not modelled; an approximate flag turns a visibly missing
+definition into a silently wrong branch.
+
+### Where those fixes actually landed: the -O2 lanes
+
+The fixture matrix reports **23 functions moving fail→pass, and 21 of them are at
+-O2**:
+
+| lane | fail→pass |
+|---|---|
+| `01_conditional_polarity` clang:O2 | 7 |
+| `01_conditional_polarity` gcc:O2 | 6 |
+| `03_loop_shapes` gcc:O2 | 6 |
+| `03_loop_shapes` clang:O2 | 2 |
+| `01_conditional_polarity` clang:O0 | 2 |
+
+That distribution is the diagnosis. -O2 is where the compiler emits `cmov` instead of
+a branch and where values merge without a spill slot to carry them — precisely the
+two things `Op::CondAssign` and the missing out-of-SSA translation got wrong. The
+functions that moved are named for it: `ternary`, `ternary_nested`, `cmp_signed`,
+`cmp_unsigned`, `early_return`, `early_return_ge`, `nested`, `elseif`. The optimised
+lanes were not weak for some diffuse reason about optimisation; they were weak because
+of three specific defects, none of which was visible in GED, `type_match`, or
+`byte_match`.
+
+The two clang:O0 gains (`ternary`, `ternary_nested`) are the same `cmov` fix — clang
+emits `cmov` even at -O0 for a ternary.
+
+Nothing regressed in any lane. Both gate failures were the improvement ratchet
+demanding a baseline refresh, which is the mechanism working.
+
+### Two structural defects the same corpus exposed
+
+`signs` also needed the missing **out-of-SSA translation**. `compute_ssa` places
+phis on the dominance frontier and hands each merged read the phi's result version,
+but nothing ever emitted a definition for that result: the merged read named a value
+no instruction produced, the arm definitions became dead, and DCE removed them. The
+emitted C was an `if/else` with two empty arms returning uninitialised stack. Phi
+results are now materialised as copies at the end of each predecessor, and the
+`b > a ? b - a : a - b` diamond recovers exactly.
+
+Notably, **the Phase A structural accounting verifier stayed silent on that one, and
+was right to** — every block and edge *was* accounted for. The defect was one layer
+down, in the dataflow. On `bsearch_i` the same verifier fired precisely:
+`EdgeUnaccounted{7→8, Linear}` plus `ImpliedEdgeAbsent{4→8}` and `{5→8}` — the
+structurer emitted the function's return block as the join of an `if/else` whose arms
+actually branch back to the loop header, so the loop cannot iterate and the trailing
+`return -1` lost its `return`. That is the general post-dominator fallback in
+`detect_if_shape` accepting a join outside the enclosing loop. It is the first defect
+the verifier caught that the metrics scored fine, which is the argument for having
+built it diagnostic-first.
+
+`statemachine:fsm` is the same defect, worse: an unconditional `return ret;` at the
+bottom of the loop plus the whole switch ladder scattered as gotos after it. So this
+one join rule accounts for two of the four remaining failures, and plausibly the
+gcc -O0 half of the `statemachine` lane too.
+
+**The obvious fix does not work, and that is worth recording.** Requiring both arms
+to reach the join by forward edges only — the `ImpliedEdgeAbsent` finding promoted
+from a diagnostic to a precondition — does remove the bad implied edges. But
+declining the shape does not produce an honest `goto`: it leaves the whole inner
+conditional unstructured, and the accounting goes from 3 findings to 9, including a
+*different* pair of absent implied edges (`2→1`, `2→7`) from the enclosing `Seq`. It
+also broke a pre-existing switch case
+(`structure_accounting::tests::switch_arm_edges_are_attributed_to_the_epilogue_instead_of_the_latch`),
+because a switch arm inside a loop legitimately relies on that same fallback. Cost: a
+working shape, for no correctness gain. Reverted.
+
+The reason it cannot be patched here is structural. What the shape needs is to be
+recognised as an *early return through the shared `-O0` epilogue* — `if (found) {
+ret = m; return ret; }` with the sibling arm as the continuation — and the epilogue
+block is reached from several places, so it has to be duplicated into each returning
+arm rather than owned by one of them. `detect_if_shape` already has a narrow version
+of this (`body_is_shared_exit`) that only fires when the arm block *is* the exit. The
+general case needs the region model to answer "which blocks does this arm own, and
+where does it leave", which is #13 Phase B — interval/SESE analysis — not a fourth
+predicate on top of three.
+
+`tests/decompiler_fixtures/src/13_loop_early_exit.c` pins the shape six ways, and
+recording its baseline immediately corrected two things I had asserted about it.
+
+I wrote the `break` and `continue` cases as counterexamples that must KEEP working.
+They do not work. 19 of the fixture's 24 cells (6 functions x 4 lanes) fail, and the
+two "controls" are among them — for two entirely different reasons:
+
+* `sum_until_zero` (`break`) is the same epilogue defect as `bisect`: an
+  unconditional `return` at the bottom of the loop and a `goto` to an empty label.
+* `sum_positive` (`continue`) is not a structuring problem at all. gcc -O0 emits the
+  guard as `test %eax,%eax ; jle`; our `test` lifting defines `Flag::Z` and
+  `Flag::S` but **not `Flag::Sle`**, so the `jle` reads the stale `Sle` left by the
+  loop's own `cmp`. The emitted C shows it directly — `sle = (local_4 <= arg1)`, the
+  loop condition, standing in for the element test. Then the inverted form renders as
+  `~sle`, and bitwise NOT of a 0/1 flag is `-1` or `-2`, both true, so the guard can
+  never skip and the function sums every element.
+
+Neither of those has anything to do with early exits. The fixture found them by
+accident, which is the argument for corpus fixtures over cases written to match a
+diagnosis: a case written to prove a theory can only confirm or deny that theory.
+
+It is also the second and third instance of one pattern — an instruction that sets
+flags a later branch reads, which our lifter does not define. `neg` defined none at
+all; `test` defines three of the four that matter. Two independent discoveries of the
+same shape is evidence the gap is systemic, so the flag-setting mnemonics deserve an
+audit rather than a third individual fix.
+
+The consequence for Phase B: a green fixture 13 will NOT by itself demonstrate that
+region ownership works, because two of its cells fail for unrelated reasons. Check
+which cells moved.
+
 ## 2. Status against the submission bar
 
 | # | requirement | state |
