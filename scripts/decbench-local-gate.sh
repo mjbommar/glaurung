@@ -17,7 +17,12 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 : "${CARGO_TARGET_DIR:=$PWD/target}"
 : "${GLAURUNG_FIXTURE_JOBS:=4}"
-export CARGO_TARGET_DIR GLAURUNG_FIXTURE_JOBS NO_COLOR=1 TERM=dumb
+# Default to the durable DecBench checkout. It previously lived in a per-session
+# scratchpad, so DECBENCH_DIR came up unset, lane 3 skipped on every run, and ~25
+# metric cells regressed unnoticed across a whole session. Defaulting it means the
+# normal path needs no environment setup at all.
+: "${DECBENCH_DIR:=/nas4/data/workspace-infosec/decbench}"
+export CARGO_TARGET_DIR GLAURUNG_FIXTURE_JOBS DECBENCH_DIR NO_COLOR=1 TERM=dumb
 unset FORCE_COLOR
 
 fail=0
@@ -43,13 +48,30 @@ else
   note "FAILED"; fail=1
 fi
 
+# Lane 3 is the ONLY lane that scores GED / type_match / byte_match. It used to print
+# "Skipping is a gap, not a pass" and then exit 0 — which is how a session's worth of
+# semantic changes regressed ~25 of 56 cells with a green gate. A gate that can pass
+# while its only metric lane is absent is not a gate, so absence is now a FAILURE.
+#
+# It costs ~37 minutes (56 cells, each spawning a Joern JVM to compute the graph edit
+# distance), which is exactly why it is tempting to skip and exactly why the skip must
+# not be silent. Set GLAURUNG_ALLOW_NO_METRICS=1 to waive it deliberately; the waiver
+# is then reported in the FINAL line rather than mid-output where it scrolls past.
 step "3/3  decbench per-cell metric ratchet"
-if [ -z "${DECBENCH_DIR:-}" ]; then
-  note "SKIPPED: DECBENCH_DIR is not set."
+waived=""
+if [ ! -d "$DECBENCH_DIR" ]; then
+  note "DECBENCH_DIR does not exist: $DECBENCH_DIR"
   note "This lane compares all 56 (program, compiler, opt) cells against"
-  note "tests/decbench_corpus/baseline.json and is the only gate that would catch"
-  note "a metric regression. Set DECBENCH_DIR to a DecBench checkout to run it."
-  note "Skipping is a gap, not a pass."
+  note "tests/decbench_corpus/baseline.json and is the only gate that catches a"
+  note "metric regression. Without it, 'green' means 'no BEHAVIOURAL regression' only."
+  if [ -n "${GLAURUNG_ALLOW_NO_METRICS:-}" ]; then
+    note "WAIVED by GLAURUNG_ALLOW_NO_METRICS."
+    waived="yes"
+  else
+    note "FAILING: a missing metric lane is a gap, not a pass."
+    note "Set GLAURUNG_ALLOW_NO_METRICS=1 only if you accept shipping unmeasured."
+    fail=1
+  fi
 elif tools/decbench_matrix.py --check 2>&1 | tail -12; then
   note "ok"
 else
@@ -61,4 +83,8 @@ if [ "$fail" -ne 0 ]; then
   echo "HEAVY GATE: FAILED"
   exit 1
 fi
-echo "HEAVY GATE: passed (see any SKIPPED notes above)"
+if [ -n "$waived" ]; then
+  echo "HEAVY GATE: passed WITHOUT METRICS (waived) — behavioural only, GED unverified"
+  exit 0
+fi
+echo "HEAVY GATE: passed (all three lanes ran)"
