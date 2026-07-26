@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 import diff_decompile as D
 import fixture_harness as H
 import fixture_toolchain as TC
+import manifest as M
 
 # Portable scratch dir: whatever manifest.tmpdir() resolves (env-driven, with a
 # system-tempfile fallback) — never a hardcoded machine path.
@@ -55,9 +56,22 @@ def test_pyelftools_is_a_declared_dependency():
     import elftools  # noqa: F401
 
 
-def test_all_ten_sources_are_discovered():
-    sources = sorted(p.name for p in SRC.glob("*.c")) + sorted(p.name for p in SRC.glob("*.cpp"))
-    assert len(sources) == 10, f"expected 10 fixture sources, found {sources}"
+def test_every_declared_fixture_source_is_discovered():
+    """The corpus size comes from the manifest, not a literal.
+
+    A hardcoded count catches a source that silently disappeared, but it also
+    fails whenever one is legitimately ADDED — which trains people to edit the
+    guard instead of reading it, and is exactly how this test went red after
+    `11_call_shapes` and `12_loop_rotation` landed. Comparing against
+    REQUIRED_FUNCTIONS catches strictly more: a vanished source, a renamed one,
+    and one added without being declared.
+    """
+    on_disk = {p.stem for p in SRC.glob("*.c")} | {p.stem for p in SRC.glob("*.cpp")}
+    declared = set(M.REQUIRED_FUNCTIONS)
+    assert on_disk == declared, (
+        f"only on disk {sorted(on_disk - declared)}, "
+        f"only declared {sorted(declared - on_disk)}"
+    )
 
 
 def test_zero_dwarf_signatures_is_an_error(tmp_path):

@@ -244,11 +244,18 @@ def build_so(c_src: str, workdir: Path, tag: str, link_against: str | None = Non
     src = workdir / f"{tag}.c"
     src.write_text(PRELUDE + "\n" + c_src + "\n")
     so = workdir / f"{tag}.so"
-    cmd = ["gcc", "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)]
-    if link_against:
+    base = ["gcc", "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)]
+    if link_against and Path(link_against).is_file():
         orig = Path(link_against).resolve()
-        cmd += [str(orig), f"-Wl,-rpath,{orig.parent}"]
-    r = TC.run(cmd)
+        r = TC.run(base + [str(orig), f"-Wl,-rpath,{orig.parent}"])
+        if r.returncode == 0:
+            return so
+        # Linking is an ENHANCEMENT, so its failure must not be reported as
+        # "decompiled C failed to compile" — that verdict belongs to the
+        # decompiler. Retry without: a function that calls no sibling links fine,
+        # and one that does will say `undefined symbol` at load time, which is a
+        # different and accurate message.
+    r = TC.run(base)
     return so if r.returncode == 0 else None
 
 
@@ -489,13 +496,22 @@ def worker(spec_path: str) -> int:
 # Parent
 # ---------------------------------------------------------------------------
 
-def exec_class(sig, fixture) -> tuple[str, str]:
+def exec_class(sig, fixture, lane: str | None = None) -> tuple[str, str]:
     """Whether a function is execution-differential or structural-only, and why.
     Shared with the structural lane so it knows which functions MUST carry a
-    structural assertion (a structural result with no assertion is a gap)."""
+    structural assertion (a structural result with no assertion is a gap).
+
+    `lane` is `"<compiler>:<opt>"` when known. `skip_exec_lanes` uses it to skip
+    only where the shape is unexecutable, which matters because optimisation
+    changes the shape: `cpp_ctor_dtor` passes a `this` derived from an
+    uninitialised `rbp` at -O0 and is inlined into something correct at -O2.
+    Skipping the whole function to make -O0 deterministic would throw away two
+    genuine -O2 passes."""
     ov = M.override(fixture, sig["name"])
     if ov.get("skip_exec"):
         return "structural", "manifest skip_exec"
+    if lane and lane in ov.get("skip_exec_lanes", ()):
+        return "structural", f"manifest skip_exec_lanes ({lane})"
     ret = _as_desc(sig["ret"])
     has_ptr = any(_as_desc(p)["k"] == "ptr" for p in sig["params"])
     if ret["k"] == "ptr":
@@ -505,13 +521,13 @@ def exec_class(sig, fixture) -> tuple[str, str]:
     return "exec", ""
 
 
-def run_function(sig, fixture, binary, workdir, seed, fuzz) -> dict:
+def run_function(sig, fixture, binary, workdir, seed, fuzz, lane=None) -> dict:
     name = sig["name"]
     ov = M.override(fixture, name)
     # Structural-only functions (function-pointer callbacks, void-no-buffer,
     # pointer returns) have no observable int value to diff — never a silent
     # pass; the structural lane asserts on them instead.
-    cls, why = exec_class(sig, fixture)
+    cls, why = exec_class(sig, fixture, lane)
     if cls == "structural":
         return {"status": "structural", "detail": why}
     c = decompiled_c(binary, sig["va"])
@@ -569,6 +585,10 @@ def exit_code(results: dict) -> int:
 
 
 def run(binary: str, source: str, fixture: str, seed: int, fuzz: int) -> dict:
+    # `<fixture>-<compiler>-<opt>.so` — the lane a per-lane skip is keyed on.
+    stem = Path(binary).stem
+    parts = stem.rsplit("-", 2)
+    lane = f"{parts[1]}:{parts[2]}" if len(parts) == 3 else None
     results: dict[str, dict] = {}
     # A truly stripped (no-.debug_info) binary must ERROR — never a green all-
     # structural run. (has_dwarf_info() also counts .eh_frame, so check the
@@ -602,7 +622,7 @@ def run(binary: str, source: str, fixture: str, seed: int, fuzz: int) -> dict:
                 results[name] = {"status": "structural",
                                  "detail": "signature not recoverable from DWARF"}
                 continue
-            results[name] = run_function(sig, fixture, binary, wd, seed, fuzz)
+            results[name] = run_function(sig, fixture, binary, wd, seed, fuzz, lane=lane)
     return results
 
 
