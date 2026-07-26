@@ -161,9 +161,18 @@ reasons unrelated to the decompilation is not a gate.
 ## What a first implementation attempt found
 
 Branch `flags-architecture` (`06579df`) implements the consumer mapping and the
-add/sub/cmp/logic producers. It satisfies the stop condition — no lifter writes
-`Ule`/`Slt`/`Sle` — and 1024 unit tests pass. It is **not** merged, for two reasons
-that are worth knowing before starting again.
+add/sub/cmp/logic producers, and 1024 unit tests pass. It is **not** merged.
+
+**It satisfies only the first half of the stop condition.** No lifter writes
+`Ule`/`Slt`/`Sle` — that clause holds. The second clause does not: there is still no
+representation for `Undefined` at all, and nine producers (`inc`, `dec`, the shifts,
+`imul`, `bt`, `adc`, `sbb`) define no flags, so anything reading their flags still
+reads whatever an earlier instruction left. That is stale state retained silently,
+which is exactly what the second clause forbids. Describing the branch as "satisfying
+the stop condition" was an overclaim, and the kind that matters: it would have let
+someone merge on a checklist rather than on the property.
+
+Two further reasons not to merge, both measured.
 
 ### The polarity regression is the important one
 
@@ -212,9 +221,12 @@ measured.
 ### Two things that improved on the way
 
 * `dec_loop`'s recovered signature went from `int dec_loop(signed char arg0, long,
-  int)` to `int dec_loop(int arg0)`. The phantom parameters and the `signed char`
-  narrowing came from `test $0x1,%dil` driving typing through a pseudo-flag — so that
-  defect was downstream of this one.
+  int)` to `int dec_loop(int arg0)`. **Treat the explanation as a hypothesis, not a
+  finding.** The plausible story is that `test $0x1,%dil` was driving typing through a
+  pseudo-flag, so that defect was downstream of this one — but that is one observation
+  on one function, and I have not isolated it. It needs a focused register-view
+  regression test before anything is concluded, and the separate signature work should
+  stay separate rather than being folded in on the strength of a coincidence.
 * `if ((~zf))` — bitwise NOT of a 0/1 flag, always true — disappeared, and the
   affected loop's back-edge began terminating.
 
