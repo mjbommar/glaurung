@@ -57,6 +57,36 @@ fn partial_gp_view(name: &str) -> Option<regview::RegView> {
     regview::view(regview::Arch::X86_64, name).filter(|v| v.preserves_parent())
 }
 
+/// The constant a write through `dst_name` actually leaves in its canonical parent.
+///
+/// A 32-bit GP write on x86-64 zero-extends: `mov $0x80808081,%eax` leaves `rax`
+/// holding 0x0000000080808081, a *positive* number. iced reports the imm32 as a
+/// 32-bit two's-complement value and we read it `as i32 as i64`, which sign-extends
+/// to 0xffffffff80808081 instead. Both spellings agree in the low 32 bits, so the
+/// difference is invisible until something reads the parent at full width — which
+/// `imul %rdx,%rax` immediately does.
+///
+/// 0x80808081 is the magic reciprocal for division by 255, so this one bit made
+/// every `x % 255` decompile into different arithmetic: `mod255` came out as
+/// `(-0x7f7f7f7f * x) >> 32`, which compiles, runs, and returns the wrong answer.
+///
+/// Only constants are adjusted, and only in 64-bit mode. A register source is
+/// already handled by the explicit-widening pass, and in 32-bit mode `eax` *is* the
+/// whole register — there masking would merely re-spell -1 as 4294967295 and lose
+/// the signed reading the 32-bit comparisons rely on.
+fn const_written_through_view(dst_name: &str, src: Value, bits: u32) -> Value {
+    if bits != 64 {
+        return src;
+    }
+    let Value::Const(c) = src else {
+        return src;
+    };
+    match regview::view(regview::Arch::X86_64, dst_name) {
+        Some(v) if v.zero_extends() => Value::Const((c as u64 & v.value_mask()) as i64),
+        _ => src,
+    }
+}
+
 /// Lift a partial-register write `view = src` as a bit-preserving read-modify-write
 /// of its CANONICAL 64-BIT parent:
 ///
@@ -958,6 +988,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     if let Some(v) = partial_gp_view(&dst_name) {
                         return partial_write_ops(v, src);
                     }
+                    let src = const_written_through_view(&dst_name, src, bits);
                     vec![Op::Assign {
                         dst: VReg::phys(dst_name),
                         src,
@@ -1650,12 +1681,22 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 } else {
                     condition.flag
                 };
+                // `dst = cond ? src : dst` — a three-input SELECT, not a
+                // conditional def. Stating the false arm explicitly is what keeps the
+                // instruction that produced the destination's prior value alive; with
+                // `Op::CondAssign` (destination = pure def) dataflow could not see
+                // that reader, dead-code elimination dropped the producer, and the
+                // emitted C conditionally assigned a variable nothing else wrote.
+                // gcc -O0 compiles `abs(a)` to exactly this pair (`neg`, `cmovs`).
+                let width = phys_reg_width(&reg_name(instr.op_register(0))).unwrap_or(Width::W64);
                 match instr.op_kind(1) {
                     OpKind::Register => {
-                        ops.push(Op::CondAssign {
-                            dst,
+                        ops.push(Op::Ite {
                             cond,
-                            src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+                            t: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+                            e: Value::Reg(dst.clone()),
+                            dst,
+                            width,
                         });
                         return ops;
                     }
@@ -1665,10 +1706,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             dst: tmp.clone(),
                             addr: mem_op_of(instr),
                         });
-                        ops.push(Op::CondAssign {
-                            dst,
+                        ops.push(Op::Ite {
                             cond,
-                            src: Value::Reg(tmp),
+                            t: Value::Reg(tmp),
+                            e: Value::Reg(dst.clone()),
+                            dst,
+                            width,
                         });
                         return ops;
                     }
@@ -1695,11 +1738,70 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Neg => {
             if instr.op_count() == 1 && instr.op_kind(0) == OpKind::Register {
                 let r = VReg::phys(reg_name(instr.op_register(0)));
-                return vec![Op::Un {
-                    dst: r.clone(),
+                // `neg` sets SF from the sign of the result and ZF from whether it is
+                // zero. Leaving them undefined made a following `cmovs`/`js` read
+                // either nothing or a stale flag from an unrelated comparison — the
+                // `arith:signs` case, where the emitted C tested `sf` several
+                // statements before anything assigned it.
+                //
+                // The flags read a TEMP holding the negation, sign-extended from the
+                // OPERAND's width. Both halves of that matter:
+                //
+                // * Not the destination register — a 32-bit write zero-extends into
+                //   the 64-bit parent, so reading `%edx` back would make the result
+                //   unconditionally non-negative and SF permanently false.
+                // * Sign-extended from the operand width, because `neg %edx` is a
+                //   32-BIT negation. Taking the temp at face value computes
+                //   `-(u32)x` in 64 bits: for `x = -1` that is -4294967295 (negative,
+                //   so SF set) where the machine produces 1 (positive, SF clear).
+                //   `abs(-1)` then came out as 4294967295 and the function returned
+                //   -1 instead of 1 — a wrong answer from a right-looking `if`.
+                //
+                // CF and OF are left undefined on purpose. `neg` sets CF = (operand
+                // != 0) and OF only at INT_MIN, and the conditions that consume them
+                // (`jb`; `jl`, which tests SF != OF) cannot be expressed without
+                // modelling OF. An approximate definition would convert a visibly
+                // missing flag into a silently wrong branch.
+                let t = VReg::Temp(0);
+                let w = phys_reg_width(&reg_name(instr.op_register(0))).unwrap_or(Width::W64);
+                let mut ops = vec![Op::Un {
+                    dst: t.clone(),
                     op: UnOp::Neg,
-                    src: Value::Reg(r),
+                    src: Value::Reg(r.clone()),
                 }];
+                // The value the flags describe: the result read at the operand's
+                // width. At 64 bits the temp already is that value.
+                let flagged = if w.bits() < 64 {
+                    let sx = VReg::Temp(1);
+                    ops.push(Op::SExt {
+                        dst: sx.clone(),
+                        src: Value::Reg(t.clone()),
+                        from: w,
+                        to: Width::W64,
+                    });
+                    sx
+                } else {
+                    t.clone()
+                };
+                ops.extend([
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(flagged.clone()),
+                        rhs: Value::Const(0),
+                    },
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::S),
+                        op: CmpOp::Slt,
+                        lhs: Value::Reg(flagged),
+                        rhs: Value::Const(0),
+                    },
+                    Op::Assign {
+                        dst: r,
+                        src: Value::Reg(t),
+                    },
+                ]);
+                return ops;
             }
             vec![Op::Unknown {
                 mnemonic: "neg".into(),
@@ -2119,6 +2221,122 @@ mod tests {
     }
 
     #[test]
+    fn neg_defines_the_sign_and_zero_flags() {
+        // `neg %edx` (f7 da). x86 sets SF from the sign of the RESULT and ZF from
+        // whether it is zero. We defined neither, so a following `cmovs`/`js` read a
+        // sign flag that either did not exist or — worse — was left over from an
+        // unrelated later comparison, which is what `arith:signs` showed: the emitted
+        // C tested `sf` several statements before anything assigned it.
+        //
+        // The flags are computed from a temp holding the negation at its natural
+        // width, not from the destination register: a write to `%edx` zero-extends
+        // into `rdx`, so reading the destination back would make the result
+        // unconditionally non-negative and the sign flag always false.
+        //
+        // CF and OF are deliberately left undefined rather than guessed. `neg` sets
+        // CF = (operand != 0) and OF only at INT_MIN, and the conditions that read
+        // them (`jb`, `jl` — which needs SF != OF) cannot be expressed without
+        // modelling OF. Defining them approximately would turn a visibly missing
+        // flag into a silently wrong branch.
+        let ops = lift64(&[0xf7, 0xda]);
+        let flags: Vec<(Flag, CmpOp)> = ops
+            .iter()
+            .filter_map(|i| match &i.op {
+                Op::Cmp {
+                    dst: VReg::Flag(f),
+                    op,
+                    ..
+                } => Some((*f, *op)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            flags.contains(&(Flag::S, CmpOp::Slt)),
+            "neg must define the sign flag, got {ops:#?}"
+        );
+        assert!(
+            flags.contains(&(Flag::Z, CmpOp::Eq)),
+            "neg must define the zero flag, got {ops:#?}"
+        );
+        // And it must still actually negate the register.
+        assert!(
+            ops.iter().any(|i| matches!(
+                &i.op,
+                Op::Un {
+                    op: UnOp::Neg,
+                    ..
+                }
+            )),
+            "neg must still negate, got {ops:#?}"
+        );
+        let defines_dst = ops.iter().any(|i| {
+            matches!(&i.op, Op::Un { dst: VReg::Phys(n), op: UnOp::Neg, .. } if n == "edx")
+                || matches!(&i.op, Op::Assign { dst: VReg::Phys(n), .. } if n == "edx")
+        });
+        assert!(defines_dst, "neg must write %edx, got {ops:#?}");
+    }
+
+    #[test]
+    fn mov_imm32_into_32bit_register_zero_extends() {
+        // `mov $0x80808081,%eax` (b8 81 80 80 80).
+        //
+        // On x86-64 a write to a 32-bit register view zero-extends into the 64-bit
+        // parent, so `rax` becomes 0x0000000080808081 — a POSITIVE value. Reading
+        // the imm32 as `as i32 as i64` sign-extends it to -0x7f7f7f7f instead, and
+        // the two differ in exactly the bits a following 64-bit `imul %rdx,%rax`
+        // reads.
+        //
+        // 0x80808081 is the magic reciprocal for division by 255, so this single
+        // sign bit made every `x % 255` decompile to the wrong arithmetic:
+        // `mod255(x)` rendered as `(-0x7f7f7f7f * x) >> 32 ...`. `x % 255` is not an
+        // exotic operation — it is the core of Fletcher's checksum — and the emitted
+        // C compiled and ran, just with a different answer.
+        let ops = lift64(&[0xb8, 0x81, 0x80, 0x80, 0x80]);
+        assert_eq!(ops.len(), 1, "expected one op, got {ops:?}");
+        match &ops[0].op {
+            Op::Assign {
+                src: Value::Const(c),
+                ..
+            } => assert_eq!(
+                *c, 0x8080_8081,
+                "a 32-bit register write zero-extends: expected 0x80808081, \
+                 got {c:#x} ({c})"
+            ),
+            other => panic!("expected Assign of a Const, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mov_imm32_into_64bit_dest_still_sign_extends() {
+        // The counterpart, so the fix above cannot be over-applied: `movq
+        // $-1,-0x8(%rbp)` and friends encode a *sign-extended* imm32, and a 64-bit
+        // destination must keep that sign. Only the 32-bit-view destination
+        // zero-extends. `mov $0xffffffff,%eax` (b8 ff ff ff ff) is the 32-bit case
+        // and must become 0xffffffff, NOT -1: `rax` really does hold 4294967295.
+        let ops = lift64(&[0xb8, 0xff, 0xff, 0xff, 0xff]);
+        match &ops[0].op {
+            Op::Assign {
+                src: Value::Const(c),
+                ..
+            } => assert_eq!(
+                *c, 0xffff_ffff,
+                "mov $0xffffffff,%eax leaves rax = 4294967295, got {c:#x}"
+            ),
+            other => panic!("expected Assign of a Const, got {other:?}"),
+        }
+
+        // ...whereas the 64-bit form of the same immediate is genuinely -1.
+        let ops = lift64(&[0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff]);
+        match &ops[0].op {
+            Op::Assign {
+                src: Value::Const(c),
+                ..
+            } => assert_eq!(*c, -1, "movq $-1,%rax must sign-extend, got {c:#x}"),
+            other => panic!("expected Assign of a Const, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn movq_imm32to64_store_decodes_immediate_correctly() {
         // movq $0x0,-0x8(%rbp) — the immediate is a sign-extended imm32, which
         // must be read via `immediate32to64()`. Using `immediate64()` returned
@@ -2444,8 +2662,19 @@ mod tests {
     }
 
     #[test]
-    fn cmovne_lifts_to_conditional_assign() {
-        // cmovne rax, rbx  (48 0f 45 c3)
+    fn cmovne_lifts_to_a_select_that_reads_its_own_destination() {
+        // cmovne rax, rbx  (48 0f 45 c3) — `rax = cond ? rbx : rax`.
+        //
+        // The old lowering used `Op::CondAssign`, whose destination is a pure DEF:
+        // dataflow could not see that the false path keeps the destination's PRIOR
+        // value. So the instruction that produced that prior value had no reader,
+        // dead-code elimination removed it, and the emitted C conditionally assigned
+        // a variable that was otherwise never written.
+        //
+        // `Op::Ite` is the same operation stated honestly — a three-input select —
+        // which makes the old value an explicit use, keeps its producer live, and
+        // lowers to a two-armed `if` instead of a one-armed one. `abs(a)`, compiled
+        // by gcc -O0 to `neg %edx ; cmovs %eax,%edx`, needs exactly this.
         let ops = lift64(&[0x48, 0x0f, 0x45, 0xc3]);
         assert_eq!(ops.len(), 2, "got: {:#?}", ops);
         match &ops[0].op {
@@ -2458,14 +2687,21 @@ mod tests {
             other => panic!("expected inverted-condition Cmp, got {:?}", other),
         }
         match &ops[1].op {
-            Op::CondAssign {
+            Op::Ite {
                 dst,
                 cond,
-                src: Value::Reg(src),
+                t: Value::Reg(t),
+                e: Value::Reg(e),
+                ..
             } => {
                 assert_eq!(*dst, VReg::phys("rax"));
                 assert_eq!(*cond, VReg::Temp(1));
-                assert_eq!(*src, VReg::phys("rbx"));
+                assert_eq!(*t, VReg::phys("rbx"), "true arm is the moved source");
+                assert_eq!(
+                    *e,
+                    VReg::phys("rax"),
+                    "false arm must READ the destination — that is the whole point"
+                );
             }
             other => panic!("expected CondAssign, got {:?}", other),
         }
