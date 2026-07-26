@@ -259,7 +259,52 @@ about:
 Each measurement is ~37 minutes (56 cells, each spawning a Joern JVM for GED), so binary
 search over the 8-commit range is ~3 runs. Budget for it rather than shortcut it.
 
-#### 0.4 decision for `3ef32ae`: narrow the predicate, do not revert
+#### 0.4 decision for `3ef32ae`: KEEP it. No statement-shape predicate works.
+
+The use-count predicate was implemented and measured. It **also** breaks
+`12_loop_rotation:gcc:O2:find_first_set`. Reading that function settles the question:
+
+```c
+// source:  for (int i = 0; i < 32; i++) if ((x >> i) & 1u) return i;
+// gcc -O2: xor %eax,%eax ; jmp L ; L2: add $1,%eax ; cmp $0x20,%eax ; je ... ; L: bt %eax,%edi ; jae L2
+
+cf = (((unsigned long)((unsigned int)(arg0)) >> (0 & 31)) & 1);   // <- i folded to 0
+while ((~cf)) { ret = (var0 + 1); var0 = ret; ... }
+```
+
+The `bt %eax,%edi` was hoisted, and at the hoist position `var0 = 0` dominates, so
+**constant folding baked the shift amount to 0**. The loop tests bit 0 forever.
+
+Note what that is and is not:
+
+* it is NOT "the body reads a preamble destination" — the body never reads `cf`, so
+  the use-count rule permits the hoist;
+* it IS "the preamble reads a register the body writes" — the old rule's condition.
+
+So the old rule is correct here, the use-count rule is correct for the `loops` family,
+and **neither is correct for both**. The real hazard is *"is the hoisted expression's
+meaning preserved at the new position"* — a dominance question. In the `loops` cases the
+preamble's read was not constant-foldable, so it survived as a variable reference and
+stayed correct; here it was foldable, so it did not. No test over statement shapes
+distinguishes those two, because the difference is what a later pass will do with the
+expression, not what the expression looks like.
+
+**Decision: keep `3ef32ae`.** It is conservatively safe and costs 7 GED cells (+3
+partial). Recovering them is Phase 2 work: with value identity, use lists and dominance,
+"may this expression move to this point" is a query, not a guess. Do not attempt a
+fourth predicate.
+
+That is three wrong theories in this one function today — invariance, use-count, and
+before them the claim that the original copy-chain rule was unsound. Each was written
+with a confident doc comment. The predicate is the wrong tool, and the repeated failure
+to find one is the strongest evidence in this document for Phase 2.
+
+**Independent bug found while reading it:** `while ((~cf))` is bitwise NOT of a 0/1
+flag, which is always true — the same defect logged for the flags branch, but present on
+`master` today, in a function whose verdict currently passes. It passes because the loop
+exits via the `ret == 32` path instead. Logged separately.
+
+#### superseded: narrow the predicate, do not revert
 
 The requirement is over-broad, not wrong. It declines every hoist whose preamble reads a
 body-assigned register; only `find_first_set` at gcc:O2 actually needs the decline.
