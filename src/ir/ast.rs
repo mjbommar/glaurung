@@ -206,18 +206,34 @@ pub struct Function {
 
 /// May the loop header's leftover statements be hoisted above the `while`?
 ///
-/// Only when they are a plain copy chain. Hoisting per-iteration work leaves the
-/// condition reading a value nothing updates, and the loop never ends. Two things
-/// disqualify it:
+/// Only when they are **loop-invariant**: hoisting per-iteration work leaves the
+/// condition reading a value nothing updates, and the loop never ends.
 ///
-/// * a MEMORY read — the body may store through the same pointer, and a reload is
-///   exactly what a `while ((c = *s++))` header is doing;
-/// * a register that updates ITSELF (`p = p + 1`) — a side effect that must happen
-///   once per iteration, not once before the loop.
+/// Establishing that needs the BODY, not just the preamble. An earlier version of
+/// this checked only the preamble and rejected two shapes — a memory read, and a
+/// register updating itself (`p = p + 1`). Both rejections are still necessary and
+/// neither is sufficient, because a preamble can read a register the *body*
+/// assigns:
 ///
-/// Anything else is a copy that `copy_prop` folds into the condition, where the
-/// hoisted form and the in-loop form are equivalent and the hoisted one reads better.
-fn hoisting_the_header_is_safe(pre: &[Stmt]) -> bool {
+///     t = i + 1;                            <- hoisted: not a self-reference,
+///     while (t < n) { ...; i = i + 1; }         reads no memory, still wrong
+///
+/// `t` never changes and the loop spins forever. So the real rule is a def-use
+/// question: every register the preamble reads, other than one it defines itself
+/// earlier in the chain, must not be assigned anywhere in the body.
+///
+/// What remains disqualifying regardless of the body:
+///
+/// * a MEMORY read — the body may store through the same pointer via a `Stmt::Store`
+///   this analysis does not alias-track, and a reload is exactly what a
+///   `while ((c = *s++))` header is doing;
+/// * a register that updates ITSELF — a per-iteration side effect;
+/// * anything with an effect (a store, a call, a push).
+///
+/// When this declines, the caller emits `while (1) { pre; if (!cond) break; body }`,
+/// which is always correct and merely less pretty. Declining is cheap; hoisting
+/// wrongly produces a program that does not terminate.
+fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
     fn expr_reads_memory(e: &Expr) -> bool {
         match e {
             Expr::Deref { .. } => true,
@@ -229,18 +245,104 @@ fn hoisting_the_header_is_safe(pre: &[Stmt]) -> bool {
             _ => false,
         }
     }
-    pre.iter().all(|s| match s {
-        Stmt::Assign { dst, src } => {
-            if expr_reads_memory(src) {
-                return false;
+    // Every register the body assigns, at any nesting depth. Over-approximating this
+    // is the safe direction: a register listed here merely blocks a hoist.
+    fn collect_assigned(stmts: &[Stmt], out: &mut std::collections::HashSet<String>) {
+        for s in stmts {
+            match s {
+                Stmt::Assign { dst: VReg::Phys(n), .. } => {
+                    out.insert(n.clone());
+                }
+                Stmt::Call { dst: Some(VReg::Phys(n)), .. } => {
+                    out.insert(n.clone());
+                }
+                Stmt::If { then_body, else_body, .. } => {
+                    collect_assigned(then_body, out);
+                    if let Some(e) = else_body {
+                        collect_assigned(e, out);
+                    }
+                }
+                Stmt::While { body, .. } => collect_assigned(body, out),
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, b) in cases {
+                        collect_assigned(b, out);
+                    }
+                    if let Some(b) = default {
+                        collect_assigned(b, out);
+                    }
+                }
+                _ => {}
             }
-            // Self-referential update: a per-iteration side effect.
-            !matches!(dst, VReg::Phys(n) if count_reg_uses_in_expr(src, &VReg::phys(n)) > 0)
         }
-        Stmt::Nop | Stmt::Comment(_) => true,
-        // A store, a call, a push — anything with an effect stays put.
-        _ => false,
-    })
+    }
+    fn collect_read(e: &Expr, out: &mut std::collections::HashSet<String>) {
+        match e {
+            Expr::Reg(VReg::Phys(n)) => {
+                out.insert(n.clone());
+            }
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                collect_read(lhs, out);
+                collect_read(rhs, out);
+            }
+            Expr::Un { src, .. } => collect_read(src, out),
+            Expr::Cast { expr, .. } => collect_read(expr, out),
+            Expr::Deref { addr, .. } => collect_read(addr, out),
+            // `Lea` and `PdbFieldAddr` name their base/index as registers directly,
+            // not as sub-expressions: an address computed from a register the body
+            // bumps is loop-carried just as much as an arithmetic one.
+            Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+                for r in [base, index].into_iter().flatten() {
+                    if let VReg::Phys(n) = r {
+                        out.insert(n.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut body_assigns = std::collections::HashSet::new();
+    collect_assigned(body, &mut body_assigns);
+
+    // Registers the preamble has defined so far: reading one of those is reading a
+    // value this chain produced, not a loop-carried one.
+    let mut defined_here: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for s in pre {
+        match s {
+            Stmt::Assign { dst, src } => {
+                if expr_reads_memory(src) {
+                    return false;
+                }
+                // Self-referential update: a per-iteration side effect.
+                if matches!(dst, VReg::Phys(n) if count_reg_uses_in_expr(src, &VReg::phys(n)) > 0)
+                {
+                    return false;
+                }
+                // Loop-invariance: nothing this statement reads may be assigned by
+                // the body, unless the preamble itself produced it.
+                let mut reads = std::collections::HashSet::new();
+                collect_read(src, &mut reads);
+                for r in &reads {
+                    if body_assigns.contains(r) && !defined_here.contains(r) {
+                        return false;
+                    }
+                }
+                if let VReg::Phys(n) = dst {
+                    // A preamble that redefines a register the body also assigns is
+                    // itself loop-carried work: hoisting it drops the update.
+                    if body_assigns.contains(n) {
+                        return false;
+                    }
+                    defined_here.insert(n.clone());
+                }
+            }
+            Stmt::Nop | Stmt::Comment(_) => {}
+            // A store, a call, a push — anything with an effect stays put.
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// `(int<to>)(int<from>)expr` — an extension that keeps its meaning when folded.
@@ -1022,7 +1124,7 @@ fn lower_region_inner(
                     cond: cond_expr,
                     body: body_stmts,
                 }]
-            } else if hoisting_the_header_is_safe(&pre) {
+            } else if hoisting_the_header_is_safe(&pre, &body_stmts) {
                 // The header's leftover work is a plain copy chain — no memory read,
                 // no register updating itself — so `copy_prop` folds it into the
                 // condition downstream and hoisting it once is equivalent.
@@ -3715,6 +3817,89 @@ pub fn render_with_types(f: &Function, tm: &TypeMap) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// The old rule was UNSOUND, and this is the counterexample.
+    ///
+    /// `t = i + 1` reads no memory and is not a self-reference, so the previous
+    /// preamble-only check hoisted it above the loop. But the body assigns `i`, so
+    /// `t` is loop-carried: hoisted, the condition `t < n` never changes and the
+    /// loop does not terminate. Rejecting only memory reads and self-references was
+    /// necessary and nowhere near sufficient — invariance is a def-use property of
+    /// the preamble AND the body, and cannot be decided from the preamble alone.
+    #[test]
+    fn a_preamble_reading_a_body_modified_register_is_not_hoistable() {
+        let pre = vec![Stmt::Assign {
+            dst: VReg::phys("t"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        }];
+        let body = vec![Stmt::Assign {
+            dst: VReg::phys("i"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        }];
+        assert!(
+            !super::hoisting_the_header_is_safe(&pre, &body),
+            "hoisting `t = i + 1` out of a loop whose body bumps `i` freezes the \
+             condition and the loop never ends"
+        );
+        // The same preamble IS hoistable when the body leaves `i` alone.
+        let inert = vec![Stmt::Assign {
+            dst: VReg::phys("s"),
+            src: Expr::Const(0),
+        }];
+        assert!(
+            super::hoisting_the_header_is_safe(&pre, &inert),
+            "a genuinely invariant preamble must still hoist, or every rotated loop \
+             regresses to `while (1) {{ ... }}`"
+        );
+    }
+
+    /// Nesting must not hide the assignment. A body that bumps `i` inside an `if`
+    /// or an inner loop is still a body that bumps `i`.
+    #[test]
+    fn a_nested_body_assignment_still_blocks_the_hoist() {
+        let bump = Stmt::Assign {
+            dst: VReg::phys("i"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        };
+        let pre = vec![Stmt::Assign {
+            dst: VReg::phys("t"),
+            src: Expr::Reg(VReg::phys("i")),
+        }];
+        for body in [
+            vec![Stmt::If {
+                cond: Expr::Const(1),
+                then_body: vec![bump.clone()],
+                else_body: None,
+            }],
+            vec![Stmt::If {
+                cond: Expr::Const(1),
+                then_body: vec![],
+                else_body: Some(vec![bump.clone()]),
+            }],
+            vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![bump.clone()],
+            }],
+        ] {
+            assert!(
+                !super::hoisting_the_header_is_safe(&pre, &body),
+                "a nested assignment to `i` must block the hoist: {body:?}"
+            );
+        }
+    }
+
     use super::*;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;

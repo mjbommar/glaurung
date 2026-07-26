@@ -824,6 +824,284 @@ mod tests {
         );
     }
 
+    /// A predecessor with MORE THAN ONE successor — the critical edge.
+    ///
+    /// The copy lands at the end of a block that does not always continue to the
+    /// merge, so on the bypassing path it executes an assignment the merge never
+    /// reads. The correctness argument is that this is dead rather than wrong: the
+    /// phi result is live only from the merge block down. This test states it as a
+    /// property instead of a comment — every versioned read still has a definition,
+    /// and the block's branch stays last.
+    ///
+    ///   b0 -> b1, b2
+    ///   b1 -> b3, b4     <- CRITICAL: b1 feeds the merge b3 *and* bypasses to b4
+    ///   b2 -> b3
+    ///   b3 reads rbx (merge of b1's and b2's writes)
+    ///   b4 reads rbx too, on the path that never went through b3
+    #[test]
+    fn a_critical_edge_predecessor_still_defines_the_phi_result() {
+        use crate::ir::types::Flag;
+        let blk = |va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va: va,
+            end_va: va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(j, op)| LlirInstr {
+                    va: va + (j as u64) * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        let cj = |t: u64| Op::CondJump {
+            cond: VReg::Flag(Flag::Z),
+            target: t,
+            inverted: false,
+        };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                blk(0x1000, vec![cj(0x1020)], vec![0x1010, 0x1020]),
+                blk(
+                    0x1010,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("rbx"),
+                            src: Value::Const(10),
+                        },
+                        cj(0x1040),
+                    ],
+                    vec![0x1030, 0x1040],
+                ),
+                blk(
+                    0x1020,
+                    vec![Op::Assign {
+                        dst: VReg::phys("rbx"),
+                        src: Value::Const(20),
+                    }],
+                    vec![0x1030],
+                ),
+                blk(
+                    0x1030,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("rcx"),
+                            src: Value::Reg(VReg::phys("rbx")),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+                blk(
+                    0x1040,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("rdx"),
+                            src: Value::Reg(VReg::phys("rbx")),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+            ],
+        };
+        let ssa = compute_ssa(&lf);
+        assert!(!ssa.phis.is_empty(), "fixture must produce a phi");
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        assert_eq!(
+            undefined_reads(&out),
+            Vec::<String>::new(),
+            "a critical-edge predecessor left the phi result undefined"
+        );
+        for (bi, b) in out.blocks.iter().enumerate() {
+            if let Some(pos) = b
+                .instrs
+                .iter()
+                .position(|i| matches!(i.op, Op::CondJump { .. } | Op::Jump { .. }))
+            {
+                assert_eq!(pos, b.instrs.len() - 1, "block {bi}: branch must stay last");
+            }
+        }
+    }
+
+    /// Two phis in the SAME merge block, on different registers, whose sources cross.
+    ///
+    /// Phi semantics are parallel, so emitting the copies sequentially is only sound
+    /// if no phi's source is another phi's destination. The claim is that SSA
+    /// guarantees this — destinations are versions fresh at the merge, sources come
+    /// from strictly earlier definitions — but "guaranteed by construction" is the
+    /// kind of claim that deserves a test rather than a paragraph. A swap
+    /// (`rbx, rcx = rcx, rbx` across the arms) is the shape that would break it.
+    #[test]
+    fn two_crossing_phis_in_one_block_do_not_clobber_each_other() {
+        use crate::ir::types::Flag;
+        let blk = |va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va: va,
+            end_va: va + 0x20,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(j, op)| LlirInstr {
+                    va: va + (j as u64) * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        let mov = |d: &str, s: &str| Op::Assign {
+            dst: VReg::phys(d),
+            src: Value::Reg(VReg::phys(s)),
+        };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                blk(
+                    0x1000,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("rbx"),
+                            src: Value::Const(1),
+                        },
+                        Op::Assign {
+                            dst: VReg::phys("rcx"),
+                            src: Value::Const(2),
+                        },
+                        Op::CondJump {
+                            cond: VReg::Flag(Flag::Z),
+                            target: 0x1020,
+                            inverted: false,
+                        },
+                    ],
+                    vec![0x1010, 0x1020],
+                ),
+                // then: swap them
+                blk(0x1010, vec![mov("rbx", "rcx"), mov("rcx", "rbx")], vec![0x1030]),
+                // else: swap them the other way
+                blk(0x1020, vec![mov("rcx", "rbx"), mov("rbx", "rcx")], vec![0x1030]),
+                blk(
+                    0x1030,
+                    vec![
+                        Op::Bin {
+                            dst: VReg::phys("rax"),
+                            op: crate::ir::types::BinOp::Add,
+                            lhs: Value::Reg(VReg::phys("rbx")),
+                            rhs: Value::Reg(VReg::phys("rcx")),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+            ],
+        };
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        assert_eq!(
+            undefined_reads(&out),
+            Vec::<String>::new(),
+            "crossing phis left a read undefined"
+        );
+        // No copy may read a name that a LATER copy in the same block defines —
+        // that is precisely the sequentialisation hazard.
+        for b in &out.blocks {
+            let copies: Vec<(String, String)> = b
+                .instrs
+                .iter()
+                .filter_map(|i| match &i.op {
+                    Op::Assign {
+                        dst: VReg::Phys(d),
+                        src: Value::Reg(VReg::Phys(s)),
+                    } => Some((d.clone(), s.clone())),
+                    _ => None,
+                })
+                .collect();
+            for (k, (_, src)) in copies.iter().enumerate() {
+                for (dst_later, _) in &copies[k + 1..] {
+                    assert_ne!(
+                        src, dst_later,
+                        "copy reads {src}, which a later copy in the same block \
+                         overwrites — the parallel-phi swap hazard:\n{copies:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A phi on the RETURN register, whose versions `value_number` keeps bare.
+    ///
+    /// `tag_phys` collapses a kept-bare version to the plain register name, so a phi
+    /// whose destination and source both collapse would emit `rax = rax`, and a
+    /// chain of them could in principle form a cycle. The insertion skips
+    /// `src == dst` for exactly this reason; this pins that no self-copy and no
+    /// two-copy cycle survives.
+    #[test]
+    fn a_kept_bare_return_register_phi_emits_no_self_copy_or_cycle() {
+        use crate::ir::types::Flag;
+        let blk = |va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va: va,
+            end_va: va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(j, op)| LlirInstr {
+                    va: va + (j as u64) * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        // if (c) rax = 1; else rax = 2;  return rax;
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                blk(
+                    0x1000,
+                    vec![Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1020,
+                        inverted: false,
+                    }],
+                    vec![0x1010, 0x1020],
+                ),
+                blk(
+                    0x1010,
+                    vec![Op::Assign {
+                        dst: VReg::phys("rax"),
+                        src: Value::Const(1),
+                    }],
+                    vec![0x1030],
+                ),
+                blk(
+                    0x1020,
+                    vec![Op::Assign {
+                        dst: VReg::phys("rax"),
+                        src: Value::Const(2),
+                    }],
+                    vec![0x1030],
+                ),
+                blk(0x1030, vec![Op::Return], vec![]),
+            ],
+        };
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        for b in &out.blocks {
+            for i in &b.instrs {
+                if let Op::Assign {
+                    dst: VReg::Phys(d),
+                    src: Value::Reg(VReg::Phys(s)),
+                } = &i.op
+                {
+                    assert_ne!(d, s, "emitted a self-copy `{d} = {s}`");
+                }
+            }
+        }
+        assert_eq!(
+            undefined_reads(&out),
+            Vec::<String>::new(),
+            "kept-bare return phi left a read undefined"
+        );
+    }
+
     #[test]
     fn distinct_defs_of_a_register_get_distinct_tags() {
         // rbx = 1 ; rbx = 2 ; rcx = rbx  -> rbx#1, rbx#2, rcx#1 = rbx#2
