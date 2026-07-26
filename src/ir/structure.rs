@@ -163,6 +163,13 @@ struct Cfg {
     /// the taken arm in the `then` slot so the rendered condition polarity is
     /// correct regardless of block address ordering.
     cond_taken: Vec<Option<usize>>,
+    /// Typed edges parallel to `succs`, OWNED here.
+    ///
+    /// The CFG is the thing that knows how control transfers, so it records it once
+    /// rather than letting each consumer re-derive edge meaning from block order.
+    /// Re-deriving is what inverted rotated-loop conditions: "successor 0 is the
+    /// fallthrough" is a guess, and the branch's own target is a fact.
+    edges: Vec<Vec<crate::ir::cfg_edges::Edge>>,
 }
 
 impl Cfg {
@@ -219,12 +226,18 @@ impl Cfg {
                 cond_taken[i] = va_to_idx.get(target).copied();
             }
         }
+        // Typed edges, computed once from the graph this Cfg describes.
+        let edges = {
+            let d = |a: usize, b: usize| dom.get(a).and_then(|r| r.get(b)).copied().unwrap_or(false);
+            crate::ir::cfg_edges::classify(lf, &succs, d)
+        };
         Cfg {
             succs,
             preds,
             dom,
             ipostdom,
             cond_taken,
+            edges,
         }
     }
 
@@ -464,6 +477,27 @@ pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
             errors.len(),
             errors
         );
+    }
+    // Full structural accounting, SHADOW ONLY: every block and every typed edge, in
+    // both directions (a CFG edge the tree does not express, and an edge the tree
+    // claims that does not exist). It reports strictly more than the check above —
+    // on the clang -O0 `statemachine` shape that one is silent — so it runs behind
+    // an env var until a region analysis can act on it. Nothing here changes
+    // `region`.
+    if std::env::var_os("GLAURUNG_ACCOUNT_STRUCTURE").is_some() {
+        let acct =
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
+        if !acct.is_empty() {
+            // stderr, not `tracing`: no subscriber is installed on the CLI or PyO3
+            // paths, so a `tracing::warn!` here reached nobody — a diagnostic that
+            // cannot be read is not a diagnostic. Matches `GLAURUNG_DUMP_PASSES`.
+            eprintln!(
+                "[account] {:#x}: {} finding(s): {:?}",
+                lf.entry_va,
+                acct.len(),
+                acct
+            );
+        }
     }
     region
 }
