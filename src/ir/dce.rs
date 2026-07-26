@@ -15,6 +15,110 @@
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::VReg;
 
+/// Remove flag assignments that a LATER write to the same flag overwrites unread.
+///
+/// [`prune_dead_flags`] counts reads per NAME across the whole function, so one surviving
+/// read of `zf` anywhere keeps every `zf` write alive. Flags have no value identity —
+/// SSA deliberately excludes them — so a name is all the granularity that pass has.
+///
+/// Measured cost of that on `statemachine:gcc:O2`: eleven flag writes rendered as
+/// statements against a single flag read in a condition. Ten statements the source does
+/// not contain, and graph-edit distance charges for every one. It is concentrated at -O2
+/// because that is where the compiler branches on arithmetic instead of emitting a
+/// separate `cmp`.
+///
+/// This pass is a per-DEFINITION peephole, deliberately narrow enough to be obviously
+/// sound: within one statement list, a flag write is dead when a later write to the SAME
+/// flag is reached without passing
+///
+/// * a read of that flag,
+/// * a label or goto (control flow this walk does not model — something could jump in
+///   between and observe the value), or
+/// * a nested block (`If`/`While`/`Switch`), whose arms might read it.
+///
+/// Anything it cannot prove, it leaves alone. A full solution versions flags in SSA so
+/// ordinary dead-store elimination applies — see
+/// `docs/design/value-model-root-cause-and-plan.md` Phase 3 — and this is a stopgap that
+/// buys the measurable part now.
+pub fn prune_overwritten_flags(f: &mut Function) {
+    fn reads_flag(e: &Expr, flag: &VReg) -> bool {
+        match e {
+            Expr::Reg(v) => v == flag,
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                reads_flag(lhs, flag) || reads_flag(rhs, flag)
+            }
+            Expr::Un { src, .. } => reads_flag(src, flag),
+            Expr::Cast { expr, .. } => reads_flag(expr, flag),
+            Expr::Deref { addr, .. } => reads_flag(addr, flag),
+            _ => false,
+        }
+    }
+
+    fn prune(body: &mut Vec<Stmt>) {
+        // Recurse first so nested lists are handled independently.
+        for st in body.iter_mut() {
+            match st {
+                Stmt::If { then_body, else_body, .. } => {
+                    prune(then_body);
+                    if let Some(e) = else_body {
+                        prune(e);
+                    }
+                }
+                Stmt::While { body, .. } => prune(body),
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, b) in cases.iter_mut() {
+                        prune(b);
+                    }
+                    if let Some(b) = default {
+                        prune(b);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut drop_at = vec![false; body.len()];
+        for i in 0..body.len() {
+            let flag = match &body[i] {
+                Stmt::Assign { dst: dst @ VReg::Flag(_), .. } => dst.clone(),
+                _ => continue,
+            };
+            // Scan forward for an unread overwrite of the same flag.
+            for j in (i + 1)..body.len() {
+                match &body[j] {
+                    // Anything with flow we do not model, or a nested reader: give up.
+                    Stmt::Label(_) | Stmt::Goto { .. } | Stmt::If { .. }
+                    | Stmt::While { .. } | Stmt::Switch { .. } | Stmt::Call { .. }
+                    | Stmt::Return { .. } => break,
+                    Stmt::Assign { dst, src } => {
+                        if reads_flag(src, &flag) {
+                            break; // read before overwrite: live
+                        }
+                        if *dst == flag {
+                            drop_at[i] = true; // overwritten unread: dead
+                            break;
+                        }
+                    }
+                    Stmt::Store { addr, src, .. } => {
+                        if reads_flag(addr, &flag) || reads_flag(src, &flag) {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut k = 0;
+        body.retain(|_| {
+            let keep = !drop_at[k];
+            k += 1;
+            keep
+        });
+    }
+
+    prune(&mut f.body);
+}
+
 /// Remove zero-use flag assignments from `f` in place.
 pub fn prune_dead_flags(f: &mut Function) {
     prune_body(&mut f.body);
