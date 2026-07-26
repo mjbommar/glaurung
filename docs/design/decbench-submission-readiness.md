@@ -92,8 +92,9 @@ are close and the third is not. We win **gcc/O0 on GED and type**, **gcc/O2 on
 GED**, and **clang/O2 on type and byte**.
 
 clang/O0 was our worst lane at GED 9.79 against angr's 3.19; the rotated-loop fix
-took it to 6.23. It is still the largest single gap, and the remaining part is not
-yet diagnosed — `statemachine` alone contributes 32 there against angr's 5.
+took it to 6.23. It is still the largest single gap, and its worst program is
+`statemachine` at 25.0 against angr's 5.0 — which turns out to be a CFG-discovery
+failure rather than a structuring one (§4).
 
 So the honest summary is: **competitive at gcc, closing at clang, and well behind
 on recompiled-byte similarity everywhere.** byte_match is the one metric where no
@@ -117,8 +118,8 @@ Stated here so it is not discovered instead.
       `factorial` returned the wrong value for every input. Fixed: 19 fixture
       functions fail->pass and clang/O0 GED 9.79 -> 6.23. This was graph structure,
       which is why it moved the metric.
-  What remains in that lane is NOT diagnosed. `statemachine` alone contributes 32
-  against angr's 5, and the cause is understood (see below) while the fix is not.
+  `statemachine` is the worst program left in that lane, and it turns out to be a
+  DIFFERENT bug from the gcc one — see the next bullet.
 * **O2 costs type recovery.** 0.816 at O0 against 0.523 at O2; gcc/O2 type is
   0.404 against angr's 0.543. The width work lifted O2 type_match from the 0.413
   measured on 2026-07-24 but nowhere near the O0 figure: no spill slots to type
@@ -126,17 +127,28 @@ Stated here so it is not discovered instead.
 * **Aggregates are not recovered.** `structs` scores type 0.25 and `linkedlist`
   0.5 because struct and array types are not reconstructed; an aggregate
   parameter appears as a pointer to its element type.
-* **Structuring is an ordered pattern match, and that is the next architectural
-  problem.** `detect_if_shape` tries shapes in a fixed order and consults a
-  `visited` set to decide what is still available, so which pattern runs first
-  decides what later ones can see. `statemachine` is the visible cost: once one
-  ladder arm returns, the immediate post-dominator is the FUNCTION EXIT, which is
-  not a join for a region inside a loop, so the loop body ends at the first case
-  and the rest is stranded as goto soup — GED 32 against angr's 5. Two local fixes
-  were attempted and both reverted after measurement: guarding the join cost three
-  clang -O2 sparse switches (271 -> 268), and a terminating-arm predicate broke a
-  genuine diamond. Each patch fixes one shape by breaking another. The answer is a
-  real region analysis, not a third predicate.
+* **`statemachine` is two different bugs, and they are on different layers.** Per
+  lane, GED ours against angr's: gcc/O0 **36.0 vs 25.0**, clang/O0 **25.0 vs 5.0**,
+  gcc/O2 **14.0 vs 34.0**, clang/O2 **20.0 vs 36.0**. We lose both -O0 lanes and win
+  both -O2 lanes decisively.
+    - **gcc -O0 is a structuring failure.** `detect_if_shape` tries shapes in a fixed
+      order and consults a `visited` set to decide what is still available, so which
+      pattern runs first decides what later ones can see. Once one ladder arm
+      returns, the immediate post-dominator is the FUNCTION EXIT — not a join for a
+      region inside a loop — so the loop body ends at the first case and the rest is
+      stranded. Two local fixes were attempted and both reverted after measurement:
+      guarding the join cost three clang -O2 sparse switches (271 -> 268), and a
+      terminating-arm predicate broke a genuine diamond. Each patch fixes one shape
+      by breaking another; the answer is a region analysis, not a third predicate.
+    - **clang -O0 is a CFG-discovery failure, one layer earlier.** clang emits a real
+      jump table (`movslq (%rax,%rcx,4)`, `add`, `jmp *%rax` — 4-byte RELATIVE
+      offsets). `discover_jump_tables` does not recognise that form, so the indirect
+      jump contributes no successors and the case arms — thirty instructions of state
+      machine — never enter the CFG at all; the dispatch renders as an indirect CALL
+      through a table entry. The region over the seven blocks that DID make it is
+      genuinely faithful. Structuring work cannot fix this lane, and a structural
+      verifier cannot see it: it accounts for the region against the CFG, not against
+      the program.
 * **Call results are recovered now.** `11_call_shapes` was written to measure the
   gap and then measured the fix: 21 functions fail->pass, including `fib`,
   `forward_sum6` and `tailcall_to_sum4`. Calls carry their arguments (nested and
