@@ -25,6 +25,30 @@ The branch is rebased onto current upstream `main` (as of e7c10a0, 17 commits
 past where the work started, including changes to `decompilers/raw/common.py`
 and `models/decompilation.py`). The 5 tests pass before and after that rebase.
 
+## 1a. Validation state (kept separate on purpose)
+
+Different gates prove different things, and collapsing them into one word is how
+"green" starts meaning less than it should. As of `b8b09ac`:
+
+| gate | state | what it covers |
+|------|-------|----------------|
+| Decompiler Fixture Gate (remote) | **success** at `b8b09ac` | harness unit tests, pinned toolchain, strict compile, semantic matrix, structural ratchet |
+| Fixture matrix + structural (local) | **pass** — 271 / 220 / 80, delta NONE | same, run under `scripts/decbench-local-gate.sh` |
+| `cargo test --lib` | **992 pass** | Rust core |
+| General CI (remote) | **QUEUED — not green, not red** | the light lanes; it has not run |
+| DecBench 56-cell matrix ratchet | **no baseline recorded yet** | per-cell metric regressions |
+
+Two of those are absences rather than passes and are written that way. General CI
+has been queued on every commit today (hosted-runner backlog), so nothing about it
+is known. The metric ratchet exists and its comparator is tested, but no baseline
+has been written, so it cannot fail yet either.
+
+The earlier fixture-gate failures at `82283b4` and `ddddb8b` were real: the first
+because the branch was pushed before the improvements it created were recorded, the
+second because of a second hardcoded fixture count, a harness link failure
+reported as a compile failure, and the host-dependent `cpp_ctor_dtor` verdict. All
+three are fixed at `b8b09ac`.
+
 ## 2. Status against the submission bar
 
 | # | requirement | state |
@@ -79,20 +103,22 @@ work this session moved the overall number at all.
 
 Stated here so it is not discovered instead.
 
-* **clang -O0 is our worst lane: GED 9.79 against angr's 3.19.** A bigger gap
-  than anything at O2, on the *unoptimised* build where we should be strongest.
-  Partly explained now. Reading the simplest program in that lane found two real
-  defects, and the distinction between them matters:
+* **clang -O0 is still our worst lane, GED 6.23 against angr's 3.19** — down from
+  9.79, and still the largest single gap. Two defects were found by reading the
+  simplest program in that lane, and both are now fixed; the distinction between
+  them is worth keeping:
     - a lifter bug (`add eax,-1` read as `+255`, since iced's `immediate32()`
-      returns the raw byte for an `Immediate8to32`) — **fixed**, and it repaired
-      six fixture functions, but it moved these metrics by *nothing*: GED measures
-      graph structure and a wrong constant is not graph structure.
+      returns the raw byte for an `Immediate8to32`) — fixed, repaired six fixture
+      functions, and moved these metrics by *nothing*: GED measures graph structure
+      and a wrong constant is not graph structure.
     - clang emits **rotated** loops (test at the top with a branch out, jump back
-      at the bottom) where gcc tests at the bottom. We invert the condition and
-      emit the back-edge as a `goto` to a label placed after the `return`, so
-      `factorial` returns the wrong value for every input. **Not fixed.** This one
-      is graph structure, so it is the part that costs GED. Fixture
-      `12_loop_rotation` now measures it per lane.
+      at the bottom) where gcc tests at the bottom. We used the exit test as the
+      loop condition and lowered the back-edge as a `goto` past the `return`, so
+      `factorial` returned the wrong value for every input. Fixed: 19 fixture
+      functions fail->pass and clang/O0 GED 9.79 -> 6.23. This was graph structure,
+      which is why it moved the metric.
+  What remains in that lane is NOT diagnosed. `statemachine` alone contributes 32
+  against angr's 5, and the cause is understood (see below) while the fix is not.
 * **O2 costs type recovery.** 0.816 at O0 against 0.523 at O2; gcc/O2 type is
   0.404 against angr's 0.543. The width work lifted O2 type_match from the 0.413
   measured on 2026-07-24 but nowhere near the O0 figure: no spill slots to type
@@ -100,17 +126,34 @@ Stated here so it is not discovered instead.
 * **Aggregates are not recovered.** `structs` scores type 0.25 and `linkedlist`
   0.5 because struct and array types are not reconstructed; an aggregate
   parameter appears as a pointer to its element type.
-* **Calls do not define their return register.** The new `11_call_shapes`
-  fixture measures exactly this: all four callees pass, and every *caller* fails
-  at -O0. Several pass at clang -O2 only because the callee is inlined and there
-  is no call left. 32 of 48 executable lanes fail. This is recorded in the
-  committed baseline, not hidden.
-* **The fixture gate carries 246 known failures** against 215 passes. It is a
-  ratchet, not a claim of correctness: it fails on NEW regressions while keeping
-  known bugs visible per function per lane. It is green — the matrix and
-  structural lanes both pass, meaning nothing in this series regressed anything
-  the gate had already measured — but "green" here means "no new breakage", not
-  "the decompiler is correct".
+* **Structuring is an ordered pattern match, and that is the next architectural
+  problem.** `detect_if_shape` tries shapes in a fixed order and consults a
+  `visited` set to decide what is still available, so which pattern runs first
+  decides what later ones can see. `statemachine` is the visible cost: once one
+  ladder arm returns, the immediate post-dominator is the FUNCTION EXIT, which is
+  not a join for a region inside a loop, so the loop body ends at the first case
+  and the rest is stranded as goto soup — GED 32 against angr's 5. Two local fixes
+  were attempted and both reverted after measurement: guarding the join cost three
+  clang -O2 sparse switches (271 -> 268), and a terminating-arm predicate broke a
+  genuine diamond. Each patch fixes one shape by breaking another. The answer is a
+  real region analysis, not a third predicate.
+* **Call results are recovered now.** `11_call_shapes` was written to measure the
+  gap and then measured the fix: 21 functions fail->pass, including `fib`,
+  `forward_sum6` and `tailcall_to_sum4`. Calls carry their arguments (nested and
+  stack-spilling included), a call's result satisfies a bare `return`, and PLT
+  stubs resolve to the function they forward to. What is left in that fixture:
+  `fact_mod`, `call_fold_wide_result` and `call_into_spill` still fail at -O0.
+* **The fixture gate carries 220 known failures** against 271 passes and 80
+  structural. It is a ratchet, not a claim of correctness: it fails on NEW
+  regressions while keeping known bugs visible per function per lane, so "green"
+  means "no new breakage", not "the decompiler is correct".
+* **One function's verdict was host-dependent and is now excluded from execution
+  at -O0.** `cpp_ctor_dtor` failed on a developer machine and passed in CI on the
+  same commit: it builds a `Tracer` on the stack, and we pass `rbp - 32` as the
+  `this` pointer where `rbp` is declared and never assigned, so whether that
+  garbage address is mapped decided the result. It is now `skip_exec_lanes` for the
+  two -O0 lanes — deterministic everywhere, still executed at -O2 where the
+  constructor inlines and it genuinely passes. The defect is recorded, not fixed.
 * **Relocatable objects are only partly handled.** Code addresses now resolve
   through executable sections, but under `-ffunction-sections` every `.text.*`
   still shares address 0 and the first one wins.
