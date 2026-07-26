@@ -2220,6 +2220,105 @@ mod tests {
         assert_eq!(ops[0].va, 0x1000);
     }
 
+    // ----------------------------------------------------------------------
+    // The flags architecture (docs/design/x86-flags.md).
+    //
+    // These two encode the STOP CONDITION for that work and are expected to be RED
+    // until it lands. They are deliberately about the SHAPE of the model rather than
+    // about any one instruction: the defect is that `Ule`/`Slt`/`Sle` are conditions
+    // stored where architectural flags belong, and no per-instruction test can catch
+    // that — each individual lifter looks locally reasonable.
+    // ----------------------------------------------------------------------
+
+    /// Representative flag-producing instructions, as (asm, encoding).
+    fn flag_producers() -> Vec<(&'static str, Vec<u8>)> {
+        vec![
+            ("cmp %eax,%ebx", vec![0x39, 0xc3]),
+            ("test %eax,%eax", vec![0x85, 0xc0]),
+            ("neg %edx", vec![0xf7, 0xda]),
+            ("sub $1,%edi", vec![0x83, 0xef, 0x01]),
+            ("add %eax,%ebx", vec![0x01, 0xc3]),
+            ("dec %ecx", vec![0xff, 0xc9]),
+            ("inc %ecx", vec![0xff, 0xc1]),
+            ("and %eax,%ebx", vec![0x21, 0xc3]),
+            ("xor %eax,%ebx", vec![0x31, 0xc3]),
+            ("shl $1,%eax", vec![0xd1, 0xe0]),
+            ("shr $3,%eax", vec![0xc1, 0xe8, 0x03]),
+            ("imul %ebx,%eax", vec![0x0f, 0xaf, 0xc3]),
+            ("bt $0,%eax", vec![0x0f, 0xba, 0xe0, 0x00]),
+        ]
+    }
+
+    #[test]
+    #[ignore = "RED by design: fails until the flags architecture lands (#56). \
+                Encodes the stop condition — producers must not write Ule/Slt/Sle. \
+                Run with `cargo test -- --ignored`."]
+    fn no_lifter_writes_a_derived_predicate_as_a_flag() {
+        // STOP CONDITION, made executable: `Ule`, `Slt` and `Sle` are CONDITIONS
+        // (CF|ZF, SF!=OF, ZF|(SF!=OF)) — not architectural flags. A producer that
+        // writes them has frozen a consumer's interpretation into its own output, so
+        // every consumer that wants a different composition of the same underlying
+        // flags is stuck reading a predicate someone else chose.
+        //
+        // Concretely, that is why `test` breaks: it defines Z and S honestly, but a
+        // following `jle` wants ZF|(SF!=OF) and finds only a pre-baked `Sle` left by
+        // whatever ran before it. Making `test` also write `Sle` would paper over
+        // this instruction and leave the shape intact.
+        let mut offenders: Vec<String> = Vec::new();
+        for (asm, bytes) in flag_producers() {
+            for ins in lift64(&bytes) {
+                if let (Some(VReg::Flag(f)), _) = crate::ir::use_def::def_uses(&ins.op) {
+                    if matches!(f, Flag::Ule | Flag::Slt | Flag::Sle) {
+                        offenders.push(format!("{asm} writes Flag::{f:?}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "producers must write only architectural flags {{CF,PF,AF,ZF,SF,OF}}; \
+             conditions belong to the shared consumer mapping:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    #[test]
+    #[ignore = "RED by design: fails until the flags architecture lands (#56). \
+                9 of 13 flag-setting instructions currently define none. \
+                Run with `cargo test -- --ignored`."]
+    fn arithmetic_that_sets_flags_defines_at_least_one() {
+        // The other half of the same gap. `add`, `sub`, `and`, `xor`, `inc`, `dec`,
+        // the shifts and `imul` all set flags on real hardware and define NONE here,
+        // so at -O2 — where the compiler branches on an arithmetic result instead of
+        // emitting a separate `cmp` — the branch reads whatever a previous comparison
+        // left behind. 14_flag_effects:dec_loop decompiles to an infinite loop
+        // because of exactly this.
+        //
+        // Deliberately weak: it asserts only that SOMETHING is defined, not what.
+        // The per-instruction semantics (CF preserved by inc/dec, OF undefined for
+        // shift counts > 1, bt leaving the rest UNDEFINED rather than preserved) are
+        // separate tests, because getting a flag wrong and not setting it at all are
+        // different bugs and should fail differently.
+        let mut silent: Vec<&str> = Vec::new();
+        for (asm, bytes) in flag_producers() {
+            let defines_a_flag = lift64(&bytes).iter().any(|ins| {
+                matches!(
+                    crate::ir::use_def::def_uses(&ins.op),
+                    (Some(VReg::Flag(_)), _)
+                )
+            });
+            if !defines_a_flag {
+                silent.push(asm);
+            }
+        }
+        assert!(
+            silent.is_empty(),
+            "these set flags on hardware but define none when lifted, so a following \
+             jcc reads a stale flag:\n  {}",
+            silent.join("\n  ")
+        );
+    }
+
     #[test]
     fn neg_defines_the_sign_and_zero_flags() {
         // `neg %edx` (f7 da). x86 sets SF from the sign of the RESULT and ZF from
