@@ -44,13 +44,17 @@ metric drift would move both columns.
 
 | lane | GED us | GED angr | type us | type angr | byte us | byte angr |
 |------|--------|----------|---------|-----------|---------|-----------|
-| gcc/O0 | **5.99** | 7.59 | **0.873** | 0.819 | 0.323 | **0.586** |
-| clang/O0 | 9.79 | **3.19** | 0.760 | **0.848** | 0.158 | **0.184** |
-| gcc/O2 | **17.29** | 17.51 | 0.404 | **0.543** | 0.216 | **0.291** |
-| clang/O2 | 11.56 | **11.40** | **0.652** | 0.534 | 0.036 | 0.036 |
-| **overall** | 11.16 | **9.93** | 0.678 | **0.694** | 0.183 | **0.274** |
+| gcc/O0 | **5.99** | 7.59 | **0.873** | 0.819 | 0.346 | **0.586** |
+| clang/O0 | 6.23 | **3.19** | 0.760 | **0.848** | 0.143 | **0.184** |
+| gcc/O2 | **17.18** | 17.51 | 0.404 | **0.543** | 0.205 | **0.291** |
+| clang/O2 | 11.56 | **11.40** | **0.652** | 0.534 | **0.038** | 0.036 |
+| **overall** | 10.24 | **9.93** | 0.678 | **0.694** | 0.183 | **0.274** |
 
-By optimisation level: O0 7.89 / 0.816 / 0.240, O2 14.42 / 0.523 / 0.126.
+Movement on 2026-07-26, all measured: **clang/O0 GED 9.79 -> 6.23** from the
+rotated-loop fix (that lane was our worst and the fix was aimed at it), overall
+**GED 11.16 -> 10.24**, gcc/O0 byte 0.323 -> 0.346 from call arguments finally
+appearing. type_match did not move: the call and loop work changes control flow
+and operands, not declared types.
 
 Three binaries have no `type_match` on **either** side — `recursion` at gcc/O2 and
 clang/O2, `matrix` at clang/O2. DecBench reports "No DWARF ground truth types"
@@ -58,15 +62,18 @@ despite `-g` and present `DW_TAG_subprogram` entries. Identical on both sides is
 what makes it a ground-truth gap rather than a decompiler one; every other metric
 is 56 of 56 for both.
 
-**What this says, without spin.** angr wins the overall on all three metrics,
-narrowly on GED (11.16 vs 9.93) and type (0.678 vs 0.694), clearly on byte (0.183
-vs 0.274). We win **gcc/O0 on GED and type** — the single lane every change this
-session was tuned against — and **clang/O2 on type** (0.652 vs 0.534). The two O2
-GED lanes are ties. Our worst relative result by far is **clang/O0: GED 9.79
-against angr's 3.19**, which is now the largest single opportunity on the board.
+**What this says, without spin.** angr still wins the overall on all three
+metrics: GED 10.24 vs 9.93, type 0.678 vs 0.694, byte 0.183 vs 0.274. The first two
+are close and the third is not. We win **gcc/O0 on GED and type**, **gcc/O2 on
+GED**, and **clang/O2 on type and byte**.
 
-So the honest summary is: **competitive at gcc -O0, roughly level at O2, and well
-behind on clang -O0 and on recompiled-byte similarity everywhere.**
+clang/O0 was our worst lane at GED 9.79 against angr's 3.19; the rotated-loop fix
+took it to 6.23. It is still the largest single gap, and the remaining part is not
+yet diagnosed — `statemachine` alone contributes 32 there against angr's 5.
+
+So the honest summary is: **competitive at gcc, closing at clang, and well behind
+on recompiled-byte similarity everywhere.** byte_match is the one metric where no
+work this session moved the overall number at all.
 
 ## 4. What a reviewer would find if they looked hard
 
