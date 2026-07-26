@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 
 use crate::ir::call_args::CallConv;
-use crate::ir::types::{LlirFunction, Op, VReg, Value};
+use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, InstrAddr};
 
 /// The registers that carry a return value under `cc` (all width sub-names).
@@ -434,7 +434,135 @@ pub fn value_number(
             tag_op(&mut ins.op, def_ver, &use_vers, &ctx);
         }
     }
+    insert_phi_copies(&mut out, lf, ssa, &ctx);
     out
+}
+
+/// Translate *out* of SSA: give every phi result an actual definition.
+///
+/// [`compute_ssa`](crate::ir::ssa::compute_ssa) places phis on the dominance
+/// frontier and hands each merged read the phi's result version, but a phi is not
+/// an executable instruction — nothing above emitted a definition for it. The
+/// merged read therefore named a value no instruction produced, and the arm
+/// definitions feeding it became dead. Dead-code elimination then removed them,
+/// correctly, and the emitted C read uninitialised stack:
+///
+/// ```c
+/// // arith:signs, gcc -O0 — return (a<0 ? -a : a) + (b>a ? b-a : a-b)
+/// if ((arg0 < arg1)) {
+/// } else {
+/// }
+/// return (var9 + var3);   // var9: declared, never assigned
+/// ```
+///
+/// The standard resolution, and the one used here: replace each phi with a copy
+/// `dst = incoming` at the end of every predecessor block. The copies restore the
+/// dataflow, which keeps the arm definitions live; copy propagation then folds most
+/// of them back into the arms, so the usual rendered result is the natural C rather
+/// than a visible temporary.
+///
+/// Three details that make this correct rather than approximately correct:
+///
+/// * **Before the terminator.** A copy appended after a block's branch would never
+///   execute, and would leave a branch mid-block where the structurer expects a
+///   terminator.
+/// * **Critical edges need no split.** A copy at the end of a predecessor with
+///   several successors also executes on the paths that bypass the merge — but the
+///   phi result is only live from the merge block downward (SSA guarantees its uses
+///   are dominated by that block), so on any other path the assignment is dead
+///   rather than wrong. Splitting the edge would add a basic block, and an invented
+///   block is exactly the kind of structural noise the graph-edit-distance metric
+///   charges for.
+/// * **No swap hazard.** Phi semantics are parallel, so sequential copies would be
+///   wrong if one phi's source were another's destination in the same block. It
+///   cannot happen here: there is at most one phi per (block, base register), and a
+///   phi destination is a version fresh at its own block while incoming versions all
+///   come from strictly earlier definitions.
+///
+/// Only phis whose result is actually READ get copies. An unread phi is dead, and
+/// materialising it would add statements to both arms that no source line
+/// corresponds to.
+fn insert_phi_copies(
+    out: &mut LlirFunction,
+    lf: &LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    ctx: &VnCtx,
+) {
+    if ssa.phis.is_empty() {
+        return;
+    }
+
+    // Which (base, version) pairs does the renamed body actually read? Computed on
+    // the OUTPUT, so it sees the tagged names the copies must match.
+    let mut read: HashSet<String> = HashSet::new();
+    for b in &out.blocks {
+        for ins in &b.instrs {
+            let (_, uses) = def_uses(&ins.op);
+            for u in uses {
+                if let VReg::Phys(n) = u {
+                    read.insert(n);
+                }
+            }
+        }
+    }
+
+    // Pending copies per predecessor block index, appended in phi order so the
+    // result is deterministic.
+    let mut pending: Vec<Vec<Op>> = vec![Vec::new(); out.blocks.len()];
+    for phi in &ssa.phis {
+        let mut dst = phi.base.clone();
+        tag_phys(&mut dst, phi.dst_version, ctx);
+        let VReg::Phys(dst_name) = &dst else {
+            // Only physical registers are named this way; a temp phi would need the
+            // remap to agree across blocks, which `build_temp_remap` does not
+            // guarantee, so leave those alone rather than emit a wrong copy.
+            continue;
+        };
+        if !read.contains(dst_name) {
+            continue;
+        }
+        for (pred, ver) in &phi.incoming {
+            if *pred >= out.blocks.len() {
+                continue;
+            }
+            let mut src = phi.base.clone();
+            tag_phys(&mut src, *ver, ctx);
+            if src == dst {
+                continue; // a version kept bare on both sides: `rax = rax`
+            }
+            pending[*pred].push(Op::Assign {
+                dst: dst.clone(),
+                src: Value::Reg(src),
+            });
+        }
+    }
+
+    for (bi, ops) in pending.into_iter().enumerate() {
+        if ops.is_empty() {
+            continue;
+        }
+        let block = &mut out.blocks[bi];
+        // Insert before a trailing terminator; a block that falls through simply
+        // takes them at the end.
+        let at = match block.instrs.last().map(|i| &i.op) {
+            Some(Op::Jump { .. } | Op::CondJump { .. } | Op::Return) => {
+                block.instrs.len() - 1
+            }
+            _ => block.instrs.len(),
+        };
+        // Share the VA of the instruction the copies precede: these are not real
+        // instructions, and inventing an address would make them look like decoded
+        // code to anything keyed on VA.
+        let va = block
+            .instrs
+            .get(at)
+            .or_else(|| block.instrs.last())
+            .map(|i| i.va)
+            .unwrap_or(lf.blocks[bi].start_va);
+        for (k, op) in ops.into_iter().enumerate() {
+            block.instrs.insert(at + k, LlirInstr { va, op });
+        }
+    }
 }
 
 /// Build the [`TempRemap`]: for every lifter temporary that is *reused* (has
@@ -518,6 +646,182 @@ mod tests {
                 succs: vec![],
             }],
         }
+    }
+
+    /// A diamond: both arms write `rbx`, the join reads it.
+    ///
+    ///   B0: cmp/branch          -> B1, B2
+    ///   B1: rbx = 10            -> B3
+    ///   B2: rbx = 20            -> B3
+    ///   B3: rcx = rbx ; return
+    fn diamond() -> LlirFunction {
+        let blk = |va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va: va,
+            end_va: va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(j, op)| LlirInstr {
+                    va: va + (j as u64) * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                blk(
+                    0x1000,
+                    vec![Op::CondJump {
+                        cond: VReg::phys("rdi"),
+                        target: 0x1020,
+                        inverted: false,
+                    }],
+                    vec![0x1010, 0x1020],
+                ),
+                blk(
+                    0x1010,
+                    vec![Op::Assign {
+                        dst: VReg::phys("rbx"),
+                        src: Value::Const(10),
+                    }],
+                    vec![0x1030],
+                ),
+                blk(
+                    0x1020,
+                    vec![Op::Assign {
+                        dst: VReg::phys("rbx"),
+                        src: Value::Const(20),
+                    }],
+                    vec![0x1030],
+                ),
+                blk(
+                    0x1030,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("rcx"),
+                            src: Value::Reg(VReg::phys("rbx")),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+            ],
+        }
+    }
+
+    /// Every versioned register a body READS must be DEFINED somewhere in that body.
+    ///
+    /// This is the invariant that translating out of SSA exists to preserve, and it
+    /// was being violated at every merge point. `compute_ssa` places phis on the
+    /// dominance frontier and hands each merged read the phi's *result* version, but
+    /// `value_number` only ever renamed existing instructions — nothing emitted a
+    /// definition for that result. So the join read `rbx#3`, a name no instruction
+    /// wrote, and the two arm definitions `rbx#1`/`rbx#2` became dead.
+    ///
+    /// What that looks like in emitted C, from `arith:signs` in the DecBench corpus:
+    ///
+    /// ```c
+    /// if ((arg0 < arg1)) {
+    /// } else {
+    /// }
+    /// return (var9 + var3);   // var9 declared, never assigned
+    /// ```
+    ///
+    /// Both arms emptied out by dead-code elimination — correctly, given the IR it
+    /// was handed — and the function returned uninitialised stack. Nothing in the
+    /// structural accounting flagged it, and it was right not to: every block and
+    /// edge WAS accounted for. The defect was one layer down, in the dataflow.
+    fn undefined_reads(lf: &LlirFunction) -> Vec<String> {
+        let mut defined: HashSet<String> = HashSet::new();
+        for b in &lf.blocks {
+            for ins in &b.instrs {
+                if let (Some(VReg::Phys(n)), _) = def_uses(&ins.op) {
+                    defined.insert(n.clone());
+                }
+            }
+        }
+        let mut bad = Vec::new();
+        for b in &lf.blocks {
+            for ins in &b.instrs {
+                let (_, uses) = def_uses(&ins.op);
+                for u in uses {
+                    if let VReg::Phys(n) = u {
+                        // A bare (unversioned) name is the live-in value — a
+                        // parameter — and is defined by the caller, not here.
+                        if n.contains('#') && !defined.contains(&n) {
+                            bad.push(n.clone());
+                        }
+                    }
+                }
+            }
+        }
+        bad.sort();
+        bad.dedup();
+        bad
+    }
+
+    #[test]
+    fn a_merged_register_read_is_defined_on_every_path() {
+        let lf = diamond();
+        let ssa = compute_ssa(&lf);
+        assert!(
+            !ssa.phis.is_empty(),
+            "the fixture must actually produce a phi, else it tests nothing"
+        );
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        assert_eq!(
+            undefined_reads(&out),
+            Vec::<String>::new(),
+            "the join reads a phi result that nothing defines"
+        );
+    }
+
+    #[test]
+    fn the_phi_copy_lands_before_the_terminator() {
+        // A copy appended AFTER a block's branch would never execute (and would
+        // leave the branch in the middle of the block, which the structurer reads
+        // as a terminator position). Insert before it.
+        let lf = diamond();
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        for (bi, b) in out.blocks.iter().enumerate() {
+            if let Some(pos) = b
+                .instrs
+                .iter()
+                .position(|i| matches!(i.op, Op::CondJump { .. } | Op::Jump { .. }))
+            {
+                assert_eq!(
+                    pos,
+                    b.instrs.len() - 1,
+                    "block {bi}: a branch must stay last, got {:?}",
+                    b.instrs.iter().map(|i| &i.op).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_phi_result_nobody_reads_gets_no_copy() {
+        // The join's read is what makes the copy necessary. Drop the read and the
+        // phi is dead: emitting copies for it would add statements to both arms
+        // that no C programmer wrote, which is exactly the graph-edit-distance
+        // noise the renderer works to avoid.
+        let mut lf = diamond();
+        lf.blocks[3].instrs.retain(|i| matches!(i.op, Op::Return));
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        let before: usize = lf.blocks.iter().map(|b| b.instrs.len()).sum();
+        let after: usize = out.blocks.iter().map(|b| b.instrs.len()).sum();
+        assert_eq!(
+            before, after,
+            "an unread phi must not add copies:\n{:#?}",
+            out.blocks
+                .iter()
+                .map(|b| b.instrs.iter().map(|i| &i.op).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
