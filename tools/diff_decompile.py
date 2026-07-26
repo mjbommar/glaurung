@@ -277,7 +277,7 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
     """A list of argument tuples. Scalars are ints; pointer params are lists of
     element values of length ptr_len. Length args are clamped to [0, ptr_len].
     Pointer element type/range follow the DWARF pointee width (1B -> 0..255,
-    else signed 4B fuzz); ov["ptr_elem"] may force "u8". Scalar boundaries are
+    else signed 4B fuzz); ov["ptr_elem"] may force "u8" or "cstr". Scalar boundaries are
     width- and signedness-aware so a 64-bit return's high half and a signed
     extension are actually exercised."""
     params = [_as_desc(p) for p in sig["params"]]
@@ -309,11 +309,23 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
                 f"({params[i]['k']}); use extra_vectors for pointer contents"
             )
         arg_values[i] = vals
-    forced_u8 = ov.get("ptr_elem") == "u8"
+    # "cstr" is "u8" plus the one invariant a string function needs: a NUL inside the
+    # buffer. Without it `str_len` walks off the end, and the two libraries then agree
+    # only because they read the SAME heap in the SAME process — luck that breaks the
+    # moment an allocation lands differently between the two calls. `sum_array` showed
+    # what that looks like when the luck runs out: a DIFFERENT wrong value every run.
+    elem = ov.get("ptr_elem")
+    forced_u8 = elem in ("u8", "cstr")
+    is_cstr = elem == "cstr"
     rng = random.Random(_stable_seed(sig["name"], seed))
 
     def is_u8(d):
         return forced_u8 or d.get("pw") == 1
+
+    def _terminate(vals, n):
+        """vals[:n] mapped into 1..255 (no interior NUL), a NUL, then zero fill."""
+        body = [(v % 255) + 1 for v in vals[:n]]
+        return (body + [0] * (ptr_len - n))[:ptr_len]
 
     def scalar(i, v, d):
         if i in arg_values:
@@ -324,11 +336,17 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         return max(0, min(ptr_len, v)) if i in len_args else v
 
     def buf_det(k, d):
+        if is_cstr:
+            # Vary the length with k so a string loop is exercised at 0, 1, and full.
+            return _terminate([(k * 7 + j * 3) for j in range(ptr_len)], k % ptr_len)
         if is_u8(d):
             return [(k * 7 + j * 3) % 256 for j in range(ptr_len)]
         return [((k * 7 + j * 3) % 17) - 8 for j in range(ptr_len)]
 
     def buf_rng(d):
+        if is_cstr:
+            n = rng.randrange(0, ptr_len)
+            return _terminate([rng.randrange(0, 255) for _ in range(n)], n)
         lo, hi = (0, 256) if is_u8(d) else (-64, 64)
         return [rng.randrange(lo, hi) for _ in range(ptr_len)]
 

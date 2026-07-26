@@ -33,7 +33,8 @@ FIXTURE_FUZZ = 12
 
 # (fixture, function) -> contract override.
 #   ptr_len:      int    — buffer elements for pointer params.
-#   ptr_elem:     str    — pointer element type: "int" (default, 4B) or "u8"
+#   ptr_elem:     str    — pointer element type: "int" (default, 4B), "u8", or
+#                          "cstr" (u8 with a guaranteed NUL and a varying length)
 #                          (1B; required for byte-accurate wire buffers).
 #   len_args:     [int]  — scalar param indices that are a length/count into the
 #                          buffer; clamped to [0, ptr_len].
@@ -48,7 +49,72 @@ FIXTURE_FUZZ = 12
 #                          Optimisation changes the SHAPE, so a function can be
 #                          unexecutable at -O0 and correct at -O2; skipping it
 #                          everywhere would discard the lanes that do work.
+# --- the DecBench validation corpus (tests/decbench_corpus/) --------------------
+#
+# The same mechanism, for a corpus that had none. Without these the harness invents
+# a length: `sum_array` was handed a 16-element buffer and `n = 100`, so BOTH sides
+# read out of bounds and disagreed about the garbage, and `reverse`/`matmul` wrote
+# out of bounds and segfaulted. That is the harness misusing the function, not the
+# decompiler getting it wrong — and reading it as a decompiler failure overstated how
+# broken the output was: `sum_array` decompiled CORRECTLY.
+#
+# `len_args` clamps a scalar to [0, ptr_len]. `arg_values` pins a domain where the
+# SOURCE is undefined outside it, which is not the same thing and is noted per case.
+# `python/tests/test_decbench_corpus_contracts.py` fails closed if a corpus function
+# that needs an entry here does not have one.
+DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
+    ("arrays", "sum_array"): {"len_args": [1]},
+    ("arrays", "max_array"): {"len_args": [1]},
+    ("arrays", "reverse"): {"len_args": [1]},
+    ("sort", "bubble"): {"len_args": [1]},
+    ("sort", "bsearch_i"): {"len_args": [1]},
+    ("checksum", "fletcher16"): {"len_args": [1]},
+    # `matmul` indexes A[i*n+k] over THREE buffers, so n is bounded by sqrt(len):
+    # n=4 fills a 16-element matrix exactly.
+    ("matrix", "matmul"): {"arg_values": {3: [0, 1, 2, 3, 4]}},
+    # Divide-by-zero is undefined in the SOURCE: the original binary raises SIGFPE on
+    # `fp_div(1, 0)`, so there is nothing to compare against. Verified, not assumed.
+    ("fixedpoint", "fp_div"): {
+        "arg_values": {1: [1, 2, 3, 7, 100, -1, -2, 65536, 2147483647]},
+    },
+    # `isqrt` overflows `(x+1)/2` for large n — signed overflow, undefined in the
+    # source. Every DEFINED input already agreed; the original happens to return 0 at
+    # INT64_MAX under gcc -O0, which is not a contract.
+    ("fixedpoint", "isqrt"): {
+        "arg_values": {0: [0, 1, 2, 3, 100, 1000000, 2147483647, -1]},
+    },
+    # Exponential and doubly-recursive: bound both so the verdict tests the recursion
+    # rather than the machine's speed, exactly as the fixture `fib` needed.
+    ("recursion", "fib"): {"arg_values": {0: [-1, 0, 1, 2, 3, 7, 12, 20]}},
+    ("recursion", "ackermann"): {
+        "arg_values": {0: [0, 1, 2], 1: [0, 1, 2, 3]},
+    },
+    # A `char *` buffer must be NUL-terminated or every string function runs off the
+    # end. "cstr" guarantees the terminator and varies where it lands.
+    ("strops", "str_len"): {"ptr_elem": "cstr"},
+    ("strops", "str_cmp"): {"ptr_elem": "cstr"},
+    ("strops", "hash_djb2"): {"ptr_elem": "cstr"},
+    ("statemachine", "fsm"): {"len_args": [1], "ptr_elem": "u8"},
+    # A `struct node *` whose first member is itself a `struct node *`. The harness
+    # builds a pointer argument by allocating a buffer of fuzz values, so `h->next`
+    # would be an integer reinterpreted as an address and the very first iteration
+    # follows a wild pointer. That is not a bound to declare — it is a data structure
+    # the harness cannot construct, so these are checked structurally. Executing them
+    # would test the allocator, and would do it by segfaulting.
+    ("linkedlist", "list_sum"): {"skip_exec": True},
+    ("linkedlist", "list_find"): {"skip_exec": True},
+}
+
 OVERRIDES: dict[tuple[str, str], dict] = {
+    # 13_loop_early_exit: every function takes a buffer and its length. Same
+    # reasoning as DECBENCH_OVERRIDES above — an unclamped length makes both
+    # binaries read out of bounds and the differential compares garbage.
+    ("13_loop_early_exit", "find_first"): {"len_args": [1]},
+    ("13_loop_early_exit", "bisect"): {"len_args": [1]},
+    ("13_loop_early_exit", "classify_run"): {"len_args": [1]},
+    ("13_loop_early_exit", "has_pair"): {"len_args": [1]},
+    ("13_loop_early_exit", "sum_until_zero"): {"len_args": [1]},
+    ("13_loop_early_exit", "sum_positive"): {"len_args": [1]},
     # `fib` is exponential. Once argument reconstruction started working the
     # decompiled version actually recursed — correctly — and then ran for
     # `fib(INT_MAX)` exactly as the original would. Before the fix it returned
@@ -262,6 +328,13 @@ def tmpdir() -> str | None:
 
 
 def override(fixture: str, func: str) -> dict:
+    """The contract for one function, from whichever corpus it belongs to.
+
+    The DecBench validation corpus is kept in its own table rather than merged: the
+    two corpora are separate populations, and a name collision between them would
+    otherwise silently apply one's contract to the other's function."""
+    if (fixture, func) in DECBENCH_OVERRIDES:
+        return DECBENCH_OVERRIDES[(fixture, func)]
     return OVERRIDES.get((fixture, func), {})
 
 
