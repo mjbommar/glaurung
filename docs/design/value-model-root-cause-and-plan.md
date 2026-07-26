@@ -277,6 +277,58 @@ cells. So it is not true that correctness costs GED in general:
 Actionable form: keep making value-level fixes freely. Treat any fix whose mechanism is
 *"emit an extra statement"* as blocked on Phase 2.
 
+#### 0.4 the actionable design: VERIFY the hoist, do not predict it
+
+Instrumenting the decision (`GLAURUNG_DEBUG_HOIST`) shows `matmul`'s preamble is not one
+statement but **eight**:
+
+```
+Assign(Phys("rax#6"))                     <- ret = local_10
+Assign(Temp(17))                          <- the cmp's sub temp
+Assign(Flag(Z)) (C) (Ule) (Sle) (S)       <- all DEAD: the condition was hoisted
+Assign(Temp(19))
+```
+
+Seven are dead flag machinery. `prune_dead_flags` removes them — but it runs at
+`python_bindings/ir.rs:480`, **after** lowering, so the loop shape is chosen against an
+un-pruned preamble. That is a pass-ordering defect independent of everything else.
+
+Filtering the dead statements is necessary but not sufficient, and the reason is the
+useful part. Compare the two cases that decide the predicate:
+
+| | hoisted expression | after folding into the condition |
+|---|---|---|
+| `sum_to` (safe) | `i - n` | `while ((i - n) < 0)` — still READS `i` |
+| `find_first_set` (unsafe) | `(arg0 >> var0) & 1` | `var0` CONST-FOLDED to 0 |
+
+The discriminator is not a property of the statement. It is **whether folding preserves
+the read of the loop-carried register** — a fact about what a later pass does, which is
+precisely why three successive predicates failed to capture it.
+
+**So do not predict it; verify it.**
+
+1. Tentatively hoist.
+2. Run the fold/copy-propagation that would happen anyway.
+3. Check the postcondition: does the resulting condition still read every body-assigned
+   register that the original preamble read?
+4. Yes → keep the hoist. No → fall back to `while (1) { pre; if (!cond) break; }`.
+
+This is sound rather than heuristic, because the postcondition is exactly the property
+that must hold, and it is checked directly instead of inferred from syntax. It should
+recover the `loops` family and `linkedlist` (~10 cells) while still declining
+`find_first_set`.
+
+Two corrections to earlier entries in this document:
+
+* `matmul`'s fallback is arguably CORRECT, not a regression. `ret` is read only after the
+  loop, so it must hold its last value; the pre-`a6d6da0` `ret = …; while (cond)` form
+  returns 0 instead. It passed only because `matmul` is void and nobody reads the result.
+  So `a6d6da0` improved correctness there and the visible cost is the phantom `ret`
+  (Phase 2.5).
+* But `sum_to` and `factorial` return `long` and take the fallback too, so the phantom
+  `ret` does not explain the bulk. The tightened predicate declining every counted loop
+  does.
+
 #### method note: I used the expensive tool for a cheap question
 
 Three 40-minute matrix runs were queued to attribute these cells. The `matrix`
