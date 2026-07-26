@@ -158,6 +158,66 @@ been shipped from unbounded undefined behaviour — `fp_div`'s left shift of a n
 value, and `add_then_negative`'s `INT_MIN + INT_MIN`. A differential that can fail for
 reasons unrelated to the decompilation is not a gate.
 
+## What a first implementation attempt found
+
+Branch `flags-architecture` (`06579df`) implements the consumer mapping and the
+add/sub/cmp/logic producers. It satisfies the stop condition — no lifter writes
+`Ule`/`Slt`/`Sle` — and 1024 unit tests pass. It is **not** merged, for two reasons
+that are worth knowing before starting again.
+
+### The polarity regression is the important one
+
+The fixture matrix reported ten `pass → fail`, and every single one is a
+condition-polarity function: `cmp_signed`, `cmp_unsigned`, `sc_or`, `early_return_ge`,
+`elseif`, `ternary`. That pattern is diagnostic.
+
+The derivations are algebraically correct — with `OF = (lhs <ₛ rhs) XOR SF`, the
+consumer's `SF != OF` collapses back to exactly `lhs <ₛ rhs`. So the fault is
+**downstream of lifting**. The AST layer matches conditions *structurally* on
+`Stmt::If { cond: Expr::Reg(flag) }` and `Expr::Un { op: Not, src: Reg(flag) }` in
+order to hoist a `flag = <Cmp>` assignment into the `if` and to decide polarity. A
+composite condition now arrives as a `VReg::Temp` rather than a `VReg::Flag`, so that
+matching never fires and polarity falls through to a path that assumed a bare flag.
+
+**Fix the AST condition handling to treat a materialised temp exactly like a flag,
+before anything else.** Confirm against `01_conditional_polarity`, not by reading one
+function.
+
+### The rendering regression, and why its fix is algebraic
+
+```c
+sf = (t42 < 0);
+of = ((local_4 < 7) ^ sf);
+if ((zf | (sf != of))) {        // was: if (local_4 <= 7)
+```
+
+Since `of = (slt ^ sf)`, the expression `sf != of` is `sf XOR (slt XOR sf)` = `slt`.
+So the simplification is the boolean identity
+
+```
+a != (b ^ a)   ->   b
+```
+
+and needs no knowledge of `cmp` at all. The catch: `const_fold.rs` works on the AST,
+where the flags are separate *statements*, so both operands are `Expr::Reg` and the
+identity cannot see `of`'s definition. Fold at LLIR/SSA level — where `of#1 =
+Xor(slt#1, sf#1)` and its consumer are both in view — or make copy-propagation inline
+the single-use flag definition into the condition first. Then a second, `cmp`-aware
+step folds `(lhs - rhs == 0) | (lhs <ₛ rhs)` → `lhs <=ₛ rhs`.
+
+Verify with the fixture matrix **and** a GED measurement. The whole reason this is not
+on master is that it trades a correctness win for an output-quality loss nobody
+measured.
+
+### Two things that improved on the way
+
+* `dec_loop`'s recovered signature went from `int dec_loop(signed char arg0, long,
+  int)` to `int dec_loop(int arg0)`. The phantom parameters and the `signed char`
+  narrowing came from `test $0x1,%dil` driving typing through a pseudo-flag — so that
+  defect was downstream of this one.
+* `if ((~zf))` — bitwise NOT of a 0/1 flag, always true — disappeared, and the
+  affected loop's back-edge began terminating.
+
 ## Stop condition
 
 Do not merge if either holds:
