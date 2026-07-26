@@ -204,6 +204,45 @@ pub struct Function {
 
 // -- Lowering ----------------------------------------------------------------
 
+/// May the loop header's leftover statements be hoisted above the `while`?
+///
+/// Only when they are a plain copy chain. Hoisting per-iteration work leaves the
+/// condition reading a value nothing updates, and the loop never ends. Two things
+/// disqualify it:
+///
+/// * a MEMORY read — the body may store through the same pointer, and a reload is
+///   exactly what a `while ((c = *s++))` header is doing;
+/// * a register that updates ITSELF (`p = p + 1`) — a side effect that must happen
+///   once per iteration, not once before the loop.
+///
+/// Anything else is a copy that `copy_prop` folds into the condition, where the
+/// hoisted form and the in-loop form are equivalent and the hoisted one reads better.
+fn hoisting_the_header_is_safe(pre: &[Stmt]) -> bool {
+    fn expr_reads_memory(e: &Expr) -> bool {
+        match e {
+            Expr::Deref { .. } => true,
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                expr_reads_memory(lhs) || expr_reads_memory(rhs)
+            }
+            Expr::Un { src, .. } => expr_reads_memory(src),
+            Expr::Cast { expr, .. } => expr_reads_memory(expr),
+            _ => false,
+        }
+    }
+    pre.iter().all(|s| match s {
+        Stmt::Assign { dst, src } => {
+            if expr_reads_memory(src) {
+                return false;
+            }
+            // Self-referential update: a per-iteration side effect.
+            !matches!(dst, VReg::Phys(n) if count_reg_uses_in_expr(src, &VReg::phys(n)) > 0)
+        }
+        Stmt::Nop | Stmt::Comment(_) => true,
+        // A store, a call, a push — anything with an effect stays put.
+        _ => false,
+    })
+}
+
 /// `(int<to>)(int<from>)expr` — an extension that keeps its meaning when folded.
 ///
 /// Emits only the inner cast when the two widths agree (nothing is being extended),
@@ -978,17 +1017,46 @@ fn lower_region_inner(
                     cond: Expr::Const(1),
                     body: loop_body,
                 }]
-            } else {
-                // Pre-tested loop. When `pre` is non-empty it is the header's
-                // per-iteration test setup (typically a reload of the loop
-                // variable) which copy-prop folds into the condition, so hoisting
-                // it once before the `while` is cleaned up downstream. Keep that.
+            } else if pre.is_empty() {
+                vec![Stmt::While {
+                    cond: cond_expr,
+                    body: body_stmts,
+                }]
+            } else if hoisting_the_header_is_safe(&pre) {
+                // The header's leftover work is a plain copy chain — no memory read,
+                // no register updating itself — so `copy_prop` folds it into the
+                // condition downstream and hoisting it once is equivalent.
                 let mut out = pre;
                 out.push(Stmt::While {
                     cond: cond_expr,
                     body: body_stmts,
                 });
                 out
+            } else {
+                // The header does PER-ITERATION work that cannot be folded into the
+                // condition, so hoisting it leaves the condition reading a value
+                // nothing updates — an infinite loop. `while ((c = *s++))` is the
+                // shape: gcc -O0 puts the pointer bump, the load and the test all in
+                // the header because all three run every iteration.
+                //
+                //     var0 = p; p = p + 1;          <- hoisted
+                //     c = *(char *)var0;            <- hoisted
+                //     while ((c != 0)) { h = ...; } <- c never changes
+                //
+                // `strops::hash_djb2` and `str_len` both spun until the time budget
+                // on inputs the original returned on. Keep the work where it runs:
+                //     while (1) { <header work>; if (!cond) break; <body> }
+                let mut loop_body = pre;
+                loop_body.push(Stmt::If {
+                    cond: negate_cmp_expr(cond_expr),
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                });
+                loop_body.extend(body_stmts);
+                vec![Stmt::While {
+                    cond: Expr::Const(1),
+                    body: loop_body,
+                }]
             }
         }
         Region::Switch { dispatch, arms, .. } => {
@@ -5417,6 +5485,87 @@ function f @ 0x1000 {
         assert!(
             out.contains("(unsigned long)"),
             "expected an explicit 64-bit unsigned target:\n{out}"
+        );
+    }
+
+    /// `while ((c = *s++))` — gcc -O0 puts the load, the pointer bump AND the test in
+    /// the loop HEADER, because all three run once per iteration.
+    ///
+    /// Hoisting that work above the `while` leaves the condition reading a value
+    /// nothing updates, so the loop never ends. `strops::hash_djb2` and `str_len`
+    /// both spun until the 5s budget on inputs the original returned on:
+    ///
+    ///     var0 = local_18; local_18 = local_18 + 1;   // hoisted
+    ///     local_4 = *(char *)(var0);                  // hoisted
+    ///     while ((local_4 != 0)) { h = ...; }         // local_4 never changes
+    ///
+    /// Hoisting is only sound when the header work is loop-INVARIANT. It is not here,
+    /// and a load through a pointer the body advances can never be assumed to be.
+    #[test]
+    fn per_iteration_header_work_stays_inside_the_loop() {
+        use crate::ir::types::{BinOp as B, CmpOp, Flag, MemOp, Value};
+        // header: p = p + 1; c = *p; if (c != 0) -> body, else exit
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1010]),
+            (
+                0x1010,
+                vec![
+                    Op::Bin {
+                        dst: VReg::phys("rbx"),
+                        op: B::Add,
+                        lhs: Value::Reg(VReg::phys("rbx")),
+                        rhs: Value::Const(1),
+                    },
+                    Op::Load {
+                        dst: VReg::phys("rcx"),
+                        addr: MemOp {
+                            base: Some(VReg::phys("rbx")),
+                            index: None,
+                            scale: 1,
+                            disp: 0,
+                            size: 1,
+                            segment: None,
+                            endian: crate::ir::types::Endian::Little,
+                        },
+                    },
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("rcx")),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1030,
+                        inverted: false,
+                    },
+                ],
+                vec![0x1020, 0x1030],
+            ),
+            (
+                0x1020,
+                vec![
+                    Op::Bin {
+                        dst: VReg::phys("rax"),
+                        op: B::Add,
+                        lhs: Value::Reg(VReg::phys("rax")),
+                        rhs: Value::Reg(VReg::phys("rcx")),
+                    },
+                    Op::Jump { target: 0x1010 },
+                ],
+                vec![0x1010],
+            ),
+            (0x1030, vec![Op::Return], vec![]),
+        ]);
+        let out = lower_and_render(&lf, "walk");
+        // The load must be inside the loop. Find the `while` and require the
+        // dereference to appear after it.
+        let wpos = out.find("while").expect(&format!("expected a loop:\n{out}"));
+        let load = out.find("*(").expect(&format!("expected a load:\n{out}"));
+        assert!(
+            load > wpos,
+            "the per-iteration load was hoisted above the loop, so the condition \
+             can never change:\n{out}"
         );
     }
 }
