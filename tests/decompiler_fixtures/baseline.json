@@ -507,7 +507,7 @@
     "cpp_lambda_capture": "fail",
     "cpp_move": "fail",
     "cpp_raii_guard": "fail",
-    "cpp_virtual_dispatch": "fail"
+    "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:clang:O2": {
     "_ZN4Base2opEi": "structural",
@@ -520,7 +520,7 @@
     "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
     "cpp_raii_guard": "pass",
-    "cpp_virtual_dispatch": "fail"
+    "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:gcc:O0": {
     "_ZN4Base2opEi": "structural",
@@ -548,7 +548,7 @@
     "cpp_lambda_capture": "fail",
     "cpp_move": "fail",
     "cpp_raii_guard": "fail",
-    "cpp_virtual_dispatch": "fail"
+    "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:gcc:O2": {
     "_ZN4Base2opEi": "structural",
@@ -564,7 +564,7 @@
     "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
     "cpp_raii_guard": "pass",
-    "cpp_virtual_dispatch": "fail"
+    "cpp_virtual_dispatch": "structural"
   },
   "11_call_shapes:clang:O0": {
     "call_accumulate_bytes": "pass",
