@@ -609,6 +609,51 @@ fn negate_cmp_expr(expr: Expr) -> Expr {
 /// src: Expr::Cmp { .. } }`, we hoist that comparison into the condition
 /// and drop the now-dead flag assignment so the printer outputs
 /// `if (rax == 0)` rather than `if (%zf)`.
+/// Drop the back-edge `goto` from the tail of a loop body.
+///
+/// A jump to the loop header at the END of the body is the back-edge, which the
+/// `while` already expresses; anywhere else it is a `continue` and is left alone
+/// (rendering it as a `goto` is ugly but correct, and inventing a `continue`
+/// statement is a separate change). Recurses into the tail of trailing branches,
+/// because a rotated loop whose body ends in an `if` puts the jump inside it.
+fn strip_back_edge(body: &mut Vec<Stmt>, header_va: u64) {
+    match body.last_mut() {
+        Some(Stmt::Goto { target }) if *target == header_va => {
+            body.pop();
+        }
+        Some(Stmt::If {
+            then_body,
+            else_body,
+            ..
+        }) => {
+            strip_back_edge(then_body, header_va);
+            if let Some(e) = else_body {
+                strip_back_edge(e, header_va);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// True when the header's conditional branch, if TAKEN, leaves the loop.
+///
+/// A `while` states the condition under which the loop CONTINUES, but the header
+/// carries the condition under which its branch is taken. Those coincide only when
+/// the taken edge re-enters the body. gcc -O0 lays loops out that way; clang -O0
+/// and gcc -O2 rotate them, so the taken edge is the exit and the condition has to
+/// be negated. Returns false when the shape cannot be established, which keeps the
+/// previous behaviour for anything unrecognised.
+fn exit_is_taken_branch(lf: &LlirFunction, header: usize, exit: Option<usize>) -> bool {
+    let Some(exit) = exit else { return false };
+    let Some(exit_va) = lf.blocks.get(exit).map(|b| b.start_va) else {
+        return false;
+    };
+    matches!(
+        lf.blocks.get(header).and_then(|b| b.instrs.last()),
+        Some(LlirInstr { op: Op::CondJump { target, .. }, .. }) if *target == exit_va
+    )
+}
+
 fn extract_cond_and_strip<'a>(block: &LlirBlock, mut stmts: Vec<Stmt>) -> (Expr, Vec<Stmt>) {
     if let Some(LlirInstr {
         op: Op::CondJump { cond, inverted, .. },
@@ -860,10 +905,32 @@ fn lower_region_inner(
             });
             pre
         }
-        Region::While { header, body, .. } => {
+        Region::While { header, body, exit } => {
             let cond_stmts = lower_block(&lf.blocks[*header]);
             let (cond_expr, pre) = extract_cond_and_strip(&lf.blocks[*header], cond_stmts);
-            let body_stmts = lower_region(body, lf, targets);
+            // `cond_expr` is the branch-TAKEN condition. Whether that is the
+            // loop's CONTINUE condition depends on where the taken edge goes, and
+            // the two mainstream layouts disagree:
+            //
+            //   gcc -O0   test at the BOTTOM, taken edge re-enters the body
+            //             -> the condition already is the continue test
+            //   clang -O0 test at the TOP, taken edge LEAVES the loop (a rotated
+            //   gcc -O2   loop) -> the condition is the EXIT test
+            //
+            // Emitting it verbatim in the second case states the opposite of the
+            // source: `while (n > 1)` came out as `while (n <= 1)`.
+            let continue_cond = if exit_is_taken_branch(lf, *header, *exit) {
+                negate_cmp_expr(cond_expr)
+            } else {
+                cond_expr
+            };
+            let cond_expr = continue_cond;
+            let mut body_stmts = lower_region(body, lf, targets);
+            // The back-edge is what `while` MEANS. Left as an explicit `goto` to
+            // the header it jumps OUT of the loop body to a label the renderer
+            // pins wherever that block was emitted — after the `return`, in a
+            // rotated loop — so the body cannot repeat.
+            strip_back_edge(&mut body_stmts, lf.blocks[*header].start_va);
             if body_stmts.is_empty() && !pre.is_empty() {
                 // Do-while: the whole loop body sits in the self-looping header,
                 // so the `While` body is empty and `pre` is the body itself. The
@@ -3559,6 +3626,122 @@ mod tests {
         let ssa = compute_ssa(lf);
         let r = recover(lf, &ssa);
         render(&lower(lf, &r, name))
+    }
+
+    /// A ROTATED loop: the test sits at the TOP and its conditional branch leaves
+    /// the loop, with an unconditional jump back at the bottom. clang -O0 emits
+    /// every `while`/`for` this way, and gcc does too at -O2.
+    ///
+    /// The header's condition is the branch-TAKEN condition, so when the taken
+    /// edge is the loop EXIT it is the exit test, and `while (cond)` states the
+    /// opposite of the source. `loops.c:factorial` came out as
+    /// `while (n <= 1) { ...; n = n - 1; }` for `while (n > 1)`, which both runs
+    /// the wrong arm and never terminates the way the original does.
+    #[test]
+    fn a_rotated_loop_continues_on_the_negation_of_its_exit_test() {
+        use crate::ir::types::{CmpOp, Flag, VReg};
+        // b0: entry -> b1
+        // b1: t = (n <= 1); if (t) goto b3   [taken edge LEAVES the loop]
+        // b2: body -> b1
+        // b3: return
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1010]),
+            (
+                0x1010,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Sle),
+                        op: CmpOp::Sle,
+                        lhs: Value::Reg(VReg::phys("rax")),
+                        rhs: Value::Const(1),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Sle),
+                        target: 0x1030,
+                        inverted: false,
+                    },
+                ],
+                vec![0x1020, 0x1030],
+            ),
+            (
+                0x1020,
+                vec![
+                    Op::Bin {
+                        dst: VReg::phys("rax"),
+                        op: BinOp::Sub,
+                        lhs: Value::Reg(VReg::phys("rax")),
+                        rhs: Value::Const(1),
+                    },
+                    // The explicit back-jump real code carries.
+                    Op::Jump { target: 0x1010 },
+                ],
+                vec![0x1010],
+            ),
+            (0x1030, vec![Op::Return], vec![]),
+        ]);
+        let out = lower_and_render(&lf, "rotated");
+        // The loop must continue while the exit test is FALSE. `!(rax <= 1)` is
+        // `rax > 1`, which the renderer spells with the constant on the left.
+        assert!(
+            out.contains("while ((1 < %rax))") || out.contains("while ((%rax > 1))"),
+            "expected the negation of the exit test as the loop condition:\n{out}"
+        );
+        assert!(
+            !out.contains("while ((%rax <= 1))"),
+            "the EXIT test must not be used as the CONTINUE condition:\n{out}"
+        );
+        // The back-edge is what `while` MEANS; emitting it as a `goto` to the
+        // header leaves a jump out of the loop body to a label the renderer then
+        // pins after the `return`, so the body cannot repeat.
+        assert!(
+            !out.contains("goto L_1010"),
+            "the back-edge must be implicit in the `while`, not a goto:\n{out}"
+        );
+    }
+
+    /// The mirror shape, which must not regress: gcc -O0 puts the test at the
+    /// bottom and its taken edge re-enters the body, so that condition already IS
+    /// the continue test and must be emitted as-is.
+    #[test]
+    fn a_bottom_tested_loop_keeps_its_condition_as_written() {
+        use crate::ir::types::{CmpOp, Flag, VReg};
+        // b0 -> b1 (body) -> b2 (test); test taken -> b1, else -> b3
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1010]),
+            (
+                0x1010,
+                vec![Op::Bin {
+                    dst: VReg::phys("rax"),
+                    op: BinOp::Sub,
+                    lhs: Value::Reg(VReg::phys("rax")),
+                    rhs: Value::Const(1),
+                }],
+                vec![0x1020],
+            ),
+            (
+                0x1020,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Slt),
+                        op: CmpOp::Slt,
+                        lhs: Value::Const(1),
+                        rhs: Value::Reg(VReg::phys("rax")),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Slt),
+                        target: 0x1010,
+                        inverted: false,
+                    },
+                ],
+                vec![0x1010, 0x1030],
+            ),
+            (0x1030, vec![Op::Return], vec![]),
+        ]);
+        let out = lower_and_render(&lf, "bottom");
+        assert!(
+            !out.contains("while (!("),
+            "a bottom-tested loop's condition is already the continue test:\n{out}"
+        );
     }
 
     #[test]

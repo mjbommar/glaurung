@@ -164,18 +164,18 @@
     "cond_side_effect": "fail",
     "dowhile_atleastonce": "fail",
     "dowhile_recompute": "pass",
-    "for_countdown": "fail",
-    "for_stride2": "fail",
-    "for_sum": "fail",
-    "loop_break": "fail",
-    "loop_continue": "fail",
+    "for_countdown": "pass",
+    "for_stride2": "pass",
+    "for_sum": "pass",
+    "loop_break": "pass",
+    "loop_continue": "pass",
     "loop_early_return": "fail",
     "loop_return_on_neg": "fail",
-    "mutate_prefix": "fail",
-    "mutate_reverse": "fail",
+    "mutate_prefix": "pass",
+    "mutate_reverse": "pass",
     "nested_carry": "fail",
     "nested_pairs": "fail",
-    "two_latches": "fail",
+    "two_latches": "pass",
     "while_prefix": "fail",
     "while_reload_header": "fail"
   },
@@ -216,7 +216,7 @@
     "nested_carry": "pass",
     "nested_pairs": "pass",
     "two_latches": "pass",
-    "while_prefix": "fail",
+    "while_prefix": "pass",
     "while_reload_header": "fail"
   },
   "03_loop_shapes:gcc:O2": {
@@ -445,14 +445,14 @@
   },
   "09_memory_effects:clang:O0": {
     "cas_update": "pass",
-    "mem_copy": "fail",
-    "mem_set": "fail",
+    "mem_copy": "pass",
+    "mem_set": "pass",
     "read_counter": "fail",
     "reset_counter": "structural",
     "tick": "structural",
     "tick_n": "structural",
-    "vec_sum": "fail",
-    "vec_transform": "fail"
+    "vec_sum": "pass",
+    "vec_transform": "pass"
   },
   "09_memory_effects:clang:O2": {
     "cas_update": "pass",
@@ -627,14 +627,14 @@
     "wrap_byte": "pass"
   },
   "12_loop_rotation:clang:O0": {
-    "count_up": "fail",
+    "count_up": "pass",
     "do_while_control": "pass",
-    "down_by_negative_imm": "fail",
-    "factorial_while": "fail",
+    "down_by_negative_imm": "pass",
+    "factorial_while": "pass",
     "find_first_set": "fail",
-    "for_accumulate": "fail",
-    "nested_rotated": "fail",
-    "skip_odd_sum": "fail"
+    "for_accumulate": "pass",
+    "nested_rotated": "pass",
+    "skip_odd_sum": "pass"
   },
   "12_loop_rotation:clang:O2": {
     "count_up": "pass",
