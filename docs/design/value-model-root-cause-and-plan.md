@@ -247,8 +247,47 @@ says it is false. That is the third extrapolation-from-one-case in this session,
 pattern is now the finding: **a confirmed mechanism in one function is evidence about
 that function only.** Attribution requires measuring each cell, not recognising a shape.
 
-Remaining candidates for the other 18, to be bisected one at a time and NOT reasoned
-about:
+#### 0.3 ATTRIBUTION COMPLETE
+
+| commit | verdict | evidence |
+|---|---|---|
+| `ea9d4b8` structural accounting | **clean** — 56 cells, no regressions | the one commit I labelled behaviour-neutral, and it is |
+| `0cf6ff6` extension width | **clean** for the loop cells | `matmul` still `while ((local_10 < arg3))` |
+| `a6d6da0` loop-hoist INTRODUCED | **the boundary** | `matmul` becomes `while (1) { ret = …; if (…) break;` |
+| `b367f3a` out-of-SSA | ~30 cells regressed cumulatively | full matrix run |
+| `12dcd5e` three lifter fixes | **RECOVERED several** | `arrays`, `checksum`, `fixedpoint`, `linkedlist` drop out of the list |
+| `3ef32ae` hoist tightening | +7 cells | measured separately; buys `find_first_set` |
+
+**I was blaming the wrong commit.** The cost is not `3ef32ae` (the tightening) but
+`a6d6da0` — the commit that introduced the three-arm loop lowering. Before it,
+`Region::While` always emitted `while (cond)` with the preamble landing naturally above
+the loop. `a6d6da0` added the `while (1) { pre; if (!cond) break; }` fallback to fix a
+real `str_len` infinite loop, and `matmul` — along with much of the corpus — falls into
+it. `3ef32ae` later widened *which* functions take the fallback, adding 7 more cells.
+
+**The thesis needs splitting, and this is the useful correction.** `12dcd5e` *recovered*
+cells. So it is not true that correctness costs GED in general:
+
+* **Value-level fixes** — right constant, right width, right flag — improve correctness
+  **and** GED. The `imm32` zero-extension made `x % 255` correct *and* moved the graph
+  toward the source, because the source contains one multiply, not a wrong one.
+* **Structural fixes** — the `while(1){…break}` fallback, phi copy insertion — buy
+  correctness by EMITTING STATEMENTS, and pay in graph nodes at a fixed rate.
+
+Actionable form: keep making value-level fixes freely. Treat any fix whose mechanism is
+*"emit an extra statement"* as blocked on Phase 2.
+
+#### method note: I used the expensive tool for a cheap question
+
+Three 40-minute matrix runs were queued to attribute these cells. The `matrix`
+regression *is* the loop form, so the actual question was "which commit changed this
+function's shape" — answerable with two builds and two `decompile` calls, in about two
+minutes. The full 56-cell matrix answers "which cells moved", which is a different and
+much more expensive question. I reached for it because it was already wired up.
+
+Bisect the SHAPE first, on one function, and use the matrix to confirm.
+
+Superseded candidate list (kept for the record):
 
 * `ea9d4b8` — structural accounting. Nominally diagnostic, but it moved typed CFG edges
   *into* `Cfg`, which the structurer now consumes; that can change region choice.
