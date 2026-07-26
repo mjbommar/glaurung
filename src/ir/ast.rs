@@ -204,6 +204,33 @@ pub struct Function {
 
 // -- Lowering ----------------------------------------------------------------
 
+/// `(int<to>)(int<from>)expr` — an extension that keeps its meaning when folded.
+///
+/// Emits only the inner cast when the two widths agree (nothing is being extended),
+/// and only the outer one when `from` is already the full width.
+fn widen_cast(
+    expr: Expr,
+    signed: bool,
+    from: crate::ir::types::Width,
+    to: crate::ir::types::Width,
+) -> Expr {
+    let fw = (from.bits() / 8).max(1) as u8;
+    let tw = (to.bits() / 8).max(1) as u8;
+    let inner = Expr::Cast {
+        signed,
+        width: fw,
+        expr: Box::new(expr),
+    };
+    if tw <= fw {
+        return inner;
+    }
+    Expr::Cast {
+        signed,
+        width: tw,
+        expr: Box::new(inner),
+    }
+}
+
 fn lower_value(v: &Value) -> Expr {
     match v {
         Value::Reg(r) => Expr::Reg(r.clone()),
@@ -347,27 +374,29 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
         }
         Op::Return => vec![Stmt::Return { value: None }],
         // Width changes must preserve their semantics, not collapse to `dst = src`.
-        //   ZExt from W: reinterpret the low W bits as *unsigned*, then widen  ->
-        //     `dst = (uint<W>)src` (the assignment to the wider `dst` zero-fills).
-        //   SExt from W: reinterpret the low W bits as *signed*, then widen     ->
-        //     `dst = (int<W>)src` (sign-fills).
-        //   Trunc to W:  keep the low W bits                                     ->
-        //     `dst = (uint<W>)src`.
-        Op::ZExt { dst, src, from, .. } => vec![Stmt::Assign {
+        //
+        // An extension states BOTH widths: `(int<to>)(int<from>)src`. The inner cast
+        // reinterprets the low `from` bits with the right signedness; the outer one
+        // says how wide the result is.
+        //
+        // The outer cast is not redundant, and leaving it off was a real bug. As an
+        // assignment `long d = (int)s` sign-fills correctly, so `(int<from>)src`
+        // alone looked sufficient — until `copy_prop` folded it into an expression.
+        // `movslq`/`cltq` feeding a 64-bit `imul` then rendered
+        // `(int)b * (int)a`, a THIRTY-TWO bit multiply, discarding exactly the high
+        // half that the source's `(long)` cast existed to keep: `fixedpoint::fp_mul`
+        // returned -65536 where the original returned 0, and `fp_div` raised SIGFPE.
+        // An expression that means the same thing wherever it is folded has to carry
+        // its own width.
+        //
+        //   Trunc to W: keep the low W bits -> `(uint<W>)src`, already self-contained.
+        Op::ZExt { dst, src, from, to } => vec![Stmt::Assign {
             dst: dst.clone(),
-            src: Expr::Cast {
-                signed: false,
-                width: (from.bits() / 8).max(1) as u8,
-                expr: Box::new(lower_value(src)),
-            },
+            src: widen_cast(lower_value(src), false, *from, *to),
         }],
-        Op::SExt { dst, src, from, .. } => vec![Stmt::Assign {
+        Op::SExt { dst, src, from, to } => vec![Stmt::Assign {
             dst: dst.clone(),
-            src: Expr::Cast {
-                signed: true,
-                width: (from.bits() / 8).max(1) as u8,
-                expr: Box::new(lower_value(src)),
-            },
+            src: widen_cast(lower_value(src), true, *from, *to),
         }],
         Op::Trunc { dst, src, to, .. } => vec![Stmt::Assign {
             dst: dst.clone(),
@@ -5314,6 +5343,81 @@ function f @ 0x1000 {
         };
         let out = render_decbench(&prepare_for_decbench(&f));
         assert!(out.contains("return 0;"), "expected the void default:\n{out}");
+    }
+
+    /// `fp_mul` is `(int)(((long)a*b)>>16)`. The machine sign-extends both operands
+    /// to 64 bits (`movslq`, `cltq`) and multiplies at 64 bits.
+    ///
+    /// Lowering `SExt` to `(int)src` alone is correct only as an ASSIGNMENT — `long
+    /// d = (int)s` sign-fills in C. It stops being correct the moment `copy_prop`
+    /// folds it into an expression: `(int)b * (int)a` is a 32-BIT multiply, and the
+    /// high half of the product — the whole point of the source's `(long)` cast —
+    /// is discarded. `fixedpoint` returned -65536 where the original returned 0.
+    ///
+    /// So an extension has to carry its target width with it: `(long)(int)s` means
+    /// the same thing wherever it is folded to.
+    #[test]
+    fn a_sign_extension_survives_being_folded_into_an_expression() {
+        use crate::ir::types::{BinOp as B, Value, Width};
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::SExt {
+                    dst: VReg::phys("rdx"),
+                    src: Value::Reg(VReg::phys("eax")),
+                    from: Width::W32,
+                    to: Width::W64,
+                },
+                Op::SExt {
+                    dst: VReg::phys("rax"),
+                    src: Value::Reg(VReg::phys("ecx")),
+                    from: Width::W32,
+                    to: Width::W64,
+                },
+                Op::Bin {
+                    dst: VReg::phys("rax"),
+                    op: B::Mul,
+                    lhs: Value::Reg(VReg::phys("rax")),
+                    rhs: Value::Reg(VReg::phys("rdx")),
+                },
+                Op::Return,
+            ],
+            vec![],
+        )]);
+        let ssa = compute_ssa(&lf);
+        let r = recover(&lf, &ssa);
+        let f = prepare_for_decbench(&lower(&lf, &r, "fp"));
+        let out = render_decbench(&f);
+        assert!(
+            out.contains("(long)") || out.contains("(unsigned long)"),
+            "the extension must state its 64-bit target so folding preserves it:\n{out}"
+        );
+    }
+
+    /// A zero-extension has the same requirement, through the unsigned type.
+    #[test]
+    fn a_zero_extension_states_its_target_width() {
+        use crate::ir::types::{Value, Width};
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::ZExt {
+                    dst: VReg::phys("rax"),
+                    src: Value::Reg(VReg::phys("eax")),
+                    from: Width::W32,
+                    to: Width::W64,
+                },
+                Op::Return,
+            ],
+            vec![],
+        )]);
+        let ssa = compute_ssa(&lf);
+        let r = recover(&lf, &ssa);
+        let out = render_decbench(&lower(&lf, &r, "z"));
+        assert!(
+            out.contains("(unsigned long)"),
+            "expected an explicit 64-bit unsigned target:\n{out}"
+        );
     }
 }
 
