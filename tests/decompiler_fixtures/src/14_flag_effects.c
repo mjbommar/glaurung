@@ -35,6 +35,33 @@ int dec_loop(int n) {
 
 /* Post-decrement in the condition — `while (n--)` is a flag read of the
  * decrement itself, with no separate compare anywhere. */
+/* HOIST TRAP — measured, do not "simplify" this loop's lowering.
+ *
+ * This function is one of exactly four the loop-header hoist fallback protects. The
+ * verbose `while (1) { pre; if (!cond) break; }` form it decompiles to is NOT an
+ * accident to be tidied away: hoisting the header above the loop lets constant
+ * propagation substitute the initial value that dominates at the hoist position, which
+ * freezes the loop-carried value and the loop stops making progress.
+ *
+ * Measured on branch `recover-ged-cells` (see docs/design/ged-recovery-measured-trade.md):
+ * always-hoisting recovers 50.32 GED points, 46% of a regression — and breaks exactly
+ * these four functions across six lanes:
+ *     03_loop_shapes:gcc:O2:while_prefix
+ *     12_loop_rotation:gcc:O2:find_first_set
+ *     13_loop_early_exit:{clang,gcc}:O2:classify_run
+ *     14_flag_effects:{clang,gcc}:O0:countdown
+ * So the compact form is worth real score, and it is wrong. That is the trade.
+ *
+ * FOUR predicates have been tried and all four failed, each differently: a copy-chain
+ * rule, a loop-invariance rule, a use-count rule, and a post-fold check requiring only a
+ * nonempty read/write intersection (which passes `find_first_set`, whose body reassigns
+ * its flag lower down while the frozen value sits inside the hoisted expression). If a
+ * post-fold check is attempted again it must preserve EVERY original loop-carried
+ * dependency, not one overlapping register.
+ *
+ * The real fix is typed value identity plus dominance, where "may this expression move
+ * here" is a query rather than a guess — value-model-root-cause-and-plan.md Phase 2.
+ */
 int countdown(int n) {
     int s = 0;
     while (n--) s += n;
