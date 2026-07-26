@@ -3390,9 +3390,21 @@ fn write_string_lit(value: &str, out: &mut String) {
 /// a warning only), else `((long (*)())(target))(args)` so an indirect target
 /// through a `long`-typed value is a valid call rather than "called object is
 /// not a function".
+/// The name to call a PLT/IAT stub by: the function it forwards to.
+///
+/// The address map records a stub as `foo@plt` because that is what it IS, and
+/// that spelling is right for an import listing or an xref view. In a call
+/// EXPRESSION it is wrong: the source called `foo`, `foo@plt` sanitises to the
+/// undeclared identifier `foo_plt`, and nothing in the program defines it.
+fn callee_display_name(name: &str) -> &str {
+    name.split_once('@').map_or(name, |(base, _)| base)
+}
+
 fn write_call_dec(target: &Expr, args: &[Expr], out: &mut String) {
     match target {
-        Expr::Named { name, .. } => out.push_str(&sanitize_c_ident(name)),
+        Expr::Named { name, .. } => {
+            out.push_str(&sanitize_c_ident(callee_display_name(name)))
+        }
         _ => {
             out.push_str("((long (*)())(");
             write_expr_dec(target, out);
@@ -5162,5 +5174,35 @@ function f @ 0x1000 {
             text
         );
         assert_looks_like_c(&text);
+    }
+
+    /// A stub is recorded as `foo@plt` because that is what it is, but a call
+    /// EXPRESSION must name the function: `foo@plt` sanitises to `foo_plt`, which
+    /// nothing declares, so the emitted C would not link.
+    #[test]
+    fn a_plt_stub_is_called_by_the_name_it_forwards_to() {
+        let f = Function {
+            name: "caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x10a0,
+                    name: "signed_step@plt".to_string(),
+                },
+                args: vec![Expr::Reg(VReg::phys("arg0"))],
+                dst: Some(VReg::phys("ret")),
+            }],
+        };
+        let out = render_decbench(&f);
+        assert!(out.contains("signed_step(arg0)"), "expected a call to `signed_step`:\n{out}");
+        assert!(!out.contains("signed_step_plt"), "the @plt stub name must not be called:\n{out}");
+    }
+
+    /// A plain name is untouched — only the `@`-suffixed stub spelling is trimmed.
+    #[test]
+    fn a_plain_callee_name_is_unchanged() {
+        assert_eq!(callee_display_name("memcpy"), "memcpy");
+        assert_eq!(callee_display_name("signed_step@plt"), "signed_step");
+        assert_eq!(callee_display_name("foo@GLIBC_2.2.5"), "foo");
     }
 }

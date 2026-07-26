@@ -16,26 +16,32 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
         return out;
     }
 
-    // Locate canonical .plt section VA range (prefer exact ".plt")
-    let mut plt_start: Option<u64> = None;
-    let mut plt_size: Option<u64> = None;
+    // Locate the stub sections. `.plt` is the classic lazy-binding table whose
+    // first slot is reserved (PLT0). A binary built with CET/IBT — the default on
+    // current distributions — ALSO has `.plt.sec`, and that is the table calls
+    // actually target: `call 2250 <_ZNSaIcED2Ev@plt>` is a `.plt.sec` address.
+    // Mapping only `.plt` left every intra-module call resolving to nothing and
+    // rendering as an indirect jump through a magic constant.
+    //
+    // `.plt.sec` has NO reserved slot: entry i pairs with relocation i.
+    let mut plt: Option<(u64, u64)> = None;
+    let mut plt_sec: Option<(u64, u64)> = None;
     for sec in obj.sections() {
         if let Ok(name) = sec.name() {
-            if name == ".plt" {
-                let addr = sec.address();
-                let size = sec.size();
-                if size > 0 {
-                    plt_start = Some(addr);
-                    plt_size = Some(size);
-                    break;
-                }
+            let (addr, size) = (sec.address(), sec.size());
+            if size == 0 {
+                continue;
+            }
+            match name {
+                ".plt" => plt = plt.or(Some((addr, size))),
+                ".plt.sec" => plt_sec = plt_sec.or(Some((addr, size))),
+                _ => {}
             }
         }
     }
-    let (Some(plt_start), Some(plt_size)) = (plt_start, plt_size) else {
+    if plt.is_none() && plt_sec.is_none() {
         return out;
-    };
-    let plt_end = plt_start.saturating_add(plt_size);
+    }
 
     // Collect imported names using .rela.plt order by raw parsing (ELF64)
     use object::ObjectSection;
@@ -161,31 +167,100 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
         return out;
     }
 
-    // Derive PLT entry size from section size and reloc count (reserved slot at index 0)
-    let mut entry_size = 0x10u64; // default
-    if !imported.is_empty() {
-        let denom = (imported.len() as u64).saturating_add(1);
-        if denom > 0 {
-            let es = plt_size / denom;
-            // Accept common PLT entry sizes across arches
-            if matches!(es, 0x10 | 0x18 | 0x20 | 0x30 | 0x40) {
-                entry_size = es;
+    // `reserved` slots precede the first real entry: one for `.plt`'s PLT0, none
+    // for `.plt.sec`.
+    let mut emit = |start: u64, size: u64, reserved: u64| {
+        let entry_size = plt_entry_size(size, imported.len() as u64, reserved);
+        let end = start.saturating_add(size);
+        let mut addr = start.saturating_add(entry_size.saturating_mul(reserved));
+        let usable = (size / entry_size).saturating_sub(reserved);
+        for (i, name) in imported.iter().enumerate() {
+            if i as u64 >= usable || addr >= end {
+                break;
             }
+            out.push((addr, format!("{}@plt", name)));
+            addr = addr.saturating_add(entry_size);
         }
+    };
+    if let Some((start, size)) = plt {
+        emit(start, size, 1);
     }
-    let mut addr = plt_start.saturating_add(entry_size); // skip PLT0
-    let slots = plt_size / entry_size;
-    // First slot is reserved
-    let usable = slots.saturating_sub(1);
-    for (i, name) in imported.into_iter().enumerate() {
-        if i as u64 >= usable {
-            break;
-        }
-        if addr >= plt_end {
-            break;
-        }
-        out.push((addr, format!("{}@plt", name)));
-        addr = addr.saturating_add(entry_size);
+    if let Some((start, size)) = plt_sec {
+        emit(start, size, 0);
     }
+    out.sort_by_key(|(va, _)| *va);
+    out.dedup_by_key(|(va, _)| *va);
     out
+}
+
+/// Stub size for a table of `size` bytes holding `count` entries after `reserved`
+/// leading slots. Derived rather than assumed, then sanity-checked against the
+/// sizes real linkers emit; anything else falls back to the x86-64 default.
+fn plt_entry_size(size: u64, count: u64, reserved: u64) -> u64 {
+    let denom = count.saturating_add(reserved);
+    if denom > 0 {
+        let es = size / denom;
+        if matches!(es, 0x10 | 0x18 | 0x20 | 0x30 | 0x40) {
+            return es;
+        }
+    }
+    0x10
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CET_SAMPLE: &str = "samples/containers/hello-cpp-g++-O0";
+
+    /// A binary built with CET/IBT (the default on current distros) has BOTH a
+    /// `.plt` of lazy-binding stubs and a `.plt.sec` of the entries calls actually
+    /// target. Mapping only `.plt` means every intra-module call resolves to
+    /// nothing and renders as an indirect jump through a magic constant.
+    #[test]
+    fn plt_sec_entries_are_mapped_because_that_is_what_calls_target() {
+        let Ok(data) = std::fs::read(CET_SAMPLE) else {
+            panic!("missing sample {CET_SAMPLE}");
+        };
+        let map = elf_plt_map(&data);
+        // `objdump -d` shows `call 2250 <_ZNSaIcED2Ev@plt>`: the first `.plt.sec`
+        // entry, at the section start with NO reserved slot 0.
+        let at_2250 = map.iter().find(|(va, _)| *va == 0x2250);
+        assert!(
+            at_2250.is_some(),
+            "no name for the .plt.sec entry at 0x2250 that calls actually target; \
+             mapped addresses were {:?}",
+            map.iter().map(|(v, _)| format!("{v:#x}")).take(12).collect::<Vec<_>>()
+        );
+        assert_eq!(at_2250.unwrap().1, "_ZNSaIcED2Ev@plt");
+    }
+
+    /// The `.plt` entries stay mapped too — a binary without `.plt.sec` still
+    /// calls them directly, and nothing should regress for those.
+    #[test]
+    fn plt_entries_remain_mapped() {
+        let Ok(data) = std::fs::read(CET_SAMPLE) else {
+            panic!("missing sample {CET_SAMPLE}");
+        };
+        let map = elf_plt_map(&data);
+        assert!(
+            map.iter().any(|(va, _)| (0x2020..0x2240).contains(va)),
+            "expected .plt entries in 0x2020..0x2240 to still be mapped"
+        );
+    }
+
+    /// Every mapped address must be distinct: `.plt` and `.plt.sec` describe the
+    /// same imports at different addresses, and a duplicate key would let one
+    /// silently shadow the other in the caller's map.
+    #[test]
+    fn mapped_addresses_are_unique() {
+        let Ok(data) = std::fs::read(CET_SAMPLE) else {
+            panic!("missing sample {CET_SAMPLE}");
+        };
+        let map = elf_plt_map(&data);
+        let mut seen = std::collections::HashSet::new();
+        for (va, name) in &map {
+            assert!(seen.insert(*va), "duplicate PLT address {va:#x} ({name})");
+        }
+    }
 }
