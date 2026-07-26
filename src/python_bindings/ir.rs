@@ -479,7 +479,7 @@ fn decompile_at_py(
     dp!("fold_constants");
     crate::ir::dce::prune_dead_flags(&mut f);
     dp!("prune_dead_flags");
-    crate::ir::call_args::reconstruct_args(&mut f, cc);
+    crate::ir::call_args::reconstruct_args_with_params(&mut f, cc, &param_slots);
     dp!("reconstruct_args");
     crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
@@ -660,7 +660,7 @@ fn decompile_range_at_py(
     reconstruct(&mut f);
     crate::ir::const_fold::fold_constants(&mut f);
     crate::ir::dce::prune_dead_flags(&mut f);
-    crate::ir::call_args::reconstruct_args(&mut f, cc);
+    crate::ir::call_args::reconstruct_args_with_params(&mut f, cc, &param_slots);
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
@@ -967,7 +967,7 @@ fn decompile_all_py(
         // `test_decompiler_fixture_structural.py::test_all_and_vas_agree`.
         crate::ir::const_fold::fold_constants(&mut f);
         crate::ir::dce::prune_dead_flags(&mut f);
-        crate::ir::call_args::reconstruct_args(&mut f, cc);
+        crate::ir::call_args::reconstruct_args_with_params(&mut f, cc, &param_slots);
         crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
         crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
         crate::ir::canary::recognise_canary(&mut f);
@@ -1089,7 +1089,7 @@ fn decompile_many_py(
         reconstruct(&mut f);
         crate::ir::const_fold::fold_constants(&mut f);
         crate::ir::dce::prune_dead_flags(&mut f);
-        crate::ir::call_args::reconstruct_args(&mut f, cc);
+        crate::ir::call_args::reconstruct_args_with_params(&mut f, cc, &param_slots);
         crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
         crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
         crate::ir::canary::recognise_canary(&mut f);

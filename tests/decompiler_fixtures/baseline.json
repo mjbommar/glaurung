@@ -329,8 +329,8 @@
   },
   "06_calling_conventions:clang:O0": {
     "fact_mod": "fail",
-    "fib": "fail",
-    "forward_sum6": "fail",
+    "fib": "pass",
+    "forward_sum6": "pass",
     "guarded_spin": "pass",
     "sum_arg0": "pass",
     "sum_arg1": "pass",
@@ -344,7 +344,7 @@
     "sum_arg8": "pass",
     "sum_arg9": "pass",
     "sum_mixed_widths": "pass",
-    "tailcall_to_sum4": "fail"
+    "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:clang:O2": {
     "fact_mod": "fail",
@@ -367,8 +367,8 @@
   },
   "06_calling_conventions:gcc:O0": {
     "fact_mod": "fail",
-    "fib": "fail",
-    "forward_sum6": "fail",
+    "fib": "pass",
+    "forward_sum6": "pass",
     "guarded_spin": "pass",
     "sum_arg0": "pass",
     "sum_arg1": "pass",
@@ -382,7 +382,7 @@
     "sum_arg8": "pass",
     "sum_arg9": "pass",
     "sum_mixed_widths": "pass",
-    "tailcall_to_sum4": "fail"
+    "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:gcc:O2": {
     "fact_mod": "structural",
@@ -567,15 +567,15 @@
     "cpp_virtual_dispatch": "fail"
   },
   "11_call_shapes:clang:O0": {
-    "call_accumulate_bytes": "fail",
-    "call_chain_in_loop": "fail",
+    "call_accumulate_bytes": "pass",
+    "call_chain_in_loop": "pass",
     "call_fold_wide_result": "fail",
-    "call_forward_result": "fail",
+    "call_forward_result": "pass",
     "call_into_spill": "fail",
-    "call_nested": "fail",
-    "call_result_drives_branch": "fail",
-    "call_result_unused": "fail",
-    "call_twice_and_combine": "fail",
+    "call_nested": "pass",
+    "call_result_drives_branch": "pass",
+    "call_result_unused": "pass",
+    "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
     "widen_mul": "pass",
@@ -597,15 +597,15 @@
     "wrap_byte": "structural"
   },
   "11_call_shapes:gcc:O0": {
-    "call_accumulate_bytes": "fail",
-    "call_chain_in_loop": "fail",
+    "call_accumulate_bytes": "pass",
+    "call_chain_in_loop": "pass",
     "call_fold_wide_result": "fail",
-    "call_forward_result": "fail",
+    "call_forward_result": "pass",
     "call_into_spill": "fail",
-    "call_nested": "fail",
-    "call_result_drives_branch": "fail",
-    "call_result_unused": "fail",
-    "call_twice_and_combine": "fail",
+    "call_nested": "pass",
+    "call_result_drives_branch": "pass",
+    "call_result_unused": "pass",
+    "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
     "widen_mul": "pass",
@@ -620,7 +620,7 @@
     "call_nested": "fail",
     "call_result_drives_branch": "fail",
     "call_result_unused": "fail",
-    "call_twice_and_combine": "fail",
+    "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "fail",
     "widen_mul": "fail",

@@ -101,16 +101,147 @@ fn ssa_base(name: &str) -> &str {
     name.split_once('#').map_or(name, |(base, _)| base)
 }
 
-fn incoming_arg_expr(arch: CallConv, slot: usize) -> Option<Expr> {
-    arg_slots(arch)
-        .get(slot)
-        .and_then(|names| names.first())
-        .map(|name| Expr::Reg(VReg::Phys((*name).to_string())))
+/// An expression naming the function's INCOMING value in `slot`, as that value is
+/// actually spelled in `body`.
+///
+/// The bare canonical name is wrong on a value-numbered body. The decbench
+/// pipeline renames registers to `canon#version`, so injecting `rdi` referenced a
+/// register the body never defines — it survived naming as a scratch `varN` and
+/// produced `__stack_chk_fail(var24)`, an argument reading nothing, in a callee
+/// that takes no arguments at all.
+///
+/// The incoming value is the LOWEST version of the slot's register present in the
+/// body: later versions are definitions made inside the function. When the slot's
+/// register does not appear at all there is no incoming value to name and no
+/// argument is invented.
+fn incoming_arg_expr(arch: CallConv, slot: usize, body: &[Stmt]) -> Option<Expr> {
+    let names = arg_slots(arch).get(slot)?;
+    // Is this body value-numbered at all? On the un-numbered path the incoming
+    // register is implicit — it legitimately appears nowhere — and the bare
+    // canonical name is the right reference, as it always was.
+    let mut versioned_anywhere = false;
+    let mut best: Option<(u32, String)> = None;
+    let mut visit = |n: &str| {
+        let Some((_, v)) = n.split_once('#') else { return };
+        versioned_anywhere = true;
+        if !names.contains(&ssa_base(n)) {
+            return;
+        }
+        if let Ok(v) = v.parse::<u32>() {
+            if best.as_ref().is_none_or(|(bv, _)| v < *bv) {
+                best = Some((v, n.to_string()));
+            }
+        }
+    };
+    walk_body_reg_names(body, &mut visit);
+    if !versioned_anywhere {
+        return names.first().map(|n| Expr::Reg(VReg::Phys((*n).to_string())));
+    }
+    // VALUE-NUMBERED: decline. Naming the live-in version requires knowing which
+    // version `value_number` treats as live-in, and this pass cannot see that.
+    // Guessing the lowest version present is wrong — in `cpp_virtual_dispatch` the
+    // only `rdi` in the body is a scratch use that nothing defines, so the guess
+    // produced `__stack_chk_fail(var24)`: an argument reading an undefined value,
+    // handed to a callee that takes none.
+    //
+    // Declining costs the Win64 forwarding recovery on this path only, where it
+    // was inventing wrong arguments anyway; the register path keeps it. Doing it
+    // properly means threading the live-in version out of `value_number` — see the
+    // AbiDescriptor consolidation.
+    let _ = best;
+    None
+}
+
+/// Call `f` with every register name mentioned anywhere in `body`.
+fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
+    fn expr(e: &Expr, f: &mut impl FnMut(&str)) {
+        match e {
+            Expr::Reg(VReg::Phys(n)) => f(n),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                expr(lhs, f);
+                expr(rhs, f);
+            }
+            Expr::Un { src, .. } => expr(src, f),
+            Expr::Cast { expr: e, .. } => expr(e, f),
+            Expr::Deref { addr, .. } => expr(addr, f),
+            _ => {}
+        }
+    }
+    for s in body {
+        match s {
+            Stmt::Assign { dst, src } => {
+                if let VReg::Phys(n) = dst {
+                    f(n);
+                }
+                expr(src, f);
+            }
+            Stmt::Store { addr, src, .. } => {
+                expr(addr, f);
+                expr(src, f);
+            }
+            Stmt::Call { target, args, dst } => {
+                expr(target, f);
+                for a in args {
+                    expr(a, f);
+                }
+                if let Some(VReg::Phys(n)) = dst {
+                    f(n);
+                }
+            }
+            Stmt::Return { value: Some(e) } => expr(e, f),
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                expr(cond, f);
+                walk_body_reg_names(then_body, f);
+                if let Some(b) = else_body {
+                    walk_body_reg_names(b, f);
+                }
+            }
+            Stmt::While { cond, body } => {
+                expr(cond, f);
+                walk_body_reg_names(body, f);
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                expr(discriminant, f);
+                for (_, b) in cases {
+                    walk_body_reg_names(b, f);
+                }
+                if let Some(b) = default {
+                    walk_body_reg_names(b, f);
+                }
+            }
+            Stmt::Push { value } => expr(value, f),
+            _ => {}
+        }
+    }
 }
 
 /// Run argument reconstruction on `f` using the given calling convention.
 pub fn reconstruct_args(f: &mut Function, arch: CallConv) {
-    fold_body(&mut f.body, arch);
+    reconstruct_args_with_params(f, arch, &std::collections::HashSet::new())
+}
+
+/// As [`reconstruct_args`], but told which argument slots hold THIS function's
+/// own incoming parameters (`value_number::live_in_arg_slots_llir`).
+///
+/// The backfill below invents an argument from the incoming register when an
+/// earlier slot was never written. That is only sound when the register actually
+/// carries a parameter. Without the set it fired on `__stack_chk_fail` — a void
+/// callee — and produced `__stack_chk_fail(var24)` reading a value nothing ever
+/// defines, which the definition verifier duly reported.
+pub fn reconstruct_args_with_params(
+    f: &mut Function,
+    arch: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+) {
+    fold_body(&mut f.body, arch, param_slots);
     attribute_call_results(&mut f.body, arch);
 }
 
@@ -279,7 +410,7 @@ fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
     }
 }
 
-fn fold_body(body: &mut Vec<Stmt>, arch: CallConv) {
+fn fold_body(body: &mut Vec<Stmt>, arch: CallConv, param_slots: &std::collections::HashSet<usize>) {
     // Recurse into nested bodies first so we don't miss calls inside arms.
     for s in body.iter_mut() {
         match s {
@@ -288,12 +419,12 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv) {
                 else_body,
                 ..
             } => {
-                fold_body(then_body, arch);
+                fold_body(then_body, arch, param_slots);
                 if let Some(eb) = else_body {
-                    fold_body(eb, arch);
+                    fold_body(eb, arch, param_slots);
                 }
             }
-            Stmt::While { body, .. } => fold_body(body, arch),
+            Stmt::While { body, .. } => fold_body(body, arch, param_slots),
             _ => {}
         }
     }
@@ -315,11 +446,16 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv) {
     // preceding arg assignments for a later call first.
     call_positions.reverse();
     for call_idx in call_positions {
-        fold_one_call(body, call_idx, arch);
+        fold_one_call(body, call_idx, arch, param_slots);
     }
 }
 
-fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
+fn fold_one_call(
+    body: &mut Vec<Stmt>,
+    call_idx: usize,
+    arch: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+) {
     // Map slot → (stmt_index, expression) for assignments we will eat.
     let mut found: Vec<Option<(usize, Expr)>> = vec![None; arg_slots(arch).len()];
     let mut read_between: Vec<bool> = vec![false; arg_slots(arch).len()];
@@ -379,8 +515,16 @@ fn fold_one_call(body: &mut Vec<Stmt>, call_idx: usize, arch: CallConv) {
                 args_out.push(expr.clone());
                 used_stmt_indices.push(*stmt_idx);
             }
-            None if args_out.is_empty() && !blocked_incoming[slot_idx] => {
-                let Some(expr) = incoming_arg_expr(arch, slot_idx) else {
+            // Backfill an unwritten earlier slot from the incoming register —
+            // but only when that slot really is one of THIS function's
+            // parameters. Otherwise the "argument" is a register nothing defined,
+            // and a void callee acquires one out of thin air
+            // (`__stack_chk_fail(var24)`).
+            None if args_out.is_empty()
+                && !blocked_incoming[slot_idx]
+                && param_slots.contains(&slot_idx) =>
+            {
+                let Some(expr) = incoming_arg_expr(arch, slot_idx, body) else {
                     break;
                 };
                 args_out.push(expr);
@@ -933,7 +1077,9 @@ mod tests {
                 },
             ],
         };
-        reconstruct_args(&mut f, CallConv::Win64);
+        // The premise of the backfill is that `rcx` still carries the function's
+        // OWN incoming first parameter, so slot 0 must be declared as such.
+        reconstruct_args_with_params(&mut f, CallConv::Win64, &[0].into_iter().collect());
 
         assert_eq!(f.body.len(), 1);
         if let Stmt::Call { args, .. } = &f.body[0] {
@@ -941,6 +1087,41 @@ mod tests {
         } else {
             panic!("expected Call, got {:?}", f.body[0]);
         }
+    }
+
+    /// The same shape in a function that has NO first parameter must not invent
+    /// one. This is how `__stack_chk_fail`, which takes nothing, acquired
+    /// `__stack_chk_fail(var24)` — an argument reading a register nothing defines.
+    #[test]
+    fn no_incoming_argument_is_invented_when_the_slot_is_not_a_parameter() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdx", 256),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "strnlen".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                },
+            ],
+        };
+        reconstruct_args_with_params(&mut f, CallConv::Win64, &Default::default());
+        let args = f
+            .body
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Call { args, .. } => Some(args.clone()),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert!(
+            !args.iter().any(|a| *a == Expr::Reg(reg("rcx"))),
+            "invented an incoming argument for a slot that is not a parameter: {args:?}"
+        );
     }
 
     #[test]
@@ -1262,6 +1443,80 @@ mod tests {
             })
             .expect("the call must survive");
         assert_eq!(args, vec![Expr::Const(7)], "body was:\n{:#?}", f.body);
+    }
+
+    /// On a VALUE-NUMBERED body the incoming value has a version, and only a
+    /// version the body mentions may be referenced. Injecting the bare `rdi` gave
+    /// `__stack_chk_fail(var24)` — an argument reading a register nothing defines,
+    /// in a callee that takes none.
+    #[test]
+    fn no_bare_register_is_injected_into_a_value_numbered_body() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdx#7", 256),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "strnlen".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                },
+            ],
+        };
+        reconstruct_args_with_params(&mut f, CallConv::Win64, &[0].into_iter().collect());
+        let args = f
+            .body
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Call { args, .. } => Some(args.clone()),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert!(
+            !args.iter().any(|a| matches!(a, Expr::Reg(VReg::Phys(n)) if n == "rcx")),
+            "injected an unversioned register into a value-numbered body: {args:?}"
+        );
+    }
+
+    /// A value-numbered body declines the backfill entirely: the live-in version is
+    /// not knowable here, and guessing produced an argument that read nothing.
+    #[test]
+    fn a_value_numbered_body_declines_the_incoming_backfill() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("scratch"),
+                    src: Expr::Reg(reg("rcx#1")),
+                },
+                assign("rdx#7", 256),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "strnlen".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                },
+            ],
+        };
+        reconstruct_args_with_params(&mut f, CallConv::Win64, &[0].into_iter().collect());
+        let args = f
+            .body
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Call { args, .. } => Some(args.clone()),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert!(
+            !args.iter().any(|a| matches!(a, Expr::Reg(VReg::Phys(n)) if ssa_base(n) == "rcx")),
+            "the backfill must not fire on a value-numbered body: {args:?}"
+        );
     }
 }
 

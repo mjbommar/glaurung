@@ -449,13 +449,13 @@
     "11_call_shapes:call_accumulate_bytes": [],
     "11_call_shapes:call_chain_in_loop": [],
     "11_call_shapes:call_fold_wide_result": [
-      "var4 is read before it is defined"
+      "var2 is read before it is defined"
     ],
     "11_call_shapes:call_forward_result": [],
     "11_call_shapes:call_into_spill": [],
     "11_call_shapes:call_nested": [
       "var0 is read but never defined",
-      "var9 is read before it is defined"
+      "var5 is read before it is defined"
     ],
     "11_call_shapes:call_result_drives_branch": [],
     "11_call_shapes:call_result_unused": [],
