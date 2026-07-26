@@ -47,6 +47,11 @@ pub enum ViolationKind {
     NeverDefined,
     /// Read on a path that reaches no definition of it.
     UsedBeforeDefinition,
+    /// A frame-pointer register the emitted C declares as a local and never assigns.
+    /// Reading it is an uninitialised read in the printed C whatever it means on the
+    /// machine — and when the value is used as an ADDRESS, dereferencing it is how a
+    /// decompilation comes to segfault rather than merely return the wrong number.
+    UninitialisedFramePointer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -62,6 +67,12 @@ impl std::fmt::Display for Violation {
             ViolationKind::UsedBeforeDefinition => {
                 write!(f, "{} is read before it is defined", self.name)
             }
+            ViolationKind::UninitialisedFramePointer => write!(
+                f,
+                "{} is declared as a local and never assigned, so reading it (and any \
+                 address computed from it) is an uninitialised read",
+                self.name
+            ),
         }
     }
 }
@@ -91,6 +102,33 @@ pub fn splice_verify_comments(body: &str, violations: &[Violation]) -> String {
         out.push_str(rest);
     }
     out
+}
+
+/// A machine register that the emitted C DECLARES as a local.
+///
+/// The renderer declares every non-argument identifier appearing in the body
+/// (`DecIdents::locals`), so a surviving `rbp` is printed as `long rbp;`. On the
+/// machine `rbp` is live-in state; in the emitted C it is an uninitialised variable,
+/// and `rbp - 32` is therefore a read of garbage. Both facts are true, and only the
+/// second one decides whether the recompiled function works.
+///
+/// That distinction is why two fixture cells emit C that SEGFAULTS —
+/// `cpp_ctor_dtor` passes `rbp - 32` as a `this` pointer, `cpp_virtual_dispatch`
+/// dereferences a vtable pointer nothing assigns — while this checker stayed silent:
+/// it excluded machine registers as "live-in", which is a statement about the
+/// machine, not about the C we printed.
+///
+/// `rsp` and `rip` are deliberately still excluded. A frame-pointer value used as an
+/// ADDRESS is a real uninitialised read; a stack pointer appearing in prologue
+/// arithmetic the renderer keeps for readability is not the same claim, and widening
+/// this to every register would trade a precise finding for noise.
+fn declared_machine_register(v: &VReg) -> Option<String> {
+    match v {
+        VReg::Phys(n) if matches!(n.as_str(), "rbp" | "ebp" | "bp" | "x29" | "w29" | "fp") => {
+            Some(n.clone())
+        }
+        _ => None,
+    }
 }
 
 /// The name of a value the decompiler invents and is therefore responsible for
@@ -359,6 +397,115 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
     }
 }
 
+/// Frame-pointer registers that appear inside an address which is dereferenced.
+///
+/// This is the shape that crashes. `cpp_ctor_dtor` passes `rbp - 32` as a `this`
+/// pointer and `cpp_virtual_dispatch` dereferences a vtable pointer derived the same
+/// way; both segfault, and both were invisible to this checker because it excluded
+/// machine registers as "live-in state". That exclusion is a statement about the
+/// machine. In the emitted C the renderer has DECLARED `long rbp;` and never assigned
+/// it, so the address is computed from an uninitialised variable.
+fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
+    fn regs_in(e: &Expr, out: &mut BTreeSet<String>) {
+        if let Some(n) = declared_machine_register_expr(e) {
+            out.insert(n);
+        }
+        match e {
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                regs_in(lhs, out);
+                regs_in(rhs, out);
+            }
+            Expr::Un { src, .. } => regs_in(src, out),
+            Expr::Cast { expr, .. } => regs_in(expr, out),
+            Expr::Deref { addr, .. } => regs_in(addr, out),
+            Expr::Lea { base, index, .. } => {
+                for r in [base, index].into_iter().flatten() {
+                    if let Some(n) = declared_machine_register(r) {
+                        out.insert(n);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    /// Addresses only: the `addr` of a `Deref`, and any `Lea` (an address being
+    /// taken, which is how a stack object reaches a callee).
+    fn scan_expr(e: &Expr, out: &mut BTreeSet<String>) {
+        match e {
+            Expr::Deref { addr, .. } => {
+                regs_in(addr, out);
+                scan_expr(addr, out);
+            }
+            Expr::Lea { .. } => regs_in(e, out),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                scan_expr(lhs, out);
+                scan_expr(rhs, out);
+            }
+            Expr::Un { src, .. } => scan_expr(src, out),
+            Expr::Cast { expr, .. } => scan_expr(expr, out),
+            _ => {}
+        }
+    }
+    fn scan(body: &[Stmt], out: &mut BTreeSet<String>) {
+        for s in body {
+            match s {
+                Stmt::Assign { src, .. } => scan_expr(src, out),
+                Stmt::Store { addr, src, .. } => {
+                    regs_in(addr, out);
+                    scan_expr(addr, out);
+                    scan_expr(src, out);
+                }
+                Stmt::Call { target, args, .. } => {
+                    scan_expr(target, out);
+                    for a in args {
+                        // ANY argument mentioning an unassigned frame pointer, not
+                        // just an `Expr::Lea`. A first version matched only `Lea` and
+                        // found nothing corpus-wide — because the real shape is plain
+                        // arithmetic: `_ZN6TracerC1EPiii((rbp - 32), ...)` is
+                        // `Bin{Sub, Reg(rbp), Const(32)}`. The callee dereferences it
+                        // as `this`, so the crash happens THERE and no local `Deref`
+                        // exists to key on.
+                        regs_in(a, out);
+                        scan_expr(a, out);
+                    }
+                }
+                Stmt::Return { value: Some(e) } => scan_expr(e, out),
+                Stmt::If { cond, then_body, else_body } => {
+                    scan_expr(cond, out);
+                    scan(then_body, out);
+                    if let Some(e) = else_body {
+                        scan(e, out);
+                    }
+                }
+                Stmt::While { cond, body } => {
+                    scan_expr(cond, out);
+                    scan(body, out);
+                }
+                Stmt::Switch { discriminant, cases, default } => {
+                    scan_expr(discriminant, out);
+                    for (_, b) in cases {
+                        scan(b, out);
+                    }
+                    if let Some(b) = default {
+                        scan(b, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    scan(body, &mut out);
+    out
+}
+
+fn declared_machine_register_expr(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Reg(v) => declared_machine_register(v),
+        _ => None,
+    }
+}
+
 /// Verify `f`, returning every violation found (sorted, deduplicated by name and
 /// kind). An empty result means every invented value the function reads has a
 /// definition that reaches it.
@@ -375,6 +522,20 @@ pub fn check(f: &Function) -> Vec<Violation> {
             kind: ViolationKind::NeverDefined,
         })
         .collect();
+
+    // A frame pointer used to compute a DEREFERENCED address. Deliberately narrower
+    // than "rbp is read anywhere": a plain `var2 = rbp` yields a garbage VALUE, which
+    // is bad, but `*(rbp - 32)` or passing `rbp - 32` as a pointer is what makes a
+    // decompilation SEGFAULT — and a rule that fired on every preserved prologue
+    // frame pointer would be noise rather than a finding.
+    for name in frame_pointer_addresses(&f.body) {
+        if !defined.contains(&name) {
+            out.push(Violation {
+                name,
+                kind: ViolationKind::UninitialisedFramePointer,
+            });
+        }
+    }
 
     if !has_unstructured_flow(&f.body) {
         let mut flow_defined = BTreeSet::new();
@@ -491,6 +652,87 @@ mod tests {
             },
         ]);
         assert_eq!(check(&f), vec![]);
+    }
+
+    #[test]
+    fn a_frame_pointer_used_as_a_dereferenced_address_is_a_violation() {
+        // `*(rbp - 32)` — the shape that segfaults.
+        //
+        // The renderer declares every non-argument identifier in the body, so a
+        // surviving `rbp` is printed as `long rbp;` and never assigned. On the machine
+        // it is live-in; in the emitted C it is uninitialised, and only the second
+        // fact decides whether the recompiled function runs. Two fixture cells —
+        // cpp_ctor_dtor and cpp_virtual_dispatch — emit exactly this and crash, and
+        // this checker stayed silent through both because it excluded machine
+        // registers wholesale.
+        let f = func(vec![
+            Stmt::Assign {
+                dst: VReg::phys("var0"),
+                src: Expr::Deref {
+                    size: 8,
+                    addr: Box::new(Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(reg("rbp")),
+                        rhs: Box::new(Expr::Const(32)),
+                    }),
+                },
+            },
+            Stmt::Return {
+                value: Some(reg("var0")),
+            },
+        ]);
+        let v = check(&f);
+        assert_eq!(
+            v,
+            vec![Violation {
+                name: "rbp".into(),
+                kind: ViolationKind::UninitialisedFramePointer,
+            }],
+            "expected the dereferenced frame pointer to be flagged, got {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_frame_pointer_read_as_a_plain_value_is_not_flagged() {
+        // The counterexample that keeps the rule precise. `var1 = rbp` yields a
+        // garbage VALUE, which is a lesser defect, and a rule firing on every
+        // preserved prologue frame pointer would be noise rather than a finding.
+        // Narrowing to dereferenced addresses is what makes this assertion
+        // actionable.
+        let f = func(vec![
+            assign("var1", reg("rbp")),
+            Stmt::Return {
+                value: Some(reg("var1")),
+            },
+        ]);
+        assert_eq!(check(&f), vec![], "a plain frame-pointer read must not fire");
+    }
+
+    #[test]
+    fn a_frame_pointer_address_passed_to_a_callee_is_a_violation() {
+        // `foo(&stack_object)` — the `this`-pointer shape. The callee dereferences
+        // it, so the crash happens there rather than here, which is precisely why a
+        // check that only looked at local Derefs would miss cpp_ctor_dtor.
+        let f = func(vec![
+            Stmt::Call {
+                dst: None,
+                target: Expr::Addr(0x1000),
+                args: vec![Expr::Lea {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 1,
+                    disp: -32,
+                    segment: None,
+                }],
+            },
+            Stmt::Return { value: None },
+        ]);
+        let v = check(&f);
+        assert!(
+            v.iter().any(|x| x.kind == ViolationKind::UninitialisedFramePointer),
+            "an address taken of an unassigned frame pointer and handed to a callee \
+             must be flagged, got {v:?}"
+        );
     }
 
     #[test]
