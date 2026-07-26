@@ -224,16 +224,31 @@ def decompiled_c(binary: str, va: int) -> str | None:
     return "\n".join(l for l in code.splitlines() if not l.strip().startswith("//"))
 
 
-def build_so(c_src: str, workdir: Path, tag: str) -> Path | None:
+def build_so(c_src: str, workdir: Path, tag: str, link_against: str | None = None) -> Path | None:
     """Rebuild our decompiled C. Compiled under the PINNED toolchain: whether a
     given rendering compiles at all is compiler-version dependent (gcc >= 14 turns
     implicit declarations and int/pointer conversions into hard errors that gcc 11
     only warns about), so a host gcc would make the `decompiled C failed to
-    compile` verdict — and therefore the baseline — host-specific."""
+    compile` verdict — and therefore the baseline — host-specific.
+
+    `link_against` is the ORIGINAL fixture object. A decompiled function that calls
+    a sibling (`forward_sum6` -> `sum_arg6`) has an undefined symbol on its own, and
+    loading it failed with `undefined symbol: sum_arg6` — a harness gap that only
+    became visible once argument reconstruction started emitting those calls at all.
+    Linking against the original supplies the callee's real behaviour, which is what
+    a differential test of THIS function wants.
+
+    A self-recursive call still binds locally: `dlopen` searches the object itself
+    before its dependencies, so the decompiled `fib` recurses into itself rather
+    than delegating to the original — otherwise the recursion would go untested."""
     src = workdir / f"{tag}.c"
     src.write_text(PRELUDE + "\n" + c_src + "\n")
     so = workdir / f"{tag}.so"
-    r = TC.run(["gcc", "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)])
+    cmd = ["gcc", "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)]
+    if link_against:
+        orig = Path(link_against).resolve()
+        cmd += [str(orig), f"-Wl,-rpath,{orig.parent}"]
+    r = TC.run(cmd)
     return so if r.returncode == 0 else None
 
 
@@ -502,7 +517,7 @@ def run_function(sig, fixture, binary, workdir, seed, fuzz) -> dict:
     c = decompiled_c(binary, sig["va"])
     if c is None:
         return {"status": "fail", "detail": "decompile failed"}
-    dec_so = build_so(c, workdir, f"dec_{name}")
+    dec_so = build_so(c, workdir, f"dec_{name}", link_against=binary)
     if dec_so is None:
         return {"status": "fail", "detail": "decompiled C failed to compile"}
     vectors = make_vectors(sig, ov, seed, fuzz)

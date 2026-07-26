@@ -45,6 +45,15 @@ FIXTURE_FUZZ = 12
 #                          verdict must not depend on how fast the machine is.
 #   skip_exec:    bool   — not safely executable; checked structurally instead.
 OVERRIDES: dict[tuple[str, str], dict] = {
+    # `fib` is exponential. Once argument reconstruction started working the
+    # decompiled version actually recursed — correctly — and then ran for
+    # `fib(INT_MAX)` exactly as the original would. Before the fix it returned
+    # instantly BECAUSE it was wrong, so the boundary sweep looked cheap. Pin the
+    # input to values that terminate: the verdict must test the recursion, not
+    # the machine's speed. Negatives still exercise the `n < 0` guard.
+    ("06_calling_conventions", "fib"): {
+        "arg_values": {0: [-1, 0, 1, 2, 3, 7, 12, 20]},
+    },
     # 12: drive each trip count across its masked range, including the zero-trip
     # case a wrongly-polarised loop condition turns into a full run (and back).
     ("12_loop_rotation", "factorial_while"): {"extra_vectors": [[0], [1], [2], [15], [16], [-1]]},

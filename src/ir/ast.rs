@@ -1089,6 +1089,16 @@ fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
             {
                 Some(dst.clone())
             }
+            // A CALL writes the return register too. Looking only at `Assign`
+            // meant a function whose value comes straight from a callee —
+            // `return sum_arg6(a0, …)` — found no writer and kept its bare
+            // `return`, which renders `return 0;`. The call was right and the
+            // result was thrown away one statement later.
+            Stmt::Call { dst: Some(d), .. }
+                if is_return_reg(d) || matches!(d, VReg::Phys(n) if n == "ret") =>
+            {
+                Some(d.clone())
+            }
             Stmt::If {
                 then_body,
                 else_body,
@@ -5252,6 +5262,58 @@ function f @ 0x1000 {
             "the call lost its argument during preparation:\n{:#?}",
             prepared.body
         );
+    }
+
+    /// `forward_sum6`: `return sum_arg6(a0, …)`. The return value is written by
+    /// the CALL's destination, not by an `Assign`, so the bare-return fixup found
+    /// no writer and the function rendered `return 0;` — discarding a call whose
+    /// arguments were otherwise perfect.
+    #[test]
+    fn a_call_result_satisfies_a_bare_return() {
+        let f = Function {
+            name: "forward_sum6".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "sum_arg6".to_string(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("arg0"))],
+                    dst: Some(VReg::phys("ret")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let out = render_decbench(&prepare_for_decbench(&f));
+        assert!(
+            out.contains("return ret;"),
+            "the call's result must satisfy the bare return:\n{out}"
+        );
+        assert!(!out.contains("return 0;"), "the result was discarded:\n{out}");
+    }
+
+    /// A genuinely void function still returns 0 — the fixup must not invent a
+    /// value where no return register was written at all.
+    #[test]
+    fn a_void_function_still_returns_zero() {
+        let f = Function {
+            name: "v".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "side_effect".to_string(),
+                    },
+                    args: vec![],
+                    dst: None,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let out = render_decbench(&prepare_for_decbench(&f));
+        assert!(out.contains("return 0;"), "expected the void default:\n{out}");
     }
 }
 
