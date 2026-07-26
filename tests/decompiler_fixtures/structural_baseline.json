@@ -260,7 +260,28 @@
     "13_loop_early_exit:sum_positive:plain": "closed",
     "13_loop_early_exit:sum_until_zero:c": "goto_no_label:L_1356",
     "13_loop_early_exit:sum_until_zero:decbench": "closed",
-    "13_loop_early_exit:sum_until_zero:plain": "goto_no_label:L_1356"
+    "13_loop_early_exit:sum_until_zero:plain": "goto_no_label:L_1356",
+    "14_flag_effects:add_then_negative:c": "closed",
+    "14_flag_effects:add_then_negative:decbench": "closed",
+    "14_flag_effects:add_then_negative:plain": "closed",
+    "14_flag_effects:and_is_zero:c": "closed",
+    "14_flag_effects:and_is_zero:decbench": "closed",
+    "14_flag_effects:and_is_zero:plain": "closed",
+    "14_flag_effects:countdown:c": "closed",
+    "14_flag_effects:countdown:decbench": "closed",
+    "14_flag_effects:countdown:plain": "closed",
+    "14_flag_effects:dec_loop:c": "closed",
+    "14_flag_effects:dec_loop:decbench": "closed",
+    "14_flag_effects:dec_loop:plain": "closed",
+    "14_flag_effects:dec_preserves_carry:c": "closed",
+    "14_flag_effects:dec_preserves_carry:decbench": "closed",
+    "14_flag_effects:dec_preserves_carry:plain": "closed",
+    "14_flag_effects:shift_until_zero:c": "closed",
+    "14_flag_effects:shift_until_zero:decbench": "closed",
+    "14_flag_effects:shift_until_zero:plain": "closed",
+    "14_flag_effects:sub_then_sign:c": "closed",
+    "14_flag_effects:sub_then_sign:decbench": "closed",
+    "14_flag_effects:sub_then_sign:plain": "closed"
   },
   "effects": {
     "08_indirect_dispatch:apply": {
@@ -388,7 +409,14 @@
     "13_loop_early_exit:find_first": false,
     "13_loop_early_exit:has_pair": false,
     "13_loop_early_exit:sum_positive": false,
-    "13_loop_early_exit:sum_until_zero": false
+    "13_loop_early_exit:sum_until_zero": false,
+    "14_flag_effects:add_then_negative": false,
+    "14_flag_effects:and_is_zero": false,
+    "14_flag_effects:countdown": false,
+    "14_flag_effects:dec_loop": false,
+    "14_flag_effects:dec_preserves_carry": false,
+    "14_flag_effects:shift_until_zero": false,
+    "14_flag_effects:sub_then_sign": false
   },
   "verify": {
     "01_conditional_polarity:classify": [],
@@ -500,6 +528,13 @@
     "13_loop_early_exit:find_first": [],
     "13_loop_early_exit:has_pair": [],
     "13_loop_early_exit:sum_positive": [],
-    "13_loop_early_exit:sum_until_zero": []
+    "13_loop_early_exit:sum_until_zero": [],
+    "14_flag_effects:add_then_negative": [],
+    "14_flag_effects:and_is_zero": [],
+    "14_flag_effects:countdown": [],
+    "14_flag_effects:dec_loop": [],
+    "14_flag_effects:dec_preserves_carry": [],
+    "14_flag_effects:shift_until_zero": [],
+    "14_flag_effects:sub_then_sign": []
   }
 }

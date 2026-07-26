@@ -698,6 +698,42 @@
     "sum_positive": "fail",
     "sum_until_zero": "fail"
   },
+  "14_flag_effects:clang:O0": {
+    "add_then_negative": "pass",
+    "and_is_zero": "pass",
+    "countdown": "pass",
+    "dec_loop": "pass",
+    "dec_preserves_carry": "pass",
+    "shift_until_zero": "pass",
+    "sub_then_sign": "pass"
+  },
+  "14_flag_effects:clang:O2": {
+    "add_then_negative": "pass",
+    "and_is_zero": "pass",
+    "countdown": "pass",
+    "dec_loop": "fail",
+    "dec_preserves_carry": "pass",
+    "shift_until_zero": "fail",
+    "sub_then_sign": "pass"
+  },
+  "14_flag_effects:gcc:O0": {
+    "add_then_negative": "pass",
+    "and_is_zero": "pass",
+    "countdown": "pass",
+    "dec_loop": "pass",
+    "dec_preserves_carry": "pass",
+    "shift_until_zero": "pass",
+    "sub_then_sign": "pass"
+  },
+  "14_flag_effects:gcc:O2": {
+    "add_then_negative": "pass",
+    "and_is_zero": "pass",
+    "countdown": "fail",
+    "dec_loop": "fail",
+    "dec_preserves_carry": "pass",
+    "shift_until_zero": "fail",
+    "sub_then_sign": "fail"
+  },
   "__toolchain__": {
     "clang": "Ubuntu clang version 14.0.0-1ubuntu1.1",
     "clangpp": "Ubuntu clang version 14.0.0-1ubuntu1.1",

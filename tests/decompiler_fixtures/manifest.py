@@ -124,6 +124,28 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
 }
 
 OVERRIDES: dict[tuple[str, str], dict] = {
+    # 14_flag_effects: all scalar, but three take a loop-trip-count parameter that
+    # must be bounded or the verdict measures machine speed instead of the flag
+    # modelling. `dec_preserves_carry` is unbounded on purpose — it has no loop.
+    ("14_flag_effects", "dec_loop"): {"arg_values": {0: [-1, 0, 1, 2, 3, 7, 8, 100]}},
+    # `while (n--)` on a NEGATIVE n decrements past INT_MIN — signed overflow, which
+    # is undefined in the source, so there is nothing to compare against. Same class
+    # as fp_div's left shift of a negative value: a differential that can fail for
+    # reasons unrelated to the decompilation is not a gate.
+    ("14_flag_effects", "countdown"): {"arg_values": {0: [0, 1, 2, 3, 7, 8, 100]}},
+    # `a + b` must not overflow: signed overflow is undefined, and the boundary
+    # sweep would otherwise pair INT_MIN with INT_MIN. Bounded to halves of the
+    # range so every sum is representable while still crossing zero in both
+    # directions, which is the whole point of the function.
+    ("14_flag_effects", "add_then_negative"): {
+        "arg_values": {
+            0: [-1073741824, -1000, -1, 0, 1, 1000, 1073741823],
+            1: [-1073741824, -1000, -1, 0, 1, 1000, 1073741823],
+        },
+    },
+    ("14_flag_effects", "shift_until_zero"): {
+        "arg_values": {0: [0, 1, 2, 3, 255, 65536, 2147483647, 4294967295]},
+    },
     # 13_loop_early_exit: every function takes a buffer and its length. Same
     # reasoning as DECBENCH_OVERRIDES above — an unclamped length makes both
     # binaries read out of bounds and the differential compares garbage.
@@ -325,6 +347,10 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     "13_loop_early_exit": [
         "find_first", "bisect", "classify_run", "has_pair", "sum_until_zero",
         "sum_positive",
+    ],
+    "14_flag_effects": [
+        "dec_loop", "countdown", "sub_then_sign", "and_is_zero",
+        "add_then_negative", "shift_until_zero", "dec_preserves_carry",
     ],
     # Callees are required too: a callee whose own recovery is wrong makes every
     # caller's verdict meaningless.
