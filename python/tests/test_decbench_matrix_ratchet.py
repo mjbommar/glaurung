@@ -1,0 +1,139 @@
+"""The per-cell DecBench ratchet's comparator.
+
+The matrix RUN is local-only (it needs the DecBench fork's `decbench evaluate`),
+but its comparison logic is pure and must be tested here, because the failure
+modes it exists to catch are precisely the ones that fooled us:
+
+  * a cell that stops being scored at all silently IMPROVES the mean by leaving
+    itself out. `recursion-gcc-O2` did exactly that — the O2 GED mean read 10.40
+    over 27 binaries and looked like a win against angr's 14.46; including the
+    binary put us at 14.42, a tie.
+  * an aggregate hides one program getting much worse while another improves.
+
+So `MISSING` and `GONE` are regressions, not absences.
+"""
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+TOOL = ROOT / "tools" / "decbench_matrix.py"
+
+
+def _load():
+    spec = importlib.util.spec_from_file_location("decbench_matrix", TOOL)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="module")
+def dm():
+    if not TOOL.exists():
+        pytest.skip(f"{TOOL} missing")
+    return _load()
+
+
+def _report(dm, **cells):
+    return {dm.TOOLCHAIN_KEY: {"gcc": "gcc 11", "clang": "clang 14"}, **cells}
+
+
+def _cell(ged=5.0, type_match=0.9, byte_match=0.3):
+    return {"ged": ged, "type_match": type_match, "byte_match": byte_match}
+
+
+def test_an_identical_run_has_no_regressions(dm):
+    base = _report(dm, **{"arith:gcc:O0": _cell()})
+    assert dm.check(dict(base), base) == []
+
+
+def test_a_worse_ged_is_a_regression(dm):
+    base = _report(dm, **{"arith:gcc:O0": _cell(ged=5.0)})
+    cur = _report(dm, **{"arith:gcc:O0": _cell(ged=6.0)})
+    assert dm.check(cur, base) == ["arith:gcc:O0.ged: 5.0 -> 6.0"]
+
+
+def test_a_lower_similarity_is_a_regression(dm):
+    """GED is a distance and the other two are similarities, so `worse` points in
+    opposite directions. Getting that backwards would make the ratchet celebrate
+    every decline."""
+    base = _report(dm, **{"arith:gcc:O0": _cell(type_match=0.9, byte_match=0.3)})
+    cur = _report(dm, **{"arith:gcc:O0": _cell(type_match=0.5, byte_match=0.1)})
+    problems = dm.check(cur, base)
+    assert any("type_match: 0.9 -> 0.5" in p for p in problems), problems
+    assert any("byte_match: 0.3 -> 0.1" in p for p in problems), problems
+
+
+def test_an_improvement_is_not_a_regression(dm):
+    base = _report(dm, **{"arith:gcc:O0": _cell(ged=5.0, type_match=0.9)})
+    cur = _report(dm, **{"arith:gcc:O0": _cell(ged=4.0, type_match=0.95)})
+    assert dm.check(cur, base) == []
+
+
+def test_a_metric_that_stopped_being_scored_is_a_regression(dm):
+    """The `recursion-gcc-O2` case: no GED at all, which an aggregate would treat
+    as a smaller sample rather than a loss."""
+    base = _report(dm, **{"recursion:gcc:O2": _cell(ged=123.0)})
+    cur = _report(dm, **{"recursion:gcc:O2": _cell(ged=None)})
+    assert dm.check(cur, base) == ["recursion:gcc:O2.ged: 123.0 -> GONE (no longer scored)"]
+
+
+def test_a_cell_absent_from_the_run_is_a_regression(dm):
+    base = _report(dm, **{"arith:gcc:O0": _cell()})
+    assert dm.check(_report(dm), base) == ["arith:gcc:O0: MISSING from the current run"]
+
+
+def test_a_cell_absent_from_the_baseline_is_reported(dm):
+    """A new cell must be recorded deliberately, the same discipline the fixture
+    baseline uses — otherwise a corpus addition lands unmeasured."""
+    base = _report(dm, **{"arith:gcc:O0": _cell()})
+    cur = _report(dm, **{"arith:gcc:O0": _cell(), "newprog:gcc:O0": _cell()})
+    assert dm.check(cur, base) == [
+        "newprog:gcc:O0: present in the run but absent from the baseline"
+    ]
+
+
+def test_a_metric_never_scored_in_the_baseline_cannot_regress(dm):
+    """Three binaries have no `type_match` on either side (DecBench finds no DWARF
+    ground truth). That is a ground-truth gap, not ours, and must not be reported
+    every run."""
+    base = _report(dm, **{"recursion:gcc:O2": _cell(type_match=None)})
+    cur = _report(dm, **{"recursion:gcc:O2": _cell(type_match=None)})
+    assert dm.check(cur, base) == []
+
+
+def test_metrics_are_not_comparable_across_a_toolchain_change(dm):
+    """Comparing metrics measured under different compilers reports phantom
+    regressions. Refuse the comparison instead."""
+    base = _report(dm, **{"arith:gcc:O0": _cell()})
+    cur = {
+        dm.TOOLCHAIN_KEY: {"gcc": "gcc 14", "clang": "clang 14"},
+        "arith:gcc:O0": _cell(),
+    }
+    problems = dm.check(cur, base)
+    assert len(problems) == 1
+    assert "not comparable" in problems[0]
+
+
+def test_ged_is_compared_exactly_and_similarities_have_a_tolerance(dm):
+    """GED is an integer edit count, so any movement is real. The similarities are
+    ratios that can wobble in the last decimal."""
+    assert dm.TOLERANCE["ged"] == 0.0
+    assert dm.TOLERANCE["type_match"] > 0
+    base = _report(dm, **{"a:gcc:O0": _cell(type_match=0.900)})
+    tiny = _report(dm, **{"a:gcc:O0": _cell(type_match=0.899)})
+    assert dm.check(tiny, base) == []
+
+
+def test_the_corpus_is_committed_and_matches_the_matrix_size(dm):
+    """The metrics in the design docs were measured against this corpus. It lived
+    only in /tmp until 2026-07-26, which made them unrepeatable."""
+    srcs = sorted(p.stem for p in dm.SRC.glob("*.c"))
+    assert len(srcs) == 14, srcs
+    assert "switch_jt" in srcs and "recursion" in srcs
+    expected_cells = len(srcs) * len(dm.COMPILERS) * len(dm.OPTS)
+    assert expected_cells == 56, expected_cells
