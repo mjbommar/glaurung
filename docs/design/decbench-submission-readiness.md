@@ -35,8 +35,8 @@ Different gates prove different things, and collapsing them into one word is how
 | `cargo test --lib` | **1024 pass** | Rust core |
 | Fixture matrix + structural (local) | **pass**, delta NONE, baselines refreshed | 4 lanes, execution-differential per function; `scripts/decbench-local-gate.sh` |
 | Round-trip execution differential | **24 of 26 correct (92%)**, gcc -O0 | does the emitted C actually behave like the original |
-| Decompiler Fixture Gate (remote) | **running** at `8a6993b` (was success at `b8b09ac`) | the same gate on a clean checkout with a pinned toolchain |
-| General CI (remote) | **running** at `8a6993b` | the light lanes |
+| Decompiler Fixture Gate (remote) | **success** at `8a6993b` | the same gate on a clean checkout with a pinned toolchain |
+| General CI (remote) | **QUEUED — not green, not red** at `8a6993b` | the light lanes; hosted-runner backlog, so nothing about it is known |
 | DecBench 56-cell metric ratchet | **NOT RUN — `DECBENCH_DIR` unset** | per-cell GED / type_match / byte_match regressions |
 
 The last row is the one to read carefully. There is no DecBench checkout in this
