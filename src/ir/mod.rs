@@ -38,6 +38,7 @@ pub mod lift_arm32;
 pub mod lift_arm64;
 pub mod lift_function;
 pub mod lift_x86;
+pub mod loop_form;
 pub mod name_resolve;
 pub mod naming;
 pub mod pdb_fields;

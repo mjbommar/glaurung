@@ -193,6 +193,15 @@ def test_apply_remains_an_indirect_callback_call(report):
     assert got.get("indirect_call") is True, "apply() lost its indirect callback call"
 
 
+def test_factorial_recovers_a_head_tested_while(report):
+    """A real compiled factorial must retain its source-level loop form."""
+    got = report["effects"].get("12_loop_rotation:factorial_while", {})
+    assert got.get("head_tested_while") is True, (
+        "factorial_while stayed as `while (1) { if (...) break; ... }` instead of "
+        "recovering a head-tested while"
+    )
+
+
 def test_declared_structural_predicates_are_all_present(report):
     # A declared predicate must actually be evaluated (True/False), never absent —
     # a structural assertion that silently does not run is a fail-open gap.

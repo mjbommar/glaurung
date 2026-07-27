@@ -300,6 +300,9 @@ OVERRIDES: dict[tuple[str, str], dict] = {
 # emitted, not dropped or replaced by a fabricated direct target. `memory_store` —
 # a write to memory must survive (not be dead-store-eliminated away).
 STRUCTURAL: dict[tuple[str, str], dict] = {
+    # A2 loop-form acceptance: after reload folding, the source head test must
+    # become the loop condition rather than an explicit break inside while (1).
+    ("12_loop_rotation", "factorial_while"): {"head_tested_while": True},
     ("08_indirect_dispatch", "dispatch"): {"indirect_call": True},
     ("08_indirect_dispatch", "apply"): {"indirect_call": True},
     ("08_indirect_dispatch", "tail_dispatch"): {"indirect_call": True},

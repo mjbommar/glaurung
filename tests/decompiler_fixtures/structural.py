@@ -121,10 +121,21 @@ def is_nonempty(block: str) -> bool:
     return ";" in inner
 
 
+def has_head_tested_while(block: str) -> bool:
+    """A canonical pre-tested loop, rather than a guarded ``while (1)``.
+
+    Anchor at the start of a statement so the trailing ``while`` of a do-while
+    cannot satisfy this predicate.
+    """
+    body = _strip_comments(block)
+    return bool(re.search(r"(?m)^\s*while\s*\((?!\s*1\s*\))", body))
+
+
 PREDICATES = {
     "indirect_call": has_indirect_call,
     "memory_store": has_memory_store,
     "nonempty": is_nonempty,
+    "head_tested_while": has_head_tested_while,
 }
 
 

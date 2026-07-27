@@ -736,7 +736,7 @@ fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
 /// If `expr` is an `Expr::Cmp { op, .. }`, return the Cmp with the inverted
 /// CmpOp (Eq <-> Ne, Ult <-> Uge — but Uge isn't in CmpOp so we wrap, ...).
 /// Anything else gets wrapped in `Expr::Un { Not, .. }` so semantics survive.
-fn negate_cmp_expr(expr: Expr) -> Expr {
+pub(crate) fn negate_cmp_expr(expr: Expr) -> Expr {
     if let Expr::Cmp { op, lhs, rhs } = expr {
         // Invert the comparison itself so the result stays a boolean `Cmp`, not a
         // wrapped `Un{Not}` — which would render as C's *bitwise* `~` and, applied
@@ -2908,7 +2908,8 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These three steps change *definitions, uses and value identities* — they are
+/// These four steps change *definitions, uses, value identities, or control-flow
+/// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
 /// 1. `default_return_to_reg` gives a bare `return` its ABI return register, so
@@ -2920,6 +2921,9 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 ///    emits);
 /// 3. `copy_prop::propagate_copies` folds the short-lived reload and
 ///    condition-setup copy chains that otherwise inflate the emitted CFG.
+/// 4. `loop_form::recover_head_tested_whiles` turns the conservative
+///    `while (1) { if (exit) break; body }` into `while (!exit) { body }` only
+///    when folding has made the exit guard the literal first statement.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
 /// impure: the AST that was checked or dumped was not the AST that was printed,
@@ -2932,6 +2936,7 @@ pub fn prepare_for_decbench(f: &Function) -> Function {
     default_return_to_reg(&mut owned.body);
     coalesce_param_spills(&mut owned.body);
     crate::ir::copy_prop::propagate_copies(&mut owned);
+    crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
     crate::ir::switch_ladder::recover_switches(&mut owned);
@@ -4772,6 +4777,70 @@ function f @ 0x1000 {
         assert!(
             !names.iter().any(|n| n.contains("var0")),
             "var0 still defined in the prepared AST: {names:?}"
+        );
+    }
+
+    #[test]
+    fn prepare_recovers_a_head_tested_while_after_copy_folding() {
+        // Real -O0 loop headers lower conservatively as
+        //
+        //   while (1) { t = i; if (t <= 1) break; i = i - 1; }
+        //
+        // Copy propagation proves the reload is redundant and removes it.  Once
+        // the exit guard is literally the first statement, converting it to the
+        // loop condition moves no computation and is semantics-preserving.
+        let i = VReg::phys("local_4");
+        let t = VReg::phys("t10");
+        let mut f = Function {
+            name: "factorial_shape".to_string(),
+            entry_va: 0x10,
+            body: vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::Assign {
+                        dst: t.clone(),
+                        src: Expr::Reg(i.clone()),
+                    },
+                    Stmt::If {
+                        cond: Expr::Cmp {
+                            op: CmpOp::Sle,
+                            lhs: Box::new(Expr::Reg(t)),
+                            rhs: Box::new(Expr::Const(1)),
+                        },
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                    Stmt::Assign {
+                        dst: i.clone(),
+                        src: Expr::Bin {
+                            op: BinOp::Sub,
+                            lhs: Box::new(Expr::Reg(i.clone())),
+                            rhs: Box::new(Expr::Const(1)),
+                        },
+                    },
+                ],
+            }],
+        };
+
+        f = prepare_for_decbench(&f);
+
+        assert_eq!(
+            f.body,
+            vec![Stmt::While {
+                cond: Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Const(1)),
+                    rhs: Box::new(Expr::Reg(i.clone())),
+                },
+                body: vec![Stmt::Assign {
+                    dst: i.clone(),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(i)),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                }],
+            }]
         );
     }
 
