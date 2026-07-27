@@ -156,6 +156,11 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    /// `do { body } while (cond);` — the condition is evaluated after the body.
+    DoWhile {
+        body: Vec<Stmt>,
+        cond: Expr,
+    },
     /// `break;` out of the nearest enclosing loop. Emitted when a loop whose
     /// per-iteration header work (test setup, or a do-while body) must run each
     /// iteration is lowered as `while (1) { <header work>; if (!cond) break; body }`.
@@ -215,8 +220,10 @@ pub struct Function {
 /// neither is sufficient, because a preamble can read a register the *body*
 /// assigns:
 ///
-///     t = i + 1;                            <- hoisted: not a self-reference,
-///     while (t < n) { ...; i = i + 1; }         reads no memory, still wrong
+/// ```text
+/// t = i + 1;                            <- hoisted: not a self-reference,
+/// while (t < n) { ...; i = i + 1; }         reads no memory, still wrong
+/// ```
 ///
 /// `t` never changes and the loop spins forever. So the real rule is a def-use
 /// question: every register the preamble reads, other than one it defines itself
@@ -250,19 +257,30 @@ fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
     fn collect_assigned(stmts: &[Stmt], out: &mut std::collections::HashSet<String>) {
         for s in stmts {
             match s {
-                Stmt::Assign { dst: VReg::Phys(n), .. } => {
+                Stmt::Assign {
+                    dst: VReg::Phys(n), ..
+                } => {
                     out.insert(n.clone());
                 }
-                Stmt::Call { dst: Some(VReg::Phys(n)), .. } => {
+                Stmt::Call {
+                    dst: Some(VReg::Phys(n)),
+                    ..
+                } => {
                     out.insert(n.clone());
                 }
-                Stmt::If { then_body, else_body, .. } => {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
                     collect_assigned(then_body, out);
                     if let Some(e) = else_body {
                         collect_assigned(e, out);
                     }
                 }
-                Stmt::While { body, .. } => collect_assigned(body, out),
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    collect_assigned(body, out)
+                }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, b) in cases {
                         collect_assigned(b, out);
@@ -315,8 +333,7 @@ fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
                     return false;
                 }
                 // Self-referential update: a per-iteration side effect.
-                if matches!(dst, VReg::Phys(n) if count_reg_uses_in_expr(src, &VReg::phys(n)) > 0)
-                {
+                if matches!(dst, VReg::Phys(n) if count_reg_uses_in_expr(src, &VReg::phys(n)) > 0) {
                     return false;
                 }
                 // Loop-invariance: nothing this statement reads may be assigned by
@@ -941,7 +958,9 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
                     .map(|a| count_reg_uses_in_expr(a, target))
                     .sum::<usize>()
         }
-        Stmt::If { cond, .. } | Stmt::While { cond, .. } => count_reg_uses_in_expr(cond, target),
+        Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
+            count_reg_uses_in_expr(cond, target)
+        }
         Stmt::Return { value } => value
             .as_ref()
             .map(|e| count_reg_uses_in_expr(e, target))
@@ -1007,8 +1026,13 @@ fn lower_region_inner(
                 // loop headed at that VA: the `-O0` for-loop's entry jump to its
                 // condition block is just the natural fall-in to the `while`, so
                 // keeping it would leave a goto to a synthesized empty label.
-                if let Some(Region::While { header, .. }) = parts.get(idx + 1) {
-                    let hva = lf.blocks[*header].start_va;
+                let next_loop_entry = parts.get(idx + 1).and_then(|next| match next {
+                    Region::While { header, .. } => Some(*header),
+                    Region::DoWhile { .. } => crate::ir::structure::entry_block(next),
+                    _ => None,
+                });
+                if let Some(header) = next_loop_entry {
+                    let hva = lf.blocks[header].start_va;
                     if matches!(lowered.last(), Some(Stmt::Goto { target }) if *target == hva) {
                         lowered.pop();
                     }
@@ -1161,6 +1185,22 @@ fn lower_region_inner(
                 }]
             }
         }
+        Region::DoWhile { body, cond, exit } => {
+            let mut body_stmts = lower_region(body, lf, targets);
+            let cond_stmts = lower_block(&lf.blocks[*cond]);
+            let (cond_expr, mut latch_stmts) =
+                extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
+            body_stmts.append(&mut latch_stmts);
+            let continue_cond = if exit_is_taken_branch(lf, *cond, *exit) {
+                negate_cmp_expr(cond_expr)
+            } else {
+                cond_expr
+            };
+            vec![Stmt::DoWhile {
+                body: body_stmts,
+                cond: continue_cond,
+            }]
+        }
         Region::Switch { dispatch, arms, .. } => {
             // Lower the dispatch block as the prefix; the last
             // instruction is the indirect jump itself which we replace
@@ -1218,7 +1258,9 @@ fn collect_goto_targets(r: &Region, lf: &LlirFunction, out: &mut std::collection
             collect_goto_targets(then_r, lf, out);
             collect_goto_targets(else_r, lf, out);
         }
-        Region::While { body, .. } => collect_goto_targets(body, lf, out),
+        Region::While { body, .. } | Region::DoWhile { body, .. } => {
+            collect_goto_targets(body, lf, out)
+        }
         Region::Switch { arms, .. } => arms.iter().for_each(|a| collect_goto_targets(a, lf, out)),
         Region::Block(_) | Region::Unstructured(_) => {}
     }
@@ -1269,7 +1311,7 @@ fn body_has_bare_return(body: &[Stmt]) -> bool {
             body_has_bare_return(then_body)
                 || else_body.as_deref().is_some_and(body_has_bare_return)
         }
-        Stmt::While { body, .. } => body_has_bare_return(body),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body_has_bare_return(body),
         Stmt::Switch { cases, default, .. } => {
             cases.iter().any(|(_, b)| body_has_bare_return(b))
                 || default.as_deref().is_some_and(body_has_bare_return)
@@ -1304,7 +1346,7 @@ fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
                 ..
             } => find_written_return_reg(then_body)
                 .or_else(|| else_body.as_deref().and_then(find_written_return_reg)),
-            Stmt::While { body, .. } => find_written_return_reg(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => find_written_return_reg(body),
             Stmt::Switch { cases, default, .. } => cases
                 .iter()
                 .find_map(|(_, b)| find_written_return_reg(b))
@@ -1334,7 +1376,9 @@ fn apply_default_return(body: &mut [Stmt], ret_reg: &VReg) {
                     apply_default_return(eb, ret_reg);
                 }
             }
-            Stmt::While { body, .. } => apply_default_return(body, ret_reg),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                apply_default_return(body, ret_reg)
+            }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     apply_default_return(b, ret_reg);
@@ -1399,7 +1443,7 @@ fn fold_returns(body: &mut Vec<Stmt>) {
                     fold_returns(eb);
                 }
             }
-            Stmt::While { body, .. } => fold_returns(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => fold_returns(body),
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases.iter_mut() {
                     fold_returns(body);
@@ -1851,6 +1895,17 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
             indent(out, level);
             out.push_str("}\n");
         }
+        Stmt::DoWhile { body, cond } => {
+            indent(out, level);
+            out.push_str("do {\n");
+            for s in body {
+                write_stmt_ctx(s, tm, out, level + 1);
+            }
+            indent(out, level);
+            out.push_str("} while (");
+            write_expr_ctx(cond, tm, out);
+            out.push_str(");\n");
+        }
         Stmt::Switch {
             discriminant,
             cases,
@@ -1976,6 +2031,7 @@ pub fn compute_frame_size(body: &[Stmt]) -> Option<i64> {
             | Stmt::Break
             | Stmt::If { .. }
             | Stmt::While { .. }
+            | Stmt::DoWhile { .. }
             | Stmt::Switch { .. } => break,
             // Register-save stores (e.g. `store %stack_top = %var0`) and
             // unrelated register assigns are part of the prologue and
@@ -2271,6 +2327,17 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             indent(out, level);
             out.push_str("}\n");
         }
+        Stmt::DoWhile { body, cond } => {
+            indent(out, level);
+            out.push_str("do {\n");
+            for s in body {
+                write_stmt_c(s, out, level + 1);
+            }
+            indent(out, level);
+            out.push_str("} while (");
+            write_expr_c(cond, out);
+            out.push_str(");\n");
+        }
         Stmt::Push { value } => {
             indent(out, level);
             out.push_str("push(");
@@ -2522,7 +2589,7 @@ fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'sta
                     }
                 }
             }
-            Stmt::While { body, .. } => {
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 if let Some(t) = first_return_value_ctype(body, tm) {
                     return Some(t);
                 }
@@ -2622,7 +2689,9 @@ fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMa
                     slot_stores_to_assigns(eb, slots);
                 }
             }
-            Stmt::While { body, .. } => slot_stores_to_assigns(body, slots),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                slot_stores_to_assigns(body, slots)
+            }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     slot_stores_to_assigns(b, slots);
@@ -2675,7 +2744,9 @@ fn collect_param_homes(body: &[Stmt], home: &mut std::collections::HashMap<Strin
                     collect_param_homes(eb, home);
                 }
             }
-            Stmt::While { body, .. } => collect_param_homes(body, home),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_param_homes(body, home)
+            }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases {
                     collect_param_homes(b, home);
@@ -2761,6 +2832,10 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                 re(cond, map);
                 rename_phys_in_body(body, map);
             }
+            Stmt::DoWhile { body, cond } => {
+                rename_phys_in_body(body, map);
+                re(cond, map);
+            }
             Stmt::Switch {
                 discriminant,
                 cases,
@@ -2817,7 +2892,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
                     drop_self_stores(eb);
                 }
             }
-            Stmt::While { body, .. } => drop_self_stores(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => drop_self_stores(body),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     drop_self_stores(b);
@@ -3149,6 +3224,12 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             for s in body {
                 collect_idents_stmt(s, ids);
             }
+        }
+        Stmt::DoWhile { body, cond } => {
+            for s in body {
+                collect_idents_stmt(s, ids);
+            }
+            collect_idents_expr(cond, ids);
         }
         Stmt::Switch {
             discriminant,
@@ -3611,9 +3692,7 @@ fn callee_display_name(name: &str) -> &str {
 
 fn write_call_dec(target: &Expr, args: &[Expr], out: &mut String) {
     match target {
-        Expr::Named { name, .. } => {
-            out.push_str(&sanitize_c_ident(callee_display_name(name)))
-        }
+        Expr::Named { name, .. } => out.push_str(&sanitize_c_ident(callee_display_name(name))),
         _ => {
             out.push_str("((long (*)())(");
             write_expr_dec(target, out);
@@ -3748,6 +3827,17 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             }
             indent(out, level);
             out.push_str("}\n");
+        }
+        Stmt::DoWhile { body, cond } => {
+            indent(out, level);
+            out.push_str("do {\n");
+            for s in body {
+                write_stmt_dec(s, out, level + 1);
+            }
+            indent(out, level);
+            out.push_str("} while (");
+            write_expr_dec(cond, out);
+            out.push_str(");\n");
         }
         Stmt::Switch {
             discriminant,
@@ -4043,8 +4133,16 @@ mod tests {
         ]);
         let out = lower_and_render(&lf, "bottom");
         assert!(
+            out.contains("do {") && out.contains("} while ((1 < %rax));"),
+            "a bottom-tested natural loop must retain its post-test shape:\n{out}"
+        );
+        assert!(
             !out.contains("while (!("),
             "a bottom-tested loop's condition is already the continue test:\n{out}"
+        );
+        assert!(
+            !out.contains("goto L_1010"),
+            "the do-while back-edge must be implicit, not a goto:\n{out}"
         );
     }
 
@@ -5486,8 +5584,14 @@ function f @ 0x1000 {
             }],
         };
         let out = render_decbench(&f);
-        assert!(out.contains("signed_step(arg0)"), "expected a call to `signed_step`:\n{out}");
-        assert!(!out.contains("signed_step_plt"), "the @plt stub name must not be called:\n{out}");
+        assert!(
+            out.contains("signed_step(arg0)"),
+            "expected a call to `signed_step`:\n{out}"
+        );
+        assert!(
+            !out.contains("signed_step_plt"),
+            "the @plt stub name must not be called:\n{out}"
+        );
     }
 
     /// A plain name is untouched — only the `@`-suffixed stub spelling is trimmed.
@@ -5572,7 +5676,10 @@ function f @ 0x1000 {
             out.contains("return ret;"),
             "the call's result must satisfy the bare return:\n{out}"
         );
-        assert!(!out.contains("return 0;"), "the result was discarded:\n{out}");
+        assert!(
+            !out.contains("return 0;"),
+            "the result was discarded:\n{out}"
+        );
     }
 
     /// A genuinely void function still returns 0 — the fixup must not invent a
@@ -5595,7 +5702,10 @@ function f @ 0x1000 {
             ],
         };
         let out = render_decbench(&prepare_for_decbench(&f));
-        assert!(out.contains("return 0;"), "expected the void default:\n{out}");
+        assert!(
+            out.contains("return 0;"),
+            "expected the void default:\n{out}"
+        );
     }
 
     /// `fp_mul` is `(int)(((long)a*b)>>16)`. The machine sign-extends both operands
@@ -5745,7 +5855,9 @@ function f @ 0x1000 {
         let out = lower_and_render(&lf, "walk");
         // The load must be inside the loop. Find the `while` and require the
         // dereference to appear after it.
-        let wpos = out.find("while").expect(&format!("expected a loop:\n{out}"));
+        let wpos = out
+            .find("while")
+            .expect(&format!("expected a loop:\n{out}"));
         let load = out.find("*(").expect(&format!("expected a load:\n{out}"));
         assert!(
             load > wpos,
@@ -5754,4 +5866,3 @@ function f @ 0x1000 {
         );
     }
 }
-

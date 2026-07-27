@@ -59,6 +59,10 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
                 resolve_expr(cond, addr_map);
                 resolve_body(body, addr_map);
             }
+            Stmt::DoWhile { body, cond } => {
+                resolve_body(body, addr_map);
+                resolve_expr(cond, addr_map);
+            }
             Stmt::Push { value } => resolve_expr(value, addr_map),
             Stmt::Switch {
                 discriminant,
@@ -76,7 +80,8 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
-            | Stmt::Break | Stmt::Nop
+            | Stmt::Break
+            | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
         }
@@ -136,7 +141,12 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
 /// and split-out paths. One list, because two copies is how they drift.
 pub(crate) fn is_internal_alias(name: &str) -> bool {
     const INTERNAL_SUFFIXES: &[&str] = &[
-        ".localalias", ".cold", ".part.", ".isra.", ".constprop.", ".lto_priv.",
+        ".localalias",
+        ".cold",
+        ".part.",
+        ".isra.",
+        ".constprop.",
+        ".lto_priv.",
     ];
     INTERNAL_SUFFIXES.iter().any(|s| name.contains(s))
 }
@@ -173,16 +183,17 @@ pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
     if let Ok(obj) = object::read::File::parse(data) {
         use object::{Object, ObjectSymbol};
         let mut rank: HashMap<u64, u8> = HashMap::new();
-        let mut consider = |addr: u64, name: &str, is_global: bool, out: &mut HashMap<u64, String>| {
-            if name.is_empty() || addr == 0 {
-                return;
-            }
-            let r = symbol_rank(name, is_global);
-            if rank.get(&addr).is_none_or(|&best| r > best) {
-                rank.insert(addr, r);
-                out.insert(addr, name.to_string());
-            }
-        };
+        let mut consider =
+            |addr: u64, name: &str, is_global: bool, out: &mut HashMap<u64, String>| {
+                if name.is_empty() || addr == 0 {
+                    return;
+                }
+                let r = symbol_rank(name, is_global);
+                if rank.get(&addr).is_none_or(|&best| r > best) {
+                    rank.insert(addr, r);
+                    out.insert(addr, name.to_string());
+                }
+            };
         for sym in obj.symbols() {
             if sym.is_definition() {
                 if let (Ok(name), addr) = (sym.name(), sym.address()) {
@@ -636,17 +647,12 @@ pub(crate) fn resolve_outer_function_name(
     // `fib_localalias`, which no source declares — so DecBench could not match it to
     // `fib` and scored NO graph edit distance for the whole binary, while angr scored
     // it normally. A name nobody else uses is not a cosmetic problem.
-    let unwanted = discovered_name.starts_with("sub_")
-        || is_internal_alias(discovered_name);
+    let unwanted = discovered_name.starts_with("sub_") || is_internal_alias(discovered_name);
     if !unwanted {
         return discovered_name.to_string();
     }
     match addr_map.get(&func_va) {
-        Some(name)
-            if !name.is_empty()
-                && !name.starts_with("sub_")
-                && !is_internal_alias(name) =>
-        {
+        Some(name) if !name.is_empty() && !name.starts_with("sub_") && !is_internal_alias(name) => {
             name.clone()
         }
         _ => discovered_name.to_string(),
@@ -669,7 +675,10 @@ mod outer_name_tests {
     #[test]
     fn an_internal_alias_loses_to_the_plain_name_at_the_same_address() {
         let m = map(&[(0x1100, "fib")]);
-        assert_eq!(resolve_outer_function_name("fib.localalias", 0x1100, &m), "fib");
+        assert_eq!(
+            resolve_outer_function_name("fib.localalias", 0x1100, &m),
+            "fib"
+        );
     }
 
     /// Every internal suffix the ranking knows about, not just `.localalias`.
@@ -683,7 +692,11 @@ mod outer_name_tests {
             "work.constprop.1",
             "work.lto_priv.42",
         ] {
-            assert_eq!(resolve_outer_function_name(alias, 0x2000, &m), "work", "{alias}");
+            assert_eq!(
+                resolve_outer_function_name(alias, 0x2000, &m),
+                "work",
+                "{alias}"
+            );
         }
     }
 

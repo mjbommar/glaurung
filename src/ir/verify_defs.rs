@@ -139,7 +139,9 @@ fn checked_name(v: &VReg) -> Option<String> {
             let invented = n == "ret"
                 || n.starts_with("local_")
                 || n.starts_with("stack_")
-                || (n.starts_with("var") && n[3..].chars().all(|c| c.is_ascii_digit()) && n.len() > 3);
+                || (n.starts_with("var")
+                    && n[3..].chars().all(|c| c.is_ascii_digit())
+                    && n.len() > 3);
             invented.then(|| n.clone())
         }
         // A lifter temporary that survives into the emitted AST must have been
@@ -211,13 +213,17 @@ fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>) {
                 out.extend(dst.as_ref().and_then(checked_name));
                 out.insert(RETURN_ROLE.to_string());
             }
-            Stmt::If { then_body, else_body, .. } => {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
                 defs_in(then_body, out);
                 if let Some(e) = else_body {
                     defs_in(e, out);
                 }
             }
-            Stmt::While { body, .. } => defs_in(body, out),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => defs_in(body, out),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases {
                     defs_in(b, out);
@@ -235,11 +241,15 @@ fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>) {
 fn has_unstructured_flow(body: &[Stmt]) -> bool {
     body.iter().any(|s| match s {
         Stmt::Label(_) | Stmt::Goto { .. } => true,
-        Stmt::If { then_body, else_body, .. } => {
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
             has_unstructured_flow(then_body)
                 || else_body.as_deref().is_some_and(has_unstructured_flow)
         }
-        Stmt::While { body, .. } => has_unstructured_flow(body),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => has_unstructured_flow(body),
         Stmt::Switch { cases, default, .. } => {
             cases.iter().any(|(_, b)| has_unstructured_flow(b))
                 || default.as_deref().is_some_and(has_unstructured_flow)
@@ -294,7 +304,11 @@ fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<Stri
             Stmt::Pop { target } => {
                 defined.extend(checked_name(target));
             }
-            Stmt::If { cond, then_body, else_body } => {
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
                 undefined_reads(cond, defined, found);
                 // Both arms start from the same state; the join takes the UNION
                 // (maybe-defined), so a definition in one arm satisfies a use
@@ -321,7 +335,19 @@ fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<Stri
                 walk(body, &mut inner, found);
                 defined.extend(loop_defined);
             }
-            Stmt::Switch { discriminant, cases, default } => {
+            Stmt::DoWhile { body, cond } => {
+                // The body executes before the first condition test, so its
+                // definitions are genuinely available to the latch and after
+                // the loop (unlike a pre-tested loop, which may execute zero
+                // times).
+                walk(body, defined, found);
+                undefined_reads(cond, defined, found);
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
                 undefined_reads(discriminant, defined, found);
                 let mut joined = defined.clone();
                 for (_, b) in cases {
@@ -372,7 +398,11 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
                 }
             }
             Stmt::Push { value } => push(value, out),
-            Stmt::If { cond, then_body, else_body } => {
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
                 push(cond, out);
                 all_reads(then_body, out);
                 if let Some(e) = else_body {
@@ -383,7 +413,15 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
                 push(cond, out);
                 all_reads(body, out);
             }
-            Stmt::Switch { discriminant, cases, default } => {
+            Stmt::DoWhile { body, cond } => {
+                all_reads(body, out);
+                push(cond, out);
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
                 push(discriminant, out);
                 for (_, b) in cases {
                     all_reads(b, out);
@@ -470,7 +508,11 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                     }
                 }
                 Stmt::Return { value: Some(e) } => scan_expr(e, out),
-                Stmt::If { cond, then_body, else_body } => {
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
                     scan_expr(cond, out);
                     scan(then_body, out);
                     if let Some(e) = else_body {
@@ -481,7 +523,15 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                     scan_expr(cond, out);
                     scan(body, out);
                 }
-                Stmt::Switch { discriminant, cases, default } => {
+                Stmt::DoWhile { body, cond } => {
+                    scan(body, out);
+                    scan_expr(cond, out);
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
                     scan_expr(discriminant, out);
                     for (_, b) in cases {
                         scan(b, out);
@@ -705,7 +755,11 @@ mod tests {
                 value: Some(reg("var1")),
             },
         ]);
-        assert_eq!(check(&f), vec![], "a plain frame-pointer read must not fire");
+        assert_eq!(
+            check(&f),
+            vec![],
+            "a plain frame-pointer read must not fire"
+        );
     }
 
     #[test]
@@ -729,7 +783,8 @@ mod tests {
         ]);
         let v = check(&f);
         assert!(
-            v.iter().any(|x| x.kind == ViolationKind::UninitialisedFramePointer),
+            v.iter()
+                .any(|x| x.kind == ViolationKind::UninitialisedFramePointer),
             "an address taken of an unassigned frame pointer and handed to a callee \
              must be flagged, got {v:?}"
         );
@@ -907,7 +962,11 @@ mod tests {
                 value: Some(reg("local_4")),
             },
         ]);
-        assert_eq!(check(&f), vec![], "a slot store is a definition of the slot");
+        assert_eq!(
+            check(&f),
+            vec![],
+            "a slot store is a definition of the slot"
+        );
     }
 
     #[test]
@@ -1004,7 +1063,10 @@ mod tests {
         // The header stays first — a comment before it would bind to the PREVIOUS
         // function when the whole multi-function blob is split on the header.
         assert_eq!(lines[0], "// glaurung: fib @ 0x1571");
-        assert_eq!(lines[1], "// glaurung-verify: var0 is read but never defined");
+        assert_eq!(
+            lines[1],
+            "// glaurung-verify: var0 is read but never defined"
+        );
         // ...and the code the header introduces still follows, unshifted.
         assert_eq!(lines[2], "long fib(long arg0) {");
     }
@@ -1020,7 +1082,10 @@ mod tests {
         let body = "// glaurung: g @ 0x20\nint g(void) {\n    return x;\n}";
         let vs = [violation("x"), violation("y")];
         let out = splice_verify_comments(body, &vs);
-        let header_idx = out.lines().position(|l| l.starts_with("// glaurung:")).unwrap();
+        let header_idx = out
+            .lines()
+            .position(|l| l.starts_with("// glaurung:"))
+            .unwrap();
         let code_idx = out.lines().position(|l| l.starts_with("int g(")).unwrap();
         for v in &vs {
             let vi = out

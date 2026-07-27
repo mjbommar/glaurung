@@ -67,10 +67,7 @@ pub fn promote_stack_locals(f: &mut Function) {
 /// type recovery so a 4-byte spill slot renders as `int` rather than the
 /// blanket `long`. When a name is defined at more than one width the widest is
 /// kept (the safest committed size).
-pub fn promote_stack_locals_typed(
-    f: &mut Function,
-    cc: Option<CallConv>,
-) -> HashMap<String, u8> {
+pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> HashMap<String, u8> {
     let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
     let mut stack_counter = 0usize;
     let mut local_counter = 0usize;
@@ -144,6 +141,10 @@ fn rewrite_body(
                 rewrite_expr(cond, map, stack_counter, local_counter, cc);
                 rewrite_body(body, map, stack_counter, local_counter, cc);
             }
+            Stmt::DoWhile { body, cond } => {
+                rewrite_body(body, map, stack_counter, local_counter, cc);
+                rewrite_expr(cond, map, stack_counter, local_counter, cc);
+            }
             Stmt::Push { value } => rewrite_expr(value, map, stack_counter, local_counter, cc),
             Stmt::Switch {
                 discriminant,
@@ -161,7 +162,8 @@ fn rewrite_body(
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
-            | Stmt::Break | Stmt::Nop
+            | Stmt::Break
+            | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
         }
@@ -255,9 +257,7 @@ fn try_promote_lea_to_local(
             };
             let entry = map
                 .entry(key)
-                .or_insert_with(|| {
-                    (alloc_name(name, *disp, stack_counter, local_counter, cc), 8)
-                });
+                .or_insert_with(|| (alloc_name(name, *disp, stack_counter, local_counter, cc), 8));
             entry.1 = entry.1.min(8);
             let alias = entry.0.clone();
             *addr = Expr::Reg(VReg::phys(alias));

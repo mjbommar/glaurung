@@ -158,6 +158,10 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 fold_expr(cond, pool);
                 fold_body(body, pool);
             }
+            Stmt::DoWhile { body, cond } => {
+                fold_body(body, pool);
+                fold_expr(cond, pool);
+            }
             Stmt::Push { value } => fold_expr(value, pool),
             Stmt::Switch {
                 discriminant,
@@ -175,7 +179,8 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
-            | Stmt::Break | Stmt::Nop
+            | Stmt::Break
+            | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
         }

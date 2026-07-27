@@ -58,13 +58,17 @@ pub fn prune_overwritten_flags(f: &mut Function) {
         // Recurse first so nested lists are handled independently.
         for st in body.iter_mut() {
             match st {
-                Stmt::If { then_body, else_body, .. } => {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
                     prune(then_body);
                     if let Some(e) = else_body {
                         prune(e);
                     }
                 }
-                Stmt::While { body, .. } => prune(body),
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => prune(body),
                 Stmt::Switch { cases, default, .. } => {
                     for (_, b) in cases.iter_mut() {
                         prune(b);
@@ -80,15 +84,23 @@ pub fn prune_overwritten_flags(f: &mut Function) {
         let mut drop_at = vec![false; body.len()];
         for i in 0..body.len() {
             let flag = match &body[i] {
-                Stmt::Assign { dst: dst @ VReg::Flag(_), .. } => dst.clone(),
+                Stmt::Assign {
+                    dst: dst @ VReg::Flag(_),
+                    ..
+                } => dst.clone(),
                 _ => continue,
             };
             // Scan forward for an unread overwrite of the same flag.
             for j in (i + 1)..body.len() {
                 match &body[j] {
                     // Anything with flow we do not model, or a nested reader: give up.
-                    Stmt::Label(_) | Stmt::Goto { .. } | Stmt::If { .. }
-                    | Stmt::While { .. } | Stmt::Switch { .. } | Stmt::Call { .. }
+                    Stmt::Label(_)
+                    | Stmt::Goto { .. }
+                    | Stmt::If { .. }
+                    | Stmt::While { .. }
+                    | Stmt::DoWhile { .. }
+                    | Stmt::Switch { .. }
+                    | Stmt::Call { .. }
                     | Stmt::Return { .. } => break,
                     Stmt::Assign { dst, src } => {
                         if reads_flag(src, &flag) {
@@ -139,7 +151,7 @@ fn prune_body(body: &mut Vec<Stmt>) {
                     prune_body(eb);
                 }
             }
-            Stmt::While { body, .. } => prune_body(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => prune_body(body),
             _ => {}
         }
     }
@@ -207,7 +219,9 @@ fn count_reads_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Store { addr, src, .. } => {
             count_reads_in_expr(addr, target) + count_reads_in_expr(src, target)
         }
-        Stmt::Call { target: t, args, .. } => {
+        Stmt::Call {
+            target: t, args, ..
+        } => {
             count_reads_in_expr(t, target)
                 + args
                     .iter()
@@ -241,6 +255,14 @@ fn count_reads_in_stmt(s: &Stmt, target: &VReg) -> usize {
             }
             n
         }
+        Stmt::DoWhile { body, cond } => {
+            let mut n = body
+                .iter()
+                .map(|st| count_reads_in_stmt(st, target))
+                .sum::<usize>();
+            n += count_reads_in_expr(cond, target);
+            n
+        }
         Stmt::Push { value } => count_reads_in_expr(value, target),
         Stmt::Switch {
             discriminant,
@@ -263,7 +285,8 @@ fn count_reads_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Break | Stmt::Nop
+        | Stmt::Break
+        | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => 0,
     }
@@ -334,7 +357,7 @@ mod tests {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
-                            inverted: false,
+                        inverted: false,
                     },
                 ],
                 vec![0x1100, 0x1200],
@@ -422,7 +445,7 @@ mod tests {
                     Op::CondJump {
                         cond: VReg::Flag(Flag::Z),
                         target: 0x1100,
-                            inverted: false,
+                        inverted: false,
                     },
                 ],
                 vec![0x1100, 0x1200],

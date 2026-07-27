@@ -152,6 +152,12 @@ fn annotate_stmt(stmt: &mut Stmt, field_map: &PdbFieldMap) {
                 annotate_stmt(stmt, field_map);
             }
         }
+        Stmt::DoWhile { body, cond } => {
+            for stmt in body {
+                annotate_stmt(stmt, field_map);
+            }
+            annotate_expr(cond, field_map);
+        }
         Stmt::Push { value } => annotate_expr(value, field_map),
         Stmt::Switch {
             discriminant,
@@ -173,7 +179,8 @@ fn annotate_stmt(stmt: &mut Stmt, field_map: &PdbFieldMap) {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Break | Stmt::Nop
+        | Stmt::Break
+        | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
     }

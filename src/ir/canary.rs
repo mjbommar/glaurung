@@ -94,7 +94,9 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
                     collapse_exit_check(eb, slot);
                 }
             }
-            Stmt::While { body, .. } => collapse_exit_check(body, slot),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collapse_exit_check(body, slot)
+            }
             _ => {}
         }
     }
@@ -181,7 +183,7 @@ fn collapse_body(body: &mut Vec<Stmt>) {
                     collapse_body(eb);
                 }
             }
-            Stmt::While { body, .. } => collapse_body(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collapse_body(body),
             _ => {}
         }
     }
@@ -255,6 +257,10 @@ fn rewrite_body(body: &mut [Stmt]) {
                 rewrite_expr(cond);
                 rewrite_body(body);
             }
+            Stmt::DoWhile { body, cond } => {
+                rewrite_body(body);
+                rewrite_expr(cond);
+            }
             Stmt::Push { value } => rewrite_expr(value),
             Stmt::Switch {
                 discriminant,
@@ -272,7 +278,8 @@ fn rewrite_body(body: &mut [Stmt]) {
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
-            | Stmt::Break | Stmt::Nop
+            | Stmt::Break
+            | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
         }

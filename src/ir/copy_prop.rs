@@ -64,7 +64,7 @@ fn invalidate(copies: &mut Copies, written: &VReg) {
     copies.retain(|dst, src| dst != written && !contains_reg(src, written));
 }
 
-fn propagate_run(stmts: &mut [Stmt]) {
+fn propagate_run(stmts: &mut [Stmt]) -> Copies {
     let mut copies: Copies = HashMap::new();
     for s in stmts.iter_mut() {
         match s {
@@ -115,6 +115,15 @@ fn propagate_run(stmts: &mut [Stmt]) {
                 propagate_run(body);
                 copies.clear();
             }
+            Stmt::DoWhile { body, cond } => {
+                // Unlike a pre-tested loop, the condition observes the tail of
+                // the body on every iteration.  Carry only the body's final
+                // straight-line copies into it; any branch, call, or other
+                // control-flow boundary clears that set conservatively.
+                let tail_copies = propagate_run(body);
+                subst(cond, &tail_copies);
+                copies.clear();
+            }
             Stmt::Switch {
                 discriminant,
                 cases,
@@ -135,6 +144,7 @@ fn propagate_run(stmts: &mut [Stmt]) {
             Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
     }
+    copies
 }
 
 fn is_self_ref(dst: &VReg, src: &Expr) -> bool {
@@ -145,7 +155,7 @@ fn is_self_ref(dst: &VReg, src: &Expr) -> bool {
 /// scratch destination is read exactly once in the whole body — safe because
 /// value-numbering makes each such destination single-def, so folding it in
 /// duplicates no computation. Copies still do not cross control-flow edges.
-fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) {
+fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Copies {
     let mut copies: Copies = HashMap::new();
     for s in stmts.iter_mut() {
         match s {
@@ -204,6 +214,11 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) {
                 propagate_run_counted(body, reads);
                 copies.clear();
             }
+            Stmt::DoWhile { body, cond } => {
+                let tail_copies = propagate_run_counted(body, reads);
+                subst(cond, &tail_copies);
+                copies.clear();
+            }
             Stmt::Switch {
                 discriminant,
                 cases,
@@ -222,6 +237,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) {
             Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
     }
+    copies
 }
 
 /// Within each straight-line run, drop a scratch-register write that is
@@ -287,7 +303,7 @@ fn dead_store_runs(body: &mut Vec<Stmt>) {
                     dead_store_runs(eb);
                 }
             }
-            Stmt::While { body, .. } => dead_store_runs(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => dead_store_runs(body),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     dead_store_runs(b);
@@ -338,7 +354,9 @@ fn remove_dead(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
                     changed |= remove_dead(eb, reads);
                 }
             }
-            Stmt::While { body, .. } => changed |= remove_dead(body, reads),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                changed |= remove_dead(body, reads)
+            }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     changed |= remove_dead(b, reads);
@@ -480,6 +498,10 @@ fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
             count_reads_expr(cond, reads);
             count_reads_body(body, reads);
         }
+        Stmt::DoWhile { body, cond } => {
+            count_reads_body(body, reads);
+            count_reads_expr(cond, reads);
+        }
         Stmt::Switch {
             discriminant,
             cases,
@@ -496,7 +518,8 @@ fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Break | Stmt::Nop
+        | Stmt::Break
+        | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
     }
@@ -672,6 +695,47 @@ mod tests {
     }
 
     #[test]
+    fn do_while_condition_observes_tail_copy() {
+        // The latch comparison is evaluated after the body.  A reload emitted
+        // at the body tail therefore reaches the condition and must fold there;
+        // leaving it as a separate wide scratch lets later width recovery change
+        // a signed `local_c > 0` into an unsigned comparison.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::DoWhile {
+                body: vec![Stmt::Assign {
+                    dst: reg("t10"),
+                    src: Expr::Reg(reg("local_c")),
+                }],
+                cond: Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Const(0)),
+                    rhs: Box::new(Expr::Reg(reg("t10"))),
+                },
+            }],
+        };
+
+        propagate_copies(&mut f);
+
+        let Stmt::DoWhile { body, cond } = &f.body[0] else {
+            panic!("expected do-while, got {:?}", f.body[0]);
+        };
+        assert!(
+            body.is_empty(),
+            "folded latch reload must be dead: {body:?}"
+        );
+        assert_eq!(
+            *cond,
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(Expr::Const(0)),
+                rhs: Box::new(Expr::Reg(reg("local_c"))),
+            }
+        );
+    }
+
+    #[test]
     fn single_use_load_not_folded_across_store() {
         // t = *p; *q = 5; return t
         // Even though `t` is read exactly once, its defining load must NOT be
@@ -793,9 +857,19 @@ mod tests {
         propagate_copies(&mut f);
         // The dead first write is removed and the shift (read once by the return)
         // folds into it -> `return (local_c >> 1)`.
-        assert_eq!(f.body.len(), 1, "dead write removed + shift folded: {:?}", f.body);
+        assert_eq!(
+            f.body.len(),
+            1,
+            "dead write removed + shift folded: {:?}",
+            f.body
+        );
         assert!(
-            matches!(&f.body[0], Stmt::Return { value: Some(Expr::Bin { op: BinOp::Shr, .. }) }),
+            matches!(
+                &f.body[0],
+                Stmt::Return {
+                    value: Some(Expr::Bin { op: BinOp::Shr, .. })
+                }
+            ),
             "surviving statement must be the folded return: {:?}",
             f.body[0]
         );

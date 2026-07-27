@@ -179,9 +179,16 @@ impl Splitter {
                 }
                 Stmt::Push { value } => self.rename_expr(value),
                 Stmt::Pop { target } => self.rename_reg(target),
-                Stmt::If { cond, .. } | Stmt::While { cond, .. } => self.rename_expr(cond),
+                Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
+                    self.rename_expr(cond)
+                }
                 Stmt::Switch { discriminant, .. } => self.rename_expr(discriminant),
-                Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+                Stmt::Goto { .. }
+                | Stmt::Label(_)
+                | Stmt::Break
+                | Stmt::Nop
+                | Stmt::Unknown(_)
+                | Stmt::Comment(_) => {}
             }
 
             if let Some(slot) = spill {
@@ -200,7 +207,7 @@ impl Splitter {
                         self.walk_body(eb);
                     }
                 }
-                Stmt::While { body, .. } => self.walk_body(body),
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => self.walk_body(body),
                 Stmt::Switch { cases, default, .. } => {
                     for (_, b) in cases.iter_mut() {
                         self.walk_body(b);

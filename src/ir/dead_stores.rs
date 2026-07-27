@@ -54,7 +54,7 @@ fn eliminate_body(body: &mut Vec<Stmt>, ret_regs: &[&str]) {
                     eliminate_body(eb, ret_regs);
                 }
             }
-            Stmt::While { body, .. } => eliminate_body(body, ret_regs),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => eliminate_body(body, ret_regs),
             _ => {}
         }
     }
@@ -220,6 +220,9 @@ fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
         Stmt::While { cond, body } => {
             expr_reads(cond, dst) || body.iter().any(|s| stmt_reads(s, dst))
         }
+        Stmt::DoWhile { body, cond } => {
+            body.iter().any(|s| stmt_reads(s, dst)) || expr_reads(cond, dst)
+        }
         Stmt::Push { value } => expr_reads(value, dst),
         Stmt::Pop { target: t } => t == dst,
         Stmt::Switch {
@@ -235,9 +238,12 @@ fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
                     .as_ref()
                     .is_some_and(|b| b.iter().any(|s| stmt_reads(s, dst)))
         }
-        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {
-            false
-        }
+        Stmt::Goto { .. }
+        | Stmt::Label(_)
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => false,
     }
 }
 
@@ -253,7 +259,9 @@ fn contains_nested_read(s: &Stmt, dst: &VReg) -> bool {
                     .as_ref()
                     .is_some_and(|eb| eb.iter().any(|s| stmt_reads(s, dst)))
         }
-        Stmt::While { body, .. } => body.iter().any(|s| stmt_reads(s, dst)),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            body.iter().any(|s| stmt_reads(s, dst))
+        }
         _ => false,
     }
 }

@@ -64,6 +64,10 @@ fn fold_body(body: &mut [Stmt]) {
                 fold_expr(cond);
                 fold_body(body);
             }
+            Stmt::DoWhile { body, cond } => {
+                fold_body(body);
+                fold_expr(cond);
+            }
             Stmt::Push { value } => fold_expr(value),
             Stmt::Switch {
                 discriminant,
@@ -81,7 +85,8 @@ fn fold_body(body: &mut [Stmt]) {
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
-            | Stmt::Break | Stmt::Nop
+            | Stmt::Break
+            | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
         }

@@ -126,9 +126,11 @@ fn owned(r: &Region, out: &mut Vec<usize>) {
             out.push(*header);
             owned(body, out);
         }
-        Region::Switch {
-            dispatch, arms, ..
-        } => {
+        Region::DoWhile { body, cond, .. } => {
+            owned(body, out);
+            out.push(*cond);
+        }
+        Region::Switch { dispatch, arms, .. } => {
             out.push(*dispatch);
             arms.iter().for_each(|a| owned(a, out));
         }
@@ -223,9 +225,8 @@ fn goto_edges(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>
             }
             goto_edges(body, edges, out);
         }
-        Region::Switch {
-            dispatch, arms, ..
-        } => {
+        Region::DoWhile { body, .. } => goto_edges(body, edges, out),
+        Region::Switch { dispatch, arms, .. } => {
             for a in arms {
                 if let Region::Goto(t) = a {
                     out.insert((*dispatch, *t));
@@ -296,11 +297,7 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             implied(then_r, edges, out);
             implied(else_r, edges, out);
         }
-        Region::While {
-            header,
-            body,
-            exit,
-        } => {
+        Region::While { header, body, exit } => {
             if let Some(b) = structural_entry(body) {
                 out.insert((*header, b));
             }
@@ -310,6 +307,17 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             // The body's escaping edges are the latch: they return to the header.
             for (from, _) in escaping(body, edges) {
                 out.insert((from, *header));
+            }
+            implied(body, edges, out);
+        }
+        Region::DoWhile { body, cond, exit } => {
+            let header = structural_entry(body).unwrap_or(*cond);
+            out.insert((*cond, header));
+            if let Some(x) = *exit {
+                out.insert((*cond, x));
+            }
+            for (from, _) in escaping(body, edges) {
+                out.insert((from, *cond));
             }
             implied(body, edges, out);
         }
@@ -349,9 +357,14 @@ fn loops_and_switches(
             loops_and_switches(body, enclosing, headers, switch_owner);
             enclosing.pop();
         }
-        Region::Switch {
-            dispatch, arms, ..
-        } => {
+        Region::DoWhile { body, cond, .. } => {
+            let header = structural_entry(body).unwrap_or(*cond);
+            headers.insert(header);
+            enclosing.push(header);
+            loops_and_switches(body, enclosing, headers, switch_owner);
+            enclosing.pop();
+        }
+        Region::Switch { dispatch, arms, .. } => {
             switch_owner.insert(*dispatch, enclosing.clone());
             arms.iter()
                 .for_each(|a| loops_and_switches(a, enclosing, headers, switch_owner));
@@ -359,7 +372,9 @@ fn loops_and_switches(
         Region::Seq(parts) => parts
             .iter()
             .for_each(|p| loops_and_switches(p, enclosing, headers, switch_owner)),
-        Region::IfThen { then_r, .. } => loops_and_switches(then_r, enclosing, headers, switch_owner),
+        Region::IfThen { then_r, .. } => {
+            loops_and_switches(then_r, enclosing, headers, switch_owner)
+        }
         Region::IfThenElse { then_r, else_r, .. } => {
             loops_and_switches(then_r, enclosing, headers, switch_owner);
             loops_and_switches(else_r, enclosing, headers, switch_owner);
@@ -447,7 +462,7 @@ pub fn account(
                 gotos(then_r, out);
                 gotos(else_r, out);
             }
-            Region::While { body, .. } => gotos(body, out),
+            Region::While { body, .. } | Region::DoWhile { body, .. } => gotos(body, out),
             Region::Switch { arms, .. } => arms.iter().for_each(|a| gotos(a, out)),
             Region::Block(_) | Region::Unstructured(_) => {}
         }
@@ -793,11 +808,27 @@ mod tests {
         // so it is not sequential flow: only `if (c) goto L3;` expresses it.
         let edges = vec![
             vec![
-                Edge { to: 1, kind: EdgeKind::Fallthrough, back: false },
-                Edge { to: 3, kind: EdgeKind::Taken, back: false },
+                Edge {
+                    to: 1,
+                    kind: EdgeKind::Fallthrough,
+                    back: false,
+                },
+                Edge {
+                    to: 3,
+                    kind: EdgeKind::Taken,
+                    back: false,
+                },
             ],
-            vec![Edge { to: 2, kind: EdgeKind::Jump, back: false }],
-            vec![Edge { to: 3, kind: EdgeKind::Jump, back: false }],
+            vec![Edge {
+                to: 2,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
+            vec![Edge {
+                to: 3,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
             vec![],
         ];
         let preds = vec![vec![], vec![0], vec![1], vec![0, 2]];
@@ -814,14 +845,14 @@ mod tests {
         ]);
         let errs = account(&edges, &preds, 0, &region);
         assert!(
-            errs.iter().any(|e| matches!(e, AccountError::EdgeViaGoto { .. })),
+            errs.iter()
+                .any(|e| matches!(e, AccountError::EdgeViaGoto { .. })),
             "expected a goto-expressed edge to be reported: {errs:?}"
         );
         assert!(
-            !errs.iter().any(|e| matches!(
-                e,
-                AccountError::EdgeUnaccounted { from: 0, to: 3, .. }
-            )),
+            !errs
+                .iter()
+                .any(|e| matches!(e, AccountError::EdgeUnaccounted { from: 0, to: 3, .. })),
             "a goto-expressed edge is not fully unaccounted: {errs:?}"
         );
     }
@@ -838,7 +869,11 @@ mod tests {
     fn a_cfg_missing_blocks_is_reported_clean() {
         // The real function branches to a third block; this CFG does not know it.
         let edges = vec![
-            vec![Edge { to: 1, kind: EdgeKind::Jump, back: false }],
+            vec![Edge {
+                to: 1,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
             vec![],
         ];
         let preds = vec![vec![], vec![0]];
@@ -856,8 +891,16 @@ mod tests {
     #[test]
     fn a_reachable_block_the_tree_never_emits_is_reported() {
         let edges = vec![
-            vec![Edge { to: 1, kind: EdgeKind::Jump, back: false }],
-            vec![Edge { to: 2, kind: EdgeKind::Jump, back: false }],
+            vec![Edge {
+                to: 1,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
+            vec![Edge {
+                to: 2,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
             vec![],
         ];
         let preds = vec![vec![], vec![0], vec![1]];
@@ -879,14 +922,34 @@ mod tests {
         // edge to 3 is expressed by nothing and must still be reported.
         let edges = vec![
             vec![
-                Edge { to: 1, kind: EdgeKind::Fallthrough, back: false },
-                Edge { to: 3, kind: EdgeKind::Taken, back: false },
+                Edge {
+                    to: 1,
+                    kind: EdgeKind::Fallthrough,
+                    back: false,
+                },
+                Edge {
+                    to: 3,
+                    kind: EdgeKind::Taken,
+                    back: false,
+                },
             ],
             vec![
-                Edge { to: 2, kind: EdgeKind::Fallthrough, back: false },
-                Edge { to: 3, kind: EdgeKind::Taken, back: false },
+                Edge {
+                    to: 2,
+                    kind: EdgeKind::Fallthrough,
+                    back: false,
+                },
+                Edge {
+                    to: 3,
+                    kind: EdgeKind::Taken,
+                    back: false,
+                },
             ],
-            vec![Edge { to: 3, kind: EdgeKind::Jump, back: false }],
+            vec![Edge {
+                to: 3,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
             vec![],
         ];
         let preds = vec![vec![], vec![0], vec![1], vec![0, 1, 2]];
@@ -903,19 +966,14 @@ mod tests {
         ]);
         let errs = account(&edges, &preds, 0, &region);
         assert!(
-            errs.iter().any(|e| matches!(
-                e,
-                AccountError::EdgeViaGoto { from: 1, to: 3, .. }
-            )),
+            errs.iter()
+                .any(|e| matches!(e, AccountError::EdgeViaGoto { from: 1, to: 3, .. })),
             "block 1's goto expresses ITS edge: {errs:?}"
         );
         assert!(
-            errs.iter().any(|e| matches!(
-                e,
-                AccountError::EdgeUnaccounted { from: 0, to: 3, .. }
-            )),
+            errs.iter()
+                .any(|e| matches!(e, AccountError::EdgeUnaccounted { from: 0, to: 3, .. })),
             "block 0's edge to the same target is expressed by nothing: {errs:?}"
         );
     }
 }
-

@@ -85,7 +85,9 @@ fn incoming_arg_expr(arch: CallConv, slot: usize, body: &[Stmt]) -> Option<Expr>
     let mut versioned_anywhere = false;
     let mut best: Option<(u32, String)> = None;
     let mut visit = |n: &str| {
-        let Some((_, v)) = n.split_once('#') else { return };
+        let Some((_, v)) = n.split_once('#') else {
+            return;
+        };
         versioned_anywhere = true;
         if !names.contains(&ssa_base(n)) {
             return;
@@ -98,7 +100,9 @@ fn incoming_arg_expr(arch: CallConv, slot: usize, body: &[Stmt]) -> Option<Expr>
     };
     walk_body_reg_names(body, &mut visit);
     if !versioned_anywhere {
-        return names.first().map(|n| Expr::Reg(VReg::Phys((*n).to_string())));
+        return names
+            .first()
+            .map(|n| Expr::Reg(VReg::Phys((*n).to_string())));
     }
     // VALUE-NUMBERED: decline. Naming the live-in version requires knowing which
     // version `value_number` treats as live-in, and this pass cannot see that.
@@ -166,6 +170,10 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
             Stmt::While { cond, body } => {
                 expr(cond, f);
                 walk_body_reg_names(body, f);
+            }
+            Stmt::DoWhile { body, cond } => {
+                walk_body_reg_names(body, f);
+                expr(cond, f);
             }
             Stmt::Switch {
                 discriminant,
@@ -288,6 +296,15 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
                 walk_stmt_regs(b, name, reads, writes);
             }
         }
+        Stmt::DoWhile { body, cond } => {
+            // This walk only accumulates whether a read/write occurs anywhere;
+            // visit the condition first to release the closure's borrow before
+            // recursing into the body.
+            expr_reads(cond);
+            for b in body {
+                walk_stmt_regs(b, name, reads, writes);
+            }
+        }
         Stmt::Switch {
             discriminant,
             cases,
@@ -355,7 +372,9 @@ fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
                     attribute_call_results(eb, arch);
                 }
             }
-            Stmt::While { body, .. } => attribute_call_results(body, arch),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                attribute_call_results(body, arch)
+            }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     attribute_call_results(b, arch);
@@ -383,7 +402,9 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv, param_slots: &std::collection
                     fold_body(eb, arch, param_slots);
                 }
             }
-            Stmt::While { body, .. } => fold_body(body, arch, param_slots),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                fold_body(body, arch, param_slots)
+            }
             _ => {}
         }
     }
@@ -595,6 +616,12 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
                 mark_arg_reads_in_stmt(stmt, arch, read_between);
             }
         }
+        Stmt::DoWhile { body, cond } => {
+            for stmt in body {
+                mark_arg_reads_in_stmt(stmt, arch, read_between);
+            }
+            mark_arg_reads_in_expr(cond, arch, read_between);
+        }
         Stmt::Push { value } => mark_arg_reads_in_expr(value, arch, read_between),
         Stmt::Switch {
             discriminant,
@@ -642,7 +669,7 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
                 }
             }
         }
-        Stmt::While { body, .. } => {
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
             for stmt in body {
                 mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
             }
@@ -1435,7 +1462,9 @@ mod tests {
             })
             .expect("the call must survive");
         assert!(
-            !args.iter().any(|a| matches!(a, Expr::Reg(VReg::Phys(n)) if n == "rcx")),
+            !args
+                .iter()
+                .any(|a| matches!(a, Expr::Reg(VReg::Phys(n)) if n == "rcx")),
             "injected an unversioned register into a value-numbered body: {args:?}"
         );
     }
@@ -1473,9 +1502,10 @@ mod tests {
             })
             .expect("the call must survive");
         assert!(
-            !args.iter().any(|a| matches!(a, Expr::Reg(VReg::Phys(n)) if ssa_base(n) == "rcx")),
+            !args
+                .iter()
+                .any(|a| matches!(a, Expr::Reg(VReg::Phys(n)) if ssa_base(n) == "rcx")),
             "the backfill must not fire on a value-numbered body: {args:?}"
         );
     }
 }
-

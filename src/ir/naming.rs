@@ -229,6 +229,12 @@ fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
                 walk_stmt_rw(s, cb);
             }
         }
+        Stmt::DoWhile { body, cond } => {
+            for s in body {
+                walk_stmt_rw(s, cb);
+            }
+            walk_expr_phys(cond, &mut |n| cb(n, false));
+        }
         Stmt::Push { value } => walk_expr_phys(value, &mut |n| cb(n, false)),
         Stmt::Pop { target } => {
             if let VReg::Phys(n) = target {
@@ -252,7 +258,12 @@ fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
                 }
             }
         }
-        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+        Stmt::Goto { .. }
+        | Stmt::Label(_)
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => {}
     }
 }
 
@@ -316,6 +327,12 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
                 walk_stmt_phys(s, cb);
             }
         }
+        Stmt::DoWhile { body, cond } => {
+            for s in body {
+                walk_stmt_phys(s, cb);
+            }
+            walk_expr_phys(cond, cb);
+        }
         Stmt::Push { value } => walk_expr_phys(value, cb),
         Stmt::Pop { target } => {
             if let VReg::Phys(n) = target {
@@ -339,7 +356,12 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
                 }
             }
         }
-        Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+        Stmt::Goto { .. }
+        | Stmt::Label(_)
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => {}
     }
 }
 
@@ -448,6 +470,10 @@ fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
                 rewrite_expr(cond, role);
                 rewrite_body(body, role);
             }
+            Stmt::DoWhile { body, cond } => {
+                rewrite_body(body, role);
+                rewrite_expr(cond, role);
+            }
             Stmt::Push { value } => rewrite_expr(value, role),
             Stmt::Pop { target } => rename_vreg(target, role),
             Stmt::Switch {
@@ -465,7 +491,8 @@ fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
             }
             Stmt::Goto { .. }
             | Stmt::Label(_)
-            | Stmt::Break | Stmt::Nop
+            | Stmt::Break
+            | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
         }
@@ -540,7 +567,11 @@ mod tests {
             "scratch rcx must not become an arg slot: {}",
             text
         );
-        assert!(!text.contains("%rcx"), "rcx should be aliased away: {}", text);
+        assert!(
+            !text.contains("%rcx"),
+            "rcx should be aliased away: {}",
+            text
+        );
     }
 
     #[test]

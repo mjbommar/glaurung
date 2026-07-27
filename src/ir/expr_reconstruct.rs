@@ -50,7 +50,7 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
                     reconstruct_body(eb);
                 }
             }
-            Stmt::While { body, .. } => reconstruct_body(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => reconstruct_body(body),
             _ => {}
         }
     }
@@ -166,14 +166,18 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
     match s {
         Stmt::Assign { src, .. } => count_reg_uses(src, target),
         Stmt::Store { addr, src, .. } => count_reg_uses(addr, target) + count_reg_uses(src, target),
-        Stmt::Call { target: t, args, .. } => {
+        Stmt::Call {
+            target: t, args, ..
+        } => {
             count_reg_uses(t, target)
                 + args
                     .iter()
                     .map(|a| count_reg_uses(a, target))
                     .sum::<usize>()
         }
-        Stmt::If { cond, .. } | Stmt::While { cond, .. } => count_reg_uses(cond, target),
+        Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
+            count_reg_uses(cond, target)
+        }
         Stmt::Return { value } => value
             .as_ref()
             .map(|e| count_reg_uses(e, target))
@@ -183,7 +187,8 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Break | Stmt::Nop
+        | Stmt::Break
+        | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => 0,
     }
@@ -281,13 +286,17 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
             substitute_in_expr(addr, target, with);
             substitute_in_expr(src, target, with);
         }
-        Stmt::Call { target: t, args, .. } => {
+        Stmt::Call {
+            target: t, args, ..
+        } => {
             substitute_in_expr(t, target, with);
             for a in args {
                 substitute_in_expr(a, target, with);
             }
         }
-        Stmt::If { cond, .. } | Stmt::While { cond, .. } => substitute_in_expr(cond, target, with),
+        Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
+            substitute_in_expr(cond, target, with)
+        }
         Stmt::Return { value } => {
             if let Some(e) = value {
                 substitute_in_expr(e, target, with);
@@ -298,7 +307,8 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
-        | Stmt::Break | Stmt::Nop
+        | Stmt::Break
+        | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
     }
@@ -578,7 +588,7 @@ mod tests {
                         n += count_stmts(eb);
                     }
                 }
-                Stmt::While { body, .. } => n += count_stmts(body),
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => n += count_stmts(body),
                 _ => {}
             }
         }

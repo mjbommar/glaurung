@@ -9,7 +9,8 @@
 //!
 //! * Straight-line sequences (`Seq`).
 //! * Single-entry diamond `if-then` and `if-then-else` with a common join.
-//! * Natural loops with a single back-edge and a single header (`While`).
+//! * Natural loops with a single back-edge and a single header (`While` and
+//!   `DoWhile`).
 //! * Anything else is preserved as [`Region::Unstructured`] carrying the raw
 //!   block indices so no control flow is ever silently dropped.
 //!
@@ -59,6 +60,13 @@ pub enum Region {
         body: Box<Region>,
         exit: Option<usize>,
     },
+    /// `do { body } while (cond)` — the conditional block is the loop latch,
+    /// so the body executes before the condition on every iteration.
+    DoWhile {
+        body: Box<Region>,
+        cond: usize,
+        exit: Option<usize>,
+    },
     /// `switch (discriminant) { case 0: <arm>; case 1: <arm>; ... }`
     /// (#193). The dispatch block has N>=3 successors (typical jump-
     /// table dispatch); each arm is a sub-region; the join is the
@@ -91,7 +99,9 @@ impl Region {
                         walk(p, out);
                     }
                 }
-                Region::IfThen { cond, then_r, join, .. } => {
+                Region::IfThen {
+                    cond, then_r, join, ..
+                } => {
                     out.push(*cond);
                     walk(then_r, out);
                     if let Some(j) = join {
@@ -115,6 +125,13 @@ impl Region {
                 Region::While { header, body, exit } => {
                     out.push(*header);
                     walk(body, out);
+                    if let Some(e) = exit {
+                        out.push(*e);
+                    }
+                }
+                Region::DoWhile { body, cond, exit } => {
+                    walk(body, out);
+                    out.push(*cond);
                     if let Some(e) = exit {
                         out.push(*e);
                     }
@@ -228,7 +245,8 @@ impl Cfg {
         }
         // Typed edges, computed once from the graph this Cfg describes.
         let edges = {
-            let d = |a: usize, b: usize| dom.get(a).and_then(|r| r.get(b)).copied().unwrap_or(false);
+            let d =
+                |a: usize, b: usize| dom.get(a).and_then(|r| r.get(b)).copied().unwrap_or(false);
             crate::ir::cfg_edges::classify(lf, &succs, d)
         };
         Cfg {
@@ -345,6 +363,7 @@ pub fn entry_block(r: &Region) -> Option<usize> {
         Region::Seq(parts) => parts.iter().find_map(entry_block),
         Region::IfThen { cond, .. } | Region::IfThenElse { cond, .. } => Some(*cond),
         Region::While { header, .. } => Some(*header),
+        Region::DoWhile { body, cond, .. } => entry_block(body).or(Some(*cond)),
         Region::Switch { dispatch, .. } => Some(*dispatch),
         Region::Goto(b) => Some(*b),
         Region::Unstructured(bs) => bs.first().copied(),
@@ -421,6 +440,13 @@ pub fn verify_region(succs: &[Vec<usize>], entry: usize, region: &Region) -> Vec
                 walk(then_r, succs, out);
             }
             Region::While { body, .. } => walk(body, succs, out),
+            Region::DoWhile { body, cond, exit } => {
+                let mut covered: HashSet<usize> = HashSet::new();
+                covered.extend(entry_block(body).or(Some(*cond)));
+                covered.extend(*exit);
+                report_uncovered(*cond, succs, &covered, out);
+                walk(body, succs, out);
+            }
             Region::Switch { arms, .. } => arms.iter().for_each(|a| walk(a, succs, out)),
             Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => {}
         }
@@ -485,8 +511,7 @@ pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
     // an env var until a region analysis can act on it. Nothing here changes
     // `region`.
     if std::env::var_os("GLAURUNG_ACCOUNT_STRUCTURE").is_some() {
-        let acct =
-            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
+        let acct = crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
         if !acct.is_empty() {
             // stderr, not `tracing`: no subscriber is installed on the CLI or PyO3
             // paths, so a `tracing::warn!` here reached nobody — a diagnostic that
@@ -532,9 +557,30 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         if Some(cur) == stop_at {
             break;
         }
-        if !visited.insert(cur) {
+        if visited.contains(&cur) {
             // Already consumed — avoid infinite loops on back-edges or shared
             // successors we don't currently model structurally.
+            break;
+        }
+
+        // --- Bottom-tested natural loop ------------------------------------
+        // Detect this before inserting `cur` into `visited`: the recovered body
+        // begins at `cur` and must be structured recursively up to (but not
+        // including) the conditional latch.
+        if let Some(loop_r) = detect_bottom_tested_loop(cur, cfg, visited) {
+            parts.push(loop_r.region);
+            match loop_r.exit {
+                Some(next) => {
+                    cur = next;
+                    continue;
+                }
+                None => break,
+            }
+        }
+
+        // `detect_bottom_tested_loop` needs an unconsumed body entry. All other
+        // shapes retain the original consume-before-detect behaviour.
+        if !visited.insert(cur) {
             break;
         }
 
@@ -656,8 +702,7 @@ fn detect_natural_loop(
     }
     // A natural loop requires a back-edge: a predecessor `tail` of `header`
     // that `header` dominates.
-    let tail = cfg
-        .preds[header]
+    let tail = cfg.preds[header]
         .iter()
         .copied()
         .find(|&p| cfg.dominates(header, p))?;
@@ -691,6 +736,84 @@ fn detect_natural_loop(
         region: Region::While {
             header,
             body: Box::new(body),
+            exit: Some(exit),
+        },
+        exit: Some(exit),
+    })
+}
+
+/// Recognise a natural loop whose conditional branch is in the latch.
+///
+/// The shape is `header ... -> cond`, with `cond -> header` as the back-edge and
+/// `cond -> exit` leaving the loop. Unlike [`detect_natural_loop`], the loop
+/// header need not branch: it is ordinary body code and therefore executes once
+/// before the first condition test.
+fn detect_bottom_tested_loop(
+    header: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+) -> Option<LoopRegion> {
+    // A genuine single-latch do-while has exactly one dominated predecessor of
+    // its header. A pre-tested loop with `continue` or an early-exit arm may
+    // also have a conditional predecessor that points to the header, but it has
+    // at least one additional back-edge; accepting one predecessor out of that
+    // set moves the first condition test after the body and changes behaviour.
+    let mut back_preds = cfg.preds[header]
+        .iter()
+        .copied()
+        .filter(|&candidate| cfg.dominates(header, candidate));
+    let cond = back_preds.next()?;
+    if back_preds.next().is_some()
+        || cfg.succs[cond].len() != 2
+        || !cfg.succs[cond].contains(&header)
+        || cfg.cond_taken[cond].is_none()
+        || visited.contains(&cond)
+    {
+        return None;
+    }
+    let body_set = natural_loop_body(header, cond, cfg);
+    // Loop rotation puts an initial top-test in a predecessor outside the
+    // natural loop, then uses a bottom latch for subsequent iterations. That
+    // CFG is not a source-level do-while: the predecessor can bypass the body
+    // entirely. Only promote when every outside entry falls unconditionally
+    // into the header, which proves the body executes at least once.
+    if cfg.preds[header].iter().copied().any(|pred| {
+        !body_set.contains(&pred) && (cfg.succs[pred].len() != 1 || cfg.succs[pred][0] != header)
+    }) {
+        return None;
+    }
+    // A second exit from the body (break/early return) needs nested region
+    // ownership that this bounded A1 detector does not yet model. Promoting
+    // such a loop pulled its exit block into the `do` body and changed both
+    // return values and termination in the O2 loop canaries. The conditional
+    // latch is the only block allowed to leave this natural loop.
+    if body_set
+        .iter()
+        .copied()
+        .any(|block| block != cond && cfg.succs[block].iter().any(|succ| !body_set.contains(succ)))
+    {
+        return None;
+    }
+    let exit = cfg.succs[cond]
+        .iter()
+        .copied()
+        .find(|succ| *succ != header && !body_set.contains(succ))?;
+
+    // The latch's condition belongs to the DoWhile node, not its body. Mark it
+    // consumed while recursively structuring everything from the header up to
+    // the latch. Temporarily consume the exit as well so an inner detector
+    // cannot absorb control outside the loop.
+    visited.insert(cond);
+    let exit_was_visited = !visited.insert(exit);
+    let body = build(header, cfg, visited, Some(cond));
+    if !exit_was_visited {
+        visited.remove(&exit);
+    }
+
+    Some(LoopRegion {
+        region: Region::DoWhile {
+            body: Box::new(body),
+            cond,
             exit: Some(exit),
         },
         exit: Some(exit),
@@ -1070,7 +1193,11 @@ mod tests {
         ]);
         let r = recover_for(&lf);
         let has_while = format!("{:?}", r).contains("While");
-        assert!(has_while, "rotated for-loop not structured as While: {:?}", r);
+        assert!(
+            has_while,
+            "rotated for-loop not structured as While: {:?}",
+            r
+        );
     }
 
     #[test]
@@ -1148,7 +1275,9 @@ mod tests {
             Region::Seq(parts) => {
                 assert_eq!(parts.len(), 2);
                 match &parts[0] {
-                    Region::IfThen { cond, then_r, join, .. } => {
+                    Region::IfThen {
+                        cond, then_r, join, ..
+                    } => {
                         assert_eq!(*cond, 0);
                         assert_eq!(**then_r, Region::Block(1));
                         assert_eq!(*join, Some(2));
@@ -1194,6 +1323,223 @@ mod tests {
     }
 
     #[test]
+    fn bottom_tested_loop_recovers_as_do_while() {
+        //   B0: entry
+        //   B1: body
+        //   B2: conditional latch -> B1 (continue), B3 (exit)
+        //   B3: return
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (0x1100, vec![Op::Nop], vec![0x1200]),
+            (
+                0x1200,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1100,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1300],
+            ),
+            (0x1300, vec![Op::Return], vec![]),
+        ]);
+        let r = recover_for(&lf);
+        match r {
+            Region::Seq(parts) => {
+                assert_eq!(parts[0], Region::Block(0));
+                match &parts[1] {
+                    Region::DoWhile { body, cond, exit } => {
+                        assert_eq!(**body, Region::Block(1));
+                        assert_eq!(*cond, 2);
+                        assert_eq!(*exit, Some(3));
+                    }
+                    other => panic!("expected DoWhile; got {other:?}"),
+                }
+                assert_eq!(parts[2], Region::Block(3));
+            }
+            other => panic!("expected Seq; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn single_block_bottom_tested_loop_recovers_as_do_while() {
+        // The body and latch share one block, as emitted for compact do-while
+        // loops after CFG block splitting.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (
+                0x1100,
+                vec![
+                    Op::Nop,
+                    Op::CondJump {
+                        cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                        target: 0x1100,
+                        inverted: false,
+                    },
+                ],
+                vec![0x1100, 0x1200],
+            ),
+            (0x1200, vec![Op::Return], vec![]),
+        ]);
+        let r = recover_for(&lf);
+        match &r {
+            Region::Seq(parts) => match &parts[1] {
+                Region::DoWhile { body, cond, exit } => {
+                    assert_eq!(**body, Region::Seq(Vec::new()));
+                    assert_eq!(*cond, 1);
+                    assert_eq!(*exit, Some(2));
+                }
+                other => panic!("expected DoWhile; got {other:?}"),
+            },
+            other => panic!("expected Seq; got {other:?}"),
+        }
+        let succs = vec![vec![1], vec![1, 2], vec![]];
+        assert!(verify_region(&succs, 0, &r).is_empty());
+    }
+
+    #[test]
+    fn multiple_back_edges_do_not_turn_a_pretested_loop_into_do_while() {
+        // B1 is the pre-test. B2 can continue directly to it, while B3 is the
+        // ordinary latch. Treating B2 as a bottom-test would skip B1 before the
+        // first iteration and was enough to break five -O2 fixture canaries.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (
+                0x1100,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1400,
+                    inverted: false,
+                }],
+                vec![0x1200, 0x1400],
+            ),
+            (
+                0x1200,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::S),
+                    target: 0x1100,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1300],
+            ),
+            (0x1300, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1400, vec![Op::Return], vec![]),
+        ]);
+        let r = recover_for(&lf);
+        fn contains_do_while(region: &Region) -> bool {
+            match region {
+                Region::DoWhile { .. } => true,
+                Region::Seq(parts) => parts.iter().any(contains_do_while),
+                Region::IfThen { then_r, .. } => contains_do_while(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    contains_do_while(then_r) || contains_do_while(else_r)
+                }
+                Region::While { body, .. } => contains_do_while(body),
+                Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
+                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => false,
+            }
+        }
+        assert!(
+            !contains_do_while(&r),
+            "pre-tested loop became DoWhile: {r:#?}"
+        );
+    }
+
+    #[test]
+    fn rotated_top_test_does_not_turn_the_latch_into_do_while() {
+        // B0 can bypass the body before its first iteration. B2 is a bottom
+        // latch only for subsequent iterations, so emitting `do` for B1..B2
+        // would execute the body once when B0's condition is false.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1300,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1300],
+            ),
+            (0x1100, vec![Op::Nop], vec![0x1200]),
+            (
+                0x1200,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::S),
+                    target: 0x1100,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1300],
+            ),
+            (0x1300, vec![Op::Return], vec![]),
+        ]);
+        let r = recover_for(&lf);
+        fn contains_do_while(region: &Region) -> bool {
+            match region {
+                Region::DoWhile { .. } => true,
+                Region::Seq(parts) => parts.iter().any(contains_do_while),
+                Region::IfThen { then_r, .. } => contains_do_while(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    contains_do_while(then_r) || contains_do_while(else_r)
+                }
+                Region::While { body, .. } => contains_do_while(body),
+                Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
+                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => false,
+            }
+        }
+        assert!(
+            !contains_do_while(&r),
+            "rotated while became DoWhile: {r:#?}"
+        );
+    }
+
+    #[test]
+    fn early_exit_loop_is_not_promoted_to_plain_do_while() {
+        // Entry into B1 is unconditional, but B1 can return through B3 before
+        // reaching the latch B2. A DoWhile with only `{body, cond, exit}` cannot
+        // own that second exit without moving it to the wrong nesting level.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (
+                0x1100,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1300,
+                    inverted: false,
+                }],
+                vec![0x1200, 0x1300],
+            ),
+            (
+                0x1200,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::S),
+                    target: 0x1100,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1400],
+            ),
+            (0x1300, vec![Op::Return], vec![]),
+            (0x1400, vec![Op::Return], vec![]),
+        ]);
+        let r = recover_for(&lf);
+        fn contains_do_while(region: &Region) -> bool {
+            match region {
+                Region::DoWhile { .. } => true,
+                Region::Seq(parts) => parts.iter().any(contains_do_while),
+                Region::IfThen { then_r, .. } => contains_do_while(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    contains_do_while(then_r) || contains_do_while(else_r)
+                }
+                Region::While { body, .. } => contains_do_while(body),
+                Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
+                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => false,
+            }
+        }
+        assert!(
+            !contains_do_while(&r),
+            "early-exit loop became DoWhile: {r:#?}"
+        );
+    }
+
+    #[test]
     fn region_blocks_cover_every_llir_block() {
         // Structural analysis must never silently drop blocks — the Region
         // tree's coverage should match the function's block count modulo
@@ -1232,7 +1578,9 @@ mod tests {
             Region::Seq(parts) => {
                 assert_eq!(parts.len(), 2);
                 match &parts[0] {
-                    Region::IfThen { cond, then_r, join, .. } => {
+                    Region::IfThen {
+                        cond, then_r, join, ..
+                    } => {
                         assert_eq!(*cond, 0);
                         assert!(matches!(**then_r, Region::Block(1)));
                         assert_eq!(*join, None);
@@ -1318,7 +1666,9 @@ mod tests {
                     let (c2, b2) = count_block(else_r, target);
                     (c1 + c2, b1 || b2)
                 }
-                Region::While { body, .. } => count_block(body, target),
+                Region::While { body, .. } | Region::DoWhile { body, .. } => {
+                    count_block(body, target)
+                }
                 Region::Switch { arms, .. } => {
                     let mut count = 0;
                     let mut bad = false;
@@ -1366,7 +1716,9 @@ mod tests {
                     assert_no_unstructured(then_r);
                     assert_no_unstructured(else_r);
                 }
-                Region::While { body, .. } => assert_no_unstructured(body),
+                Region::While { body, .. } | Region::DoWhile { body, .. } => {
+                    assert_no_unstructured(body)
+                }
                 Region::Switch { arms, .. } => {
                     arms.iter().for_each(assert_no_unstructured);
                 }

@@ -55,7 +55,7 @@ fn drop_epilogue_rsp_adjust(body: &mut Vec<Stmt>) {
                     drop_epilogue_rsp_adjust(eb);
                 }
             }
-            Stmt::While { body, .. } => drop_epilogue_rsp_adjust(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => drop_epilogue_rsp_adjust(body),
             _ => {}
         }
     }
@@ -86,7 +86,7 @@ fn rematerialise_body(body: &mut Vec<Stmt>) {
                     rematerialise_body(eb);
                 }
             }
-            Stmt::While { body, .. } => rematerialise_body(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => rematerialise_body(body),
             _ => {}
         }
     }

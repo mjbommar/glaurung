@@ -73,7 +73,7 @@ fn rewrite_stmt(s: &mut Stmt) {
                 rewrite_body(b);
             }
         }
-        Stmt::While { body, .. } => rewrite_body(body),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => rewrite_body(body),
         Stmt::Switch { cases, default, .. } => {
             for (_, b) in cases.iter_mut() {
                 rewrite_body(b);
@@ -316,7 +316,7 @@ fn goto_targets(body: &[Stmt]) -> std::collections::BTreeSet<u64> {
                         walk(b, out);
                     }
                 }
-                Stmt::While { body, .. } => walk(body, out),
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => walk(body, out),
                 Stmt::Switch { cases, default, .. } => {
                     for (_, b) in cases {
                         walk(b, out);
@@ -350,7 +350,7 @@ fn prune_labels(body: &mut Vec<Stmt>, live: &std::collections::BTreeSet<u64>) {
                     prune_labels(b, live);
                 }
             }
-            Stmt::While { body, .. } => prune_labels(body, live),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => prune_labels(body, live),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     prune_labels(b, live);
@@ -465,7 +465,12 @@ mod tests {
             body: vec![gcc_ladder(8), Stmt::Return { value: None }],
         };
         recover_switches(&mut f);
-        let Stmt::Switch { cases, default, discriminant } = &f.body[0] else {
+        let Stmt::Switch {
+            cases,
+            default,
+            discriminant,
+        } = &f.body[0]
+        else {
             panic!("expected a switch, got:\n{:#?}", f.body[0]);
         };
         assert_eq!(*discriminant, reg("arg0"));
