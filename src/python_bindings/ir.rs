@@ -289,16 +289,17 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
 ///
 /// Returns the recovered stack-slot sizes, which callers thread into type recovery.
 ///
-/// `dump` enables the pass-by-pass AST dump (`GLAURUNG_DUMP_PASSES=1`). It is a parameter
-/// rather than an env read per pass so the sequence stays one list.
+/// The pass-by-pass AST dump (`GLAURUNG_DUMP_PASSES=1`) is read here, so EVERY entry
+/// point gets identical diagnostics rather than only the one that happened to carry the
+/// macro. Debugging `--all` used to produce no dump at all.
 fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
     addr_map: &std::collections::HashMap<u64, String>,
     str_pool: &std::collections::HashMap<u64, String>,
-    dump: bool,
 ) -> std::collections::HashMap<String, u8> {
+    let dump = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
     macro_rules! dp {
         ($n:expr) => {
             if dump {
@@ -541,7 +542,7 @@ fn decompile_at_py(
     }
     dp!("lower");
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool, dump_passes);
+    let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool);
     if matches!(
         cc,
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
@@ -691,30 +692,17 @@ fn decompile_range_at_py(
     };
     let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
     let mut f = lower(&lf, &region, func.name.clone());
-    reconstruct(&mut f);
-    crate::ir::const_fold::fold_constants(&mut f);
-    crate::ir::dce::prune_overwritten_flags(&mut f);
-        crate::ir::dce::prune_dead_flags(&mut f);
-    crate::ir::call_args::reconstruct_args_with_params(&mut f, cc, &param_slots);
+    // Inputs the shared pipeline needs. These were interleaved BETWEEN passes here, which
+    // is why the four copies could not simply be diffed against each other — the pass
+    // list and the local setup were braided together. None of them touch `f`, so
+    // hoisting them is order-preserving.
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
-    crate::ir::canary::recognise_canary(&mut f);
-    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(cc));
-    crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
-    crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
-    crate::ir::canary::collapse_canary_save(&mut f);
-    if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
-        crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
-    }
-    crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
-    crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
-    crate::ir::label_prune::prune_unreferenced_labels(&mut f);
+    let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool);
     if matches!(
         cc,
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
