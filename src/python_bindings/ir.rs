@@ -279,6 +279,73 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
 }
 
 /// Dispatch lifting to the appropriate per-arch backend.
+/// THE AST pass pipeline. Every public decompile entry point runs exactly this.
+///
+/// It used to be copy-pasted into four functions — `decompile_at`, `decompile_range_at`,
+/// `decompile_all`, `decompile_many` — with tests keeping the copies aligned by
+/// convention and nothing enforcing it. That is not hypothetical drift: a loop-hoist
+/// retry added during this work landed in one copy and silently did nothing in the other
+/// three, which is exactly how a "fix" gets measured as ineffective.
+///
+/// Returns the recovered stack-slot sizes, which callers thread into type recovery.
+///
+/// `dump` enables the pass-by-pass AST dump (`GLAURUNG_DUMP_PASSES=1`). It is a parameter
+/// rather than an env read per pass so the sequence stays one list.
+fn run_ast_passes(
+    f: &mut crate::ir::ast::Function,
+    cc: crate::ir::call_args::CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    addr_map: &std::collections::HashMap<u64, String>,
+    str_pool: &std::collections::HashMap<u64, String>,
+    dump: bool,
+) -> std::collections::HashMap<String, u8> {
+    macro_rules! dp {
+        ($n:expr) => {
+            if dump {
+                eprintln!("\n===== after {} =====\n{}", $n, crate::ir::ast::render(f));
+            }
+        };
+    }
+    crate::ir::expr_reconstruct::reconstruct(f);
+    dp!("reconstruct");
+    crate::ir::const_fold::fold_constants(f);
+    dp!("fold_constants");
+    // Per-definition first: it removes writes an unread overwrite supersedes, which the
+    // per-name pass below cannot see (flags are un-versioned, so one read keeps every
+    // write of that name alive).
+    crate::ir::dce::prune_overwritten_flags(f);
+    crate::ir::dce::prune_dead_flags(f);
+    dp!("prune_dead_flags");
+    crate::ir::call_args::reconstruct_args_with_params(f, cc, param_slots);
+    dp!("reconstruct_args");
+    crate::ir::name_resolve::resolve_names(f, addr_map);
+    crate::ir::strings_fold::fold_string_literals(f, str_pool);
+    crate::ir::canary::recognise_canary(f);
+    dp!("canary+strings");
+    // Stack-slot promotion runs before register renaming so the aliases (`stack_0`,
+    // `local_0`, ...) it allocates cannot collide with the role names (`arg0`, `ret`,
+    // `varN`) the naming pass introduces.
+    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(f, Some(cc));
+    dp!("promote_stack_locals");
+    crate::ir::value_split::split_spilled_arg_reuse(f, cc);
+    dp!("split_spilled_arg_reuse");
+    crate::ir::naming::apply_role_names_with_params(f, cc, param_slots);
+    dp!("apply_role_names");
+    crate::ir::canary::collapse_canary_save(f);
+    if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
+        crate::ir::arm64_prologue::recognise_arm64_prologue(f);
+    }
+    // Dead-store elimination runs *after* naming so it sees the aliased return register
+    // (`ret` / `arg0`) rather than the raw physical one; that removes the common pre-call
+    // `%ret = 0` idiom entirely.
+    crate::ir::dead_stores::eliminate_dead_stores(f, cc);
+    dp!("eliminate_dead_stores");
+    crate::ir::stack_idiom::rematerialise_stack_ops(f);
+    crate::ir::label_prune::prune_unreferenced_labels(f);
+    dp!("stack_idiom+label_prune");
+    slot_sizes
+}
+
 fn lift_for_arch(data: &[u8], start_va: u64, bits: u32, arch: &str) -> PyResult<Vec<LlirInstr>> {
     let a = arch.to_ascii_lowercase();
     match a.as_str() {
@@ -473,42 +540,8 @@ fn decompile_at_py(
         };
     }
     dp!("lower");
-    reconstruct(&mut f);
-    dp!("reconstruct");
-    crate::ir::const_fold::fold_constants(&mut f);
-    dp!("fold_constants");
-    crate::ir::dce::prune_overwritten_flags(&mut f);
-        crate::ir::dce::prune_dead_flags(&mut f);
-    dp!("prune_dead_flags");
-    crate::ir::call_args::reconstruct_args_with_params(&mut f, cc, &param_slots);
-    dp!("reconstruct_args");
-    crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
-    crate::ir::canary::recognise_canary(&mut f);
-    dp!("canary+strings");
-    // Stack-slot promotion runs before register renaming so the aliases
-    // (`stack_0`, `local_0`, ...) it allocates don't collide with the role
-    // names (`arg0`, `ret`, `varN`) that the naming pass introduces.
-    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(cc));
-    dp!("promote_stack_locals");
-    crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
-    dp!("split_spilled_arg_reuse");
-    crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
-    dp!("apply_role_names");
-    crate::ir::canary::collapse_canary_save(&mut f);
-    if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
-        crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
-    }
-    // Run dead-store elimination *after* naming so the pass sees the
-    // aliased return register (`ret` / `arg0`) rather than the raw
-    // physical register. This removes the common pre-call `%ret = 0`
-    // idiom entirely.
-    crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
-    dp!("eliminate_dead_stores");
-    crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
-    crate::ir::label_prune::prune_unreferenced_labels(&mut f);
-    dp!("stack_idiom+label_prune");
+    let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool, dump_passes);
     if matches!(
         cc,
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
