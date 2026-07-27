@@ -103,6 +103,47 @@ def test_verify_diagnostics_are_opt_in():
     assert [l for l in asked.splitlines() if "glaurung-verify" not in l] == clean.splitlines()
 
 
+def test_do_while_latch_condition_is_defined(tmp_path):
+    """A recovered post-test must retain every value used by its latch.
+
+    Pinned GCC O2's ``crc32_step`` places several flag-producing operations in the
+    single loop block.  This real shape caught a lowering bug where do-while
+    recovery dropped the definition of the temporary used by its condition.
+    """
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "checksum.c"
+    binary = tmp_path / "checksum-gcc-O2.so"
+    compiled = TC.run(
+        ["gcc", "-shared", "-fPIC", "-g", "-O2", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "crc32_step",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+        env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
+    )
+
+    assert "do {" in result.stdout, "the real bottom-tested loop was not recovered"
+    assert "glaurung-verify" not in result.stdout, result.stdout
+
+
 def test_all_and_vas_agree():
     """`decompile --all` and `decompile --vas <list>` must produce the same functions.
 

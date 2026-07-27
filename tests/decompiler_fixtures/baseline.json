@@ -162,7 +162,7 @@
   "03_loop_shapes:clang:O0": {
     "cond_reload_and_transform": "fail",
     "cond_side_effect": "fail",
-    "dowhile_atleastonce": "fail",
+    "dowhile_atleastonce": "pass",
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
     "for_stride2": "pass",

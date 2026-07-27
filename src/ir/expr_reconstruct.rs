@@ -37,7 +37,7 @@ pub fn reconstruct(f: &mut Function) {
 }
 
 fn reconstruct_body(stmts: &mut Vec<Stmt>) {
-    // Recurse into nested If / While bodies first so inlining composes.
+    // Recurse into nested control-flow bodies first so inlining composes.
     for s in stmts.iter_mut() {
         match s {
             Stmt::If {
@@ -50,7 +50,8 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
                     reconstruct_body(eb);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => reconstruct_body(body),
+            Stmt::While { body, .. } => reconstruct_body(body),
+            Stmt::DoWhile { body, cond } => reconstruct_do_while(body, cond),
             _ => {}
         }
     }
@@ -110,6 +111,32 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
         }
         i += 1;
     }
+}
+
+/// Reconstruct a post-tested loop as one ordered sequence: body, then latch.
+///
+/// Treating the body in isolation under-counts a temporary that is read once in
+/// the body and again by the condition. The body-only walk then removes its
+/// definition after substituting the first read, leaving the latch undefined.
+/// A temporary `If` statement lets the existing linear-run logic see the latch
+/// as the final consumer without giving it any branch semantics.
+fn reconstruct_do_while(body: &mut Vec<Stmt>, cond: &mut Expr) {
+    body.push(Stmt::If {
+        cond: std::mem::replace(cond, Expr::Const(1)),
+        then_body: Vec::new(),
+        else_body: None,
+    });
+    reconstruct_body(body);
+    let Some(Stmt::If {
+        cond: reconstructed,
+        then_body,
+        else_body: None,
+    }) = body.pop()
+    else {
+        unreachable!("the synthetic do-while latch must remain last")
+    };
+    debug_assert!(then_body.is_empty());
+    *cond = reconstructed;
 }
 
 // -- Reg-reference utilities --------------------------------------------------
@@ -419,6 +446,46 @@ mod tests {
         );
         assert!(text.contains("%zf = (%t0 == 0);"), "lost zf use: {}", text);
         assert!(text.contains("%sf = (%t0 < 0);"), "lost sf use: {}", text);
+    }
+
+    #[test]
+    fn do_while_latch_counts_as_a_later_temp_use() {
+        let temp = VReg::Temp(0);
+        let mut f = Function {
+            name: "post_test".into(),
+            entry_va: 0,
+            body: vec![Stmt::DoWhile {
+                body: vec![
+                    Stmt::Assign {
+                        dst: temp.clone(),
+                        src: Expr::Reg(VReg::phys("rax")),
+                    },
+                    Stmt::Assign {
+                        dst: VReg::Flag(Flag::S),
+                        src: Expr::Cmp {
+                            op: CmpOp::Slt,
+                            lhs: Box::new(Expr::Reg(temp.clone())),
+                            rhs: Box::new(Expr::Const(0)),
+                        },
+                    },
+                ],
+                cond: Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(Expr::Reg(temp.clone())),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+            }],
+        };
+
+        reconstruct(&mut f);
+
+        let Stmt::DoWhile { body, .. } = &f.body[0] else {
+            panic!("lost do-while: {:?}", f.body);
+        };
+        assert!(
+            matches!(body.first(), Some(Stmt::Assign { dst, .. }) if dst == &temp),
+            "the latch's second read must keep the temp definition: {body:?}"
+        );
     }
 
     #[test]
