@@ -115,6 +115,18 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 propagate_run(body);
                 copies.clear();
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                propagate_run(std::slice::from_mut(init.as_mut()));
+                subst(cond, &copies);
+                propagate_run(body);
+                propagate_run(std::slice::from_mut(step.as_mut()));
+                copies.clear();
+            }
             Stmt::DoWhile { body, cond } => {
                 // Unlike a pre-tested loop, the condition observes the tail of
                 // the body on every iteration.  Carry only the body's final
@@ -214,6 +226,18 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 propagate_run_counted(body, reads);
                 copies.clear();
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                propagate_run_counted(std::slice::from_mut(init.as_mut()), reads);
+                subst(cond, &copies);
+                propagate_run_counted(body, reads);
+                propagate_run_counted(std::slice::from_mut(step.as_mut()), reads);
+                copies.clear();
+            }
             Stmt::DoWhile { body, cond } => {
                 let tail_copies = propagate_run_counted(body, reads);
                 subst(cond, &tail_copies);
@@ -304,6 +328,7 @@ fn dead_store_runs(body: &mut Vec<Stmt>) {
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => dead_store_runs(body),
+            Stmt::For { body, .. } => dead_store_runs(body),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     dead_store_runs(b);
@@ -357,6 +382,7 @@ fn remove_dead(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 changed |= remove_dead(body, reads)
             }
+            Stmt::For { body, .. } => changed |= remove_dead(body, reads),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     changed |= remove_dead(b, reads);
@@ -497,6 +523,17 @@ fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
         Stmt::While { cond, body } => {
             count_reads_expr(cond, reads);
             count_reads_body(body, reads);
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            count_reads_stmt(init, reads);
+            count_reads_expr(cond, reads);
+            count_reads_body(body, reads);
+            count_reads_stmt(step, reads);
         }
         Stmt::DoWhile { body, cond } => {
             count_reads_body(body, reads);

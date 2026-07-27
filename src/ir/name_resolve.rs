@@ -59,6 +59,17 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
                 resolve_expr(cond, addr_map);
                 resolve_body(body, addr_map);
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                resolve_body(std::slice::from_mut(init.as_mut()), addr_map);
+                resolve_expr(cond, addr_map);
+                resolve_body(body, addr_map);
+                resolve_body(std::slice::from_mut(step.as_mut()), addr_map);
+            }
             Stmt::DoWhile { body, cond } => {
                 resolve_body(body, addr_map);
                 resolve_expr(cond, addr_map);

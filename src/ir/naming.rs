@@ -229,6 +229,19 @@ fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
                 walk_stmt_rw(s, cb);
             }
         }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            walk_stmt_rw(init, cb);
+            walk_expr_phys(cond, &mut |n| cb(n, false));
+            for s in body {
+                walk_stmt_rw(s, cb);
+            }
+            walk_stmt_rw(step, cb);
+        }
         Stmt::DoWhile { body, cond } => {
             for s in body {
                 walk_stmt_rw(s, cb);
@@ -326,6 +339,19 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
             for s in body {
                 walk_stmt_phys(s, cb);
             }
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            walk_stmt_phys(init, cb);
+            walk_expr_phys(cond, cb);
+            for s in body {
+                walk_stmt_phys(s, cb);
+            }
+            walk_stmt_phys(step, cb);
         }
         Stmt::DoWhile { body, cond } => {
             for s in body {
@@ -469,6 +495,17 @@ fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
             Stmt::While { cond, body } => {
                 rewrite_expr(cond, role);
                 rewrite_body(body, role);
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                rewrite_body(std::slice::from_mut(init.as_mut()), role);
+                rewrite_expr(cond, role);
+                rewrite_body(body, role);
+                rewrite_body(std::slice::from_mut(step.as_mut()), role);
             }
             Stmt::DoWhile { body, cond } => {
                 rewrite_body(body, role);

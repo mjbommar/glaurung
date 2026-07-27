@@ -74,6 +74,13 @@ fn rewrite_stmt(s: &mut Stmt) {
             }
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => rewrite_body(body),
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            rewrite_body(std::slice::from_mut(init.as_mut()));
+            rewrite_body(body);
+            rewrite_body(std::slice::from_mut(step.as_mut()));
+        }
         Stmt::Switch { cases, default, .. } => {
             for (_, b) in cases.iter_mut() {
                 rewrite_body(b);
@@ -317,6 +324,13 @@ fn goto_targets(body: &[Stmt]) -> std::collections::BTreeSet<u64> {
                     }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => walk(body, out),
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    walk(std::slice::from_ref(init.as_ref()), out);
+                    walk(body, out);
+                    walk(std::slice::from_ref(step.as_ref()), out);
+                }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, b) in cases {
                         walk(b, out);
@@ -351,6 +365,7 @@ fn prune_labels(body: &mut Vec<Stmt>, live: &std::collections::BTreeSet<u64>) {
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => prune_labels(body, live),
+            Stmt::For { body, .. } => prune_labels(body, live),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     prune_labels(b, live);

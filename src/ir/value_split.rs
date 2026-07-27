@@ -182,6 +182,7 @@ impl Splitter {
                 Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
                     self.rename_expr(cond)
                 }
+                Stmt::For { cond, .. } => self.rename_expr(cond),
                 Stmt::Switch { discriminant, .. } => self.rename_expr(discriminant),
                 Stmt::Goto { .. }
                 | Stmt::Label(_)
@@ -208,6 +209,13 @@ impl Splitter {
                     }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => self.walk_body(body),
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    self.walk_body(std::slice::from_mut(init.as_mut()));
+                    self.walk_body(body);
+                    self.walk_body(std::slice::from_mut(step.as_mut()));
+                }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, b) in cases.iter_mut() {
                         self.walk_body(b);

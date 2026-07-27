@@ -69,6 +69,7 @@ pub fn prune_overwritten_flags(f: &mut Function) {
                     }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => prune(body),
+                Stmt::For { body, .. } => prune(body),
                 Stmt::Switch { cases, default, .. } => {
                     for (_, b) in cases.iter_mut() {
                         prune(b);
@@ -98,6 +99,7 @@ pub fn prune_overwritten_flags(f: &mut Function) {
                     | Stmt::Goto { .. }
                     | Stmt::If { .. }
                     | Stmt::While { .. }
+                    | Stmt::For { .. }
                     | Stmt::DoWhile { .. }
                     | Stmt::Switch { .. }
                     | Stmt::Call { .. }
@@ -152,6 +154,7 @@ fn prune_body(body: &mut Vec<Stmt>) {
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => prune_body(body),
+            Stmt::For { body, .. } => prune_body(body),
             _ => {}
         }
     }
@@ -254,6 +257,20 @@ fn count_reads_in_stmt(s: &Stmt, target: &VReg) -> usize {
                 n += count_reads_in_stmt(st, target);
             }
             n
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            count_reads_in_stmt(init, target)
+                + count_reads_in_expr(cond, target)
+                + body
+                    .iter()
+                    .map(|stmt| count_reads_in_stmt(stmt, target))
+                    .sum::<usize>()
+                + count_reads_in_stmt(step, target)
         }
         Stmt::DoWhile { body, cond } => {
             let mut n = body

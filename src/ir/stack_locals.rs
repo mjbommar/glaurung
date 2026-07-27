@@ -141,6 +141,29 @@ fn rewrite_body(
                 rewrite_expr(cond, map, stack_counter, local_counter, cc);
                 rewrite_body(body, map, stack_counter, local_counter, cc);
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                rewrite_body(
+                    std::slice::from_mut(init.as_mut()),
+                    map,
+                    stack_counter,
+                    local_counter,
+                    cc,
+                );
+                rewrite_expr(cond, map, stack_counter, local_counter, cc);
+                rewrite_body(body, map, stack_counter, local_counter, cc);
+                rewrite_body(
+                    std::slice::from_mut(step.as_mut()),
+                    map,
+                    stack_counter,
+                    local_counter,
+                    cc,
+                );
+            }
             Stmt::DoWhile { body, cond } => {
                 rewrite_body(body, map, stack_counter, local_counter, cc);
                 rewrite_expr(cond, map, stack_counter, local_counter, cc);

@@ -131,11 +131,18 @@ def has_head_tested_while(block: str) -> bool:
     return bool(re.search(r"(?m)^\s*while\s*\((?!\s*1\s*\))", body))
 
 
+def has_for_loop(block: str) -> bool:
+    """A source-level ``for (init; condition; iterator)`` survived rendering."""
+    body = _strip_comments(block)
+    return bool(re.search(r"(?m)^\s*for\s*\([^;]+;[^;]+;[^)]+\)", body))
+
+
 PREDICATES = {
     "indirect_call": has_indirect_call,
     "memory_store": has_memory_store,
     "nonempty": is_nonempty,
     "head_tested_while": has_head_tested_while,
+    "for_loop": has_for_loop,
 }
 
 

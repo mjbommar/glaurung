@@ -64,6 +64,17 @@ fn fold_body(body: &mut [Stmt]) {
                 fold_expr(cond);
                 fold_body(body);
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                fold_body(std::slice::from_mut(init.as_mut()));
+                fold_expr(cond);
+                fold_body(body);
+                fold_body(std::slice::from_mut(step.as_mut()));
+            }
             Stmt::DoWhile { body, cond } => {
                 fold_body(body);
                 fold_expr(cond);

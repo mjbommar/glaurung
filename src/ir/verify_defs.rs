@@ -224,6 +224,13 @@ fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>) {
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => defs_in(body, out),
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                defs_in(std::slice::from_ref(init.as_ref()), out);
+                defs_in(body, out);
+                defs_in(std::slice::from_ref(step.as_ref()), out);
+            }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases {
                     defs_in(b, out);
@@ -250,6 +257,13 @@ fn has_unstructured_flow(body: &[Stmt]) -> bool {
                 || else_body.as_deref().is_some_and(has_unstructured_flow)
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => has_unstructured_flow(body),
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            has_unstructured_flow(std::slice::from_ref(init.as_ref()))
+                || has_unstructured_flow(body)
+                || has_unstructured_flow(std::slice::from_ref(step.as_ref()))
+        }
         Stmt::Switch { cases, default, .. } => {
             cases.iter().any(|(_, b)| has_unstructured_flow(b))
                 || default.as_deref().is_some_and(has_unstructured_flow)
@@ -335,6 +349,24 @@ fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<Stri
                 walk(body, &mut inner, found);
                 defined.extend(loop_defined);
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                walk(std::slice::from_ref(init.as_ref()), defined, found);
+                let mut loop_defs = BTreeSet::new();
+                defs_in(body, &mut loop_defs);
+                defs_in(std::slice::from_ref(step.as_ref()), &mut loop_defs);
+                let mut loop_defined = defined.clone();
+                loop_defined.extend(loop_defs);
+                undefined_reads(cond, &loop_defined, found);
+                let mut inner = loop_defined.clone();
+                walk(body, &mut inner, found);
+                walk(std::slice::from_ref(step.as_ref()), &mut inner, found);
+                defined.extend(loop_defined);
+            }
             Stmt::DoWhile { body, cond } => {
                 // The body executes before the first condition test, so its
                 // definitions are genuinely available to the latch and after
@@ -412,6 +444,17 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
             Stmt::While { cond, body } => {
                 push(cond, out);
                 all_reads(body, out);
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                all_reads(std::slice::from_ref(init.as_ref()), out);
+                push(cond, out);
+                all_reads(body, out);
+                all_reads(std::slice::from_ref(step.as_ref()), out);
             }
             Stmt::DoWhile { body, cond } => {
                 all_reads(body, out);
@@ -522,6 +565,17 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                 Stmt::While { cond, body } => {
                     scan_expr(cond, out);
                     scan(body, out);
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    scan(std::slice::from_ref(init.as_ref()), out);
+                    scan_expr(cond, out);
+                    scan(body, out);
+                    scan(std::slice::from_ref(step.as_ref()), out);
                 }
                 Stmt::DoWhile { body, cond } => {
                     scan(body, out);

@@ -52,6 +52,7 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
             }
             Stmt::While { body, .. } => reconstruct_body(body),
             Stmt::DoWhile { body, cond } => reconstruct_do_while(body, cond),
+            Stmt::For { body, .. } => reconstruct_body(body),
             _ => {}
         }
     }
@@ -205,6 +206,13 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
             count_reg_uses(cond, target)
         }
+        Stmt::For {
+            init, cond, step, ..
+        } => {
+            count_reg_uses_in_stmt(init, target)
+                + count_reg_uses(cond, target)
+                + count_reg_uses_in_stmt(step, target)
+        }
         Stmt::Return { value } => value
             .as_ref()
             .map(|e| count_reg_uses(e, target))
@@ -323,6 +331,13 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
         }
         Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
             substitute_in_expr(cond, target, with)
+        }
+        Stmt::For {
+            init, cond, step, ..
+        } => {
+            substitute_in_stmt(init, target, with);
+            substitute_in_expr(cond, target, with);
+            substitute_in_stmt(step, target, with);
         }
         Stmt::Return { value } => {
             if let Some(e) = value {
@@ -656,6 +671,7 @@ mod tests {
                     }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => n += count_stmts(body),
+                Stmt::For { body, .. } => n += 2 + count_stmts(body),
                 _ => {}
             }
         }

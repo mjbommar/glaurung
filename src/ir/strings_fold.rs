@@ -158,6 +158,17 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 fold_expr(cond, pool);
                 fold_body(body, pool);
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                fold_body(std::slice::from_mut(init.as_mut()), pool);
+                fold_expr(cond, pool);
+                fold_body(body, pool);
+                fold_body(std::slice::from_mut(step.as_mut()), pool);
+            }
             Stmt::DoWhile { body, cond } => {
                 fold_body(body, pool);
                 fold_expr(cond, pool);

@@ -156,6 +156,15 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
+    /// `for (init; cond; step) { body }` recovered after conservative loop
+    /// structuring. `init` and `step` are boxed ordinary assignment/store nodes
+    /// so value identity and promoted-stack-local semantics remain explicit.
+    For {
+        init: Box<Stmt>,
+        cond: Expr,
+        step: Box<Stmt>,
+        body: Vec<Stmt>,
+    },
     /// `do { body } while (cond);` — the condition is evaluated after the body.
     DoWhile {
         body: Vec<Stmt>,
@@ -280,6 +289,13 @@ fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                     collect_assigned(body, out)
+                }
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    collect_assigned(std::slice::from_ref(init.as_ref()), out);
+                    collect_assigned(body, out);
+                    collect_assigned(std::slice::from_ref(step.as_ref()), out);
                 }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, b) in cases {
@@ -961,6 +977,13 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
             count_reg_uses_in_expr(cond, target)
         }
+        Stmt::For {
+            init, cond, step, ..
+        } => {
+            count_reg_uses_in_stmt(init, target)
+                + count_reg_uses_in_expr(cond, target)
+                + count_reg_uses_in_stmt(step, target)
+        }
         Stmt::Return { value } => value
             .as_ref()
             .map(|e| count_reg_uses_in_expr(e, target))
@@ -1312,6 +1335,7 @@ fn body_has_bare_return(body: &[Stmt]) -> bool {
                 || else_body.as_deref().is_some_and(body_has_bare_return)
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body_has_bare_return(body),
+        Stmt::For { body, .. } => body_has_bare_return(body),
         Stmt::Switch { cases, default, .. } => {
             cases.iter().any(|(_, b)| body_has_bare_return(b))
                 || default.as_deref().is_some_and(body_has_bare_return)
@@ -1347,6 +1371,7 @@ fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
             } => find_written_return_reg(then_body)
                 .or_else(|| else_body.as_deref().and_then(find_written_return_reg)),
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => find_written_return_reg(body),
+            Stmt::For { body, .. } => find_written_return_reg(body),
             Stmt::Switch { cases, default, .. } => cases
                 .iter()
                 .find_map(|(_, b)| find_written_return_reg(b))
@@ -1379,6 +1404,7 @@ fn apply_default_return(body: &mut [Stmt], ret_reg: &VReg) {
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 apply_default_return(body, ret_reg)
             }
+            Stmt::For { body, .. } => apply_default_return(body, ret_reg),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     apply_default_return(b, ret_reg);
@@ -1444,6 +1470,7 @@ fn fold_returns(body: &mut Vec<Stmt>) {
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => fold_returns(body),
+            Stmt::For { body, .. } => fold_returns(body),
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases.iter_mut() {
                     fold_returns(body);
@@ -1768,6 +1795,22 @@ fn write_stmt(s: &Stmt, out: &mut String, level: usize) {
     write_stmt_ctx(s, None, out, level);
 }
 
+fn write_for_clause(s: &Stmt, tm: Option<&TypeMap>, out: &mut String) {
+    match s {
+        Stmt::Assign { dst, src } => {
+            write_reg_with_type(dst, tm, out);
+            out.push_str(" = ");
+            write_expr_ctx(src, tm, out);
+        }
+        Stmt::Store { addr, src, .. } => {
+            write_expr_ctx(addr, tm, out);
+            out.push_str(" = ");
+            write_expr_ctx(src, tm, out);
+        }
+        _ => out.push_str("/* unsupported for-clause */"),
+    }
+}
+
 fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize) {
     match s {
         Stmt::Assign { dst, src } => {
@@ -1888,6 +1931,26 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
             indent(out, level);
             out.push_str("while (");
             write_expr_ctx(cond, tm, out);
+            out.push_str(") {\n");
+            for s in body {
+                write_stmt_ctx(s, tm, out, level + 1);
+            }
+            indent(out, level);
+            out.push_str("}\n");
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            indent(out, level);
+            out.push_str("for (");
+            write_for_clause(init, tm, out);
+            out.push_str("; ");
+            write_expr_ctx(cond, tm, out);
+            out.push_str("; ");
+            write_for_clause(step, tm, out);
             out.push_str(") {\n");
             for s in body {
                 write_stmt_ctx(s, tm, out, level + 1);
@@ -2031,6 +2094,7 @@ pub fn compute_frame_size(body: &[Stmt]) -> Option<i64> {
             | Stmt::Break
             | Stmt::If { .. }
             | Stmt::While { .. }
+            | Stmt::For { .. }
             | Stmt::DoWhile { .. }
             | Stmt::Switch { .. } => break,
             // Register-save stores (e.g. `store %stack_top = %var0`) and
@@ -2327,6 +2391,26 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             indent(out, level);
             out.push_str("}\n");
         }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            indent(out, level);
+            out.push_str("for (");
+            write_for_clause_c(init, out, false);
+            out.push_str("; ");
+            write_expr_c(cond, out);
+            out.push_str("; ");
+            write_for_clause_c(step, out, true);
+            out.push_str(") {\n");
+            for s in body {
+                write_stmt_c(s, out, level + 1);
+            }
+            indent(out, level);
+            out.push_str("}\n");
+        }
         Stmt::DoWhile { body, cond } => {
             indent(out, level);
             out.push_str("do {\n");
@@ -2385,6 +2469,27 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             out.push_str("}\n");
         }
     }
+}
+
+fn write_for_clause_c(s: &Stmt, out: &mut String, prefer_increment: bool) {
+    let (dst, src) = match s {
+        Stmt::Assign { dst, src } => (dst, src),
+        Stmt::Store {
+            addr: Expr::Reg(dst),
+            src,
+            ..
+        } => (dst, src),
+        _ => {
+            out.push_str("/* unsupported for-clause */");
+            return;
+        }
+    };
+    if prefer_increment && write_unit_step(dst, src, out, write_reg_c) {
+        return;
+    }
+    write_reg_c(dst, out);
+    out.push_str(" = ");
+    write_expr_c(src, out);
 }
 
 fn binop_sym_c(op: BinOp) -> &'static str {
@@ -2594,6 +2699,11 @@ fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'sta
                     return Some(t);
                 }
             }
+            Stmt::For { body, .. } => {
+                if let Some(t) = first_return_value_ctype(body, tm) {
+                    return Some(t);
+                }
+            }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases {
                     if let Some(t) = first_return_value_ctype(b, tm) {
@@ -2692,6 +2802,7 @@ fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMa
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 slot_stores_to_assigns(body, slots)
             }
+            Stmt::For { body, .. } => slot_stores_to_assigns(body, slots),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     slot_stores_to_assigns(b, slots);
@@ -2746,6 +2857,13 @@ fn collect_param_homes(body: &[Stmt], home: &mut std::collections::HashMap<Strin
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 collect_param_homes(body, home)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                collect_param_homes(std::slice::from_ref(init.as_ref()), home);
+                collect_param_homes(body, home);
+                collect_param_homes(std::slice::from_ref(step.as_ref()), home);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases {
@@ -2832,6 +2950,17 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                 re(cond, map);
                 rename_phys_in_body(body, map);
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                rename_phys_in_body(std::slice::from_mut(init.as_mut()), map);
+                re(cond, map);
+                rename_phys_in_body(body, map);
+                rename_phys_in_body(std::slice::from_mut(step.as_mut()), map);
+            }
             Stmt::DoWhile { body, cond } => {
                 rename_phys_in_body(body, map);
                 re(cond, map);
@@ -2893,6 +3022,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => drop_self_stores(body),
+            Stmt::For { body, .. } => drop_self_stores(body),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     drop_self_stores(b);
@@ -2908,7 +3038,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These four steps change *definitions, uses, value identities, or control-flow
+/// These six steps change *definitions, uses, value identities, or control-flow
 /// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
@@ -2924,6 +3054,10 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 4. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
+/// 5. `switch_ladder::recover_switches` converts proven comparison ladders into
+///    `switch` nodes.
+/// 6. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+///    guard, and unconditional same-variable unit increment into a `for` node.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
 /// impure: the AST that was checked or dumped was not the AST that was printed,
@@ -2940,6 +3074,7 @@ pub fn prepare_for_decbench(f: &Function) -> Function {
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
     crate::ir::switch_ladder::recover_switches(&mut owned);
+    crate::ir::loop_form::promote_for_loops(&mut owned);
     owned
 }
 
@@ -3229,6 +3364,19 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             for s in body {
                 collect_idents_stmt(s, ids);
             }
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            collect_idents_stmt(init, ids);
+            collect_idents_expr(cond, ids);
+            for s in body {
+                collect_idents_stmt(s, ids);
+            }
+            collect_idents_stmt(step, ids);
         }
         Stmt::DoWhile { body, cond } => {
             for s in body {
@@ -3833,6 +3981,26 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             indent(out, level);
             out.push_str("}\n");
         }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            indent(out, level);
+            out.push_str("for (");
+            write_for_clause_dec(init, out, false);
+            out.push_str("; ");
+            write_expr_dec(cond, out);
+            out.push_str("; ");
+            write_for_clause_dec(step, out, true);
+            out.push_str(") {\n");
+            for s in body {
+                write_stmt_dec(s, out, level + 1);
+            }
+            indent(out, level);
+            out.push_str("}\n");
+        }
         Stmt::DoWhile { body, cond } => {
             indent(out, level);
             out.push_str("do {\n");
@@ -3890,6 +4058,67 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             out.push_str("}\n");
         }
     }
+}
+
+fn write_for_clause_dec(s: &Stmt, out: &mut String, prefer_increment: bool) {
+    let (dst, src) = match s {
+        Stmt::Assign { dst, src } => (dst, src),
+        Stmt::Store {
+            addr: Expr::Reg(dst),
+            src,
+            ..
+        } => (dst, src),
+        _ => {
+            out.push_str("/* unsupported for-clause */");
+            return;
+        }
+    };
+    if prefer_increment && write_unit_step(dst, src, out, write_reg_lvalue_dec) {
+        return;
+    }
+    write_reg_lvalue_dec(dst, out);
+    out.push_str(" = ");
+    if let VReg::Phys(name) = dst {
+        if let Some(pointer_type) = dec_ptr_arg_type(name) {
+            let _ = write!(out, "({})(", pointer_type);
+            write_expr_dec(src, out);
+            out.push(')');
+            return;
+        }
+    }
+    write_expr_dec(src, out);
+}
+
+fn write_unit_step(
+    dst: &VReg,
+    src: &Expr,
+    out: &mut String,
+    write_reg: fn(&VReg, &mut String),
+) -> bool {
+    let integer_local = match dst {
+        VReg::Temp(_) => true,
+        VReg::Phys(name) => name.starts_with("local_") || name.starts_with("stack_"),
+        VReg::Flag(_) => false,
+    };
+    if !integer_local {
+        return false;
+    }
+    let Expr::Bin { op, lhs, rhs } = src else {
+        return false;
+    };
+    if !matches!(lhs.as_ref(), Expr::Reg(read) if read == dst)
+        || !matches!(rhs.as_ref(), Expr::Const(1))
+    {
+        return false;
+    }
+    let suffix = match op {
+        BinOp::Add => "++",
+        BinOp::Sub => "--",
+        _ => return false,
+    };
+    write_reg(dst, out);
+    out.push_str(suffix);
+    true
 }
 
 /// Render a function using the provided [`TypeMap`] for register-level

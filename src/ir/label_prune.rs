@@ -42,6 +42,17 @@ fn collect_goto_targets(body: &[Stmt], out: &mut HashSet<u64>) {
                 collect_expr_goto(cond, out);
                 collect_goto_targets(body, out);
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                collect_goto_targets(std::slice::from_ref(init.as_ref()), out);
+                collect_expr_goto(cond, out);
+                collect_goto_targets(body, out);
+                collect_goto_targets(std::slice::from_ref(step.as_ref()), out);
+            }
             Stmt::DoWhile { body, cond } => {
                 collect_goto_targets(body, out);
                 collect_expr_goto(cond, out);
@@ -74,6 +85,7 @@ fn drop_unreferenced(body: &mut Vec<Stmt>, referenced: &HashSet<u64>) {
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 drop_unreferenced(body, referenced)
             }
+            Stmt::For { body, .. } => drop_unreferenced(body, referenced),
             _ => {}
         }
     }

@@ -55,6 +55,7 @@ fn eliminate_body(body: &mut Vec<Stmt>, ret_regs: &[&str]) {
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => eliminate_body(body, ret_regs),
+            Stmt::For { body, .. } => eliminate_body(body, ret_regs),
             _ => {}
         }
     }
@@ -220,6 +221,17 @@ fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
         Stmt::While { cond, body } => {
             expr_reads(cond, dst) || body.iter().any(|s| stmt_reads(s, dst))
         }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            stmt_reads(init, dst)
+                || expr_reads(cond, dst)
+                || body.iter().any(|s| stmt_reads(s, dst))
+                || stmt_reads(step, dst)
+        }
         Stmt::DoWhile { body, cond } => {
             body.iter().any(|s| stmt_reads(s, dst)) || expr_reads(cond, dst)
         }
@@ -261,6 +273,13 @@ fn contains_nested_read(s: &Stmt, dst: &VReg) -> bool {
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
             body.iter().any(|s| stmt_reads(s, dst))
+        }
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            stmt_reads(init, dst)
+                || body.iter().any(|s| stmt_reads(s, dst))
+                || stmt_reads(step, dst)
         }
         _ => false,
     }

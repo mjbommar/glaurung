@@ -839,7 +839,8 @@ fn remap_type_map(
 ///
 /// 1. [`crate::ir::ast::prepare_for_decbench`] performs the semantic AST
 ///    transformation (bare-return ABI register, parameter-spill coalescing,
-///    copy-chain folding) that used to happen inside the renderer;
+///    copy-chain folding and source-level loop-form recovery) that used to happen
+///    inside the renderer;
 /// 2. [`crate::ir::verify_defs::check`] verifies the result — the AST that is
 ///    about to be printed, which is what makes the check trustworthy;
 /// 3. the renderer formats it, and nothing else.
@@ -1186,4 +1187,3 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
     m.add_submodule(&ir_mod)?;
     Ok(())
 }
-

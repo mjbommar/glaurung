@@ -85,6 +85,17 @@ fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap) {
             rewrite_expr(cond, None, tm);
             rewrite_body(body, ret_width, tm);
         }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            rewrite_stmt(init, ret_width, tm);
+            rewrite_expr(cond, None, tm);
+            rewrite_body(body, ret_width, tm);
+            rewrite_stmt(step, ret_width, tm);
+        }
         Stmt::DoWhile { body, cond } => {
             rewrite_body(body, ret_width, tm);
             rewrite_expr(cond, None, tm);

@@ -152,6 +152,19 @@ fn annotate_stmt(stmt: &mut Stmt, field_map: &PdbFieldMap) {
                 annotate_stmt(stmt, field_map);
             }
         }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            annotate_stmt(init, field_map);
+            annotate_expr(cond, field_map);
+            for stmt in body {
+                annotate_stmt(stmt, field_map);
+            }
+            annotate_stmt(step, field_map);
+        }
         Stmt::DoWhile { body, cond } => {
             for stmt in body {
                 annotate_stmt(stmt, field_map);

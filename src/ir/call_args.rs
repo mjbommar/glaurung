@@ -171,6 +171,17 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
                 expr(cond, f);
                 walk_body_reg_names(body, f);
             }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                walk_body_reg_names(std::slice::from_ref(init.as_ref()), f);
+                expr(cond, f);
+                walk_body_reg_names(body, f);
+                walk_body_reg_names(std::slice::from_ref(step.as_ref()), f);
+            }
             Stmt::DoWhile { body, cond } => {
                 walk_body_reg_names(body, f);
                 expr(cond, f);
@@ -296,6 +307,19 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
                 walk_stmt_regs(b, name, reads, writes);
             }
         }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            expr_reads(cond);
+            walk_stmt_regs(init, name, reads, writes);
+            for stmt in body {
+                walk_stmt_regs(stmt, name, reads, writes);
+            }
+            walk_stmt_regs(step, name, reads, writes);
+        }
         Stmt::DoWhile { body, cond } => {
             // This walk only accumulates whether a read/write occurs anywhere;
             // visit the condition first to release the closure's borrow before
@@ -375,6 +399,7 @@ fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 attribute_call_results(body, arch)
             }
+            Stmt::For { body, .. } => attribute_call_results(body, arch),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
                     attribute_call_results(b, arch);
@@ -405,6 +430,7 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv, param_slots: &std::collection
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 fold_body(body, arch, param_slots)
             }
+            Stmt::For { body, .. } => fold_body(body, arch, param_slots),
             _ => {}
         }
     }
@@ -616,6 +642,19 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
                 mark_arg_reads_in_stmt(stmt, arch, read_between);
             }
         }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            mark_arg_reads_in_stmt(init, arch, read_between);
+            mark_arg_reads_in_expr(cond, arch, read_between);
+            for stmt in body {
+                mark_arg_reads_in_stmt(stmt, arch, read_between);
+            }
+            mark_arg_reads_in_stmt(step, arch, read_between);
+        }
         Stmt::DoWhile { body, cond } => {
             for stmt in body {
                 mark_arg_reads_in_stmt(stmt, arch, read_between);
@@ -673,6 +712,15 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
             for stmt in body {
                 mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
             }
+        }
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            mark_arg_writes_in_stmt(init, arch, blocked_incoming);
+            for stmt in body {
+                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+            }
+            mark_arg_writes_in_stmt(step, arch, blocked_incoming);
         }
         Stmt::Switch { cases, default, .. } => {
             for (_case, body) in cases {

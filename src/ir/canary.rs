@@ -97,6 +97,7 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 collapse_exit_check(body, slot)
             }
+            Stmt::For { body, .. } => collapse_exit_check(body, slot),
             _ => {}
         }
     }
@@ -184,6 +185,7 @@ fn collapse_body(body: &mut Vec<Stmt>) {
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collapse_body(body),
+            Stmt::For { body, .. } => collapse_body(body),
             _ => {}
         }
     }
@@ -256,6 +258,17 @@ fn rewrite_body(body: &mut [Stmt]) {
             Stmt::While { cond, body } => {
                 rewrite_expr(cond);
                 rewrite_body(body);
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                rewrite_body(std::slice::from_mut(init.as_mut()));
+                rewrite_expr(cond);
+                rewrite_body(body);
+                rewrite_body(std::slice::from_mut(step.as_mut()));
             }
             Stmt::DoWhile { body, cond } => {
                 rewrite_body(body);

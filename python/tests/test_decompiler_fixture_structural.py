@@ -243,6 +243,43 @@ def test_factorial_recovers_a_head_tested_while(report):
     )
 
 
+def test_sum_array_recovers_a_for_loop(tmp_path):
+    """A real compiled counted array walk must regain its source-level loop form."""
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "arrays.c"
+    binary = tmp_path / "arrays-gcc-O0.so"
+    compiled = TC.run(
+        ["gcc", "-shared", "-fPIC", "-g", "-O0", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "sum_array",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+        env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
+    )
+
+    assert S.has_for_loop(result.stdout), result.stdout
+    assert "++" in result.stdout, result.stdout
+    assert "glaurung-verify" not in result.stdout, result.stdout
+
+
 def test_declared_structural_predicates_are_all_present(report):
     # A declared predicate must actually be evaluated (True/False), never absent —
     # a structural assertion that silently does not run is a fail-open gap.
