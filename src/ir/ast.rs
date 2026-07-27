@@ -2921,9 +2921,9 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 ///    emits);
 /// 3. `copy_prop::propagate_copies` folds the short-lived reload and
 ///    condition-setup copy chains that otherwise inflate the emitted CFG.
-/// 4. `loop_form::recover_head_tested_whiles` turns the conservative
-///    `while (1) { if (exit) break; body }` into `while (!exit) { body }` only
-///    when folding has made the exit guard the literal first statement.
+/// 4. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+///    countdown `while (1) { if (exit) break; body }` into
+///    `while (!exit) { body }` only when folding has made the exit guard first.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
 /// impure: the AST that was checked or dumped was not the AST that was printed,
