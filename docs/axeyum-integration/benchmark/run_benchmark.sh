@@ -55,17 +55,16 @@ cargo build --release --features "$FEATURES" \
 
 echo "== Tier 0: primitives =="
 target/release/examples/axeyum_bench_primitives \
-  >"$RES/tier0-primitives.jsonl" 2>"$RES/tier0-primitives.table.txt" \
-  || echo "  (Tier 0 flagged a correctness issue -- inspect the table)"
+  >"$RES/tier0-primitives.jsonl" 2>"$RES/tier0-primitives.table.txt"
 
 echo "== Tier 1: formula families =="
-target/release/examples/axeyum_diff >"$RES/tier1-families.txt" 2>&1 || true
+target/release/examples/axeyum_diff >"$RES/tier1-families.txt" 2>&1
 
 echo "== Tier 1b: width x count mechanism =="
-target/release/examples/axeyum_sweep >"$RES/tier1b-sweep.txt" 2>&1 || true
+target/release/examples/axeyum_sweep >"$RES/tier1b-sweep.txt" 2>&1
 
 echo "== Tier 2: warm vs one-shot =="
-target/release/examples/axeyum_incremental >"$RES/tier2-incremental.txt" 2>&1 || true
+target/release/examples/axeyum_incremental >"$RES/tier2-incremental.txt" 2>&1
 
 echo "== Tier 3: real driver query streams =="
 export IOCTLANCE_SOLVE_SECS=60 IOCTLANCE_SOLVE_BUDGET=20000 IOCTLANCE_DEADLINE_SECS=300
@@ -84,7 +83,7 @@ run_driver() {
   local drv="$1"
   echo "### $(basename "$drv") @ $(git rev-parse --short HEAD) ###" >>"$RES/tier3-drivers.txt"
   GLAURUNG_SHADOW_DIFF=1 target/release/examples/ioctlance "$drv" 2>&1 \
-    | grep -E '^\[shadow-diff\]|^\[model-choice\]|^\[axeyum-warm\]' >>"$RES/tier3-drivers.txt" || true
+    | grep -E '^\[shadow-diff\]|^\[model-choice\]|^\[axeyum-warm\]' >>"$RES/tier3-drivers.txt"
   echo >>"$RES/tier3-drivers.txt"
 }
 for d in "${FAST_DRIVERS[@]}"; do run_driver "$d"; done

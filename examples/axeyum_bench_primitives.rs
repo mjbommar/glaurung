@@ -402,7 +402,7 @@ fn verdict(r: &SolveResult) -> &'static str {
     match r {
         SolveResult::Sat(_) => "sat",
         SolveResult::Unsat => "unsat",
-        SolveResult::Unknown => "unknown",
+        SolveResult::Unknown(_) => "unknown",
         SolveResult::NoSolver => "nosolver",
         SolveResult::Error(_) => "error",
     }
@@ -428,11 +428,8 @@ fn main() {
     // verdict from either side rather than merely "they disagree".
     let mut z3_wrong = 0usize;
     let mut ax_wrong = 0usize;
-    let mut z3_wide_const_limit = 0usize; // z3 wrong at >64b via as_u64 truncation
     let mut z3_unknown = 0usize;
     let mut ax_unknown = 0usize;
-    // Head-to-head timing is only meaningful where BOTH backends are sound
-    // (<=64b); wider rows are kept for the correctness demo, not the ratio.
     let mut z3_total = 0.0f64;
     let mut ax_total = 0.0f64;
 
@@ -486,8 +483,6 @@ fn main() {
                 let ax_ok = va == expected;
                 let z3_unk = vz == "unknown";
                 let ax_unk = va == "unknown";
-                let sound_width = prim.width <= 64;
-
                 if z3_unk {
                     z3_unknown += 1;
                 }
@@ -495,13 +490,7 @@ fn main() {
                     ax_unknown += 1;
                 }
                 if !z3_ok && !z3_unk {
-                    if sound_width {
-                        z3_wrong += 1;
-                    } else {
-                        // Known glaurung z3-adapter limitation: `value as u64`
-                        // truncation of >64b constants (z3_backend.rs:122).
-                        z3_wide_const_limit += 1;
-                    }
+                    z3_wrong += 1;
                 }
                 if !ax_ok && !ax_unk {
                     ax_wrong += 1;
@@ -509,18 +498,14 @@ fn main() {
 
                 let z3_us = time_us(Z3Solver::new, pool, &asserts);
                 let ax_us = time_us(AxeyumSolver::new, pool, &asserts);
-                if sound_width {
-                    z3_total += z3_us;
-                    ax_total += ax_us;
-                }
+                z3_total += z3_us;
+                ax_total += ax_us;
                 cases += 1;
 
                 let status = if !ax_ok && !ax_unk {
                     "AXEYUM-WRONG"
-                } else if !z3_ok && !z3_unk && sound_width {
+                } else if !z3_ok && !z3_unk {
                     "Z3-WRONG"
-                } else if !z3_ok && !z3_unk && !sound_width {
-                    "z3-wide-const-limit"
                 } else if z3_unk || ax_unk {
                     "unknown"
                 } else {
@@ -538,8 +523,8 @@ fn main() {
                 );
                 // machine-readable line
                 println!(
-                    "{{\"tier\":\"primitives\",\"op\":\"{}\",\"category\":\"{}\",\"width\":{},\"verdict\":\"{}\",\"ground_truth\":\"{}\",\"z3\":\"{}\",\"axeyum\":\"{}\",\"z3_correct\":{},\"axeyum_correct\":{},\"sound_width\":{},\"z3_us\":{:.3},\"axeyum_us\":{:.3},\"reps\":{}}}",
-                    prim.name, prim.category, prim.width, label, expected, vz, va, z3_ok, ax_ok, sound_width, z3_us, ax_us, REPS
+                    "{{\"tier\":\"primitives\",\"op\":\"{}\",\"category\":\"{}\",\"width\":{},\"verdict\":\"{}\",\"ground_truth\":\"{}\",\"z3\":\"{}\",\"axeyum\":\"{}\",\"z3_correct\":{},\"axeyum_correct\":{},\"z3_us\":{:.3},\"axeyum_us\":{:.3},\"reps\":{}}}",
+                    prim.name, prim.category, prim.width, label, expected, vz, va, z3_ok, ax_ok, z3_us, ax_us, REPS
                 );
             }
         }
@@ -550,24 +535,16 @@ fn main() {
         cases
     );
     eprintln!(
-        "  correctness: axeyum_wrong={} z3_wrong(<=64b)={} z3_wide_const_limit(>64b)={} | axeyum_unknown={} z3_unknown={}",
-        ax_wrong, z3_wrong, z3_wide_const_limit, ax_unknown, z3_unknown
+        "  correctness: axeyum_wrong={} z3_wrong={} | axeyum_unknown={} z3_unknown={}",
+        ax_wrong, z3_wrong, ax_unknown, z3_unknown
     );
     eprintln!(
-        "  head-to-head timing (<=64b, both sound): median-sum z3={:.1}us axeyum={:.1}us => axeyum {:.2}x faster",
+        "  head-to-head timing (all widths): median-sum z3={:.1}us axeyum={:.1}us => axeyum {:.2}x faster",
         z3_total,
         ax_total,
         if ax_total > 0.0 { z3_total / ax_total } else { 0.0 }
     );
-    if z3_wide_const_limit > 0 {
-        eprintln!(
-            "  NOTE: {} of {} >64b cases: glaurung's z3 adapter truncates the wide constant\n        (z3_backend.rs:122 `value as u64`) and returns a WRONG verdict; axeyum is correct.",
-            z3_wide_const_limit, cases
-        );
-    }
-    // Fail only on an axeyum correctness error, or an UNEXPECTED z3 error at a
-    // width where its adapter is sound. The >64b z3 truncation is a documented
-    // glaurung-adapter limitation, reported but not a benchmark failure.
+    // Fail closed on a correctness error from either backend at any width.
     if ax_wrong > 0 || z3_wrong > 0 {
         std::process::exit(1);
     }

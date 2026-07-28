@@ -1,5 +1,12 @@
 # axeyum vs z3: a bottom-up benchmark for glaurung's QF_BV workload
 
+> **Snapshot status:** the checked-in result files are immutable historical
+> evidence from Glaurung `9ace064` on 2026-07-17, not current performance
+> claims. That revision predates the wide-constant Z3 adapter fix in `4ae96cf`.
+> The current harness grades both backends at every width and exits nonzero on
+> any wrong verdict; rerunning the script replaces the result files and stamps
+> the current revisions in `provenance.txt`.
+
 > A reproducible, layered benchmark comparing the **axeyum** (pure-Rust,
 > in-process) and **z3** (libz3 via the `z3` crate) backends on the exact
 > solver workload glaurung's symbolic-execution engine produces. Built to be a
@@ -72,7 +79,7 @@ to build against the local axeyum checkout, sync axeyum
 (`git -C ~/projects/personal/axeyum pull --ff-only`) -- glaurung HEAD tracks a
 recent axeyum revision.
 
-## Results (this run)
+## Historical results (the checked-in run)
 
 Provenance: glaurung `9ace064`, axeyum `1cc1918`, i9-12900K, rustc 1.97-nightly,
 2026-07-17. See `results/provenance.txt`.
@@ -159,12 +166,12 @@ drivers (tcpip, dxgkrnl) are reproducible via `--full-drivers`.
 3. **The warm path is the real lever** (Tier 2): ~8x beyond axeyum one-shot on a
    narrowing path condition -- the mechanism behind the 2.8-15.6x real-driver
    numbers.
-4. **The benchmark surfaced a glaurung z3-adapter soundness bug** (Tier 0): at
+4. **The historical run surfaced a glaurung z3-adapter soundness bug** (Tier 0): at
    >64 bits, `z3_backend.rs:122` truncates constants via `value as u64`,
-   yielding a wrong verdict; axeyum's full-width path is correct. This is a
-   glaurung-adapter limitation (not a z3-core or axeyum bug) and means z3 cannot
-   serve as an oracle at 128 bits -- the head-to-head timing is therefore scoped
-   to <=64b, where both backends are sound.
+   yielding a wrong verdict; axeyum's full-width path was correct. This was a
+   Glaurung-adapter limitation, not a Z3-core bug, and was fixed in `4ae96cf`.
+   The historical head-to-head timing remains scoped to <=64b; the current
+   harness treats both backends as required-correct at 128 bits too.
 5. **Methodology, learned the hard way:** an earlier ad-hoc sweep reported
    inflated tcpip/dxgkrnl speedups because ~733 queries were fast-*erroring* on a
    since-fixed concat-width bug, not solving. This benchmark instruments
@@ -182,8 +189,9 @@ drivers (tcpip, dxgkrnl) are reproducible via `--full-drivers`.
   smaller floor. The comparison is "as glaurung uses them."
 - **Tier 3 is z3-authoritative** (z3 drives exploration), which isolates solver
   cost fairly but means the stream reflects z3's model choices.
-- **Widths >64b** compare against a known-unsound z3 adapter path; those rows are
-  a correctness demonstration, excluded from the timing head-to-head.
+- **Widths >64b in the historical files** exercised the then-known-unsound Z3
+  adapter path and were excluded from that run's timing head-to-head. Current
+  runs include those widths after the adapter fix.
 - **Synthetic tiers (0/1/1b/2)** are author-constructed; they explain *mechanism*
   and *correctness*. The real-workload claims rest on Tier 3.
 

@@ -26,8 +26,8 @@ use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
     export_qf_bv_unsat_proof_within, AigConstructionStats, CheckResult, IncrementalBvSolver,
     IncrementalBvStats, IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
-    IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy, ReplayCheckedSatCacheStats, SolverConfig,
-    UnsatProof, UnsatProofOutcome, UnknownKind, export_qf_bv_unsat_proof,
+    IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy,
+    ReplayCheckedSatCacheStats, SolverConfig, UnknownKind, UnsatProof, UnsatProofOutcome,
 };
 #[cfg(feature = "solver-axeyum-text")]
 use axeyum_solver::{solve_smtlib, solve_smtlib_get_value};
@@ -37,9 +37,9 @@ use sha2::{Digest, Sha256};
 use crate::ir::types::{BinOp, CmpOp, UnOp};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    Assert, AxeyumExecutionClass, IncrementalSolver, Model, SolveResult, SolveUnknownReason,
-    Solver, SolverWorkBudgets, WarmAssertionPrefix, WarmDeltaContext, check_timeout, pipe,
-    solver_work_budgets,
+    check_timeout, pipe, solver_work_budgets, Assert, AxeyumExecutionClass, IncrementalSolver,
+    Model, SolveResult, SolveUnknownReason, Solver, SolverWorkBudgets, WarmAssertionPrefix,
+    WarmDeltaContext,
 };
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
 const CNF_SNAPSHOT_DIR_ENV: &str = "GLAURUNG_AXEYUM_CNF_SNAPSHOT_DIR";
@@ -3056,7 +3056,7 @@ impl AxeyumSolver {
         pool: &ExprPool,
         asserts: &[Assert],
     ) -> InfeasiblePathVerdict {
-        self.prove_infeasible_path_before(pool, asserts, Some(Instant::now() + SOLVE_TIMEOUT))
+        self.prove_infeasible_path_before(pool, asserts, Some(Instant::now() + check_timeout()))
     }
 
     fn prove_infeasible_path_before(
