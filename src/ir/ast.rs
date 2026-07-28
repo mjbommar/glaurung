@@ -780,7 +780,9 @@ fn lower_block(b: &LlirBlock) -> Vec<Stmt> {
 /// Peephole pass: for each control-flow condition or pure select condition whose
 /// flag was assigned by a `Stmt::Assign { dst: flag, src: Expr::Cmp(..) }` earlier
 /// in the same block (with no intervening read of the flag), fold the comparison
-/// into the condition and drop the assignment.
+/// into the condition. Raw architectural flags can be removed immediately;
+/// versioned predicates are retained for whole-function DCE because the same SSA
+/// value may also be consumed in a successor block.
 ///
 /// The structurer's `extract_cond_and_strip` already does this for
 /// conditionals that end a block (recognised as `Region::IfThen` /
@@ -801,6 +803,14 @@ fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
                             .map(|stmt| count_reg_uses_in_stmt(stmt, flag))
                             .sum();
                         if reads == 0 {
+                            if matches!(flag, VReg::FlagValue { .. }) {
+                                // A local scan cannot prove a versioned predicate
+                                // dead: a successor block may read this exact SSA
+                                // value (GCC's `cmp; jb; ...; cmova` does). Clone
+                                // for the condition and let whole-function DCE
+                                // remove the definition only when no read remains.
+                                return Some(src.clone());
+                            }
                             if let Stmt::Assign { src, .. } = out.remove(i) {
                                 return Some(src);
                             }
@@ -5407,6 +5417,59 @@ function f @ 0x1000 {
             !text.contains("if (%zf)"),
             "opaque flag-based if remained: {}",
             text
+        );
+    }
+
+    #[test]
+    fn hoisting_one_use_keeps_a_versioned_predicate_for_a_later_consumer() {
+        // GCC -O2 lowers the two comparisons in `cmp_unsigned` to one CMP whose
+        // CF feeds the first JB and then also feeds a later CMOVA.  Hoisting CF
+        // into the branch condition must not delete the SSA definition: the
+        // select is in a successor block and still reads that exact flag value.
+        let cf = VReg::FlagValue {
+            flag: Flag::C,
+            version: 1,
+        };
+        let stmts = vec![
+            Stmt::Assign {
+                dst: cf.clone(),
+                src: Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                },
+            },
+            Stmt::If {
+                cond: Expr::Reg(cf.clone()),
+                then_body: vec![Stmt::Goto { target: 0x113a }],
+                else_body: None,
+            },
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Select {
+                    cond: Box::new(Expr::Reg(cf.clone())),
+                    if_true: Box::new(Expr::Const(55)),
+                    if_false: Box::new(Expr::Const(66)),
+                    width: 4,
+                },
+            },
+        ];
+
+        let lowered = hoist_inline_flag_conds(stmts);
+
+        assert!(
+            matches!(
+                lowered.first(),
+                Some(Stmt::Assign { dst, .. }) if dst == &cf
+            ),
+            "hoisting the branch consumed a predicate still read later: {lowered:#?}"
+        );
+        assert!(
+            matches!(
+                lowered.get(1),
+                Some(Stmt::If { cond: Expr::Cmp { op: CmpOp::Ult, .. }, .. })
+            ),
+            "the branch should still receive the inlined comparison: {lowered:#?}"
         );
     }
 

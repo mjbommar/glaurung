@@ -197,7 +197,7 @@ fn read_view_ops(v: regview::RegView, dst: VReg) -> Vec<Op> {
 ///
 /// When `src` names the destination view itself (`xor %ah,%ah`), the accumulator is
 /// reused for both operands, so constant folding still recognises the idiom.
-fn partial_alu_ops(v: regview::RegView, op: BinOp, src: Value) -> Vec<Op> {
+fn partial_alu_ops(v: regview::RegView, op: BinOp, src: Value, bits: u32) -> Vec<Op> {
     let parent = VReg::phys(v.parent);
     let acc = VReg::Temp(0);
     let mask = (v.value_mask() >> v.offset) as i64;
@@ -217,7 +217,13 @@ fn partial_alu_ops(v: regview::RegView, op: BinOp, src: Value) -> Vec<Op> {
         },
         _ => src.clone(),
     };
-    ops.extend(emit_bin_with_flags(acc.clone(), op, rhs, Width(v.width)));
+    ops.extend(emit_machine_bin_with_flags(
+        acc.clone(),
+        op,
+        rhs,
+        Width(v.width),
+        bits,
+    ));
     ops.push(Op::Bin {
         dst: parent.clone(),
         op: BinOp::And,
@@ -761,6 +767,61 @@ fn emit_bin_with_flags(dst: VReg, op: BinOp, rhs: Value, width: Width) -> Vec<Op
             ops
         }
     }
+}
+
+/// Apply an x86 ALU operation at its encoded operand width, even though the
+/// downstream SSA model canonicalises GP sub-registers to their full parent.
+///
+/// Most low-word arithmetic happens to retain the right low bits when computed
+/// at 64 bits, but right shifts do not: `sar eax,1` must replicate bit 31, not
+/// the already-zeroed bit 63, and `shr` must never shift stale parent bits down
+/// into the low word. Make that read width explicit before the operation. A
+/// 32-bit GP destination on x86-64 then zero-extends into its parent, so record
+/// that write effect explicitly after the flag values have consumed the result.
+fn emit_machine_bin_with_flags(
+    dst: VReg,
+    op: BinOp,
+    rhs: Value,
+    width: Width,
+    bits: u32,
+) -> Vec<Op> {
+    let machine_width = if bits == 64 { Width::W64 } else { Width::W32 };
+    let mut ops = Vec::new();
+    if width < machine_width && matches!(op, BinOp::Shr | BinOp::Sar) {
+        let src = Value::Reg(dst.clone());
+        ops.push(if op == BinOp::Sar {
+            Op::SExt {
+                dst: dst.clone(),
+                src,
+                from: width,
+                to: machine_width,
+            }
+        } else {
+            Op::ZExt {
+                dst: dst.clone(),
+                src,
+                from: width,
+                to: machine_width,
+            }
+        });
+    }
+    ops.extend(emit_bin_with_flags(dst.clone(), op, rhs, width));
+    let zero_extends_parent = bits == 64
+        && width == Width::W32
+        && matches!(
+            &dst,
+            VReg::Phys(name)
+                if regview::view(regview::Arch::X86_64, name).is_some_and(|view| view.zero_extends())
+        );
+    if zero_extends_parent {
+        ops.push(Op::ZExt {
+            dst: dst.clone(),
+            src: Value::Reg(dst),
+            from: Width::W32,
+            to: Width::W64,
+        });
+    }
+    ops
 }
 
 fn emit_inc_dec_with_flags(dst: VReg, increment: bool, width: Width) -> Vec<Op> {
@@ -1422,10 +1483,10 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     let partial = partial_gp_view(&dst_name);
                     if let Some(src) = value_of_operand(instr, 1) {
                         return match partial {
-                            Some(v) => partial_alu_ops(v, op, src),
+                            Some(v) => partial_alu_ops(v, op, src, bits),
                             None => {
                                 let width = operand_width(instr, 0);
-                                emit_bin_with_flags(dst, op, src, width)
+                                emit_machine_bin_with_flags(dst, op, src, width, bits)
                             }
                         };
                     } else if instr.op_kind(1) == OpKind::Memory {
@@ -1439,16 +1500,17 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         return match partial {
                             Some(v) => {
                                 let mut ops = vec![load];
-                                ops.extend(partial_alu_ops(v, op, Value::Reg(tmp)));
+                                ops.extend(partial_alu_ops(v, op, Value::Reg(tmp), bits));
                                 ops
                             }
                             None => {
                                 let mut ops = vec![load];
-                                ops.extend(emit_bin_with_flags(
+                                ops.extend(emit_machine_bin_with_flags(
                                     dst,
                                     op,
                                     Value::Reg(tmp),
                                     operand_width(instr, 0),
+                                    bits,
                                 ));
                                 ops
                             }
@@ -1464,11 +1526,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             dst: tmp.clone(),
                             addr: addr.clone(),
                         }];
-                        ops.extend(emit_bin_with_flags(
+                        ops.extend(emit_machine_bin_with_flags(
                             tmp.clone(),
                             op,
                             src,
                             operand_width(instr, 0),
+                            bits,
                         ));
                         ops.push(Op::Store {
                             addr,
@@ -3257,6 +3320,50 @@ mod tests {
         assert!(
             zf_at > bin_at,
             "ZF must describe the shifted result: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn sar_eax_signs_the_low_word_then_zero_extends_the_parent() {
+        // `sar eax,1` reads eax as a signed 32-bit value, then (because it
+        // writes eax) clears rax[63:32]. Treating the already-zero-extended
+        // parent as a signed 64-bit value turns -3 >> 1 into 2147483646.
+        let ops = lift64(&[0xd1, 0xf8]);
+        let sext = ops
+            .iter()
+            .position(|instruction| {
+                matches!(
+                    &instruction.op,
+                    Op::SExt {
+                        dst,
+                        src: Value::Reg(src),
+                        from: Width::W32,
+                        to: Width::W64,
+                    } if *dst == VReg::phys("eax") && *src == VReg::phys("eax")
+                )
+            })
+            .expect("32-bit SAR must sign-extend its low-word input");
+        let shift = ops
+            .iter()
+            .position(|instruction| matches!(&instruction.op, Op::Bin { op: BinOp::Sar, .. }))
+            .expect("SAR operation");
+        let zext = ops
+            .iter()
+            .rposition(|instruction| {
+                matches!(
+                    &instruction.op,
+                    Op::ZExt {
+                        dst,
+                        src: Value::Reg(src),
+                        from: Width::W32,
+                        to: Width::W64,
+                    } if *dst == VReg::phys("eax") && *src == VReg::phys("eax")
+                )
+            })
+            .expect("32-bit destination must zero-extend its parent after the shift");
+        assert!(
+            sext < shift && shift < zext,
+            "wrong width-operation order: {ops:#?}"
         );
     }
 

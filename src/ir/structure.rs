@@ -208,9 +208,17 @@ impl Cfg {
                 }
             }
         }
-        for v in succs.iter_mut().chain(preds.iter_mut()) {
-            v.sort_unstable();
-            v.dedup();
+        // Successor order is semantic for a jump table: entry N is source
+        // `case N`. Preserve the CFG edge insertion order while removing any
+        // duplicate target. Predecessor order carries no such meaning and may
+        // remain sorted for deterministic dataflow.
+        for successors in &mut succs {
+            let mut seen = HashSet::new();
+            successors.retain(|successor| seen.insert(*successor));
+        }
+        for predecessors in &mut preds {
+            predecessors.sort_unstable();
+            predecessors.dedup();
         }
 
         // Materialise the dominance relation from idom chains.

@@ -173,7 +173,7 @@ impl Disassembler for IcedDisassembler {
         address: &Address,
         bytes: &[u8],
     ) -> DisassemblerResult<Instruction> {
-        use iced_x86::{Decoder, DecoderOptions, Formatter, IntelFormatter};
+        use iced_x86::{Decoder, DecoderOptions};
 
         if !matches!(self.arch, Architecture::X86 | Architecture::X86_64) {
             return Err(DisassemblerError::UnsupportedInstruction());
@@ -186,14 +186,13 @@ impl Disassembler for IcedDisassembler {
             return Err(DisassemblerError::InvalidInstruction());
         }
         let len = instr.len();
-        let mut fmt = IntelFormatter::new();
-        let mut out = String::new();
-        fmt.format(&instr, &mut out);
-        let (mnemonic, _ops) = if let Some((m, rest)) = out.split_once(' ') {
-            (m.to_string(), rest.trim().to_string())
-        } else {
-            (format!("{:?}", instr.mnemonic()), String::new())
-        };
+        // The formatter includes instruction prefixes in its text. For CET
+        // indirect branches it renders `notrack jmp rdx`; taking the first
+        // whitespace-delimited token therefore turned the operation into
+        // `notrack` and made every control-flow consumer miss the jump. Iced's
+        // decoded mnemonic is the authoritative operation and deliberately
+        // excludes prefixes.
+        let mnemonic = format!("{:?}", instr.mnemonic()).to_ascii_lowercase();
         let operands = Self::iced_operands(&instr, self.bits);
 
         let text_bytes = &bytes[..len.min(bytes.len())];
@@ -260,6 +259,20 @@ mod tests {
         let ins = d.disassemble_instruction(&va(0x1000), &[0x80, 0x00, 0x01]).unwrap();
         assert_eq!(ins.operands[0].kind, OperandKind::Memory);
         assert_eq!(ins.operands[0].size, 8, "byte memory access");
+    }
+
+    #[test]
+    fn notrack_prefix_does_not_replace_the_jump_mnemonic() {
+        let d = dis();
+        // GCC -O2 emits this CET-hardened indirect jump for switch tables.
+        // `notrack` is a prefix, not the operation: CFG discovery must still
+        // see a register-indirect `jmp` and resolve its case successors.
+        let ins = d
+            .disassemble_instruction(&va(0x112f), &[0x3e, 0xff, 0xe2])
+            .unwrap();
+        assert_eq!(ins.mnemonic.to_ascii_lowercase(), "jmp");
+        assert_eq!(ins.operands[0].register.as_deref(), Some("rdx"));
+        assert_eq!(ins.operands[0].access, Access::Read);
     }
 
     #[test]

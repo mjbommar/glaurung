@@ -89,8 +89,11 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
         return None;
     }
 
-    // Sort deterministically by VA for stable consumers.
-    blocks.sort_by_key(|b| b.start_va);
+    // Every SSA/dominance/structuring consumer defines block index zero as the
+    // semantic entry. Keep the remaining blocks VA-sorted for determinism, but
+    // never let a lower-address cold split become block zero.
+    let entry_va = func.entry_point.value;
+    blocks.sort_by_key(|block| (block.start_va != entry_va, block.start_va));
 
     // Phase 0 (task 0.7): the executable IR has no untyped holes. Rewrite any
     // residual `Op::Unknown` the per-arch lifters emitted into a conservative,

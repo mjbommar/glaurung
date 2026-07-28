@@ -3295,6 +3295,14 @@ pub fn analyze_functions_bytes_with_stats(
         }
     }
 
+    // Fold compiler-emitted split chunks while the symbol-table suffixes are
+    // still intact. A DWARF subprogram covers every range of the logical
+    // function, so applying it first renames both `dispatch` and
+    // `dispatch.cold` to `dispatch`; the suffix then disappears and the child
+    // survives as a duplicate function. After this merge, DWARF can safely
+    // replace the surviving parent's chunk list with its authoritative ranges.
+    merge_compiler_split_chunks(&mut functions);
+
     // Apply DWARF authoritative ground truth where available. DWARF
     // gives us the canonical function name, multi-chunk address ranges
     // (DW_AT_ranges), parameter count, and source language — all of
@@ -3321,14 +3329,6 @@ pub fn analyze_functions_bytes_with_stats(
     if let Some(ref lib) = flirt_lib_for_seeds {
         apply_flirt_overrides(data, &mut functions, lib);
     }
-
-    // Fold compiler-emitted split chunks (e.g. GCC -O2 `<fn>.cold`) into
-    // their parent function's `chunks` list so downstream consumers see
-    // one logical function instead of N siblings. Runs after DWARF —
-    // DWARF chunks are already canonical, but a binary may have a mix
-    // (some functions DWARF-covered, some not), and this pass handles
-    // the heuristic side.
-    merge_compiler_split_chunks(&mut functions);
 
     let shape_stats = classify_function_shapes(data, arch, &mut functions);
     stats.thunk_functions = shape_stats.thunk_functions;
@@ -3954,6 +3954,140 @@ mod chunk_tests {
         let merged = merge_compiler_split_chunks(&mut funcs);
         assert_eq!(merged, 0);
         assert_eq!(funcs.len(), 1);
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod gcc_dispatch_corpus_tests {
+    use super::*;
+    use object::{Object, ObjectSymbol};
+    use std::io::Write;
+    use std::process::Command;
+
+    #[test]
+    fn gcc_o2_real_corpus_dispatch_keeps_one_function_and_eight_cfg_arms() {
+        let tmp = tempfile::tempdir().expect("temporary GCC dispatch build directory");
+        let source = tmp.path().join("switch_jt.c");
+        let binary = tmp.path().join("switch_jt.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decbench_corpus/src/switch_jt.c"
+                ))
+            })
+            .expect("write the real DecBench switch_jt source");
+        let build = match Command::new("gcc")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch GCC: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile switch_jt.c with GCC -O2: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read GCC output");
+        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let dispatch_va = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("dispatch"))
+            .map(|symbol| symbol.address())
+            .expect("exported dispatch symbol");
+
+        let (functions, _callgraph, stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let named: Vec<_> = functions
+            .iter()
+            .filter(|function| function.name == "dispatch")
+            .collect();
+        assert_eq!(
+            named.len(),
+            1,
+            "the compiler split must not survive as a duplicate named function"
+        );
+        assert_eq!(named[0].entry_point.value, dispatch_va);
+        assert!(
+            named[0]
+                .all_ranges()
+                .iter()
+                .any(|range| range.start.value < dispatch_va),
+            "the cold default block must remain owned by dispatch"
+        );
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            named[0],
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift the real dispatch CFG");
+        assert_eq!(
+            lifted.blocks[0].start_va, dispatch_va,
+            "LLIR block zero is the semantic entry, even when a cold split has a lower VA"
+        );
+        let dispatch_block = lifted
+            .blocks
+            .iter()
+            .find(|block| block.succs.len() == 8)
+            .expect("eight-way LLIR dispatch block");
+        assert!(
+            matches!(
+                dispatch_block.instrs.last().map(|instruction| &instruction.op),
+                Some(crate::ir::types::Op::IndirectJump { .. })
+            ),
+            "the computed transfer must survive lifting as IndirectJump"
+        );
+        let ssa = crate::ir::ssa::compute_ssa(&lifted);
+        let region = crate::ir::structure::recover_verified(&lifted, &ssa);
+        fn switch_arms(
+            region: &crate::ir::structure::Region,
+        ) -> Option<&[crate::ir::structure::Region]> {
+            use crate::ir::structure::Region;
+            match region {
+                Region::Switch { arms, .. } => Some(arms),
+                Region::Seq(parts) => parts.iter().find_map(switch_arms),
+                Region::IfThen { then_r, .. } => switch_arms(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    switch_arms(then_r).or_else(|| switch_arms(else_r))
+                }
+                Region::While { body, .. } | Region::DoWhile { body, .. } => switch_arms(body),
+                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+            }
+        }
+        let arms = switch_arms(&region).expect("recover the real dispatch as a switch");
+        let arm_vas: Vec<_> = arms
+            .iter()
+            .map(|arm| {
+                let index = crate::ir::structure::entry_block(arm).expect("non-empty switch arm");
+                lifted.blocks[index].start_va
+            })
+            .collect();
+        assert_eq!(
+            arm_vas, dispatch_block.succs,
+            "case numbering must retain the jump-table entry order"
+        );
+        assert_eq!(
+            stats
+                .resolved_dispatches
+                .iter()
+                .map(|(_site, arms)| *arms)
+                .collect::<Vec<_>>(),
+            vec![8],
+            "the real GCC O2 table jump must contribute all eight case arms"
+        );
+        let dispatch_site = stats.resolved_dispatches[0].0;
+        assert!(
+            stats
+                .unresolved_indirect
+                .iter()
+                .all(|(site, _reason)| *site != dispatch_site),
+            "the resolved table jump must not also be reported unresolved: {:?}",
+            stats.unresolved_indirect
+        );
     }
 }
 

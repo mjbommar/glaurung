@@ -147,3 +147,21 @@ def test_every_override_names_a_real_function():
         f"tests/decbench_corpus/src: {stale}. Either the function was renamed (move "
         f"its contract with it) or removed (delete the entry)."
     )
+
+
+def test_switch_dispatch_vectors_execute_every_arm_with_signed_inputs():
+    """A random 32-bit opcode almost always takes the default arm.
+
+    The previous differential ran 110 cases yet exercised case 7 only as
+    ``dispatch(7, 7, 7)``, missing the wrong logical shift for negative ``b``.
+    Keep explicit in-range vectors so every recovered table edge is executed.
+    """
+    vectors = M.override("switch_jt", "dispatch").get("extra_vectors", [])
+    covered = {int(vector[0]) for vector in vectors if len(vector) == 3}
+    assert set(range(8)) <= covered, f"missing switch arms: {set(range(8)) - covered}"
+    assert any(
+        int(vector[0]) == 7 and int(vector[2]) < 0 for vector in vectors
+    ), "case 7 needs a negative signed-shift operand"
+    assert any(int(vector[0]) < 0 or int(vector[0]) > 7 for vector in vectors), (
+        "the out-of-range default arm needs an explicit vector"
+    )

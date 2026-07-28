@@ -113,6 +113,29 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
     ("strops", "str_cmp"): {"ptr_elem": "cstr"},
     ("strops", "hash_djb2"): {"ptr_elem": "cstr"},
     ("statemachine", "fsm"): {"len_args": [1], "ptr_elem": "u8"},
+    # A random signed 32-bit opcode reaches the default arm almost every time.
+    # Pin every jump-table arm, including the negative case-7 operand that caught
+    # `sar eax,1` being rendered as a 64-bit logical shift. Values stay small so
+    # add/mul/left-shift do not invoke signed-overflow or negative-shift UB.
+    ("switch_jt", "dispatch"): {
+        "extra_vectors": [
+            [-1, -9, -3],
+            [8, -9, -3],
+            [0, -9, -3],
+            [0, -3, 9],
+            [1, -9, -3],
+            [1, 9, -3],
+            [2, -9, -3],
+            [2, -3, 9],
+            [3, -9, -3],
+            [4, -9, -3],
+            [5, -9, -3],
+            [6, 9, -3],
+            [6, 0, -1],
+            [7, -9, -3],
+            [7, 0, -1],
+        ]
+    },
     # A `struct node *` whose first member is itself a `struct node *`. The harness
     # builds a pointer argument by allocating a buffer of fuzz values, so `h->next`
     # would be an integer reinterpreted as an address and the very first iteration
