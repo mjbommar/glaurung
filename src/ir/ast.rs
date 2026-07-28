@@ -1316,18 +1316,18 @@ fn lower_region_inner(
             let mut out = Vec::new();
             for (idx, p) in parts.iter().enumerate() {
                 let mut lowered = lower_region(p, lf, targets);
-                // Strip a redundant `goto <header>` when the next region is a
-                // loop headed at that VA: the `-O0` for-loop's entry jump to its
-                // condition block is just the natural fall-in to the `while`, so
-                // keeping it would leave a goto to a synthesized empty label.
-                let next_loop_entry = parts.get(idx + 1).and_then(|next| match next {
-                    Region::While { header, .. } => Some(*header),
-                    Region::DoWhile { .. } => crate::ir::structure::entry_block(next),
-                    _ => None,
-                });
-                if let Some(header) = next_loop_entry {
-                    let hva = lf.blocks[header].start_va;
-                    if matches!(lowered.last(), Some(Stmt::Goto { target }) if *target == hva) {
+                // A sequence emits its next region immediately after this one,
+                // so an unconditional jump to that region is ordinary
+                // fallthrough and must disappear. This includes entry jumps to
+                // a recovered loop and zero-distance bridge blocks between a
+                // nested-loop exit and its outer latch. Keeping the latter goto
+                // makes the following latch statements unreachable.
+                let next_entry = parts
+                    .get(idx + 1)
+                    .and_then(crate::ir::structure::entry_block);
+                if let Some(entry) = next_entry {
+                    let next_va = lf.blocks[entry].start_va;
+                    if matches!(lowered.last(), Some(Stmt::Goto { target }) if *target == next_va) {
                         lowered.pop();
                     }
                 }
@@ -5232,6 +5232,45 @@ function f @ 0x1000 {
 }
 ";
         assert_eq!(text, expected);
+    }
+
+    #[test]
+    fn a_jump_to_the_immediately_following_region_falls_through() {
+        // Clang -O0 places a zero-distance jump block between a nested loop's
+        // exit and the outer-loop increment. Keeping `goto increment` while
+        // emitting that increment immediately next makes the statements after
+        // the goto unreachable; label repair can only append an empty label at
+        // function scope and cannot restore the lost outer iteration.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Jump { target: 0x1010 }], vec![0x1010]),
+            (
+                0x1010,
+                vec![Op::Assign {
+                    dst: VReg::phys("outer_index"),
+                    src: Value::Const(1),
+                }],
+                vec![],
+            ),
+        ]);
+        let region = Region::Seq(vec![Region::Block(0), Region::Block(1)]);
+
+        let lowered = lower(&lf, &region, "fallthrough");
+
+        assert!(
+            !lowered
+                .body
+                .iter()
+                .any(|stmt| matches!(stmt, Stmt::Goto { target: 0x1010 })),
+            "a jump to the next emitted region is redundant: {:#?}",
+            lowered.body
+        );
+        assert!(
+            lowered.body.iter().any(|stmt| {
+                matches!(stmt, Stmt::Assign { dst, .. } if *dst == VReg::phys("outer_index"))
+            }),
+            "the following region's body must remain reachable: {:#?}",
+            lowered.body
+        );
     }
 
     #[test]

@@ -1102,6 +1102,39 @@ fn detect_if_shape(
         }
     }
 
+    // --- optional preheader feeding a shared natural loop -----------------
+    // Optimisers commonly peel one iteration or initialise an odd/even lane in
+    // only one arm, after which both arms enter the same loop header.  A side
+    // exit from that optional preheader (for example `if (n == 1) return`) makes
+    // the function epilogue the condition's global post-dominator, even though
+    // the loop header is the local join for every continuing path.  Choosing the
+    // epilogue nests the loop inside only the direct arm and makes the setup arm
+    // skip all remaining iterations.
+    for &(body, join) in &[(t, e), (e, t)] {
+        let join_is_loop_header = cfg.preds[join]
+            .iter()
+            .copied()
+            .any(|tail| cfg.dominates(join, tail));
+        if join_is_loop_header
+            && cfg.preds[body] == vec![cond]
+            && can_reach(body, join, cfg)
+            && every_path_reaches_join_or_terminates(body, join, cfg)
+        {
+            let invert = invert_for(cfg, cond, body);
+            visited.insert(cond);
+            let then_r = build(body, cfg, visited, Some(join));
+            return Some((
+                Region::IfThen {
+                    cond,
+                    then_r: Box::new(then_r),
+                    join: Some(join),
+                    invert,
+                },
+                Some(join),
+            ));
+        }
+    }
+
     // (switch detection lives in detect_switch_shape — invoked by build()
     // before falling through to the default block path, since this fn is
     // only called for 2-successor blocks.)
@@ -1200,6 +1233,39 @@ fn detect_if_shape(
     }
 
     None
+}
+
+/// True when every path starting at `start` either reaches `join` or ends at a
+/// terminal block. Cycles encountered before the join are rejected
+/// conservatively: the optional-preheader rule is for acyclic one-time setup,
+/// not for guessing ownership of another loop.
+fn every_path_reaches_join_or_terminates(start: usize, join: usize, cfg: &Cfg) -> bool {
+    fn visit(
+        node: usize,
+        join: usize,
+        cfg: &Cfg,
+        active: &mut HashSet<usize>,
+        memo: &mut HashMap<usize, bool>,
+    ) -> bool {
+        if node == join || cfg.succs[node].is_empty() {
+            return true;
+        }
+        if let Some(&known) = memo.get(&node) {
+            return known;
+        }
+        if !active.insert(node) {
+            return false;
+        }
+        let valid = cfg.succs[node]
+            .iter()
+            .copied()
+            .all(|succ| visit(succ, join, cfg, active, memo));
+        active.remove(&node);
+        memo.insert(node, valid);
+        valid
+    }
+
+    visit(start, join, cfg, &mut HashSet::new(), &mut HashMap::new())
 }
 
 fn can_reach(start: usize, target: usize, cfg: &Cfg) -> bool {
@@ -1558,6 +1624,62 @@ mod tests {
             has_while,
             "rotated for-loop not structured as While: {:?}",
             r
+        );
+    }
+
+    #[test]
+    fn optional_preheader_with_early_return_joins_before_the_shared_loop() {
+        use crate::ir::types::{Flag, VReg};
+
+        let branch = |target: u64| {
+            vec![Op::CondJump {
+                cond: VReg::Flag(Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        // GCC -O2 `sum_to` / `factorial` peel one iteration according to parity:
+        //
+        //          b0
+        //       /      \
+        //      b1       |       b1 is an optional one-time preheader
+        //    /   \      |       whose side exit returns from the function
+        //   b2   exit   |
+        //     \         /
+        //       loop_header -> loop_body -> loop_header
+        //              \
+        //               exit
+        //
+        // The function exit is b0's global post-dominator, but it is not the
+        // conditional's local join. Nesting the loop in only b0's direct arm
+        // makes the preheader path skip every remaining iteration.
+        let lf = mk_cfg(vec![
+            (0x1000, branch(0x1030), vec![0x1010, 0x1030]), // b0
+            (0x1010, branch(0x1050), vec![0x1020, 0x1050]), // b1
+            (0x1020, vec![Op::Nop], vec![0x1030]),          // b2
+            (0x1030, branch(0x1050), vec![0x1040, 0x1050]), // loop header
+            (0x1040, vec![Op::Jump { target: 0x1030 }], vec![0x1030]),
+            (0x1050, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let Region::Seq(parts) = &region else {
+            panic!("expected preheader, shared loop, and exit sequence: {region:#?}");
+        };
+        assert!(
+            matches!(
+                parts.first(),
+                Some(Region::IfThen {
+                    cond: 0,
+                    join: Some(3),
+                    ..
+                })
+            ),
+            "the optional setup must join at the loop header: {region:#?}"
+        );
+        assert!(
+            matches!(parts.get(1), Some(Region::While { header: 3, .. })),
+            "the loop must be shared after the optional setup: {region:#?}"
         );
     }
 

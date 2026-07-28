@@ -494,7 +494,9 @@ pub fn value_number(
 ///   phi destination is a version fresh at its own block while incoming versions all
 ///   come from strictly earlier definitions.
 ///
-/// Only phis whose result is actually READ get copies. An unread phi is dead, and
+/// Only phis whose result is actually READ get copies. Liveness is transitive
+/// through other phis: in a nested loop, an outer carried value may be read only
+/// as an incoming operand of the inner loop's phi. An unread phi is dead, and
 /// materialising it would add statements to both arms that no source line
 /// corresponds to.
 fn insert_phi_copies(
@@ -516,6 +518,29 @@ fn insert_phi_copies(
         for ins in &b.instrs {
             let (_, uses) = def_uses(&ins.op);
             read.extend(uses);
+        }
+    }
+
+    // Phi instructions do not exist in `out` yet, so their incoming operands
+    // cannot seed `read` above. Propagate liveness backwards through the phi
+    // graph to a fixed point before deciding which copies to materialise. One
+    // pass is insufficient for nested loops: inner_phi <- outer_phi <- entry.
+    loop {
+        let mut changed = false;
+        for phi in &ssa.phis {
+            let mut dst = phi.base.clone();
+            tag_phys(&mut dst, phi.dst_version, ctx);
+            if !read.contains(&dst) {
+                continue;
+            }
+            for (_pred, version) in &phi.incoming {
+                let mut src = phi.base.clone();
+                tag_phys(&mut src, *version, ctx);
+                changed |= read.insert(src);
+            }
+        }
+        if !changed {
+            break;
         }
     }
 
@@ -786,6 +811,70 @@ mod tests {
             undefined_reads(&out),
             Vec::<String>::new(),
             "the join reads a phi result that nothing defines"
+        );
+    }
+
+    #[test]
+    fn real_gcc_o2_nested_loop_defines_every_loop_carried_register() {
+        use object::{Object, ObjectSymbol};
+        use std::io::Write;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().expect("temporary nested-loop build directory");
+        let source = tmp.path().join("03_loop_shapes.c");
+        let binary = tmp.path().join("03_loop_shapes.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decompiler_fixtures/src/03_loop_shapes.c"
+                ))
+            })
+            .expect("write the real loop fixture source");
+        let build = match Command::new("gcc")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch GCC: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile the real loop fixture with GCC -O2: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read GCC output");
+        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let entry = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("nested_carry"))
+            .map(|symbol| symbol.address())
+            .expect("exported nested_carry symbol");
+        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+            &data,
+            &crate::analysis::cfg::Budgets::default(),
+        );
+        let function = functions
+            .iter()
+            .find(|function| function.entry_point.value == entry)
+            .expect("discovered nested_carry function");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift nested_carry");
+        let ssa = compute_ssa(&lifted);
+        let numbered = value_number(&lifted, &ssa, CallConv::SysVAmd64);
+
+        assert_eq!(
+            undefined_reads(&numbered),
+            Vec::<String>::new(),
+            "a loop-carried phi read has no incoming edge definition; phis: {:#?}",
+            ssa.phis
         );
     }
 
