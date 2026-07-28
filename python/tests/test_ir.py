@@ -43,13 +43,22 @@ def test_mov_reg_reg_lifts_to_assign_with_reg_value():
 def test_add_reg_imm_lifts_to_bin_add():
     # add rax, 5  (48 83 c0 05)
     ops = g.ir.lift_bytes(bytes([0x48, 0x83, 0xC0, 0x05]), 0x1000, 64)
-    assert len(ops) == 1
-    o = ops[0]
+    o = next(op for op in ops if op["kind"] == "bin" and op["dst"] == "rax")
     assert o["kind"] == "bin"
     assert o["op"] == "add"
     assert o["dst"] == "rax"
     assert o["lhs"] == {"kind": "reg", "name": "rax"}
     assert o["rhs"] == {"kind": "const", "value": 5}
+    # ADD replaces every architectural flag. PF/AF remain visible poison until
+    # their low-bit expressions are modelled; they must never be stale state.
+    assert {op.get("dst") for op in ops if op.get("dst", "").startswith("%")} >= {
+        "%cf",
+        "%pf",
+        "%af",
+        "%zf",
+        "%sf",
+        "%of",
+    }
 
 
 def test_push_expands_into_two_ops():
@@ -82,13 +91,14 @@ def test_call_direct_records_target_address():
 
 
 def test_cmp_and_je_roundtrip():
-    # cmp rax, rbx ; je +2 — cmp emits ZF/CF/Ule/Slt/Sle/S writes (plus a
-    # sub temp to materialise the signed difference for %sf); je reads %zf.
+    # cmp rax, rbx ; je +2 — the producer emits architectural flags only;
+    # derived signed/unsigned predicates belong to the consumer mapping.
     ops = g.ir.lift_bytes(bytes([0x48, 0x39, 0xD8, 0x74, 0x02]), 0x1000, 64)
     cmp_ops = [o for o in ops if o["kind"] == "cmp"]
-    assert len(cmp_ops) == 6
     cmp_flags = {o["dst"] for o in cmp_ops}
-    assert cmp_flags == {"%zf", "%cf", "%ule", "%slt", "%sle", "%sf"}
+    assert {"%zf", "%cf", "%sf"} <= cmp_flags
+    assert not {"%ule", "%slt", "%sle"} & cmp_flags
+    assert any(o["kind"] == "bin" and o["dst"] == "%of" for o in ops)
     cj = [o for o in ops if o["kind"] == "cond_jump"]
     assert len(cj) == 1
     assert cj[0]["cond"] == "%zf"
@@ -105,23 +115,51 @@ def test_js_after_test_reads_raw_sign_flag():
     assert any(o["kind"] == "cmp" and o["dst"] == "%sf" for o in ops)
 
 
-def test_jle_reads_sle_flag():
-    # cmp rax, rbx ; jle +2  — jle should read %sle, not %slt or %zf.
+def test_jle_materializes_signed_less_equal():
+    # JLE = ZF | (SF ^ OF), materialised by the shared consumer mapping.
     ops = g.ir.lift_bytes(bytes([0x48, 0x39, 0xD8, 0x7E, 0x02]), 0x1000, 64)
     cj = next(o for o in ops if o["kind"] == "cond_jump")
-    assert cj["cond"] == "%sle"
+    assert cj["cond"] == "%t21"
+    assert any(
+        o["kind"] == "bin"
+        and o["dst"] == "%t20"
+        and o["op"] == "xor"
+        and {o["lhs"]["name"], o["rhs"]["name"]} == {"%sf", "%of"}
+        for o in ops
+    )
+    assert any(
+        o["kind"] == "bin"
+        and o["dst"] == "%t21"
+        and o["op"] == "or"
+        and {o["lhs"]["name"], o["rhs"]["name"]} == {"%zf", "%t20"}
+        for o in ops
+    )
 
 
-def test_jl_reads_slt_flag():
+def test_jl_materializes_signed_less():
     ops = g.ir.lift_bytes(bytes([0x48, 0x39, 0xD8, 0x7C, 0x02]), 0x1000, 64)
     cj = next(o for o in ops if o["kind"] == "cond_jump")
-    assert cj["cond"] == "%slt"
+    assert cj["cond"] == "%t20"
+    assert any(
+        o["kind"] == "bin"
+        and o["dst"] == "%t20"
+        and o["op"] == "xor"
+        and {o["lhs"]["name"], o["rhs"]["name"]} == {"%sf", "%of"}
+        for o in ops
+    )
 
 
-def test_jbe_reads_unsigned_less_equal_flag():
+def test_jbe_materializes_unsigned_less_equal():
     ops = g.ir.lift_bytes(bytes([0x48, 0x39, 0xD8, 0x76, 0x02]), 0x1000, 64)
     cj = next(o for o in ops if o["kind"] == "cond_jump")
-    assert cj["cond"] == "%ule"
+    assert cj["cond"] == "%t20"
+    assert any(
+        o["kind"] == "bin"
+        and o["dst"] == "%t20"
+        and o["op"] == "or"
+        and {o["lhs"]["name"], o["rhs"]["name"]} == {"%cf", "%zf"}
+        for o in ops
+    )
 
 
 def test_sete_lifts_to_assign_from_flag():
@@ -149,10 +187,11 @@ def test_cmovne_lifts_to_cond_assign_dict():
         },
         {
             "va": 0x1000,
-            "kind": "cond_assign",
+            "kind": "ite",
             "dst": "rax",
             "cond": "%t1",
-            "src": {"kind": "reg", "name": "rbx"},
+            "t": {"kind": "reg", "name": "rbx"},
+            "e": {"kind": "reg", "name": "rax"},
         },
     ]
 
@@ -172,35 +211,41 @@ def test_int3_lifts_to_nop_dict():
     assert g.ir.lift_bytes(bytes([0xCC]), 0x1000, 64) == [{"va": 0x1000, "kind": "nop"}]
 
 
-def test_div_lifts_to_bin_div_dict():
+def test_div_lifts_to_two_output_intrinsic_and_poisoned_flags():
     ops = g.ir.lift_bytes(bytes([0x48, 0xF7, 0xF1]), 0x1000, 64)
-    assert ops == [
-        {
-            "va": 0x1000,
-            "kind": "bin",
-            "dst": "rax",
-            "op": "div",
-            "lhs": {"kind": "reg", "name": "rax"},
-            "rhs": {"kind": "reg", "name": "rcx"},
-        }
+    assert ops[0]["kind"] == "intrinsic"
+    assert ops[0]["name"] == "div"
+    assert ops[0]["outs"] == [
+        {"reg": "rax", "width": 64},
+        {"reg": "rdx", "width": 64},
     ]
+    assert {o["dst"] for o in ops[1:] if o["kind"] == "undef"} == {
+        "%cf",
+        "%of",
+        "%zf",
+        "%sf",
+        "%pf",
+        "%af",
+    }
 
 
-def test_cdqe_lifts_to_rax_from_eax_assign():
+def test_cdqe_lifts_to_explicit_sign_extension():
     ops = g.ir.lift_bytes(bytes([0x48, 0x98]), 0x1000, 64)
     assert ops == [
         {
             "va": 0x1000,
-            "kind": "assign",
+            "kind": "sext",
             "dst": "rax",
             "src": {"kind": "reg", "name": "eax"},
+            "from": 32,
+            "to": 64,
         }
     ]
 
 
 def test_sbb_reg_reg_lifts_to_sub_with_carry_dependency():
     ops = g.ir.lift_bytes(bytes([0x48, 0x19, 0xC8]), 0x1000, 64)
-    assert ops == [
+    assert ops[:2] == [
         {
             "va": 0x1000,
             "kind": "bin",
@@ -218,6 +263,14 @@ def test_sbb_reg_reg_lifts_to_sub_with_carry_dependency():
             "rhs": {"kind": "reg", "name": "%cf"},
         },
     ]
+    assert {o["dst"] for o in ops[2:] if o["kind"] == "undef"} == {
+        "%cf",
+        "%of",
+        "%zf",
+        "%sf",
+        "%pf",
+        "%af",
+    }
 
 
 def test_xorps_self_lifts_to_zero_assign():
@@ -329,9 +382,12 @@ def test_decompile_at_for_first_function_produces_text():
 
 
 @pytest.mark.skipif(not WIN64_SAMPLE.exists(), reason="win64 PE sample missing")
-def test_decompile_win64_pe_uses_windows_argument_registers():
+def test_decompile_win64_pe_does_not_misclassify_scratch_as_argument():
     text = g.ir.decompile_at(str(WIN64_SAMPLE), 0x140001190, timeout_ms=2000)
-    assert "%arg0 = 13;" in text
+    # `mov ecx, 13` precedes the first read in this CRT startup function, so
+    # ECX is scratch/call-argument setup, not an incoming function parameter.
+    assert "%var5 = 13;" in text
+    assert "%arg0 = 13;" not in text
     assert "%arg3 = 13;" not in text
 
 
@@ -507,15 +563,25 @@ def test_lift_window_at_returns_dicts_for_real_binary():
         assert o["kind"] in {
             "nop",
             "assign",
+            "undef",
+            "cond_assign",
             "bin",
             "un",
             "cmp",
             "load",
             "store",
             "jump",
+            "indirect_jump",
             "cond_jump",
             "call",
             "return",
+            "zext",
+            "sext",
+            "trunc",
+            "extract",
+            "concat",
+            "ite",
+            "intrinsic",
             "unknown",
         }
     # A 128-byte entry window from a compiled C program must contain at least

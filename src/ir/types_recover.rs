@@ -5,8 +5,6 @@
 //! * Registers used as the base of a `Load`/`Store` memory operand are
 //!   classified as **pointers**. The inferred pointee width comes from the
 //!   memory access size.
-//! * Registers compared against zero with `CmpOp::Eq` are tagged
-//!   **boolean-ish** (likely hold a truth value).
 //! * Registers used solely as shift counts are tagged **unsigned integer**.
 //! * Registers that flow into a `CallTarget::Direct` as the first argument
 //!   register (by convention x86-64 SysV: `rdi`, AArch64: `x0`) keep their
@@ -23,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use crate::ir::types::{BinOp, CmpOp, LlirFunction, Op, VReg, Value};
+use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeHint {
@@ -348,9 +346,7 @@ fn offset_registers(lf: &LlirFunction) -> std::collections::HashSet<VReg> {
                         // A multiply/shift result is a scaled index.
                         BinOp::Mul | BinOp::Shl => true,
                         // An add/sub is an offset only if *both* sides are.
-                        BinOp::Add | BinOp::Sub => {
-                            is_off(&offsets, lhs) && is_off(&offsets, rhs)
-                        }
+                        BinOp::Add | BinOp::Sub => is_off(&offsets, lhs) && is_off(&offsets, rhs),
                         _ => false,
                     };
                     if dst_is_off && offsets.insert(dst.clone()) {
@@ -509,9 +505,48 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
                         );
                     }
                 }
+                // A logical right shift is an unsigned operation on its value;
+                // the count is unsigned for every shift family. This distinction
+                // is executable semantics, not a source-style guess: widening a
+                // 32-bit `shr` operand as signed changes negative inputs into a
+                // 64-bit all-ones prefix and doubles the loop trip count.
+                Op::Bin {
+                    dst,
+                    op: BinOp::Shr,
+                    lhs,
+                    rhs,
+                } => {
+                    if matches!(dst, VReg::Phys(_)) {
+                        tm.upsert(
+                            dst.clone(),
+                            TypeHint::Int {
+                                signed: false,
+                                width: reg_width_bytes(dst),
+                            },
+                        );
+                    }
+                    if let Value::Reg(r) = lhs {
+                        tm.upsert(
+                            r.clone(),
+                            TypeHint::Int {
+                                signed: false,
+                                width: reg_width_bytes(r),
+                            },
+                        );
+                    }
+                    if let Value::Reg(r) = rhs {
+                        tm.upsert(
+                            r.clone(),
+                            TypeHint::Int {
+                                signed: false,
+                                width: reg_width_bytes(r),
+                            },
+                        );
+                    }
+                }
                 // Shift counts are unsigned integers.
                 Op::Bin {
-                    op: BinOp::Shl | BinOp::Shr | BinOp::Sar,
+                    op: BinOp::Shl | BinOp::Sar,
                     rhs,
                     ..
                 } => {
@@ -524,21 +559,6 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
                             },
                         );
                     }
-                }
-                // Compared against zero → likely boolean.
-                Op::Cmp {
-                    op: CmpOp::Eq,
-                    lhs: Value::Reg(r),
-                    rhs: Value::Const(0),
-                    ..
-                }
-                | Op::Cmp {
-                    op: CmpOp::Eq,
-                    lhs: Value::Const(0),
-                    rhs: Value::Reg(r),
-                    ..
-                } => {
-                    tm.upsert(r.clone(), TypeHint::BoolLike);
                 }
                 // Indirect call target → code pointer.
                 Op::Call {
@@ -900,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn cmp_eq_zero_marks_bool() {
+    fn cmp_eq_zero_does_not_retype_an_integer_as_bool() {
         use crate::ir::types::{CmpOp, Flag};
         let lf = mk_block(vec![Op::Cmp {
             dst: VReg::Flag(Flag::Z),
@@ -909,7 +929,13 @@ mod tests {
             rhs: Value::Const(0),
         }]);
         let tm = recover_types(&lf);
-        assert_eq!(tm.get(&VReg::phys("rax")), Some(TypeHint::BoolLike));
+        assert_eq!(
+            tm.get(&VReg::phys("rax")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
     }
 
     #[test]
@@ -937,6 +963,24 @@ mod tests {
             tm.get(&VReg::phys("rcx")),
             Some(TypeHint::Int { signed: false, .. })
         ));
+    }
+
+    #[test]
+    fn logical_right_shift_tags_the_shifted_value_unsigned() {
+        let lf = mk_block(vec![Op::Bin {
+            dst: VReg::phys("edi"),
+            op: BinOp::Shr,
+            lhs: Value::Reg(VReg::phys("edi")),
+            rhs: Value::Const(1),
+        }]);
+        let tm = recover_types(&lf);
+        assert_eq!(
+            tm.get(&VReg::phys("edi")),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            })
+        );
     }
 
     #[test]

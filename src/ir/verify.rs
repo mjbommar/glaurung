@@ -36,13 +36,19 @@ pub enum VerifyError {
     /// An un-migrated [`Op::Unknown`] remains (tracked, not fatal, during the
     /// lifter migration).
     ResidualUnknown { va: u64, mnemonic: String },
+    /// An explicit poison definition remains. This is safe to retain in LLIR,
+    /// but execution must halt if it is reached and emitted code must report it.
+    ExplicitUndef { va: u64, dst: VReg, reason: String },
 }
 
 impl VerifyError {
     /// True for problems that make execution unsound (everything except the
     /// tracked-but-tolerated [`VerifyError::ResidualUnknown`]).
     pub fn is_fatal(&self) -> bool {
-        !matches!(self, VerifyError::ResidualUnknown { .. })
+        !matches!(
+            self,
+            VerifyError::ResidualUnknown { .. } | VerifyError::ExplicitUndef { .. }
+        )
     }
 }
 
@@ -113,6 +119,11 @@ pub fn verify_function(lf: &LlirFunction) -> Vec<VerifyError> {
                 Op::Unknown { mnemonic } => errors.push(VerifyError::ResidualUnknown {
                     va,
                     mnemonic: mnemonic.clone(),
+                }),
+                Op::Undef { dst, reason } => errors.push(VerifyError::ExplicitUndef {
+                    va,
+                    dst: dst.clone(),
+                    reason: reason.clone(),
                 }),
                 _ => {}
             }

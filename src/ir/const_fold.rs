@@ -17,13 +17,16 @@
 //! | `(X & 0)`        | `0`   |
 //! | `(X & -1)`       | `X`   |
 //! | `(X \| 0)`       | `X`   |
+//! | `X ^ (Y ^ X)`    | `Y`   |
+//! | `(X == Y) \| (X < Y)` | `X <= Y` |
+//! | `(X < Y) == 0`   | `Y <= X` |
 //! | `(c1 op c2)`     | folded constant when the op is safe |
 //!
 //! The pass is purely syntactic — it doesn't require any dataflow info —
 //! and recurses bottom-up so nested patterns collapse in one walk.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::BinOp;
+use crate::ir::types::{BinOp, CmpOp};
 
 /// Rewrite `f`'s body in place, folding the patterns above.
 pub fn fold_constants(f: &mut Function) {
@@ -131,6 +134,64 @@ fn fold_expr(e: &mut Expr) {
     // Now try to collapse the current node.
     if let Expr::Bin { op, lhs, rhs } = e {
         let op = *op;
+
+        // XOR cancellation through one associative layer.  This is the
+        // canonical shape of x86 signed predicates: SF ^ OF, where OF is
+        // itself the XOR of a signed comparison and SF.
+        if op == BinOp::Xor {
+            let replacement = match (lhs.as_ref(), rhs.as_ref()) {
+                (
+                    a,
+                    Expr::Bin {
+                        op: BinOp::Xor,
+                        lhs: b,
+                        rhs: c,
+                    },
+                ) if a == c.as_ref() => Some(b.as_ref().clone()),
+                (
+                    a,
+                    Expr::Bin {
+                        op: BinOp::Xor,
+                        lhs: b,
+                        rhs: c,
+                    },
+                ) if a == b.as_ref() => Some(c.as_ref().clone()),
+                (
+                    Expr::Bin {
+                        op: BinOp::Xor,
+                        lhs: b,
+                        rhs: c,
+                    },
+                    a,
+                ) if a == c.as_ref() => Some(b.as_ref().clone()),
+                (
+                    Expr::Bin {
+                        op: BinOp::Xor,
+                        lhs: b,
+                        rhs: c,
+                    },
+                    a,
+                ) if a == b.as_ref() => Some(c.as_ref().clone()),
+                _ => None,
+            };
+            if let Some(replacement) = replacement {
+                *e = replacement;
+                return;
+            }
+        }
+
+        // Inclusive comparisons are emitted by x86 as equality OR strict
+        // comparison.  Recover the source-level relation once both sides use
+        // the same operands and signedness.
+        if op == BinOp::Or {
+            if let Some(replacement) =
+                merge_equality_and_less(lhs, rhs).or_else(|| merge_equality_and_less(rhs, lhs))
+            {
+                *e = replacement;
+                return;
+            }
+        }
+
         // Same-operand identities (X op X).
         if lhs == rhs {
             match op {
@@ -246,6 +307,84 @@ fn fold_expr(e: &mut Expr) {
             };
             *e = Expr::Const(folded);
         }
+    }
+
+    // Comparisons are boolean-valued.  Comparing one to zero is logical
+    // negation, not a bitwise operation; invert it into the corresponding
+    // relation so it remains readable and type-correct.
+    if let Expr::Cmp { op, lhs, rhs } = e {
+        let inner = match (lhs.as_ref(), rhs.as_ref()) {
+            (inner @ Expr::Cmp { .. }, Expr::Const(0))
+            | (Expr::Const(0), inner @ Expr::Cmp { .. }) => Some(inner),
+            _ => None,
+        };
+        if let Some(Expr::Cmp {
+            op: inner_op,
+            lhs: inner_lhs,
+            rhs: inner_rhs,
+        }) = inner
+        {
+            let replacement = match op {
+                CmpOp::Ne => Some(Expr::Cmp {
+                    op: *inner_op,
+                    lhs: inner_lhs.clone(),
+                    rhs: inner_rhs.clone(),
+                }),
+                CmpOp::Eq => Some(invert_comparison(*inner_op, inner_lhs, inner_rhs)),
+                _ => None,
+            };
+            if let Some(replacement) = replacement {
+                *e = replacement;
+            }
+        }
+    }
+}
+
+fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
+    let Expr::Cmp {
+        op: CmpOp::Eq,
+        lhs: equality_lhs,
+        rhs: equality_rhs,
+    } = equality
+    else {
+        return None;
+    };
+    let Expr::Cmp {
+        op,
+        lhs: less_lhs,
+        rhs: less_rhs,
+    } = less
+    else {
+        return None;
+    };
+    if equality_lhs != less_lhs || equality_rhs != less_rhs {
+        return None;
+    }
+    let op = match op {
+        CmpOp::Slt => CmpOp::Sle,
+        CmpOp::Ult => CmpOp::Ule,
+        _ => return None,
+    };
+    Some(Expr::Cmp {
+        op,
+        lhs: equality_lhs.clone(),
+        rhs: equality_rhs.clone(),
+    })
+}
+
+fn invert_comparison(op: CmpOp, lhs: &Expr, rhs: &Expr) -> Expr {
+    let (op, lhs, rhs) = match op {
+        CmpOp::Eq => (CmpOp::Ne, lhs, rhs),
+        CmpOp::Ne => (CmpOp::Eq, lhs, rhs),
+        CmpOp::Slt => (CmpOp::Sle, rhs, lhs),
+        CmpOp::Sle => (CmpOp::Slt, rhs, lhs),
+        CmpOp::Ult => (CmpOp::Ule, rhs, lhs),
+        CmpOp::Ule => (CmpOp::Ult, rhs, lhs),
+    };
+    Expr::Cmp {
+        op,
+        lhs: Box::new(lhs.clone()),
+        rhs: Box::new(rhs.clone()),
     }
 }
 
@@ -382,6 +521,81 @@ mod tests {
         fold_constants(&mut f);
         if let Stmt::Assign { src, .. } = &f.body[0] {
             assert_eq!(*src, Expr::Reg(reg("rax")));
+        }
+    }
+
+    #[test]
+    fn xor_cancellation_recovers_signed_relation() {
+        let less = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("rax"))),
+            rhs: Box::new(Expr::Reg(reg("rbx"))),
+        };
+        let sign = Expr::Reg(reg("sf"));
+        let mut f = one_stmt(bin(
+            BinOp::Xor,
+            sign.clone(),
+            bin(BinOp::Xor, less.clone(), sign),
+        ));
+        fold_constants(&mut f);
+        if let Stmt::Assign { src, .. } = &f.body[0] {
+            assert_eq!(*src, less);
+        }
+    }
+
+    #[test]
+    fn equality_or_less_merges_to_less_equal() {
+        let lhs = Expr::Reg(reg("rax"));
+        let rhs = Expr::Reg(reg("rbx"));
+        let mut f = one_stmt(bin(
+            BinOp::Or,
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(lhs.clone()),
+                rhs: Box::new(rhs.clone()),
+            },
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(lhs.clone()),
+                rhs: Box::new(rhs.clone()),
+            },
+        ));
+        fold_constants(&mut f);
+        if let Stmt::Assign { src, .. } = &f.body[0] {
+            assert_eq!(
+                *src,
+                Expr::Cmp {
+                    op: CmpOp::Sle,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn logical_not_of_comparison_reverses_relation() {
+        let lhs = Expr::Reg(reg("rax"));
+        let rhs = Expr::Reg(reg("rbx"));
+        let mut f = one_stmt(Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(lhs.clone()),
+                rhs: Box::new(rhs.clone()),
+            }),
+            rhs: Box::new(Expr::Const(0)),
+        });
+        fold_constants(&mut f);
+        if let Stmt::Assign { src, .. } = &f.body[0] {
+            assert_eq!(
+                *src,
+                Expr::Cmp {
+                    op: CmpOp::Sle,
+                    lhs: Box::new(rhs),
+                    rhs: Box::new(lhs),
+                }
+            );
         }
     }
 

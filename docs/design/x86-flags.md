@@ -86,7 +86,8 @@ Audit against Intel SDM Volume 2; these are the cases that bite.
 | `neg` | `src != 0` | defined | defined | defined | not merely ZF/SF |
 | `imul` | defined | defined | **undefined** | undefined | only CF/OF are meaningful |
 | `bt` | defined | **undefined** | **undefined** | undefined | other flags undefined, *not* preserved |
-| shifts / rotates | defined | count-sensitive | defined | undefined | see below |
+| shifts | defined | count-sensitive | defined | undefined | see below |
+| rotates | defined | count-sensitive | **preserved** | **preserved** | only CF/OF change |
 | `adc` `sbb` | defined | defined | defined | defined | **also CONSUME CF as an input** |
 
 Shifts are count-sensitive and are the easiest to get wrong:
@@ -236,3 +237,45 @@ Do not merge if either holds:
 
 * any individual instruction lifter still writes `Ule`, `Slt` or `Sle`; or
 * an undefined flag is represented by leaving stale state untouched.
+
+## Implemented checkpoint (2026-07-28)
+
+The current implementation satisfies the x86 stop condition. This statement is
+specific to the x86 lifter: the shared `Flag` enum still contains derived predicates
+used by the ARM lifters, but `src/ir/lift_x86.rs` does not write them.
+
+The implementation differs from the lazy sketch above in one deliberate first-step
+choice: it eagerly emits the demanded architectural effects and relies on whole-AST
+dead predicate elimination. That keeps the representation explicit while making the
+undefined-state boundary testable now. The concrete protocol is:
+
+* `VReg::FlagValue { flag, version }` gives every architectural flag definition its
+  own SSA identity, including phis;
+* `Op::Undef { dst, reason }` replaces stale state for architectural undefinedness or
+  a defined effect whose expression is not yet modelled;
+* the verifier reports a live undefined value, and the interpreter halts with
+  `UndefinedValue` rather than fabricating a plausible result;
+* all sixteen Jcc, SETcc, and CMOVcc families share `materialize_condition`;
+* ADD/SUB/CMP/logic/TEST/NEG/INC/DEC have exact ZF/SF and the implemented exact
+  CF/OF expressions. PF/AF are explicit poison where the low-bit expression is not
+  yet implemented;
+* IMUL/MUL/BT/DIV/IDIV, ADC/SBB, shifts, XADD, CMPXCHG, and rotates all replace or
+  intentionally preserve every affected flag. ADC/SBB consume the prior CF before
+  replacing their outputs. Variable-count shifts/rotates fail closed where a guarded
+  flag write is still required;
+* dead predicate removal is whole-function and fixed-point, so a loop-body definition
+  used by its `do ... while` latch is retained.
+
+Measured on the rebuilt extension, not inferred from generated text:
+
+* `tools/dectest.py @flags --full --show`: 28/28 pass, five baseline improvements,
+  zero regressions;
+* `tools/dectest.py @polarity --full --show`: 48/48 pass, eight baseline
+  improvements, zero regressions;
+* `ir::lift_x86::tests`: 75/75 pass, including widths 8/16/32/64, counts
+  zero/one/many/variable, XADD, CMPXCHG, and all consumer families.
+
+The remaining poison is visible technical debt, not silent stale state. Exact PF/AF,
+ADC/SBB output flags, product overflow, shifted-out bits, and guarded variable-count
+effects can replace those poison definitions incrementally without changing the
+producer/consumer contract.

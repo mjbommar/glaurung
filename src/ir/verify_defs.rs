@@ -19,7 +19,8 @@
 //! WHAT IS CHECKED
 //!
 //! Only names the decompiler itself invents and must therefore define:
-//! `ret`, `varN`, `local_*`, `stack_*`, and lifter temporaries. Parameters
+//! `ret`, `varN`, `local_*`, `stack_*`, lifter temporaries, and versioned
+//! predicate values. Parameters
 //! (`argN`) are defined by the ABI, and raw machine registers (`rsp`, `rbp`,
 //! `rip`, …) are live-in state, so neither is a violation.
 //!
@@ -47,6 +48,9 @@ pub enum ViolationKind {
     NeverDefined,
     /// Read on a path that reaches no definition of it.
     UsedBeforeDefinition,
+    /// A read reaches an explicit poison definition (for example an
+    /// architecturally undefined x86 flag), rather than a concrete value.
+    UndefinedValue,
     /// A frame-pointer register the emitted C declares as a local and never assigns.
     /// Reading it is an uninitialised read in the printed C whatever it means on the
     /// machine — and when the value is used as an ADDRESS, dereferencing it is how a
@@ -66,6 +70,9 @@ impl std::fmt::Display for Violation {
             ViolationKind::NeverDefined => write!(f, "{} is read but never defined", self.name),
             ViolationKind::UsedBeforeDefinition => {
                 write!(f, "{} is read before it is defined", self.name)
+            }
+            ViolationKind::UndefinedValue => {
+                write!(f, "{} reads an explicitly undefined value", self.name)
             }
             ViolationKind::UninitialisedFramePointer => write!(
                 f,
@@ -132,7 +139,8 @@ fn declared_machine_register(v: &VReg) -> Option<String> {
 }
 
 /// The name of a value the decompiler invents and is therefore responsible for
-/// defining, or `None` for parameters, machine registers, and flags.
+/// defining, or `None` for parameters, machine registers, and unversioned
+/// architectural flag names (which exist only before SSA value numbering).
 fn checked_name(v: &VReg) -> Option<String> {
     match v {
         VReg::Phys(n) => {
@@ -148,6 +156,7 @@ fn checked_name(v: &VReg) -> Option<String> {
         // assigned there too.
         VReg::Temp(i) => Some(format!("t{i}")),
         VReg::Flag(_) => None,
+        VReg::FlagValue { .. } => v.predicate_ident(),
     }
 }
 
@@ -643,6 +652,45 @@ fn declared_machine_register_expr(e: &Expr) -> Option<String> {
     }
 }
 
+/// Versioned values whose reaching definition is explicit poison.
+fn poisoned_defs(body: &[Stmt], out: &mut BTreeSet<String>) {
+    for stmt in body {
+        match stmt {
+            Stmt::Assign {
+                dst,
+                src: Expr::Unknown(reason),
+            } if reason.starts_with("undefined(") => out.extend(checked_name(dst)),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                poisoned_defs(then_body, out);
+                if let Some(else_body) = else_body {
+                    poisoned_defs(else_body, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => poisoned_defs(body, out),
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                poisoned_defs(std::slice::from_ref(init.as_ref()), out);
+                poisoned_defs(body, out);
+                poisoned_defs(std::slice::from_ref(step.as_ref()), out);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    poisoned_defs(case_body, out);
+                }
+                if let Some(default_body) = default {
+                    poisoned_defs(default_body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Verify `f`, returning every violation found (sorted, deduplicated by name and
 /// kind). An empty result means every invented value the function reads has a
 /// definition that reaches it.
@@ -659,6 +707,15 @@ pub fn check(f: &Function) -> Vec<Violation> {
             kind: ViolationKind::NeverDefined,
         })
         .collect();
+
+    let mut poisoned = BTreeSet::new();
+    poisoned_defs(&f.body, &mut poisoned);
+    for name in reads.intersection(&poisoned) {
+        out.push(Violation {
+            name: name.clone(),
+            kind: ViolationKind::UndefinedValue,
+        });
+    }
 
     // A frame pointer used to compute a DEREFERENCED address. Deliberately narrower
     // than "rbp is read anywhere": a plain `var2 = rbp` yields a garbage VALUE, which
@@ -753,6 +810,69 @@ mod tests {
         let v = check(&f);
         assert_eq!(names(&v), vec!["var7"]);
         assert_eq!(v[0].kind, ViolationKind::NeverDefined);
+    }
+
+    #[test]
+    fn an_undefined_predicate_live_in_is_reported() {
+        let zf_live_in = VReg::FlagValue {
+            flag: crate::ir::types::Flag::Z,
+            version: 0,
+        };
+        let f = func(vec![Stmt::If {
+            cond: Expr::Reg(zf_live_in),
+            then_body: vec![Stmt::Nop],
+            else_body: None,
+        }]);
+
+        let violations = check(&f);
+
+        assert_eq!(names(&violations), vec!["zf_0"]);
+        assert_eq!(violations[0].kind, ViolationKind::NeverDefined);
+    }
+
+    #[test]
+    fn a_defined_versioned_predicate_is_not_reported() {
+        let zf = VReg::FlagValue {
+            flag: crate::ir::types::Flag::Z,
+            version: 1,
+        };
+        let f = func(vec![
+            Stmt::Assign {
+                dst: zf.clone(),
+                src: Expr::Const(1),
+            },
+            Stmt::If {
+                cond: Expr::Reg(zf),
+                then_body: vec![Stmt::Nop],
+                else_body: None,
+            },
+        ]);
+
+        assert_eq!(check(&f), vec![]);
+    }
+
+    #[test]
+    fn a_live_explicitly_undefined_predicate_is_reported() {
+        let of = VReg::FlagValue {
+            flag: crate::ir::types::Flag::O,
+            version: 2,
+        };
+        let f = func(vec![
+            Stmt::Assign {
+                dst: of.clone(),
+                src: Expr::Unknown("undefined(OF after multi-bit shift)".into()),
+            },
+            Stmt::If {
+                cond: Expr::Reg(of),
+                then_body: vec![Stmt::Nop],
+                else_body: None,
+            },
+        ]);
+
+        let violations = check(&f);
+
+        assert_eq!(names(&violations), vec!["of_2"]);
+        assert_eq!(violations[0].kind, ViolationKind::UndefinedValue);
     }
 
     #[test]

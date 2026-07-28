@@ -184,7 +184,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                     let record = is_pure_copyable(src)
                         || (is_scratch_reg(dst)
                             && reads.get(dst).copied().unwrap_or(0) == 1
-                            && !matches!(src, Expr::Select { .. }));
+                            && !matches!(src, Expr::Select { .. } | Expr::Unknown(_)));
                     if record {
                         copies.insert(dst.clone(), src.clone());
                     }
@@ -412,12 +412,14 @@ fn remove_dead(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
 }
 
 /// A register we're willing to delete a dead copy to: physical scratch/role
-/// registers and temporaries, but NOT promoted stack locals (owned by
-/// dead-store elimination) and NOT flags.
+/// registers, temporaries, and SSA-versioned predicate values, but NOT promoted
+/// stack locals (owned by dead-store elimination) or unversioned architectural
+/// flag names. A poisoned predicate is separately excluded from propagation.
 fn is_scratch_reg(v: &VReg) -> bool {
     match v {
         VReg::Temp(_) => true,
         VReg::Phys(n) => !n.starts_with("local_") && !n.starts_with("stack_"),
+        VReg::FlagValue { .. } => true,
         VReg::Flag(_) => false,
     }
 }

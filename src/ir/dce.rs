@@ -1,12 +1,12 @@
 //! Dead-code elimination for unused flag writes in a lowered [`Function`].
 //!
 //! After [`super::ast::lower`] runs, a typical x86 block emitted by the
-//! Cmp-hoisting step still carries several `%cf = ...`, `%slt = ...`,
-//! `%sle = ...`, `%sf = ...` statements whose LHS is never read anywhere
+//! Cmp-hoisting step can still carry several versioned `%cf_1 = ...`,
+//! `%zf_2 = ...`, `%sf_1 = ...` statements whose LHS is never read anywhere
 //! else in the function — they are leftover flag writes from the
 //! cmp lifter that a human reader (or LLM) never needs to see.
 //!
-//! This pass counts total reads of each `VReg::Flag(_)` across the entire
+//! This pass counts total reads of each architectural or SSA-versioned flag
 //! function body (including nested `If`/`While` arms) and removes the
 //! assignment when the read-count is zero. Non-flag writes (`%rax = …`,
 //! temp writes, etc.) are untouched — those are the responsibility of the
@@ -17,9 +17,9 @@ use crate::ir::types::VReg;
 
 /// Remove flag assignments that a LATER write to the same flag overwrites unread.
 ///
-/// [`prune_dead_flags`] counts reads per NAME across the whole function, so one surviving
-/// read of `zf` anywhere keeps every `zf` write alive. Flags have no value identity —
-/// SSA deliberately excludes them — so a name is all the granularity that pass has.
+/// [`prune_dead_flags`] counts reads of the exact [`VReg`].  After value numbering,
+/// every predicate definition is a distinct [`VReg::FlagValue`], so an unrelated
+/// later ZF use cannot keep an earlier dead ZF definition alive.
 ///
 /// Measured cost of that on `statemachine:gcc:O2`: eleven flag writes rendered as
 /// statements against a single flag read in a condition. Ten statements the source does
@@ -36,10 +36,9 @@ use crate::ir::types::VReg;
 ///   between and observe the value), or
 /// * a nested block (`If`/`While`/`Switch`), whose arms might read it.
 ///
-/// Anything it cannot prove, it leaves alone. A full solution versions flags in SSA so
-/// ordinary dead-store elimination applies — see
-/// `docs/design/value-model-root-cause-and-plan.md` Phase 3 — and this is a stopgap that
-/// buys the measurable part now.
+/// Anything it cannot prove, it leaves alone.  This pass remains useful before value
+/// numbering, where the lifter still names architectural [`VReg::Flag`] values, and is
+/// exact per definition after value numbering.
 pub fn prune_overwritten_flags(f: &mut Function) {
     fn reads_flag(e: &Expr, flag: &VReg) -> bool {
         match e {
@@ -91,10 +90,11 @@ pub fn prune_overwritten_flags(f: &mut Function) {
         let mut drop_at = vec![false; body.len()];
         for i in 0..body.len() {
             let flag = match &body[i] {
-                Stmt::Assign {
-                    dst: dst @ VReg::Flag(_),
-                    ..
-                } => dst.clone(),
+                Stmt::Assign { dst, .. }
+                    if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. }) =>
+                {
+                    dst.clone()
+                }
                 _ => continue,
             };
             // Scan forward for an unread overwrite of the same flag.
@@ -139,66 +139,244 @@ pub fn prune_overwritten_flags(f: &mut Function) {
     prune(&mut f.body);
 }
 
-/// Remove zero-use flag assignments from `f` in place.
-pub fn prune_dead_flags(f: &mut Function) {
-    prune_body(&mut f.body);
-}
+/// Backward per-definition liveness for raw, unversioned architectural flags.
+///
+/// The SSA path gives every definition a distinct `FlagValue`, but the human
+/// renderer intentionally lowers raw LLIR too.  In that path, a single early
+/// read of `%zf` must not keep an unrelated `%zf = ...` at function exit.  A
+/// name-wide use count cannot make that distinction; backward liveness can.
+fn prune_dead_unversioned_flags(f: &mut Function) {
+    fn flag_regs() -> Vec<VReg> {
+        use crate::ir::types::Flag;
+        [
+            Flag::Z,
+            Flag::C,
+            Flag::Ule,
+            Flag::S,
+            Flag::Slt,
+            Flag::Sle,
+            Flag::O,
+            Flag::P,
+            Flag::A,
+            Flag::Bit,
+        ]
+        .into_iter()
+        .map(VReg::Flag)
+        .collect()
+    }
 
-fn prune_body(body: &mut Vec<Stmt>) {
-    // Recurse first so inner removals don't inflate our use counts with
-    // stale references.
-    for s in body.iter_mut() {
-        match s {
-            Stmt::If {
-                then_body,
-                else_body,
-                ..
-            } => {
-                prune_body(then_body);
-                if let Some(eb) = else_body {
-                    prune_body(eb);
-                }
+    fn add_expr_reads(expr: &Expr, live: &mut std::collections::BTreeSet<VReg>, flags: &[VReg]) {
+        for flag in flags {
+            if count_reads_in_expr(expr, flag) > 0 {
+                live.insert(flag.clone());
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => prune_body(body),
-            Stmt::For { body, .. } => prune_body(body),
-            _ => {}
         }
     }
 
-    // Drop flag assignments whose dst is never read in the outer body (at
-    // this level). Conservative scope: we only look at the flag's reads
-    // *within the same Vec<Stmt>* rather than walking into the function's
-    // other bodies. In practice the lifter always emits the flag write
-    // adjacent to its consumer, so that locality is sufficient.
-    let mut i = 0;
-    while i < body.len() {
-        let is_flag_write = matches!(
-            &body[i],
-            Stmt::Assign {
-                dst: VReg::Flag(_),
-                ..
+    fn add_stmt_reads(stmt: &Stmt, live: &mut std::collections::BTreeSet<VReg>, flags: &[VReg]) {
+        for flag in flags {
+            if count_reads_in_stmt(stmt, flag) > 0 {
+                live.insert(flag.clone());
             }
-        );
-        if !is_flag_write {
-            i += 1;
-            continue;
         }
-        let flag = if let Stmt::Assign { dst, .. } = &body[i] {
-            dst.clone()
-        } else {
-            unreachable!()
-        };
-        let reads = body
+    }
+
+    fn prune_body(
+        body: &mut Vec<Stmt>,
+        live_out: &std::collections::BTreeSet<VReg>,
+        flags: &[VReg],
+    ) -> std::collections::BTreeSet<VReg> {
+        let mut live = live_out.clone();
+        let mut drop_at = vec![false; body.len()];
+        for index in (0..body.len()).rev() {
+            match &mut body[index] {
+                Stmt::Assign { dst, src } if matches!(dst, VReg::Flag(_)) => {
+                    if !live.contains(dst) {
+                        drop_at[index] = true;
+                    } else {
+                        live.remove(dst);
+                        add_expr_reads(src, &mut live, flags);
+                    }
+                }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    let then_live = prune_body(then_body, &live, flags);
+                    let else_live = else_body
+                        .as_mut()
+                        .map(|branch| prune_body(branch, &live, flags))
+                        .unwrap_or_else(|| live.clone());
+                    live.extend(then_live);
+                    live.extend(else_live);
+                    add_expr_reads(cond, &mut live, flags);
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    let branch_out = live.clone();
+                    for (_, case_body) in cases.iter_mut() {
+                        live.extend(prune_body(case_body, &branch_out, flags));
+                    }
+                    if let Some(default_body) = default {
+                        live.extend(prune_body(default_body, &branch_out, flags));
+                    } else {
+                        live.extend(branch_out);
+                    }
+                    add_expr_reads(discriminant, &mut live, flags);
+                }
+                // A loop can carry a flag from its tail to its next condition.
+                // Seed its body with every flag read anywhere in the loop; this
+                // is conservative (it may keep a dead write) but cannot delete a
+                // loop-carried definition.
+                stmt @ (Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. }) => {
+                    add_stmt_reads(stmt, &mut live, flags);
+                }
+                // With unstructured entry points, a predecessor outside this
+                // lexical list may observe any architectural flag. Stop pruning
+                // definitions that precede the boundary.
+                stmt @ (Stmt::Label(_) | Stmt::Goto { .. } | Stmt::IndirectGoto { .. }) => {
+                    live.extend(flags.iter().cloned());
+                    add_stmt_reads(stmt, &mut live, flags);
+                }
+                stmt => add_stmt_reads(stmt, &mut live, flags),
+            }
+        }
+        let mut index = 0;
+        body.retain(|_| {
+            let keep = !drop_at[index];
+            index += 1;
+            keep
+        });
+        live
+    }
+
+    let flags = flag_regs();
+    prune_body(&mut f.body, &std::collections::BTreeSet::new(), &flags);
+}
+
+/// Remove zero-use flag assignments from `f` in place.
+pub fn prune_dead_flags(f: &mut Function) {
+    prune_dead_unversioned_flags(f);
+
+    fn collect_flag_defs(body: &[Stmt], out: &mut std::collections::BTreeSet<VReg>) {
+        for stmt in body {
+            match stmt {
+                Stmt::Assign { dst, .. }
+                    if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. }) =>
+                {
+                    out.insert(dst.clone());
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    collect_flag_defs(then_body, out);
+                    if let Some(else_body) = else_body {
+                        collect_flag_defs(else_body, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    collect_flag_defs(body, out)
+                }
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    collect_flag_defs(std::slice::from_ref(init.as_ref()), out);
+                    collect_flag_defs(body, out);
+                    collect_flag_defs(std::slice::from_ref(step.as_ref()), out);
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case_body) in cases {
+                        collect_flag_defs(case_body, out);
+                    }
+                    if let Some(default_body) = default {
+                        collect_flag_defs(default_body, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn retain_live(body: &mut Vec<Stmt>, live: &std::collections::BTreeSet<VReg>) {
+        for stmt in body.iter_mut() {
+            match stmt {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    retain_live(then_body, live);
+                    if let Some(else_body) = else_body {
+                        retain_live(else_body, live);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => retain_live(body, live),
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    if matches!(
+                        init.as_ref(),
+                        Stmt::Assign { dst, .. }
+                            if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. })
+                                && !live.contains(dst)
+                    ) {
+                        **init = Stmt::Nop;
+                    }
+                    retain_live(body, live);
+                    if matches!(
+                        step.as_ref(),
+                        Stmt::Assign { dst, .. }
+                            if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. })
+                                && !live.contains(dst)
+                    ) {
+                        **step = Stmt::Nop;
+                    }
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case_body) in cases {
+                        retain_live(case_body, live);
+                    }
+                    if let Some(default_body) = default {
+                        retain_live(default_body, live);
+                    }
+                }
+                _ => {}
+            }
+        }
+        body.retain(|stmt| {
+            !matches!(
+                stmt,
+                Stmt::Assign { dst, .. }
+                    if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. })
+                        && !live.contains(dst)
+            )
+        });
+    }
+
+    loop {
+        let mut defs = std::collections::BTreeSet::new();
+        collect_flag_defs(&f.body, &mut defs);
+        let live: std::collections::BTreeSet<VReg> = defs
             .iter()
-            .enumerate()
-            .filter(|(j, _)| *j != i)
-            .map(|(_, s)| count_reads_in_stmt(s, &flag))
-            .sum::<usize>();
-        if reads == 0 {
-            body.remove(i);
-        } else {
-            i += 1;
+            .filter(|flag| {
+                f.body
+                    .iter()
+                    .map(|stmt| count_reads_in_stmt(stmt, flag))
+                    .sum::<usize>()
+                    > 0
+            })
+            .cloned()
+            .collect();
+        if live.len() == defs.len() {
+            break;
         }
+        retain_live(&mut f.body, &live);
     }
 }
 
@@ -353,6 +531,158 @@ mod tests {
             })
             .collect();
         LlirFunction { entry_va, blocks }
+    }
+
+    #[test]
+    fn prunes_only_the_unused_versioned_predicate_definition() {
+        let zf_1 = VReg::FlagValue {
+            flag: Flag::Z,
+            version: 1,
+        };
+        let zf_2 = VReg::FlagValue {
+            flag: Flag::Z,
+            version: 2,
+        };
+        let mut f = Function {
+            name: "versioned_flags".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: zf_1.clone(),
+                    src: Expr::Const(0),
+                },
+                Stmt::Assign {
+                    dst: zf_2.clone(),
+                    src: Expr::Const(1),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(zf_2.clone()),
+                    then_body: vec![Stmt::Nop],
+                    else_body: None,
+                },
+            ],
+        };
+
+        prune_dead_flags(&mut f);
+
+        assert_eq!(f.body.len(), 2);
+        assert!(!f
+            .body
+            .iter()
+            .any(|stmt| { matches!(stmt, Stmt::Assign { dst, .. } if dst == &zf_1) }));
+        assert!(f
+            .body
+            .iter()
+            .any(|stmt| { matches!(stmt, Stmt::Assign { dst, .. } if dst == &zf_2) }));
+    }
+
+    #[test]
+    fn prunes_a_trailing_unversioned_write_after_an_earlier_read() {
+        let zf = VReg::Flag(Flag::Z);
+        let mut f = Function {
+            name: "raw_flags".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: zf.clone(),
+                    src: Expr::Const(1),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(zf.clone()),
+                    then_body: vec![Stmt::Nop],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: zf.clone(),
+                    src: Expr::Const(0),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_dead_flags(&mut f);
+
+        assert_eq!(
+            f.body
+                .iter()
+                .filter(|stmt| matches!(stmt, Stmt::Assign { dst, .. } if dst == &zf))
+                .count(),
+            1,
+            "the read must keep its reaching write, but not a later trailing write: {:#?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn keeps_a_predicate_defined_in_a_do_while_body_and_read_by_its_latch() {
+        let zf = VReg::FlagValue {
+            flag: Flag::Z,
+            version: 5,
+        };
+        let mut f = Function {
+            name: "shift_until_zero".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::DoWhile {
+                body: vec![Stmt::Assign {
+                    dst: zf.clone(),
+                    src: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(VReg::phys("value"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                }],
+                cond: Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(zf.clone())),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+            }],
+        };
+
+        prune_dead_flags(&mut f);
+
+        let Stmt::DoWhile { body, .. } = &f.body[0] else {
+            panic!("fixture changed shape")
+        };
+        assert!(matches!(
+            body.as_slice(),
+            [Stmt::Assign { dst, .. }] if dst == &zf
+        ));
+    }
+
+    #[test]
+    fn dead_predicate_dependency_chains_are_pruned_to_a_fixpoint() {
+        let sf = VReg::FlagValue {
+            flag: Flag::S,
+            version: 1,
+        };
+        let of = VReg::FlagValue {
+            flag: Flag::O,
+            version: 1,
+        };
+        let mut f = Function {
+            name: "dead_chain".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: sf.clone(),
+                    src: Expr::Const(0),
+                },
+                Stmt::Assign {
+                    dst: of,
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Xor,
+                        lhs: Box::new(Expr::Reg(sf)),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_dead_flags(&mut f);
+
+        assert_eq!(f.body, vec![Stmt::Return { value: None }]);
     }
 
     #[test]

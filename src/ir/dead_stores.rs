@@ -83,7 +83,7 @@ fn eliminate_body(body: &mut Vec<Stmt>, ret_regs: &[&str]) {
                 // Only regular register writes are considered. Flag writes
                 // are handled elsewhere.
                 VReg::Phys(_) | VReg::Temp(_) => dst.clone(),
-                VReg::Flag(_) => {
+                VReg::Flag(_) | VReg::FlagValue { .. } => {
                     i += 1;
                     continue;
                 }

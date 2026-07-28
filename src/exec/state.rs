@@ -224,7 +224,7 @@ impl<D: Domain> RegFile<D> {
     /// This is architecture-aware for ambiguous names such as `sp`.
     pub(crate) fn width(&self, reg: &VReg) -> Option<Width> {
         match reg {
-            VReg::Flag(_) => Some(Width::W1),
+            VReg::Flag(_) | VReg::FlagValue { .. } => Some(Width::W1),
             VReg::Temp(_) => None,
             VReg::Phys(name) => {
                 let name = lower(name);
@@ -264,6 +264,9 @@ impl<D: Domain> RegFile<D> {
     pub fn read(&mut self, dom: &mut D, reg: &VReg) -> D::Val {
         match reg {
             VReg::Flag(f) => self.flags[flag_idx(*f)]
+                .clone()
+                .unwrap_or_else(|| dom.constant(Width::W1, 0)),
+            VReg::FlagValue { flag, .. } => self.flags[flag_idx(*flag)]
                 .clone()
                 .unwrap_or_else(|| dom.constant(Width::W1, 0)),
             VReg::Temp(id) => self
@@ -307,6 +310,7 @@ impl<D: Domain> RegFile<D> {
     pub fn write(&mut self, dom: &mut D, reg: &VReg, val: D::Val) {
         match reg {
             VReg::Flag(f) => self.flags[flag_idx(*f)] = Some(val),
+            VReg::FlagValue { flag, .. } => self.flags[flag_idx(*flag)] = Some(val),
             VReg::Temp(id) => {
                 let id = *id as usize;
                 if id >= self.temps.len() {

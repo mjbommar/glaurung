@@ -419,6 +419,12 @@ fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
             }
             None
         }
+        Op::Undef { dst, .. } => {
+            if let Some(d) = vreg_canon(dst) {
+                write_reg(state, &d, Taint::Top);
+            }
+            None
+        }
         // A computed transfer writes no register; where it goes is the CFG's
         // business, not the taint state's.
         Op::IndirectJump { .. } => None,

@@ -48,6 +48,7 @@ fn vreg_to_str(v: &VReg) -> String {
         VReg::Phys(n) => n.clone(),
         VReg::Temp(i) => format!("%t{}", i),
         VReg::Flag(f) => flag_repr(*f).to_string(),
+        VReg::FlagValue { flag, version } => format!("{}#{}", flag_repr(*flag), version),
     }
 }
 
@@ -124,6 +125,11 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("kind", "assign")?;
             d.set_item("dst", vreg_to_str(dst))?;
             d.set_item("src", value_to_pyobj(py, src)?)?;
+        }
+        Op::Undef { dst, reason } => {
+            d.set_item("kind", "undef")?;
+            d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("reason", reason)?;
         }
         Op::CondAssign { dst, cond, src } => {
             d.set_item("kind", "cond_assign")?;
@@ -409,9 +415,10 @@ fn lift_window_at_py(
 ) -> PyResult<PyObject> {
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
-    let foff = crate::analysis::entry::va_to_code_file_offset(&data, start_va).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err(format!("no mapping for VA 0x{:x}", start_va))
-    })?;
+    let foff =
+        crate::analysis::entry::va_to_code_file_offset(&data, start_va).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!("no mapping for VA 0x{:x}", start_va))
+        })?;
     let end = foff.saturating_add(window_bytes).min(data.len());
     lift_bytes_py(py, &data[foff..end], start_va, bits, arch)
 }
@@ -996,8 +1003,7 @@ fn decompile_all_py(
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
         let text = if style == "decbench" {
-            let (decl, width) =
-                decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
+            let (decl, width) = decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
             decbench_text(&f, Some(&decl), Some(&width))
         } else {
             render(&f)
@@ -1117,8 +1123,7 @@ fn decompile_many_py(
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
         let text = if style == "decbench" {
-            let (decl, width) =
-                decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
+            let (decl, width) = decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
             decbench_text(&f, Some(&decl), Some(&width))
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);
@@ -1142,7 +1147,6 @@ fn decompile_many_py(
 }
 
 use crate::ir::name_resolve::resolve_outer_function_name;
-
 
 /// Register LLIR-related Python bindings under the `ir` submodule.
 pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {

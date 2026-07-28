@@ -28,6 +28,8 @@ pub enum Halt {
     UnsupportedIntrinsic(String),
     /// A residual `Op::Unknown` was reached (should not happen post-lift).
     ResidualUnknown(String),
+    /// An explicitly undefined or unmodelled value was demanded.
+    UndefinedValue(String),
     /// A symbolic condition asked the concrete engine to fork (cannot happen).
     UnexpectedFork,
     /// A jump/call/load address could not be concretized.
@@ -215,6 +217,7 @@ impl<D: Domain> Machine<D> {
                 self.regs.write(&mut self.dom, dst, v);
                 Flow::Next
             }
+            Op::Undef { reason, .. } => Flow::Halt(Halt::UndefinedValue(reason.clone())),
             Op::CondAssign { dst, cond, src } => {
                 let c = self.regs.read(&mut self.dom, cond);
                 if let BranchDecision::Taken = self.dom.as_branch(&c) {

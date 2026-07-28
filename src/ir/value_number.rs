@@ -12,7 +12,9 @@
 //! becomes a distinct variable. Version 0 is the implicit entry-def (a live-in
 //! parameter), which stays the bare register so downstream argument/return
 //! naming is unchanged; explicit definitions (version ≥ 1) and the uses that
-//! read them get the tagged name. Temporaries and flags are left alone.
+//! read them get the tagged name. Reused temporaries are split by version, and
+//! flags become typed `FlagValue` instances so a consumer names its exact
+//! reaching predicate definition.
 //!
 //! This pass is pure (returns a rewritten copy) and is validated in isolation
 //! before being threaded into the lowering pipeline.
@@ -147,7 +149,15 @@ fn tag_phys(v: &mut VReg, version: u32, ctx: &VnCtx) {
                 *base = nid;
             }
         }
-        _ => {}
+        VReg::Flag(flag) => {
+            *v = VReg::FlagValue {
+                flag: *flag,
+                version,
+            };
+        }
+        VReg::FlagValue {
+            version: current, ..
+        } => *current = version,
     }
 }
 
@@ -187,6 +197,7 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
             tag_value(src, use_vers, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
+        Op::Undef { dst, .. } => tag_phys(dst, def_ver, ctx),
         Op::CondAssign { dst, cond, src } => {
             // def_uses order: cond, then src.
             if let Some(&ver) = use_vers.first() {
@@ -496,17 +507,15 @@ fn insert_phi_copies(
         return;
     }
 
-    // Which (base, version) pairs does the renamed body actually read? Computed on
-    // the OUTPUT, so it sees the tagged names the copies must match.
-    let mut read: HashSet<String> = HashSet::new();
+    // Which versioned values does the renamed body actually read? Computed on the
+    // OUTPUT, so it sees the tagged values the copies must match. Keep the typed
+    // VReg rather than a string: predicate SSA values are deliberately not Phys
+    // registers and must receive phi copies too.
+    let mut read: HashSet<VReg> = HashSet::new();
     for b in &out.blocks {
         for ins in &b.instrs {
             let (_, uses) = def_uses(&ins.op);
-            for u in uses {
-                if let VReg::Phys(n) = u {
-                    read.insert(n);
-                }
-            }
+            read.extend(uses);
         }
     }
 
@@ -516,13 +525,13 @@ fn insert_phi_copies(
     for phi in &ssa.phis {
         let mut dst = phi.base.clone();
         tag_phys(&mut dst, phi.dst_version, ctx);
-        let VReg::Phys(dst_name) = &dst else {
-            // Only physical registers are named this way; a temp phi would need the
-            // remap to agree across blocks, which `build_temp_remap` does not
-            // guarantee, so leave those alone rather than emit a wrong copy.
+        if !matches!(dst, VReg::Phys(_) | VReg::FlagValue { .. }) {
+            // A temp phi would need the remap to agree across blocks, which
+            // `build_temp_remap` does not guarantee, so leave it alone rather than
+            // emit a wrong copy. Phys and predicate values use stable SSA versions.
             continue;
-        };
-        if !read.contains(dst_name) {
+        }
+        if !read.contains(&dst) {
             continue;
         }
         for (pred, ver) in &phi.incoming {
@@ -549,9 +558,7 @@ fn insert_phi_copies(
         // Insert before a trailing terminator; a block that falls through simply
         // takes them at the end.
         let at = match block.instrs.last().map(|i| &i.op) {
-            Some(Op::Jump { .. } | Op::CondJump { .. } | Op::Return) => {
-                block.instrs.len() - 1
-            }
+            Some(Op::Jump { .. } | Op::CondJump { .. } | Op::Return) => block.instrs.len() - 1,
             _ => block.instrs.len(),
         };
         // Share the VA of the instruction the copies precede: these are not real
@@ -783,6 +790,93 @@ mod tests {
     }
 
     #[test]
+    fn a_merged_predicate_read_is_defined_on_every_path() {
+        use crate::ir::types::{CmpOp, Flag};
+
+        let blk = |va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va: va,
+            end_va: va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(j, op)| LlirInstr {
+                    va: va + (j as u64) * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        let zf_from = |value: i64| Op::Cmp {
+            dst: VReg::Flag(Flag::Z),
+            op: CmpOp::Eq,
+            lhs: Value::Reg(VReg::phys("rax")),
+            rhs: Value::Const(value),
+        };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                blk(
+                    0x1000,
+                    vec![Op::CondJump {
+                        cond: VReg::Flag(Flag::C),
+                        target: 0x1020,
+                        inverted: false,
+                    }],
+                    vec![0x1010, 0x1020],
+                ),
+                blk(
+                    0x1010,
+                    vec![zf_from(0), Op::Jump { target: 0x1030 }],
+                    vec![0x1030],
+                ),
+                blk(
+                    0x1020,
+                    vec![zf_from(1), Op::Jump { target: 0x1030 }],
+                    vec![0x1030],
+                ),
+                blk(
+                    0x1030,
+                    vec![Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1050,
+                        inverted: false,
+                    }],
+                    vec![0x1040, 0x1050],
+                ),
+                blk(0x1040, vec![Op::Return], vec![]),
+                blk(0x1050, vec![Op::Return], vec![]),
+            ],
+        };
+        let ssa = compute_ssa(&lf);
+        assert!(
+            ssa.phis.iter().any(|phi| phi.base == VReg::Flag(Flag::Z)),
+            "fixture must place a ZF phi"
+        );
+
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        let defined: HashSet<VReg> = out
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .filter_map(|ins| def_uses(&ins.op).0)
+            .collect();
+        let undefined: Vec<VReg> = out
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .flat_map(|ins| def_uses(&ins.op).1)
+            .filter(|used| {
+                matches!(used, VReg::FlagValue { version, .. } if *version > 0)
+                    && !defined.contains(used)
+            })
+            .collect();
+        assert!(
+            undefined.is_empty(),
+            "merged predicate uses undefined SSA values: {undefined:?}"
+        );
+    }
+
+    #[test]
     fn the_phi_copy_lands_before_the_terminator() {
         // A copy appended AFTER a block's branch would never execute (and would
         // leave the branch in the middle of the block, which the structurer reads
@@ -819,7 +913,8 @@ mod tests {
         let before: usize = lf.blocks.iter().map(|b| b.instrs.len()).sum();
         let after: usize = out.blocks.iter().map(|b| b.instrs.len()).sum();
         assert_eq!(
-            before, after,
+            before,
+            after,
             "an unread phi must not add copies:\n{:#?}",
             out.blocks
                 .iter()
@@ -980,9 +1075,17 @@ mod tests {
                     vec![0x1010, 0x1020],
                 ),
                 // then: swap them
-                blk(0x1010, vec![mov("rbx", "rcx"), mov("rcx", "rbx")], vec![0x1030]),
+                blk(
+                    0x1010,
+                    vec![mov("rbx", "rcx"), mov("rcx", "rbx")],
+                    vec![0x1030],
+                ),
                 // else: swap them the other way
-                blk(0x1020, vec![mov("rcx", "rbx"), mov("rbx", "rcx")], vec![0x1030]),
+                blk(
+                    0x1020,
+                    vec![mov("rcx", "rbx"), mov("rbx", "rcx")],
+                    vec![0x1030],
+                ),
                 blk(
                     0x1030,
                     vec![

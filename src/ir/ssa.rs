@@ -14,8 +14,8 @@
 //! a second parallel type hierarchy.
 //!
 //! Scope (v1):
-//! * Operates on register VRegs (`VReg::Phys` and `VReg::Temp`) only —
-//!   flag VRegs and memory are not versioned.
+//! * Operates on register and predicate VRegs (`VReg::Phys`, `VReg::Temp`, and
+//!   `VReg::Flag`) — memory is not versioned.
 //! * Dominance is computed with the iterative algorithm of Cooper, Harvey &
 //!   Kennedy (2001) — simple and well within our budgets for the function
 //!   sizes we see today.
@@ -56,11 +56,9 @@ pub struct SsaInfo {
     pub use_versions: HashMap<(InstrAddr, usize), u32>,
 }
 
-/// Only register VRegs (`Phys` / `Temp`) are versioned. Flag VRegs are left
-/// alone for now — a dedicated pass can version them once memory-effect
-/// modelling lands.
+/// Registers and flag predicates are SSA values. Memory remains outside SSA.
 fn is_ssa_reg(v: &VReg) -> bool {
-    matches!(v, VReg::Phys(_) | VReg::Temp(_))
+    matches!(v, VReg::Phys(_) | VReg::Temp(_) | VReg::Flag(_))
 }
 
 /// The 64-bit parent of a general-purpose x86-64 register name, for the 32-bit
@@ -541,6 +539,39 @@ mod tests {
             dst: VReg::phys(reg),
             src: Value::Const(c),
         }
+    }
+
+    #[test]
+    fn predicate_flags_receive_ssa_versions() {
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::Cmp {
+                    dst: VReg::Flag(crate::ir::types::Flag::Z),
+                    op: crate::ir::types::CmpOp::Eq,
+                    lhs: Value::Reg(VReg::phys("rdi")),
+                    rhs: Value::Const(0),
+                },
+                Op::CondJump {
+                    cond: VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1100,
+                    inverted: true,
+                },
+            ],
+            vec![0x1100],
+        )]);
+
+        let info = compute_ssa(&lf);
+        let def = InstrAddr {
+            block_idx: 0,
+            instr_idx: 0,
+        };
+        let use_at = InstrAddr {
+            block_idx: 0,
+            instr_idx: 1,
+        };
+        assert_eq!(info.def_versions.get(&def), Some(&1));
+        assert_eq!(info.use_versions.get(&(use_at, 0)), Some(&1));
     }
 
     fn add(reg: &str, a: &str, b: &str) -> Op {

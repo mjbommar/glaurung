@@ -533,6 +533,18 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
     if lf.blocks.is_empty() {
         return Region::Unstructured(Vec::new());
     }
+    // `While` can represent one distinguished exit reached from its header.
+    // A rotated multi-latch loop may instead have an early-return edge from
+    // the header *and* a different normal-exhaustion edge from its latches.
+    // Forcing that graph into `While` silently moves one set of blocks below
+    // the other return (clang -O2 binary search was the real canary).  Preserve
+    // the complete labelled CFG until the region algebra grows owned multi-
+    // exits; `Unstructured` is explicitly the lossless fallback contract.
+    if has_multi_latch_loop_with_distinct_exits(cfg)
+        || has_loop_conditional_with_join_beyond_loop(cfg)
+    {
+        return Region::Unstructured((0..lf.blocks.len()).collect());
+    }
     let mut visited: HashSet<usize> = HashSet::new();
     let region = build(0, cfg, &mut visited, None);
     let leftover: Vec<usize> = (0..lf.blocks.len())
@@ -545,6 +557,121 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
         parts.push(Region::Unstructured(leftover));
         Region::Seq(parts)
     }
+}
+
+fn has_multi_latch_loop_with_distinct_exits(cfg: &Cfg) -> bool {
+    for header in 0..cfg.succs.len() {
+        let tails: Vec<usize> = cfg.preds[header]
+            .iter()
+            .copied()
+            .filter(|&tail| cfg.dominates(header, tail))
+            .collect();
+        if tails.len() < 2 {
+            continue;
+        }
+
+        let mut body = HashSet::new();
+        for tail in tails {
+            body.extend(natural_loop_body(header, tail, cfg));
+        }
+        let header_exits: HashSet<usize> = cfg.succs[header]
+            .iter()
+            .copied()
+            .filter(|succ| !body.contains(succ))
+            .collect();
+        if header_exits.is_empty() {
+            continue;
+        }
+        let non_header_exits: HashSet<usize> = body
+            .iter()
+            .copied()
+            .filter(|&block| block != header)
+            .flat_map(|block| cfg.succs[block].iter().copied())
+            .filter(|succ| !body.contains(succ))
+            .collect();
+        if non_header_exits
+            .iter()
+            .any(|exit| !header_exits.contains(exit))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// A conditional inside a natural loop may return through the same epilogue as
+/// the loop's ordinary exit while its sibling continues to a latch.  The shared
+/// epilogue post-dominates the conditional globally, but it is not a join owned
+/// by that conditional *inside this iteration*.  `detect_if_shape` cannot encode
+/// the split ownership yet, so recognise the unsafe case before it can invent an
+/// edge from the continuing arm to the epilogue.
+fn has_loop_conditional_with_join_beyond_loop(cfg: &Cfg) -> bool {
+    // A recovered multi-way dispatch already has a more precise Switch region.
+    // Falling the *whole function* back would discard that information and can
+    // expose raw indirect jumps, so leave those functions on the switch path.
+    if cfg.succs.iter().any(|succs| succs.len() >= 3) {
+        return false;
+    }
+    for header in 0..cfg.succs.len() {
+        let tails: Vec<usize> = cfg.preds[header]
+            .iter()
+            .copied()
+            .filter(|&tail| cfg.dominates(header, tail))
+            .collect();
+        if tails.is_empty() {
+            continue;
+        }
+        let mut body = HashSet::new();
+        for tail in tails {
+            body.extend(natural_loop_body(header, tail, cfg));
+        }
+
+        for cond in body.iter().copied().filter(|&block| block != header) {
+            if cfg.succs[cond].len() != 2 {
+                continue;
+            }
+            let Some(join) = cfg.ipostdom[cond] else {
+                continue;
+            };
+            if body.contains(&join) || join == header {
+                continue;
+            }
+            let reaches_next_iteration = cfg.succs[cond]
+                .iter()
+                // A direct edge to the header is the ordinary loop latch.  Its
+                // sibling may set final carried values on the way to the exit
+                // (`while_prefix`); raw fallback before phi lowering loses those
+                // values.  The ownership bug is an *internal* early-return
+                // conditional whose continuing arm still has body work before
+                // reaching a latch.
+                .filter(|&&succ| succ != header && can_reach(succ, header, cfg))
+                .count();
+            let reaches_nonlocal_join = cfg.succs[cond]
+                .iter()
+                .filter(|&&succ| {
+                    succ != join
+                        && !can_reach(succ, header, cfg)
+                        && linear_chain_reaches(succ, join, cfg)
+                })
+                .count();
+            if reaches_next_iteration > 0 && reaches_nonlocal_join > 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn linear_chain_reaches(start: usize, target: usize, cfg: &Cfg) -> bool {
+    let mut current = start;
+    let mut seen = HashSet::new();
+    while current != target && seen.insert(current) {
+        let [next] = cfg.succs[current].as_slice() else {
+            return false;
+        };
+        current = *next;
+    }
+    current == target
 }
 
 /// Recursively build a Region starting at `start`, stopping at `stop_at`
@@ -1671,6 +1798,69 @@ mod tests {
     }
 
     #[test]
+    fn multi_latch_loop_with_distinct_early_and_normal_exits_falls_back_totally() {
+        // Optimised binary-search shape (clang -O2): B3 is the rotated loop
+        // header, B2 and B5 are distinct latches, B7 is the successful early
+        // return, and B6 is the ordinary exhausted-range return.
+        //
+        // Region::While has one header exit.  Choosing B7 strands both latch
+        // arms after the successful return; choosing B6 invents a header edge
+        // which does not exist.  Until the region algebra represents multiple
+        // owned exits, the semantics-preserving representation is the complete
+        // labelled CFG, not a lossy While plus leftovers.
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, cond(0x1600), vec![0x1100, 0x1600]), // initial empty test
+            (0x1100, vec![Op::Nop], vec![0x1300]),        // initialise bounds
+            (0x1200, cond(0x1600), vec![0x1300, 0x1600]), // high-side latch
+            (0x1300, cond(0x1700), vec![0x1400, 0x1700]), // compare / found
+            (0x1400, cond(0x1200), vec![0x1200, 0x1500]), // choose update arm
+            (0x1500, cond(0x1300), vec![0x1300, 0x1600]), // low-side latch
+            (0x1600, vec![Op::Return], vec![]),           // not found
+            (0x1700, vec![Op::Return], vec![]),           // found
+        ]);
+
+        let r = recover_for(&lf);
+        assert_eq!(r, Region::Unstructured((0..8).collect()), "{r:#?}");
+        assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
+    fn loop_early_return_through_shared_epilogue_falls_back_totally() {
+        // GCC -O0 `fsm`: the loop header B1 normally exits through epilogue B6,
+        // while B2 may return early through B5 -> B6 and its sibling continues
+        // through the state-update ladder and latch.  B6 post-dominates B2 but
+        // lies outside the loop.  Treating it as B2's local if/else join moves
+        // the epilogue into the loop and strands the update ladder afterward.
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (0x1100, cond(0x1600), vec![0x1200, 0x1600]), // loop header / normal exit
+            (0x1200, cond(0x1500), vec![0x1300, 0x1500]), // continue / early return
+            (0x1300, vec![Op::Nop], vec![0x1400]),        // state update
+            (0x1400, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1500, vec![Op::Jump { target: 0x1600 }], vec![0x1600]),
+            (0x1600, vec![Op::Return], vec![]),
+        ]);
+
+        let r = recover_for(&lf);
+        assert_eq!(r, Region::Unstructured((0..7).collect()), "{r:#?}");
+        assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
     fn rotated_top_test_does_not_turn_the_latch_into_do_while() {
         // B0 can bypass the body before its first iteration. B2 is a bottom
         // latch only for subsequent iterations, so emitting `do` for B1..B2
@@ -2020,7 +2210,7 @@ mod tests {
 
     #[test]
     fn runs_on_real_binary_without_losing_blocks() {
-        use crate::analysis::cfg::{Budgets, analyze_functions_bytes};
+        use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
         use crate::core::binary::Arch;
         use crate::ir::lift_function::lift_function_from_bytes;
         let path = std::path::Path::new(

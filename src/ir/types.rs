@@ -80,6 +80,24 @@ pub enum Flag {
     Bit,
 }
 
+impl Flag {
+    /// Stable identifier stem used by every textual representation.
+    pub fn ident(self) -> &'static str {
+        match self {
+            Flag::Z => "zf",
+            Flag::C => "cf",
+            Flag::Ule => "ule",
+            Flag::S => "sf",
+            Flag::Slt => "slt",
+            Flag::Sle => "sle",
+            Flag::O => "of",
+            Flag::P => "pf",
+            Flag::A => "af",
+            Flag::Bit => "bitpred",
+        }
+    }
+}
+
 /// A virtual register. Named physical registers carry the source-ISA name
 /// verbatim (`"rax"`, `"x0"`) so downstream annotations can round-trip.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -90,6 +108,13 @@ pub enum VReg {
     Temp(u32),
     /// Processor status flag.
     Flag(Flag),
+    /// A particular SSA value of a processor flag / boolean predicate.
+    ///
+    /// `Flag` is the architectural name used by the lifter. The value-numbering
+    /// pass rewrites definitions and uses to this form so distinct producers do
+    /// not alias merely because both write (for example) ZF. Version zero is the
+    /// implicit live-in value and identifies an undefined-in-function read.
+    FlagValue { flag: Flag, version: u32 },
 }
 
 /// A readable RHS value.
@@ -203,6 +228,16 @@ pub enum Op {
     Assign {
         dst: VReg,
         src: Value,
+    },
+    /// Explicitly poison a value whose architecture-level contents are not
+    /// defined (or whose defined semantics are not yet modelled).
+    ///
+    /// This is a real definition for SSA: a later read must reach this new value,
+    /// never an older plausible value. Execution halts and AST verification marks
+    /// a live poison, while ordinary DCE can remove an unused poisoned flag.
+    Undef {
+        dst: VReg,
+        reason: String,
     },
     /// Conditional register assignment. `dst` receives `src` when `cond` is
     /// true; otherwise its previous value is preserved.
@@ -402,6 +437,15 @@ impl VReg {
         Self::Phys(name.into())
     }
 
+    /// C-safe identifier for a flag/predicate value, if this is one.
+    pub fn predicate_ident(&self) -> Option<String> {
+        match self {
+            VReg::Flag(flag) => Some(flag.ident().to_string()),
+            VReg::FlagValue { flag, version } => Some(format!("{}_{}", flag.ident(), version)),
+            _ => None,
+        }
+    }
+
     /// Bit width of this register where derivable.
     ///
     /// * `Flag` is always 1 bit.
@@ -410,7 +454,7 @@ impl VReg {
     ///   op / executor, so this returns `None` for temporaries.
     pub fn width(&self) -> Option<Width> {
         match self {
-            VReg::Flag(_) => Some(Width::W1),
+            VReg::Flag(_) | VReg::FlagValue { .. } => Some(Width::W1),
             VReg::Temp(_) => None,
             VReg::Phys(name) => phys_reg_width(name),
         }
@@ -547,6 +591,9 @@ impl fmt::Display for VReg {
                 Flag::A => write!(f, "%af"),
                 Flag::Bit => write!(f, "%bitpred"),
             },
+            VReg::FlagValue { flag, version } => {
+                write!(f, "%{}#{version}", flag.ident())
+            }
         }
     }
 }
@@ -583,6 +630,7 @@ impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Op::Assign { dst, src } => write!(f, "{} = {}", dst, src),
+            Op::Undef { dst, reason } => write!(f, "{} = undef({})", dst, reason),
             Op::CondAssign { dst, cond, src } => {
                 write!(f, "if {} {} = {}", cond, dst, src)
             }

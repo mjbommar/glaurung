@@ -42,7 +42,11 @@ fn reg_name(r: Register) -> String {
 
 fn reg_size(r: Register) -> u8 {
     let s = r.size();
-    if s == 0 { 8 } else { s as u8 }
+    if s == 0 {
+        8
+    } else {
+        s as u8
+    }
 }
 
 /// The register-view descriptor for a partial (bit-preserving) GP write, or
@@ -213,12 +217,7 @@ fn partial_alu_ops(v: regview::RegView, op: BinOp, src: Value) -> Vec<Op> {
         },
         _ => src.clone(),
     };
-    ops.push(Op::Bin {
-        dst: acc.clone(),
-        op,
-        lhs: Value::Reg(acc.clone()),
-        rhs,
-    });
+    ops.extend(emit_bin_with_flags(acc.clone(), op, rhs, Width(v.width)));
     ops.push(Op::Bin {
         dst: parent.clone(),
         op: BinOp::And,
@@ -346,6 +345,40 @@ fn cmp_operand_as_value(
     value_of_operand(instr, idx)
 }
 
+/// Width at which an instruction operand participates in arithmetic.
+fn operand_width(instr: &iced_x86::Instruction, idx: u32) -> Width {
+    match instr.op_kind(idx) {
+        OpKind::Register => phys_reg_width(&reg_name(instr.op_register(idx))).unwrap_or(Width::W64),
+        OpKind::Memory => Width::from_bytes(instr.memory_size().size() as u16),
+        _ => Width::W64,
+    }
+}
+
+/// Give a signed comparison the value at the machine operand's width.
+fn signed_cmp_value(value: Value, width: Width, temp: VReg, ops: &mut Vec<Op>) -> Value {
+    if width.bits() < 64 && matches!(&value, Value::Reg(_)) {
+        ops.push(Op::SExt {
+            dst: temp.clone(),
+            src: value,
+            from: width,
+            to: Width::W64,
+        });
+        Value::Reg(temp)
+    } else {
+        value
+    }
+}
+
+/// ZF for an already-written arithmetic result.
+fn zero_flag_of(result: VReg) -> Op {
+    Op::Cmp {
+        dst: VReg::Flag(Flag::Z),
+        op: CmpOp::Eq,
+        lhs: Value::Reg(result),
+        rhs: Value::Const(0),
+    }
+}
+
 /// Emit LLIR for a reg/reg or reg/imm binary op (`dst = dst <op> src`).
 fn emit_bin(dst: VReg, op: BinOp, src: Value) -> Op {
     Op::Bin {
@@ -356,58 +389,420 @@ fn emit_bin(dst: VReg, op: BinOp, src: Value) -> Op {
     }
 }
 
-/// The status flags `sub dst, src` writes, in terms of the ORIGINAL `dst`.
-///
-/// `cmp` is `sub` that discards its result, so the two set identical flags — and
-/// `Mnemonic::Cmp` has always emitted exactly this block. The arithmetic form
-/// emitted none at all: `emit_bin` produced the `Op::Bin` and nothing else.
-///
-/// That is not a cosmetic omission. Compilers lower a switch's range check as
-/// `sub $N,%reg; ja default` — the subtract IS the comparison — so the `ja` read
-/// whatever flag some earlier, unrelated `cmp` had left behind. In
-/// `05_cleanup_and_state_machine:clang:O0:fsm` the guard came out as
-/// `if (~ule)` where `ule` still held the enclosing loop's condition; `~` of a
-/// 0/1 flag is -1 or -2, both true, so the recovered `switch` was unreachable.
-///
-/// These must be emitted BEFORE the `Op::Bin`, because they describe `dst`'s
-/// value before the subtract overwrites it.
-///
-/// This is the fourth instance of one gap — `neg` defined no flags, `test`
-/// defined three of the four that matter, `cmovcc` mis-modelled its condition —
-/// which is the argument for auditing flag-setting mnemonics as a family rather
-/// than one at a time. See `docs/design/x86-flags.md`.
-fn sub_flag_ops(lhs: Value, rhs: Value) -> Vec<Op> {
-    let mut ops: Vec<Op> = [
-        (Flag::Z, CmpOp::Eq),
-        (Flag::C, CmpOp::Ult),
-        (Flag::Ule, CmpOp::Ule),
-        (Flag::Slt, CmpOp::Slt),
-        (Flag::Sle, CmpOp::Sle),
-    ]
-    .into_iter()
-    .map(|(f, op)| Op::Cmp {
-        dst: VReg::Flag(f),
-        op,
-        lhs: lhs.clone(),
-        rhs: rhs.clone(),
-    })
-    .collect();
-    // JS/JNS read the raw sign bit, not the composite signed-less-than
-    // condition. Materialise the result before the architectural destination
-    // is overwritten, exactly as the CMP lifting path does.
-    let result = VReg::Temp(0);
-    ops.push(Op::Bin {
-        dst: result.clone(),
-        op: BinOp::Sub,
-        lhs,
-        rhs,
+fn undef_flag(flag: Flag, reason: impl Into<String>) -> Op {
+    Op::Undef {
+        dst: VReg::Flag(flag),
+        reason: reason.into(),
+    }
+}
+
+fn append_undef_flags(ops: &mut Vec<Op>, flags: &[Flag], reason: &str) {
+    ops.extend(flags.iter().map(|flag| undef_flag(*flag, reason)));
+}
+
+/// Define ZF and the actual architectural SF for `result` at `width`.
+fn zero_sign_flags(result: Value, width: Width, signed_temp: u32, ops: &mut Vec<Op>) {
+    ops.push(Op::Cmp {
+        dst: VReg::Flag(Flag::Z),
+        op: CmpOp::Eq,
+        lhs: result.clone(),
+        rhs: Value::Const(0),
     });
+    let signed = signed_cmp_value(result, width, VReg::Temp(signed_temp), ops);
     ops.push(Op::Cmp {
         dst: VReg::Flag(Flag::S),
         op: CmpOp::Slt,
-        lhs: Value::Reg(result),
+        lhs: signed,
         rhs: Value::Const(0),
     });
+}
+
+/// Exact ZF/CF/SF/OF effects of subtraction, plus explicit poison for the two
+/// defined-but-not-yet-materialised low-bit flags. `cmp` uses the same helper
+/// with `write_result = false` semantics encoded by its private result temp.
+fn emit_sub_with_flags(dst: VReg, rhs: Value, width: Width) -> Vec<Op> {
+    let mut ops = Vec::new();
+    let lhs = Value::Reg(dst.clone());
+    let signed_lhs = signed_cmp_value(lhs.clone(), width, VReg::Temp(30), &mut ops);
+    let signed_rhs = signed_cmp_value(rhs.clone(), width, VReg::Temp(31), &mut ops);
+    let signed_less = VReg::Temp(32);
+    ops.push(Op::Cmp {
+        dst: signed_less.clone(),
+        op: CmpOp::Slt,
+        lhs: signed_lhs,
+        rhs: signed_rhs,
+    });
+    ops.push(Op::Cmp {
+        dst: VReg::Flag(Flag::C),
+        op: CmpOp::Ult,
+        lhs,
+        rhs: rhs.clone(),
+    });
+    ops.push(emit_bin(dst.clone(), BinOp::Sub, rhs));
+    zero_sign_flags(Value::Reg(dst), width, 33, &mut ops);
+    // For subtraction, signed-less == SF xor OF, therefore OF == signed-less xor SF.
+    ops.push(Op::Bin {
+        dst: VReg::Flag(Flag::O),
+        op: BinOp::Xor,
+        lhs: Value::Reg(signed_less),
+        rhs: Value::Reg(VReg::Flag(Flag::S)),
+    });
+    append_undef_flags(
+        &mut ops,
+        &[Flag::P, Flag::A],
+        "x86 SUB defines PF/AF, but their exact low-bit expressions are not modelled",
+    );
+    ops
+}
+
+fn cmp_flag_ops(lhs: Value, rhs: Value, width: Width) -> Vec<Op> {
+    let mut ops = Vec::new();
+    let signed_lhs = signed_cmp_value(lhs.clone(), width, VReg::Temp(30), &mut ops);
+    let signed_rhs = signed_cmp_value(rhs.clone(), width, VReg::Temp(31), &mut ops);
+    let signed_less = VReg::Temp(32);
+    let result = VReg::Temp(33);
+    ops.extend([
+        Op::Cmp {
+            dst: signed_less.clone(),
+            op: CmpOp::Slt,
+            lhs: signed_lhs,
+            rhs: signed_rhs,
+        },
+        Op::Bin {
+            dst: result.clone(),
+            op: BinOp::Sub,
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+        },
+        Op::Cmp {
+            dst: VReg::Flag(Flag::Z),
+            op: CmpOp::Eq,
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+        },
+        Op::Cmp {
+            dst: VReg::Flag(Flag::C),
+            op: CmpOp::Ult,
+            lhs,
+            rhs,
+        },
+    ]);
+    zero_sign_flags(Value::Reg(result), width, 34, &mut ops);
+    // `zero_sign_flags` also emitted a result-based ZF. Preserve the cleaner,
+    // exact `lhs == rhs` definition above by removing only that duplicate.
+    let result_zf = ops
+        .iter()
+        .rposition(|op| {
+            matches!(
+                op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Z),
+                    ..
+                }
+            )
+        })
+        .expect("zero_sign_flags emits ZF");
+    ops.remove(result_zf);
+    ops.push(Op::Bin {
+        dst: VReg::Flag(Flag::O),
+        op: BinOp::Xor,
+        lhs: Value::Reg(signed_less),
+        rhs: Value::Reg(VReg::Flag(Flag::S)),
+    });
+    append_undef_flags(
+        &mut ops,
+        &[Flag::P, Flag::A],
+        "x86 CMP defines PF/AF, but their exact low-bit expressions are not modelled",
+    );
+    ops
+}
+
+/// Exact ZF/CF/SF/OF effects of addition. PF/AF are new poisoned values rather
+/// than stale values until their low-bit expressions are materialised.
+fn emit_add_with_flags(dst: VReg, rhs: Value, width: Width) -> Vec<Op> {
+    let mut ops = Vec::new();
+    let original = VReg::Temp(30);
+    ops.push(Op::Assign {
+        dst: original.clone(),
+        src: Value::Reg(dst.clone()),
+    });
+    let signed_lhs = signed_cmp_value(
+        Value::Reg(original.clone()),
+        width,
+        VReg::Temp(31),
+        &mut ops,
+    );
+    let signed_rhs = signed_cmp_value(rhs.clone(), width, VReg::Temp(32), &mut ops);
+    let lhs_negative = VReg::Temp(33);
+    let rhs_negative = VReg::Temp(34);
+    ops.extend([
+        Op::Cmp {
+            dst: lhs_negative.clone(),
+            op: CmpOp::Slt,
+            lhs: signed_lhs,
+            rhs: Value::Const(0),
+        },
+        Op::Cmp {
+            dst: rhs_negative.clone(),
+            op: CmpOp::Slt,
+            lhs: signed_rhs,
+            rhs: Value::Const(0),
+        },
+        emit_bin(dst.clone(), BinOp::Add, rhs),
+    ]);
+    zero_sign_flags(Value::Reg(dst.clone()), width, 35, &mut ops);
+    ops.push(Op::Cmp {
+        dst: VReg::Flag(Flag::C),
+        op: CmpOp::Ult,
+        lhs: Value::Reg(dst),
+        rhs: Value::Reg(original),
+    });
+    let same_sign = VReg::Temp(36);
+    let sign_changed = VReg::Temp(37);
+    ops.extend([
+        Op::Cmp {
+            dst: same_sign.clone(),
+            op: CmpOp::Eq,
+            lhs: Value::Reg(lhs_negative),
+            rhs: Value::Reg(rhs_negative),
+        },
+        Op::Cmp {
+            dst: sign_changed.clone(),
+            op: CmpOp::Ne,
+            lhs: Value::Reg(VReg::Flag(Flag::S)),
+            rhs: Value::Reg(VReg::Temp(33)),
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::O),
+            op: BinOp::And,
+            lhs: Value::Reg(same_sign),
+            rhs: Value::Reg(sign_changed),
+        },
+    ]);
+    append_undef_flags(
+        &mut ops,
+        &[Flag::P, Flag::A],
+        "x86 ADD defines PF/AF, but their exact low-bit expressions are not modelled",
+    );
+    ops
+}
+
+fn emit_logic_with_flags(dst: VReg, op: BinOp, rhs: Value, width: Width) -> Vec<Op> {
+    let mut ops = vec![emit_bin(dst.clone(), op, rhs)];
+    zero_sign_flags(Value::Reg(dst), width, 30, &mut ops);
+    ops.extend([
+        Op::Assign {
+            dst: VReg::Flag(Flag::C),
+            src: Value::Const(0),
+        },
+        Op::Assign {
+            dst: VReg::Flag(Flag::O),
+            src: Value::Const(0),
+        },
+        undef_flag(
+            Flag::P,
+            "x86 logic defines PF, but its exact low-byte parity expression is not modelled",
+        ),
+        undef_flag(Flag::A, "x86 logic leaves AF architecturally undefined"),
+    ]);
+    ops
+}
+
+fn emit_shift_with_flags(dst: VReg, op: BinOp, rhs: Value, width: Width) -> Vec<Op> {
+    let mask = if width.bits() == 64 { 63 } else { 31 };
+    match rhs {
+        Value::Const(raw) => {
+            let count = raw & mask;
+            if count == 0 {
+                // A masked zero count preserves the destination and every flag.
+                return vec![Op::Nop];
+            }
+            let mut ops = vec![emit_bin(dst.clone(), op, Value::Const(count))];
+            zero_sign_flags(Value::Reg(dst), width, 30, &mut ops);
+            ops.push(undef_flag(
+                Flag::C,
+                "x86 shift defines CF, but the shifted-out-bit expression is not modelled",
+            ));
+            ops.push(if count == 1 {
+                undef_flag(
+                    Flag::O,
+                    "x86 one-bit shift defines OF, but its exact expression is not modelled",
+                )
+            } else {
+                undef_flag(
+                    Flag::O,
+                    "x86 multi-bit shift leaves OF architecturally undefined",
+                )
+            });
+            ops.extend([
+                undef_flag(
+                    Flag::P,
+                    "x86 shift defines PF, but its exact low-byte parity expression is not modelled",
+                ),
+                undef_flag(Flag::A, "x86 shift leaves AF architecturally undefined"),
+            ]);
+            ops
+        }
+        variable => {
+            let mut ops = vec![emit_bin(dst, op, variable)];
+            append_undef_flags(
+                &mut ops,
+                &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
+                "x86 variable-count shift has count-sensitive flag effects not yet modelled",
+            );
+            ops
+        }
+    }
+}
+
+/// Append the two flag effects of a non-zero ROL/ROR.  ZF/SF/PF/AF are
+/// architecturally preserved and therefore deliberately absent.
+fn append_rotate_flags(ops: &mut Vec<Op>, dst: VReg, rotate_left: bool, width: Width, count: i64) {
+    let top_shift = (width.bits() - 1) as i64;
+    if rotate_left {
+        ops.push(Op::Bin {
+            dst: VReg::Flag(Flag::C),
+            op: BinOp::And,
+            lhs: Value::Reg(dst.clone()),
+            rhs: Value::Const(1),
+        });
+    } else {
+        let top = VReg::Temp(50);
+        ops.extend([
+            Op::Bin {
+                dst: top.clone(),
+                op: BinOp::Shr,
+                lhs: Value::Reg(dst.clone()),
+                rhs: Value::Const(top_shift),
+            },
+            Op::Bin {
+                dst: VReg::Flag(Flag::C),
+                op: BinOp::And,
+                lhs: Value::Reg(top),
+                rhs: Value::Const(1),
+            },
+        ]);
+    }
+
+    if count != 1 {
+        ops.push(undef_flag(
+            Flag::O,
+            "x86 multi-bit rotate leaves OF architecturally undefined",
+        ));
+        return;
+    }
+
+    let top = VReg::Temp(51);
+    ops.push(Op::Bin {
+        dst: top.clone(),
+        op: BinOp::Shr,
+        lhs: Value::Reg(dst.clone()),
+        rhs: Value::Const(top_shift),
+    });
+    if rotate_left {
+        ops.push(Op::Bin {
+            dst: VReg::Flag(Flag::O),
+            op: BinOp::Xor,
+            lhs: Value::Reg(top),
+            rhs: Value::Reg(VReg::Flag(Flag::C)),
+        });
+    } else {
+        let next = VReg::Temp(52);
+        ops.extend([
+            Op::Bin {
+                dst: next.clone(),
+                op: BinOp::Shr,
+                lhs: Value::Reg(dst),
+                rhs: Value::Const(top_shift - 1),
+            },
+            Op::Bin {
+                dst: next.clone(),
+                op: BinOp::And,
+                lhs: Value::Reg(next.clone()),
+                rhs: Value::Const(1),
+            },
+            Op::Bin {
+                dst: VReg::Flag(Flag::O),
+                op: BinOp::Xor,
+                lhs: Value::Reg(top),
+                rhs: Value::Reg(next),
+            },
+        ]);
+    }
+}
+
+fn emit_bin_with_flags(dst: VReg, op: BinOp, rhs: Value, width: Width) -> Vec<Op> {
+    match op {
+        BinOp::Add => emit_add_with_flags(dst, rhs, width),
+        BinOp::Sub => emit_sub_with_flags(dst, rhs, width),
+        BinOp::And | BinOp::Or | BinOp::Xor => emit_logic_with_flags(dst, op, rhs, width),
+        BinOp::Shl | BinOp::Shr | BinOp::Sar => emit_shift_with_flags(dst, op, rhs, width),
+        BinOp::Mul => {
+            let mut ops = vec![emit_bin(dst, op, rhs)];
+            append_undef_flags(
+                &mut ops,
+                &[Flag::C, Flag::O],
+                "x86 IMUL defines CF/OF, but product truncation overflow is not modelled",
+            );
+            append_undef_flags(
+                &mut ops,
+                &[Flag::Z, Flag::S, Flag::P, Flag::A],
+                "x86 IMUL leaves ZF/SF/PF/AF architecturally undefined",
+            );
+            ops
+        }
+        BinOp::Div => {
+            let mut ops = vec![emit_bin(dst, op, rhs)];
+            append_undef_flags(
+                &mut ops,
+                &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
+                "x86 DIV leaves arithmetic flags architecturally undefined",
+            );
+            ops
+        }
+    }
+}
+
+fn emit_inc_dec_with_flags(dst: VReg, increment: bool, width: Width) -> Vec<Op> {
+    let original = VReg::Temp(40);
+    let mut ops = vec![Op::Assign {
+        dst: original.clone(),
+        src: Value::Reg(dst.clone()),
+    }];
+    ops.push(emit_bin(
+        dst.clone(),
+        if increment { BinOp::Add } else { BinOp::Sub },
+        Value::Const(1),
+    ));
+    zero_sign_flags(Value::Reg(dst), width, 41, &mut ops);
+    let signed_original = signed_cmp_value(Value::Reg(original), width, VReg::Temp(42), &mut ops);
+    let boundary = if increment {
+        if width.bits() == 64 {
+            i64::MAX
+        } else {
+            (1_i64 << (width.bits() - 1)) - 1
+        }
+    } else if width.bits() == 64 {
+        i64::MIN
+    } else {
+        -(1_i64 << (width.bits() - 1))
+    };
+    ops.push(Op::Cmp {
+        dst: VReg::Flag(Flag::O),
+        op: CmpOp::Eq,
+        lhs: signed_original,
+        rhs: Value::Const(boundary),
+    });
+    append_undef_flags(
+        &mut ops,
+        &[Flag::P, Flag::A],
+        if increment {
+            "x86 INC defines PF/AF, but their exact low-bit expressions are not modelled"
+        } else {
+            "x86 DEC defines PF/AF, but their exact low-bit expressions are not modelled"
+        },
+    );
+    // CF is intentionally absent: INC/DEC preserve it.
     ops
 }
 
@@ -432,44 +827,103 @@ fn condition_suffix(mnem: Mnemonic, prefix: &str) -> Option<String> {
 }
 
 #[derive(Debug, Clone)]
+enum ConditionCode {
+    Overflow,
+    Below,
+    Equal,
+    BelowEqual,
+    Sign,
+    Parity,
+    Less,
+    LessEqual,
+}
+
+#[derive(Debug, Clone)]
 struct Condition {
-    flag: VReg,
+    code: ConditionCode,
     inverted: bool,
 }
 
 fn condition_for_suffix(suffix: &str) -> Option<Condition> {
-    let (flag, inverted) = match suffix {
-        "e" | "z" => (Flag::Z, false),
-        "ne" | "nz" => (Flag::Z, true),
-        "b" | "c" | "nae" => (Flag::C, false),
-        "ae" | "nb" | "nc" => (Flag::C, true),
-        "be" | "na" => (Flag::Ule, false),
-        "a" | "nbe" => (Flag::Ule, true),
-        "l" | "nge" => (Flag::Slt, false),
-        "ge" | "nl" => (Flag::Slt, true),
-        "le" | "ng" => (Flag::Sle, false),
-        "g" | "nle" => (Flag::Sle, true),
-        "s" => (Flag::S, false),
-        "ns" => (Flag::S, true),
-        "o" => (Flag::O, false),
-        "no" => (Flag::O, true),
-        "p" | "pe" => (Flag::P, false),
-        "np" | "po" => (Flag::P, true),
+    let (code, inverted) = match suffix {
+        "e" | "z" => (ConditionCode::Equal, false),
+        "ne" | "nz" => (ConditionCode::Equal, true),
+        "b" | "c" | "nae" => (ConditionCode::Below, false),
+        "ae" | "nb" | "nc" => (ConditionCode::Below, true),
+        "be" | "na" => (ConditionCode::BelowEqual, false),
+        "a" | "nbe" => (ConditionCode::BelowEqual, true),
+        "l" | "nge" => (ConditionCode::Less, false),
+        "ge" | "nl" => (ConditionCode::Less, true),
+        "le" | "ng" => (ConditionCode::LessEqual, false),
+        "g" | "nle" => (ConditionCode::LessEqual, true),
+        "s" => (ConditionCode::Sign, false),
+        "ns" => (ConditionCode::Sign, true),
+        "o" => (ConditionCode::Overflow, false),
+        "no" => (ConditionCode::Overflow, true),
+        "p" | "pe" => (ConditionCode::Parity, false),
+        "np" | "po" => (ConditionCode::Parity, true),
         _ => return None,
     };
-    Some(Condition {
-        flag: VReg::Flag(flag),
-        inverted,
-    })
+    Some(Condition { code, inverted })
 }
 
-/// Map a conditional-jump mnemonic onto the flag virtual register family that
-/// controls the branch. `Op::CondJump` does not yet carry polarity, so negated
-/// siblings (Jne, Jae, Jge, ...) intentionally share the positive flag as the
-/// existing approximation. `setcc` and `cmovcc` materialize inverted forms
-/// explicitly because they produce dataflow values.
-fn cond_flag_for(mnem: Mnemonic) -> Option<VReg> {
-    condition_suffix(mnem, "j").and_then(|suffix| condition_for_suffix(&suffix).map(|c| c.flag))
+/// Materialise one of x86's eight positive condition families from the six
+/// architectural status flags. Derived conditions are ordinary typed boolean
+/// temporaries, never mutable pseudo-flags.
+fn materialize_condition(condition: &Condition) -> (Vec<Op>, VReg) {
+    let atom = |flag| (Vec::new(), VReg::Flag(flag));
+    match condition.code {
+        ConditionCode::Overflow => atom(Flag::O),
+        ConditionCode::Below => atom(Flag::C),
+        ConditionCode::Equal => atom(Flag::Z),
+        ConditionCode::Sign => atom(Flag::S),
+        ConditionCode::Parity => atom(Flag::P),
+        ConditionCode::BelowEqual => {
+            let out = VReg::Temp(20);
+            (
+                vec![Op::Bin {
+                    dst: out.clone(),
+                    op: BinOp::Or,
+                    lhs: Value::Reg(VReg::Flag(Flag::C)),
+                    rhs: Value::Reg(VReg::Flag(Flag::Z)),
+                }],
+                out,
+            )
+        }
+        ConditionCode::Less => {
+            let out = VReg::Temp(20);
+            (
+                vec![Op::Bin {
+                    dst: out.clone(),
+                    op: BinOp::Xor,
+                    lhs: Value::Reg(VReg::Flag(Flag::S)),
+                    rhs: Value::Reg(VReg::Flag(Flag::O)),
+                }],
+                out,
+            )
+        }
+        ConditionCode::LessEqual => {
+            let less = VReg::Temp(20);
+            let out = VReg::Temp(21);
+            (
+                vec![
+                    Op::Bin {
+                        dst: less.clone(),
+                        op: BinOp::Xor,
+                        lhs: Value::Reg(VReg::Flag(Flag::S)),
+                        rhs: Value::Reg(VReg::Flag(Flag::O)),
+                    },
+                    Op::Bin {
+                        dst: out.clone(),
+                        op: BinOp::Or,
+                        lhs: Value::Reg(VReg::Flag(Flag::Z)),
+                        rhs: Value::Reg(less),
+                    },
+                ],
+                out,
+            )
+        }
+    }
 }
 
 fn setcc_condition_for(mnem: Mnemonic) -> Option<Condition> {
@@ -723,32 +1177,34 @@ fn scalar_move_ops(instr: &iced_x86::Instruction, width: u8, mnemonic: &str) -> 
     }
 }
 
-fn sbb_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+fn adc_sbb_ops(instr: &iced_x86::Instruction, add: bool) -> Vec<Op> {
+    let mnemonic = if add { "adc" } else { "sbb" };
     if instr.op_count() != 2 {
         return vec![Op::Unknown {
-            mnemonic: "sbb".into(),
+            mnemonic: mnemonic.into(),
         }];
     }
 
     let carry = Value::Reg(VReg::Flag(Flag::C));
-    match instr.op_kind(0) {
+    let arithmetic = if add { BinOp::Add } else { BinOp::Sub };
+    let mut ops = match instr.op_kind(0) {
         OpKind::Register => {
             let dst = VReg::phys(reg_name(instr.op_register(0)));
             let mut ops = Vec::new();
             let Some(rhs) = cmp_operand_as_value(instr, 1, VReg::Temp(0), &mut ops) else {
                 return vec![Op::Unknown {
-                    mnemonic: "sbb".into(),
+                    mnemonic: mnemonic.into(),
                 }];
             };
             ops.push(Op::Bin {
                 dst: dst.clone(),
-                op: BinOp::Sub,
+                op: arithmetic,
                 lhs: Value::Reg(dst.clone()),
                 rhs,
             });
             ops.push(Op::Bin {
                 dst: dst.clone(),
-                op: BinOp::Sub,
+                op: arithmetic,
                 lhs: Value::Reg(dst),
                 rhs: carry,
             });
@@ -759,7 +1215,7 @@ fn sbb_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
             let mut ops = Vec::new();
             let Some(rhs) = cmp_operand_as_value(instr, 1, VReg::Temp(1), &mut ops) else {
                 return vec![Op::Unknown {
-                    mnemonic: "sbb".into(),
+                    mnemonic: mnemonic.into(),
                 }];
             };
             let tmp = VReg::Temp(0);
@@ -772,13 +1228,13 @@ fn sbb_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
             );
             ops.push(Op::Bin {
                 dst: tmp.clone(),
-                op: BinOp::Sub,
+                op: arithmetic,
                 lhs: Value::Reg(tmp.clone()),
                 rhs,
             });
             ops.push(Op::Bin {
                 dst: tmp.clone(),
-                op: BinOp::Sub,
+                op: arithmetic,
                 lhs: Value::Reg(tmp.clone()),
                 rhs: carry,
             });
@@ -789,9 +1245,29 @@ fn sbb_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
             ops
         }
         _ => vec![Op::Unknown {
-            mnemonic: "sbb".into(),
+            mnemonic: mnemonic.into(),
         }],
+    };
+    if !ops.iter().any(|op| matches!(op, Op::Unknown { .. })) {
+        append_undef_flags(
+            &mut ops,
+            &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
+            if add {
+                "x86 ADC defines flags from lhs+rhs+CF, but those expressions are not yet modelled"
+            } else {
+                "x86 SBB defines flags from lhs-rhs-CF, but those expressions are not yet modelled"
+            },
+        );
     }
+    ops
+}
+
+fn adc_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    adc_sbb_ops(instr, true)
+}
+
+fn sbb_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    adc_sbb_ops(instr, false)
 }
 
 fn xorps_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
@@ -849,6 +1325,7 @@ fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
 
     let src = Value::Reg(VReg::phys(reg_name(instr.op_register(1))));
     let old = VReg::Temp(0);
+    let width = operand_width(instr, 0);
     let acc = match instr.op_kind(0) {
         OpKind::Register => {
             let dst = instr.op_register(0);
@@ -873,12 +1350,11 @@ fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 dst: old.clone(),
                 src: Value::Reg(dst.clone()),
             });
-            ops.push(Op::Cmp {
-                dst: VReg::Flag(Flag::Z),
-                op: CmpOp::Eq,
-                lhs: Value::Reg(acc.clone()),
-                rhs: Value::Reg(old.clone()),
-            });
+            ops.extend(cmp_flag_ops(
+                Value::Reg(acc.clone()),
+                Value::Reg(old.clone()),
+                width,
+            ));
             ops.push(Op::CondAssign {
                 dst,
                 cond: VReg::Flag(Flag::Z),
@@ -892,12 +1368,11 @@ fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 dst: old.clone(),
                 addr: addr.clone(),
             });
-            ops.push(Op::Cmp {
-                dst: VReg::Flag(Flag::Z),
-                op: CmpOp::Eq,
-                lhs: Value::Reg(acc.clone()),
-                rhs: Value::Reg(old.clone()),
-            });
+            ops.extend(cmp_flag_ops(
+                Value::Reg(acc.clone()),
+                Value::Reg(old.clone()),
+                width,
+            ));
             ops.push(Op::Assign {
                 dst: new_value.clone(),
                 src: Value::Reg(old.clone()),
@@ -949,12 +1424,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         return match partial {
                             Some(v) => partial_alu_ops(v, op, src),
                             None => {
-                                let mut ops = Vec::new();
-                                if op == BinOp::Sub {
-                                    ops.extend(sub_flag_ops(Value::Reg(dst.clone()), src.clone()));
-                                }
-                                ops.push(emit_bin(dst, op, src));
-                                ops
+                                let width = operand_width(instr, 0);
+                                emit_bin_with_flags(dst, op, src, width)
                             }
                         };
                     } else if instr.op_kind(1) == OpKind::Memory {
@@ -971,7 +1442,16 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                                 ops.extend(partial_alu_ops(v, op, Value::Reg(tmp)));
                                 ops
                             }
-                            None => vec![load, emit_bin(dst, op, Value::Reg(tmp))],
+                            None => {
+                                let mut ops = vec![load];
+                                ops.extend(emit_bin_with_flags(
+                                    dst,
+                                    op,
+                                    Value::Reg(tmp),
+                                    operand_width(instr, 0),
+                                ));
+                                ops
+                            }
                         };
                     }
                 }
@@ -980,22 +1460,21 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     let addr = mem_op_of(instr);
                     if let Some(src) = value_of_operand(instr, 1) {
                         let tmp = VReg::Temp(0);
-                        return vec![
-                            Op::Load {
-                                dst: tmp.clone(),
-                                addr: addr.clone(),
-                            },
-                            Op::Bin {
-                                dst: tmp.clone(),
-                                op,
-                                lhs: Value::Reg(tmp.clone()),
-                                rhs: src,
-                            },
-                            Op::Store {
-                                addr,
-                                src: Value::Reg(tmp),
-                            },
-                        ];
+                        let mut ops = vec![Op::Load {
+                            dst: tmp.clone(),
+                            addr: addr.clone(),
+                        }];
+                        ops.extend(emit_bin_with_flags(
+                            tmp.clone(),
+                            op,
+                            src,
+                            operand_width(instr, 0),
+                        ));
+                        ops.push(Op::Store {
+                            addr,
+                            src: Value::Reg(tmp),
+                        });
+                        return ops;
                     }
                 }
                 _ => {}
@@ -1016,11 +1495,42 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 }];
             }
             match (instr.op_kind(0), instr.op_kind(1)) {
-                (OpKind::Register, OpKind::Memory) => vec![Op::Load {
-                    dst: VReg::phys(reg_name(instr.op_register(0))),
-                    addr: mem_op_of(instr),
-                }],
+                (OpKind::Register, OpKind::Memory) => {
+                    let dst_name = reg_name(instr.op_register(0));
+                    if let Some(view) = partial_gp_view(&dst_name) {
+                        let value = VReg::Temp(0);
+                        let mut ops = vec![Op::Load {
+                            dst: value.clone(),
+                            addr: mem_op_of(instr),
+                        }];
+                        ops.extend(partial_write_ops(view, Value::Reg(value)));
+                        ops
+                    } else {
+                        vec![Op::Load {
+                            dst: VReg::phys(dst_name),
+                            addr: mem_op_of(instr),
+                        }]
+                    }
+                }
                 (OpKind::Memory, _) => {
+                    // A partial register SOURCE is a view of its canonical
+                    // parent.  Spell the extraction explicitly before the
+                    // store so SSA versions the producer and consumer as one
+                    // value.  Treating `al` as an independent register here
+                    // made `movzx eax,[mem]; mov [stack],al` store a loop-entry
+                    // live-in instead of the byte just loaded.
+                    if instr.op_kind(1) == OpKind::Register {
+                        let src_name = reg_name(instr.op_register(1));
+                        if let Some(view) = partial_gp_view(&src_name) {
+                            let value = VReg::Temp(0);
+                            let mut ops = read_view_ops(view, value.clone());
+                            ops.push(Op::Store {
+                                addr: mem_op_of(instr),
+                                src: Value::Reg(value),
+                            });
+                            return ops;
+                        }
+                    }
                     if let Some(src) = value_of_operand(instr, 1) {
                         vec![Op::Store {
                             addr: mem_op_of(instr),
@@ -1221,6 +1731,16 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             rhs,
                         }),
                     }
+                    append_undef_flags(
+                        &mut ops,
+                        &[Flag::C, Flag::O],
+                        "x86 IMUL defines CF/OF, but product truncation overflow is not modelled",
+                    );
+                    append_undef_flags(
+                        &mut ops,
+                        &[Flag::Z, Flag::S, Flag::P, Flag::A],
+                        "x86 IMUL leaves ZF/SF/PF/AF architecturally undefined",
+                    );
                     return ops;
                 }
             }
@@ -1235,7 +1755,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Rol | Mnemonic::Ror => {
             if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
                 let dst_name = reg_name(instr.op_register(0));
-                let w = phys_reg_width(&dst_name).unwrap_or(Width::W64).bits() as i64;
+                let width = phys_reg_width(&dst_name).unwrap_or(Width::W64);
+                let w = width.bits() as i64;
                 let dst = VReg::phys(dst_name);
                 if let Some(Value::Const(cnt)) = value_of_operand(instr, 1) {
                     let n = ((cnt % w) + w) % w;
@@ -1248,7 +1769,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     } else {
                         (BinOp::Shr, n, BinOp::Shl, w - n)
                     };
-                    return vec![
+                    let mut ops = vec![
                         Op::Bin {
                             dst: t1.clone(),
                             op: a_op,
@@ -1262,12 +1783,14 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             rhs: Value::Const(b_sh),
                         },
                         Op::Bin {
-                            dst,
+                            dst: dst.clone(),
                             op: BinOp::Or,
                             lhs: Value::Reg(t1),
                             rhs: Value::Reg(t2),
                         },
                     ];
+                    append_rotate_flags(&mut ops, dst, matches!(mnem, Mnemonic::Rol), width, n);
+                    return ops;
                 } else if instr.op_kind(1) == OpKind::Register {
                     // Rotate by `cl`. x86 variable shifts/rotates always take the
                     // count in CL; use its 32-bit view ECX (identical low bits,
@@ -1294,7 +1817,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     } else {
                         (BinOp::Shl, BinOp::Shr)
                     };
-                    return vec![
+                    let mut ops = vec![
                         Op::Bin {
                             dst: t0.clone(),
                             op: BinOp::And,
@@ -1332,6 +1855,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             rhs: Value::Reg(t4),
                         },
                     ];
+                    append_undef_flags(
+                        &mut ops,
+                        &[Flag::C, Flag::O],
+                        "x86 variable-count rotate has count-sensitive CF/OF effects not yet modelled",
+                    );
+                    return ops;
                 }
             }
             vec![Op::Unknown {
@@ -1351,13 +1880,24 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     _ => None,
                 };
                 if let Some((lo, hi)) = acc {
-                    return vec![Op::Intrinsic {
+                    let mut ops = vec![Op::Intrinsic {
                         name: "mul".into(),
                         ins: vec![Value::Reg(VReg::phys(lo)), Value::Reg(VReg::phys(src_name))],
                         outs: vec![(VReg::phys(lo), w), (VReg::phys(hi), w)],
                         reads_mem: false,
                         writes_mem: false,
                     }];
+                    append_undef_flags(
+                        &mut ops,
+                        &[Flag::C, Flag::O],
+                        "x86 MUL defines CF/OF, but high-half overflow is not yet modelled",
+                    );
+                    append_undef_flags(
+                        &mut ops,
+                        &[Flag::Z, Flag::S, Flag::P, Flag::A],
+                        "x86 MUL leaves ZF/SF/PF/AF architecturally undefined",
+                    );
+                    return ops;
                 }
             }
             vec![Op::Unknown {
@@ -1405,6 +1945,11 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         dst: VReg::Flag(Flag::C),
                         src: Value::Reg(t2),
                     });
+                    append_undef_flags(
+                        &mut ops,
+                        &[Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
+                        "x86 BT leaves OF/ZF/SF/PF/AF architecturally undefined",
+                    );
                     return ops;
                 }
             }
@@ -1569,61 +2114,9 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         mnemonic: "cmp".into(),
                     }];
                 };
-                // A machine `cmp` updates ZF, SF, CF, OF, AF, PF, but jcc
-                // semantics ultimately depend on five composite conditions:
-                // equal (ZF), unsigned-less (CF), signed-less (SF^OF),
-                // unsigned-less-or-equal (CF|ZF), signed-less-or-equal
-                // (ZF|SF^OF), and raw sign (SF). We write each directly as
-                // an LLIR flag so conditional
-                // branches can read a single flag with faithful semantics.
-                // The raw sign is derived by materialising `lhs - rhs` into
-                // a temp and comparing to zero.
-                let sub_tmp = VReg::Temp(0);
+                let width = operand_width(instr, 0);
                 let mut ops = preamble;
-                ops.extend(vec![
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Z),
-                        op: CmpOp::Eq,
-                        lhs: lhs.clone(),
-                        rhs: rhs.clone(),
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::C),
-                        op: CmpOp::Ult,
-                        lhs: lhs.clone(),
-                        rhs: rhs.clone(),
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Ule),
-                        op: CmpOp::Ule,
-                        lhs: lhs.clone(),
-                        rhs: rhs.clone(),
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Slt),
-                        op: CmpOp::Slt,
-                        lhs: lhs.clone(),
-                        rhs: rhs.clone(),
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Sle),
-                        op: CmpOp::Sle,
-                        lhs: lhs.clone(),
-                        rhs: rhs.clone(),
-                    },
-                    Op::Bin {
-                        dst: sub_tmp.clone(),
-                        op: BinOp::Sub,
-                        lhs,
-                        rhs,
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::S),
-                        op: CmpOp::Slt,
-                        lhs: Value::Reg(sub_tmp),
-                        rhs: Value::Const(0),
-                    },
-                ]);
+                ops.extend(cmp_flag_ops(lhs, rhs, width));
                 return ops;
             }
             vec![Op::Unknown {
@@ -1640,34 +2133,54 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         mnemonic: "test".into(),
                     }];
                 };
-                // test sets ZF = ((lhs & rhs) == 0) and SF = msb(lhs & rhs).
-                // Materialise the AND into a temp and emit the two flag
-                // writes against it. `Flag::Slt` is also written so that the
-                // Jl/Jge siblings (rare after test, but emitted by some
-                // compilers) read something reasonable instead of a stale
-                // flag — it coincides with the sign bit here because the
-                // second comparand is 0.
+                // TEST sets ZF/SF/PF from `lhs & rhs`, clears CF/OF, and leaves
+                // AF undefined. Materialise the AND once; PF remains explicit
+                // poison until its low-byte parity expression is implemented.
                 let tmp = VReg::Temp(0);
+                let width = operand_width(instr, 0);
                 let mut ops = preamble;
-                ops.extend(vec![
-                    Op::Bin {
-                        dst: tmp.clone(),
-                        op: BinOp::And,
-                        lhs,
-                        rhs,
+                ops.push(Op::Bin {
+                    dst: tmp.clone(),
+                    op: BinOp::And,
+                    lhs,
+                    rhs,
+                });
+                let signed = if width.bits() < 64 {
+                    let widened = VReg::Temp(1);
+                    ops.push(Op::SExt {
+                        dst: widened.clone(),
+                        src: Value::Reg(tmp.clone()),
+                        from: width,
+                        to: Width::W64,
+                    });
+                    widened
+                } else {
+                    tmp.clone()
+                };
+                ops.extend([
+                    zero_flag_of(tmp.clone()),
+                    // TEST clears CF and OF. Materialising those architectural
+                    // effects prevents a later composite condition from reading
+                    // stale values.
+                    Op::Assign {
+                        dst: VReg::Flag(Flag::C),
+                        src: Value::Const(0),
                     },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Z),
-                        op: CmpOp::Eq,
-                        lhs: Value::Reg(tmp.clone()),
-                        rhs: Value::Const(0),
+                    Op::Assign {
+                        dst: VReg::Flag(Flag::O),
+                        src: Value::Const(0),
                     },
                     Op::Cmp {
                         dst: VReg::Flag(Flag::S),
                         op: CmpOp::Slt,
-                        lhs: Value::Reg(tmp),
+                        lhs: Value::Reg(signed.clone()),
                         rhs: Value::Const(0),
                     },
+                    undef_flag(
+                        Flag::P,
+                        "x86 TEST defines PF, but its exact low-byte parity expression is not modelled",
+                    ),
+                    undef_flag(Flag::A, "x86 TEST leaves AF architecturally undefined"),
                 ]);
                 return ops;
             }
@@ -1678,42 +2191,47 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         _ if setcc_condition_for(mnem).is_some() => {
             let condition = setcc_condition_for(mnem).expect("checked above");
             if instr.op_count() == 1 {
+                let (mut ops, predicate) = materialize_condition(&condition);
                 match instr.op_kind(0) {
                     OpKind::Register => {
                         let dst = VReg::phys(reg_name(instr.op_register(0)));
                         if condition.inverted {
-                            return vec![Op::Cmp {
+                            ops.push(Op::Cmp {
                                 dst,
                                 op: CmpOp::Eq,
-                                lhs: Value::Reg(condition.flag),
+                                lhs: Value::Reg(predicate),
                                 rhs: Value::Const(0),
-                            }];
+                            });
+                            return ops;
                         }
-                        return vec![Op::Assign {
+                        ops.push(Op::Assign {
                             dst,
-                            src: Value::Reg(condition.flag),
-                        }];
+                            src: Value::Reg(predicate),
+                        });
+                        return ops;
                     }
                     OpKind::Memory => {
                         if condition.inverted {
                             let tmp = VReg::Temp(0);
-                            return vec![
+                            ops.extend([
                                 Op::Cmp {
                                     dst: tmp.clone(),
                                     op: CmpOp::Eq,
-                                    lhs: Value::Reg(condition.flag),
+                                    lhs: Value::Reg(predicate),
                                     rhs: Value::Const(0),
                                 },
                                 Op::Store {
                                     addr: mem_op_of(instr),
                                     src: Value::Reg(tmp),
                                 },
-                            ];
+                            ]);
+                            return ops;
                         }
-                        return vec![Op::Store {
+                        ops.push(Op::Store {
                             addr: mem_op_of(instr),
-                            src: Value::Reg(condition.flag),
-                        }];
+                            src: Value::Reg(predicate),
+                        });
+                        return ops;
                     }
                     _ => {}
                 }
@@ -1726,18 +2244,18 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             let condition = cmovcc_condition_for(mnem).expect("checked above");
             if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
                 let dst = VReg::phys(reg_name(instr.op_register(0)));
-                let mut ops = Vec::new();
+                let (mut ops, predicate) = materialize_condition(&condition);
                 let cond = if condition.inverted {
                     let tmp = VReg::Temp(1);
                     ops.push(Op::Cmp {
                         dst: tmp.clone(),
                         op: CmpOp::Eq,
-                        lhs: Value::Reg(condition.flag),
+                        lhs: Value::Reg(predicate),
                         rhs: Value::Const(0),
                     });
                     tmp
                 } else {
-                    condition.flag
+                    predicate
                 };
                 // `dst = cond ? src : dst` — a three-input SELECT, not a
                 // conditional def. Stating the false arm explicitly is what keeps the
@@ -1815,11 +2333,9 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 //   `abs(-1)` then came out as 4294967295 and the function returned
                 //   -1 instead of 1 — a wrong answer from a right-looking `if`.
                 //
-                // CF and OF are left undefined on purpose. `neg` sets CF = (operand
-                // != 0) and OF only at INT_MIN, and the conditions that consume them
-                // (`jb`; `jl`, which tests SF != OF) cannot be expressed without
-                // modelling OF. An approximate definition would convert a visibly
-                // missing flag into a silently wrong branch.
+                // CF is source!=0 and OF is source==INT_MIN at the operand width;
+                // both are materialised exactly so every Jcc family sees the same
+                // producer state.
                 let t = VReg::Temp(0);
                 let w = phys_reg_width(&reg_name(instr.op_register(0))).unwrap_or(Width::W64);
                 let mut ops = vec![Op::Un {
@@ -1841,6 +2357,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 } else {
                     t.clone()
                 };
+                let signed_original =
+                    signed_cmp_value(Value::Reg(r.clone()), w, VReg::Temp(2), &mut ops);
                 ops.extend([
                     Op::Cmp {
                         dst: VReg::Flag(Flag::Z),
@@ -1854,6 +2372,30 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         lhs: Value::Reg(flagged),
                         rhs: Value::Const(0),
                     },
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::C),
+                        op: CmpOp::Ne,
+                        lhs: Value::Reg(r.clone()),
+                        rhs: Value::Const(0),
+                    },
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::O),
+                        op: CmpOp::Eq,
+                        lhs: signed_original,
+                        rhs: Value::Const(if w.bits() == 64 {
+                            i64::MIN
+                        } else {
+                            -(1_i64 << (w.bits() - 1))
+                        }),
+                    },
+                    undef_flag(
+                        Flag::P,
+                        "x86 NEG defines PF, but its exact low-byte parity expression is not modelled",
+                    ),
+                    undef_flag(
+                        Flag::A,
+                        "x86 NEG defines AF, but its exact low-bit borrow expression is not modelled",
+                    ),
                     Op::Assign {
                         dst: r,
                         src: Value::Reg(t),
@@ -1904,6 +2446,11 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         reads_mem: false,
                         writes_mem: false,
                     });
+                    append_undef_flags(
+                        &mut ops,
+                        &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
+                        "x86 DIV leaves arithmetic flags architecturally undefined",
+                    );
                     return ops;
                 }
                 // idiv (signed) / 8-bit: approximate quotient lift (acc = acc /
@@ -1915,12 +2462,18 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     lhs: Value::Reg(acc),
                     rhs: divisor,
                 });
+                append_undef_flags(
+                    &mut ops,
+                    &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
+                    "x86 IDIV leaves arithmetic flags architecturally undefined",
+                );
                 return ops;
             }
             vec![Op::Unknown {
                 mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
             }]
         }
+        Mnemonic::Adc => adc_ops(instr),
         Mnemonic::Sbb => sbb_ops(instr),
         Mnemonic::Xorps => xorps_ops(instr),
         Mnemonic::Push => push_ops(instr, bits),
@@ -1933,33 +2486,41 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             if instr.op_count() == 1 {
                 match instr.op_kind(0) {
                     OpKind::Register => {
-                        let r = VReg::phys(reg_name(instr.op_register(0)));
-                        return vec![Op::Bin {
-                            dst: r.clone(),
-                            op: BinOp::Add,
-                            lhs: Value::Reg(r),
-                            rhs: Value::Const(1),
-                        }];
+                        let name = reg_name(instr.op_register(0));
+                        if let Some(view) = partial_gp_view(&name) {
+                            let value = VReg::Temp(0);
+                            let mut ops = read_view_ops(view, value.clone());
+                            ops.extend(emit_inc_dec_with_flags(
+                                value.clone(),
+                                true,
+                                Width(view.width),
+                            ));
+                            ops.extend(partial_write_ops(view, Value::Reg(value)));
+                            return ops;
+                        }
+                        return emit_inc_dec_with_flags(
+                            VReg::phys(name),
+                            true,
+                            operand_width(instr, 0),
+                        );
                     }
                     OpKind::Memory => {
                         let addr = mem_op_of(instr);
                         let tmp = VReg::Temp(0);
-                        return vec![
-                            Op::Load {
-                                dst: tmp.clone(),
-                                addr: addr.clone(),
-                            },
-                            Op::Bin {
-                                dst: tmp.clone(),
-                                op: BinOp::Add,
-                                lhs: Value::Reg(tmp.clone()),
-                                rhs: Value::Const(1),
-                            },
-                            Op::Store {
-                                addr,
-                                src: Value::Reg(tmp),
-                            },
-                        ];
+                        let mut ops = vec![Op::Load {
+                            dst: tmp.clone(),
+                            addr: addr.clone(),
+                        }];
+                        ops.extend(emit_inc_dec_with_flags(
+                            tmp.clone(),
+                            true,
+                            operand_width(instr, 0),
+                        ));
+                        ops.push(Op::Store {
+                            addr,
+                            src: Value::Reg(tmp),
+                        });
+                        return ops;
                     }
                     _ => {}
                 }
@@ -1972,33 +2533,41 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             if instr.op_count() == 1 {
                 match instr.op_kind(0) {
                     OpKind::Register => {
-                        let r = VReg::phys(reg_name(instr.op_register(0)));
-                        return vec![Op::Bin {
-                            dst: r.clone(),
-                            op: BinOp::Sub,
-                            lhs: Value::Reg(r),
-                            rhs: Value::Const(1),
-                        }];
+                        let name = reg_name(instr.op_register(0));
+                        if let Some(view) = partial_gp_view(&name) {
+                            let value = VReg::Temp(0);
+                            let mut ops = read_view_ops(view, value.clone());
+                            ops.extend(emit_inc_dec_with_flags(
+                                value.clone(),
+                                false,
+                                Width(view.width),
+                            ));
+                            ops.extend(partial_write_ops(view, Value::Reg(value)));
+                            return ops;
+                        }
+                        return emit_inc_dec_with_flags(
+                            VReg::phys(name),
+                            false,
+                            operand_width(instr, 0),
+                        );
                     }
                     OpKind::Memory => {
                         let addr = mem_op_of(instr);
                         let tmp = VReg::Temp(0);
-                        return vec![
-                            Op::Load {
-                                dst: tmp.clone(),
-                                addr: addr.clone(),
-                            },
-                            Op::Bin {
-                                dst: tmp.clone(),
-                                op: BinOp::Sub,
-                                lhs: Value::Reg(tmp.clone()),
-                                rhs: Value::Const(1),
-                            },
-                            Op::Store {
-                                addr,
-                                src: Value::Reg(tmp),
-                            },
-                        ];
+                        let mut ops = vec![Op::Load {
+                            dst: tmp.clone(),
+                            addr: addr.clone(),
+                        }];
+                        ops.extend(emit_inc_dec_with_flags(
+                            tmp.clone(),
+                            false,
+                            operand_width(instr, 0),
+                        ));
+                        ops.push(Op::Store {
+                            addr,
+                            src: Value::Reg(tmp),
+                        });
+                        return ops;
                     }
                     _ => {}
                 }
@@ -2014,38 +2583,41 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     OpKind::Register => {
                         let dst = VReg::phys(reg_name(instr.op_register(0)));
                         let old = VReg::Temp(0);
-                        return vec![
-                            Op::Assign {
-                                dst: old.clone(),
-                                src: Value::Reg(dst.clone()),
-                            },
-                            Op::Bin {
-                                dst: dst.clone(),
-                                op: BinOp::Add,
-                                lhs: Value::Reg(dst),
-                                rhs: Value::Reg(src.clone()),
-                            },
-                            Op::Assign {
-                                dst: src,
-                                src: Value::Reg(old),
-                            },
-                        ];
+                        let mut ops = vec![Op::Assign {
+                            dst: old.clone(),
+                            src: Value::Reg(dst.clone()),
+                        }];
+                        ops.extend(emit_add_with_flags(
+                            dst,
+                            Value::Reg(src.clone()),
+                            operand_width(instr, 0),
+                        ));
+                        ops.push(Op::Assign {
+                            dst: src,
+                            src: Value::Reg(old),
+                        });
+                        return ops;
                     }
                     OpKind::Memory => {
                         let addr = mem_op_of(instr);
                         let old = VReg::Temp(0);
                         let sum = VReg::Temp(1);
-                        return vec![
+                        let mut ops = vec![
                             Op::Load {
                                 dst: old.clone(),
                                 addr: addr.clone(),
                             },
-                            Op::Bin {
+                            Op::Assign {
                                 dst: sum.clone(),
-                                op: BinOp::Add,
-                                lhs: Value::Reg(old.clone()),
-                                rhs: Value::Reg(src.clone()),
+                                src: Value::Reg(old.clone()),
                             },
+                        ];
+                        ops.extend(emit_add_with_flags(
+                            sum.clone(),
+                            Value::Reg(src.clone()),
+                            operand_width(instr, 0),
+                        ));
+                        ops.extend([
                             Op::Store {
                                 addr,
                                 src: Value::Reg(sum),
@@ -2054,7 +2626,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                                 dst: src,
                                 src: Value::Reg(old),
                             },
-                        ];
+                        ]);
+                        return ops;
                     }
                     _ => {}
                 }
@@ -2223,11 +2796,25 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             {
                 match instr.op_kind(0) {
                     OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
-                        return vec![Op::CondJump {
-                            cond: condition.flag,
+                        let (mut ops, predicate) = materialize_condition(&condition);
+                        let (predicate, inverted) = if condition.inverted {
+                            let logical_not = VReg::Temp(22);
+                            ops.push(Op::Cmp {
+                                dst: logical_not.clone(),
+                                op: CmpOp::Eq,
+                                lhs: Value::Reg(predicate),
+                                rhs: Value::Const(0),
+                            });
+                            (logical_not, false)
+                        } else {
+                            (predicate, false)
+                        };
+                        ops.push(Op::CondJump {
+                            cond: predicate,
                             target: instr.near_branch_target(),
-                            inverted: condition.inverted,
-                        }];
+                            inverted,
+                        });
+                        return ops;
                     }
                     _ => {}
                 }
@@ -2307,13 +2894,14 @@ mod tests {
             ("shr $3,%eax", vec![0xc1, 0xe8, 0x03]),
             ("imul %ebx,%eax", vec![0x0f, 0xaf, 0xc3]),
             ("bt $0,%eax", vec![0x0f, 0xba, 0xe0, 0x00]),
+            ("xadd %ebx,%eax", vec![0x0f, 0xc1, 0xd8]),
+            ("cmpxchg %rcx,%rbx", vec![0x48, 0x0f, 0xb1, 0xcb]),
+            ("rol $1,%eax", vec![0xd1, 0xc0]),
+            ("ror $3,%eax", vec![0xc1, 0xc8, 0x03]),
         ]
     }
 
     #[test]
-    #[ignore = "RED by design: fails until the flags architecture lands (#56). \
-                Encodes the stop condition — producers must not write Ule/Slt/Sle. \
-                Run with `cargo test -- --ignored`."]
     fn no_lifter_writes_a_derived_predicate_as_a_flag() {
         // STOP CONDITION, made executable: `Ule`, `Slt` and `Sle` are CONDITIONS
         // (CF|ZF, SF!=OF, ZF|(SF!=OF)) — not architectural flags. A producer that
@@ -2344,9 +2932,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "RED by design: fails until the flags architecture lands (#56). \
-                9 of 13 flag-setting instructions currently define none. \
-                Run with `cargo test -- --ignored`."]
     fn arithmetic_that_sets_flags_defines_at_least_one() {
         // The other half of the same gap. `add`, `sub`, `and`, `xor`, `inc`, `dec`,
         // the shifts and `imul` all set flags on real hardware and define NONE here,
@@ -2378,6 +2963,179 @@ mod tests {
              jcc reads a stale flag:\n  {}",
             silent.join("\n  ")
         );
+    }
+
+    fn defined_arch_flags(ops: &[LlirInstr]) -> std::collections::BTreeSet<Flag> {
+        ops.iter()
+            .filter_map(|ins| match crate::ir::use_def::def_uses(&ins.op).0 {
+                Some(VReg::Flag(flag)) => Some(flag),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_flag_producer_defines_or_intentionally_preserves_each_flag() {
+        let all: std::collections::BTreeSet<Flag> =
+            [Flag::C, Flag::P, Flag::A, Flag::Z, Flag::S, Flag::O]
+                .into_iter()
+                .collect();
+        let cf_preserved: std::collections::BTreeSet<Flag> =
+            [Flag::P, Flag::A, Flag::Z, Flag::S, Flag::O]
+                .into_iter()
+                .collect();
+        let rotate_changed: std::collections::BTreeSet<Flag> =
+            [Flag::C, Flag::O].into_iter().collect();
+        let cases: &[(&str, &[u8], &std::collections::BTreeSet<Flag>)] = &[
+            ("cmp", &[0x39, 0xc3], &all),
+            ("test", &[0x85, 0xc0], &all),
+            ("neg", &[0xf7, 0xda], &all),
+            ("sub", &[0x83, 0xef, 0x01], &all),
+            ("add", &[0x01, 0xc3], &all),
+            ("and", &[0x21, 0xc3], &all),
+            ("or", &[0x09, 0xc3], &all),
+            ("xor", &[0x31, 0xc3], &all),
+            ("shl", &[0xd1, 0xe0], &all),
+            ("shr", &[0xc1, 0xe8, 0x03], &all),
+            ("sar", &[0xc1, 0xf8, 0x03], &all),
+            ("imul", &[0x0f, 0xaf, 0xc3], &all),
+            ("bt", &[0x0f, 0xba, 0xe0, 0x00], &all),
+            ("xadd", &[0x0f, 0xc1, 0xd8], &all),
+            ("cmpxchg", &[0x48, 0x0f, 0xb1, 0xcb], &all),
+            ("rol", &[0xd1, 0xc0], &rotate_changed),
+            ("ror", &[0xc1, 0xc8, 0x03], &rotate_changed),
+            ("inc", &[0xff, 0xc1], &cf_preserved),
+            ("dec", &[0xff, 0xc9], &cf_preserved),
+        ];
+        for (name, bytes, expected) in cases {
+            assert_eq!(
+                defined_arch_flags(&lift64(bytes)),
+                **expected,
+                "{name} left a stale flag value reachable"
+            );
+        }
+    }
+
+    #[test]
+    fn rotate_counts_have_explicit_architectural_flag_protocol() {
+        // A masked zero count preserves every flag.
+        let zero = lift64(&[0xc1, 0xc0, 0x00]); // rol eax, 0
+        assert!(defined_arch_flags(&zero).is_empty(), "got: {zero:#?}");
+
+        // A one-bit rotate defines CF and OF exactly.
+        let one = lift64(&[0xd1, 0xc0]); // rol eax, 1
+        assert!(one.iter().any(|ins| matches!(
+            ins.op,
+            Op::Bin {
+                dst: VReg::Flag(Flag::C),
+                ..
+            }
+        )));
+        assert!(one.iter().any(|ins| matches!(
+            ins.op,
+            Op::Bin {
+                dst: VReg::Flag(Flag::O),
+                ..
+            }
+        )));
+
+        // CF is still defined for a multi-bit rotate; OF is explicitly
+        // architectural poison, never an older stale value.
+        let many = lift64(&[0xc1, 0xc8, 0x03]); // ror eax, 3
+        assert!(many.iter().any(|ins| matches!(
+            ins.op,
+            Op::Bin {
+                dst: VReg::Flag(Flag::C),
+                ..
+            }
+        )));
+        assert!(many.iter().any(|ins| matches!(
+            ins.op,
+            Op::Undef {
+                dst: VReg::Flag(Flag::O),
+                ..
+            }
+        )));
+
+        // A variable count may be zero, one, or many at runtime. Until the IR
+        // carries guarded flag writes, fail closed for the two affected flags
+        // and preserve the four architecturally unaffected ones.
+        let variable = lift64(&[0xd3, 0xc0]); // rol eax, cl
+        assert_eq!(
+            defined_arch_flags(&variable),
+            [Flag::C, Flag::O].into_iter().collect()
+        );
+        assert!(
+            variable
+                .iter()
+                .filter(|ins| matches!(ins.op, Op::Undef { .. }))
+                .count()
+                >= 2
+        );
+    }
+
+    #[test]
+    fn arithmetic_flags_cover_8_16_32_and_64_bit_operands() {
+        let all: std::collections::BTreeSet<Flag> =
+            [Flag::C, Flag::P, Flag::A, Flag::Z, Flag::S, Flag::O]
+                .into_iter()
+                .collect();
+        for (width, bytes) in [
+            (8, &[0x00, 0xd8][..]),        // add al,bl
+            (16, &[0x66, 0x01, 0xd8][..]), // add ax,bx
+            (32, &[0x01, 0xd8][..]),       // add eax,ebx
+            (64, &[0x48, 0x01, 0xd8][..]), // add rax,rbx
+        ] {
+            assert_eq!(
+                defined_arch_flags(&lift64(bytes)),
+                all,
+                "{width}-bit ADD did not replace every flag value"
+            );
+        }
+    }
+
+    #[test]
+    fn shift_counts_zero_one_many_and_variable_have_explicit_effects() {
+        let all: std::collections::BTreeSet<Flag> =
+            [Flag::C, Flag::P, Flag::A, Flag::Z, Flag::S, Flag::O]
+                .into_iter()
+                .collect();
+        assert!(
+            defined_arch_flags(&lift64(&[0xc1, 0xe0, 0x00])).is_empty(),
+            "masked count zero must preserve every flag"
+        );
+        for (shape, bytes) in [
+            ("one", &[0xd1, 0xe0][..]),
+            ("many", &[0xc1, 0xe0, 0x03][..]),
+            ("variable", &[0xd3, 0xe0][..]),
+        ] {
+            assert_eq!(
+                defined_arch_flags(&lift64(bytes)),
+                all,
+                "{shape}-count shift left a stale flag"
+            );
+        }
+        assert!(lift64(&[0xc1, 0xe0, 0x03]).iter().any(|ins| matches!(
+            &ins.op,
+            Op::Undef {
+                dst: VReg::Flag(Flag::O),
+                reason,
+            } if reason.contains("multi-bit shift")
+        )));
+    }
+
+    #[test]
+    fn adc_and_sbb_consume_old_cf_then_replace_all_flags() {
+        for (name, bytes) in [("adc", &[0x11, 0xd8][..]), ("sbb", &[0x19, 0xd8][..])] {
+            let ops = lift64(bytes);
+            let cf_read = ops.iter().any(|ins| {
+                crate::ir::use_def::def_uses(&ins.op)
+                    .1
+                    .contains(&VReg::Flag(Flag::C))
+            });
+            assert!(cf_read, "{name} did not consume incoming CF: {ops:#?}");
+            assert_eq!(defined_arch_flags(&ops).len(), 6, "{name}: {ops:#?}");
+        }
     }
 
     #[test]
@@ -2432,6 +3190,225 @@ mod tests {
     }
 
     #[test]
+    fn jle_after_test_materializes_a_fresh_composite_predicate() {
+        // test edi,edi ; jle +2. TEST clears OF, so JLE is exactly
+        // `(signed32)(edi & edi) <= 0`; the consumer must not inherit Sle from
+        // an unrelated earlier comparison.
+        let ops = lift_bytes(&[0x85, 0xff, 0x7e, 0x02], 0x1000, 64);
+        let jle_at = ops
+            .iter()
+            .position(|i| matches!(i.op, Op::CondJump { .. }))
+            .expect("jle must lift");
+        assert!(
+            ops[..jle_at].iter().any(|i| matches!(
+                &i.op,
+                Op::Bin {
+                    dst: VReg::Temp(20),
+                    op: BinOp::Xor,
+                    lhs: Value::Reg(VReg::Flag(Flag::S)),
+                    rhs: Value::Reg(VReg::Flag(Flag::O)),
+                }
+            )),
+            "JLE must materialize SF^OF: {ops:#?}"
+        );
+        assert!(
+            ops[..jle_at].iter().any(|i| matches!(
+                &i.op,
+                Op::Bin {
+                    dst: VReg::Temp(21),
+                    op: BinOp::Or,
+                    lhs: Value::Reg(VReg::Flag(Flag::Z)),
+                    rhs: Value::Reg(VReg::Temp(20)),
+                }
+            )),
+            "JLE must materialize ZF|(SF^OF): {ops:#?}"
+        );
+        assert!(matches!(
+            &ops[jle_at].op,
+            Op::CondJump {
+                cond: VReg::Temp(21),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn shift_defines_zero_after_writing_its_result() {
+        // shr $1,edi ; jne +2. The JNE consumes ZF for the shifted RESULT.
+        let ops = lift_bytes(&[0xd1, 0xef, 0x75, 0x02], 0x1000, 64);
+        let bin_at = ops
+            .iter()
+            .position(|i| matches!(&i.op, Op::Bin { op: BinOp::Shr, .. }))
+            .expect("shr must lift");
+        let zf_at = ops
+            .iter()
+            .position(|i| {
+                matches!(
+                    &i.op,
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        rhs: Value::Const(0),
+                        ..
+                    }
+                )
+            })
+            .expect("shr must define ZF");
+        assert!(
+            zf_at > bin_at,
+            "ZF must describe the shifted result: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn signed_cmp_uses_the_machine_operand_width() {
+        // cmp $0,eax. A 32-bit negative value lives in a zero-extended 64-bit
+        // parent after the write, so comparing that parent directly against zero
+        // makes every value non-negative. The signed flag atom must consume a
+        // sign-extension from 32 bits.
+        let ops = lift64(&[0x83, 0xf8, 0x00]);
+        assert!(
+            ops.iter().any(|i| matches!(
+                &i.op,
+                Op::SExt {
+                    dst: VReg::Temp(30),
+                    from: Width::W32,
+                    to: Width::W64,
+                    ..
+                }
+            )),
+            "32-bit CMP must sign-extend its signed operand: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|i| matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Temp(32),
+                    lhs: Value::Reg(VReg::Temp(30)),
+                    ..
+                }
+            )),
+            "signed relation must use the widened value: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|i| matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::S),
+                    lhs: Value::Reg(VReg::Temp(34)),
+                    ..
+                }
+            )),
+            "architectural SF must use the width-normalized result: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn inverted_composite_jcc_materializes_logical_not() {
+        // test edi,edi ; jg +2. JG is !(ZF | (SF^OF)); keeping `inverted=true`
+        // on an arbitrary temporary lets AST lowering render bitwise `~temp`,
+        // which is true for both zero and one.
+        let ops = lift_bytes(&[0x85, 0xff, 0x7f, 0x02], 0x1000, 64);
+        assert!(
+            ops.iter().any(|i| matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Temp(22),
+                    op: CmpOp::Eq,
+                    rhs: Value::Const(0),
+                    ..
+                }
+            )),
+            "inverted Jcc must materialize predicate == 0: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|i| matches!(
+                &i.op,
+                Op::CondJump {
+                    cond: VReg::Temp(22),
+                    inverted: false,
+                    ..
+                }
+            )),
+            "CondJump must consume the positive logical-not value: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn all_sixteen_jcc_setcc_and_cmovcc_conditions_share_one_mapping() {
+        // Intel condition-code nibble order for 0x70/0x0f90/0x0f40 families.
+        // Every odd entry is the logical inverse of the preceding even entry.
+        let expected: [Vec<Flag>; 16] = [
+            vec![Flag::O],
+            vec![Flag::O],
+            vec![Flag::C],
+            vec![Flag::C],
+            vec![Flag::Z],
+            vec![Flag::Z],
+            vec![Flag::C, Flag::Z],
+            vec![Flag::C, Flag::Z],
+            vec![Flag::S],
+            vec![Flag::S],
+            vec![Flag::P],
+            vec![Flag::P],
+            vec![Flag::S, Flag::O],
+            vec![Flag::S, Flag::O],
+            vec![Flag::Z, Flag::S, Flag::O],
+            vec![Flag::Z, Flag::S, Flag::O],
+        ];
+
+        let read_flags = |ops: &[LlirInstr]| {
+            let mut flags: Vec<Flag> = ops
+                .iter()
+                .flat_map(|ins| crate::ir::use_def::def_uses(&ins.op).1)
+                .filter_map(|reg| match reg {
+                    VReg::Flag(flag) => Some(flag),
+                    _ => None,
+                })
+                .collect();
+            flags.sort();
+            flags.dedup();
+            flags
+        };
+
+        for cc in 0u8..16 {
+            let mut want = expected[cc as usize].clone();
+            want.sort();
+
+            let jcc = lift64(&[0x70 + cc, 0x00]);
+            assert!(
+                matches!(
+                    jcc.last().map(|ins| &ins.op),
+                    Some(Op::CondJump {
+                        inverted: false,
+                        ..
+                    })
+                ),
+                "Jcc/{cc:x} did not end in a positive predicate jump: {jcc:#?}"
+            );
+            assert_eq!(read_flags(&jcc), want, "Jcc/{cc:x} flag inputs");
+
+            let setcc = lift64(&[0x0f, 0x90 + cc, 0xc0]);
+            assert!(!setcc.iter().any(|ins| matches!(ins.op, Op::Unknown { .. })));
+            assert_eq!(read_flags(&setcc), want, "SETcc/{cc:x} flag inputs");
+            assert!(matches!(
+                crate::ir::use_def::def_uses(&setcc.last().expect("SETcc output").op).0,
+                Some(VReg::Phys(_))
+            ));
+
+            let cmovcc = lift64(&[0x0f, 0x40 + cc, 0xc3]);
+            assert!(!cmovcc
+                .iter()
+                .any(|ins| matches!(ins.op, Op::Unknown { .. })));
+            assert_eq!(read_flags(&cmovcc), want, "CMOVcc/{cc:x} flag inputs");
+            assert!(matches!(
+                cmovcc.last().map(|ins| &ins.op),
+                Some(Op::Ite { .. })
+            ));
+        }
+    }
+
+    #[test]
     fn mov_imm32_into_32bit_register_zero_extends() {
         // `mov $0x80808081,%eax` (b8 81 80 80 80).
         //
@@ -2459,6 +3436,63 @@ mod tests {
             ),
             other => panic!("expected Assign of a Const, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn mov_store_from_low_byte_reads_the_canonical_parent_value() {
+        // `mov byte ptr [rbp-9], al` (88 45 f7), as emitted immediately after
+        // `movzx eax, byte ptr [rax]` in the real GCC -O0 DecBench `fsm`.
+        // `al` is a view of the newly-written `rax`, not an independent SSA
+        // register.  Keeping it as `Value::Reg("al")` creates a loop phi from
+        // the entry live-in and stores an uninitialised old byte instead.
+        let ops = lift64(&[0x88, 0x45, 0xf7]);
+        assert_eq!(ops.len(), 2, "expected extract + store, got {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Bin {
+                dst: VReg::Temp(0),
+                op: BinOp::And,
+                lhs: Value::Reg(VReg::Phys(parent)),
+                rhs: Value::Const(0xff),
+            } if parent == "rax"
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Store {
+                src: Value::Reg(VReg::Temp(0)),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn mov_load_into_low_byte_updates_the_canonical_parent_value() {
+        // `mov al, byte ptr [rax]` (8a 00).  A partial destination preserves
+        // the other parent bits, so it must be load-to-temp plus the same
+        // canonical read/modify/write used for register/immediate MOV.  Leaving
+        // this as `al = load` while a following store reads `rax & 255` makes
+        // the store see the old pointer byte rather than the loaded byte.
+        let ops = lift64(&[0x8a, 0x00]);
+        assert_eq!(ops.len(), 4, "expected load + parent RMW, got {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(0),
+                ..
+            }
+        ));
+        assert!(ops.iter().skip(1).any(|ins| matches!(
+            &ins.op,
+            Op::Bin {
+                dst: VReg::Phys(parent),
+                op: BinOp::Or,
+                ..
+            } if parent == "rax"
+        )));
+        assert!(!ops.iter().any(|ins| matches!(
+            crate::ir::use_def::def_uses(&ins.op).0,
+            Some(VReg::Phys(name)) if name == "al"
+        )));
     }
 
     #[test]
@@ -2552,8 +3586,11 @@ mod tests {
     fn add_reg_imm_sets_bin_add() {
         // add rax, 5  (48 83 c0 05)
         let ops = lift64(&[0x48, 0x83, 0xc0, 0x05]);
-        assert_eq!(ops.len(), 1);
-        match &ops[0].op {
+        let add = ops
+            .iter()
+            .find(|ins| matches!(ins.op, Op::Bin { op: BinOp::Add, .. }))
+            .expect("ADD result op");
+        match &add.op {
             Op::Bin { dst, op, lhs, rhs } => {
                 assert_eq!(*dst, VReg::phys("rax"));
                 assert_eq!(*op, BinOp::Add);
@@ -2562,6 +3599,15 @@ mod tests {
             }
             other => panic!("expected Bin, got {:?}", other),
         }
+        assert!(ops.iter().any(|ins| matches!(
+            &ins.op,
+            Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(VReg::Phys(name)),
+                rhs: Value::Const(0),
+            } if name == "rax"
+        )));
     }
 
     #[test]
@@ -2571,7 +3617,7 @@ mod tests {
         // instruction to `Unknown`, so `a2 * 3` silently vanished from `sum_arg3` and
         // the surrounding expression reused another term instead.
         let ops = lift64(&[0x6b, 0x4d, 0xf4, 0x03]);
-        assert_eq!(ops.len(), 2, "expected a load then a multiply: {ops:?}");
+        assert!(ops.len() >= 2, "expected a load then a multiply: {ops:?}");
         assert!(matches!(&ops[0].op, Op::Load { .. }), "{:?}", ops[0].op);
         match &ops[1].op {
             Op::Bin {
@@ -2587,8 +3633,12 @@ mod tests {
     fn three_operand_imul_from_a_register_still_lifts_to_one_op() {
         // imul $0x5,%ecx,%eax  (6b c1 05)
         let ops = lift64(&[0x6b, 0xc1, 0x05]);
-        assert_eq!(ops.len(), 1);
-        match &ops[0].op {
+        match &ops
+            .iter()
+            .find(|ins| matches!(ins.op, Op::Bin { op: BinOp::Mul, .. }))
+            .expect("multiply")
+            .op
+        {
             Op::Bin {
                 op: BinOp::Mul,
                 rhs: Value::Const(5),
@@ -2683,37 +3733,33 @@ mod tests {
         let ops = lift64(&[0x48, 0x83, 0xe8, 0x07]);
         let flags: Vec<_> = ops
             .iter()
-            .filter_map(|i| match &i.op {
-                Op::Cmp {
-                    dst: VReg::Flag(f), ..
-                } => Some(*f),
+            .filter_map(|i| match crate::ir::use_def::def_uses(&i.op).0 {
+                Some(VReg::Flag(f)) => Some(f),
                 _ => None,
             })
             .collect();
-        for want in [Flag::Z, Flag::C, Flag::Ule, Flag::Slt, Flag::Sle, Flag::S] {
+        for want in [Flag::Z, Flag::C, Flag::S, Flag::O] {
             assert!(flags.contains(&want), "sub must define {want:?}: {flags:?}");
         }
-        // ...and they must be computed BEFORE the destination is overwritten.
+        // Relational atoms use the pre-subtract operands; ZF uses the written
+        // result and therefore follows the Bin.
         let bin_at = ops
             .iter()
             .rposition(|i| matches!(&i.op, Op::Bin { op: BinOp::Sub, .. }))
             .expect("sub must still do the arithmetic");
-        let last_flag = ops
+        let zf_at = ops
             .iter()
-            .rposition(|i| {
+            .position(|i| {
                 matches!(
                     &i.op,
                     Op::Cmp {
-                        dst: VReg::Flag(_),
+                        dst: VReg::Flag(Flag::Z),
                         ..
                     }
                 )
             })
-            .expect("flags present");
-        assert!(
-            last_flag < bin_at,
-            "flags describe the PRE-subtract value, so they must precede the Bin"
-        );
+            .expect("ZF present");
+        assert!(zf_at > bin_at, "ZF must describe the post-subtract result");
     }
 
     #[test]
@@ -2749,27 +3795,25 @@ mod tests {
     }
 
     #[test]
-    fn cmp_emits_composite_flag_writes_plus_sign_materialisation() {
-        // cmp rax, rbx (48 39 d8) — lifter writes Z, C, Slt, Sle, S (via a
-        // `tmp = lhs - rhs; %sf = slt(tmp, 0)` sequence so that Js/Jns read a
-        // faithful bit).
+    fn cmp_emits_architectural_condition_atoms() {
+        // cmp rax, rbx (48 39 d8) — all architectural effects replace their
+        // previous SSA values. Composite conditions still belong to consumers.
         let ops = lift64(&[0x48, 0x39, 0xd8]);
-        // 5 Cmp flag writes + 1 Sub temp materialisation + 1 Cmp for %sf = 7.
-        assert_eq!(ops.len(), 7, "cmp should lift to 7 LLIR ops: {:#?}", ops);
+        assert!(!ops.is_empty(), "cmp must produce flag effects");
         let flags: Vec<_> = ops
             .iter()
-            .filter_map(|i| match &i.op {
-                Op::Cmp { dst, .. } => Some(dst.clone()),
+            .filter_map(|i| match crate::ir::use_def::def_uses(&i.op).0 {
+                Some(dst @ VReg::Flag(_)) => Some(dst),
                 _ => None,
             })
             .collect();
         for want in [
             VReg::Flag(Flag::Z),
             VReg::Flag(Flag::C),
-            VReg::Flag(Flag::Ule),
-            VReg::Flag(Flag::Slt),
-            VReg::Flag(Flag::Sle),
             VReg::Flag(Flag::S),
+            VReg::Flag(Flag::O),
+            VReg::Flag(Flag::P),
+            VReg::Flag(Flag::A),
         ] {
             assert!(flags.contains(&want), "missing {:?} in {:?}", want, flags);
         }
@@ -2808,7 +3852,7 @@ mod tests {
                 _ => None,
             })
             .expect("expected CondJump");
-        assert_eq!(cj.0, VReg::Flag(Flag::Sle));
+        assert_eq!(cj.0, VReg::Temp(21));
     }
 
     #[test]
@@ -2822,7 +3866,7 @@ mod tests {
                 _ => None,
             })
             .expect("expected CondJump");
-        assert_eq!(cj, VReg::Flag(Flag::Slt));
+        assert_eq!(cj, VReg::Temp(20));
     }
 
     #[test]
@@ -2854,7 +3898,7 @@ mod tests {
                 _ => None,
             })
             .expect("expected CondJump");
-        assert_eq!(cj.0, VReg::Flag(Flag::Ule));
+        assert_eq!(cj.0, VReg::Temp(20));
         assert_eq!(cj.1, 0x1007);
     }
 
@@ -2985,7 +4029,6 @@ mod tests {
     fn cmpxchg_reg_reg_lifts_to_compare_and_conditional_updates() {
         // cmpxchg rbx, rcx  (48 0f b1 cb)
         let ops = lift64(&[0x48, 0x0f, 0xb1, 0xcb]);
-        assert_eq!(ops.len(), 5, "got: {:#?}", ops);
         assert!(matches!(
             &ops[0].op,
             Op::Assign {
@@ -2993,25 +4036,25 @@ mod tests {
                 src: Value::Reg(src),
             } if *src == VReg::phys("rbx")
         ));
-        assert!(matches!(
-            &ops[1].op,
+        assert!(ops.iter().any(|ins| matches!(
+            &ins.op,
             Op::Cmp {
                 dst: VReg::Flag(Flag::Z),
                 op: CmpOp::Eq,
                 lhs: Value::Reg(lhs),
                 rhs: Value::Reg(VReg::Temp(0)),
             } if *lhs == VReg::phys("rax")
-        ));
-        assert!(matches!(
-            &ops[2].op,
+        )));
+        assert!(ops.iter().any(|ins| matches!(
+            &ins.op,
             Op::CondAssign {
                 dst,
                 cond: VReg::Flag(Flag::Z),
                 src: Value::Reg(src),
             } if *dst == VReg::phys("rbx") && *src == VReg::phys("rcx")
-        ));
+        )));
         assert!(matches!(
-            &ops[4].op,
+            &ops.last().expect("accumulator update").op,
             Op::CondAssign {
                 dst,
                 cond: VReg::Temp(2),
@@ -3024,7 +4067,6 @@ mod tests {
     fn cmpxchg_mem_reg_lifts_to_conditional_store_shape() {
         // cmpxchg qword ptr [rip+0x10], rcx  (48 0f b1 0d 10 00 00 00)
         let ops = lift64(&[0x48, 0x0f, 0xb1, 0x0d, 0x10, 0x00, 0x00, 0x00]);
-        assert_eq!(ops.len(), 7, "got: {:#?}", ops);
         assert!(matches!(
             &ops[0].op,
             Op::Load {
@@ -3032,23 +4074,23 @@ mod tests {
                 addr: MemOp { size: 8, .. },
             }
         ));
-        assert!(matches!(
-            &ops[3].op,
+        assert!(ops.iter().any(|ins| matches!(
+            &ins.op,
             Op::CondAssign {
                 dst: VReg::Temp(1),
                 cond: VReg::Flag(Flag::Z),
                 src: Value::Reg(src),
             } if *src == VReg::phys("rcx")
-        ));
-        assert!(matches!(
-            &ops[4].op,
+        )));
+        assert!(ops.iter().any(|ins| matches!(
+            &ins.op,
             Op::Store {
                 src: Value::Reg(VReg::Temp(1)),
                 ..
             }
-        ));
+        )));
         assert!(matches!(
-            &ops[6].op,
+            &ops.last().expect("accumulator update").op,
             Op::CondAssign {
                 dst,
                 cond: VReg::Temp(2),
@@ -3069,7 +4111,6 @@ mod tests {
         // div rcx  (48 f7 f1) → unsigned rdx:rax / rcx, quotient→rax,
         // remainder→rdx (a two-output intrinsic, executed by a helper).
         let ops = lift64(&[0x48, 0xf7, 0xf1]);
-        assert_eq!(ops.len(), 1, "got: {:#?}", ops);
         match &ops[0].op {
             Op::Intrinsic {
                 name, ins, outs, ..
@@ -3123,7 +4164,6 @@ mod tests {
     #[test]
     fn sbb_reg_reg_lifts_to_sub_with_carry_dependency() {
         let ops = lift64(&[0x48, 0x19, 0xc8]);
-        assert_eq!(ops.len(), 2, "got: {ops:#?}");
         assert!(matches!(
             &ops[0].op,
             Op::Bin {
@@ -3393,13 +4433,27 @@ mod tests {
                 ..
             }
         ));
-        // Subsequent ops should be the usual cmp flag writes, all of which
+        // Subsequent ops should be the architectural cmp flag writes, all of which
         // read the temp rather than a bare memory operand.
         let flag_count = ops
             .iter()
             .filter(|i| matches!(i.op, Op::Cmp { .. }))
             .count();
-        assert!(flag_count >= 4, "expected ≥4 Cmp writes, got {flag_count}");
+        assert!(
+            flag_count >= 4,
+            "expected signed relation plus ZF, CF, and SF"
+        );
+        assert!(
+            ops.iter().any(|i| matches!(
+                i.op,
+                Op::Bin {
+                    dst: VReg::Flag(Flag::O),
+                    op: BinOp::Xor,
+                    ..
+                }
+            )),
+            "CMP must define architectural OF: {ops:#?}"
+        );
     }
 
     #[test]
@@ -3410,10 +4464,9 @@ mod tests {
         assert!(ops.iter().any(|i| matches!(&i.op, Op::Load { .. })));
         assert!(ops.iter().any(|i| matches!(&i.op, Op::Cmp { .. })));
         // And NOT have any Unknown cmp stubs.
-        assert!(
-            !ops.iter()
-                .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp"))
-        );
+        assert!(!ops
+            .iter()
+            .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp")));
     }
 
     #[test]
@@ -3430,10 +4483,9 @@ mod tests {
                 && addr.size == 2
         ));
         assert!(ops.iter().any(|i| matches!(&i.op, Op::Cmp { .. })));
-        assert!(
-            !ops.iter()
-                .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp"))
-        );
+        assert!(!ops
+            .iter()
+            .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp")));
     }
 
     #[test]
@@ -3454,18 +4506,21 @@ mod tests {
                 ..
             }
         )));
-        assert!(
-            !ops.iter()
-                .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "test"))
-        );
+        assert!(!ops
+            .iter()
+            .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "test")));
     }
 
     #[test]
     fn inc_rax_lifts_to_bin_add_one() {
         // inc rax (48 ff c0)
         let ops = lift64(&[0x48, 0xff, 0xc0]);
-        assert_eq!(ops.len(), 1);
-        match &ops[0].op {
+        match &ops
+            .iter()
+            .find(|ins| matches!(ins.op, Op::Bin { op: BinOp::Add, .. }))
+            .expect("INC result")
+            .op
+        {
             Op::Bin {
                 dst,
                 op: BinOp::Add,
@@ -3480,8 +4535,12 @@ mod tests {
     fn dec_rax_lifts_to_bin_sub_one() {
         // dec rax (48 ff c8)
         let ops = lift64(&[0x48, 0xff, 0xc8]);
-        assert_eq!(ops.len(), 1);
-        match &ops[0].op {
+        match &ops
+            .iter()
+            .find(|ins| matches!(ins.op, Op::Bin { op: BinOp::Sub, .. }))
+            .expect("DEC result")
+            .op
+        {
             Op::Bin {
                 dst,
                 op: BinOp::Sub,
@@ -3496,7 +4555,6 @@ mod tests {
     fn inc_mem_lifts_to_load_add_store() {
         // inc qword ptr [rax+8] (48 ff 40 08)
         let ops = lift64(&[0x48, 0xff, 0x40, 0x08]);
-        assert_eq!(ops.len(), 3);
         match &ops[0].op {
             Op::Load { dst, addr } => {
                 assert_eq!(*dst, VReg::Temp(0));
@@ -3506,7 +4564,12 @@ mod tests {
             }
             other => panic!("expected Load, got {:?}", other),
         }
-        match &ops[1].op {
+        match &ops
+            .iter()
+            .find(|ins| matches!(ins.op, Op::Bin { op: BinOp::Add, .. }))
+            .expect("INC memory result")
+            .op
+        {
             Op::Bin {
                 dst,
                 op: BinOp::Add,
@@ -3518,7 +4581,7 @@ mod tests {
             }
             other => panic!("expected Bin Add +1, got {:?}", other),
         }
-        match &ops[2].op {
+        match &ops.last().expect("store").op {
             Op::Store {
                 addr,
                 src: Value::Reg(src),
@@ -3536,7 +4599,6 @@ mod tests {
     fn dec_mem_lifts_to_load_sub_store() {
         // dec qword ptr [rax+0x10] (48 ff 48 10)
         let ops = lift64(&[0x48, 0xff, 0x48, 0x10]);
-        assert_eq!(ops.len(), 3);
         assert!(matches!(
             &ops[0].op,
             Op::Load {
@@ -3545,7 +4607,10 @@ mod tests {
             } if addr.base == Some(VReg::phys("rax")) && addr.disp == 0x10 && addr.size == 8
         ));
         assert!(matches!(
-            &ops[1].op,
+            &ops.iter()
+                .find(|ins| matches!(ins.op, Op::Bin { op: BinOp::Sub, .. }))
+                .expect("DEC memory result")
+                .op,
             Op::Bin {
                 dst: VReg::Temp(0),
                 op: BinOp::Sub,
@@ -3554,7 +4619,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            &ops[2].op,
+            &ops.last().expect("store").op,
             Op::Store {
                 addr,
                 src: Value::Reg(VReg::Temp(0)),
@@ -3566,7 +4631,6 @@ mod tests {
     fn xadd_mem_reg_lifts_to_load_add_store_and_old_value_assign() {
         // lock xadd dword ptr [rcx], eax (f0 0f c1 01)
         let ops = lift64(&[0xf0, 0x0f, 0xc1, 0x01]);
-        assert_eq!(ops.len(), 4);
         assert!(matches!(
             &ops[0].op,
             Op::Load {
@@ -3574,24 +4638,24 @@ mod tests {
                 addr,
             } if addr.base == Some(VReg::phys("rcx")) && addr.size == 4
         ));
-        assert!(matches!(
-            &ops[1].op,
+        assert!(ops.iter().any(|ins| matches!(
+            &ins.op,
             Op::Bin {
                 dst: VReg::Temp(1),
                 op: BinOp::Add,
-                lhs: Value::Reg(VReg::Temp(0)),
+                lhs: Value::Reg(VReg::Temp(1)),
                 rhs: Value::Reg(VReg::Phys(src)),
             } if src == "eax"
-        ));
-        assert!(matches!(
-            &ops[2].op,
+        )));
+        assert!(ops.iter().any(|ins| matches!(
+            &ins.op,
             Op::Store {
                 addr,
                 src: Value::Reg(VReg::Temp(1)),
             } if addr.base == Some(VReg::phys("rcx")) && addr.size == 4
-        ));
+        )));
         assert!(matches!(
-            &ops[3].op,
+            &ops.last().expect("old-value writeback").op,
             Op::Assign {
                 dst: VReg::Phys(dst),
                 src: Value::Reg(VReg::Temp(0)),
@@ -3603,7 +4667,6 @@ mod tests {
     fn xadd_reg_reg_lifts_to_exchange_after_add() {
         // xadd eax, ebx (0f c1 d8)
         let ops = lift64(&[0x0f, 0xc1, 0xd8]);
-        assert_eq!(ops.len(), 3);
         assert!(matches!(
             &ops[0].op,
             Op::Assign {
@@ -3611,17 +4674,17 @@ mod tests {
                 src: Value::Reg(VReg::Phys(src)),
             } if src == "eax"
         ));
-        assert!(matches!(
-            &ops[1].op,
+        assert!(ops.iter().any(|ins| matches!(
+            &ins.op,
             Op::Bin {
                 dst: VReg::Phys(dst),
                 op: BinOp::Add,
                 lhs: Value::Reg(VReg::Phys(lhs)),
                 rhs: Value::Reg(VReg::Phys(rhs)),
             } if dst == "eax" && lhs == "eax" && rhs == "ebx"
-        ));
+        )));
         assert!(matches!(
-            &ops[2].op,
+            &ops.last().expect("old-value writeback").op,
             Op::Assign {
                 dst: VReg::Phys(dst),
                 src: Value::Reg(VReg::Temp(0)),

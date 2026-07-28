@@ -561,6 +561,10 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
             dst: dst.clone(),
             src: lower_value(src),
         }],
+        Op::Undef { dst, reason } => vec![Stmt::Assign {
+            dst: dst.clone(),
+            src: Expr::Unknown(format!("undefined({reason})")),
+        }],
         Op::CondAssign { dst, cond, src } => vec![Stmt::If {
             cond: Expr::Reg(cond.clone()),
             then_body: vec![Stmt::Assign {
@@ -625,18 +629,18 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
         // A CondJump on its own (not absorbed into a structured If/While)
         // becomes a conditional goto. If the CondJump carries `inverted`
         // (i.e. lifted from JNE / JAE / JGE / b.ne / b.hs / ...), wrap the
-        // flag in a Not so the printer renders "!flag" and the inline-hoist
-        // pass downstream can fold the original Cmp through the negation
-        // into an `Expr::Cmp` of the opposite kind.
+        // flag as `flag == 0`. `UnOp::Not` is the machine bitwise operation
+        // and renders as `~`; applying it to a 0/1 predicate is always truthy.
         Op::CondJump {
             cond,
             target,
             inverted,
         } => {
             let cond_expr = if *inverted {
-                Expr::Un {
-                    op: UnOp::Not,
-                    src: Box::new(Expr::Reg(cond.clone())),
+                Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(cond.clone())),
+                    rhs: Box::new(Expr::Const(0)),
                 }
             } else {
                 Expr::Reg(cond.clone())
@@ -876,6 +880,30 @@ fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
                     continue;
                 }
             },
+            Stmt::If {
+                cond:
+                    Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs,
+                        rhs,
+                    },
+                then_body,
+                else_body,
+            } if matches!(rhs.as_ref(), Expr::Const(0)) => match *lhs {
+                Expr::Reg(flag) => (Some(flag), true, then_body, else_body),
+                other => {
+                    out.push(Stmt::If {
+                        cond: Expr::Cmp {
+                            op: CmpOp::Eq,
+                            lhs: Box::new(other),
+                            rhs,
+                        },
+                        then_body,
+                        else_body,
+                    });
+                    continue;
+                }
+            },
             stmt => {
                 out.push(stmt);
                 continue;
@@ -888,9 +916,10 @@ fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
         let cond_expr = match (hoisted, was_inverted) {
             (Some(expr), true) => negate_cmp_expr(expr),
             (Some(expr), false) => expr,
-            (None, true) => Expr::Un {
-                op: UnOp::Not,
-                src: Box::new(Expr::Reg(flag)),
+            (None, true) => Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Reg(flag)),
+                rhs: Box::new(Expr::Const(0)),
             },
             (None, false) => Expr::Reg(flag),
         };
@@ -905,7 +934,7 @@ fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
 
 /// If `expr` is an `Expr::Cmp { op, .. }`, return the Cmp with the inverted
 /// CmpOp (Eq <-> Ne, Ult <-> Uge — but Uge isn't in CmpOp so we wrap, ...).
-/// Anything else gets wrapped in `Expr::Un { Not, .. }` so semantics survive.
+/// Anything else becomes `expr == 0`, a logical negation that stays boolean.
 pub(crate) fn negate_cmp_expr(expr: Expr) -> Expr {
     if let Expr::Cmp { op, lhs, rhs } = expr {
         // Invert the comparison itself so the result stays a boolean `Cmp`, not a
@@ -949,9 +978,10 @@ pub(crate) fn negate_cmp_expr(expr: Expr) -> Expr {
         // Double negation cancels.
         *src
     } else {
-        Expr::Un {
-            op: UnOp::Not,
-            src: Box::new(expr),
+        Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(expr),
+            rhs: Box::new(Expr::Const(0)),
         }
     }
 }
@@ -1080,9 +1110,10 @@ fn extract_cond_and_strip<'a>(block: &LlirBlock, mut stmts: Vec<Stmt>) -> (Expr,
             }
         }
         let fallback = if inverted {
-            Expr::Un {
-                op: UnOp::Not,
-                src: Box::new(Expr::Reg(cond.clone())),
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Reg(cond.clone())),
+                rhs: Box::new(Expr::Const(0)),
             }
         } else {
             Expr::Reg(cond.clone())
@@ -2468,7 +2499,7 @@ fn write_reg_c(v: &VReg, out: &mut String) {
         VReg::Temp(i) => {
             let _ = write!(out, "t{}", i);
         }
-        VReg::Flag(_) => {
+        VReg::Flag(_) | VReg::FlagValue { .. } => {
             // Flags still get their `%` prefix — there's no natural C
             // analogue and the leading `%` preserves the "synthetic bit"
             // cue for a reader.
@@ -3034,6 +3065,10 @@ fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
         Expr::Reg(VReg::Phys(n)) => tm
             .and_then(|m| m.get(&VReg::Phys(n.clone())))
             .map(hint_to_ctype),
+        // C comparison operators produce `int`.  This is an expression-level
+        // language rule and therefore outranks whichever narrow sub-register
+        // (`al` for SETcc) happened to materialise the value on the machine.
+        Expr::Cmp { .. } if tm.is_some() => Some("int"),
         // A bare integer literal return (`return 0;`) — most often a function
         // whose real return value was lost to structuring — is an `int`. Only
         // claim this on the typed render path; the untyped path (`tm` is None)
@@ -3485,6 +3520,10 @@ pub fn prepare_for_decbench(f: &Function) -> Function {
     default_return_to_reg(&mut owned.body);
     coalesce_param_spills(&mut owned.body);
     crate::ir::copy_prop::propagate_copies(&mut owned);
+    // Copy propagation can expose algebraic flag identities (for example
+    // `SF ^ ((lhs <s rhs) ^ SF)`) that were not adjacent when the first fold
+    // ran on the lowered AST.
+    crate::ir::const_fold::fold_constants(&mut owned);
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
@@ -3644,19 +3683,7 @@ pub(crate) fn parse_arg_index(name: &str) -> Option<usize> {
 
 /// The C-identifier spelling for a processor flag (`Flag::Z` -> `zf`).
 fn flag_ident(fl: &Flag) -> &'static str {
-    match fl {
-        Flag::Z => "zf",
-        Flag::C => "cf",
-        Flag::Ule => "ule",
-        Flag::S => "sf",
-        Flag::Slt => "slt",
-        Flag::Sle => "sle",
-        Flag::O => "of",
-        Flag::P => "pf",
-        Flag::A => "af",
-        // internal one-bit predicate for flag-preserving ISA branches (adr0302)
-        Flag::Bit => "bitpred",
-    }
+    fl.ident()
 }
 
 /// Map an arbitrary name (function or register) to a valid C identifier: keep
@@ -3698,6 +3725,9 @@ fn collect_reg(v: &VReg, ids: &mut DecIdents) {
         }
         VReg::Temp(i) => format!("t{}", i),
         VReg::Flag(fl) => flag_ident(fl).to_string(),
+        VReg::FlagValue { .. } => v
+            .predicate_ident()
+            .expect("FlagValue always has a predicate identifier"),
     };
     ids.locals.insert(spelling);
 }
@@ -4056,6 +4086,10 @@ fn write_reg_lvalue_dec(v: &VReg, out: &mut String) {
             let _ = write!(out, "t{}", i);
         }
         VReg::Flag(fl) => out.push_str(flag_ident(fl)),
+        VReg::FlagValue { .. } => out.push_str(
+            &v.predicate_ident()
+                .expect("FlagValue always has a predicate identifier"),
+        ),
     }
 }
 
@@ -4596,7 +4630,7 @@ fn write_unit_step(
     let integer_local = match dst {
         VReg::Temp(_) => true,
         VReg::Phys(name) => name.starts_with("local_") || name.starts_with("stack_"),
-        VReg::Flag(_) => false,
+        VReg::Flag(_) | VReg::FlagValue { .. } => false,
     };
     if !integer_local {
         return false;
@@ -5555,11 +5589,12 @@ function f @ 0x1000 {
     }
 
     #[test]
-    fn render_with_types_annotates_pointer_and_bool() {
+    fn render_with_types_annotates_pointer_without_mistyping_cmp_operand_as_bool() {
         use crate::ir::types::{MemOp, VReg};
         use crate::ir::types_recover::recover_types;
-        // Two ops: `rax = load [rbp+0]` makes rbp a pointer, `cmp rcx, 0`
-        // makes rcx bool-like. Render should annotate both.
+        // `rax = load [rbp+0]` makes rbp a pointer. Comparing an integer with
+        // zero does NOT make the integer itself a boolean: this is the normal
+        // shape of zero/nonzero tests on counters, pointers, and bit-fields.
         let lf = mk_cfg(vec![(
             0x1000,
             vec![
@@ -5589,8 +5624,11 @@ function f @ 0x1000 {
         let f = lower(&lf, &r, "f");
         let tm = recover_types(&lf);
         let text = render_with_types(&f, &tm);
-        // Bool annotation survives on top-level `Expr::Reg` (inside a Cmp).
-        assert!(text.contains("(bool)%rcx"), "bool not annotated: {}", text);
+        assert!(
+            !text.contains("(bool)%rcx"),
+            "an integer merely compared with zero was mistyped as bool: {}",
+            text
+        );
         // Pointer annotation is suppressed inside Lea-subexpressions (the
         // surrounding `&[...]` already conveys "this is an address"), so
         // the `(u64*)` prefix does NOT appear in a deref of `[%rbp]`.
@@ -6168,6 +6206,38 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn decbench_comparison_return_uses_c_int_type() {
+        // In C, comparison operators produce `int`, even when x86 materialises
+        // the final 0/1 through `setcc al`.  The expression's language type
+        // must outrank the narrow last physical-register write.
+        let f = Function {
+            name: "is_zero".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(0)),
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("ret"),
+            TypeHint::Int {
+                signed: true,
+                width: 1,
+            },
+        );
+        let text = render_decbench_typed(&f, Some(&tm), None);
+        assert!(
+            text.contains("int is_zero(") && text.contains("return (arg0 == 0);"),
+            "comparison return should use C's `int` result type:\n{}",
+            text
+        );
+    }
+
+    #[test]
     fn decbench_array_index_render_for_pointer_arg() {
         // `*(int*)(arg0 + i*4)` with `arg0` a declared `int *` renders as
         // `arg0[i]`, dropping the byte-offset arithmetic and `(long)` cast.
@@ -6349,9 +6419,10 @@ function f @ 0x1000 {
         };
         let text = dec_pipeline(&f);
         assert!(text.contains("/* asm: cpuid */"), "unknown stmt:\n{}", text);
-        // var0 is single-use, so it folds into the indirect call target.
+        // Unknown/poison values are deliberately not propagated: keeping the
+        // assignment rooted preserves the visible undefined-value boundary.
         assert!(
-            text.contains("((long (*)())(__unknown(0)))(arg0);"),
+            text.contains("var0 = __unknown(0);") && text.contains("((long (*)())(var0))(arg0);"),
             "indirect call:\n{}",
             text
         );
