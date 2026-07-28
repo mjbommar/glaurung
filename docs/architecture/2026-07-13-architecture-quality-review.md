@@ -1,8 +1,9 @@
 # Glaurung architecture, quality, and efficiency review
 
 - **Date:** 2026-07-13
-- **Repository snapshot:** `c9a56ee` plus concurrent, uncommitted Android/ELF work
-- **Status:** Findings and recommendations; no production code changed by this review
+- **Repository snapshot:** `cf97906`
+- **Status:** Findings and recommendations, including the latest Android, Linux
+  IOCTL, SELinux, and IOCTLance work; no production code changed by this review
 - **Scope:** Rust core, PyO3 boundary, Python package, CLI, LLM/tool platform,
   persistent project database, test/type/lint gates, and representative end-to-end
   workflows
@@ -68,8 +69,8 @@ architecture promises.
 Key observations:
 
 - Python: 384 modules and approximately 154,469 lines.
-- Rust: 205 modules and approximately 86,703 lines.
-- Tests: 350 Python test files and 35 Rust integration-test files, in addition to
+- Rust: 216 modules and approximately 88,540 lines.
+- Tests: 350 Python test files and 37 Rust integration-test files, in addition to
   Rust unit tests embedded in modules.
 - One Python import-cycle component contains `glaurung.cli`, `cli.main`,
   `commands.explain`, and `commands._layer0_prepass`.
@@ -187,6 +188,45 @@ The recommendations were checked against current authoritative documentation:
 - `ty` requires `.pyi` descriptions for compiled extension APIs; this confirms that
   native-surface diagnostics should be addressed by generated/validated stubs, not
   blanket suppression. See the [ty typing FAQ](https://docs.astral.sh/ty/reference/typing-faq/).
+
+### Latest-work integration review: `c9a56ee..cf97906`
+
+The latest six commits add Android DEX/APK/AXML parsing, Android packed-relocation
+and PAC/BTI analysis, dispatch-aware IOCTLance parity, Linux kernel-module IOCTL
+surface recovery, symbolic-example feature gating, and the first SELinux policydb
+parsing stage. The work is generally cohesive, fixture-backed, and careful about
+bounds and incomplete semantic coverage. It should shape the architecture program,
+not sit beside it as a separate pipeline.
+
+| Area | Review | Integration into the plan |
+|---|---|---|
+| Android formats | Cohesive format modules, real fixtures, and reproducible fixture provenance | Use them to define a capability-graduation contract from parser to user-facing workflow |
+| AArch64 PAC/BTI | Specific fixture-backed discovery support; also adds more architecture-specific policy to `analysis/cfg.rs` | Extract architecture discovery strategies when the pass/session substrate lands |
+| Linux IOCTL surface | Useful typed Rust domain, but heuristics and empty-on-error behavior lose confidence and failure state | Produce a provenance-bearing `KernelIoctlSurface` artifact with coverage, diagnostics, and confidence |
+| SELinux policydb | Correctly staged at the header rather than overstating an incomplete policy oracle | Finish and validate symbol, class/permission, type-attribute, avtab, conditional, and MLS semantics before reachability affects severity |
+| IOCTLance parity | Valuable real-corpus regression harness with dispatch-aware comparison | Replace human-output regex/`eval` parsing with a versioned JSON result artifact before making it a gate |
+| Cargo gating | `required-features = ["symbolic"]` correctly gates the symbolic examples | Include examples and format modules in the supported feature/profile matrix |
+| Integration gates | Focused new tests and builds pass; repository-wide formatting and two existing Rust tests do not | Add a stabilization phase before extending this vertical |
+
+The strongest architectural opportunity is a concrete cross-artifact pilot:
+
+```text
+AndroidPackageFacts
+        |
+        +--> NativeLibraryFacts
+                  |
+                  +--> UserlandIoctlUse ------------------------+
+                                                               |
+KernelModuleFacts --> KernelIoctlSurface --> SymbolicSinkFinding+--> CorrelatedExposureFinding
+                                                               |
+SELinuxPolicyFacts --> SePolicyReachability --------------------+
+```
+
+Every artifact should carry source identity, producer/version, option fingerprint,
+coverage, status, diagnostics, resource use, and evidence references. This pilot
+exercises format parsing, architecture-aware discovery, policy semantics, symbolic
+analysis, correlation, partial outcomes, and persistence without inventing a
+synthetic architecture example.
 
 ## Architectural strengths to preserve
 
@@ -344,8 +384,13 @@ immutable binary-scoped analyses rather than trigger them.
 Once internal passes are stable, expose the same contract through Python entry
 points. Do not start with arbitrary native dynamic libraries or a stable Rust ABI.
 
-**First vertical slice.** Represent the existing kickoff sequence as registered
-passes without changing behavior. Then move one analysis to lazy dependency lookup.
+**First vertical slice.** Use the new Android-driver work as the first typed vertical:
+produce `AndroidPackageFacts`, `NativeLibraryFacts`, `UserlandIoctlUse`,
+`KernelModuleFacts`, `KernelIoctlSurface`, `SELinuxPolicyFacts`,
+`SePolicyReachability`, `SymbolicSinkFinding`, and `CorrelatedExposureFinding`
+artifacts behind existing APIs. Preserve the current behavior while making missing
+policy semantics, heuristic coverage, and analysis failures explicit. Convert
+kickoff to the same pass contract once this smaller artifact chain proves it.
 
 **Acceptance evidence.** pass-order snapshot tests, cycle rejection, missing
 capability errors, cache reuse, invalidation tests, and identical kickoff output.
@@ -354,8 +399,12 @@ capability errors, cache reuse, invalidation tests, and identical kickoff output
 
 **Finding.** Low-level budget controls do not form a composite deadline. The real
 Windows kickoff exceeded 60 seconds without producing user-visible checkpointed
-output. Broad best-effort exception handling can also erase the distinction between
-“not applicable,” “budget exhausted,” and “analysis failed.”
+output. The new symbolic IOCTLance example has a useful local timeout, but its
+format parsing, kernel-surface recovery, policy work, symbolic analysis, correlation,
+and persistence still lack one shared deadline. Broad best-effort handling can also
+erase the distinction between “not applicable,” “no findings,” “budget exhausted,”
+and “analysis failed”; `map_linux_ioctl_surface` currently collapses parse/analysis
+failure to an empty result.
 
 **Recommendation.** Add one `ExecutionContext` shared by sessions, passes, database
 operations, CLI commands, and agent tools:
@@ -395,6 +444,18 @@ configuration/stub gaps with genuine type/API problems.
 - separate native-surface diagnostics from pure-Python diagnostics; and
 - ratchet each category to zero rather than adding blanket ignores.
 
+Also define a capability-graduation ladder for new Rust work:
+
+```text
+core parser -> triage fact -> typed pass artifact -> Python binding
+            -> project persistence -> CLI/tool surface -> benchmark/docs
+```
+
+The new Android, Linux IOCTL, and SELinux modules are strong core capabilities, but
+most are not yet represented consistently in Python bindings, persistent projects,
+or the CLI. A capability should declare its current rung rather than appearing
+simultaneously “shipped” in one layer and absent in another.
+
 The six invalid method overrides in CLI commands also indicate that the command
 base abstraction should be generic in its formatter or should accept the base type
 and narrow internally.
@@ -413,7 +474,7 @@ zero unknown-argument diagnostics; a committed `ty` baseline that can only impro
 - `windows_function_pretty_lift.py`: 6,046 lines and 224 top-level functions/classes;
 - `cli/commands/windows.py`: 4,027 lines;
 - `llm/kb/xref_db.py`: 3,420 lines and 87 top-level functions/classes;
-- `analysis/cfg.rs`: 3,576 lines;
+- `analysis/cfg.rs`: 3,699 lines;
 - `ir/lift_x86.rs`: 2,820 lines; and
 - `ir/ast.rs`: 2,259 lines.
 
@@ -432,6 +493,10 @@ verification, symbol borrowing, stack variables, bookmarks, and journal entries.
   ownership justify it.
 
 Preserve compatibility imports during migration and enforce dependency direction.
+The new `formats::{apk, axml, dex, sepolicy}` modules are positive examples of
+cohesive boundaries. By contrast, new AArch64 discovery policy in `cfg.rs` should
+eventually become an architecture-specific seed/control-flow strategy, preferably
+as part of the pass refactor rather than a standalone file split.
 
 **First vertical slice.** Split xref/name/prototype/frame/journal repositories from
 `xref_db.py`; this aligns with rank 2 and avoids a low-value standalone reshuffle.
@@ -481,6 +546,12 @@ Because Glaurung is AI-native, the default end-user install may still include
 `llm`. The architectural requirement is that non-agent commands do not import or
 require it, and that minimal builds are tested.
 
+The latest work partially advances this recommendation: symbolic examples now use
+Cargo `required-features` correctly. However, Android APK parsing and its compression
+support are currently part of the unconditional Rust surface. The feature matrix
+should explicitly decide which format parsers belong to the base product rather
+than letting dependency history make that choice implicitly.
+
 **Acceptance evidence.** install/import smoke tests for each supported profile,
 clear missing-capability messages, wheel-size and dependency-count baselines.
 
@@ -502,6 +573,12 @@ analysis, tool registration, or composite command memory.
 
 Track distributions and regression budgets; do not fail CI on noisy single-run
 microseconds. Keep large/nightly fixtures separate from fast presubmit gates.
+
+Adopt the dispatch-aware IOCTLance parity corpus as an early workflow scorecard, but
+first make the scanner and comparator exchange a versioned JSON schema. Save inputs,
+configuration, coverage, per-stage timing, diagnostics, and mismatches as artifacts;
+parsing human output with regular expressions and `eval` is too brittle for a
+long-lived regression gate even when the input is trusted local output.
 
 ### Rank 11 — P2: complete source-level Rust core/PyO3 separation incrementally
 
@@ -540,7 +617,10 @@ exceptions.
 **Finding.** Some documents are excellent, but others mix proposals, historical
 plans, and current contracts. The persistent-project document promises migrations
 that do not exist; the PyO3 separation document is dated December 2024 and its
-checklist no longer fully describes build reality.
+checklist no longer fully describes build reality. The Android parser checklist in
+`docs/parsers/android/README.md` still marks DEX, APK, AXML, and multidex work as
+unimplemented while `docs/formats/android.md` and the current code describe them as
+shipped.
 
 **Recommendation.** Add concise architecture decision records for:
 
@@ -557,9 +637,13 @@ proposals should be clearly labeled and should not function as current contracts
 ### Rank 14 — P2: establish a lint/type debt ratchet
 
 **Finding.** The mandatory completion commands are not currently green: Ruff reports
-51 issues and `ty` reports 279 diagnostics. With a codebase this broad, an all-at-once
-cleanup is likely to conflict with feature work, but leaving the gates aspirational
-allows further drift.
+51 issues and `ty` reports 279 diagnostics. At `cf97906`, `cargo test --all-targets`
+passes 802 tests and fails the same two WinAPI prototype tests already documented by
+earlier work; focused Android, Linux IOCTL, and SELinux tests pass. `cargo build
+--all-targets` and the symbolic IOCTLance example build pass, but `cargo fmt --check`
+reports formatting diffs that include newly added Android files. With a codebase this
+broad, an all-at-once cleanup is likely to conflict with feature work, but leaving
+the gates aspirational allows further drift.
 
 **Recommendation.** First classify diagnostics into configuration/stub debt and
 real code defects. Store a machine-readable baseline by code and path, require no
@@ -571,6 +655,67 @@ This is a quality program, not permission to weaken the project instructions or
 hide diagnostics globally.
 
 ## Recommended delivery sequence
+
+### Top 10 starting backlog
+
+This is the review order for the first implementation work. Each item should be a
+separately mergeable TDD slice; the phase sections below preserve the longer-term
+dependency structure.
+
+1. **Restore the latest-work gates.** Apply Rust formatting, keep the focused
+   Android, Linux IOCTL, and SELinux tests green, and either fix or record an
+   explicit baseline for the two known WinAPI prototype failures in the all-target
+   suite.
+2. **Harden APK and DEX input boundaries.** Add real adversarial fixtures for ZIP
+   structure validation, CRC and declared-size checks, decompression budgets,
+   table-size limits, and explicit partial/error outcomes instead of silent skips.
+3. **Make manifest reachability Android-version-aware.** Resolve relative component
+   names and model `targetSdkVersion`, component-kind defaults, provider behavior,
+   and Android 12's explicit-exported requirement before treating a component as
+   externally reachable.
+4. **Publish the capability-graduation matrix.** Record, for DEX, APK, AXML, packed
+   relocations, PAC/BTI, Linux IOCTL, SELinux, and IOCTLance, the current parser,
+   triage, pass, binding, persistence, CLI/tool, documentation, benchmark, and
+   feature-profile rung.
+5. **Replace IOCTLance text scraping with a versioned JSON artifact.** Remove the
+   regular-expression/`eval` exchange and preserve input identity, options, tool
+   versions, coverage, timing, diagnostics, findings, and mismatches.
+6. **Turn Linux IOCTL recovery into a provenance-bearing outcome.** Distinguish not
+   applicable, no handlers, partial coverage, budget exhaustion, and failure;
+   validate `file_operations` slots, invalidate stale register facts, and attach
+   evidence and confidence to every recovered handler and command.
+7. **Complete the SELinux semantic oracle.** Parse and differentially validate
+   symbols, classes/permissions, type attributes, avtab, conditionals, and MLS on
+   real policies before policy reachability can change finding severity.
+8. **Make CLI commands and toolsets lazy.** Commit cold-start/import/RSS baselines,
+   add lightweight descriptors, and make `--help`, `triage`, and `strings` avoid
+   importing the agent/tool graph.
+9. **Land the minimal session/pass substrate.** Introduce artifact identity,
+   `AnalysisSession`, `ExecutionContext`, typed `PassOutcome`, cache/invalidation
+   tests, and end-to-end deadline, cancellation, progress, and partial-result
+   propagation behind existing APIs.
+10. **Build the Android-driver correlation pilot.** Produce independently
+    inspectable and resumable package, native-library, userland-IOCTL, kernel-IOCTL,
+    SELinux-reachability, symbolic-sink, and correlated-exposure artifacts through
+    the typed pass graph, then graduate the proven outputs through persistence,
+    Python, CLI/tools, and the IOCTLance scorecard.
+
+### Phase 0: stabilize and graduate the latest work (immediate)
+
+1. Format the latest Rust additions and make `cargo fmt --check` pass without
+   unrelated rewrites.
+2. Resolve or explicitly baseline the two existing WinAPI prototype test failures;
+   keep the focused Android, Linux IOCTL, and SELinux tests green.
+3. Add a capability matrix showing the graduation rung, feature requirements,
+   bindings, persistence, CLI/tool exposure, documentation, and benchmark coverage
+   for each new capability.
+4. Define versioned JSON result schemas for Linux IOCTL surface recovery and
+   IOCTLance parity, including evidence, coverage, confidence, and diagnostics.
+5. Continue SELinux parsing through symbols, classes/permissions, type attributes,
+   avtab, conditionals, and MLS with real-policy differential tests. Do not use an
+   incomplete oracle to strengthen a reachability or severity claim.
+6. Keep the emerging Android-driver workflow behind the session/pass interfaces
+   described in Phase B instead of adding another ad hoc composite orchestrator.
 
 ### Phase A: measure and isolate startup (small, immediate)
 
@@ -589,6 +734,8 @@ later work.
 3. Add cache/invalidation tests.
 4. Define `PassOutcome` and convert kickoff without behavior changes.
 5. Thread the execution context/deadline through the converted passes.
+6. Implement the Android package -> native library -> kernel IOCTL -> SELinux
+   reachability -> symbolic sink correlation as the first multi-artifact pass graph.
 
 ### Phase C: migrate the project database (foundational)
 
@@ -677,6 +824,10 @@ Evidence should show:
 - correct cache invalidation after patching bytes, changing types/names, and changing
   analysis options;
 - deterministic pass scheduling and provenance-bearing partial outcomes;
+- one end-to-end Android-driver correlation run whose package, native, kernel,
+  policy, and symbolic artifacts can be inspected and resumed independently;
+- no policy-based exposure or severity claim unless the supporting SELinux policy
+  structures were parsed and validated, with incomplete coverage reported explicitly;
 - `--help` and non-LLM commands no longer import agent/tool implementations;
 - versioned migration from every supported project schema and integrity-preserving
   cancellation;
@@ -684,20 +835,27 @@ Evidence should show:
 - workflow budgets enforced across native, Python, and persistence phases;
 - public native stubs matching runtime signatures;
 - no dependency cycles or CLI-to-agent/agent-to-CLI inversion;
-- green or explicitly ratcheted Ruff and `ty` gates; and
+- green or explicitly ratcheted Ruff and `ty` gates;
+- machine-readable IOCTLance parity artifacts with stable schema, evidence, and
+  reproducible mismatch accounting; and
 - benchmark evidence that cold startup, warm repeated analysis, project operations,
   and peak memory meet agreed thresholds.
 
 ## Immediate recommendation
 
-Start with two coordinated but separately mergeable slices:
+Start by restoring the latest-work integration gates: make formatting green,
+baseline or fix the two known WinAPI tests, publish the capability-graduation
+matrix, and replace IOCTLance's human-output exchange with a JSON artifact.
+
+Then proceed with two coordinated but separately mergeable slices:
 
 1. **Lazy CLI/tool registration**, because it is low-risk, directly measured, and
    directly targets the measured roughly 1.7-second and 200-MB gap between the base
    package import and simple CLI commands on this machine.
-2. **`AnalysisSession` discovery/decompile slice**, because it establishes the main
-   architectural direction and replaces special-case batching with reusable cached
-   analysis semantics.
+2. **`AnalysisSession` and typed-pass slice**, using the Android package -> kernel
+   IOCTL -> SELinux -> symbolic correlation as the concrete pilot. It establishes
+   reusable cache, provenance, coverage, and partial-result semantics while directly
+   integrating the latest capability work.
 
 Design the centralized database migration in parallel, but do not mutate existing
 project files until v1 fixtures, backup behavior, and migration failure tests are in
@@ -719,6 +877,19 @@ rg -n 'sqlite3\.connect|CREATE TABLE|ALTER TABLE' python/glaurung/llm/kb
 uvx ruff check python/glaurung --statistics
 uvx ty check python/glaurung
 cargo check --no-default-features
+
+# Latest-work integration gates
+cargo fmt --check
+cargo test --all-targets
+cargo test --test android_dex_triage --test android_pac_bti_cfg \
+  --test android_pac_stripped_discovery --test android_packed_relocations
+cargo test linux_ioctl
+cargo test sepolicy
+cargo build --all-targets
+cargo build --example ioctlance --features symbolic
+uvx ruff check scripts/ioctlance_parity.py
+uvx ty check scripts/ioctlance_parity.py
+uv run python scripts/ioctlance_parity.py --help
 
 # Cold process/import baselines
 /usr/bin/time -f 'elapsed=%e rss_kb=%M' uv run python -c 'import glaurung'
@@ -744,7 +915,6 @@ statistically stable benchmark. The proposed scorecard should add warmups,
 distributions, environment capture, and noise thresholds before these values become
 regression gates.
 
-During the review, concurrent work added or modified Android DEX, AXML, ELF packed
-relocation, and related triage files. This report did not edit those files. Counts
-describe the observed worktree and may move as that work lands; conclusions do not
-depend on the exact small change in totals.
+The latest-work integration review covered commits `c9a56ee..cf97906`. This report
+did not edit production or test code. At final verification the report itself was
+the only review-owned worktree change.
