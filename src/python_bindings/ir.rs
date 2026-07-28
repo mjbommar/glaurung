@@ -481,7 +481,7 @@ fn decompile_at_py(
     pdb_cache: &str,
     max_functions: usize,
 ) -> PyResult<String> {
-    use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+    use crate::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
@@ -496,7 +496,7 @@ fn decompile_at_py(
         max_instructions,
         timeout_ms,
     };
-    let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
+    let (funcs, _cg) = analyze_functions_bytes_with_seeds(&data, &budgets, &[func_va]);
     let func = funcs
         .iter()
         .find(|f| f.entry_point.value == func_va)
@@ -1058,7 +1058,7 @@ fn decompile_many_py(
     // analyse once, then run the same per-function pipeline as `decompile_at`
     // for each requested VA. Returns a list of (name, va, c_or_ir_text) for
     // every requested VA that resolves to a known function.
-    use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+    use crate::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
@@ -1075,7 +1075,7 @@ fn decompile_many_py(
         timeout_ms,
     };
     // --- one-time analysis + name/field/string maps -----------------------
-    let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
+    let (funcs, _cg) = analyze_functions_bytes_with_seeds(&data, &budgets, &func_vas);
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =

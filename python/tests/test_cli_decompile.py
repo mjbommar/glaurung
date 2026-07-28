@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 import glaurung as g
-
+import pytest
 
 SAMPLE = Path(
     "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
@@ -143,6 +143,47 @@ def test_decompile_arm32_thumb_recovers_main():
     assert "sub_" in text or "(" in text
 
 
+@pytest.mark.skipif(not ARM32_SAMPLE.exists(), reason="armhf sample missing")
+def test_decompile_requested_va_seeds_stripped_arm32(
+    tmp_path: Path,
+) -> None:
+    """An explicit entry VA must not depend on stripped-symbol discovery.
+
+    DecBench and similar evaluation protocols provide authoritative function
+    addresses in stripped binaries.  Reproduce that contract using the real
+    checked-in ARM32 binary: remove its symbols, then request ``main`` by the
+    even code VA recorded in the original symbol table.
+    """
+    strip = shutil.which("arm-linux-gnueabihf-strip")
+    if strip is None:
+        pytest.skip("arm-linux-gnueabihf-strip is unavailable")
+
+    stripped = tmp_path / "hello-armhf-stripped"
+    shutil.copy2(ARM32_SAMPLE, stripped)
+    strip_result = subprocess.run(
+        [strip, "--strip-all", str(stripped)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert strip_result.returncode == 0, strip_result.stderr
+
+    # main is the Thumb symbol 0x46d in the original; executable entry VAs
+    # clear the T-bit and therefore use 0x46c.
+    requested_va = 0x46C
+    results = g.ir.decompile_many(
+        str(stripped),
+        [requested_va],
+        style="decbench",
+        timeout_ms=8000,
+    )
+    assert len(results) == 1
+    name, va, text = results[0]
+    assert name == "sub_46c"
+    assert va == requested_va
+    assert text.startswith("// glaurung: sub_46c @ 0x46c\n")
+
+
 @pytest.mark.skipif(not X86_O0_SAMPLE.exists(), reason="clang-O0 sample missing")
 def test_decompile_style_c_strips_percent_prefix():
     # `--style c` drops the `%` prefix from register names and the
@@ -206,7 +247,6 @@ def test_pe_iat_map_exposes_api_aliases():
 # `src/ir/ast.rs::render_decbench`.
 
 import json
-import shutil
 import tempfile
 
 
@@ -278,7 +318,13 @@ def test_decbench_output_parses_with_gcc():
             fp.write(text)
             tmp = fp.name
         try:
-            r = sp.run(flags + [tmp], capture_output=True, text=True, timeout=30)
+            r = sp.run(
+                flags + [tmp],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
             if r.returncode == 0:
                 ok += 1
         finally:

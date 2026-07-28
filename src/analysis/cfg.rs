@@ -226,6 +226,7 @@ struct ExecRegion {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiscoverySeedKind {
+    Requested,
     EntryPoint,
     Symbol,
     Flirt,
@@ -259,6 +260,7 @@ impl DiscoverySeedKind {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Requested => "requested",
             Self::EntryPoint => "entrypoint",
             Self::Symbol => "symbol",
             Self::Flirt => "flirt",
@@ -2690,10 +2692,35 @@ pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>
     (functions, cg)
 }
 
+/// Analyze bytes while treating caller-provided executable VAs as trusted
+/// function-entry seeds.
+///
+/// Address-scoped clients (for example, external decompiler benchmarks) know
+/// the entries they want even when symbols and other discovery metadata have
+/// been stripped. Invalid or non-executable VAs are ignored, preserving the
+/// normal "not found" behavior at the binding boundary.
+pub fn analyze_functions_bytes_with_seeds(
+    data: &[u8],
+    budgets: &Budgets,
+    requested_vas: &[u64],
+) -> (Vec<Function>, CallGraph) {
+    let (functions, cg, _stats) =
+        analyze_functions_bytes_with_stats_and_seeds(data, budgets, requested_vas);
+    (functions, cg)
+}
+
 /// Analyze bytes and return discovered functions, callgraph, and budget telemetry.
 pub fn analyze_functions_bytes_with_stats(
     data: &[u8],
     budgets: &Budgets,
+) -> (Vec<Function>, CallGraph, FunctionDiscoveryStats) {
+    analyze_functions_bytes_with_stats_and_seeds(data, budgets, &[])
+}
+
+fn analyze_functions_bytes_with_stats_and_seeds(
+    data: &[u8],
+    budgets: &Budgets,
+    requested_vas: &[u64],
 ) -> (Vec<Function>, CallGraph, FunctionDiscoveryStats) {
     let (regions, arch, end, entry) = parse_exec_regions(data);
     let mut functions: Vec<Function> = Vec::new();
@@ -2709,18 +2736,35 @@ pub fn analyze_functions_bytes_with_stats(
         return (functions, cg, stats);
     }
 
-    // Seeds: entrypoint + symbol-defined function addresses (exec region)
-    let mut seeds: Vec<(Address, DiscoverySeedKind)> = parse_function_seeds(data, &regions, arch)
-        .into_iter()
-        .map(|addr| (addr, DiscoverySeedKind::Symbol))
-        .collect();
-    if let Some(ep) = entry.clone() {
-        // Ensure entrypoint first
-        seeds.retain(|(a, _kind)| a.value != ep.value);
-        let mut ordered = vec![(ep, DiscoverySeedKind::EntryPoint)];
-        ordered.extend(seeds);
-        seeds = ordered;
+    // Explicit caller-provided addresses are authoritative and go first so a
+    // tight function budget cannot be consumed by whole-binary heuristics
+    // before the requested entries are reached. Callers provide executable
+    // code VAs (with ARM's Thumb metadata bit already cleared).
+    let bits = if arch.is_64_bit() { 64 } else { 32 };
+    let mut seeds: Vec<(Address, DiscoverySeedKind)> = Vec::new();
+    let mut requested_known = std::collections::HashSet::new();
+    for requested_va in requested_vas {
+        let va = *requested_va;
+        if in_exec_regions(&regions, va).is_none() || !requested_known.insert(va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, va, bits, None, None) {
+            seeds.push((addr, DiscoverySeedKind::Requested));
+        }
     }
+
+    // Remaining seeds: entrypoint + symbol-defined function addresses.
+    let mut automatic_seeds: Vec<(Address, DiscoverySeedKind)> =
+        parse_function_seeds(data, &regions, arch)
+            .into_iter()
+            .map(|addr| (addr, DiscoverySeedKind::Symbol))
+            .collect();
+    if let Some(ep) = entry.clone() {
+        automatic_seeds.retain(|(a, _kind)| a.value != ep.value);
+        automatic_seeds.insert(0, (ep, DiscoverySeedKind::EntryPoint));
+    }
+    automatic_seeds.retain(|(addr, _kind)| !requested_known.contains(&addr.value));
+    seeds.extend(automatic_seeds);
 
     // FLIRT seed augmentation. On stripped binaries (no symbol table),
     // the seed list is otherwise just the entrypoint, so the analyser
@@ -2734,7 +2778,6 @@ pub fn analyze_functions_bytes_with_stats(
     } else {
         Vec::new()
     };
-    let bits = if arch.is_64_bit() { 64 } else { 32 };
     let is_pe_image = data.len() >= 2 && &data[..2] == b"MZ";
     let flirt_name_by_va: std::collections::HashMap<u64, String> =
         flirt_seeds.iter().cloned().collect();
