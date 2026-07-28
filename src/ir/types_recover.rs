@@ -64,6 +64,18 @@ impl TypeMap {
         self.upsert(reg, new)
     }
 
+    /// Replace an existing integer width with an ABI-mandated width while
+    /// preserving signedness. This is intentionally narrower than `upsert`:
+    /// ordinary evidence merging prefers a precise sub-register width, whereas
+    /// a later proof that the value's high bits are consumed must be allowed to
+    /// restore the complete incoming/return eightbyte. Semantic pointer hints
+    /// are never overwritten.
+    pub(crate) fn force_int_width(&mut self, reg: VReg, width: u8) {
+        if let Some(TypeHint::Int { signed, .. }) = self.inner.get(&reg).copied() {
+            self.inner.insert(reg, TypeHint::Int { signed, width });
+        }
+    }
+
     /// Union-style update: only overwrite when `new` is strictly more
     /// specific than the current entry. Pointers beat ints; specific widths
     /// beat zero-width entries; bool beats nothing.

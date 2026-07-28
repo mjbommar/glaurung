@@ -3048,6 +3048,377 @@ fn ctype_for(ident: &str, tm: Option<&TypeMap>) -> &'static str {
         .unwrap_or("long")
 }
 
+/// Correct declaration widths when the AST proves that the high half of an ABI
+/// value is semantically live. Raw-register type recovery deliberately prefers a
+/// narrow sub-register signal (`edi` -> 4 bytes), but that rule is wrong for a
+/// packed SysV aggregate when the same incoming eightbyte is also shifted by 32
+/// or masked above bit 31. The high-bit consumer is stronger evidence: narrowing
+/// the C parameter would discard input bits before the body can inspect them.
+///
+/// The same dataflow supplies the return width. A result assembled from 64-bit
+/// casts/operations must not inherit a stray final `eax` hint and render as
+/// `int`, which truncates a valid machine `long` at the C ABI boundary.
+pub(crate) fn refine_decbench_abi_widths(f: &Function, tm: &mut TypeMap) {
+    let mut required_wide = std::collections::HashSet::new();
+    collect_high_half_requirements(&f.body, &mut required_wide);
+
+    // Carry a high-half requirement backwards through copy/definition chains:
+    // `local_18 = arg0; y = (unsigned long)local_18 >> 32` proves `arg0` wide.
+    loop {
+        let before = required_wide.len();
+        propagate_required_widths(&f.body, &mut required_wide);
+        if required_wide.len() == before {
+            break;
+        }
+    }
+    for name in required_wide
+        .iter()
+        .filter(|name| parse_arg_index(name).is_some())
+    {
+        tm.force_int_width(VReg::phys(name), 8);
+    }
+
+    let mut defs = std::collections::HashMap::new();
+    // AST names are almost SSA after value numbering, but promoted locals can
+    // have multiple assignments. A bounded monotone fixed point handles both.
+    loop {
+        let before = defs.clone();
+        collect_definition_widths(&f.body, tm, &mut defs);
+        if defs == before {
+            break;
+        }
+    }
+    if widest_return_value(&f.body, tm, &defs).is_some_and(|width| width >= 8) {
+        tm.force_int_width(VReg::phys("ret"), 8);
+    }
+}
+
+fn constant_needs_wide_word(value: i64) -> bool {
+    value < i64::from(i32::MIN) || value > i64::from(u32::MAX)
+}
+
+fn collect_high_half_requirements(body: &[Stmt], required: &mut std::collections::HashSet<String>) {
+    for stmt in body {
+        match stmt {
+            Stmt::Assign { src, .. } | Stmt::Push { value: src } => {
+                collect_high_half_expr(src, required)
+            }
+            Stmt::Store { addr, src, .. } => {
+                collect_high_half_expr(addr, required);
+                collect_high_half_expr(src, required);
+            }
+            Stmt::Call { target, args, .. } => {
+                collect_high_half_expr(target, required);
+                for arg in args {
+                    collect_high_half_expr(arg, required);
+                }
+            }
+            Stmt::Return { value: Some(expr) } | Stmt::IndirectGoto { target: expr } => {
+                collect_high_half_expr(expr, required)
+            }
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                collect_high_half_expr(cond, required);
+                collect_high_half_requirements(then_body, required);
+                if let Some(else_body) = else_body {
+                    collect_high_half_requirements(else_body, required);
+                }
+            }
+            Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+                collect_high_half_expr(cond, required);
+                collect_high_half_requirements(body, required);
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                collect_high_half_requirements(std::slice::from_ref(init.as_ref()), required);
+                collect_high_half_expr(cond, required);
+                collect_high_half_requirements(std::slice::from_ref(step.as_ref()), required);
+                collect_high_half_requirements(body, required);
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                collect_high_half_expr(discriminant, required);
+                for (_, case) in cases {
+                    collect_high_half_requirements(case, required);
+                }
+                if let Some(default) = default {
+                    collect_high_half_requirements(default, required);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_high_half_expr(expr: &Expr, required: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::Bin { op, lhs, rhs } => {
+            let high_shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar)
+                && matches!(rhs.as_ref(), Expr::Const(count) if *count >= 32);
+            if high_shift {
+                require_wide_expr(lhs, required);
+            }
+            if matches!(lhs.as_ref(), Expr::Const(value) if constant_needs_wide_word(*value)) {
+                require_wide_expr(rhs, required);
+            }
+            if matches!(rhs.as_ref(), Expr::Const(value) if constant_needs_wide_word(*value)) {
+                require_wide_expr(lhs, required);
+            }
+            collect_high_half_expr(lhs, required);
+            collect_high_half_expr(rhs, required);
+        }
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::Deref { addr: src, .. } => {
+            collect_high_half_expr(src, required)
+        }
+        Expr::Cmp { lhs, rhs, .. } => {
+            collect_high_half_expr(lhs, required);
+            collect_high_half_expr(rhs, required);
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            collect_high_half_expr(cond, required);
+            collect_high_half_expr(if_true, required);
+            collect_high_half_expr(if_false, required);
+        }
+        _ => {}
+    }
+}
+
+fn require_wide_expr(expr: &Expr, required: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::Reg(VReg::Phys(name)) => {
+            required.insert(name.clone());
+        }
+        Expr::Bin { op, lhs, rhs } => {
+            require_wide_expr(lhs, required);
+            if !matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar) {
+                require_wide_expr(rhs, required);
+            }
+        }
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => require_wide_expr(src, required),
+        Expr::Select {
+            if_true, if_false, ..
+        } => {
+            require_wide_expr(if_true, required);
+            require_wide_expr(if_false, required);
+        }
+        _ => {}
+    }
+}
+
+fn propagate_required_widths(body: &[Stmt], required: &mut std::collections::HashSet<String>) {
+    for stmt in body {
+        match stmt {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src,
+            } if required.contains(name) => require_wide_expr(src, required),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                propagate_required_widths(then_body, required);
+                if let Some(else_body) = else_body {
+                    propagate_required_widths(else_body, required);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                propagate_required_widths(body, required)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                propagate_required_widths(std::slice::from_ref(init.as_ref()), required);
+                propagate_required_widths(std::slice::from_ref(step.as_ref()), required);
+                propagate_required_widths(body, required);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    propagate_required_widths(case, required);
+                }
+                if let Some(default) = default {
+                    propagate_required_widths(default, required);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn type_hint_width(hint: TypeHint) -> Option<u8> {
+    match hint {
+        TypeHint::Int { width, .. } => Some(width),
+        TypeHint::Pointer { .. } | TypeHint::CodePointer => Some(8),
+        TypeHint::BoolLike => Some(4),
+    }
+}
+
+fn expression_value_width(
+    expr: &Expr,
+    tm: &TypeMap,
+    defs: &std::collections::HashMap<String, u8>,
+) -> Option<u8> {
+    match expr {
+        Expr::Reg(VReg::Phys(name)) => defs
+            .get(name)
+            .copied()
+            .or_else(|| tm.get(&VReg::phys(name)).and_then(type_hint_width)),
+        Expr::Const(value) => Some(if constant_needs_wide_word(*value) {
+            8
+        } else {
+            4
+        }),
+        Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => Some(8),
+        Expr::Deref { size, .. } => Some(*size),
+        // x86's ordinary 32-bit return write is represented after
+        // canonicalisation as a zero-extension into the 64-bit parent. That
+        // machine housekeeping does not turn a C `int` return into `long`.
+        // When the inner expression is explicitly narrowed first, keep its
+        // semantic width and let the recovered return hint decide the ABI.
+        Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: inner,
+        } if matches!(inner.as_ref(), Expr::Cast { width: 1..=4, .. }) => {
+            expression_value_width(inner, tm, defs)
+        }
+        Expr::Cast { width, .. } => Some(*width),
+        Expr::Bin { op, lhs, rhs } => {
+            let lhs_width = expression_value_width(lhs, tm, defs);
+            if matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar) {
+                if matches!(rhs.as_ref(), Expr::Const(count) if *count >= 32) {
+                    Some(lhs_width.unwrap_or(8).max(8))
+                } else {
+                    lhs_width
+                }
+            } else {
+                let rhs_width = expression_value_width(rhs, tm, defs);
+                lhs_width.into_iter().chain(rhs_width).max()
+            }
+        }
+        Expr::Un { src, .. } => expression_value_width(src, tm, defs),
+        Expr::Cmp { .. } => Some(4),
+        Expr::Select { width, .. } => Some(*width),
+        Expr::Unknown(_) | Expr::Reg(_) => None,
+    }
+}
+
+fn collect_definition_widths(
+    body: &[Stmt],
+    tm: &TypeMap,
+    defs: &mut std::collections::HashMap<String, u8>,
+) {
+    for stmt in body {
+        match stmt {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src,
+            } => {
+                if let Some(width) = expression_value_width(src, tm, defs) {
+                    defs.entry(name.clone())
+                        .and_modify(|old| *old = (*old).max(width))
+                        .or_insert(width);
+                }
+            }
+            Stmt::Call {
+                dst: Some(VReg::Phys(name)),
+                ..
+            } => {
+                if let Some(width) = tm.get(&VReg::phys(name)).and_then(type_hint_width) {
+                    defs.entry(name.clone())
+                        .and_modify(|old| *old = (*old).max(width))
+                        .or_insert(width);
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_definition_widths(then_body, tm, defs);
+                if let Some(else_body) = else_body {
+                    collect_definition_widths(else_body, tm, defs);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_definition_widths(body, tm, defs)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                collect_definition_widths(std::slice::from_ref(init.as_ref()), tm, defs);
+                collect_definition_widths(std::slice::from_ref(step.as_ref()), tm, defs);
+                collect_definition_widths(body, tm, defs);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    collect_definition_widths(case, tm, defs);
+                }
+                if let Some(default) = default {
+                    collect_definition_widths(default, tm, defs);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn widest_return_value(
+    body: &[Stmt],
+    tm: &TypeMap,
+    defs: &std::collections::HashMap<String, u8>,
+) -> Option<u8> {
+    body.iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Return { value: Some(expr) } => expression_value_width(expr, tm, defs),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => widest_return_value(then_body, tm, defs)
+                .into_iter()
+                .chain(
+                    else_body
+                        .as_deref()
+                        .and_then(|body| widest_return_value(body, tm, defs)),
+                )
+                .max(),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                widest_return_value(body, tm, defs)
+            }
+            Stmt::Switch { cases, default, .. } => cases
+                .iter()
+                .filter_map(|(_, case)| widest_return_value(case, tm, defs))
+                .chain(
+                    default
+                        .as_deref()
+                        .and_then(|body| widest_return_value(body, tm, defs)),
+                )
+                .max(),
+            _ => None,
+        })
+        .max()
+}
+
 /// The `(signed, byte-width)` an identifier is actually **declared** with in the
 /// DecBench render, or `None` when it is not an integer.
 ///
@@ -5506,7 +5877,10 @@ function f @ 0x1000 {
         assert!(
             matches!(
                 lowered.get(1),
-                Some(Stmt::If { cond: Expr::Cmp { op: CmpOp::Ult, .. }, .. })
+                Some(Stmt::If {
+                    cond: Expr::Cmp { op: CmpOp::Ult, .. },
+                    ..
+                })
             ),
             "the branch should still receive the inlined comparison: {lowered:#?}"
         );
@@ -6275,6 +6649,144 @@ function f @ 0x1000 {
             untyped.contains("long add_one(long arg0) {"),
             "untyped fallback changed:\n{}",
             untyped
+        );
+    }
+
+    #[test]
+    fn decbench_abi_widths_preserve_high_halves_of_packed_arguments() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        // Optimized SysV code for two-register by-value aggregates uses the high
+        // halves of the incoming INTEGER-class eightbytes. Narrow sub-register
+        // uses elsewhere must not make either parameter (or the wide result)
+        // render as `int`.
+        let mut f = Function {
+            name: "packed".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Bin {
+                        op: BinOp::Shr,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: Expr::Bin {
+                        op: BinOp::And,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                        rhs: Box::new(Expr::Const(-0x1_0000_0000)),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("var0"))),
+                        rhs: Box::new(Expr::Reg(VReg::phys("var1"))),
+                    }),
+                },
+            ],
+        };
+        let mut tm = TypeMap::default();
+        for name in ["arg0", "arg1", "ret"] {
+            tm.upsert_public(
+                VReg::phys(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+
+        refine_decbench_abi_widths(&f, &mut tm);
+        crate::ir::widen::insert_widening_casts(&mut f, &tm);
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+
+        assert!(
+            text.contains("long packed(long arg0, long arg1) {"),
+            "high-half consumers require complete eightbyte parameters and return:\n{text}"
+        );
+        assert!(
+            !text.contains("(unsigned int)(arg1)"),
+            "the high mask must not truncate its operand before reading it:\n{text}"
+        );
+    }
+
+    #[test]
+    fn decbench_abi_widths_do_not_widen_an_ordinary_int_shift() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "small_shift".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Bin {
+                    op: BinOp::Shr,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(3)),
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        for name in ["arg0", "ret"] {
+            tm.upsert_public(
+                VReg::phys(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+
+        refine_decbench_abi_widths(&f, &mut tm);
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(
+            text.contains("int small_shift(int arg0) {"),
+            "a sub-word shift is not evidence of a packed 64-bit parameter:\n{text}"
+        );
+    }
+
+    #[test]
+    fn decbench_abi_widths_keep_x86_zero_extended_int_return_narrow() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "area".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Bin {
+                            op: BinOp::Mul,
+                            lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                            rhs: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                        }),
+                    }),
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        for name in ["arg0", "arg1", "ret"] {
+            tm.upsert_public(
+                VReg::phys(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+
+        refine_decbench_abi_widths(&f, &mut tm);
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(
+            text.contains("int area(int arg0, int arg1) {"),
+            "zero-extension into rax is not evidence of a C long return:\n{text}"
         );
     }
 

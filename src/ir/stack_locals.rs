@@ -51,10 +51,16 @@ struct SlotKey {
     disp: i64,
 }
 
-/// The promoted local name for a slot plus the narrowest access width observed
-/// for it. Loads report the true width; stores (width unknown here) report the
-/// conservative 8, so taking the min lets a real load width win.
-type SlotVal = (String, u8);
+/// Promoted local metadata. `declared_size` is the narrowest access width and
+/// drives the C declaration; `span_size` is the widest access and records the
+/// bytes owned by the slot so a later field read inside a wide spill can be
+/// extracted from the parent instead of becoming an undefined overlapping local.
+#[derive(Debug, Clone)]
+struct SlotVal {
+    name: String,
+    declared_size: u8,
+    span_size: u8,
+}
 
 #[derive(Clone, Copy)]
 struct StackContext {
@@ -86,7 +92,9 @@ pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> Has
         ctx,
         &mut sp_delta,
     );
-    map.into_values().collect()
+    map.into_values()
+        .map(|slot| (slot.name, slot.declared_size))
+        .collect()
 }
 
 /// Where a calling convention puts the arguments that do not fit in registers:
@@ -126,10 +134,18 @@ fn rewrite_body(
                     *sp_delta = stack_delta_after_assignment(dst, src, *sp_delta);
                 }
             }
-            Stmt::Store { addr, src, .. } => {
+            Stmt::Store { addr, src, size } => {
                 // Store's addr is an Lea — we need to rewrite the Lea itself
                 // into a Reg reference when the lea points to a stack slot.
-                try_promote_lea_to_local(addr, map, stack_counter, local_counter, ctx, *sp_delta);
+                try_promote_lea_to_local(
+                    addr,
+                    *size,
+                    map,
+                    stack_counter,
+                    local_counter,
+                    ctx,
+                    *sp_delta,
+                );
                 rewrite_expr(src, map, stack_counter, local_counter, ctx, *sp_delta);
             }
             Stmt::Call { target, args, .. } => {
@@ -355,15 +371,46 @@ fn rewrite_expr(
                         base: key_base.clone(),
                         disp: key_disp,
                     };
-                    let entry = map.entry(key).or_insert_with(|| {
-                        (
-                            alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx),
-                            size_val,
-                        )
-                    });
-                    // A load reports the true access width — let it win.
-                    entry.1 = entry.1.min(size_val);
-                    let alias = entry.0.clone();
+                    if let Some(entry) = map.get_mut(&key) {
+                        // A load reports the true access width — let it win for
+                        // the declaration while preserving the widest owned span.
+                        entry.declared_size = entry.declared_size.min(size_val);
+                        entry.span_size = entry.span_size.max(size_val);
+                        let alias = entry.name.clone();
+                        *e = Expr::Reg(VReg::phys(alias));
+                        return;
+                    }
+                    if matches!(ctx.cc, Some(CallConv::SysVAmd64 | CallConv::Win64)) {
+                        let child_end = key_disp.saturating_add(i64::from(size_val));
+                        let parent = map
+                            .iter()
+                            .filter(|(candidate, slot)| {
+                                candidate.base == key_base
+                                    && candidate.disp < key_disp
+                                    && slot.span_size <= 8
+                                    && child_end
+                                        <= candidate.disp.saturating_add(i64::from(slot.span_size))
+                            })
+                            .max_by_key(|(candidate, _)| candidate.disp)
+                            .map(|(candidate, slot)| (candidate.disp, slot.name.clone()));
+                        if let Some((parent_disp, parent_name)) = parent {
+                            *e = extract_little_endian_subvalue(
+                                parent_name,
+                                (key_disp - parent_disp) as u8,
+                                size_val,
+                            );
+                            return;
+                        }
+                    }
+                    let alias = alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx);
+                    map.insert(
+                        key,
+                        SlotVal {
+                            name: alias.clone(),
+                            declared_size: size_val,
+                            span_size: size_val,
+                        },
+                    );
                     *e = Expr::Reg(VReg::phys(alias));
                     return;
                 }
@@ -398,20 +445,36 @@ fn rewrite_expr(
     }
 }
 
+fn extract_little_endian_subvalue(parent: String, byte_offset: u8, size: u8) -> Expr {
+    let wide_parent = Expr::Cast {
+        signed: false,
+        width: 8,
+        expr: Box::new(Expr::Reg(VReg::phys(parent))),
+    };
+    let shifted = Expr::Bin {
+        op: crate::ir::types::BinOp::Shr,
+        lhs: Box::new(wide_parent),
+        rhs: Box::new(Expr::Const(i64::from(byte_offset) * 8)),
+    };
+    Expr::Cast {
+        signed: false,
+        width: size,
+        expr: Box::new(shifted),
+    }
+}
+
 /// Store-address Lea: turn the full `&[base+disp]` into a `Reg(local)`.
 fn try_promote_lea_to_local(
     addr: &mut Expr,
+    size: u8,
     map: &mut HashMap<SlotKey, SlotVal>,
     stack_counter: &mut usize,
     local_counter: &mut usize,
     ctx: StackContext,
     sp_delta: Option<i64>,
 ) {
-    // The store's `addr` carries no access size (our lowering doesn't thread it
-    // through), so we record the conservative 8. Because the size lives in the
-    // map value and is combined with `min`, a load of the same slot still gets
-    // to pin the true, narrower width — and, crucially, the slot resolves to the
-    // *same* local name as that load rather than a second one.
+    // A later narrower read at the exact same address can narrow the declaration,
+    // while `span_size` retains the bytes this store defined for overlap recovery.
     if let Expr::Lea {
         base: Some(VReg::Phys(name)),
         index: None,
@@ -426,14 +489,14 @@ fn try_promote_lea_to_local(
                 base: key_base.clone(),
                 disp: key_disp,
             };
-            let entry = map.entry(key).or_insert_with(|| {
-                (
-                    alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx),
-                    8,
-                )
+            let entry = map.entry(key).or_insert_with(|| SlotVal {
+                name: alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx),
+                declared_size: size,
+                span_size: size,
             });
-            entry.1 = entry.1.min(8);
-            let alias = entry.0.clone();
+            entry.declared_size = entry.declared_size.min(size);
+            entry.span_size = entry.span_size.max(size);
+            let alias = entry.name.clone();
             *addr = Expr::Reg(VReg::phys(alias));
         }
     }
@@ -853,6 +916,64 @@ mod tests {
         };
         assert_eq!(store_name, Expr::Reg(reg("local_c")));
         assert_eq!(load_name, Expr::Reg(reg("local_c")));
+    }
+
+    #[test]
+    fn a_narrow_read_inside_a_wide_spill_extracts_the_parent_value() {
+        // GCC -O0 `dist2(struct pt a, struct pt b)` spills the packed 8-byte
+        // argument with `mov [rbp-0x18], rdi`, then reads `a.y` with
+        // `mov edx, [rbp-0x14]`. The latter is the upper half of local_18, not
+        // a new local_14 that nothing defines.
+        let mut f = Function {
+            name: "dist2".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -0x18),
+                    src: Expr::Reg(reg("rdi")),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: reg("rdx"),
+                    src: deref_of("rbp", -0x14, 4),
+                },
+            ],
+        };
+
+        let sizes = promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Assign { src, .. } = &f.body[1] else {
+            panic!("expected the upper-half load");
+        };
+        assert!(
+            matches!(
+                src,
+                Expr::Cast {
+                    signed: false,
+                    width: 4,
+                    expr,
+                } if matches!(
+                    expr.as_ref(),
+                    Expr::Bin {
+                        op: crate::ir::types::BinOp::Shr,
+                        lhs,
+                        rhs,
+                    } if matches!(
+                        lhs.as_ref(),
+                        Expr::Cast {
+                            signed: false,
+                            width: 8,
+                            expr,
+                        } if matches!(expr.as_ref(), Expr::Reg(VReg::Phys(name)) if name == "local_18")
+                    ) && matches!(rhs.as_ref(), Expr::Const(32))
+                )
+            ),
+            "the high field must be extracted from the defined parent spill: {src:#?}"
+        );
+        assert!(
+            !sizes.contains_key("local_14"),
+            "an overlapping field must not become an undefined standalone local"
+        );
     }
 
     #[test]

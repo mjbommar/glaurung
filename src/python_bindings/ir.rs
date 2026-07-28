@@ -869,6 +869,20 @@ fn decbench_text(
     width: Option<&crate::ir::types_recover::TypeMap>,
 ) -> String {
     let mut prepared = crate::ir::ast::prepare_for_decbench(f);
+    // Preparation exposes the actual expression dataflow (notably parameter
+    // spill coalescing and folded returns), so only now can high-half uses and
+    // wide return definitions safely override a misleading narrow sub-register
+    // type hint.
+    let mut refined_decl = decl.cloned();
+    let mut refined_width = width.cloned();
+    if let Some(tm) = refined_decl.as_mut() {
+        crate::ir::ast::refine_decbench_abi_widths(&prepared, tm);
+    }
+    if let Some(tm) = refined_width.as_mut() {
+        crate::ir::ast::refine_decbench_abi_widths(&prepared, tm);
+    }
+    let decl = refined_decl.as_ref();
+    let width = refined_width.as_ref();
     // Declarations are recovered at true machine width, so a value read in a wider
     // context needs the extension the hardware performed made explicit. Runs before
     // verification and rendering; it changes no definition, use, or value identity.
