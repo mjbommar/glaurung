@@ -44,6 +44,13 @@ uvx pytest python/tests/                # Python suite (~345 test files)
 uvx pytest python/tests/test_x.py -xvs  # one file, stop on first failure
 cargo test                              # Rust suite (~125 test modules)
 
+# Decompiler: iterate small, gate big — docs/development/decompiler-testing.md
+tools/build_guard.py                              # is the .so current?
+tools/dectest.py 13_loop_early_exit:gcc:O0:bisect --show   # ONE function, ~3s
+tools/dectest.py @loops                           # a named set (sets.toml)
+tools/dectest.py --list-sets                      # what sets exist
+scripts/decbench-local-gate.sh                    # the full 3-lane gate (~40m)
+
 # Bench / regression scorecard
 uv run python -m glaurung.bench
 

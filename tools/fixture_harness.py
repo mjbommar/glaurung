@@ -17,6 +17,7 @@ compared against another's.
   python tools/fixture_harness.py --write-baseline # regenerate baseline.json
   python tools/fixture_harness.py --json           # machine-readable result map
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,6 +36,7 @@ BASELINE = ROOT / "tests" / "decompiler_fixtures" / "baseline.json"
 
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 sys.path.insert(0, str(ROOT / "tools"))
+import build_guard as BG  # ty: ignore[unresolved-import]
 import fixture_toolchain as TC
 import manifest as M  # ty: ignore[unresolved-import]
 
@@ -61,13 +63,25 @@ def _cxx_runtime_ok(cc: str) -> bool:
     so ALLOWED_MISSING reflects a REAL gap on this host (and disappears on a CI
     runner where the runtime IS provisioned)."""
     import tempfile
+
     with tempfile.TemporaryDirectory(dir=M.tmpdir()) as td:
         src = Path(td) / "p.cpp"
-        src.write_text("int f(int x){ if(x<0) throw x; return x; }\n"
-                       "extern \"C\" int probe(int x){ try{ return f(x); }catch(int e){ return e; } }\n")
+        src.write_text(
+            "int f(int x){ if(x<0) throw x; return x; }\n"
+            'extern "C" int probe(int x){ try{ return f(x); }catch(int e){ return e; } }\n'
+        )
         out = Path(td) / "p.so"
-        r = TC.run([_cpp_compiler(cc), "-shared", "-fPIC", f"-{DEFAULT_OPT}",
-                    "-o", str(out), str(src)])
+        r = TC.run(
+            [
+                _cpp_compiler(cc),
+                "-shared",
+                "-fPIC",
+                f"-{DEFAULT_OPT}",
+                "-o",
+                str(out),
+                str(src),
+            ]
+        )
         return r.returncode == 0
 
 
@@ -86,7 +100,9 @@ def detect_allowed_missing() -> set[tuple[str, str, str]]:
     return missing
 
 
-def compile_fixture(src: Path, cc: str, opt: str, strict: bool = False) -> tuple[Path | None, str]:
+def compile_fixture(
+    src: Path, cc: str, opt: str, strict: bool = False
+) -> tuple[Path | None, str]:
     is_cpp = src.suffix == ".cpp"
     compiler = _cpp_compiler(cc) if is_cpp else cc
     BUILD.mkdir(parents=True, exist_ok=True)
@@ -94,7 +110,17 @@ def compile_fixture(src: Path, cc: str, opt: str, strict: bool = False) -> tuple
     # Fixtures are warning-clean C; the strict lane proves it (-Werror + explicit
     # fallthrough annotations). Execution builds stay lenient only re: -g/-fPIC.
     warn = ["-Wall", "-Wextra", "-Werror"] if strict else ["-w"]
-    cmd = [compiler, "-shared", "-fPIC", "-g", f"-{opt}", *warn, "-o", str(out), str(src)]
+    cmd = [
+        compiler,
+        "-shared",
+        "-fPIC",
+        "-g",
+        f"-{opt}",
+        *warn,
+        "-o",
+        str(out),
+        str(src),
+    ]
     r = TC.run(cmd)
     if r.returncode != 0:
         return None, (r.stderr.strip().splitlines() or ["?"])[-1]
@@ -121,28 +147,63 @@ def strict_compile_problems(matrix=None, allowed_missing=None) -> list[str]:
             if (cc, opt, src.stem) in allowed_missing:
                 # declared gap: must genuinely fail (env runtime absent)
                 if so is not None:
-                    problems.append(f"{src.stem}:{cc}:{opt}: declared env-missing but compiled")
+                    problems.append(
+                        f"{src.stem}:{cc}:{opt}: declared env-missing but compiled"
+                    )
                 continue
             if so is None:
                 problems.append(f"{src.stem}:{cc}:{opt}: {err}")
     return problems
 
 
-def _run_lane(src: Path, cc: str, opt: str, fuzz: int, env_missing: bool) -> dict:
-    """One (fixture, compiler, opt) lane: {func: status} or a `__lane__` error."""
+def _run_lane(
+    src: Path,
+    cc: str,
+    opt: str,
+    fuzz: int,
+    env_missing: bool,
+    funcs: tuple[str, ...] | None = None,
+) -> dict:
+    """One (fixture, compiler, opt) lane: {func: status} or a `__lane__` error.
+
+    `funcs` restricts which functions in the lane are executed — the whole point
+    of `tools/dectest.py`. It changes WHAT IS REPORTED, never how a reported
+    function is judged: the same binary is compiled, and each function's fuzz
+    seed is derived from its own name (`_stable_seed`), so a verdict from a
+    one-function run is identical to that function's verdict in a full run.
+    Anything else would make the fast loop lie.
+    """
     # A declared env gap must be a REAL gap: assert the compile truly fails before
     # recording it as env-missing (never a silent skip).
     if env_missing:
         so, _ = compile_fixture(src, cc, opt)
-        assert so is None, f"declared env-missing lane {src.stem}:{cc}:{opt} unexpectedly compiled"
+        assert so is None, (
+            f"declared env-missing lane {src.stem}:{cc}:{opt} unexpectedly compiled"
+        )
         return {"__lane__": "env-missing"}
     so, err = compile_fixture(src, cc, opt)
     if so is None:
         return {"__lane__": f"compile-failed: {err}"}
+    cmd = [
+        BG.python_bin(),
+        str(DIFF),
+        str(so),
+        str(src),
+        "--fixture",
+        src.stem,
+        "--fuzz",
+        str(fuzz),
+        "--json",
+    ]
+    for f in funcs or ():
+        cmd += ["--function", f]
     r = subprocess.run(
-        [sys.executable, str(DIFF), str(so), str(src),
-         "--fixture", src.stem, "--fuzz", str(fuzz), "--json"],
-        capture_output=True, text=True, timeout=3600, check=False,
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=3600,
+        check=False,
+        env=BG.export_bin_to_path(),
     )
     try:
         fns = json.loads(r.stdout)
@@ -168,7 +229,9 @@ def default_jobs() -> int:
     return max(1, min(8, (os.cpu_count() or 2) - 1))
 
 
-def run_matrix(matrix, fuzz: int, allowed_missing=None, jobs: int | None = None) -> dict:
+def run_matrix(
+    matrix, fuzz: int, allowed_missing=None, jobs: int | None = None
+) -> dict:
     """Return {f"{stem}:{cc}:{opt}": {func: status}} plus lane-level errors, and a
     `__toolchain__` entry identifying the compilers that produced it."""
     if allowed_missing is None:
@@ -192,6 +255,60 @@ def run_matrix(matrix, fuzz: int, allowed_missing=None, jobs: int | None = None)
         futures = {
             pool.submit(_run_lane, src, cc, opt, fuzz, env_missing): key
             for key, src, cc, opt, env_missing in lanes_to_run
+        }
+        for fut in as_completed(futures):
+            key = futures[fut]
+            try:
+                result[key] = fut.result()
+            except Exception as e:  # noqa: BLE001 — a lane crash is a lane error, not a skip
+                result[key] = {"__lane__": f"harness-crashed: {type(e).__name__}: {e}"}
+    return result
+
+
+def run_lanes(
+    lane_specs, fuzz: int, allowed_missing=None, jobs: int | None = None
+) -> dict:
+    """`run_matrix` for an explicit list of `(fixture, cc, opt, funcs)`.
+
+    The scoped entry point used by `tools/dectest.py`. It shares `_run_lane` with
+    the full matrix so a scoped verdict and a gate verdict come from the same
+    code — a separate fast path would eventually disagree with the gate, which is
+    worse than having no fast path.
+
+    The returned map deliberately carries no `__toolchain__` fingerprint: that
+    key is what makes a result map writable as a baseline, and a partial run must
+    never be. See `tools/dectest.py` on why there is no `--write-baseline`.
+    """
+    if allowed_missing is None:
+        allowed_missing = detect_allowed_missing()
+    if jobs is None:
+        jobs = default_jobs()
+    work = []
+    for fixture, cc, opt, funcs in lane_specs:
+        matches = [
+            p for p in (SRC / f"{fixture}.c", SRC / f"{fixture}.cpp") if p.is_file()
+        ]
+        if not matches:
+            raise FileNotFoundError(f"no fixture source for {fixture!r} in {SRC}")
+        work.append(
+            (
+                f"{fixture}:{cc}:{opt}",
+                matches[0],
+                cc,
+                opt,
+                (cc, opt, fixture) in allowed_missing,
+                tuple(funcs),
+            )
+        )
+    result: dict = {}
+    if jobs == 1:
+        for key, src, cc, opt, env_missing, funcs in work:
+            result[key] = _run_lane(src, cc, opt, fuzz, env_missing, funcs)
+        return result
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = {
+            pool.submit(_run_lane, src, cc, opt, fuzz, env_missing, funcs): key
+            for key, src, cc, opt, env_missing, funcs in work
         }
         for fut in as_completed(futures):
             key = futures[fut]
@@ -314,8 +431,12 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--gcc-o0-only", action="store_true", help="fast local subset")
-    ap.add_argument("--jobs", type=int, default=None,
-                    help="lanes to run concurrently (default: GLAURUNG_FIXTURE_JOBS or cores-1, max 8)")
+    ap.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help="lanes to run concurrently (default: GLAURUNG_FIXTURE_JOBS or cores-1, max 8)",
+    )
     args = ap.parse_args()
 
     matrix = [("gcc", "O0")] if args.gcc_o0_only else REQUIRED_MATRIX
@@ -324,7 +445,9 @@ def main() -> int:
     if args.write_baseline:
         problems = baseline_problems(result) + schema_problems(result, matrix)
         if problems:
-            print("REFUSING to write baseline — infrastructure problems:", file=sys.stderr)
+            print(
+                "REFUSING to write baseline — infrastructure problems:", file=sys.stderr
+            )
             for p in problems:
                 print(f"  {p}", file=sys.stderr)
             return 1
@@ -347,9 +470,11 @@ def main() -> int:
         flag = "" if ff == 0 else "  <-- FAILURES"
         print(f"{key:44s}  {pf:3d} pass {ff:3d} fail {sf:3d} struct{flag}")
     c = summarize(result)
-    print(f"\n=== TOTAL: {c['pass']} pass, {c['fail']} fail, {c['structural']} structural, "
-          f"{c['missing']} missing, {c['nocases']} no-cases; "
-          f"{c['lane']} lane error(s), {c['env_missing']} env-missing ===")
+    print(
+        f"\n=== TOTAL: {c['pass']} pass, {c['fail']} fail, {c['structural']} structural, "
+        f"{c['missing']} missing, {c['nocases']} no-cases; "
+        f"{c['lane']} lane error(s), {c['env_missing']} env-missing ==="
+    )
     # Fail-closed: any real lane error or infra status fails the run (env-missing
     # is a declared, probed gap and does not).
     return 1 if (c["fail"] or c["lane"] or c["missing"] or c["nocases"]) else 0

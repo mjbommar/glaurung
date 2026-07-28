@@ -1,0 +1,85 @@
+# Named, reproducible slices of the fixture corpus.
+#
+# The full matrix is 14 fixtures x 4 lanes and takes minutes. That is the right
+# cost for a gate and the wrong cost for iterating on one defect. These sets name
+# the slices worth re-running constantly, so an iteration loop is
+# `tools/dectest.py @loops` rather than a remembered selector string.
+#
+# Rules that keep this file honest:
+#   * every set must resolve to at least one lane      (test_dectest_selection.py)
+#   * every set must have a description                (same)
+#   * @smoke must stay <= 6 lanes                      (same)
+# A set that rots — naming a renamed fixture or a deleted function — fails the
+# fast suite rather than silently shrinking someone's loop.
+#
+# Failure counts below are from the committed baseline.json (330 pass / 209 fail
+# / 84 structural) and are a snapshot, not a contract; re-read them with
+# `tools/dectest.py --list @<set>`.
+
+[smoke]
+description = "Six passing canaries across four shape families, ~8s. Run this constantly."
+# Deliberately FUNCTION-scoped, not lane-scoped. The lane-scoped version ran 43
+# functions in 39 seconds, which is not a smoke test — it is a slow gate nobody
+# runs twice. Every function here PASSES in the baseline, so any of them turning
+# red is unambiguous; a set of known failures would tell you nothing.
+selectors = [
+    "01_conditional_polarity:gcc:O0:ternary",       # cmov / Op::Ite
+    "01_conditional_polarity:gcc:O0:sc_and",        # short-circuit shared join
+    "03_loop_shapes:gcc:O0:for_sum",                # the plainest loop there is
+    "03_loop_shapes:gcc:O0:nested_carry",           # nested loops, carried value
+    "11_call_shapes:gcc:O0:call_forward_result",    # a call result satisfies return
+    "12_loop_rotation:clang:O0:factorial_while",    # clang's rotated loop form
+]
+
+[region]
+description = "The Phase 4 region-ownership acceptance set — 114 of the 209 known failures."
+selectors = [
+    "03_loop_shapes",
+    "04_switch_shapes",
+    "12_loop_rotation",
+    "13_loop_early_exit",
+]
+
+[switch]
+description = "Switch and ladder recovery (04). The single worst fixture: 42 fail / 22 pass."
+selectors = ["04_switch_shapes"]
+
+[loops]
+description = "Every loop shape: plain (03), rotated (12), early-exit (13). 72 known failures."
+selectors = ["03_loop_shapes", "12_loop_rotation", "13_loop_early_exit"]
+
+[early-exit]
+description = "13 alone — break/continue/early-return. 19 of its 24 cells fail."
+selectors = ["13_loop_early_exit"]
+
+[flags]
+description = "x86 flag producer/consumer effects (14). The Phase 3 acceptance set."
+selectors = ["14_flag_effects"]
+
+[calls]
+description = "Calling conventions (06) and call shapes (11) — argument and result recovery."
+selectors = ["06_calling_conventions", "11_call_shapes"]
+
+[polarity]
+description = "Conditional polarity (01). The regression canary for any predicate change."
+selectors = ["01_conditional_polarity"]
+
+[widths]
+description = "Integer widths and sub-register views (02). The Phase 2 value-model canary."
+selectors = ["02_integer_widths"]
+
+[structs]
+description = "Aggregates and memory effects (09) plus the C++ shapes (10) — 66 structural cells."
+selectors = ["09_memory_effects", "10_cpp_runtime_shapes"]
+
+[o0]
+description = "Every fixture, unoptimised, both compilers. Where structuring bugs are legible."
+selectors = ["*:gcc:O0", "*:clang:O0"]
+
+[o2]
+description = "Every fixture at -O2, both compilers. Where cmov, merged values and type loss live."
+selectors = ["*:gcc:O2", "*:clang:O2"]
+
+[clang-o0]
+description = "Our weakest lane against angr (GED 6.23 vs 3.19). Includes the jump-table gap."
+selectors = ["*:clang:O0"]

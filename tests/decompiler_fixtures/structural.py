@@ -14,12 +14,17 @@ The one hard, non-baselined invariant is *control-flow closure*: every
 decompilation that emits a jump to a label it never defines is not valid C and
 cannot be reasoned about — that is a structural bug regardless of execution.
 """
+
 from __future__ import annotations
 
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "tools"))
+import build_guard as BG  # ty: ignore[unresolved-import]
 
 STYLES = ("plain", "c", "decbench")
 
@@ -39,22 +44,36 @@ def decompile_all(so: str | Path, style: str, timeout: int = 180) -> dict[str, s
     structural lane fails closed rather than silently seeing zero functions.
     """
     p = subprocess.run(
-        ["glaurung", "decompile", str(so), "--all", "--limit", "1000",
-         "--style", style, "--no-color"],
-        capture_output=True, text=True, timeout=timeout, check=False,
+        [
+            BG.glaurung_bin(),
+            "decompile",
+            str(so),
+            "--all",
+            "--limit",
+            "1000",
+            "--style",
+            style,
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
         # Opt in to the `// glaurung-verify:` diagnostics. They are deliberately OFF by
         # default — they are instrumentation, and the decbench render is an artifact
         # other tools consume and score — so this lane asks for them explicitly.
         env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
     )
     if p.returncode != 0:
-        raise RuntimeError(f"glaurung decompile failed ({style}): {p.stderr.strip()[-200:]}")
+        raise RuntimeError(
+            f"glaurung decompile failed ({style}): {p.stderr.strip()[-200:]}"
+        )
     out = p.stdout
     parts = list(_HDR.finditer(out))
     funcs: dict[str, str] = {}
     for i, m in enumerate(parts):
         end = parts[i + 1].start() if i + 1 < len(parts) else len(out)
-        funcs[m.group("a") or m.group("b")] = out[m.start():end]
+        funcs[m.group("a") or m.group("b")] = out[m.start() : end]
     return funcs
 
 
@@ -81,15 +100,19 @@ def has_indirect_call(block: str) -> bool:
     """A call through a computed/loaded pointer: ``(*(...))(...)`` or ``(...)()``
     on a dereferenced/cast target — the operations-table / callback dispatch."""
     body = _strip_comments(block)
-    return bool(re.search(r"\)\s*\)\s*\(", body) or re.search(r"\(\s*\*[^)]*\)\s*\(", body))
+    return bool(
+        re.search(r"\)\s*\)\s*\(", body) or re.search(r"\(\s*\*[^)]*\)\s*\(", body)
+    )
 
 
 def has_memory_store(block: str) -> bool:
     """A store to memory survived lowering: ``*(T *)(addr) = v`` or ``[idx] = v``."""
     body = _strip_comments(block)
-    return bool(re.search(r"\*\s*\([^)]*\*\s*\)\s*\([^;]*\)\s*=", body)
-                or re.search(r"\]\s*=", body)
-                or re.search(r"\*\s*\w+\s*=", body))
+    return bool(
+        re.search(r"\*\s*\([^)]*\*\s*\)\s*\([^;]*\)\s*=", body)
+        or re.search(r"\]\s*=", body)
+        or re.search(r"\*\s*\w+\s*=", body)
+    )
 
 
 _VERIFY = re.compile(r"(?m)^// glaurung-verify: (.+)$")
@@ -111,13 +134,15 @@ def has_placeholder_dispatch(block: str) -> bool:
     """A fabricated target name like ``dispatch_0x1234`` / ``sub_401000`` / ``fn_...``
     invented in place of a recovered indirect callee — a semantic lie."""
     body = _strip_comments(block)
-    return bool(re.search(r"\b(dispatch|sub|fn|loc|func)_0?x?[0-9a-fA-F]{3,}\s*\(", body))
+    return bool(
+        re.search(r"\b(dispatch|sub|fn|loc|func)_0?x?[0-9a-fA-F]{3,}\s*\(", body)
+    )
 
 
 def is_nonempty(block: str) -> bool:
     """The function body recovered at least one real statement (not just braces)."""
     body = _strip_comments(block)
-    inner = body[body.find("{") + 1: body.rfind("}")] if "{" in body else ""
+    inner = body[body.find("{") + 1 : body.rfind("}")] if "{" in body else ""
     return ";" in inner
 
 
@@ -229,10 +254,19 @@ def structural_report(workdir: Path) -> dict:
             # Contract: a function the exec gate can ONLY treat as structural must
             # carry at least one structural assertion, else it is untested.
             sig = _sig_for(so, fn)
-            if sig is not None and D.exec_class(sig, fixture)[0] == "structural" and not spec:
+            if (
+                sig is not None
+                and D.exec_class(sig, fixture)[0] == "structural"
+                and not spec
+            ):
                 gaps.append(f"{fixture}:{fn}")
-    return {"closure": closure, "effects": effects,
-            "placeholder": placeholder, "verify": verify, "gaps": sorted(gaps)}
+    return {
+        "closure": closure,
+        "effects": effects,
+        "placeholder": placeholder,
+        "verify": verify,
+        "gaps": sorted(gaps),
+    }
 
 
 _SIG_CACHE: dict[str, dict] = {}

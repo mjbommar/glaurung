@@ -29,6 +29,7 @@ Modes:
   diff_decompile.py <binary> <source> [--fixture NAME] [--json]   parent/report
   diff_decompile.py --worker <spec.json>                          internal child
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,8 +49,14 @@ from elftools.elf.elffile import ELFFile
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 sys.path.insert(0, str(ROOT / "tools"))
+import build_guard as BG  # ty: ignore[unresolved-import]
 import fixture_toolchain as TC
 import manifest as M  # ty: ignore[unresolved-import]  # added to sys.path above
+
+# Resolved once: the CLI whose output every verdict here is a judgement of. Bare
+# `glaurung` only works from an activated venv, which is how a fresh shell used
+# to fail the whole gate with `FileNotFoundError: 'glaurung'`.
+_glaurung = BG.glaurung_bin
 
 PRELUDE = """
 typedef unsigned char uint8_t; typedef signed char int8_t;
@@ -64,8 +71,13 @@ long __unknown(long x){ (void)x; return 0; }
 # ---------------------------------------------------------------------------
 
 # Encodings we accept as integer scalars (float/complex are unsupported).
-_SIGNED_ENC = {0x05, 0x06, 0x0D}          # signed, signed_char, signed_fixed
-_UNSIGNED_ENC = {0x02, 0x07, 0x08, 0x0E}  # boolean, unsigned, unsigned_char, unsigned_fixed
+_SIGNED_ENC = {0x05, 0x06, 0x0D}  # signed, signed_char, signed_fixed
+_UNSIGNED_ENC = {
+    0x02,
+    0x07,
+    0x08,
+    0x0E,
+}  # boolean, unsigned, unsigned_char, unsigned_fixed
 
 
 def _resolve(ref, cu, drop_cv: bool):
@@ -75,7 +87,11 @@ def _resolve(ref, cu, drop_cv: bool):
         tag = ref.tag
         if tag == "DW_TAG_const_type":
             const = True
-        elif tag not in ("DW_TAG_typedef", "DW_TAG_volatile_type") or not drop_cv and tag in ("DW_TAG_const_type", "DW_TAG_volatile_type"):
+        elif (
+            tag not in ("DW_TAG_typedef", "DW_TAG_volatile_type")
+            or not drop_cv
+            and tag in ("DW_TAG_const_type", "DW_TAG_volatile_type")
+        ):
             break
         tt = ref.attributes.get("DW_AT_type")
         if tt is None:
@@ -101,8 +117,8 @@ def _scalar_desc(ref):
 def _type_desc(type_attr, cu):
     """Full descriptor for a DWARF type reference, or None if unsupported.
 
-      scalar : {'k':'int','w':1|2|4|8,'s':bool}
-      pointer: {'k':'ptr','pw':pointee_width,'ps':pointee_signed,'const':bool}
+    scalar : {'k':'int','w':1|2|4|8,'s':bool}
+    pointer: {'k':'ptr','pw':pointee_width,'ps':pointee_signed,'const':bool}
     """
     if type_attr is None:
         return {"k": "void"}
@@ -143,9 +159,11 @@ def exported_functions(binary: str) -> dict[str, int]:
             return out
         for sym in dyn.iter_symbols():  # ty: ignore[unresolved-attribute]  # SymbolTableSection
             info = sym["st_info"]
-            if (info["type"] in ("STT_FUNC", "STT_GNU_IFUNC")
-                    and info["bind"] in ("STB_GLOBAL", "STB_WEAK")
-                    and sym["st_shndx"] != "SHN_UNDEF"):
+            if (
+                info["type"] in ("STT_FUNC", "STT_GNU_IFUNC")
+                and info["bind"] in ("STB_GLOBAL", "STB_WEAK")
+                and sym["st_shndx"] != "SHN_UNDEF"
+            ):
                 out[sym.name] = sym["st_value"]
     return out
 
@@ -165,7 +183,10 @@ def signatures(binary: str) -> list[dict]:
             for die in cu.iter_DIEs():
                 if die.tag != "DW_TAG_subprogram":
                     continue
-                if "DW_AT_low_pc" not in die.attributes or "DW_AT_name" not in die.attributes:
+                if (
+                    "DW_AT_low_pc" not in die.attributes
+                    or "DW_AT_name" not in die.attributes
+                ):
                     continue
                 name = die.attributes["DW_AT_name"].value.decode()
                 va = die.attributes["DW_AT_low_pc"].value
@@ -206,11 +227,24 @@ def _as_desc(x):
 # Decompile + compile
 # ---------------------------------------------------------------------------
 
+
 def decompiled_c(binary: str, va: int) -> str | None:
     p = subprocess.run(
-        ["glaurung", "decompile", binary, "--vas", hex(va),
-         "--style", "decbench", "--format", "json"],
-        capture_output=True, text=True, timeout=120, check=False,
+        [
+            _glaurung(),
+            "decompile",
+            binary,
+            "--vas",
+            hex(va),
+            "--style",
+            "decbench",
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
     if p.returncode != 0:
         return None
@@ -224,7 +258,9 @@ def decompiled_c(binary: str, va: int) -> str | None:
     return "\n".join(l for l in code.splitlines() if not l.strip().startswith("//"))
 
 
-def build_so(c_src: str, workdir: Path, tag: str, link_against: str | None = None) -> Path | None:
+def build_so(
+    c_src: str, workdir: Path, tag: str, link_against: str | None = None
+) -> Path | None:
     """Rebuild our decompiled C. Compiled under the PINNED toolchain: whether a
     given rendering compiles at all is compiler-version dependent (gcc >= 14 turns
     implicit declarations and int/pointer conversions into hard errors that gcc 11
@@ -262,6 +298,7 @@ def build_so(c_src: str, workdir: Path, tag: str, link_against: str | None = Non
 # ---------------------------------------------------------------------------
 # Vector generation (deterministic boundaries + seeded fuzz)
 # ---------------------------------------------------------------------------
+
 
 def _stable_seed(name: str, seed: int) -> int:
     """A per-function seed that is IDENTICAL across processes. Python's built-in
@@ -366,10 +403,12 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
     scalar_ws = [(d["w"], d["s"]) for d in params if d["k"] != "ptr"]
     n_bounds = max((len(M.scalar_boundaries(w, s)) for w, s in scalar_ws), default=0)
     for bi in range(n_bounds):
+
         def src(si, bi=bi):
             w, s = scalar_ws[si]
             b = M.scalar_boundaries(w, s)
             return b[bi % len(b)]
+
         add(src)
     # Explicit manifest vectors (already full tuples: scalar ints, ptr lists).
     for ev in ov.get("extra_vectors", []):
@@ -428,10 +467,14 @@ DECOMPILED_CALL_BUDGET_S = 5.0
 
 
 _CTYPE = {
-    (1, True): ctypes.c_int8, (1, False): ctypes.c_uint8,
-    (2, True): ctypes.c_int16, (2, False): ctypes.c_uint16,
-    (4, True): ctypes.c_int32, (4, False): ctypes.c_uint32,
-    (8, True): ctypes.c_int64, (8, False): ctypes.c_uint64,
+    (1, True): ctypes.c_int8,
+    (1, False): ctypes.c_uint8,
+    (2, True): ctypes.c_int16,
+    (2, False): ctypes.c_uint16,
+    (4, True): ctypes.c_int32,
+    (4, False): ctypes.c_uint32,
+    (8, True): ctypes.c_int64,
+    (8, False): ctypes.c_uint64,
 }
 
 
@@ -451,7 +494,9 @@ def _ctypes_fn(lib, sig, forced_u8):
     fn = getattr(lib, sig["name"])
     fn.restype = None if ret["k"] == "void" else _scalar_ctype(ret)
     fn.argtypes = [
-        ctypes.POINTER(_pointee_ctype(d, forced_u8)) if d["k"] == "ptr" else _scalar_ctype(d)
+        ctypes.POINTER(_pointee_ctype(d, forced_u8))
+        if d["k"] == "ptr"
+        else _scalar_ctype(d)
         for d in params
     ]
     return fn
@@ -504,7 +549,11 @@ def worker(spec_path: str) -> int:
             return 0
         for ob, db in zip(obufs, dbufs):
             if list(ob) != list(db):
-                print(json.dumps({"ok": False, "detail": f"buffer mutation differs on {vec}"}))
+                print(
+                    json.dumps(
+                        {"ok": False, "detail": f"buffer mutation differs on {vec}"}
+                    )
+                )
                 return 0
     print(json.dumps({"ok": True, "detail": f"{len(spec['vectors'])} cases"}))
     return 0
@@ -513,6 +562,7 @@ def worker(spec_path: str) -> int:
 # ---------------------------------------------------------------------------
 # Parent
 # ---------------------------------------------------------------------------
+
 
 def exec_class(sig, fixture, lane: str | None = None) -> tuple[str, str]:
     """Whether a function is execution-differential or structural-only, and why.
@@ -559,14 +609,22 @@ def run_function(sig, fixture, binary, workdir, seed, fuzz, lane=None) -> dict:
         # An infra/manifest problem (no inputs generated), NOT a decompiler
         # result — a distinct status so --write-baseline can refuse it.
         return {"status": "nocases", "detail": "no executable cases"}
-    spec = {"sig": sig, "orig_so": binary, "dec_so": str(dec_so), "vectors": vectors,
-            "ptr_elem": ov.get("ptr_elem", "int")}
+    spec = {
+        "sig": sig,
+        "orig_so": binary,
+        "dec_so": str(dec_so),
+        "vectors": vectors,
+        "ptr_elem": ov.get("ptr_elem", "int"),
+    }
     spec_path = workdir / f"spec_{name}.json"
     spec_path.write_text(json.dumps(spec))
     try:
         r = subprocess.run(
             [sys.executable, __file__, "--worker", str(spec_path)],
-            capture_output=True, text=True, timeout=WORKER_TIMEOUT_S, check=False,
+            capture_output=True,
+            text=True,
+            timeout=WORKER_TIMEOUT_S,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         # NOT `fail`: exceeding a wall clock is not evidence that the
@@ -575,11 +633,16 @@ def run_function(sig, fixture, binary, workdir, seed, fuzz, lane=None) -> dict:
         return {"status": "timeout", "detail": f"worker exceeded {WORKER_TIMEOUT_S}s"}
     if r.returncode == -signal.SIGALRM:
         # See DECOMPILED_CALL_BUDGET_S: the original returned, ours did not.
-        return {"status": "fail",
-                "detail": f"decompiled function did not terminate within "
-                          f"{DECOMPILED_CALL_BUDGET_S}s on an input the original returned on"}
+        return {
+            "status": "fail",
+            "detail": f"decompiled function did not terminate within "
+            f"{DECOMPILED_CALL_BUDGET_S}s on an input the original returned on",
+        }
     if r.returncode != 0:
-        return {"status": "fail", "detail": f"worker crashed (exit {r.returncode}; {r.stderr.strip()[-120:]})"}
+        return {
+            "status": "fail",
+            "detail": f"worker crashed (exit {r.returncode}; {r.stderr.strip()[-120:]})",
+        }
     try:
         verdict = json.loads(r.stdout.strip().splitlines()[-1])
     except (json.JSONDecodeError, IndexError):
@@ -602,7 +665,22 @@ def exit_code(results: dict) -> int:
     return 1 if "fail" in statuses else 0
 
 
-def run(binary: str, source: str, fixture: str, seed: int, fuzz: int) -> dict:
+def run(
+    binary: str,
+    source: str,
+    fixture: str,
+    seed: int,
+    fuzz: int,
+    only: set[str] | None = None,
+) -> dict:
+    """`only` restricts which functions are executed and reported.
+
+    Each function's fuzz vectors come from `_stable_seed(name, seed)` — derived
+    from the function's own name, not from its position in the run — so a
+    filtered run gives a filtered function exactly the verdict a full run would.
+    A filter that changed the vectors would make `tools/dectest.py` a different
+    measurement from the gate, which is the one thing it must not be.
+    """
     # `<fixture>-<compiler>-<opt>.so` — the lane a per-lane skip is keyed on.
     stem = Path(binary).stem
     parts = stem.rsplit("-", 2)
@@ -626,21 +704,32 @@ def run(binary: str, source: str, fixture: str, seed: int, fuzz: int) -> dict:
     # Required-function presence = present in the symbol table. (A dropped/renamed
     # export is a real infra failure; an unparseable signature is not.)
     for req in M.REQUIRED_FUNCTIONS.get(fixture, []):
+        if only is not None and req not in only:
+            continue
         if req not in exported:
-            results[req] = {"status": "missing", "detail": "required function missing from binary"}
+            results[req] = {
+                "status": "missing",
+                "detail": "required function missing from binary",
+            }
     with tempfile.TemporaryDirectory(dir=M.tmpdir()) as td:
         wd = Path(td)
         for name in sorted(exported):
+            if only is not None and name not in only:
+                continue
             sig = sig_by_name.get(name)
             if sig is None:
                 # Exported but no recoverable DWARF signature (function-pointer
                 # param, or O2 ranges/abstract-origin form) — not execution-
                 # differential; report structural, never a silent pass or a
                 # baseline-blocking infra status.
-                results[name] = {"status": "structural",
-                                 "detail": "signature not recoverable from DWARF"}
+                results[name] = {
+                    "status": "structural",
+                    "detail": "signature not recoverable from DWARF",
+                }
                 continue
-            results[name] = run_function(sig, fixture, binary, wd, seed, fuzz, lane=lane)
+            results[name] = run_function(
+                sig, fixture, binary, wd, seed, fuzz, lane=lane
+            )
     return results
 
 
@@ -652,6 +741,12 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--fuzz", type=int, default=24)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--function",
+        action="append",
+        default=None,
+        help="only this function (repeatable); default: every export",
+    )
     ap.add_argument("--worker", default=None)
     args = ap.parse_args()
 
@@ -661,22 +756,37 @@ def main() -> int:
     if not args.binary or not args.source:
         ap.error("binary and source required")
     fixture = args.fixture or Path(args.source).stem
-    results = run(args.binary, args.source, fixture, args.seed, args.fuzz)
+    results = run(
+        args.binary,
+        args.source,
+        fixture,
+        args.seed,
+        args.fuzz,
+        only=set(args.function) if args.function else None,
+    )
     if args.json:
         print(json.dumps(results, indent=2))
         return exit_code(results)
     if "__error__" in results:
         print(f"ERROR: {results['__error__']}", file=sys.stderr)
         return 2
-    tags = {"pass": "PASS", "fail": "FAIL", "structural": "STRUCT",
-            "missing": "MISSING", "nocases": "NOCASES", "timeout": "TIMEOUT"}
+    tags = {
+        "pass": "PASS",
+        "fail": "FAIL",
+        "structural": "STRUCT",
+        "missing": "MISSING",
+        "nocases": "NOCASES",
+        "timeout": "TIMEOUT",
+    }
     counts = {k: 0 for k in tags}
     for name, r in sorted(results.items()):
         counts[r["status"]] += 1
         print(f"{tags[r['status']]} {name}: {r['detail']}")
-    print(f"\n{counts['pass']} pass, {counts['fail']} fail, {counts['structural']} structural, "
-          f"{counts['missing']} missing, {counts['nocases']} no-cases, "
-          f"{counts['timeout']} timed out")
+    print(
+        f"\n{counts['pass']} pass, {counts['fail']} fail, {counts['structural']} structural, "
+        f"{counts['missing']} missing, {counts['nocases']} no-cases, "
+        f"{counts['timeout']} timed out"
+    )
     return exit_code(results)
 
 

@@ -12,6 +12,7 @@ modes it exists to catch are precisely the ones that fooled us:
 
 So `MISSING` and `GONE` are regressions, not absences.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -79,7 +80,9 @@ def test_a_metric_that_stopped_being_scored_is_a_regression(dm):
     as a smaller sample rather than a loss."""
     base = _report(dm, **{"recursion:gcc:O2": _cell(ged=123.0)})
     cur = _report(dm, **{"recursion:gcc:O2": _cell(ged=None)})
-    assert dm.check(cur, base) == ["recursion:gcc:O2.ged: 123.0 -> GONE (no longer scored)"]
+    assert dm.check(cur, base) == [
+        "recursion:gcc:O2.ged: 123.0 -> GONE (no longer scored)"
+    ]
 
 
 def test_a_cell_absent_from_the_run_is_a_regression(dm):
@@ -137,3 +140,59 @@ def test_the_corpus_is_committed_and_matches_the_matrix_size(dm):
     assert "switch_jt" in srcs and "recursion" in srcs
     expected_cells = len(srcs) * len(dm.COMPILERS) * len(dm.OPTS)
     assert expected_cells == 56, expected_cells
+
+
+# --- scoped runs (--only) --------------------------------------------------
+#
+# The full matrix is 56 cells, each spawning a Joern JVM: ~37 minutes. That is
+# affordable before a push and not affordable in a loop, so a change aimed at one
+# program can be measured against that program. The rules below are what stop a
+# scoped run from being mistaken for the gate.
+
+
+def test_a_bare_program_name_selects_all_four_of_its_cells(dm):
+    assert dm.select_cells(["statemachine"]) == [
+        "statemachine:gcc:O0",
+        "statemachine:gcc:O2",
+        "statemachine:clang:O0",
+        "statemachine:clang:O2",
+    ]
+
+
+def test_a_lane_glob_selects_that_lane_across_programs(dm):
+    keys = dm.select_cells(["*:clang:O0"])
+    assert len(keys) == 14
+    assert all(k.endswith(":clang:O0") for k in keys)
+
+
+def test_selecting_nothing_is_an_error_not_an_empty_run(dm):
+    """The same fail-closed rule as `tools/dectest.py`: a typo that matched zero
+    cells would print "no per-cell regressions across 0 cells"."""
+    with pytest.raises(SystemExit, match="matches no cell"):
+        dm.select_cells(["nosuchprogram"])
+
+
+def test_no_selection_means_the_whole_matrix(dm):
+    assert len(dm.select_cells(None)) == 56
+
+
+def test_overlapping_selections_do_not_duplicate_cells(dm):
+    keys = dm.select_cells(["statemachine", "statemachine:gcc:O0"])
+    assert len(keys) == len(set(keys)) == 4
+
+
+def test_a_scoped_check_does_not_report_unrun_cells_as_missing(dm):
+    """Within the cells that ran, a regression is still a regression; the cells
+    that were never selected are absent by construction, not lost."""
+    base = _report(dm, **{"arith:gcc:O0": _cell(), "sort:gcc:O0": _cell()})
+    cur = _report(dm, **{"arith:gcc:O0": _cell()})
+    assert dm.check(cur, base, scoped=True) == []
+    assert dm.check(cur, base, scoped=False) == [
+        "sort:gcc:O0: MISSING from the current run"
+    ]
+
+
+def test_a_scoped_check_still_catches_a_regression_in_what_did_run(dm):
+    base = _report(dm, **{"arith:gcc:O0": _cell(ged=5.0), "sort:gcc:O0": _cell()})
+    cur = _report(dm, **{"arith:gcc:O0": _cell(ged=9.0)})
+    assert dm.check(cur, base, scoped=True) == ["arith:gcc:O0.ged: 5.0 -> 9.0"]

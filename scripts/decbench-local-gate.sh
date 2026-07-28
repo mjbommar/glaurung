@@ -17,6 +17,27 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 : "${CARGO_TARGET_DIR:=$PWD/target}"
 : "${GLAURUNG_FIXTURE_JOBS:=4}"
+# The harness shells out to `glaurung`, so this script used to require an
+# ACTIVATED venv and otherwise died with `FileNotFoundError: 'glaurung'` — an
+# environment problem wearing a harness bug's clothes. Put the venv first
+# ourselves; `tools/build_guard.py` resolves the same binary the same way for
+# anything invoked outside this script.
+if [ -x "$PWD/.venv/bin/glaurung" ]; then
+  PATH="$PWD/.venv/bin:$PATH"
+  export PATH
+fi
+# The execution differential needs a writable tmpdir it can exec from; some hosts
+# mount /tmp noexec. Previously this only printed a note and then failed obscurely.
+: "${GLAURUNG_FIXTURE_TMPDIR:=$PWD/target/fixture-tmp}"
+mkdir -p "$GLAURUNG_FIXTURE_TMPDIR"
+export GLAURUNG_FIXTURE_TMPDIR
+# Nothing below means anything if the extension predates the Rust it is meant to
+# be testing. One stat, and it has already cost a full gate cycle once.
+if ! python tools/build_guard.py >/dev/null; then
+  python tools/build_guard.py
+  echo "HEAVY GATE: refusing to run against a stale build"
+  exit 1
+fi
 # Default to the durable DecBench checkout. It previously lived in a per-session
 # scratchpad, so DECBENCH_DIR came up unset, lane 3 skipped on every run, and ~25
 # metric cells regressed unnoticed across a whole session. Defaulting it means the
@@ -37,9 +58,7 @@ else
 fi
 
 step "2/3  decompiler fixture matrix + structural ratchet"
-if [ -z "${GLAURUNG_FIXTURE_TMPDIR:-}" ]; then
-  note "GLAURUNG_FIXTURE_TMPDIR unset — the harness needs a writable exec tmpdir"
-fi
+note "exec tmpdir: $GLAURUNG_FIXTURE_TMPDIR"
 if python -m pytest -p no:cacheprovider -m slow -q \
      python/tests/test_decompiler_fixture_matrix.py \
      python/tests/test_decompiler_fixture_structural.py 2>&1 | tail -6; then

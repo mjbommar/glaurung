@@ -20,9 +20,11 @@ does not have. Run it from `scripts/local-ci.sh` alongside the fixture matrix.
   tools/decbench_matrix.py --check
   tools/decbench_matrix.py --write-baseline
 """
+
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -56,9 +58,12 @@ def toolchain_fingerprint() -> dict:
     """What compiled the corpus. A metric measured under a different compiler is
     not comparable, so the baseline records this and `--check` refuses to compare
     across a change rather than reporting phantom regressions."""
+
     def first_line(cmd: list[str]) -> str:
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30, check=False
+            )
             return (r.stdout or r.stderr).splitlines()[0].strip()
         except Exception as exc:  # noqa: BLE001 - reported, not raised
             return f"unavailable: {exc}"
@@ -76,11 +81,14 @@ def compile_cell(program: str, compiler: str, opt: str, outdir: Path) -> Path | 
         [compiler, "-shared", "-fPIC", "-g", *OPTS[opt], "-o", str(out), str(src)],
         capture_output=True,
         text=True,
+        check=False,
     )
     return out if r.returncode == 0 else None
 
 
-def evaluate(binary: Path, source: Path, backend: str, results: Path, cwd: Path) -> dict:
+def evaluate(
+    binary: Path, source: Path, backend: str, results: Path, cwd: Path
+) -> dict:
     """One cell's metrics. A metric the pipeline did not produce is recorded as
     None rather than omitted, so `--check` can tell "worse" from "gone"."""
     env = dict(os.environ, GLAURUNG_BIN=shutil.which("glaurung") or "", NO_COLOR="1")
@@ -88,9 +96,23 @@ def evaluate(binary: Path, source: Path, backend: str, results: Path, cwd: Path)
     out: dict[str, float | None] = {"ged": None, "type_match": None, "byte_match": None}
     try:
         p = subprocess.run(
-            ["decbench", "evaluate", str(binary), "-s", str(source),
-             "-d", backend, "-o", str(results)],
-            cwd=cwd, env=env, capture_output=True, text=True, timeout=900,
+            [
+                "decbench",
+                "evaluate",
+                str(binary),
+                "-s",
+                str(source),
+                "-d",
+                backend,
+                "-o",
+                str(results),
+            ],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return out | {"error": "timeout"}
@@ -101,26 +123,59 @@ def evaluate(binary: Path, source: Path, backend: str, results: Path, cwd: Path)
     return out
 
 
-def run_matrix(backend: str, workdir: Path, cwd: Path) -> dict:
+def all_cell_keys() -> list[str]:
+    return [
+        f"{program}:{compiler}:{opt}"
+        for program in sorted(p.stem for p in SRC.glob("*.c"))
+        for compiler in COMPILERS
+        for opt in OPTS
+    ]
+
+
+def select_cells(patterns=None) -> list[str]:
+    """Cell keys matching any `program:compiler:opt` glob.
+
+    A full run is 56 cells, each spawning a Joern JVM to compute a graph edit
+    distance — about 37 minutes. That is affordable before a push and not
+    affordable in a loop, so a change aimed at one program can be measured
+    against that program. Fail-closed, exactly as `tools/dectest.py` is: a
+    pattern matching nothing is an error, because "0 cells, no regressions"
+    reads like success.
+    """
+    keys = all_cell_keys()
+    if not patterns:
+        return keys
+    chosen: list[str] = []
+    for pat in patterns:
+        # A bare program name means the whole program, not a literal key.
+        expanded = pat if ":" in pat else f"{pat}:*:*"
+        hits = fnmatch.filter(keys, expanded)
+        if not hits:
+            raise SystemExit(
+                f"--only {pat!r} matches no cell. Programs: "
+                + ", ".join(sorted({k.split(":")[0] for k in keys}))
+            )
+        chosen += [k for k in hits if k not in chosen]
+    return chosen
+
+
+def run_matrix(backend: str, workdir: Path, cwd: Path, only=None) -> dict:
     result: dict = {TOOLCHAIN_KEY: toolchain_fingerprint()}
-    programs = sorted(p.stem for p in SRC.glob("*.c"))
     results = workdir / "results"
-    for program in programs:
-        for compiler in COMPILERS:
-            for opt in OPTS:
-                key = f"{program}:{compiler}:{opt}"
-                so = compile_cell(program, compiler, opt, workdir)
-                if so is None:
-                    result[key] = {"error": "build failed"}
-                    print(f"  {key:34s} BUILD FAILED", flush=True)
-                    continue
-                cell = evaluate(so, SRC / f"{program}.c", backend, results, cwd)
-                result[key] = cell
-                shown = " ".join(
-                    f"{k}={'-' if cell.get(k) is None else cell[k]}"
-                    for k in ("ged", "type_match", "byte_match")
-                )
-                print(f"  {key:34s} {shown}", flush=True)
+    for key in select_cells(only):
+        program, compiler, opt = key.split(":")
+        so = compile_cell(program, compiler, opt, workdir)
+        if so is None:
+            result[key] = {"error": "build failed"}
+            print(f"  {key:34s} BUILD FAILED", flush=True)
+            continue
+        cell = evaluate(so, SRC / f"{program}.c", backend, results, cwd)
+        result[key] = cell
+        shown = " ".join(
+            f"{k}={'-' if cell.get(k) is None else cell[k]}"
+            for k in ("ged", "type_match", "byte_match")
+        )
+        print(f"  {key:34s} {shown}", flush=True)
     return result
 
 
@@ -128,19 +183,27 @@ def cells(report: dict) -> dict:
     return {k: v for k, v in report.items() if k != TOOLCHAIN_KEY}
 
 
-def check(current: dict, baseline: dict) -> list[str]:
-    """Per-cell regressions. A metric that vanished counts as one."""
+def check(current: dict, baseline: dict, scoped: bool = False) -> list[str]:
+    """Per-cell regressions. A metric that vanished counts as one.
+
+    `scoped` says the run deliberately covered a subset, so a baseline cell that
+    is absent is expected rather than a missing result. Every other rule is
+    unchanged: within the cells that DID run, a regression is still a regression.
+    """
     problems: list[str] = []
     if current.get(TOOLCHAIN_KEY) != baseline.get(TOOLCHAIN_KEY):
         return [
-            "toolchain fingerprint differs from the baseline — these metrics are "
-            f"not comparable.\n    baseline: {baseline.get(TOOLCHAIN_KEY)}\n"
-            f"    current:  {current.get(TOOLCHAIN_KEY)}"
+            (
+                "toolchain fingerprint differs from the baseline — these metrics are "
+                f"not comparable.\n    baseline: {baseline.get(TOOLCHAIN_KEY)}\n"
+                f"    current:  {current.get(TOOLCHAIN_KEY)}"
+            )
         ]
     for key, base in sorted(cells(baseline).items()):
         cur = cells(current).get(key)
         if cur is None:
-            problems.append(f"{key}: MISSING from the current run")
+            if not scoped:
+                problems.append(f"{key}: MISSING from the current run")
             continue
         for metric, tol in TOLERANCE.items():
             b, c = base.get(metric), cur.get(metric)
@@ -165,7 +228,31 @@ def main() -> int:
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--backend", default="glaurung", help="glaurung | angr | …")
     ap.add_argument("--workdir", default=None)
+    ap.add_argument(
+        "--only",
+        action="append",
+        default=None,
+        help="cell glob `program[:compiler[:opt]]`, repeatable "
+        "(e.g. --only statemachine --only '*:clang:O0'). "
+        "A scoped run cannot write a baseline.",
+    )
+    ap.add_argument(
+        "--list", action="store_true", help="print the selected cells and exit"
+    )
     args = ap.parse_args()
+
+    if args.list:
+        for key in select_cells(args.only):
+            print(key)
+        return 0
+    if args.only and args.write_baseline:
+        print(
+            "REFUSING: --write-baseline with --only would record fresh metrics for "
+            "the selected cells and leave the rest of baseline.json describing an "
+            "older build. Baselines come from full runs.",
+            file=sys.stderr,
+        )
+        return 1
 
     cwd = decbench_dir()
     if cwd is None or not cwd.is_dir():
@@ -179,7 +266,7 @@ def main() -> int:
     import tempfile
 
     with tempfile.TemporaryDirectory(dir=args.workdir) as td:
-        report = run_matrix(args.backend, Path(td), cwd)
+        report = run_matrix(args.backend, Path(td), cwd, only=args.only)
 
     if args.write_baseline:
         missing = [k for k, v in cells(report).items() if "error" in v]
@@ -199,13 +286,17 @@ def main() -> int:
         if not BASELINE.exists():
             print(f"no baseline at {BASELINE}", file=sys.stderr)
             return 1
-        problems = check(report, json.loads(BASELINE.read_text()))
+        problems = check(
+            report, json.loads(BASELINE.read_text()), scoped=bool(args.only)
+        )
         if problems:
             print(f"\nDECBENCH MATRIX REGRESSIONS ({len(problems)}):", file=sys.stderr)
             for p in problems:
                 print(f"  {p}", file=sys.stderr)
             return 1
-        print(f"\nno per-cell regressions across {len(cells(report))} cells")
+        n, total = len(cells(report)), len(all_cell_keys())
+        scope = "SCOPED" if args.only else "FULL MATRIX"
+        print(f"\n{scope}: no per-cell regressions across {n} of {total} cells")
     return 0
 
 

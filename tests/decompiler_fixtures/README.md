@@ -33,6 +33,18 @@ does, and that structural facts an analyst relies on survive lowering.
 
 Run the slow lanes with `-m slow` (they build + decompile the whole corpus).
 
+**For iterating, don't run the matrix.** `tools/dectest.py` runs this same
+harness over a selection — one function in ~3 seconds instead of 56 lanes in ~2
+minutes, with the same compilers, the same seeded vectors, and the same baseline
+comparison. Named sets live in `sets.toml`. See
+[docs/development/decompiler-testing.md](../../docs/development/decompiler-testing.md).
+
+```bash
+tools/dectest.py 13_loop_early_exit:gcc:O0:sum_positive --show
+tools/dectest.py @loops
+tools/dectest.py --list-sets
+```
+
 ## Per-function statuses
 
 `pass` / `fail` are decompiler results (a known `fail` stays visible in the
