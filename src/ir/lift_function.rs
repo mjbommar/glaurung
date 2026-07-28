@@ -15,15 +15,12 @@ use crate::ir::types::*;
 use crate::ir::{lift_arm32, lift_arm64, lift_x86};
 
 /// Lift a byte window into LLIR using the appropriate per-arch lifter.
-fn lift_window(bytes: &[u8], start_va: u64, arch: Arch) -> Vec<LlirInstr> {
+fn lift_window(bytes: &[u8], start_va: u64, arch: Arch, thumb: bool) -> Vec<LlirInstr> {
     match arch {
         Arch::X86 => lift_x86::lift_bytes(bytes, start_va, 32),
         Arch::X86_64 => lift_x86::lift_bytes(bytes, start_va, 64),
         Arch::AArch64 => lift_arm64::lift_bytes(bytes, start_va),
-        // ARM32 decodes as Thumb-2: Cortex-M is Thumb-only and modern
-        // arm-linux-gnueabihf defaults to Thumb, so Thumb is the pipeline
-        // default. (A32-only binaries are a documented follow-up.)
-        Arch::ARM => lift_arm32::lift_bytes(bytes, start_va, true),
+        Arch::ARM => lift_arm32::lift_bytes(bytes, start_va, thumb),
         _ => Vec::new(),
     }
 }
@@ -61,7 +58,8 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
             continue;
         }
         let window = &data[foff..end_off];
-        let instrs = lift_window(window, start, arch);
+        let thumb = func.has_flag(crate::core::function::FunctionFlags::IS_THUMB);
+        let instrs = lift_window(window, start, arch, thumb);
 
         // Successors are the CFG successor block starts, which we can recover
         // from bb.successor_ids by finding the corresponding BasicBlock.

@@ -646,13 +646,13 @@ fn discover_function(
 ) -> Option<(Function, Vec<FunctionXref>, SingleFunctionDiscoveryStats)> {
     let darch: crate::core::disassembler::Architecture = arch.into();
     let mut backend = registry::for_arch(darch, end)?;
-    // ARM32 is decoded as Thumb-2 (Cortex-M is Thumb-only; modern
-    // arm-linux-gnueabihf defaults to Thumb). Matches the lifter default in
-    // `ir::lift_function`. A32-only binaries are a documented follow-up.
-    if matches!(arch, BArch::ARM) {
-        // Best-effort: on the off chance the backend rejects the mode switch we
-        // fall back to A32 decoding rather than aborting discovery.
-        let _ = backend.set_thumb_mode(true);
+    let arm32_mode = matches!(arch, BArch::ARM)
+        .then(|| crate::analysis::arm32_mode::mode_at(data, entry.value, end));
+    if let Some(mode) = arm32_mode {
+        let _ = backend.set_thumb_mode(matches!(
+            mode,
+            crate::analysis::arm32_mode::Arm32Mode::Thumb
+        ));
     }
     let bits = darch.address_bits();
     let t0 = std::time::Instant::now();
@@ -916,6 +916,12 @@ fn discover_function(
     // Build Function object
     let fname = format!("sub_{:x}", entry.value);
     let mut func = Function::new(fname, entry.clone(), FunctionKind::Normal).ok()?;
+    if matches!(
+        arm32_mode,
+        Some(crate::analysis::arm32_mode::Arm32Mode::Thumb)
+    ) {
+        func.add_flag(FunctionFlags::IS_THUMB);
+    }
 
     // Build BasicBlocks with successor/predecessor IDs
     let mut bb_ids: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();

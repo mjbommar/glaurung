@@ -184,6 +184,29 @@ def test_decompile_requested_va_seeds_stripped_arm32(
     assert text.startswith("// glaurung: sub_46c @ 0x46c\n")
 
 
+@pytest.mark.skipif(not ARM32_SAMPLE.exists(), reason="armhf sample missing")
+def test_decompile_arm32_mixed_mode_init_uses_a32() -> None:
+    """A32 mapping symbols must override the ARM pipeline's Thumb default.
+
+    The real checked-in armhf ELF mixes A32 and Thumb in one executable.
+    ``_init`` is three A32 instructions at 0x3f4: push, a direct call to
+    ``call_weak_fn``, and pop-to-PC. Decoding those bytes as Thumb used to emit
+    unrelated arithmetic followed by a wrapped negative-address label.
+    """
+    results = g.ir.decompile_many(
+        str(ARM32_SAMPLE),
+        [0x3F4],
+        style="decbench",
+        timeout_ms=8000,
+    )
+    assert len(results) == 1
+    name, va, text = results[0]
+    assert name == "_init"
+    assert va == 0x3F4
+    assert "call_weak_fn(" in text, text
+    assert "ffffffffffff" not in text, text
+
+
 @pytest.mark.skipif(not X86_O0_SAMPLE.exists(), reason="clang-O0 sample missing")
 def test_decompile_style_c_strips_percent_prefix():
     # `--style c` drops the `%` prefix from register names and the

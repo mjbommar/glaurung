@@ -54,6 +54,8 @@ impl FunctionFlags {
     pub const IS_NAKED: FunctionFlags = FunctionFlags(32);
     pub const IS_CONSTRUCTOR: FunctionFlags = FunctionFlags(64);
     pub const IS_DESTRUCTOR: FunctionFlags = FunctionFlags(128);
+    /// Function instructions use Thumb/Thumb-2 rather than A32 encoding.
+    pub const IS_THUMB: FunctionFlags = FunctionFlags(256);
 }
 
 impl std::ops::BitOr for FunctionFlags {
@@ -800,6 +802,8 @@ impl FunctionFlagsPy {
     const IS_CONSTRUCTOR: u32 = 64;
     #[classattr]
     const IS_DESTRUCTOR: u32 = 128;
+    #[classattr]
+    const IS_THUMB: u32 = 256;
 }
 
 #[cfg(test)]
