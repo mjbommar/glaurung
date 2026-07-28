@@ -10,6 +10,16 @@ from types import SimpleNamespace
 import glaurung as g
 
 
+def test_fallback_param_roles_distinguish_copy_sources() -> None:
+    """Uncurated copy-like APIs still label their source operands."""
+    from glaurung.cli.commands.windows_risk import _param_role
+
+    assert _param_role("source", "const char *") == "source"
+    assert _param_role("sourceBuffer", "const void *") == "source"
+    assert _param_role("src", "const void *") == "source"
+    assert _param_role("destinationBuffer", "void *") == "buffer"
+
+
 def test_windows_risk_json_reports_parser_shape(
     monkeypatch,
     tmp_path,

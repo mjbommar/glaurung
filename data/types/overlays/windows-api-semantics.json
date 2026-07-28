@@ -73,6 +73,31 @@
       "confidence": 0.9
     },
     {
+      "name": "memmove",
+      "return_type": "void *",
+      "params": [
+        {"name": "destinationBuffer", "c_type": "void *", "role": "buffer"},
+        {"name": "sourceBuffer", "c_type": "const void *", "role": "source"},
+        {"name": "numberOfBytes", "c_type": "size_t", "role": "length"}
+      ],
+      "module": "ucrtbase.dll",
+      "calling_convention": "C",
+      "confidence": 0.9
+    },
+    {
+      "name": "memmove_s",
+      "return_type": "errno_t",
+      "params": [
+        {"name": "destinationBuffer", "c_type": "void *", "role": "buffer"},
+        {"name": "destinationSize", "c_type": "rsize_t", "role": "length"},
+        {"name": "sourceBuffer", "c_type": "const void *", "role": "source"},
+        {"name": "numberOfBytes", "c_type": "rsize_t", "role": "length"}
+      ],
+      "module": "ucrtbase.dll",
+      "calling_convention": "C",
+      "confidence": 0.9
+    },
+    {
       "name": "RtlAllocateHeap",
       "return_type": "PVOID",
       "params": [

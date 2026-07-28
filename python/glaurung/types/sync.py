@@ -19,12 +19,12 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import glaurung as g
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DATA_TYPES_DIR = REPO_ROOT / "data" / "types"
@@ -171,7 +171,7 @@ def sync_windows_api_types(
         ),
         "set_by": "stdlib",
         "generated": True,
-        "source_lock": str(source_lock),
+        "source_lock": _display_path(source_lock),
         "manifest": "generated/MANIFEST.json",
         "prototypes": prototypes,
     }
@@ -181,10 +181,10 @@ def sync_windows_api_types(
     manifest = {
         "schema_version": "1",
         "generated_at": generated_at,
-        "manifest_path": str(manifest_path),
-        "source_lock": str(source_lock),
-        "output_path": str(output_path),
-        "generated_bundle_path": str(output_path),
+        "manifest_path": _display_path(manifest_path),
+        "source_lock": _display_path(source_lock),
+        "output_path": _display_path(output_path),
+        "generated_bundle_path": _display_path(output_path),
         "bundle_sha256": _sha256_file(output_path),
         "prototype_count": len(prototypes),
         "source_results": source_results,
@@ -238,10 +238,10 @@ def _sync_package_source(
         "version": source.version,
         "source_url": source.source_url,
         "nupkg_url": source.nupkg_url,
-        "nupkg_path": str(package_path),
+        "nupkg_path": package_path.relative_to(cache_dir).as_posix(),
         "nupkg_sha256": nupkg_sha256,
         "winmd_path": source.winmd_path,
-        "extracted_winmd_path": str(winmd_out),
+        "extracted_winmd_path": winmd_out.relative_to(cache_dir).as_posix(),
         "winmd_sha256": _sha256_file(winmd_out),
         "confidence": source.confidence,
         "extracted_winmd": winmd_out,
@@ -323,7 +323,7 @@ def _sync_header_source(
     return {
         "source_id": f"header:{header.name}",
         "source_kind": "clang_header_ast",
-        "header_path": str(header),
+        "header_path": _display_path(header),
         "header_sha256": _sha256_file(header),
         "clang": clang,
         "clang_args": clang_args,
@@ -384,7 +384,7 @@ def _merge_header_prototypes(
         key = name.lower()
         provenance = {
             "source_id": f"header:{header.name}",
-            "header_path": str(header),
+            "header_path": _display_path(header),
             "header_sha256": header_sha256,
         }
         if key in out:
@@ -435,7 +435,7 @@ def _apply_overlay(
         "source": overlay.get("source", "glaurung-overlay"),
         "source_kind": overlay.get("source_kind", "curated_overlay"),
         "source_url": overlay.get("source_url"),
-        "path": str(overlay_path),
+        "path": _display_path(overlay_path),
         "sha256": _sha256_file(overlay_path),
     }
 
@@ -495,7 +495,7 @@ def _apply_overlay(
         semantics += 1
 
     return {
-        "path": str(overlay_path),
+        "path": _display_path(overlay_path),
         "sha256": overlay_source["sha256"],
         "prototype_added": added,
         "prototype_updated": updated,
@@ -576,6 +576,15 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     rendered = json.dumps(data, indent=2, sort_keys=True)
     path.write_text(rendered + "\n", encoding="utf-8")
+
+
+def _display_path(path: Path) -> str:
+    """Return stable repository-relative provenance for checked-in paths."""
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
 
 
 def _sha256_file(path: Path) -> str:

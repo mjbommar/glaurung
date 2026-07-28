@@ -6,10 +6,8 @@ import json
 from pathlib import Path
 
 import pytest
-
 from glaurung.llm.kb import xref_db
 from glaurung.llm.kb.persistent import PersistentKnowledgeBase
-
 
 _HELLO = Path(
     "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug"
@@ -65,6 +63,8 @@ def test_winapi_bundle_file_is_well_formed() -> None:
         # curated kernel / CRT sink modelling
         "strcpy_s",
         "strnlen",
+        "memmove",
+        "memmove_s",
         "ExAllocatePoolWithTag",
         "ProbeForRead",
         # crypto
@@ -109,6 +109,11 @@ def test_pe_auto_load_imports_winapi_bundle(tmp_path: Path) -> None:
     assert strcpy is not None
     assert strcpy.params[0].name == "destinationBuffer"
     assert strcpy.params[1].c_type == "rsize_t"
+
+    memmove = xref_db.get_function_prototype(kb, "memmove")
+    assert memmove is not None
+    assert memmove.params[0].name == "destinationBuffer"
+    assert memmove.params[1].role == "source"
 
     pool = xref_db.get_function_prototype(kb, "ExAllocatePoolWithTag")
     assert pool is not None

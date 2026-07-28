@@ -87723,8 +87723,8 @@
       },
       "return_type": "HANDLE",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -119608,8 +119608,8 @@
       },
       "return_type": "BOOL",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -160135,16 +160135,16 @@
       ],
       "provenance": {
         "notes": "Legacy kernel allocator retained for historical binaries and vulnerable-driver research.",
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
       },
       "return_type": "PVOID",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -160193,8 +160193,8 @@
       ],
       "provenance": {
         "notes": null,
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -365030,8 +365030,8 @@
       ],
       "provenance": {
         "notes": null,
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -365070,8 +365070,83 @@
       ],
       "provenance": {
         "notes": null,
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
+        "source": "glaurung-windows-api-overlay",
+        "source_kind": "curated_overlay",
+        "source_url": "data/types/overlays/windows-api-semantics.json"
+      },
+      "return_type": "errno_t",
+      "source": "glaurung-windows-api-overlay",
+      "source_kind": "curated_overlay"
+    },
+    {
+      "calling_convention": "C",
+      "confidence": 0.9,
+      "is_variadic": false,
+      "module": "ucrtbase.dll",
+      "name": "memmove",
+      "params": [
+        {
+          "c_type": "void *",
+          "name": "destinationBuffer",
+          "role": "buffer"
+        },
+        {
+          "c_type": "const void *",
+          "name": "sourceBuffer",
+          "role": "source"
+        },
+        {
+          "c_type": "size_t",
+          "name": "numberOfBytes",
+          "role": "length"
+        }
+      ],
+      "provenance": {
+        "notes": null,
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
+        "source": "glaurung-windows-api-overlay",
+        "source_kind": "curated_overlay",
+        "source_url": "data/types/overlays/windows-api-semantics.json"
+      },
+      "return_type": "void *",
+      "source": "glaurung-windows-api-overlay",
+      "source_kind": "curated_overlay"
+    },
+    {
+      "calling_convention": "C",
+      "confidence": 0.9,
+      "is_variadic": false,
+      "module": "ucrtbase.dll",
+      "name": "memmove_s",
+      "params": [
+        {
+          "c_type": "void *",
+          "name": "destinationBuffer",
+          "role": "buffer"
+        },
+        {
+          "c_type": "rsize_t",
+          "name": "destinationSize",
+          "role": "length"
+        },
+        {
+          "c_type": "const void *",
+          "name": "sourceBuffer",
+          "role": "source"
+        },
+        {
+          "c_type": "rsize_t",
+          "name": "numberOfBytes",
+          "role": "length"
+        }
+      ],
+      "provenance": {
+        "notes": null,
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -420734,16 +420809,16 @@
       ],
       "provenance": {
         "notes": "Native API overlay for process-memory and exploit staging triage.",
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
       },
       "return_type": "NTSTATUS",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -457545,16 +457620,16 @@
       ],
       "provenance": {
         "notes": null,
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
       },
       "return_type": "void",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -457600,8 +457675,8 @@
       ],
       "provenance": {
         "notes": null,
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -502752,8 +502827,8 @@
       ],
       "provenance": {
         "notes": null,
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -506294,8 +506369,8 @@
       ],
       "provenance": {
         "notes": null,
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -586533,16 +586608,16 @@
       ],
       "provenance": {
         "notes": "CRT bounded copy sink used heavily by Windows kernel/core-service research.",
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
       },
       "return_type": "errno_t",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -587456,8 +587531,8 @@
       ],
       "provenance": {
         "notes": "CRT prototype overlay; not present in Win32 metadata.",
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -660069,8 +660144,8 @@
       },
       "return_type": "void *",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -660335,8 +660410,8 @@
       },
       "return_type": "BOOL",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -660396,8 +660471,8 @@
       },
       "return_type": "BOOL",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -675559,8 +675634,8 @@
       ],
       "provenance": {
         "notes": "Preserve WinHTTP handle typedef spelling for decompiler readability.",
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -685499,8 +685574,8 @@
       },
       "return_type": "BOOL",
       "semantic_provenance": {
-        "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-        "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f",
+        "path": "data/types/overlays/windows-api-semantics.json",
+        "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50",
         "source": "glaurung-windows-api-overlay",
         "source_kind": "curated_overlay",
         "source_url": "data/types/overlays/windows-api-semantics.json"
@@ -709738,5 +709813,5 @@
   ],
   "schema_version": "2",
   "set_by": "stdlib",
-  "source_lock": "/nas4/data/workspace-infosec/glaurung/data/types/windows-api-sources.lock.json"
+  "source_lock": "data/types/windows-api-sources.lock.json"
 }

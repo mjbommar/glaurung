@@ -1,10 +1,10 @@
 {
   "analysis_network_policy": "offline by default; only `glaurung types sync` downloads metadata",
-  "bundle_sha256": "2fae1911fe1412b45c29d7fd8c5a5585bcfbd21f9a44f93c09a9b5378ec7c381",
-  "generated_at": "2026-05-18T12:58:15Z",
-  "generated_bundle_path": "/nas4/data/workspace-infosec/glaurung/data/types/stdlib-winapi-protos.json",
+  "bundle_sha256": "c7fa9b1f0e2abd308c3fe7b7cd94d057f311ec0a92aa67f53daeb09d01894a0a",
+  "generated_at": "2026-07-28T13:52:27Z",
+  "generated_bundle_path": "data/types/stdlib-winapi-protos.json",
   "header_results": [],
-  "manifest_path": "/nas4/data/workspace-infosec/glaurung/data/types/generated/MANIFEST.json",
+  "manifest_path": "data/types/generated/MANIFEST.json",
   "network_used": false,
   "optional_sources": {
     "headers": {
@@ -54,23 +54,23 @@
       }
     ]
   },
-  "output_path": "/nas4/data/workspace-infosec/glaurung/data/types/stdlib-winapi-protos.json",
+  "output_path": "data/types/stdlib-winapi-protos.json",
   "overlay": {
-    "path": "/nas4/data/workspace-infosec/glaurung/data/types/overlays/windows-api-semantics.json",
-    "prototype_added": 5,
+    "path": "data/types/overlays/windows-api-semantics.json",
+    "prototype_added": 7,
     "prototype_updated": 7,
     "semantics_attached": 10,
-    "sha256": "8fb4962f90681212b36a078398f32103af32e459fbc122ae4fede47d7305e65f"
+    "sha256": "6c9d32233c112b9537c143ecd22e6e79a4c489ae8b73a1ea03540a32d47fad50"
   },
-  "prototype_count": 20762,
+  "prototype_count": 20764,
   "schema_version": "1",
-  "source_lock": "/nas4/data/workspace-infosec/glaurung/data/types/windows-api-sources.lock.json",
+  "source_lock": "data/types/windows-api-sources.lock.json",
   "source_results": [
     {
       "confidence": 0.99,
-      "extracted_winmd_path": "/home/mjbommar/.cache/glaurung/windows-api-metadata/microsoft.windows.sdk.win32metadata/70.0.11-preview/Windows.Win32.winmd",
+      "extracted_winmd_path": "microsoft.windows.sdk.win32metadata/70.0.11-preview/Windows.Win32.winmd",
       "method_count": 70599,
-      "nupkg_path": "/home/mjbommar/.cache/glaurung/windows-api-metadata/microsoft.windows.sdk.win32metadata.70.0.11-preview.nupkg",
+      "nupkg_path": "microsoft.windows.sdk.win32metadata.70.0.11-preview.nupkg",
       "nupkg_sha256": "251713165cd5fac0df81428fb67d283a7db949d362be685b4bcfb41dc028ceef",
       "nupkg_url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.win32metadata/70.0.11-preview/microsoft.windows.sdk.win32metadata.70.0.11-preview.nupkg",
       "package": "Microsoft.Windows.SDK.Win32Metadata",
@@ -87,9 +87,9 @@
     },
     {
       "confidence": 0.93,
-      "extracted_winmd_path": "/home/mjbommar/.cache/glaurung/windows-api-metadata/microsoft.windows.wdk.win32metadata/0.13.25-experimental/Windows.Wdk.winmd",
+      "extracted_winmd_path": "microsoft.windows.wdk.win32metadata/0.13.25-experimental/Windows.Wdk.winmd",
       "method_count": 4461,
-      "nupkg_path": "/home/mjbommar/.cache/glaurung/windows-api-metadata/microsoft.windows.wdk.win32metadata.0.13.25-experimental.nupkg",
+      "nupkg_path": "microsoft.windows.wdk.win32metadata.0.13.25-experimental.nupkg",
       "nupkg_sha256": "79079a449d8f621052bcaf13039e411d1c1b77aec4a89cf04d96518d0a619617",
       "nupkg_url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.wdk.win32metadata/0.13.25-experimental/microsoft.windows.wdk.win32metadata.0.13.25-experimental.nupkg",
       "package": "Microsoft.Windows.WDK.Win32Metadata",

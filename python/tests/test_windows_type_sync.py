@@ -8,8 +8,16 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 from glaurung.types import sync as win_sync
+
+
+def test_generated_provenance_uses_repo_relative_paths() -> None:
+    assert win_sync._display_path(win_sync.DEFAULT_LOCK_PATH) == (
+        "data/types/windows-api-sources.lock.json"
+    )
+    assert win_sync._display_path(win_sync.DEFAULT_OVERLAY_PATH) == (
+        "data/types/overlays/windows-api-semantics.json"
+    )
 
 
 def test_windows_api_source_lock_is_well_formed() -> None:

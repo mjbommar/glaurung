@@ -185,4 +185,18 @@ mod tests {
         let proto = lookup("CreateFile").expect("CreateFile stem");
         assert!(proto.name == "CreateFileA" || proto.name == "CreateFileW");
     }
+
+    #[test]
+    fn resolves_kernel_and_crt_security_sinks() {
+        let strcpy = lookup("strcpy_s").expect("strcpy_s proto");
+        assert_eq!(strcpy.params[0].name, "destinationBuffer");
+        assert!(render_signature(strcpy).contains("rsize_t numberOfElements"));
+
+        let pool = lookup("NTOSKRNL.EXE!ExAllocatePoolWithTag").expect("pool proto");
+        assert_eq!(pool.return_type, "PVOID");
+        assert!(render_signature(pool).contains("SIZE_T NumberOfBytes"));
+
+        let probe = lookup("ProbeForRead").expect("ProbeForRead proto");
+        assert!(render_signature(probe).contains("SIZE_T Length"));
+    }
 }

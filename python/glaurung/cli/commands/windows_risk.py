@@ -1911,6 +1911,8 @@ def _split_call_args(args: str) -> list[str]:
 def _param_role(param_name: str, c_type: str) -> str | None:
     name = param_name.lower()
     c_type_lower = c_type.lower()
+    if any(token in name for token in ("source", "src")):
+        return "source"
     if "buffer" in name or name in {"lpdata", "lpbaseaddress", "lpaddress", "buf"}:
         return "buffer"
     if _looks_like_output_length_param(name):
