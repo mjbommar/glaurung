@@ -1,0 +1,8 @@
+Path-condition depth K=24, 200 reps. Cost to explore to depth K (ms/run):
+  z3 one-shot     :   13.859 ms   (glaurung's current backend)
+  axeyum one-shot :    1.486 ms   (0.11x vs z3)
+  axeyum WARM     :    0.195 ms   (0.01x vs z3, 0.13x vs axeyum one-shot)
+  (warm path stayed SAT throughout: true)
+
+If axeyum WARM << axeyum one-shot, the incremental Solver-trait
+extension (P5) is the lever to close the real-workload gap.

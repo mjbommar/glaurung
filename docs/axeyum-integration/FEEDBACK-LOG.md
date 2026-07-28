@@ -447,3 +447,79 @@ representative tier (Axeyum/Z3, gated, 100% decided, 0 disagreements):
   warm/incremental path (GQ7/GQ8), which is still untestable through glaurung
   (one-shot Solver trait). Native-path profiling + ordered capture now exist
   (`check_profiled` / GLAURUNG_AXEYUM_PROFILE_DIR) to make that measurable.
+
+## Iteration 17 - THE WARM PATH LANDS AND FLIPS THE GAP: axeyum now BEATS z3 on real drivers (2026-07-15)
+
+The one lever every prior iteration pointed at (warm/incremental reuse, P5)
+is now wired end-to-end through the real explorer and measured on real
+drivers. **It works, and it does not just close the ~2x gap -- it crosses
+over to a net win, with zero correctness regressions.**
+
+Mechanism (glaurung side, all landed on `sec/axeyum-backend`):
+- `explore.rs` assigns every `State` a `warm_path_id` (fresh on fork / re-root),
+  calls `solve_for_path(pool, constraints, path_id)`, and `close_warm_path` on
+  drop. So the solver backend receives the explorer's real path lineage.
+- `axeyum_backend` gained a `WarmReusePolicy` (Off / Snapshot / Lineage), env
+  `GLAURUNG_AXEYUM_WARM_REUSE` (unset=off, `lineage`, else=snapshot):
+  - **Snapshot**: one retained per-thread adapter reconstructs the longest
+    common structural prefix between *consecutive* snapshots.
+  - **Lineage**: a `path_id -> retained IncrementalBvSolver` map, bounded by
+    live-path and per-path assertion caps with fallback counters
+    (`GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS`, `..._MAX_ASSERTIONS_PER_PATH`).
+- Observability already in `ioctlance`: `[axeyum-warm]` line
+  (`warm_reuse_stats` + `warm_path_reuse_stats`).
+
+Method: `ioctlance` under `GLAURUNG_SHADOW_DIFF=1` (both backends on every
+query, z3 authoritative so **the query stream and path lineage are identical
+across warm modes** -- the only variable is axeyum's solving cost). Matched
+effectively-unbounded budgets (`IOCTLANCE_SOLVE_SECS=600
+IOCTLANCE_SOLVE_BUDGET=200000`) so every mode traverses the *identical
+complete stream*. Release build, both features.
+
+- **[RESULT - vwififlt, identical 4753-query stream, 0 disagreements]**
+  axeyum solver-time **cold 12034 ms -> warm/lineage 4890 ms (2.46x less)**;
+  vs the stable z3 baseline (~5.5 s) that is **0.5x (2.1x SLOWER) cold ->
+  1.1x (1.13x FASTER) warm**. End-to-end wall clock 17.9 s -> 11.0 s.
+- **[RESULT - DptfDevGen (harder formulas), identical 561-query stream, 0
+  disagreements]** axeyum **cold 1317 ms -> warm/lineage 238 ms (5.5x less)**;
+  vs z3 **0.5x cold -> 2.3x FASTER warm**. The harder-formula driver benefits
+  MORE from reuse, not less.
+- **[WHY - reuse stats]** Lineage retains each path's blast/CNF/learned state,
+  so consecutive checks re-assert almost nothing. vwififlt: 4753 checks,
+  169,774 prefix-roots reused, only 1,391 pops (near-zero thrash), 1,487 paths
+  created/closed, peak 11 live, 0 fallbacks, 0 resets. DptfDevGen: 561 checks,
+  12,892 reused, 168 pops, peak 5 live.
+- **[SNAPSHOT policy is NOT the answer]** The consecutive-snapshot adapter
+  barely moved vwififlt (0.6x->0.7x): glaurung's DFS interleaves *unrelated*
+  paths, so a single adapter pops and re-adds almost everything each check
+  (`added=2874 popped=2871`). Only the **per-path lineage** map captures the
+  reuse. Lesson: warm reuse in a forking explorer must be keyed by path
+  identity, not by consecutive-query prefix.
+- **[AXEYUM - this is the paper-flipping result]** The word-level
+  preprocessing + clause/bit-blast reuse axeyum built for exactly this formula
+  shape (`assert_configured`, incremental CNF-root fusion) was a net LOSS on
+  the one-shot cold path (Iter 13) because there was nothing to amortize.
+  Given the warm path to amortize across, it delivers: **~2.5-5.5x less solver
+  time and a crossover from ~2x slower to 1.1-2.3x faster than z3 on real
+  driver query streams.** C2 ("axeyum is slower on real formulas") no longer
+  holds *when the consumer uses the warm path*; it held only for the one-shot
+  trait.
+
+- **[HONEST caveats]** (1) Two drivers, single clean run each -- but the
+  comparison is internally controlled (identical stream, stable z3 baseline,
+  ratios corroborated by the earlier budget-bounded runs 0.6x->1.2x). (2)
+  Shadow mode has z3 drive exploration; a solo-axeyum warm run would explore
+  its own (model-divergent) stream -- fine for *finding* work, but solver-cost
+  isolation requires the shadow harness used here. (3) The gains assume the
+  explorer keeps path lineage alive; the live-path cap (default) bounds memory
+  and fell back 0 times on these drivers. (4) Not yet run across the full
+  6-driver realworld set or the 128-query representative corpus (the corpus is
+  a *deduped set*, so it has no path lineage to reuse -- warm reuse is only
+  measurable through the live explorer, which this harness does).
+
+- **[STATUS]** The gap-closing arc that was stuck at ~1.34x (corpus, CNF-side
+  micro-opt only) is superseded for the real workload: **warm/lineage reuse is
+  the structural win, and it overshoots break-even into a net speedup.** Next:
+  broaden to the full driver set, a second rep for variance, and decide whether
+  to make lineage the default warm policy. PAPER-NOTES C2 needs a warm-path
+  revision (kept separate pending user sign-off on the thesis change).

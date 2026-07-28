@@ -1,0 +1,25 @@
+case                  z3  axeyum   z3_us/op   ax_us/op   ratio
+----------------------------------------------------------------
+linear8              sat     sat      481.2       15.6   0.03x
+linear16             sat     sat      359.2       29.7   0.08x
+linear32             sat     sat      471.2       58.6   0.12x
+linear64             sat     sat      772.6      137.1   0.18x
+mask_range8        unsat   unsat      137.8       12.9   0.09x
+mask_range16         sat     sat     1387.5       30.4   0.02x
+mask_range32         sat     sat     1467.6       47.6   0.03x
+mask_range64         sat     sat     1372.9       82.0   0.06x
+signed_win8          sat     sat     1095.0       15.2   0.01x
+signed_win16         sat     sat     1048.3       20.5   0.02x
+signed_win32         sat     sat     1141.4       29.1   0.03x
+signed_win64         sat     sat     1114.2       46.6   0.04x
+overflow8            sat     sat     2242.6       65.0   0.03x
+overflow16           sat     sat     1501.3      122.3   0.08x
+overflow32           sat     sat     1920.8      225.5   0.12x
+overflow64           sat     sat     2377.7      438.5   0.18x
+reassemble32         sat     sat      129.7       19.1   0.15x
+contra_eq          unsat   unsat      227.4       25.3   0.11x
+contra_range       unsat   unsat      378.8       34.2   0.09x
+ite_shift_mux        sat     sat      431.2       58.7   0.14x
+----------------------------------------------------------------
+TOTALS: 20 cases, 0 confident disagreements | z3 1002.92 ms, axeyum 75.70 ms, ratio 0.08x
+OK: verdicts agree across all cases (unknowns tolerated).

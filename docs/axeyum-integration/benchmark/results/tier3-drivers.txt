@@ -1,0 +1,22 @@
+### win10-vwififlt @ 9ace064 ###
+[shadow-diff] queries=4753 agree=4753 disagree=0 | SAME-STREAM z3=5063.8ms axeyum=1533.7ms speedup=3.3x
+[model-choice] both-sat=2945 different-model=2762 | z3-unknown=0 axeyum-unknown=0 unknown-split=0
+
+### sqfs-intel-DptfDevGen @ 9ace064 ###
+[shadow-diff] queries=561 agree=561 disagree=0 | SAME-STREAM z3=510.0ms axeyum=160.3ms speedup=3.2x
+[model-choice] both-sat=317 different-model=187 | z3-unknown=0 axeyum-unknown=0 unknown-split=0
+
+### windows-update-intel-audio-IntcSST @ 9ace064 ###
+[shadow-diff] queries=1672 agree=1672 disagree=0 | SAME-STREAM z3=2643.3ms axeyum=271.2ms speedup=9.7x
+[model-choice] both-sat=1270 different-model=770 | z3-unknown=0 axeyum-unknown=0 unknown-split=0
+
+### windows-update-SurfacePenBleLcAddrAdaptationDriver @ 9ace064 ###
+[shadow-diff] queries=2551 agree=2551 disagree=0 | SAME-STREAM z3=4833.9ms axeyum=309.9ms speedup=15.6x
+[model-choice] both-sat=2282 different-model=815 | z3-unknown=0 axeyum-unknown=0 unknown-split=0
+
+### tcpip @ 9ace064  (large driver; SOLVE_SECS=60, DEADLINE=240) ###
+[shadow-diff] queries=46336 agree=46336 disagree=0 | SAME-STREAM z3=163538.8ms axeyum=59019.4ms speedup=2.8x
+[model-choice] both-sat=31651 different-model=25097 | z3-unknown=52 axeyum-unknown=11 unknown-split=57
+
+### dxgkrnl @ prior-session (large driver) ###
+[shadow-diff] queries=17572 agree=17572 disagree=0 | SAME-STREAM z3~36600ms axeyum~7700ms speedup~4.7x  (pre-concat-fix budget; re-run via --full-drivers to refresh)

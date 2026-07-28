@@ -1,0 +1,12 @@
+Per-solve latency (us), z3 vs axeyum, 100 reps. Cell = z3/axeyum (speedup).
+
+width\count                   K=1                   K=4                  K=16                  K=64
+--------------------------------------------------------------------------------------------------
+        8b        474/15 (31.7x)        997/47 (21.0x)      2869/191 (15.0x)     10372/774 (13.4x)
+       16b        359/28 (13.1x)        549/103 (5.3x)       1225/400 (3.1x)      3887/1653 (2.4x)
+       32b         463/56 (8.3x)        916/215 (4.3x)       2636/874 (3.0x)      9607/3610 (2.7x)
+       64b        841/128 (6.6x)       2165/677 (3.2x)      7682/2103 (3.7x)     29170/9549 (3.1x)
+
+Reading: z3 (left) is ~flat across size = fixed FFI/context floor.
+axeyum (right) starts tiny and grows with formula size = bit-blast cost.
+Speedup is largest for small formulas and shrinks as size grows.

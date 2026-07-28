@@ -154,6 +154,10 @@ name = "axeyum_diff"
 required-features = ["solver-z3", "solver-axeyum"]
 
 [[example]]
+name = "axeyum_bench_primitives"
+required-features = ["solver-z3", "solver-axeyum"]
+
+[[example]]
 name = "axeyum_sweep"
 required-features = ["solver-z3", "solver-axeyum"]
 

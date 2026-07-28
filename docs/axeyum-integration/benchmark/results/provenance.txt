@@ -1,0 +1,6 @@
+date_utc: 2026-07-17T12:10:47Z
+glaurung_rev: 9ace06406d2aa361f2805b01d097e584e3a0d444
+axeyum_rev: 1cc19181d3f20cd7053bb0ff054c303b0d0c3cfa
+host: Linux 7.0.0-27-generic x86_64
+cpu: 12th Gen Intel(R) Core(TM) i9-12900K
+rustc: rustc 1.97.0-nightly (f53b654a8 2026-04-30)
