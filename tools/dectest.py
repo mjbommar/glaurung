@@ -101,6 +101,34 @@ def function_universe() -> dict[str, list[str]]:
     return {k: sorted(v) for k, v in universe.items()}
 
 
+def lane_function_universe() -> dict[tuple[str, str, str], list[str]]:
+    """Selectable functions for each exact compiler/optimisation lane.
+
+    C++ ABI aliases are not stable across compilers or optimisation levels. The
+    baseline records what actually existed in each pinned lane; required
+    functions are added to every lane because their absence is infrastructure.
+    """
+    universe = {
+        (fixture, cc, opt): set(required)
+        for fixture, required in M.REQUIRED_FUNCTIONS.items()
+        for cc in COMPILERS
+        for opt in OPTS
+    }
+    if BASELINE.is_file():
+        observed = json.loads(BASELINE.read_text())
+        for cell, fns in observed.items():
+            if cell.startswith("__") or not isinstance(fns, dict):
+                continue
+            parts = cell.split(":")
+            if len(parts) != 3:
+                continue
+            key = tuple(parts)
+            if key not in universe:
+                continue
+            universe[key].update(name for name in fns if not name.startswith("__"))
+    return {key: sorted(funcs) for key, funcs in universe.items()}
+
+
 @dataclass(frozen=True)
 class Selector:
     fixture: str
@@ -159,6 +187,7 @@ def resolve(raws: list[str]) -> list[Lane]:
     that matched nothing rather than reporting an empty run.
     """
     universe = function_universe()
+    lane_universe = lane_function_universe()
     selectors = [parse_selector(r) for raw in raws for r in _expand(raw)]
     by_lane: dict[tuple[str, str, str], set[str]] = {}
     for sel in selectors:
@@ -182,12 +211,12 @@ def resolve(raws: list[str]) -> list[Lane]:
         # fixture is different: there the miss is a typo, and is reported as one.
         matched_any = False
         for fixture in fixtures:
-            funcs = fnmatch.filter(universe[fixture], sel.func)
-            if not funcs:
-                continue
-            matched_any = True
             for cc in ccs:
                 for opt in opts:
+                    funcs = fnmatch.filter(lane_universe[(fixture, cc, opt)], sel.func)
+                    if not funcs:
+                        continue
+                    matched_any = True
                     by_lane.setdefault((fixture, cc, opt), set()).update(funcs)
         if not matched_any:
             where = (
@@ -209,13 +238,17 @@ def resolve(raws: list[str]) -> list[Lane]:
     ]
 
 
-def summary_line(lanes, regressions, improvements, full_matrix: bool) -> str:
+def summary_line(
+    lanes, regressions, improvements, full_matrix: bool, infra=None
+) -> str:
     """The last line of every run. It states the scope on purpose: a green result
     over 1 lane and a green result over 56 are different claims."""
     scope = "FULL MATRIX" if full_matrix else "SCOPED"
     n = len(lanes)
     pct = f"{100 * n / FULL_MATRIX_LANES:.0f}%"
     head = f"{scope}: {n} lane{'' if n == 1 else 's'} of {FULL_MATRIX_LANES} ({pct})"
+    if infra:
+        return f"{head} — {len(infra)} INFRASTRUCTURE ERROR(S)"
     if regressions:
         return f"{head} — {len(regressions)} REGRESSION(S)"
     tail = (
@@ -403,6 +436,7 @@ def main(argv=None) -> int:
             regressions,
             improvements,
             full_matrix=len(lanes) == FULL_MATRIX_LANES,
+            infra=infra,
         )
     )
     if infra:

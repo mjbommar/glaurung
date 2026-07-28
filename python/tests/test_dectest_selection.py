@@ -88,6 +88,14 @@ def test_the_universe_still_contains_every_required_function():
         assert set(required) <= set(universe[fixture])
 
 
+def test_bare_fixture_uses_each_lanes_observed_function_set():
+    """C++ constructor/destructor aliases differ by compiler and optimisation.
+    A full-fixture selector must not demand GCC-only aliases from Clang lanes."""
+    lanes = {lane.key: lane for lane in D.resolve(["10_cpp_runtime_shapes"])}
+    assert "_ZN5GuardC1EPii" in lanes["10_cpp_runtime_shapes:gcc:O0"].funcs
+    assert "_ZN5GuardC1EPii" not in lanes["10_cpp_runtime_shapes:clang:O0"].funcs
+
+
 # --- fail-closed -----------------------------------------------------------
 
 
@@ -155,6 +163,19 @@ def test_a_scoped_result_reports_its_scope():
     summary = D.summary_line(lanes, regressions=[], improvements=[], full_matrix=False)
     assert "SCOPED" in summary
     assert "1 lane" in summary
+
+
+def test_infrastructure_errors_can_never_render_as_green():
+    lanes = D.resolve(["03_loop_shapes:gcc:O0"])
+    summary = D.summary_line(
+        lanes,
+        regressions=[],
+        improvements=[],
+        full_matrix=False,
+        infra=["worker crashed"],
+    )
+    assert "INFRASTRUCTURE" in summary
+    assert "no regressions" not in summary
 
 
 def test_dectest_has_no_baseline_writing_flag():

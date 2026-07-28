@@ -14,7 +14,7 @@
     "ternary_nested": "pass"
   },
   "01_conditional_polarity:clang:O2": {
-    "classify": "fail",
+    "classify": "pass",
     "cmp_signed": "pass",
     "cmp_unsigned": "pass",
     "early_return": "pass",
@@ -428,7 +428,7 @@
   "08_indirect_dispatch:clang:O2": {
     "apply": "structural",
     "dispatch": "fail",
-    "dispatch_switch": "fail",
+    "dispatch_switch": "pass",
     "tail_dispatch": "fail"
   },
   "08_indirect_dispatch:gcc:O0": {
@@ -732,7 +732,7 @@
     "dec_loop": "fail",
     "dec_preserves_carry": "pass",
     "shift_until_zero": "fail",
-    "sub_then_sign": "fail"
+    "sub_then_sign": "pass"
   },
   "__toolchain__": {
     "clang": "Ubuntu clang version 14.0.0-1ubuntu1.1",
