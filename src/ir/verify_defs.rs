@@ -188,6 +188,16 @@ fn reads_expr(e: &Expr, out: &mut Vec<String>) {
             reads_expr(lhs, out);
             reads_expr(rhs, out);
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            reads_expr(cond, out);
+            reads_expr(if_true, out);
+            reads_expr(if_false, out);
+        }
         Expr::Un { src, .. } => reads_expr(src, out),
         Expr::Cast { expr, .. } => reads_expr(expr, out),
     }
@@ -496,6 +506,16 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                 regs_in(lhs, out);
                 regs_in(rhs, out);
             }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                regs_in(cond, out);
+                regs_in(if_true, out);
+                regs_in(if_false, out);
+            }
             Expr::Un { src, .. } => regs_in(src, out),
             Expr::Cast { expr, .. } => regs_in(expr, out),
             Expr::Deref { addr, .. } => regs_in(addr, out),
@@ -521,6 +541,16 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 scan_expr(lhs, out);
                 scan_expr(rhs, out);
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                scan_expr(cond, out);
+                scan_expr(if_true, out);
+                scan_expr(if_false, out);
             }
             Expr::Un { src, .. } => scan_expr(src, out),
             Expr::Cast { expr, .. } => scan_expr(expr, out),
@@ -720,6 +750,33 @@ mod tests {
         let v = check(&f);
         assert_eq!(names(&v), vec!["var7"]);
         assert_eq!(v[0].kind, ViolationKind::NeverDefined);
+    }
+
+    #[test]
+    fn a_select_keeps_condition_and_both_value_arms_as_reads() {
+        let f = func(vec![
+            assign(
+                "local_0",
+                Expr::Select {
+                    cond: Box::new(reg("var1")),
+                    if_true: Box::new(reg("var2")),
+                    if_false: Box::new(reg("var3")),
+                    width: 8,
+                },
+            ),
+            Stmt::Return {
+                value: Some(reg("local_0")),
+            },
+        ]);
+
+        let v = check(&f);
+
+        assert_eq!(names(&v), vec!["var1", "var2", "var3"]);
+        assert!(
+            v.iter()
+                .all(|violation| violation.kind == ViolationKind::NeverDefined),
+            "all three select inputs must remain visible to verification: {v:?}"
+        );
     }
 
     #[test]

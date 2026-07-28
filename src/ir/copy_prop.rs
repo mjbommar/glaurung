@@ -176,7 +176,9 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 invalidate(&mut copies, dst);
                 if !is_self_ref(dst, src) {
                     let record = is_pure_copyable(src)
-                        || (is_scratch_reg(dst) && reads.get(dst).copied().unwrap_or(0) == 1);
+                        || (is_scratch_reg(dst)
+                            && reads.get(dst).copied().unwrap_or(0) == 1
+                            && !matches!(src, Expr::Select { .. }));
                     if record {
                         copies.insert(dst.clone(), src.clone());
                     }
@@ -432,6 +434,12 @@ fn contains_deref(e: &Expr) -> bool {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_deref(lhs) || contains_deref(rhs)
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => contains_deref(cond) || contains_deref(if_true) || contains_deref(if_false),
         Expr::Un { src, .. } => contains_deref(src),
         Expr::Cast { expr, .. } => contains_deref(expr),
     }
@@ -458,6 +466,16 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reg_uses(lhs, target) + count_reg_uses(rhs, target)
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            count_reg_uses(cond, target)
+                + count_reg_uses(if_true, target)
+                + count_reg_uses(if_false, target)
+        }
         Expr::Un { src, .. } => count_reg_uses(src, target),
         Expr::Cast { expr, .. } => count_reg_uses(expr, target),
     }
@@ -483,6 +501,16 @@ fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reads_expr(lhs, reads);
             count_reads_expr(rhs, reads);
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            count_reads_expr(cond, reads);
+            count_reads_expr(if_true, reads);
+            count_reads_expr(if_false, reads);
         }
         Expr::Un { src, .. } => count_reads_expr(src, reads),
         Expr::Cast { expr, .. } => count_reads_expr(expr, reads),
@@ -623,6 +651,16 @@ fn subst(e: &mut Expr, copies: &Copies) {
             subst(lhs, copies);
             subst(rhs, copies);
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            subst(cond, copies);
+            subst(if_true, copies);
+            subst(if_false, copies);
+        }
         Expr::Un { src, .. } => subst(src, copies),
         Expr::Cast { expr, .. } => subst(expr, copies),
     }
@@ -729,6 +767,50 @@ mod tests {
             } => assert_eq!(**lhs, Expr::Reg(reg("local_3"))),
             other => panic!("expected folded `return (local_3 == 7)`, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn single_use_select_stays_statement_rooted_for_one_armed_rendering() {
+        let selected = reg("var0");
+        let mut f = Function {
+            name: "select".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: selected.clone(),
+                    src: Expr::Select {
+                        cond: Box::new(Expr::Reg(reg("cond"))),
+                        if_true: Box::new(Expr::Reg(reg("yes"))),
+                        if_false: Box::new(Expr::Reg(reg("no"))),
+                        width: 8,
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(selected)),
+                        rhs: Box::new(Expr::Const(1)),
+                    }),
+                },
+            ],
+        };
+
+        propagate_copies(&mut f);
+
+        assert!(
+            matches!(
+                f.body.as_slice(),
+                [
+                    Stmt::Assign {
+                        src: Expr::Select { .. },
+                        ..
+                    },
+                    Stmt::Return { .. }
+                ]
+            ),
+            "a select must stay at statement scope for one-armed rendering: {:?}",
+            f.body
+        );
     }
 
     #[test]

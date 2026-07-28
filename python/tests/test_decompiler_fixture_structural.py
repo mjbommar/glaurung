@@ -280,6 +280,85 @@ def test_sum_array_recovers_a_for_loop(tmp_path):
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
+@pytest.mark.parametrize(("opt", "expected_else_count"), [("-O0", 1), ("-O2", 0)])
+def test_signs_renders_lifted_select_as_one_armed_if(
+    tmp_path: Path, opt: str, expected_else_count: int
+) -> None:
+    """Real compiled selects must remain statement-rooted conditional updates."""
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "arith.c"
+    binary = tmp_path / f"arith-gcc-{opt[1:]}.so"
+    compiled = TC.run(
+        ["gcc", "-shared", "-fPIC", "-g", opt, "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "signs",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+        env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
+    )
+
+    assert " ? " not in result.stdout, result.stdout
+    assert result.stdout.count("if (") == 2, result.stdout
+    assert result.stdout.count("else") == expected_else_count, result.stdout
+    assert "glaurung-verify" not in result.stdout, result.stdout
+
+
+def test_nested_select_under_existing_branch_retains_inner_else(tmp_path: Path) -> None:
+    """An optimized select inside source control flow must retain both arms."""
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "branches.c"
+    binary = tmp_path / "branches-gcc-O2.so"
+    compiled = TC.run(
+        ["gcc", "-shared", "-fPIC", "-g", "-O2", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "nested",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+        env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
+    )
+
+    assert " ? " not in result.stdout, result.stdout
+    assert result.stdout.count("if (") == 2, result.stdout
+    assert result.stdout.count("else") == 1, result.stdout
+    assert "glaurung-verify" not in result.stdout, result.stdout
+
+
 def test_declared_structural_predicates_are_all_present(report):
     # A declared predicate must actually be evaluated (True/False), never absent —
     # a structural assertion that silently does not run is a fail-open gap.

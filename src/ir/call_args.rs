@@ -128,6 +128,16 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
                 expr(lhs, f);
                 expr(rhs, f);
             }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                expr(cond, f);
+                expr(if_true, f);
+                expr(if_false, f);
+            }
             Expr::Un { src, .. } => expr(src, f),
             Expr::Cast { expr: e, .. } => expr(e, f),
             Expr::Deref { addr, .. } => expr(addr, f),
@@ -598,6 +608,16 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
             mark_arg_reads_in_expr(lhs, arch, read_between);
             mark_arg_reads_in_expr(rhs, arch, read_between);
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            mark_arg_reads_in_expr(cond, arch, read_between);
+            mark_arg_reads_in_expr(if_true, arch, read_between);
+            mark_arg_reads_in_expr(if_false, arch, read_between);
+        }
         Expr::Un { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
         Expr::Cast { expr, .. } => mark_arg_reads_in_expr(expr, arch, read_between),
     }
@@ -761,6 +781,16 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
         Expr::Deref { addr, .. } => reads_reg_in_expr(addr, target),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             reads_reg_in_expr(lhs, target) || reads_reg_in_expr(rhs, target)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            reads_reg_in_expr(cond, target)
+                || reads_reg_in_expr(if_true, target)
+                || reads_reg_in_expr(if_false, target)
         }
         Expr::Un { src, .. } => reads_reg_in_expr(src, target),
         Expr::Cast { expr, .. } => reads_reg_in_expr(expr, target),

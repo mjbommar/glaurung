@@ -47,6 +47,12 @@ pub fn prune_overwritten_flags(f: &mut Function) {
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 reads_flag(lhs, flag) || reads_flag(rhs, flag)
             }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => reads_flag(cond, flag) || reads_flag(if_true, flag) || reads_flag(if_false, flag),
             Expr::Un { src, .. } => reads_flag(src, flag),
             Expr::Cast { expr, .. } => reads_flag(expr, flag),
             Expr::Deref { addr, .. } => reads_flag(addr, flag),
@@ -210,6 +216,16 @@ fn count_reads_in_expr(e: &Expr, target: &VReg) -> usize {
         Expr::Deref { addr, .. } => count_reads_in_expr(addr, target),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reads_in_expr(lhs, target) + count_reads_in_expr(rhs, target)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            count_reads_in_expr(cond, target)
+                + count_reads_in_expr(if_true, target)
+                + count_reads_in_expr(if_false, target)
         }
         Expr::Un { src, .. } => count_reads_in_expr(src, target),
         Expr::Cast { expr, .. } => count_reads_in_expr(expr, target),

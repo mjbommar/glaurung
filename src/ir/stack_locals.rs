@@ -239,6 +239,16 @@ fn rewrite_expr(
             rewrite_expr(lhs, map, stack_counter, local_counter, cc);
             rewrite_expr(rhs, map, stack_counter, local_counter, cc);
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            rewrite_expr(cond, map, stack_counter, local_counter, cc);
+            rewrite_expr(if_true, map, stack_counter, local_counter, cc);
+            rewrite_expr(if_false, map, stack_counter, local_counter, cc);
+        }
         Expr::Un { src, .. } => rewrite_expr(src, map, stack_counter, local_counter, cc),
         Expr::Cast { expr, .. } => rewrite_expr(expr, map, stack_counter, local_counter, cc),
         Expr::Reg(_)

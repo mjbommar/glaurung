@@ -162,6 +162,16 @@ fn expr_mentions_guard(e: &Expr) -> bool {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_mentions_guard(lhs) || expr_mentions_guard(rhs)
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expr_mentions_guard(cond)
+                || expr_mentions_guard(if_true)
+                || expr_mentions_guard(if_false)
+        }
         Expr::Un { src, .. } => expr_mentions_guard(src),
         Expr::Cast { expr, .. } => expr_mentions_guard(expr),
         Expr::Deref { addr, .. } => expr_mentions_guard(addr),
@@ -316,6 +326,16 @@ fn rewrite_expr(e: &mut Expr) {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             rewrite_expr(lhs);
             rewrite_expr(rhs);
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            rewrite_expr(cond);
+            rewrite_expr(if_true);
+            rewrite_expr(if_false);
         }
         Expr::Un { src, .. } => rewrite_expr(src),
         Expr::Cast { expr, .. } => rewrite_expr(expr),

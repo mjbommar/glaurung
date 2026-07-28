@@ -63,7 +63,9 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
     //       up to (but not including) the next write to that same temp, and
     //   (c) that single use is in the immediately following statement — this
     //       bounds reordering across intervening side-effectful stmts
-    //       without a real alias analysis.
+    //       without a real alias analysis, and
+    //   (d) the RHS is not a pure select, which must stay statement-rooted so
+    //       the renderer can preserve its one-armed control-flow form.
     let mut i = 0;
     while i + 1 < stmts.len() {
         let (temp, def_expr) = match &stmts[i] {
@@ -78,6 +80,10 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
         };
 
         if contains_reg(&def_expr, &temp) {
+            i += 1;
+            continue;
+        }
+        if matches!(def_expr, Expr::Select { .. }) {
             i += 1;
             continue;
         }
@@ -158,6 +164,16 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_reg(lhs, target) || contains_reg(rhs, target)
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            contains_reg(cond, target)
+                || contains_reg(if_true, target)
+                || contains_reg(if_false, target)
+        }
         Expr::Un { src, .. } => contains_reg(src, target),
         Expr::Cast { expr, .. } => contains_reg(expr, target),
     }
@@ -184,6 +200,16 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
         Expr::Deref { addr, .. } => count_reg_uses(addr, target),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reg_uses(lhs, target) + count_reg_uses(rhs, target)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            count_reg_uses(cond, target)
+                + count_reg_uses(if_true, target)
+                + count_reg_uses(if_false, target)
         }
         Expr::Un { src, .. } => count_reg_uses(src, target),
         Expr::Cast { expr, .. } => count_reg_uses(expr, target),
@@ -310,6 +336,22 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
             substitute_in_expr(&mut lhs, target, with);
             substitute_in_expr(&mut rhs, target, with);
             Expr::Cmp { op, lhs, rhs }
+        }
+        Expr::Select {
+            mut cond,
+            mut if_true,
+            mut if_false,
+            width,
+        } => {
+            substitute_in_expr(&mut cond, target, with);
+            substitute_in_expr(&mut if_true, target, with);
+            substitute_in_expr(&mut if_false, target, with);
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                width,
+            }
         }
     };
 }
@@ -461,6 +503,46 @@ mod tests {
         );
         assert!(text.contains("%zf = (%t0 == 0);"), "lost zf use: {}", text);
         assert!(text.contains("%sf = (%t0 < 0);"), "lost sf use: {}", text);
+    }
+
+    #[test]
+    fn a_select_temp_stays_statement_rooted_for_one_armed_rendering() {
+        let selected = VReg::Temp(0);
+        let mut f = Function {
+            name: "select".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: selected.clone(),
+                    src: Expr::Select {
+                        cond: Box::new(Expr::Reg(VReg::phys("cond"))),
+                        if_true: Box::new(Expr::Reg(VReg::phys("yes"))),
+                        if_false: Box::new(Expr::Reg(VReg::phys("no"))),
+                        width: 8,
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(selected)),
+                },
+            ],
+        };
+
+        reconstruct(&mut f);
+
+        assert!(
+            matches!(
+                f.body.as_slice(),
+                [
+                    Stmt::Assign {
+                        src: Expr::Select { .. },
+                        ..
+                    },
+                    Stmt::Return { .. }
+                ]
+            ),
+            "a select must stay at statement scope for one-armed rendering: {:?}",
+            f.body
+        );
     }
 
     #[test]

@@ -173,6 +173,16 @@ fn rewrite_expr(e: &mut Expr, want: Want, tm: &TypeMap) {
             rewrite_expr(lhs, None, tm);
             rewrite_expr(rhs, None, tm);
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            width,
+        } => {
+            rewrite_expr(cond, None, tm);
+            rewrite_expr(if_true, Some(*width), tm);
+            rewrite_expr(if_false, Some(*width), tm);
+        }
         Expr::Deref { addr, .. } => rewrite_expr(addr, None, tm),
         _ => {}
     }

@@ -297,6 +297,16 @@ fn contains_reg(expr: &Expr, target: &VReg) -> bool {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_reg(lhs, target) || contains_reg(rhs, target)
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            contains_reg(cond, target)
+                || contains_reg(if_true, target)
+                || contains_reg(if_false, target)
+        }
         Expr::Un { src, .. } => contains_reg(src, target),
         Expr::Cast { expr, .. } => contains_reg(expr, target),
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
@@ -317,6 +327,12 @@ fn contains_const(expr: &Expr) -> bool {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_const(lhs) || contains_const(rhs)
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => contains_const(cond) || contains_const(if_true) || contains_const(if_false),
         Expr::Un { src, .. } => contains_const(src),
         Expr::Cast { expr, .. } => contains_const(expr),
         Expr::Reg(_)

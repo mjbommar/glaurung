@@ -215,6 +215,16 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
             fold_expr(lhs, pool);
             fold_expr(rhs, pool);
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            fold_expr(cond, pool);
+            fold_expr(if_true, pool);
+            fold_expr(if_false, pool);
+        }
         Expr::Un { src, .. } => fold_expr(src, pool),
         Expr::Cast { expr, .. } => fold_expr(expr, pool),
         Expr::Reg(_)

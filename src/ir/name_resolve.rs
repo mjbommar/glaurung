@@ -128,6 +128,16 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
             resolve_expr(lhs, addr_map);
             resolve_expr(rhs, addr_map);
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            resolve_expr(cond, addr_map);
+            resolve_expr(if_true, addr_map);
+            resolve_expr(if_false, addr_map);
+        }
         Expr::Un { src, .. } => resolve_expr(src, addr_map),
         Expr::Cast { expr, .. } => resolve_expr(expr, addr_map),
         Expr::Reg(_)

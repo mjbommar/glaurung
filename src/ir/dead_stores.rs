@@ -300,6 +300,12 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_reads(lhs, dst) || expr_reads(rhs, dst)
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => expr_reads(cond, dst) || expr_reads(if_true, dst) || expr_reads(if_false, dst),
         Expr::Un { src, .. } => expr_reads(src, dst),
         Expr::Cast { expr, .. } => expr_reads(expr, dst),
     }

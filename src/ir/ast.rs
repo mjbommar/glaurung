@@ -93,6 +93,17 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    /// A pure three-input select: `cond ? if_true : if_false`.
+    ///
+    /// Unlike [`Stmt::If`], this does not introduce control flow. Both value
+    /// arms remain explicit reads, matching [`Op::Ite`] use-def semantics.
+    Select {
+        cond: Box<Expr>,
+        if_true: Box<Expr>,
+        if_false: Box<Expr>,
+        /// Width of the selected value in bytes.
+        width: u8,
+    },
     /// A width/sign-changing cast: `(<ctype>)(expr)`. Carries the *target* integer
     /// type so zero/sign extension and truncation are preserved through lowering
     /// instead of collapsing to a bare assignment. `signed` picks the C type's
@@ -256,6 +267,14 @@ fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 expr_reads_memory(lhs) || expr_reads_memory(rhs)
             }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                expr_reads_memory(cond) || expr_reads_memory(if_true) || expr_reads_memory(if_false)
+            }
             Expr::Un { src, .. } => expr_reads_memory(src),
             Expr::Cast { expr, .. } => expr_reads_memory(expr),
             _ => false,
@@ -317,6 +336,16 @@ fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 collect_read(lhs, out);
                 collect_read(rhs, out);
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                collect_read(cond, out);
+                collect_read(if_true, out);
+                collect_read(if_false, out);
             }
             Expr::Un { src, .. } => collect_read(src, out),
             Expr::Cast { expr, .. } => collect_read(expr, out),
@@ -612,19 +641,23 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
                 rhs: Box::new(lower_value(lo)),
             },
         }],
-        // Pure select renders as a full if/else assigning both arms.
+        // A pure select is one expression-level assignment, not manufactured
+        // control flow. Keeping both arms inside the expression also preserves
+        // the three-input use-def semantics of `Op::Ite`.
         Op::Ite {
-            dst, cond, t, e, ..
-        } => vec![Stmt::If {
-            cond: Expr::Reg(cond.clone()),
-            then_body: vec![Stmt::Assign {
-                dst: dst.clone(),
-                src: lower_value(t),
-            }],
-            else_body: Some(vec![Stmt::Assign {
-                dst: dst.clone(),
-                src: lower_value(e),
-            }]),
+            dst,
+            cond,
+            t,
+            e,
+            width,
+        } => vec![Stmt::Assign {
+            dst: dst.clone(),
+            src: Expr::Select {
+                cond: Box::new(Expr::Reg(cond.clone())),
+                if_true: Box::new(lower_value(t)),
+                if_false: Box::new(lower_value(e)),
+                width: (width.bits() / 8).max(1) as u8,
+            },
         }],
         // Opaque intrinsic. For the lowered-`Unknown` case (no typed operands)
         // render exactly as the old `Unknown` did — including the semantic
@@ -652,10 +685,10 @@ fn lower_block(b: &LlirBlock) -> Vec<Stmt> {
     hoist_inline_flag_conds(out)
 }
 
-/// Peephole pass: for each `Stmt::If { cond: Expr::Reg(flag), .. }` whose
-/// flag was assigned by a `Stmt::Assign { dst: flag, src: Expr::Cmp(..) }`
-/// earlier in the same block (with no intervening read of the flag),
-/// fold the Cmp into the condition and drop the assignment.
+/// Peephole pass: for each control-flow condition or pure select condition whose
+/// flag was assigned by a `Stmt::Assign { dst: flag, src: Expr::Cmp(..) }` earlier
+/// in the same block (with no intervening read of the flag), fold the comparison
+/// into the condition and drop the assignment.
 ///
 /// The structurer's `extract_cond_and_strip` already does this for
 /// conditionals that end a block (recognised as `Region::IfThen` /
@@ -666,8 +699,68 @@ fn lower_block(b: &LlirBlock) -> Vec<Stmt> {
 /// On real PE binaries (e.g. wkssvc!WsOpenCreateConnectionSpecifyImpersonation)
 /// most conditionals fall through to this path and produce unreadable output.
 fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
+    fn take_reaching_cmp(out: &mut Vec<Stmt>, flag: &VReg) -> Option<Expr> {
+        for i in (0..out.len()).rev() {
+            match &out[i] {
+                Stmt::Assign { dst, src } if dst == flag => {
+                    if matches!(src, Expr::Cmp { .. }) {
+                        let reads: usize = out[i + 1..]
+                            .iter()
+                            .map(|stmt| count_reg_uses_in_stmt(stmt, flag))
+                            .sum();
+                        if reads == 0 {
+                            if let Stmt::Assign { src, .. } = out.remove(i) {
+                                return Some(src);
+                            }
+                        }
+                    }
+                    return None;
+                }
+                other if count_reg_uses_in_stmt(other, flag) > 0 => return None,
+                _ => {}
+            }
+        }
+        None
+    }
+
     let mut out: Vec<Stmt> = Vec::with_capacity(stmts.len());
     for stmt in stmts {
+        let stmt = match stmt {
+            Stmt::Assign {
+                dst,
+                src:
+                    Expr::Select {
+                        mut cond,
+                        if_true,
+                        if_false,
+                        width,
+                    },
+            } => {
+                let flag = match cond.as_ref() {
+                    Expr::Reg(flag) => Some(flag.clone()),
+                    _ => None,
+                };
+                if let Some(flag) = flag {
+                    let arm_reads = count_reg_uses_in_expr(&if_true, &flag)
+                        + count_reg_uses_in_expr(&if_false, &flag);
+                    if arm_reads == 0 {
+                        if let Some(cmp) = take_reaching_cmp(&mut out, &flag) {
+                            cond = Box::new(cmp);
+                        }
+                    }
+                }
+                Stmt::Assign {
+                    dst,
+                    src: Expr::Select {
+                        cond,
+                        if_true,
+                        if_false,
+                        width,
+                    },
+                }
+            }
+            other => other,
+        };
         // Match both `Stmt::If { cond: Reg(flag), .. }` (non-inverted
         // CondJump) and `Stmt::If { cond: Un(Not, Reg(flag)), .. }`
         // (inverted CondJump from JNE / JAE / ...).
@@ -702,34 +795,7 @@ fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
         };
 
         let flag = flag.expect("Some by match above");
-        let mut hoisted: Option<Expr> = None;
-        // Walk backwards through what we've already emitted, looking
-        // for an assignment to `flag` with an Expr::Cmp RHS.
-        for i in (0..out.len()).rev() {
-            match &out[i] {
-                Stmt::Assign { dst, src } if dst == &flag => {
-                    if matches!(src, Expr::Cmp { .. }) {
-                        // Make sure no intervening stmt reads the flag.
-                        let reads: usize = out[i + 1..]
-                            .iter()
-                            .map(|s| count_reg_uses_in_stmt(s, &flag))
-                            .sum();
-                        if reads == 0 {
-                            if let Stmt::Assign { src, .. } = out.remove(i) {
-                                hoisted = Some(src);
-                            }
-                        }
-                    }
-                    // Most recent assign found — stop regardless.
-                    break;
-                }
-                other => {
-                    if count_reg_uses_in_stmt(other, &flag) > 0 {
-                        break;
-                    }
-                }
-            }
-        }
+        let hoisted = take_reaching_cmp(&mut out, &flag);
 
         let cond_expr = match (hoisted, was_inverted) {
             (Some(expr), true) => negate_cmp_expr(expr),
@@ -954,9 +1020,82 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reg_uses_in_expr(lhs, target) + count_reg_uses_in_expr(rhs, target)
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            count_reg_uses_in_expr(cond, target)
+                + count_reg_uses_in_expr(if_true, target)
+                + count_reg_uses_in_expr(if_false, target)
+        }
         Expr::Un { src, .. } => count_reg_uses_in_expr(src, target),
         Expr::Cast { expr, .. } => count_reg_uses_in_expr(expr, target),
     }
+}
+
+/// Whether evaluating `expr` speculatively is side-effect and fault free.
+///
+/// A one-armed select evaluates its initializer even when the other arm is
+/// selected. Register arithmetic is safe to evaluate early; memory reads and
+/// opaque expressions are not.
+fn can_eagerly_evaluate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Deref { .. } | Expr::Unknown(_) => false,
+        Expr::Bin { op: BinOp::Div, .. } => false,
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            can_eagerly_evaluate(lhs) && can_eagerly_evaluate(rhs)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            can_eagerly_evaluate(cond)
+                && can_eagerly_evaluate(if_true)
+                && can_eagerly_evaluate(if_false)
+        }
+        Expr::Un { src, .. } => can_eagerly_evaluate(src),
+        Expr::Cast { expr, .. } => can_eagerly_evaluate(expr),
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => true,
+    }
+}
+
+/// Choose a semantics-preserving one-armed rendering for a pure select.
+///
+/// The initializer executes before the condition in the rendered form, so the
+/// condition must not read `dst`. The conditional arm also executes after the
+/// initializer has overwritten `dst`, so that arm must not read the old value.
+/// The initializer itself may read `dst`: C evaluates its RHS before the write.
+/// If neither orientation is safe, callers retain the expression-level ternary.
+fn one_armed_select<'a>(dst: &VReg, src: &'a Expr) -> Option<(&'a Expr, &'a Expr, &'a Expr, bool)> {
+    let Expr::Select {
+        cond,
+        if_true,
+        if_false,
+        ..
+    } = src
+    else {
+        return None;
+    };
+    if count_reg_uses_in_expr(cond, dst) != 0 {
+        return None;
+    }
+    if can_eagerly_evaluate(if_false) && count_reg_uses_in_expr(if_true, dst) == 0 {
+        return Some((cond, if_false, if_true, false));
+    }
+    if can_eagerly_evaluate(if_true) && count_reg_uses_in_expr(if_false, dst) == 0 {
+        return Some((cond, if_true, if_false, true));
+    }
+    None
 }
 
 fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
@@ -1760,6 +1899,20 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
             write_expr_ctx(rhs, tm, out);
             out.push(')');
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            out.push('(');
+            write_expr_ctx(cond, tm, out);
+            out.push_str(" ? ");
+            write_expr_ctx(if_true, tm, out);
+            out.push_str(" : ");
+            write_expr_ctx(if_false, tm, out);
+            out.push(')');
+        }
         Expr::Unknown(s) => {
             let _ = write!(out, "<{}>", s);
         }
@@ -1814,6 +1967,54 @@ fn write_for_clause(s: &Stmt, tm: Option<&TypeMap>, out: &mut String) {
 fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize) {
     match s {
         Stmt::Assign { dst, src } => {
+            if level > 1 {
+                if let Expr::Select {
+                    cond,
+                    if_true,
+                    if_false,
+                    ..
+                } = src
+                {
+                    indent(out, level);
+                    out.push_str("if (");
+                    write_expr_ctx(cond, tm, out);
+                    out.push_str(") {\n");
+                    indent(out, level + 1);
+                    write_reg_with_type(dst, tm, out);
+                    out.push_str(" = ");
+                    write_expr_ctx(if_true, tm, out);
+                    out.push_str(";\n");
+                    indent(out, level);
+                    out.push_str("} else {\n");
+                    indent(out, level + 1);
+                    write_reg_with_type(dst, tm, out);
+                    out.push_str(" = ");
+                    write_expr_ctx(if_false, tm, out);
+                    out.push_str(";\n");
+                    indent(out, level);
+                    out.push_str("}\n");
+                    return;
+                }
+            }
+            if let Some((cond, init, update, inverted)) = one_armed_select(dst, src) {
+                indent(out, level);
+                write_reg_with_type(dst, tm, out);
+                out.push_str(" = ");
+                write_expr_ctx(init, tm, out);
+                out.push_str(";\n");
+                indent(out, level);
+                out.push_str(if inverted { "if (!(" } else { "if (" });
+                write_expr_ctx(cond, tm, out);
+                out.push_str(if inverted { ")) {\n" } else { ") {\n" });
+                indent(out, level + 1);
+                write_reg_with_type(dst, tm, out);
+                out.push_str(" = ");
+                write_expr_ctx(update, tm, out);
+                out.push_str(";\n");
+                indent(out, level);
+                out.push_str("}\n");
+                return;
+            }
             indent(out, level);
             // When the assignment is pure stack-pointer arithmetic
             // (`%rsp = %rsp ± const`), the type annotation on both sides is
@@ -2281,6 +2482,20 @@ fn write_expr_c(e: &Expr, out: &mut String) {
             write_expr_c(rhs, out);
             out.push(')');
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            out.push('(');
+            write_expr_c(cond, out);
+            out.push_str(" ? ");
+            write_expr_c(if_true, out);
+            out.push_str(" : ");
+            write_expr_c(if_false, out);
+            out.push(')');
+        }
         Expr::Unknown(s) => {
             let _ = write!(out, "<{}>", s);
         }
@@ -2290,6 +2505,54 @@ fn write_expr_c(e: &Expr, out: &mut String) {
 fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
     match s {
         Stmt::Assign { dst, src } => {
+            if level > 1 {
+                if let Expr::Select {
+                    cond,
+                    if_true,
+                    if_false,
+                    ..
+                } = src
+                {
+                    indent(out, level);
+                    out.push_str("if (");
+                    write_expr_c(cond, out);
+                    out.push_str(") {\n");
+                    indent(out, level + 1);
+                    write_reg_c(dst, out);
+                    out.push_str(" = ");
+                    write_expr_c(if_true, out);
+                    out.push_str(";\n");
+                    indent(out, level);
+                    out.push_str("} else {\n");
+                    indent(out, level + 1);
+                    write_reg_c(dst, out);
+                    out.push_str(" = ");
+                    write_expr_c(if_false, out);
+                    out.push_str(";\n");
+                    indent(out, level);
+                    out.push_str("}\n");
+                    return;
+                }
+            }
+            if let Some((cond, init, update, inverted)) = one_armed_select(dst, src) {
+                indent(out, level);
+                write_reg_c(dst, out);
+                out.push_str(" = ");
+                write_expr_c(init, out);
+                out.push_str(";\n");
+                indent(out, level);
+                out.push_str(if inverted { "if (!(" } else { "if (" });
+                write_expr_c(cond, out);
+                out.push_str(if inverted { ")) {\n" } else { ") {\n" });
+                indent(out, level + 1);
+                write_reg_c(dst, out);
+                out.push_str(" = ");
+                write_expr_c(update, out);
+                out.push_str(";\n");
+                indent(out, level);
+                out.push_str("}\n");
+                return;
+            }
             indent(out, level);
             write_reg_c(dst, out);
             out.push_str(" = ");
@@ -2903,6 +3166,16 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                 re(lhs, map);
                 re(rhs, map);
             }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                re(cond, map);
+                re(if_true, map);
+                re(if_false, map);
+            }
             Expr::Un { src, .. } => re(src, map),
             Expr::Cast { expr, .. } => re(expr, map),
             Expr::Const(_)
@@ -3310,6 +3583,16 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
             collect_idents_expr(lhs, ids);
             collect_idents_expr(rhs, ids);
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            collect_idents_expr(cond, ids);
+            collect_idents_expr(if_true, ids);
+            collect_idents_expr(if_false, ids);
+        }
         Expr::Un { src, .. } => collect_idents_expr(src, ids),
         Expr::Cast { expr, .. } => collect_idents_expr(expr, ids),
     }
@@ -3500,6 +3783,7 @@ fn expr_machine_width(e: &Expr) -> Option<u8> {
         Expr::Named { name, .. } => dec_int_width(name),
         Expr::Reg(VReg::Phys(n)) => dec_int_width(n),
         Expr::Const(_) => None,
+        Expr::Select { width, .. } => Some(*width),
         Expr::Bin { op, lhs, rhs } if is_width_preserving_arith(*op) => {
             let lw = expr_machine_width(lhs);
             let rw = expr_machine_width(rhs);
@@ -3803,6 +4087,20 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 out.push(')');
             }
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            out.push('(');
+            write_expr_dec(cond, out);
+            out.push_str(" ? ");
+            write_expr_dec(if_true, out);
+            out.push_str(" : ");
+            write_expr_dec(if_false, out);
+            out.push(')');
+        }
         // An unmodelled/indirect value: a call to an undeclared `__unknown`
         // (implicit-declaration warning only) keeps it a valid `long` rvalue.
         Expr::Unknown(_) => out.push_str("__unknown(0)"),
@@ -3862,23 +4160,67 @@ fn write_call_dec(target: &Expr, args: &[Expr], out: &mut String) {
     out.push(')');
 }
 
+fn write_assign_dec(dst: &VReg, src: &Expr, out: &mut String) {
+    write_reg_lvalue_dec(dst, out);
+    out.push_str(" = ");
+    // Reassigning a scratch integer into a pointer-typed arg register: cast the
+    // RHS to the pointer type so int-to-pointer conversion remains explicit.
+    if let VReg::Phys(name) = dst {
+        if let Some(pointer_type) = dec_ptr_arg_type(name) {
+            let _ = write!(out, "({})(", pointer_type);
+            write_expr_dec(src, out);
+            out.push(')');
+            return;
+        }
+    }
+    write_expr_dec(src, out);
+}
+
 fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
     match s {
         Stmt::Assign { dst, src } => {
-            indent(out, level);
-            write_reg_lvalue_dec(dst, out);
-            out.push_str(" = ");
-            // Reassigning a scratch integer into a pointer-typed arg register:
-            // cast the RHS to the pointer type so int→pointer is explicit.
-            if let VReg::Phys(n) = dst {
-                if let Some(pty) = dec_ptr_arg_type(n) {
-                    let _ = write!(out, "({})(", pty);
-                    write_expr_dec(src, out);
-                    out.push_str(");\n");
+            if level > 1 {
+                if let Expr::Select {
+                    cond,
+                    if_true,
+                    if_false,
+                    ..
+                } = src
+                {
+                    indent(out, level);
+                    out.push_str("if (");
+                    write_expr_dec(cond, out);
+                    out.push_str(") {\n");
+                    indent(out, level + 1);
+                    write_assign_dec(dst, if_true, out);
+                    out.push_str(";\n");
+                    indent(out, level);
+                    out.push_str("} else {\n");
+                    indent(out, level + 1);
+                    write_assign_dec(dst, if_false, out);
+                    out.push_str(";\n");
+                    indent(out, level);
+                    out.push_str("}\n");
                     return;
                 }
             }
-            write_expr_dec(src, out);
+            if let Some((cond, init, update, inverted)) = one_armed_select(dst, src) {
+                indent(out, level);
+                write_assign_dec(dst, init, out);
+                out.push_str(";\n");
+                indent(out, level);
+                out.push_str(if inverted { "if (!(" } else { "if (" });
+                write_expr_dec(cond, out);
+                out.push_str(if inverted { ")) {\n" } else { ") {\n" });
+                indent(out, level + 1);
+                write_assign_dec(dst, update, out);
+                out.push_str(";\n");
+                indent(out, level);
+                out.push_str("}\n");
+                return;
+            }
+            indent(out, level);
+            write_assign_dec(dst, src, out);
             out.push_str(";\n");
         }
         Stmt::Store { addr, src, size } => {
@@ -4227,7 +4569,7 @@ mod tests {
     use super::*;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
-    use crate::ir::types::{Flag, LlirBlock, LlirInstr, VReg};
+    use crate::ir::types::{CmpOp, Flag, LlirBlock, LlirInstr, VReg};
 
     fn mk_cfg(spec: Vec<(u64, Vec<Op>, Vec<u64>)>) -> LlirFunction {
         let entry_va = spec.first().map(|(s, _, _)| *s).unwrap_or(0);
@@ -4254,6 +4596,229 @@ mod tests {
         let ssa = compute_ssa(lf);
         let r = recover(lf, &ssa);
         render(&lower(lf, &r, name))
+    }
+
+    #[test]
+    fn a_pure_select_renders_as_a_one_armed_assignment() {
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::Ite {
+                    dst: VReg::phys("result"),
+                    cond: VReg::phys("negative"),
+                    t: Value::Reg(VReg::phys("negated")),
+                    e: Value::Reg(VReg::phys("original")),
+                    width: crate::ir::types::Width::W64,
+                },
+                Op::Return,
+            ],
+            vec![],
+        )]);
+
+        let rendered = lower_and_render(&lf, "select");
+
+        assert!(
+            rendered.contains("%result = %original;"),
+            "the false value must initialize the destination: {rendered}"
+        );
+        assert!(
+            rendered.contains("if (%negative) {\n        %result = %negated;"),
+            "the true value must be the only conditional assignment: {rendered}"
+        );
+        assert!(
+            !rendered.contains("else"),
+            "a pure select must not expand to a two-armed conditional: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_select_nested_under_control_flow_preserves_two_armed_shape() {
+        let result = VReg::phys("result");
+        let f = Function {
+            name: "nested_select".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(VReg::phys("outer")),
+                then_body: vec![Stmt::Assign {
+                    dst: result,
+                    src: Expr::Select {
+                        cond: Box::new(Expr::Reg(VReg::phys("inner"))),
+                        if_true: Box::new(Expr::Reg(VReg::phys("yes"))),
+                        if_false: Box::new(Expr::Reg(VReg::phys("no"))),
+                        width: 8,
+                    },
+                }],
+                else_body: None,
+            }],
+        };
+
+        let rendered = render(&f);
+
+        assert!(
+            rendered.contains("if (%inner) {\n            %result = %yes;\n        } else {"),
+            "a select nested under control flow must retain both arms: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_select_with_a_memory_arm_is_not_eagerly_evaluated() {
+        let f = Function {
+            name: "memory_select".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("result"),
+                src: Expr::Select {
+                    cond: Box::new(Expr::Reg(VReg::phys("choose_load"))),
+                    if_true: Box::new(Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("pointer"))),
+                        size: 8,
+                    }),
+                    if_false: Box::new(Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("fallback_pointer"))),
+                        size: 8,
+                    }),
+                    width: 8,
+                },
+            }],
+        };
+
+        let rendered = render(&f);
+
+        assert!(
+            rendered.contains("?"),
+            "a conditional load must remain lazily evaluated: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_select_with_two_division_arms_is_not_eagerly_evaluated() {
+        let divide = |divisor: &str| Expr::Bin {
+            op: BinOp::Div,
+            lhs: Box::new(Expr::Reg(VReg::phys("numerator"))),
+            rhs: Box::new(Expr::Reg(VReg::phys(divisor))),
+        };
+        let f = Function {
+            name: "division_select".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("result"),
+                src: Expr::Select {
+                    cond: Box::new(Expr::Reg(VReg::phys("choose_first"))),
+                    if_true: Box::new(divide("first_divisor")),
+                    if_false: Box::new(divide("second_divisor")),
+                    width: 8,
+                },
+            }],
+        };
+
+        let rendered = render(&f);
+
+        assert!(
+            rendered.contains("?"),
+            "a potentially trapping division must remain lazily evaluated: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_select_inlines_its_single_reaching_comparison() {
+        let predicate = VReg::phys("negative");
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::Cmp {
+                    dst: predicate.clone(),
+                    op: CmpOp::Slt,
+                    lhs: Value::Reg(VReg::phys("value")),
+                    rhs: Value::Const(0),
+                },
+                Op::Ite {
+                    dst: VReg::phys("result"),
+                    cond: predicate,
+                    t: Value::Reg(VReg::phys("negated")),
+                    e: Value::Reg(VReg::phys("original")),
+                    width: crate::ir::types::Width::W64,
+                },
+                Op::Return,
+            ],
+            vec![],
+        )]);
+
+        let rendered = lower_and_render(&lf, "select");
+
+        assert!(
+            rendered.contains("if ((%value < 0)) {\n        %result = %negated;"),
+            "the comparison must inline into the one conditional arm: {rendered}"
+        );
+        assert!(
+            !rendered.contains("%negative ="),
+            "a single-use predicate must not survive as a separate statement: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_select_arm_reading_the_predicate_keeps_its_definition() {
+        let predicate = VReg::phys("negative");
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::Cmp {
+                    dst: predicate.clone(),
+                    op: CmpOp::Slt,
+                    lhs: Value::Reg(VReg::phys("value")),
+                    rhs: Value::Const(0),
+                },
+                Op::Ite {
+                    dst: VReg::phys("result"),
+                    cond: predicate.clone(),
+                    t: Value::Reg(predicate),
+                    e: Value::Reg(VReg::phys("original")),
+                    width: crate::ir::types::Width::W64,
+                },
+                Op::Return,
+            ],
+            vec![],
+        )]);
+
+        let rendered = lower_and_render(&lf, "select");
+
+        assert!(
+            rendered.contains("%negative = (%value < 0);"),
+            "the value arm still reads the predicate, so its definition is live: {rendered}"
+        );
+        assert!(
+            rendered.contains("if (%negative) {\n        %result = %negative;"),
+            "the select must retain both predicate reads: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_true_arm_reading_the_destination_uses_the_inverted_orientation() {
+        let result = VReg::phys("result");
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::Ite {
+                    dst: result.clone(),
+                    cond: VReg::phys("choose_old"),
+                    t: Value::Reg(result),
+                    e: Value::Reg(VReg::phys("fallback")),
+                    width: crate::ir::types::Width::W64,
+                },
+                Op::Return,
+            ],
+            vec![],
+        )]);
+
+        let rendered = lower_and_render(&lf, "select");
+
+        assert!(
+            rendered.contains("%result = %result;"),
+            "the old destination must be captured before any overwrite: {rendered}"
+        );
+        assert!(
+            rendered.contains("if (!(%choose_old)) {\n        %result = %fallback;"),
+            "the non-self-referential arm must use the inverted condition: {rendered}"
+        );
     }
 
     /// A ROTATED loop: the test sits at the TOP and its conditional branch leaves

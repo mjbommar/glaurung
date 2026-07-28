@@ -111,6 +111,16 @@ fn fold_expr(e: &mut Expr) {
             fold_expr(lhs);
             fold_expr(rhs);
         }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            fold_expr(cond);
+            fold_expr(if_true);
+            fold_expr(if_false);
+        }
         Expr::Un { src, .. } => fold_expr(src),
         Expr::Cast { expr, .. } => fold_expr(expr),
         Expr::Deref { addr, .. } => fold_expr(addr),

@@ -121,6 +121,16 @@ impl Splitter {
                 self.rename_expr(lhs);
                 self.rename_expr(rhs);
             }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                self.rename_expr(cond);
+                self.rename_expr(if_true);
+                self.rename_expr(if_false);
+            }
             Expr::Un { src, .. } => self.rename_expr(src),
             Expr::Cast { expr, .. } => self.rename_expr(expr),
         }
