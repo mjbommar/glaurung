@@ -2,7 +2,7 @@
 
 **Worktree:** `/home/mjbommar/projects/personal/glaurung`
 **Original state:** `master` @ `b66a4cb`, seven commits behind upstream, all work uncommitted
-**Closed:** 2026-07-28 on `master` / `origin/master` @ `2f32318`
+**Closed:** 2026-07-28 on `master`; final upstream revision recorded after push
 **Integrated commits:** `39d1b44` (bounded indirect dispatch), `416b02d`
 (flags, indirect-memory semantics, region ownership, completeness telemetry),
 `2f32318` (lane-specific fail-closed fixture selection and refreshed baseline)
@@ -19,10 +19,14 @@
 - The pinned full execution-differential matrix completed all 56 lanes and 623
   lane-specific functions with zero regressions and three baseline improvements:
   `classify`, `dispatch_switch`, and `sub_then_sign`.
-- `cargo test --workspace` reached 1,081 passing tests before one stale accounting
-  expectation asserted the old known defect; that expectation was converted into
-  the inverse regression assertion and the 11-test accounting module passes. A
-  final full-suite replay is required whenever later work changes this tree.
+- On the final recovered tree, `cargo test --workspace` passes: 1,083 unit tests
+  passed, two were ignored, and every integration-test executable passed.
+- The fail-closed Axeyum/Z3 primitive comparison completed all 230 cells across
+  8/16/32/64/128-bit widths with zero wrong and zero unknown results.
+- The full Python replay completed with 2,526 passed and 43 skipped, but 27 stale
+  API/model-policy expectations still fail. Repository-wide Ruff and `ty` also
+  retain pre-existing debt (3,520 and 1,968 diagnostics respectively). Those are
+  project-wide baseline failures, not claimed green by this recovery.
 
 Everything below is retained as the original handoff and diagnosis. Statements
 about branches, commit positions, and measurements describe the 2026-07-27 state,
