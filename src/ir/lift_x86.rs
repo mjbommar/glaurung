@@ -42,11 +42,7 @@ fn reg_name(r: Register) -> String {
 
 fn reg_size(r: Register) -> u8 {
     let s = r.size();
-    if s == 0 {
-        8
-    } else {
-        s as u8
-    }
+    if s == 0 { 8 } else { s as u8 }
 }
 
 /// The register-view descriptor for a partial (bit-preserving) GP write, or
@@ -381,7 +377,7 @@ fn emit_bin(dst: VReg, op: BinOp, src: Value) -> Op {
 /// which is the argument for auditing flag-setting mnemonics as a family rather
 /// than one at a time. See `docs/design/x86-flags.md`.
 fn sub_flag_ops(lhs: Value, rhs: Value) -> Vec<Op> {
-    [
+    let mut ops: Vec<Op> = [
         (Flag::Z, CmpOp::Eq),
         (Flag::C, CmpOp::Ult),
         (Flag::Ule, CmpOp::Ule),
@@ -395,7 +391,24 @@ fn sub_flag_ops(lhs: Value, rhs: Value) -> Vec<Op> {
         lhs: lhs.clone(),
         rhs: rhs.clone(),
     })
-    .collect()
+    .collect();
+    // JS/JNS read the raw sign bit, not the composite signed-less-than
+    // condition. Materialise the result before the architectural destination
+    // is overwritten, exactly as the CMP lifting path does.
+    let result = VReg::Temp(0);
+    ops.push(Op::Bin {
+        dst: result.clone(),
+        op: BinOp::Sub,
+        lhs,
+        rhs,
+    });
+    ops.push(Op::Cmp {
+        dst: VReg::Flag(Flag::S),
+        op: CmpOp::Slt,
+        lhs: Value::Reg(result),
+        rhs: Value::Const(0),
+    });
+    ops
 }
 
 fn bin_for(mnem: Mnemonic) -> Option<BinOp> {
@@ -539,7 +552,7 @@ fn push_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         _ => {
             return vec![Op::Unknown {
                 mnemonic: "push".to_string(),
-            }]
+            }];
         }
     };
     ops.push(Op::Bin {
@@ -575,7 +588,7 @@ fn pop_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         _ => {
             return vec![Op::Unknown {
                 mnemonic: "pop".to_string(),
-            }]
+            }];
         }
     };
     vec![
@@ -848,7 +861,7 @@ fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         _ => {
             return vec![Op::Unknown {
                 mnemonic: "cmpxchg".into(),
-            }]
+            }];
         }
     };
 
@@ -1185,7 +1198,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         _ => {
                             return vec![Op::Unknown {
                                 mnemonic: "imul".into(),
-                            }]
+                            }];
                         }
                     };
                     // A partial-view destination is a bit-preserving write of the
@@ -1870,7 +1883,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     _ => {
                         return vec![Op::Unknown {
                             mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
-                        }]
+                        }];
                     }
                 };
                 let w = phys_reg_width(lo_name).unwrap_or(Width::W64);
@@ -2160,9 +2173,22 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             OpKind::Register => vec![Op::IndirectJump {
                 target: Value::Reg(VReg::phys(reg_name(instr.op_register(0)))),
             }],
-            OpKind::Memory => vec![Op::IndirectJump {
-                target: Value::Addr(instr.memory_displacement64()),
-            }],
+            OpKind::Memory => {
+                // The memory operand contains the destination pointer; its
+                // address is not itself the jump target. Preserve that
+                // dereference explicitly so execution and downstream analyses
+                // follow the loaded code address rather than the import slot.
+                let target = VReg::Temp(0);
+                vec![
+                    Op::Load {
+                        dst: target.clone(),
+                        addr: mem_op_of(instr),
+                    },
+                    Op::IndirectJump {
+                        target: Value::Reg(target),
+                    },
+                ]
+            }
             _ => vec![Op::Unknown {
                 mnemonic: "jmp".into(),
             }],
@@ -2394,13 +2420,8 @@ mod tests {
         );
         // And it must still actually negate the register.
         assert!(
-            ops.iter().any(|i| matches!(
-                &i.op,
-                Op::Un {
-                    op: UnOp::Neg,
-                    ..
-                }
-            )),
+            ops.iter()
+                .any(|i| matches!(&i.op, Op::Un { op: UnOp::Neg, .. })),
             "neg must still negate, got {ops:#?}"
         );
         let defines_dst = ops.iter().any(|i| {
@@ -2663,21 +2684,31 @@ mod tests {
         let flags: Vec<_> = ops
             .iter()
             .filter_map(|i| match &i.op {
-                Op::Cmp { dst: VReg::Flag(f), .. } => Some(*f),
+                Op::Cmp {
+                    dst: VReg::Flag(f), ..
+                } => Some(*f),
                 _ => None,
             })
             .collect();
-        for want in [Flag::Z, Flag::C, Flag::Ule, Flag::Slt, Flag::Sle] {
+        for want in [Flag::Z, Flag::C, Flag::Ule, Flag::Slt, Flag::Sle, Flag::S] {
             assert!(flags.contains(&want), "sub must define {want:?}: {flags:?}");
         }
         // ...and they must be computed BEFORE the destination is overwritten.
         let bin_at = ops
             .iter()
-            .position(|i| matches!(&i.op, Op::Bin { op: BinOp::Sub, .. }))
+            .rposition(|i| matches!(&i.op, Op::Bin { op: BinOp::Sub, .. }))
             .expect("sub must still do the arithmetic");
         let last_flag = ops
             .iter()
-            .rposition(|i| matches!(&i.op, Op::Cmp { dst: VReg::Flag(_), .. }))
+            .rposition(|i| {
+                matches!(
+                    &i.op,
+                    Op::Cmp {
+                        dst: VReg::Flag(_),
+                        ..
+                    }
+                )
+            })
             .expect("flags present");
         assert!(
             last_flag < bin_at,
@@ -2696,13 +2727,25 @@ mod tests {
         // slot is still recoverable — it is the jump's target — which is what this
         // test actually needs to hold.
         let ops = lift64(&[0xff, 0x25, 0x34, 0x12, 0x00, 0x00]);
-        assert_eq!(ops.len(), 1);
-        match &ops[0].op {
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(0),
+                addr: MemOp {
+                    base: None,
+                    disp: 0x223a,
+                    size: 8,
+                    ..
+                }
+            }
+        ));
+        assert!(matches!(
+            &ops[1].op,
             Op::IndirectJump {
-                target: Value::Addr(addr),
-            } => assert_eq!(*addr, 0x223a),
-            other => panic!("expected an indirect jump through memory, got {:?}", other),
-        }
+                target: Value::Reg(VReg::Temp(0))
+            }
+        ));
     }
 
     #[test]
@@ -3367,9 +3410,10 @@ mod tests {
         assert!(ops.iter().any(|i| matches!(&i.op, Op::Load { .. })));
         assert!(ops.iter().any(|i| matches!(&i.op, Op::Cmp { .. })));
         // And NOT have any Unknown cmp stubs.
-        assert!(!ops
-            .iter()
-            .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp")));
+        assert!(
+            !ops.iter()
+                .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp"))
+        );
     }
 
     #[test]
@@ -3386,9 +3430,10 @@ mod tests {
                 && addr.size == 2
         ));
         assert!(ops.iter().any(|i| matches!(&i.op, Op::Cmp { .. })));
-        assert!(!ops
-            .iter()
-            .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp")));
+        assert!(
+            !ops.iter()
+                .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "cmp"))
+        );
     }
 
     #[test]
@@ -3409,9 +3454,10 @@ mod tests {
                 ..
             }
         )));
-        assert!(!ops
-            .iter()
-            .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "test")));
+        assert!(
+            !ops.iter()
+                .any(|i| matches!(&i.op, Op::Unknown { mnemonic } if mnemonic == "test"))
+        );
     }
 
     #[test]
@@ -3683,9 +3729,16 @@ mod tests {
     #[test]
     fn an_imm8_sign_extended_to_32_bits_keeps_its_sign() {
         // add eax, -1
-        let ops: Vec<Op> = lift64(&[0x83, 0xc0, 0xff]).into_iter().map(|i| i.op).collect();
+        let ops: Vec<Op> = lift64(&[0x83, 0xc0, 0xff])
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
         let found = ops.iter().find_map(|o| match o {
-            Op::Bin { op: BinOp::Add, rhs: Value::Const(c), .. } => Some(*c),
+            Op::Bin {
+                op: BinOp::Add,
+                rhs: Value::Const(c),
+                ..
+            } => Some(*c),
             _ => None,
         });
         assert_eq!(found, Some(-1), "expected `add eax, -1`, got:\n{ops:#?}");
@@ -3695,13 +3748,26 @@ mod tests {
     #[test]
     fn other_sign_extended_imm8_forms_keep_their_sign() {
         // sub eax, -8   (83 e8 f8)
-        let ops: Vec<Op> = lift64(&[0x83, 0xe8, 0xf8]).into_iter().map(|i| i.op).collect();
+        let ops: Vec<Op> = lift64(&[0x83, 0xe8, 0xf8])
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
         assert!(
-            ops.iter().any(|o| matches!(o, Op::Bin { op: BinOp::Sub, rhs: Value::Const(-8), .. })),
+            ops.iter().any(|o| matches!(
+                o,
+                Op::Bin {
+                    op: BinOp::Sub,
+                    rhs: Value::Const(-8),
+                    ..
+                }
+            )),
             "expected `sub eax, -8`, got:\n{ops:#?}"
         );
         // add ax, -1    (66 83 c0 ff) — Immediate8to16
-        let ops16: Vec<Op> = lift64(&[0x66, 0x83, 0xc0, 0xff]).into_iter().map(|i| i.op).collect();
+        let ops16: Vec<Op> = lift64(&[0x66, 0x83, 0xc0, 0xff])
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
         assert!(
             format!("{ops16:#?}").contains("-1"),
             "expected a -1 immediate for `add ax, -1`, got:\n{ops16:#?}"

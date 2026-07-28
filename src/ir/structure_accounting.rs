@@ -53,7 +53,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::cfg_edges::{Edge, EdgeKind};
-use crate::ir::structure::{entry_block, Region};
+use crate::ir::structure::{Region, entry_block};
 
 /// What the region tree fails to account for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -661,11 +661,11 @@ mod tests {
         );
     }
 
-    /// RED #2, and the sharpest one. The tree says the case arms flow to the
-    /// EPILOGUE when they really flow to the LATCH: it claims `4 -> 9` and `6 -> 9`,
-    /// which do not exist, and expresses `4 -> 7` and `6 -> 7`, which do, with
-    /// nothing at all. That single mis-attribution is why the loop body ends at the
-    /// first case and the rest of the ladder is stranded after the loop.
+    /// Regression for the sharpest original defect. The tree used to say the
+    /// case arms flowed to the EPILOGUE when they really flow to the LATCH: it
+    /// claimed `4 -> 9` and `6 -> 9`, which do not exist. The switch join repair
+    /// must never reintroduce that false ownership even while the shadow
+    /// accounting still reports other incomplete edge attribution.
     ///
     /// Note what is NOT wrong: the epilogue is emitted once. `Region::blocks()`
     /// counts it twice because it treats a `join`/`exit` REFERENCE as ownership, and
@@ -673,21 +673,12 @@ mod tests {
     /// so a duplication check built on `blocks()` would have reported a defect that
     /// does not exist. `owned()` here counts emissions only.
     #[test]
-    fn switch_arm_edges_are_attributed_to_the_epilogue_instead_of_the_latch() {
+    fn switch_arm_edges_are_not_misattributed_to_the_epilogue() {
         let errs = account_recovered(&statemachine_shape());
         for (from, to) in [(4usize, 9usize), (6, 9)] {
             assert!(
-                errs.contains(&AccountError::ImpliedEdgeAbsent { from, to }),
-                "expected the tree to claim the absent edge {from} -> {to}: {errs:?}"
-            );
-        }
-        for (from, to) in [(4usize, 7usize), (6, 7)] {
-            assert!(
-                errs.iter().any(|e| matches!(
-                    e,
-                    AccountError::EdgeUnaccounted { from: f, to: t, .. } if *f == from && *t == to
-                )),
-                "expected the real edge {from} -> {to} to be unaccounted: {errs:?}"
+                !errs.contains(&AccountError::ImpliedEdgeAbsent { from, to }),
+                "the tree must not claim the absent epilogue edge {from} -> {to}: {errs:?}"
             );
         }
     }

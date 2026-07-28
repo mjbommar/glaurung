@@ -16,10 +16,10 @@ use crate::core::control_flow_graph::ControlFlowEdgeKind;
 use crate::core::disassembler::Disassembler;
 use crate::core::function::{Function, FunctionFlags, FunctionKind};
 use crate::core::instruction::Instruction;
-use crate::debug::dwarf::{extract_dwarf_functions, DwarfFunction};
+use crate::debug::dwarf::{DwarfFunction, extract_dwarf_functions};
 use crate::disasm::registry;
 use crate::flirt::{
-    apply_flirt_overrides, discover_flirt_seeds, load_default_library, FlirtLibrary,
+    FlirtLibrary, apply_flirt_overrides, discover_flirt_seeds, load_default_library,
 };
 use crate::triage::heuristics;
 
@@ -108,6 +108,11 @@ pub struct FunctionDiscoveryStats {
     pub hit_block_limit: bool,
     pub hit_instruction_limit: bool,
     pub hit_timeout: bool,
+    /// Register-indirect transfers whose targets could not be recovered. A
+    /// non-empty list means at least one returned CFG is incomplete.
+    pub unresolved_indirect: Vec<(u64, crate::analysis::dispatch::Unresolved)>,
+    /// Jump-table dispatch sites successfully resolved, paired with arm count.
+    pub resolved_dispatches: Vec<(u64, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +140,21 @@ struct SingleFunctionDiscoveryStats {
     unresolved_indirect: Vec<(u64, crate::analysis::dispatch::Unresolved)>,
     /// Indirect transfers resolved through a jump table, with how many arms.
     resolved_dispatches: Vec<(u64, usize)>,
+}
+
+fn merge_single_function_stats(
+    aggregate: &mut FunctionDiscoveryStats,
+    mut local: SingleFunctionDiscoveryStats,
+) {
+    aggregate.hit_block_limit |= local.hit_block_limit;
+    aggregate.hit_instruction_limit |= local.hit_instruction_limit;
+    aggregate.hit_timeout |= local.hit_timeout;
+    aggregate
+        .unresolved_indirect
+        .append(&mut local.unresolved_indirect);
+    aggregate
+        .resolved_dispatches
+        .append(&mut local.resolved_dispatches);
 }
 
 #[derive(Debug, Clone, Default)]
@@ -822,8 +842,10 @@ fn discover_function(
                     // the jump table's entry count. Restricted to the unsigned
                     // forms because a switch index is unsigned after the
                     // compiler's rebase; a signed test is a different construct.
-                    if matches!(ins.mnemonic.to_ascii_lowercase().as_str(), "ja" | "jae" | "jnbe" | "jnb")
-                        && dispatch.pending_bound().is_some()
+                    if matches!(
+                        ins.mnemonic.to_ascii_lowercase().as_str(),
+                        "ja" | "jae" | "jnbe" | "jnb"
+                    ) && dispatch.pending_bound().is_some()
                     {
                         // Carry the register bounds AND the slot bounds: clang -O0
                         // spills the switch value before the check and reloads it
@@ -3149,9 +3171,15 @@ pub fn analyze_functions_bytes_with_stats(
             );
             continue;
         }
-        if let Some((f, calls, func_stats)) =
-            discover_function(data, arch, end, seed.clone(), &regions, budgets, &jump_table_index)
-        {
+        if let Some((f, calls, func_stats)) = discover_function(
+            data,
+            arch,
+            end,
+            seed.clone(),
+            &regions,
+            budgets,
+            &jump_table_index,
+        ) {
             stats.function_seed_kinds.push((
                 f.entry_point.value,
                 seed_kind_by_va
@@ -3161,9 +3189,7 @@ pub fn analyze_functions_bytes_with_stats(
                     .label()
                     .to_string(),
             ));
-            stats.hit_block_limit |= func_stats.hit_block_limit;
-            stats.hit_instruction_limit |= func_stats.hit_instruction_limit;
-            stats.hit_timeout |= func_stats.hit_timeout;
+            merge_single_function_stats(&mut stats, func_stats);
             for xref in &calls {
                 calls_all.push((f.entry_point.value, *xref));
                 match xref.call_type {
@@ -3351,7 +3377,7 @@ pub fn analyze_functions_bytes_with_stats(
 
 #[cfg(test)]
 mod aarch64_ctrl_flow_tests {
-    use super::{classify_ctrl_flow, is_unconditional_branch_mnemonic, BArch};
+    use super::{BArch, classify_ctrl_flow, is_unconditional_branch_mnemonic};
 
     fn class(m: &str) -> (bool, bool, bool) {
         classify_ctrl_flow(m, BArch::AArch64)
@@ -3411,11 +3437,11 @@ mod aarch64_ctrl_flow_tests {
 #[cfg(test)]
 mod prologue_gate_tests {
     use super::{
-        classify_pe_thunk_head, is_code_padding_terminator, looks_like_fn_start, memory_operand_va,
-        pe_adjustor_jump_stub_len, pe_head_looks_like_simd_continuation,
-        pe_low_confidence_call_target_head, pe_prologue_scan_candidate, pe_tiny_return_helper_len,
-        pe_tiny_stub_scan_candidate, pe_tiny_stub_scan_promotes_candidate, BArch, ExecRegion,
-        PeThunkKind,
+        BArch, ExecRegion, PeThunkKind, classify_pe_thunk_head, is_code_padding_terminator,
+        looks_like_fn_start, memory_operand_va, pe_adjustor_jump_stub_len,
+        pe_head_looks_like_simd_continuation, pe_low_confidence_call_target_head,
+        pe_prologue_scan_candidate, pe_tiny_return_helper_len, pe_tiny_stub_scan_candidate,
+        pe_tiny_stub_scan_promotes_candidate,
     };
     use crate::core::instruction::{Access, Instruction, Operand};
     use std::collections::HashSet;
@@ -3980,6 +4006,28 @@ mod degenerate_block_tests {
         assert!(
             !func.basic_blocks.is_empty(),
             "expected the decodable blocks to be recovered"
+        );
+    }
+
+    #[test]
+    fn dispatch_completeness_survives_stats_aggregation() {
+        let mut aggregate = FunctionDiscoveryStats::default();
+        let local = SingleFunctionDiscoveryStats {
+            unresolved_indirect: vec![(
+                0x1234,
+                crate::analysis::dispatch::Unresolved::NoBound(0x4000),
+            )],
+            resolved_dispatches: vec![(0x5678, 4)],
+            ..SingleFunctionDiscoveryStats::default()
+        };
+        merge_single_function_stats(&mut aggregate, local);
+        assert_eq!(aggregate.resolved_dispatches, vec![(0x5678, 4)]);
+        assert_eq!(
+            aggregate.unresolved_indirect,
+            vec![(
+                0x1234,
+                crate::analysis::dispatch::Unresolved::NoBound(0x4000)
+            )]
         );
     }
 }

@@ -602,7 +602,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
 
         // --- Conditional shapes ---------------------------------------------
         if cfg.succs[cur].len() == 2 {
-            if let Some((ite, after)) = detect_if_shape(cur, cfg, visited) {
+            if let Some((ite, after)) = detect_if_shape(cur, cfg, visited, stop_at) {
                 parts.push(ite);
                 match after {
                     Some(next) => {
@@ -619,7 +619,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         // switch dispatch. Each successor that's reached only from this
         // block is an arm; the shared post-dominator (if any) is the join.
         if cfg.succs[cur].len() >= 3 {
-            if let Some((sw, after)) = detect_switch_shape(cur, cfg, visited) {
+            if let Some((sw, after)) = detect_switch_shape(cur, cfg, visited, stop_at) {
                 parts.push(sw);
                 match after {
                     Some(next) => {
@@ -858,6 +858,7 @@ fn detect_if_shape(
     cond: usize,
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
+    stop_at: Option<usize>,
 ) -> Option<(Region, Option<usize>)> {
     let t = cfg.succs[cond][0];
     let e = cfg.succs[cond][1];
@@ -998,7 +999,26 @@ fn detect_if_shape(
     // body jumps to a shared end block. Structuring it against the post-dominator
     // collapses the whole ladder into nested if/else with a single exit instead
     // of goto soup. Runs only after every tighter pattern above has declined.
-    if let Some(join) = cfg.ipostdom[cond] {
+    let mut distant_join = cfg.ipostdom[cond];
+    let mut bounded_by_enclosing_region = false;
+    if let (Some(boundary), Some(join)) = (stop_at, distant_join) {
+        // An immediate post-dominator may lie beyond the region currently being
+        // built (most importantly, a function epilogue beyond a loop latch).
+        // In that case it is not this conditional's local join: use the region
+        // boundary when at least one arm continues there. The other arm may
+        // legitimately terminate early.
+        if join != boundary
+            && !can_reach(join, boundary, cfg)
+            && (can_reach(t, boundary, cfg) || can_reach(e, boundary, cfg))
+            && (!cfg.dominates(boundary, cond)
+                || contains_multiway_before(t, boundary, cfg)
+                || contains_multiway_before(e, boundary, cfg))
+        {
+            distant_join = Some(boundary);
+            bounded_by_enclosing_region = true;
+        }
+    }
+    if let Some(join) = distant_join {
         if join != cond && t != join && e != join {
             // Order the arms by the branch's taken target so the rendered
             // condition polarity is correct: `if (cond)` must guard the arm the
@@ -1010,8 +1030,27 @@ fn detect_if_shape(
             };
             let invert = invert_for(cfg, cond, then_a);
             visited.insert(cond);
-            let then_r = build_arm(then_a, cfg, visited, Some(join));
-            let else_r = build_arm(else_a, cfg, visited, Some(join));
+            let (then_r, else_r) = if bounded_by_enclosing_region {
+                // Paths that leave a bounded region (a return from inside a
+                // loop is the common case) may include a shared function
+                // epilogue. Render that terminating path here, but only commit
+                // ownership of blocks which can rejoin the region boundary;
+                // otherwise outer paths lose their one real epilogue.
+                let mut scoped_visited = visited.clone();
+                let then_r = build_arm(then_a, cfg, &mut scoped_visited, Some(join));
+                let else_r = build_arm(else_a, cfg, &mut scoped_visited, Some(join));
+                visited.extend(
+                    scoped_visited
+                        .into_iter()
+                        .filter(|&block| can_reach(block, join, cfg)),
+                );
+                (then_r, else_r)
+            } else {
+                (
+                    build_arm(then_a, cfg, visited, Some(join)),
+                    build_arm(else_a, cfg, visited, Some(join)),
+                )
+            };
             return Some((
                 Region::IfThenElse {
                     cond,
@@ -1028,15 +1067,44 @@ fn detect_if_shape(
     None
 }
 
+fn can_reach(start: usize, target: usize, cfg: &Cfg) -> bool {
+    let mut seen = HashSet::new();
+    let mut stack = vec![start];
+    while let Some(block) = stack.pop() {
+        if block == target {
+            return true;
+        }
+        if seen.insert(block) {
+            stack.extend(cfg.succs[block].iter().copied());
+        }
+    }
+    false
+}
+
+fn contains_multiway_before(start: usize, boundary: usize, cfg: &Cfg) -> bool {
+    let mut seen = HashSet::new();
+    let mut stack = vec![start];
+    while let Some(block) = stack.pop() {
+        if block == boundary || !seen.insert(block) {
+            continue;
+        }
+        if cfg.succs[block].len() >= 3 {
+            return true;
+        }
+        stack.extend(cfg.succs[block].iter().copied());
+    }
+    false
+}
+
 /// Recognise a switch dispatch (#193).
 ///
 /// Pattern: `cur` has N>=3 successors. Each arm should have `cur` as
 /// either its only predecessor (clean dispatch) or as one of a small
 /// number of preds when other arms fall through. We identify a join
-/// block as the first block reachable from at least one arm that has
-/// >1 predecessors and is dominated by `cur` — this is a coarse
-/// post-dominator approximation that's good enough for typical
-/// switch shapes.
+/// block as the multi-predecessor block reached from the greatest number of
+/// distinct arms. Counting distinct arms matters: a merge wholly inside one case
+/// or a shared exceptional exit used by only two cases is not the normal switch
+/// continuation when more cases converge elsewhere.
 ///
 /// Each arm is then recursively built with `stop_at = join`. Arms
 /// that terminate without reaching the join become Region sub-trees
@@ -1045,6 +1113,7 @@ fn detect_switch_shape(
     dispatch: usize,
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
+    enclosing_stop: Option<usize>,
 ) -> Option<(Region, Option<usize>)> {
     let arms = cfg.succs[dispatch].clone();
     if arms.len() < 3 {
@@ -1060,14 +1129,27 @@ fn detect_switch_shape(
         }
     }
 
-    // Find a candidate join: the first block (in any arm's reachable
-    // set) that has >1 predecessors and is dominated by `dispatch`.
-    let join = find_switch_join(dispatch, &arms, cfg);
+    let join = find_switch_join(dispatch, &arms, cfg, enclosing_stop);
+    let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
 
     visited.insert(dispatch);
     let mut sub_arms: Vec<Region> = Vec::new();
     for &a in &arms {
-        sub_arms.push(build(a, cfg, visited, join));
+        if let Some((_, loop_body)) = &enclosing_loop {
+            // Case-local returns may pass through a function epilogue outside
+            // the loop. Render that path in the case, but do not globally claim
+            // the shared epilogue: the loop-exit and pre-loop paths still need
+            // it at function scope. Only loop-body ownership is committed.
+            let mut arm_visited = visited.clone();
+            sub_arms.push(build(a, cfg, &mut arm_visited, join));
+            visited.extend(
+                arm_visited
+                    .into_iter()
+                    .filter(|block| loop_body.contains(block)),
+            );
+        } else {
+            sub_arms.push(build(a, cfg, visited, join));
+        }
     }
     Some((
         Region::Switch {
@@ -1079,34 +1161,97 @@ fn detect_switch_shape(
     ))
 }
 
-/// Walk reachable blocks from each arm, collect the union, and return
-/// the smallest-index block (in the union) that has >1 preds and is
-/// dominated by `dispatch`. None if no such candidate exists.
-fn find_switch_join(dispatch: usize, arms: &[usize], cfg: &Cfg) -> Option<usize> {
+/// Walk reachable blocks from each arm and return the block reached from the
+/// greatest number of DISTINCT arms that also has >1 predecessors and is
+/// dominated by `dispatch`. Address order breaks ties only after arm coverage;
+/// otherwise an earlier shared error exit can steal the normal continuation.
+/// None if no candidate is shared by at least two arms.
+fn find_switch_join(
+    dispatch: usize,
+    arms: &[usize],
+    cfg: &Cfg,
+    enclosing_stop: Option<usize>,
+) -> Option<usize> {
     use std::collections::VecDeque;
-    let mut reachable: HashSet<usize> = HashSet::new();
+    let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
+    let mut arm_reach_counts: HashMap<usize, usize> = HashMap::new();
     for &a in arms {
         let mut q: VecDeque<usize> = VecDeque::new();
         q.push_back(a);
         let mut seen: HashSet<usize> = HashSet::new();
         while let Some(b) = q.pop_front() {
+            // A switch nested in a loop must not walk through the loop header
+            // into a later iteration. Doing so makes every case-internal merge
+            // appear reachable from every arm and selects it as the join.
+            if Some(b) == enclosing_stop {
+                continue;
+            }
+            // A local if/else join can replace the loop header as `stop_at`
+            // while recursively building a switch nested inside that arm. Find
+            // the natural loop independently: paths leaving its body are case
+            // exits, and the header starts the *next* iteration, neither of
+            // which may participate in this iteration's switch join.
+            if let Some((header, body)) = &enclosing_loop {
+                if b == *header || !body.contains(&b) {
+                    continue;
+                }
+            }
             if !seen.insert(b) {
                 continue;
             }
-            reachable.insert(b);
             for &s in &cfg.succs[b] {
                 if !seen.contains(&s) {
                     q.push_back(s);
                 }
             }
         }
+        for b in seen {
+            *arm_reach_counts.entry(b).or_default() += 1;
+        }
     }
-    let mut candidates: Vec<usize> = reachable
+    let mut candidates: Vec<(usize, usize)> = arm_reach_counts
         .into_iter()
-        .filter(|&b| !arms.contains(&b) && cfg.preds[b].len() > 1 && cfg.dominates(dispatch, b))
+        .filter_map(|(b, arm_count)| {
+            (arm_count > 1
+                && !arms.contains(&b)
+                && cfg.preds[b].len() > 1
+                && cfg.dominates(dispatch, b))
+            .then_some((arm_count, b))
+        })
         .collect();
-    candidates.sort_unstable();
-    candidates.into_iter().next()
+    candidates.sort_unstable_by(|(count_a, block_a), (count_b, block_b)| {
+        count_b.cmp(count_a).then_with(|| block_a.cmp(block_b))
+    });
+    candidates.into_iter().next().map(|(_, block)| block)
+}
+
+/// The smallest natural-loop body containing `node`, paired with its header.
+/// Smallest is the innermost loop when loops are nested. A header may have more
+/// than one back-edge, so its body is the union of the standard predecessor
+/// walks from every dominated tail.
+fn innermost_natural_loop_containing(node: usize, cfg: &Cfg) -> Option<(usize, HashSet<usize>)> {
+    let mut loops = Vec::new();
+    for header in 0..cfg.succs.len() {
+        if !cfg.dominates(header, node) {
+            continue;
+        }
+        let tails: Vec<usize> = cfg.preds[header]
+            .iter()
+            .copied()
+            .filter(|&tail| cfg.dominates(header, tail))
+            .collect();
+        if tails.is_empty() {
+            continue;
+        }
+        let mut body = HashSet::new();
+        for tail in tails {
+            body.extend(natural_loop_body(header, tail, cfg));
+        }
+        if body.contains(&node) {
+            loops.push((header, body));
+        }
+    }
+    loops.into_iter().min_by_key(|(_, body)| body.len())
 }
 
 #[cfg(test)]
@@ -1139,6 +1284,87 @@ mod tests {
     fn recover_for(lf: &LlirFunction) -> Region {
         let ssa = compute_ssa(lf);
         recover(lf, &ssa)
+    }
+
+    #[test]
+    fn switch_join_prefers_a_shared_continuation_over_an_internal_arm_merge() {
+        // Block 5 is an internal merge in case 0; block 8 is the normal switch
+        // continuation reached by all three cases. The extra conditional at
+        // block 1 gives recursive if lowering a function-level `stop_at` (9),
+        // not the surrounding loop header (0). Following the back-edge through
+        // block 0 makes every arm appear to reach block 5 and lets its lower
+        // address steal ownership from block 8. This is the shape of
+        // `05_cleanup_and_state_machine:fsm`.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1b00,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1b00],
+            ),
+            (
+                0x1100,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::C),
+                    target: 0x1a00,
+                    inverted: false,
+                }],
+                vec![0x1200, 0x1a00],
+            ),
+            (0x1200, vec![Op::Nop], vec![0x1300, 0x1600, 0x1700]),
+            (
+                0x1300,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1c00,
+                    inverted: false,
+                }],
+                vec![0x1400, 0x1c00],
+            ),
+            (0x1400, vec![Op::Nop], vec![0x1500]),
+            (0x1500, vec![Op::Nop], vec![0x1800]),
+            (0x1600, vec![Op::Nop], vec![0x1800]),
+            (0x1700, vec![Op::Nop], vec![0x1800]),
+            (0x1800, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (0x1900, vec![Op::Return], vec![]),
+            (0x1a00, vec![Op::Jump { target: 0x1900 }], vec![0x1900]),
+            (0x1b00, vec![Op::Jump { target: 0x1900 }], vec![0x1900]),
+            (0x1c00, vec![Op::Jump { target: 0x1900 }], vec![0x1900]),
+        ]);
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        assert_eq!(
+            find_switch_join(2, &[3, 6, 7], &cfg, Some(9)),
+            Some(8),
+            "the shared loop continuation is the join"
+        );
+        fn find_switch(region: &Region) -> Option<&Region> {
+            match region {
+                Region::Switch { .. } => Some(region),
+                Region::Seq(parts) => parts.iter().find_map(find_switch),
+                Region::IfThen { then_r, .. } => find_switch(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    find_switch(then_r).or_else(|| find_switch(else_r))
+                }
+                Region::While { body, .. } | Region::DoWhile { body, .. } => find_switch(body),
+                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+            }
+        }
+        let region = recover_for(&lf);
+        let Some(Region::Switch { arms, .. }) = find_switch(&region) else {
+            panic!("expected recovered switch: {region:?}");
+        };
+        assert!(
+            arms.iter().all(|arm| !arm.blocks().contains(&9)),
+            "the shared function epilogue must stay outside the switch: {arms:?}"
+        );
+        assert!(
+            region.blocks().into_iter().any(|block| block == 9),
+            "the shared epilogue must remain represented at function scope"
+        );
     }
 
     #[test]
@@ -1794,7 +2020,7 @@ mod tests {
 
     #[test]
     fn runs_on_real_binary_without_losing_blocks() {
-        use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+        use crate::analysis::cfg::{Budgets, analyze_functions_bytes};
         use crate::core::binary::Arch;
         use crate::ir::lift_function::lift_function_from_bytes;
         let path = std::path::Path::new(
