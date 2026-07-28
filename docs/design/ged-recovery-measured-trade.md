@@ -13,7 +13,7 @@
 > Use this document as historical evidence for what the loop fallback costs, and
 > nothing else. The unsafe code was deliberately not integrated.
 
-**Experimental branch:** `recover-ged-cells` at `2bde5a8`  
+**Experimental branch:** `recover-ged-cells` at `2bde5a8`
 **Baseline:** `a1a8a87` · **Compared master:** `d6144a7`+ · measured 2026-07-26
 
 ## What it buys
