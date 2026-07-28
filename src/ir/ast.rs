@@ -3311,7 +3311,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These six steps change *definitions, uses, value identities, or control-flow
+/// These seven steps change *definitions, uses, value identities, or control-flow
 /// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
@@ -3324,12 +3324,14 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 ///    emits);
 /// 3. `copy_prop::propagate_copies` folds the short-lived reload and
 ///    condition-setup copy chains that otherwise inflate the emitted CFG.
-/// 4. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+/// 4. `select_fold::collapse_assignment_diamonds` turns a proven two-arm,
+///    same-destination terminal return-value diamond into one pure select expression.
+/// 5. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 5. `switch_ladder::recover_switches` converts proven comparison ladders into
+/// 6. `switch_ladder::recover_switches` converts proven comparison ladders into
 ///    `switch` nodes.
-/// 6. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+/// 7. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
@@ -3343,6 +3345,7 @@ pub fn prepare_for_decbench(f: &Function) -> Function {
     default_return_to_reg(&mut owned.body);
     coalesce_param_spills(&mut owned.body);
     crate::ir::copy_prop::propagate_copies(&mut owned);
+    crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.

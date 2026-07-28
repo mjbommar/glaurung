@@ -44,6 +44,7 @@ pub mod naming;
 pub mod pdb_fields;
 pub mod regview;
 pub mod ssa;
+pub mod select_fold;
 pub mod stack_idiom;
 pub mod stack_locals;
 pub mod strings_fold;
