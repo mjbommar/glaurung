@@ -238,6 +238,7 @@ fn collapse_body(body: &mut Vec<Stmt>) {
 fn rewrite_body(body: &mut [Stmt]) {
     for s in body.iter_mut() {
         match s {
+            Stmt::IndirectGoto { target } => rewrite_expr(target),
             Stmt::Assign { src, .. } => rewrite_expr(src),
             Stmt::Store { addr, src, .. } => {
                 rewrite_expr(addr);

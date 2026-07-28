@@ -79,6 +79,14 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
             reads_of_value(rhs, &mut uses);
             Some(dst.clone())
         }
+        // Reads the computed target, defines nothing. Getting this wrong in the
+        // other direction — as `Op::Call` did — let dead-code elimination believe
+        // the dispatch produced a value, so the index computation was kept alive
+        // only as the argument of a phantom call.
+        Op::IndirectJump { target } => {
+            reads_of_value(target, &mut uses);
+            None
+        }
         Op::Un { dst, src, .. } => {
             reads_of_value(src, &mut uses);
             Some(dst.clone())

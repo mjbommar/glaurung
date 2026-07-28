@@ -271,6 +271,7 @@ fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
                 }
             }
         }
+        Stmt::IndirectGoto { target } => walk_expr_phys(target, &mut |n| cb(n, false)),
         Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
@@ -295,6 +296,7 @@ fn collect_first_appearance_phys(body: &[Stmt]) -> Vec<String> {
 
 fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
     match s {
+        Stmt::IndirectGoto { target } => walk_expr_phys(target, cb),
         Stmt::Assign { dst, src } => {
             if let VReg::Phys(n) = dst {
                 cb(n);
@@ -475,6 +477,7 @@ fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
 fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
     for s in body.iter_mut() {
         match s {
+            Stmt::IndirectGoto { target } => rewrite_expr(target, role),
             Stmt::Assign { dst, src } => {
                 rename_vreg(dst, role);
                 rewrite_expr(src, role);

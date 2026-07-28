@@ -165,6 +165,10 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("kind", "jump")?;
             d.set_item("target", *target)?;
         }
+        Op::IndirectJump { target } => {
+            d.set_item("kind", "indirect_jump")?;
+            d.set_item("target", value_to_pyobj(py, target)?)?;
+        }
         Op::CondJump {
             cond,
             target,
@@ -466,7 +470,6 @@ fn decompile_at_py(
 ) -> PyResult<String> {
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
-    use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover_verified;
@@ -613,7 +616,6 @@ fn decompile_range_at_py(
     use crate::core::basic_block::BasicBlock;
     use crate::core::function::{Function, FunctionKind};
     use crate::ir::ast::{lower, render, render_with_types};
-    use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover_verified;
@@ -937,11 +939,9 @@ fn decompile_all_py(
 ) -> PyResult<PyObject> {
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render};
-    use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover_verified;
-    use crate::ir::types_recover::recover_types_for;
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
@@ -980,32 +980,12 @@ fn decompile_all_py(
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
-        reconstruct(&mut f);
-        // This sequence MUST match the other decompile entry points. It did not:
-        // this one ran dead-flag pruning before constant folding and never pruned
-        // unreferenced labels, so `--all` produced different output from `--vas` for
-        // the same function — and the fixture gate's structural lane (which uses
-        // `--all`) was measuring a different pipeline from its execution lane (which
-        // uses `--vas`). Factoring these four copies into one core pipeline is the
-        // real fix; until then they are kept identical and asserted by
-        // `test_decompiler_fixture_structural.py::test_all_and_vas_agree`.
-        crate::ir::const_fold::fold_constants(&mut f);
-        crate::ir::dce::prune_overwritten_flags(&mut f);
-        crate::ir::dce::prune_dead_flags(&mut f);
-        crate::ir::call_args::reconstruct_args_with_params(&mut f, cc, &param_slots);
-        crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
-        crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
-        crate::ir::canary::recognise_canary(&mut f);
-        let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(cc));
-        crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
-        crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
-        crate::ir::canary::collapse_canary_save(&mut f);
-        if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
-            crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
-        }
-        crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
-        crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
-        crate::ir::label_prune::prune_unreferenced_labels(&mut f);
+        // One pass list, shared with every other entry point — see `run_ast_passes`.
+        // This site used to run dead-flag pruning before constant folding and never
+        // pruned unreferenced labels, so `--all` produced different output from `--vas`
+        // for the same function, and the fixture gate's structural lane measured a
+        // different pipeline from its execution lane. It cannot drift again.
+        let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool);
         if matches!(
             cc,
             crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
@@ -1054,7 +1034,6 @@ fn decompile_many_py(
     // every requested VA that resolves to a known function.
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
-    use crate::ir::expr_reconstruct::reconstruct;
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover_verified;
@@ -1111,29 +1090,19 @@ fn decompile_many_py(
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         let mut f = lower(&lf, &region, outer_name);
-        reconstruct(&mut f);
-        crate::ir::const_fold::fold_constants(&mut f);
-        crate::ir::dce::prune_overwritten_flags(&mut f);
-        crate::ir::dce::prune_dead_flags(&mut f);
-        crate::ir::call_args::reconstruct_args_with_params(&mut f, cc, &param_slots);
-        crate::ir::name_resolve::resolve_names(&mut f, &addr_map);
-        crate::ir::strings_fold::fold_string_literals(&mut f, &str_pool);
-        crate::ir::canary::recognise_canary(&mut f);
-        let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(cc));
+        // One pass list, shared with every other entry point — see `run_ast_passes`.
+        // This site used to run dead-flag pruning before constant folding and never
+        // pruned unreferenced labels, so `--all` produced different output from `--vas`
+        // for the same function, and the fixture gate's structural lane measured a
+        // different pipeline from its execution lane. It cannot drift again.
+        // Type recovery runs on the pre-canonicalisation LLIR and does not touch `f`,
+        // so it is hoisted above the shared pipeline rather than braided into it.
         let tm = if types {
             Some(recover_types_for(&lf_raw, cc))
         } else {
             None
         };
-        crate::ir::value_split::split_spilled_arg_reuse(&mut f, cc);
-        crate::ir::naming::apply_role_names_with_params(&mut f, cc, &param_slots);
-        crate::ir::canary::collapse_canary_save(&mut f);
-        if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
-            crate::ir::arm64_prologue::recognise_arm64_prologue(&mut f);
-        }
-        crate::ir::dead_stores::eliminate_dead_stores(&mut f, cc);
-        crate::ir::stack_idiom::rematerialise_stack_ops(&mut f);
-        crate::ir::label_prune::prune_unreferenced_labels(&mut f);
+        let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool);
         if matches!(
             cc,
             crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64

@@ -241,6 +241,25 @@ pub enum Op {
     Jump {
         target: u64,
     },
+    /// Unconditional jump through a computed value — `jmp *%rax`, `jmp *[mem]`.
+    ///
+    /// These used to lift to [`Op::Call`], with the lifter noting that "downstream
+    /// analyses treat both the same". They must not: **a call returns and a jump
+    /// does not.** Modelling a dispatch as a call made the AST emit
+    /// `var = (*(code *)(table + ...))();` in place of the switch — the dispatch
+    /// became a value-producing statement, so the switch lowering could not
+    /// recognise it as the terminator to drop, and the arms hung off a
+    /// discriminant nothing defined.
+    ///
+    /// The *targets* are deliberately absent. Where control goes is a property of
+    /// the graph, recovered once by `analysis::dispatch` and recorded as CFG
+    /// edges; what the instruction IS belongs here. Duplicating the target set
+    /// into the op would create a second copy to disagree with the first.
+    IndirectJump {
+        /// The value jumped through, for the renderer to reconstruct the
+        /// dispatch from.
+        target: Value,
+    },
     /// Conditional jump on a previously-computed flag/bool value.
     /// `inverted = true` means "take the jump when `cond` is *not* set" —
     /// this is how JNE / JAE / JGE / etc. lift while still letting their
@@ -575,6 +594,7 @@ impl fmt::Display for Op {
                 write!(f, "store[{} bytes] {:?} <- {}", addr.size, addr, src)
             }
             Op::Jump { target } => write!(f, "jmp 0x{:x}", target),
+            Op::IndirectJump { target } => write!(f, "jmp *{}", target),
             Op::CondJump {
                 cond,
                 target,

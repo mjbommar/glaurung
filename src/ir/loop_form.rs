@@ -242,6 +242,7 @@ fn recover_body(stmts: &mut [Stmt]) {
             | Stmt::Unknown(_)
             | Stmt::Comment(_)
             | Stmt::Label(_)
+            | Stmt::IndirectGoto { .. }
             | Stmt::Goto { .. } => {}
         }
     }

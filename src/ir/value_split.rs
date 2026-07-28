@@ -194,6 +194,7 @@ impl Splitter {
                 }
                 Stmt::For { cond, .. } => self.rename_expr(cond),
                 Stmt::Switch { discriminant, .. } => self.rename_expr(discriminant),
+                Stmt::IndirectGoto { .. } => {}
                 Stmt::Goto { .. }
                 | Stmt::Label(_)
                 | Stmt::Break

@@ -625,6 +625,7 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
 
 fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
     match s {
+        Stmt::IndirectGoto { target } => mark_arg_reads_in_expr(target, arch, read_between),
         Stmt::Assign { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
         Stmt::Store { addr, src, .. } => {
             mark_arg_reads_in_expr(addr, arch, read_between);
@@ -711,6 +712,8 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
 
 fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [bool]) {
     match s {
+        // A computed transfer writes no argument slot.
+        Stmt::IndirectGoto { .. } => {}
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
             mark_slot_write(dst, arch, blocked_incoming);
         }

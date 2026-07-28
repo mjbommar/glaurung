@@ -152,6 +152,12 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
             }
             // Control-flow boundaries: a label may be a join target and a goto
             // leaves the run — clear so nothing propagates across the edge.
+            // Substitute THEN end the run: the dispatch reads its target, so a
+            // copy that reaches it has to be applied before the barrier.
+            Stmt::IndirectGoto { target } => {
+                subst(target, &copies);
+                copies.clear();
+            }
             Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
             Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
@@ -257,6 +263,12 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 if let Some(b) = default {
                     propagate_run_counted(b, reads);
                 }
+                copies.clear();
+            }
+            // Substitute THEN end the run: the dispatch reads its target, so a
+            // copy that reaches it has to be applied before the barrier.
+            Stmt::IndirectGoto { target } => {
+                subst(target, &copies);
                 copies.clear();
             }
             Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
@@ -519,6 +531,7 @@ fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
 
 fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
     match s {
+        Stmt::IndirectGoto { target } => count_reads_expr(target, reads),
         // The destination of an Assign is a WRITE, not a read.
         Stmt::Assign { src, .. } => count_reads_expr(src, reads),
         Stmt::Store { addr, src, .. } => {

@@ -158,6 +158,16 @@ pub enum Stmt {
     Goto {
         target: u64,
     },
+    /// A computed transfer the structurer did NOT turn into a `Switch` — an
+    /// unresolved jump table, a tail call through a register, a vtable dispatch.
+    ///
+    /// It exists so the output cannot quietly imply control falls through. The
+    /// previous modelling (an indirect `Op::Call`) rendered these as a call whose
+    /// result was assigned and dropped, which reads as "we understood this" when
+    /// the truth is the opposite.
+    IndirectGoto {
+        target: Expr,
+    },
     If {
         cond: Expr,
         then_body: Vec<Stmt>,
@@ -479,6 +489,70 @@ fn semantic_comment_for_unknown(mnemonic: &str) -> Option<&'static str> {
     }
 }
 
+/// The value a jump-table dispatch switches on, read out of the jump's own
+/// target expression.
+///
+/// A relative-table dispatch computes `table + (i32)table[idx]`, so the index is
+/// sitting inside the load's address as `base + idx * scale`. Recovering it here
+/// means the `switch` names the value the source switched on instead of a
+/// synthetic `dispatch_<va>` that nothing defines.
+///
+/// Returns `None` rather than guessing when the shape is not recognised — a
+/// wrong discriminant would render a switch that reads correct and is not.
+fn switch_index_of(target: &Expr) -> Option<Expr> {
+    fn find_deref(e: &Expr) -> Option<&Expr> {
+        match e {
+            Expr::Deref { addr, .. } => Some(addr),
+            Expr::Bin { lhs, rhs, .. } => find_deref(lhs).or_else(|| find_deref(rhs)),
+            Expr::Cast { expr, .. } => find_deref(expr),
+            Expr::Un { src, .. } => find_deref(src),
+            _ => None,
+        }
+    }
+    /// The `idx` of a `base + idx * scale` address.
+    ///
+    /// At lowering time the table read is still an `Expr::Lea` — the scaled form
+    /// with an explicit `index` field — because the fold that turns it into
+    /// `base + idx*4` runs later. Handling only the folded shape found nothing,
+    /// which is how the discriminant stayed a placeholder.
+    fn scaled_index(addr: &Expr) -> Option<Expr> {
+        if let Expr::Lea {
+            index: Some(i),
+            scale,
+            ..
+        } = addr
+        {
+            if *scale > 1 {
+                return Some(Expr::Reg(i.clone()));
+            }
+        }
+        if let Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } = addr
+        {
+            for side in [lhs, rhs] {
+                if let Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: a,
+                    rhs: b,
+                } = side.as_ref()
+                {
+                    if matches!(b.as_ref(), Expr::Const(_)) {
+                        return Some((**a).clone());
+                    }
+                    if matches!(a.as_ref(), Expr::Const(_)) {
+                        return Some((**b).clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+    scaled_index(find_deref(target)?)
+}
+
 /// Lower a single LLIR op to one or more Stmts.
 fn lower_op(op: &Op) -> Vec<Stmt> {
     match op {
@@ -534,6 +608,20 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
             size: addr.size,
         }],
         Op::Jump { target } => vec![Stmt::Goto { target: *target }],
+        // A computed transfer. Where it goes lives in the CFG — the arms are
+        // real successors, and the structurer turns them into `Region::Switch`
+        // — so there is nothing to emit here. It must NOT become a statement:
+        // lifting it as `Op::Call` made the dispatch render as
+        // `var = (*(code *)(...))();`, which the switch lowering could not
+        // recognise as the terminator to drop, so the bogus call survived
+        // *inside* the recovered switch.
+        //
+        // An UNSTRUCTURED indirect jump — one the structurer did not turn into
+        // a switch — still has to say so rather than vanish, or the function
+        // silently reads as if control fell through.
+        Op::IndirectJump { target } => vec![Stmt::IndirectGoto {
+            target: lower_value(target),
+        }],
         // A CondJump on its own (not absorbed into a structured If/While)
         // becomes a conditional goto. If the CondJump carries `inverted`
         // (i.e. lifted from JNE / JAE / JGE / b.ne / b.hs / ...), wrap the
@@ -1128,6 +1216,9 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
             .map(|e| count_reg_uses_in_expr(e, target))
             .unwrap_or(0),
         Stmt::Push { value } => count_reg_uses_in_expr(value, target),
+        // It reads the value it jumps through — counting it as zero would let
+        // DCE delete the index computation the dispatch depends on.
+        Stmt::IndirectGoto { target: t } => count_reg_uses_in_expr(t, target),
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
@@ -1370,12 +1461,20 @@ fn lower_region_inner(
             // arm with its case index (positional) and an implicit
             // break at the end.
             let mut prefix = lower_block(&lf.blocks[*dispatch]);
-            // Drop the trailing Goto/If-Goto if present — the switch
-            // statement encodes the dispatch.
+            // The switch statement IS the dispatch, so its terminator must not
+            // also appear inside it. `IndirectGoto` belongs in this list for the
+            // same reason `Goto` does; while the indirect jump lifted to a call
+            // it was neither, so the dispatch survived as a phantom call
+            // statement *within* the recovered switch.
+            let mut discriminant = None;
             while matches!(
                 prefix.last(),
-                Some(Stmt::Goto { .. }) | Some(Stmt::If { .. })
+                Some(Stmt::Goto { .. }) | Some(Stmt::If { .. }) | Some(Stmt::IndirectGoto { .. })
             ) {
+                if let Some(Stmt::IndirectGoto { target }) = prefix.last() {
+                    discriminant = switch_index_of(target);
+                }
+                let _ = &discriminant;
                 prefix.pop();
             }
             let cases: Vec<(Option<i64>, Vec<Stmt>)> = arms
@@ -1383,14 +1482,26 @@ fn lower_region_inner(
                 .enumerate()
                 .map(|(i, arm)| (Some(i as i64), lower_region(arm, lf, targets)))
                 .collect();
-            // Discriminant is a placeholder — recovering the original
-            // switched value requires walking the index computation
-            // above the dispatch. Filed as a v1 follow-up.
+            // The switched value, recovered from the dispatch's own target
+            // expression: the table read indexes by exactly the value the
+            // source switched on. The placeholder this replaces
+            // (`dispatch_<va>`) named nothing and rendered as an undeclared
+            // variable, so the recovered switch read as `switch (var6)` with
+            // `var6` defined nowhere. Falls back to the placeholder when the
+            // index is not recognisable, rather than inventing one.
+            let discriminant = discriminant.or_else(|| {
+                prefix.iter().rev().find_map(|st| match st {
+                    Stmt::Assign { src, .. } => switch_index_of(src),
+                    _ => None,
+                })
+            });
             prefix.push(Stmt::Switch {
-                discriminant: Expr::Reg(VReg::Phys(format!(
-                    "dispatch_{:x}",
-                    lf.blocks[*dispatch].start_va
-                ))),
+                discriminant: discriminant.unwrap_or_else(|| {
+                    Expr::Reg(VReg::Phys(format!(
+                        "dispatch_{:x}",
+                        lf.blocks[*dispatch].start_va
+                    )))
+                }),
                 cases,
                 default: None,
             });
@@ -2104,6 +2215,18 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
             indent(out, level);
             let _ = writeln!(out, "goto L_{:x};", target);
         }
+        // A computed transfer the structurer could not turn into a `switch`.
+        // Emitted as a comment, not as code: there is no C for "jump wherever
+        // this register points", and the previous modelling (an indirect call
+        // whose result was assigned and dropped) rendered as something that
+        // compiles and reads as understood, which is worse than admitting the
+        // gap.
+        Stmt::IndirectGoto { target } => {
+            indent(out, level);
+            out.push_str("/* unrecovered indirect jump through ");
+            write_expr_ctx(target, tm, out);
+            out.push_str(" */\n");
+        }
         Stmt::If {
             cond,
             then_body,
@@ -2278,7 +2401,11 @@ pub fn compute_frame_size(body: &[Stmt]) -> Option<i64> {
                 }
                 break;
             }
-            Stmt::Nop | Stmt::Label(_) | Stmt::Unknown(_) | Stmt::Comment(_) => continue,
+            Stmt::Nop
+            | Stmt::Label(_)
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::IndirectGoto { .. } => continue,
             // Each `push` implicitly costs the stack-pointer width (8 on
             // 64-bit). We don't have the width threaded through the AST, so
             // conservatively account for an 8-byte push.
@@ -2618,6 +2745,18 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
         Stmt::Goto { target } => {
             indent(out, level);
             let _ = writeln!(out, "goto L_{:x};", target);
+        }
+        // A computed transfer the structurer could not turn into a `switch`.
+        // Emitted as a comment, not as code: there is no C for "jump wherever
+        // this register points", and the previous modelling (an indirect call
+        // whose result was assigned and dropped) rendered as something that
+        // compiles and reads as understood, which is worse than admitting the
+        // gap.
+        Stmt::IndirectGoto { target } => {
+            indent(out, level);
+            out.push_str("/* unrecovered indirect jump through ");
+            write_expr_c(target, out);
+            out.push_str(" */\n");
         }
         Stmt::If {
             cond,
@@ -3251,6 +3390,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                     rename_phys_in_body(b, map);
                 }
             }
+            Stmt::IndirectGoto { target } => re(target, map),
             Stmt::Goto { .. }
             | Stmt::Label(_)
             | Stmt::Break
@@ -3693,6 +3833,7 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         Stmt::Goto { target } => {
             ids.gotos.insert(*target);
         }
+        Stmt::IndirectGoto { target } => collect_idents_expr(target, ids),
         // Push/Pop/Nop are elided by the renderer; Unknown/Comment become
         // comments; none introduce a declared identifier.
         Stmt::Push { .. }
@@ -4291,6 +4432,18 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             indent(out, level);
             let _ = writeln!(out, "goto L_{:x};", target);
         }
+        // A computed transfer the structurer could not turn into a `switch`.
+        // Emitted as a comment, not as code: there is no C for "jump wherever
+        // this register points", and the previous modelling (an indirect call
+        // whose result was assigned and dropped) rendered as something that
+        // compiles and reads as understood, which is worse than admitting the
+        // gap.
+        Stmt::IndirectGoto { target } => {
+            indent(out, level);
+            out.push_str("/* unrecovered indirect jump through ");
+            write_expr_dec(target, out);
+            out.push_str(" */\n");
+        }
         Stmt::If {
             cond,
             then_body,
@@ -4570,6 +4723,7 @@ mod tests {
     }
 
     use super::*;
+
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
     use crate::ir::types::{CmpOp, Flag, LlirBlock, LlirInstr, VReg};

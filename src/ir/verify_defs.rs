@@ -296,6 +296,9 @@ fn undefined_reads(e: &Expr, defined: &BTreeSet<String>, found: &mut BTreeSet<St
 fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<String>) {
     for s in body {
         match s {
+            // The dispatch READS its target; an undefined read here is as real
+            // as any other.
+            Stmt::IndirectGoto { target } => undefined_reads(target, defined, found),
             Stmt::Assign { dst, src } => {
                 // The source is evaluated first: `x = x + 1` reads x before this
                 // definition of it.

@@ -33,6 +33,7 @@ pub fn fold_constants(f: &mut Function) {
 fn fold_body(body: &mut [Stmt]) {
     for s in body.iter_mut() {
         match s {
+            Stmt::IndirectGoto { target } => fold_expr(target),
             Stmt::Assign { src, .. } => fold_expr(src),
             Stmt::Store { addr, src, .. } => {
                 fold_expr(addr);

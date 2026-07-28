@@ -164,6 +164,9 @@ fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
         }
     };
     match op {
+        // Jumps through a computed value; the target is an address, and the
+        // width hint this pass applies would be wrong for one.
+        Op::IndirectJump { .. } => {}
         Op::Assign { dst, src } => {
             if let VReg::Phys(_) = dst {
                 tm.upsert(dst.clone(), int_for_reg(dst));

@@ -108,6 +108,7 @@ fn rewrite_body(
 ) {
     for s in body.iter_mut() {
         match s {
+            Stmt::IndirectGoto { target } => rewrite_expr(target, map, stack_counter, local_counter, cc),
             Stmt::Assign { src, .. } => rewrite_expr(src, map, stack_counter, local_counter, cc),
             Stmt::Store { addr, src, .. } => {
                 // Store's addr is an Lea — we need to rewrite the Lea itself

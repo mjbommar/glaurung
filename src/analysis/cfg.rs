@@ -123,6 +123,18 @@ struct SingleFunctionDiscoveryStats {
     hit_block_limit: bool,
     hit_instruction_limit: bool,
     hit_timeout: bool,
+    /// Indirect transfers whose target set could not be recovered, with the
+    /// dispatch VA and why.
+    ///
+    /// This is a **completeness** signal, not a diagnostic nicety. An unresolved
+    /// indirect jump means the recovered CFG is missing real edges — and every
+    /// verifier downstream compares the region tree against the CFG, so all of
+    /// them report clean on the truncated graph. Recording it here is what makes
+    /// "this function's graph is not the program's graph" something a consumer
+    /// can ask about instead of something nobody can see.
+    unresolved_indirect: Vec<(u64, crate::analysis::dispatch::Unresolved)>,
+    /// Indirect transfers resolved through a jump table, with how many arms.
+    resolved_dispatches: Vec<(u64, usize)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -601,6 +613,14 @@ fn discover_function(
     entry: Address,
     regions: &[ExecRegion],
     budgets: &Budgets,
+    // Jump tables discovered once for the whole binary, indexed by table VA.
+    //
+    // These used to be consumed only as function-discovery seeds — each arm
+    // offered as a possible new function entry — so the binding between a table
+    // and the `jmp` that reads it was never formed, and the dispatching
+    // function's own CFG got no successors at all. Passing them in is what lets
+    // `analysis::dispatch` answer "where does THIS jump go".
+    tables: &std::collections::BTreeMap<u64, Vec<u64>>,
 ) -> Option<(Function, Vec<FunctionXref>, SingleFunctionDiscoveryStats)> {
     let darch: crate::core::disassembler::Architecture = arch.into();
     let mut backend = registry::for_arch(darch, end)?;
@@ -621,6 +641,10 @@ fn discover_function(
     let mut queue: VecDeque<u64> = VecDeque::new();
     let mut seen: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
     let mut blocks: HashMap<u64, (u64, u32)> = HashMap::new(); // start_va -> (end_va, instr_count)
+    // block start -> inclusive max switch index its guard admits. Written when a
+    // block ends in a range check, read when its in-range successor is walked.
+    // BFS reaches the guard before the dispatch, so the fact is always available.
+    let mut index_bounds: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
     let mut edges: Vec<(u64, u64, ControlFlowEdgeKind)> = Vec::new();
     let mut call_edges: Vec<FunctionXref> = Vec::new();
 
@@ -646,6 +670,14 @@ fn discover_function(
         // Decode sequentially until a terminating control flow or budget hit
         let mut cur_va = start_va;
         let mut instrs = 0u32;
+        // Register tracking for indirect-dispatch resolution, per block. Reset
+        // here because a value set up in one block is not guaranteed to reach
+        // this one — there may be several predecessors.
+        let mut dispatch = crate::analysis::dispatch::DispatchTracker::new();
+        // A switch's range check sits in the block BEFORE the dispatch, and it
+        // is the only thing that knows how many entries the table has. Carry it
+        // across the in-range edge; see `DispatchTracker::inherit_bound`.
+        dispatch.inherit_bound(index_bounds.get(&start_va).cloned());
         'block: loop {
             if decoded_instructions >= budgets.max_instructions {
                 stats.hit_instruction_limit = true;
@@ -685,6 +717,8 @@ fn discover_function(
             };
             decoded_instructions += 1;
             instrs = instrs.saturating_add(1);
+            // Streaming, so the block is neither buffered nor decoded twice.
+            dispatch.observe(&ins);
             let end_va = cur_va.saturating_add(ins.length as u64);
             if is_code_padding_terminator(&ins.mnemonic, arch) {
                 blocks.insert(start_va, (end_va, instrs));
@@ -745,6 +779,35 @@ fn discover_function(
                             target_va: tgt,
                             call_type: CallType::Tail,
                         });
+                    } else {
+                        // A register-indirect unconditional jump: either a
+                        // dispatch whose arms belong in THIS function, or a
+                        // transfer we cannot follow. Before this, both produced
+                        // the same thing — no edges — so a switch lost every arm
+                        // and nothing recorded that the graph was incomplete.
+                        match dispatch.resolve(&ins, tables) {
+                            Some(crate::analysis::dispatch::Resolution::Table {
+                                targets, ..
+                            }) => {
+                                let mut arms = 0usize;
+                                for tgt in targets {
+                                    if in_exec_regions(regions, tgt).is_none() {
+                                        continue;
+                                    }
+                                    if seen.insert(tgt) {
+                                        queue.push_back(tgt);
+                                    }
+                                    edges.push((start_va, tgt, ControlFlowEdgeKind::Branch));
+                                    arms += 1;
+                                }
+                                stats.resolved_dispatches.push((cur_va, arms));
+                            }
+                            Some(crate::analysis::dispatch::Resolution::Unresolved(why)) => {
+                                stats.unresolved_indirect.push((cur_va, why));
+                            }
+                            // Not a register-indirect transfer at all.
+                            None => {}
+                        }
                     }
                 }
                 if !unconditional {
@@ -753,6 +816,20 @@ fn discover_function(
                         queue.push_back(end_va);
                     }
                     edges.push((start_va, end_va, ControlFlowEdgeKind::Fallthrough));
+                    // An unsigned-above branch to the default arm makes the
+                    // FALLTHROUGH the in-range path, so the compare's immediate
+                    // is that successor's inclusive index bound — and therefore
+                    // the jump table's entry count. Restricted to the unsigned
+                    // forms because a switch index is unsigned after the
+                    // compiler's rebase; a signed test is a different construct.
+                    if matches!(ins.mnemonic.to_ascii_lowercase().as_str(), "ja" | "jae" | "jnbe" | "jnb")
+                        && dispatch.pending_bound().is_some()
+                    {
+                        // Carry the register bounds AND the slot bounds: clang -O0
+                        // spills the switch value before the check and reloads it
+                        // into a different register in the dispatch block.
+                        index_bounds.insert(end_va, dispatch.export_bounds());
+                    }
                 }
                 // Block ends after branch
                 cur_va = end_va;
@@ -2697,6 +2774,12 @@ pub fn analyze_functions_bytes_with_stats(
     // not promote case labels into the top-level function list: Ghidra
     // keeps them as intra-function blocks, and switch reconstruction has
     // its own comparison area.
+    // Indexed by table VA so a dispatch site can ask "what does the table I
+    // computed point at". Previously these targets were consumed ONLY as
+    // function-entry seeds, which is why the dispatching function's own CFG
+    // never gained the arms — see `analysis::dispatch`.
+    let mut jump_table_index: std::collections::BTreeMap<u64, Vec<u64>> =
+        std::collections::BTreeMap::new();
     if !is_pe_image {
         let regions_for_check2 = regions.clone();
         let is_executable2 = move |va: u64| -> bool {
@@ -2705,6 +2788,9 @@ pub fn analyze_functions_bytes_with_stats(
                 .any(|r| va >= r.start && va < r.end)
         };
         let jump_tables = discover_jump_tables(data, is_executable2);
+        for jt in &jump_tables {
+            jump_table_index.insert(jt.table_va, jt.targets.clone());
+        }
         for jt in &jump_tables {
             for tgt in &jt.targets {
                 if known.contains(tgt) {
@@ -3064,7 +3150,7 @@ pub fn analyze_functions_bytes_with_stats(
             continue;
         }
         if let Some((f, calls, func_stats)) =
-            discover_function(data, arch, end, seed.clone(), &regions, budgets)
+            discover_function(data, arch, end, seed.clone(), &regions, budgets, &jump_table_index)
         {
             stats.function_seed_kinds.push((
                 f.entry_point.value,
@@ -3887,6 +3973,7 @@ mod degenerate_block_tests {
             entry,
             &regions,
             &budgets,
+            &std::collections::BTreeMap::new(),
         );
         let (func, _, _) = out.expect("discovery must succeed, not panic");
         // The decodable blocks survive; the empty one contributes nothing.

@@ -250,6 +250,7 @@ fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
                     .as_ref()
                     .is_some_and(|b| b.iter().any(|s| stmt_reads(s, dst)))
         }
+        Stmt::IndirectGoto { target } => expr_reads(target, dst),
         Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break

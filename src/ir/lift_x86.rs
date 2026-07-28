@@ -360,6 +360,44 @@ fn emit_bin(dst: VReg, op: BinOp, src: Value) -> Op {
     }
 }
 
+/// The status flags `sub dst, src` writes, in terms of the ORIGINAL `dst`.
+///
+/// `cmp` is `sub` that discards its result, so the two set identical flags — and
+/// `Mnemonic::Cmp` has always emitted exactly this block. The arithmetic form
+/// emitted none at all: `emit_bin` produced the `Op::Bin` and nothing else.
+///
+/// That is not a cosmetic omission. Compilers lower a switch's range check as
+/// `sub $N,%reg; ja default` — the subtract IS the comparison — so the `ja` read
+/// whatever flag some earlier, unrelated `cmp` had left behind. In
+/// `05_cleanup_and_state_machine:clang:O0:fsm` the guard came out as
+/// `if (~ule)` where `ule` still held the enclosing loop's condition; `~` of a
+/// 0/1 flag is -1 or -2, both true, so the recovered `switch` was unreachable.
+///
+/// These must be emitted BEFORE the `Op::Bin`, because they describe `dst`'s
+/// value before the subtract overwrites it.
+///
+/// This is the fourth instance of one gap — `neg` defined no flags, `test`
+/// defined three of the four that matter, `cmovcc` mis-modelled its condition —
+/// which is the argument for auditing flag-setting mnemonics as a family rather
+/// than one at a time. See `docs/design/x86-flags.md`.
+fn sub_flag_ops(lhs: Value, rhs: Value) -> Vec<Op> {
+    [
+        (Flag::Z, CmpOp::Eq),
+        (Flag::C, CmpOp::Ult),
+        (Flag::Ule, CmpOp::Ule),
+        (Flag::Slt, CmpOp::Slt),
+        (Flag::Sle, CmpOp::Sle),
+    ]
+    .into_iter()
+    .map(|(f, op)| Op::Cmp {
+        dst: VReg::Flag(f),
+        op,
+        lhs: lhs.clone(),
+        rhs: rhs.clone(),
+    })
+    .collect()
+}
+
 fn bin_for(mnem: Mnemonic) -> Option<BinOp> {
     Some(match mnem {
         Mnemonic::Add => BinOp::Add,
@@ -897,7 +935,14 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     if let Some(src) = value_of_operand(instr, 1) {
                         return match partial {
                             Some(v) => partial_alu_ops(v, op, src),
-                            None => vec![emit_bin(dst, op, src)],
+                            None => {
+                                let mut ops = Vec::new();
+                                if op == BinOp::Sub {
+                                    ops.extend(sub_flag_ops(Value::Reg(dst.clone()), src.clone()));
+                                }
+                                ops.push(emit_bin(dst, op, src));
+                                ops
+                            }
                         };
                     } else if instr.op_kind(1) == OpKind::Memory {
                         // dst_reg = op(dst_reg, load([mem]))
@@ -2112,21 +2157,11 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     target: instr.near_branch_target(),
                 }]
             }
-            OpKind::Register => vec![Op::Call {
-                // Indirect jumps get encoded as calls for now because we do
-                // not yet have a dedicated IndirectJump op; downstream
-                // analyses treat both the same.
-                target: CallTarget::Indirect(Value::Reg(VReg::phys(reg_name(
-                    instr.op_register(0),
-                )))),
-                effects: None,
+            OpKind::Register => vec![Op::IndirectJump {
+                target: Value::Reg(VReg::phys(reg_name(instr.op_register(0)))),
             }],
-            OpKind::Memory => vec![Op::Call {
-                // See the register-indirect case above: model tail jumps
-                // through an import slot as indirect calls until LLIR grows a
-                // dedicated indirect-jump operation.
-                target: CallTarget::Indirect(Value::Addr(instr.memory_displacement64())),
-                effects: None,
+            OpKind::Memory => vec![Op::IndirectJump {
+                target: Value::Addr(instr.memory_displacement64()),
             }],
             _ => vec![Op::Unknown {
                 mnemonic: "jmp".into(),
@@ -2620,16 +2655,53 @@ mod tests {
     }
 
     #[test]
+    fn sub_defines_the_flags_a_range_check_branch_reads() {
+        // sub $0x7,%rax (48 83 e8 07) — the switch range check. Before this, the
+        // arithmetic form emitted no flags at all, so the following `ja` read a
+        // stale flag from an unrelated earlier compare.
+        let ops = lift64(&[0x48, 0x83, 0xe8, 0x07]);
+        let flags: Vec<_> = ops
+            .iter()
+            .filter_map(|i| match &i.op {
+                Op::Cmp { dst: VReg::Flag(f), .. } => Some(*f),
+                _ => None,
+            })
+            .collect();
+        for want in [Flag::Z, Flag::C, Flag::Ule, Flag::Slt, Flag::Sle] {
+            assert!(flags.contains(&want), "sub must define {want:?}: {flags:?}");
+        }
+        // ...and they must be computed BEFORE the destination is overwritten.
+        let bin_at = ops
+            .iter()
+            .position(|i| matches!(&i.op, Op::Bin { op: BinOp::Sub, .. }))
+            .expect("sub must still do the arithmetic");
+        let last_flag = ops
+            .iter()
+            .rposition(|i| matches!(&i.op, Op::Cmp { dst: VReg::Flag(_), .. }))
+            .expect("flags present");
+        assert!(
+            last_flag < bin_at,
+            "flags describe the PRE-subtract value, so they must precede the Bin"
+        );
+    }
+
+    #[test]
     fn jmp_rip_memory_records_indirect_tail_call_slot() {
-        // jmp qword ptr [rip+0x1234] (ff 25 34 12 00 00) from 0x1000.
+        // jmp qword ptr [rip+0x1234] (ff 25 34 12 00 00) from 0x1000 — a PLT-style
+        // tail call through an import slot.
+        //
+        // This is an `IndirectJump`, not a `Call`. It used to lift as a call so the
+        // slot address stayed reachable for name resolution, but a jump that lifts
+        // to a call tells every consumer control comes back, and it does not. The
+        // slot is still recoverable — it is the jump's target — which is what this
+        // test actually needs to hold.
         let ops = lift64(&[0xff, 0x25, 0x34, 0x12, 0x00, 0x00]);
         assert_eq!(ops.len(), 1);
         match &ops[0].op {
-            Op::Call {
-                target: CallTarget::Indirect(Value::Addr(addr)),
-                ..
+            Op::IndirectJump {
+                target: Value::Addr(addr),
             } => assert_eq!(*addr, 0x223a),
-            other => panic!("expected indirect Call through memory, got {:?}", other),
+            other => panic!("expected an indirect jump through memory, got {:?}", other),
         }
     }
 

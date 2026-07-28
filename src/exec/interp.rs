@@ -317,6 +317,17 @@ impl<D: Domain> Machine<D> {
                 Flow::Next
             }
             Op::Jump { target } => Flow::Jump(*target),
+            // Followable only when the target concretizes. `UnresolvedAddress`
+            // rather than falling through: control does NOT continue to the next
+            // instruction, and pretending it does is how a jump modelled as a call
+            // produced plausible, wrong execution.
+            Op::IndirectJump { target } => {
+                let val = self.read(target, Width::W64);
+                match self.dom.as_u64(&val) {
+                    Some(a) => Flow::Jump(a),
+                    None => Flow::Halt(Halt::UnresolvedAddress),
+                }
+            }
             Op::CondJump {
                 cond,
                 target,

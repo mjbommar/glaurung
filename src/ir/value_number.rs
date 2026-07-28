@@ -201,6 +201,10 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
             tag_value(rhs, use_vers, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
+        // One use (the computed target), no def — mirrors `use_def::def_uses`.
+        Op::IndirectJump { target } => {
+            tag_value(target, use_vers, &mut ui, ctx);
+        }
         Op::Un { dst, src, .. } => {
             tag_value(src, use_vers, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
