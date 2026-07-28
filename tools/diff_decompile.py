@@ -114,11 +114,70 @@ def _scalar_desc(ref):
     return {"k": "int", "w": w, "s": enc.value in _SIGNED_ENC}
 
 
+def _die_desc(ref, cu, seen: set[int] | None = None):
+    """Describe one resolved DIE.
+
+    Aggregate execution is deliberately bounded to plain data structs. That is
+    enough for the SysV `struct { int x, y; }` eightbyte used by DecBench while
+    refusing bit-fields, unions, pointer members, and location expressions whose
+    ABI/data layout this harness cannot state exactly.
+    """
+    ref, _ = _resolve(ref, cu, drop_cv=True)
+    if ref is None:
+        return None
+    scalar = _scalar_desc(ref)
+    if scalar is not None:
+        return scalar
+    if ref.tag != "DW_TAG_structure_type":
+        return None
+    offset = ref.offset
+    seen = set() if seen is None else set(seen)
+    if offset in seen:
+        return None
+    seen.add(offset)
+    size_attr = ref.attributes.get("DW_AT_byte_size")
+    if size_attr is None or not 1 <= size_attr.value <= 256:
+        return None
+    fields = []
+    for index, child in enumerate(ref.iter_children()):
+        if child.tag != "DW_TAG_member":
+            continue
+        if "DW_AT_bit_size" in child.attributes:
+            return None
+        loc = child.attributes.get("DW_AT_data_member_location")
+        typ = child.attributes.get("DW_AT_type")
+        if loc is None or typ is None or not isinstance(loc.value, int):
+            return None
+        try:
+            field_ref = cu.get_DIE_from_refaddr(typ.value)
+        except Exception:  # noqa: BLE001
+            return None
+        field_type = _die_desc(field_ref, cu, seen)
+        # Pointer-bearing aggregates need deep allocation/lifetime semantics;
+        # keep this first implementation exact by accepting scalar/nested-data
+        # fields only.
+        if field_type is None or field_type["k"] not in ("int", "struct"):
+            return None
+        name_attr = child.attributes.get("DW_AT_name")
+        name = (
+            name_attr.value.decode(errors="replace")
+            if name_attr is not None
+            else f"field{index}"
+        )
+        fields.append({"name": name, "off": loc.value, "t": field_type})
+    if not fields:
+        return None
+    fields.sort(key=lambda field: field["off"])
+    return {"k": "struct", "w": size_attr.value, "fields": fields}
+
+
 def _type_desc(type_attr, cu):
     """Full descriptor for a DWARF type reference, or None if unsupported.
 
     scalar : {'k':'int','w':1|2|4|8,'s':bool}
-    pointer: {'k':'ptr','pw':pointee_width,'ps':pointee_signed,'const':bool}
+    struct : {'k':'struct','w':bytes,'fields':[{'off':N,'t':desc}, ...]}
+    pointer: {'k':'ptr','p':pointee_descriptor,'const':bool}; scalar pointees
+             retain the legacy `pw`/`ps` keys for manifest compatibility.
     """
     if type_attr is None:
         return {"k": "void"}
@@ -138,11 +197,14 @@ def _type_desc(type_attr, cu):
         except Exception:  # noqa: BLE001
             return None
         pref2, const = _resolve(pref, cu, drop_cv=True)
-        sd = _scalar_desc(pref2)
-        if sd is None:
-            return None  # pointer to struct/func/etc — not int-differential
-        return {"k": "ptr", "pw": sd["w"], "ps": sd["s"], "const": const}
-    return _scalar_desc(ref)
+        pointee = _die_desc(pref2, cu)
+        if pointee is None:
+            return None
+        desc = {"k": "ptr", "p": pointee, "const": const}
+        if pointee["k"] == "int":
+            desc.update({"pw": pointee["w"], "ps": pointee["s"]})
+        return desc
+    return _die_desc(ref, cu)
 
 
 def exported_functions(binary: str) -> dict[str, int]:
@@ -221,6 +283,13 @@ _STR_DESC = {
 
 def _as_desc(x):
     return dict(_STR_DESC[x]) if isinstance(x, str) else x
+
+
+def _pointee_desc(d):
+    """Return a pointer's full pointee descriptor, including legacy shorthands."""
+    if "p" in d:
+        return d["p"]
+    return {"k": "int", "w": d.get("pw", 1), "s": d.get("ps", False)}
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +426,22 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
     rng = random.Random(_stable_seed(sig["name"], seed))
 
     def is_u8(d):
-        return forced_u8 or d.get("pw") == 1
+        pointee = _pointee_desc(d)
+        return forced_u8 or (pointee["k"] == "int" and pointee["w"] == 1)
+
+    def aggregate(v, d):
+        """Turn one reproducible scalar seed into every scalar aggregate field."""
+        values = []
+        for field_index, field in enumerate(d["fields"]):
+            field_type = field["t"]
+            field_seed = v if field_index == 0 else -v + field_index * 3
+            if field_type["k"] == "struct":
+                values.append(aggregate(field_seed, field_type))
+            else:
+                values.append(
+                    _wrap(field_seed, field_type["w"], field_type["s"])
+                )
+        return values
 
     def _terminate(vals, n):
         """vals[:n] mapped into 1..255 (no interior NUL), a NUL, then zero fill."""
@@ -369,10 +453,15 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
             # Deterministic cycle through the declared values, seed-independent.
             allowed = arg_values[i]
             return _wrap(allowed[abs(v) % len(allowed)], d["w"], d["s"])
+        if d["k"] == "struct":
+            return aggregate(v, d)
         v = _wrap(v, d["w"], d["s"])
         return max(0, min(ptr_len, v)) if i in len_args else v
 
     def buf_det(k, d):
+        pointee = _pointee_desc(d)
+        if pointee["k"] == "struct":
+            return [aggregate(k * 7 + j * 3, pointee) for j in range(ptr_len)]
         if is_cstr:
             # Vary the length with k so a string loop is exercised at 0, 1, and full.
             return _terminate([(k * 7 + j * 3) for j in range(ptr_len)], k % ptr_len)
@@ -381,6 +470,9 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         return [((k * 7 + j * 3) % 17) - 8 for j in range(ptr_len)]
 
     def buf_rng(d):
+        pointee = _pointee_desc(d)
+        if pointee["k"] == "struct":
+            return [aggregate(rng.randrange(-64, 64), pointee) for _ in range(ptr_len)]
         if is_cstr:
             n = rng.randrange(0, ptr_len)
             return _terminate([rng.randrange(0, 255) for _ in range(n)], n)
@@ -400,7 +492,9 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         vectors.append(args)
 
     # Deterministic scalar boundaries, per scalar arg's own width/signedness.
-    scalar_ws = [(d["w"], d["s"]) for d in params if d["k"] != "ptr"]
+    scalar_ws = [
+        (d["w"], d.get("s", False)) for d in params if d["k"] != "ptr"
+    ]
     n_bounds = max((len(M.scalar_boundaries(w, s)) for w, s in scalar_ws), default=0)
     for bi in range(n_bounds):
 
@@ -443,9 +537,17 @@ def _pad_ptr(ev, params, ptr_len):
     out = []
     for d, a in zip(params, ev):
         if d["k"] == "ptr" and isinstance(a, list):
-            a = (a + [0] * ptr_len)[:ptr_len]
+            pointee = _pointee_desc(d)
+            zero = _zero_value(pointee)
+            a = (a + [zero] * ptr_len)[:ptr_len]
         out.append(a)
     return out
+
+
+def _zero_value(d):
+    if d["k"] == "struct":
+        return [_zero_value(field["t"]) for field in d["fields"]]
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +587,69 @@ def _scalar_ctype(d):
 def _pointee_ctype(d, forced_u8):
     if forced_u8:
         return ctypes.c_uint8
-    return _CTYPE[(d["pw"], d["ps"])]
+    return _value_ctype(_pointee_desc(d))
+
+
+_STRUCT_CTYPES: dict[str, type[ctypes.Structure]] = {}
+
+
+def _struct_ctype(d):
+    """Build an exact packed ctypes layout from DWARF offsets and size."""
+    key = json.dumps(d, sort_keys=True)
+    if key in _STRUCT_CTYPES:
+        return _STRUCT_CTYPES[key]
+    fields, cursor = [], 0
+    for index, field in enumerate(sorted(d["fields"], key=lambda f: f["off"])):
+        offset = field["off"]
+        if offset < cursor:
+            raise ValueError(f"overlapping DWARF struct field at {offset}")
+        if offset > cursor:
+            fields.append((f"_pad{index}", ctypes.c_uint8 * (offset - cursor)))
+        ctype = _value_ctype(field["t"])
+        fields.append((f"f{index}", ctype))
+        cursor = offset + ctypes.sizeof(ctype)
+    if cursor > d["w"]:
+        raise ValueError("DWARF struct fields exceed declared size")
+    if cursor < d["w"]:
+        fields.append(("_tail_pad", ctypes.c_uint8 * (d["w"] - cursor)))
+    cls = type(
+        f"DwarfStruct_{len(_STRUCT_CTYPES)}",
+        (ctypes.Structure,),
+        {"_pack_": 1, "_fields_": fields},
+    )
+    if ctypes.sizeof(cls) != d["w"]:
+        raise ValueError(
+            f"ctypes struct size {ctypes.sizeof(cls)} != DWARF size {d['w']}"
+        )
+    _STRUCT_CTYPES[key] = cls
+    return cls
+
+
+def _value_ctype(d):
+    if d["k"] == "int":
+        return _scalar_ctype(d)
+    if d["k"] == "struct":
+        return _struct_ctype(d)
+    raise ValueError(f"unsupported ctypes value descriptor {d['k']}")
+
+
+def _materialize_value(d, value):
+    if d["k"] != "struct":
+        return value
+    ctype = _struct_ctype(d)
+    obj = ctype()
+    for index, (field, field_value) in enumerate(zip(d["fields"], value)):
+        setattr(obj, f"f{index}", _materialize_value(field["t"], field_value))
+    return obj
+
+
+def _snapshot_value(d, value):
+    if d["k"] != "struct":
+        return int(value)
+    return [
+        _snapshot_value(field["t"], getattr(value, f"f{index}"))
+        for index, field in enumerate(d["fields"])
+    ]
 
 
 def _ctypes_fn(lib, sig, forced_u8):
@@ -496,7 +660,7 @@ def _ctypes_fn(lib, sig, forced_u8):
     fn.argtypes = [
         ctypes.POINTER(_pointee_ctype(d, forced_u8))
         if d["k"] == "ptr"
-        else _scalar_ctype(d)
+        else _value_ctype(d)
         for d in params
     ]
     return fn
@@ -519,12 +683,16 @@ def worker(spec_path: str) -> int:
         for d, a in zip(params, vec):
             if d["k"] == "ptr":
                 ct = _pointee_ctype(d, forced_u8)
-                ob = (ct * len(a))(*a)
-                db = (ct * len(a))(*a)
+                pointee = _pointee_desc(d)
+                ob = (ct * len(a))(*[_materialize_value(pointee, v) for v in a])
+                db = (ct * len(a))(*[_materialize_value(pointee, v) for v in a])
                 obufs.append(ob)
                 dbufs.append(db)
                 oargs.append(ob)
                 dargs.append(db)
+            elif d["k"] == "struct":
+                oargs.append(_materialize_value(d, a))
+                dargs.append(_materialize_value(d, a))
             else:
                 oargs.append(a)
                 dargs.append(a)
@@ -547,8 +715,12 @@ def worker(spec_path: str) -> int:
         if ret["k"] != "void" and ro != rd:
             print(json.dumps({"ok": False, "detail": f"return {ro} != {rd} on {vec}"}))
             return 0
-        for ob, db in zip(obufs, dbufs):
-            if list(ob) != list(db):
+        ptr_params = [d for d in params if d["k"] == "ptr"]
+        for d, ob, db in zip(ptr_params, obufs, dbufs):
+            pointee = _pointee_desc(d)
+            osnapshot = [_snapshot_value(pointee, value) for value in ob]
+            dsnapshot = [_snapshot_value(pointee, value) for value in db]
+            if osnapshot != dsnapshot:
                 print(
                     json.dumps(
                         {"ok": False, "detail": f"buffer mutation differs on {vec}"}
@@ -584,6 +756,13 @@ def exec_class(sig, fixture, lane: str | None = None) -> tuple[str, str]:
     has_ptr = any(_as_desc(p)["k"] == "ptr" for p in sig["params"])
     if ret["k"] == "ptr":
         return "structural", "pointer return — addresses not comparable"
+    if ret["k"] == "struct":
+        return "structural", "aggregate return — not execution-differential"
+    if any(
+        _as_desc(param)["k"] == "struct" and _as_desc(param)["w"] > 8
+        for param in sig["params"]
+    ):
+        return "structural", "multi-eightbyte aggregate parameter — unsupported ABI"
     if ret["k"] == "void" and not has_ptr:
         return "structural", "void return, no buffer — not execution-differential"
     return "exec", ""

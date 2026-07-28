@@ -14,8 +14,8 @@ actually open.
 
 **What the metrics do and do not know.** GED is graph edit distance to the source
 CFG (lower is better); `type_match` and `byte_match` are similarities (higher is
-better). None of them knows whether the code is CORRECT — `structs:dist2` scores
-a perfect GED of 0.0 while its body reads two locals nothing assigns. Read them
+better). None of them knows whether the code is CORRECT — `structs:dist2` formerly
+scored a perfect GED of 0.0 while its body read undefined locals. Read them
 alongside the execution differential (`tools/dectest.py`, `tools/roundtrip_review.py`),
 never instead of it.
 

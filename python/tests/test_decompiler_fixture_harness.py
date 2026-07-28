@@ -268,6 +268,57 @@ def test_signatures_recover_width_and_signedness():
     assert ps[3]["k"] == "ptr" and ps[3]["pw"] == 1 and ps[3]["const"] is True
 
 
+def test_struct_signatures_are_executed_at_the_real_sysv_abi(monkeypatch):
+    """A two-int struct is one SysV INTEGER eightbyte.
+
+    The original is called with its DWARF aggregate type while the decompiled C
+    intentionally uses the ABI-compatible packed `long` representation Glaurung
+    emits. Both the by-value and pointer-to-struct functions must run through the
+    differential; neither may fall back to a structural/non-executed verdict.
+    """
+    orig = _compile_so(
+        "struct pt { int x, y; };"
+        "long dist2(struct pt a, struct pt b){"
+        " long dx=(long)a.x-b.x,dy=(long)a.y-b.y;return dx*dx+dy*dy;}"
+        "int rect_area(const struct pt *p){"
+        " return (p[1].x-p[0].x)*(p[1].y-p[0].y);}",
+        "struct_abi",
+    )
+    sigs = {s["name"]: s for s in D.signatures(orig)}
+
+    dist = sigs["dist2"]
+    assert [p["k"] for p in dist["params"]] == ["struct", "struct"]
+    assert dist["params"][0]["w"] == 8
+    assert [(f["off"], f["t"]["w"]) for f in dist["params"][0]["fields"]] == [
+        (0, 4),
+        (4, 4),
+    ]
+    rect = sigs["rect_area"]
+    assert rect["params"][0]["k"] == "ptr"
+    assert rect["params"][0]["p"]["k"] == "struct"
+
+    recovered = {
+        "dist2": (
+            "long dist2(long a,long b){"
+            "long dx=(int)(unsigned int)a-(int)(unsigned int)b;"
+            "long dy=(int)((unsigned long)a>>32)-(int)((unsigned long)b>>32);"
+            "return dx*dx+dy*dy;}"
+        ),
+        "rect_area": (
+            "int rect_area(const int *p){"
+            "return (p[2]-p[0])*(p[3]-p[1]);}"
+        ),
+    }
+    monkeypatch.setattr(D, "decompiled_c", lambda _b, va: recovered[next(
+        name for name, sig in sigs.items() if sig["va"] == va
+    )])
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        for sig in (dist, rect):
+            result = D.run_function(sig, "fx", orig, Path(td), seed=7, fuzz=12)
+            assert result["status"] == "pass", (sig["name"], result)
+
+
 def test_exit_code_distinguishes_infra_from_semantic():
     assert D.exit_code({"f": {"status": "pass"}}) == 0
     assert D.exit_code({"f": {"status": "structural"}}) == 0

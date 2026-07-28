@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Put the source and our decompiled C next to each other, with a verdict.
 
-Reading the output is the only check that caught what the metrics could not.
-`structs:dist2` scores a PERFECT graph edit distance of 0.0 while its body reads two
-locals nothing assigns and subtracts two packed structs whole; `fixedpoint` scores
-GED 0.0 and type_match 1.0 with none of its three functions returning the right
-answer. Numbers that good on output that wrong are not a measurement problem to be
-argued about — they are a reason to look.
+Reading the output is the check that originally caught what the metrics could not:
+`structs:dist2` once scored a perfect graph edit distance while reading undefined
+overlapping locals. The execution harness now recovers bounded integer-only DWARF
+aggregates and executes that case, but the lesson remains: compressed text metrics
+do not establish behavioural correctness.
 
 So this exists to make looking cheap:
 
@@ -18,9 +17,9 @@ So this exists to make looking cheap:
 Each function gets its source, our C, and the execution-differential verdict, which
 is the only one of the three that knows whether the code is right.
 
-`structural` in the verdict column means NOT CHECKED, not "fine": the harness could
-not build a call signature from DWARF — a by-value struct parameter is enough — so
-it declined to run it. Those are exactly where the struct bugs are.
+`structural` in the verdict column means NOT CHECKED, not "fine": function-pointer
+parameters, complex/multi-eightbyte aggregates, pointer returns, and fragmented O2
+DWARF can still prevent a safe execution differential.
 """
 from __future__ import annotations
 
@@ -198,13 +197,12 @@ def main() -> int:
         "|---|---|---|",
         f"| correct | {totals.get('pass', 0)} | same answer as the original on every input |",
         f"| WRONG | {totals.get('fail', 0)} | different answer, crash, or mutated buffer |",
-        f"| not checked | {totals.get('structural', 0)} | no call signature from DWARF — NOT a pass |",
+        f"| not checked | {totals.get('structural', 0)} | no safe execution differential — NOT a pass |",
         f"| did not terminate | {totals.get('timeout', 0)} | ran past the per-call budget |",
         "",
-        "`not checked` is the row to distrust. A by-value struct parameter is enough to",
-        "stop the harness building a signature, and those are exactly the functions whose",
-        "output is wrong — `structs:dist2` reads two locals nothing assigns and still",
-        "scores a graph edit distance of 0.0.",
+        "`not checked` is the row to distrust: it is not a pass. The harness executes",
+        "plain integer-only aggregates that fit one ABI eightbyte, but unsupported type",
+        "shapes and fragmented DWARF still require direct output review.",
         "",
     ]
     text = "\n".join(header) + "\n".join(body)

@@ -9,8 +9,8 @@ original source and all three recoveries side by side, function by function.
 
 **Why side-by-side text and not metrics.** GED, `type_match` and `byte_match`
 each compress a whole function to one number, and none of them knows whether the
-code is right — `structs:dist2` scores a perfect 0.0 graph edit distance while
-its body reads two locals nothing assigns. The differences that matter (a `for`
+code is right — `structs:dist2` formerly scored a perfect 0.0 graph edit distance
+while its body read undefined locals. The differences that matter (a `for`
 recovered as `while(1){if(..)break;}`, a switch guard reading a stale flag, a
 parameter typed `long` instead of `char *`) are visible in seconds by reading and
 invisible in the aggregate. This makes reading cheap.
