@@ -47,6 +47,128 @@ fn arg_slots(arch: CallConv) -> &'static [&'static [&'static str]] {
     crate::ir::abi::argument_slots(arch)
 }
 
+/// Recover a terminal jump through a resolved import slot as the source-level
+/// tail call it implements.
+///
+/// This is intentionally narrower than generic indirect-call recovery. Only
+/// `IndirectGoto(Deref(Named(...)))` qualifies: name resolution proved the memory
+/// slot is a GOT/IAT-style symbol. Register/vtable/jump-table targets remain
+/// `IndirectGoto`, preserving the explicit unrecovered-control-flow warning.
+///
+/// A tail transfer does not return to this machine frame, but its C meaning is
+/// `return callee(...)`. We express that as adjacent Call + Return nodes so the
+/// existing argument/result reconstruction and renderer can retain normal value
+/// identity. When no argument register was set up locally, the jump forwards the
+/// complete ABI register state. Logical `argN` names record that fact without
+/// guessing a source prototype or a callee arity.
+pub fn recover_resolved_tail_calls(f: &mut Function, arch: CallConv) {
+    recover_tail_calls_in_body(&mut f.body, arch);
+}
+
+fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
+    for stmt in body.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_tail_calls_in_body(then_body, arch);
+                if let Some(else_body) = else_body {
+                    recover_tail_calls_in_body(else_body, arch);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                recover_tail_calls_in_body(body, arch)
+            }
+            Stmt::For { body, .. } => recover_tail_calls_in_body(body, arch),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    recover_tail_calls_in_body(case, arch);
+                }
+                if let Some(default) = default {
+                    recover_tail_calls_in_body(default, arch);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut index = 0;
+    while index < body.len() {
+        let callee = match &body[index] {
+            Stmt::IndirectGoto {
+                target: Expr::Deref { addr, .. },
+            } => match addr.as_ref() {
+                Expr::Named { .. } => Some((**addr).clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(callee) = callee else {
+            index += 1;
+            continue;
+        };
+
+        let has_local_setup = body[..index]
+            .iter()
+            .any(|stmt| statement_writes_argument_slot(stmt, arch));
+        let args = if has_local_setup {
+            Vec::new()
+        } else {
+            (0..arg_slots(arch).len())
+                .map(|slot| Expr::Reg(VReg::phys(format!("arg{slot}"))))
+                .collect()
+        };
+        body[index] = Stmt::Call {
+            target: callee,
+            args,
+            dst: None,
+        };
+        body.insert(
+            index + 1,
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys(return_reg(arch)))),
+            },
+        );
+        index += 2;
+    }
+}
+
+fn statement_writes_argument_slot(stmt: &Stmt, arch: CallConv) -> bool {
+    match stmt {
+        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
+            matches!(dst, VReg::Phys(name) if slot_of(arch, name).is_some())
+        }
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body
+                .iter()
+                .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                || else_body.as_ref().is_some_and(|body| {
+                    body.iter()
+                        .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                })
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => body
+            .iter()
+            .any(|stmt| statement_writes_argument_slot(stmt, arch)),
+        Stmt::Switch { cases, default, .. } => {
+            cases.iter().any(|(_, body)| {
+                body.iter()
+                    .any(|stmt| statement_writes_argument_slot(stmt, arch))
+            }) || default.as_ref().is_some_and(|body| {
+                body.iter()
+                    .any(|stmt| statement_writes_argument_slot(stmt, arch))
+            })
+        }
+        _ => false,
+    }
+}
+
 /// The calling-convention slot a register name denotes, if any.
 ///
 /// The name may be SSA-VERSIONED. The decbench pipeline value-numbers the LLIR
@@ -814,6 +936,123 @@ mod tests {
             dst: reg(dst),
             src: Expr::Const(value),
         }
+    }
+
+    fn got_tail(name: &str, va: u64) -> Stmt {
+        Stmt::IndirectGoto {
+            target: Expr::Deref {
+                addr: Box::new(Expr::Named {
+                    va,
+                    name: name.to_string(),
+                }),
+                size: 8,
+            },
+        }
+    }
+
+    #[test]
+    fn resolved_got_tail_jump_becomes_a_call_and_return() {
+        let mut f = Function {
+            name: "reverse".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("r8#1"),
+                    src: Expr::Reg(reg("rdi#0")),
+                },
+                Stmt::Assign {
+                    dst: reg("rax#1"),
+                    src: Expr::Reg(reg("rsi#0")),
+                },
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Reg(reg("rcx#0")),
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Reg(reg("rdx#0")),
+                },
+                Stmt::Assign {
+                    dst: reg("rcx#1"),
+                    src: Expr::Reg(reg("r8#1")),
+                },
+                Stmt::Assign {
+                    dst: reg("rdx#1"),
+                    src: Expr::Reg(reg("rax#1")),
+                },
+                got_tail("sum_arg4", 0x4000),
+            ],
+        };
+
+        recover_resolved_tail_calls(&mut f, CallConv::SysVAmd64);
+        reconstruct_args_with_params(
+            &mut f,
+            CallConv::SysVAmd64,
+            &[0, 1, 2, 3].into_iter().collect(),
+        );
+
+        let (target, args, dst) = f
+            .body
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::Call { target, args, dst } => Some((target, args, dst)),
+                _ => None,
+            })
+            .expect("the resolved terminal transfer must become a call");
+        assert!(matches!(target, Expr::Named { name, .. } if name == "sum_arg4"));
+        assert_eq!(
+            args,
+            &vec![
+                Expr::Reg(reg("rcx#0")),
+                Expr::Reg(reg("rdx#0")),
+                Expr::Reg(reg("rax#1")),
+                Expr::Reg(reg("r8#1")),
+            ]
+        );
+        assert_eq!(dst, &Some(reg("rax")));
+        assert!(matches!(
+            f.body.last(),
+            Some(Stmt::Return {
+                value: Some(Expr::Reg(VReg::Phys(name)))
+            }) if name == "rax"
+        ));
+    }
+
+    #[test]
+    fn untouched_tail_jump_forwards_the_complete_abi_register_state() {
+        let mut f = Function {
+            name: "forward".into(),
+            entry_va: 0,
+            body: vec![got_tail("sum_arg6", 0x4008)],
+        };
+
+        recover_resolved_tail_calls(&mut f, CallConv::SysVAmd64);
+
+        let Stmt::Call { target, args, .. } = &f.body[0] else {
+            panic!("expected recovered call, got {:#?}", f.body);
+        };
+        assert!(matches!(target, Expr::Named { name, .. } if name == "sum_arg6"));
+        assert_eq!(
+            args,
+            &(0..6)
+                .map(|slot| Expr::Reg(reg(&format!("arg{slot}"))))
+                .collect::<Vec<_>>()
+        );
+        assert!(matches!(f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn unresolved_computed_jump_is_not_relabelled_as_a_call() {
+        let mut f = Function {
+            name: "dispatch".into(),
+            entry_va: 0,
+            body: vec![Stmt::IndirectGoto {
+                target: Expr::Reg(reg("rax")),
+            }],
+        };
+
+        recover_resolved_tail_calls(&mut f, CallConv::SysVAmd64);
+        assert!(matches!(f.body.as_slice(), [Stmt::IndirectGoto { .. }]));
     }
 
     #[test]

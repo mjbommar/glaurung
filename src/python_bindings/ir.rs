@@ -327,9 +327,15 @@ fn run_ast_passes(
     crate::ir::dce::prune_overwritten_flags(f);
     crate::ir::dce::prune_dead_flags(f);
     dp!("prune_dead_flags");
+    // A direct jump into a PLT stub lowers to that stub's terminal GOT
+    // dereference. Resolve the slot before argument reconstruction, then recover
+    // only symbol-backed terminal jumps as tail calls so the ordinary call pass
+    // can see their argument-register setup and returned value.
+    crate::ir::name_resolve::resolve_names(f, addr_map);
+    crate::ir::call_args::recover_resolved_tail_calls(f, cc);
+    dp!("recover_resolved_tail_calls");
     crate::ir::call_args::reconstruct_args_with_params(f, cc, param_slots);
     dp!("reconstruct_args");
-    crate::ir::name_resolve::resolve_names(f, addr_map);
     crate::ir::strings_fold::fold_string_literals(f, str_pool);
     crate::ir::canary::recognise_canary(f);
     dp!("canary+strings");
