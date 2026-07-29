@@ -259,15 +259,17 @@ pub struct RecoveredParameter {
     pub hint: Option<TypeHint>,
 }
 
-/// The source-level return role, anchored to the exact SSA definition that
-/// reaches the ABI result register.
+/// The source-level return role, anchored to every SSA definition that reaches
+/// the ABI result register.
 ///
 /// Input and output registers overlap on ARM/AArch64 (`r0`/`x0`) and on x86
-/// (`rax`).  Keeping the output value here prevents a pointer-valued live-in
-/// from contaminating a later scalar written into the same physical storage.
+/// (`rax`). Keeping the reaching values here prevents a pointer-valued live-in
+/// from contaminating later scalar writes, while still representing the one
+/// source-level return type shared by branch-local definitions. This is the
+/// same boundary modeled by Ghidra's `propagateAcrossReturns` and Kuna's port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredResult {
-    pub value: SsaValue,
+    pub values: Vec<SsaValue>,
     pub hint: Option<TypeHint>,
 }
 
@@ -327,6 +329,20 @@ fn abi_pointer_width(cc: crate::ir::call_args::CallConv) -> u8 {
     }
 }
 
+/// Constrain a result fact to the ABI container when the architecture-neutral
+/// register-name table cannot determine a narrower width. This matters for
+/// 32-bit ARM `r0`..`r3`, whose names intentionally do not collide with x86's
+/// `r8`.. register family in [`crate::ir::types::phys_reg_width`].
+fn normalize_result_hint_for_abi(hint: TypeHint, cc: crate::ir::call_args::CallConv) -> TypeHint {
+    match hint {
+        TypeHint::Int { signed, width } => TypeHint::Int {
+            signed,
+            width: width.min(abi_pointer_width(cc)),
+        },
+        _ => hint,
+    }
+}
+
 /// A result fact strong enough to cross the SSA-to-source prototype boundary.
 ///
 /// A narrow load cannot contain a machine pointer, so its scalar class and
@@ -353,12 +369,66 @@ fn qualified_result_hint(
         | Op::Cmp { .. }
         | Op::ZExt { .. }
         | Op::SExt { .. }
-        | Op::Trunc { .. } => valued.get(value),
+        | Op::Trunc { .. } => valued
+            .get(value)
+            .map(|hint| normalize_result_hint_for_abi(hint, cc)),
         // Calls, full-width loads, address constants, conditional updates, and
         // opaque definitions need stronger prototype or merge evidence before
         // they can safely decide pointer-vs-scalar class.
         _ => None,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultHintClass {
+    Pointer,
+    Scalar,
+}
+
+fn result_hint_class(hint: TypeHint) -> ResultHintClass {
+    match hint {
+        TypeHint::Pointer { .. } | TypeHint::CodePointer => ResultHintClass::Pointer,
+        TypeHint::Int { .. } | TypeHint::BoolLike => ResultHintClass::Scalar,
+    }
+}
+
+/// Join independently qualified return definitions without inventing a C type
+/// that cannot represent all of them.
+///
+/// Ghidra's `propagateAcrossReturns` first chooses one canonical return type,
+/// then propagates it only across compatible return storage. Kuna preserves the
+/// same constraint. Our smaller lattice has no union type, so pointer/scalar
+/// conflicts fail closed except for C's one compatible scalar value: a literal
+/// zero used as a null pointer constant.
+fn join_result_hints(facts: &[(TypeHint, bool)]) -> Option<TypeHint> {
+    let mut joined = None;
+    let mut joined_class = None;
+    let mut saw_nonnull_scalar = false;
+
+    for (hint, is_literal_null) in facts {
+        let class = result_hint_class(*hint);
+        if class == ResultHintClass::Scalar && !is_literal_null {
+            saw_nonnull_scalar = true;
+        }
+        match joined_class {
+            None => {
+                joined = Some(*hint);
+                joined_class = Some(class);
+            }
+            Some(current_class) if current_class == class && joined == Some(*hint) => {}
+            Some(current_class) if current_class == class => return None,
+            Some(_) if !saw_nonnull_scalar => {
+                // Every scalar fact seen so far is the literal zero. Preserve
+                // the pointer class regardless of branch traversal order.
+                if class == ResultHintClass::Pointer {
+                    joined = Some(*hint);
+                    joined_class = Some(ResultHintClass::Pointer);
+                }
+            }
+            Some(_) => return None,
+        }
+    }
+    joined
 }
 
 /// Recover the function's parameter prototype directly from SSA live-ins.
@@ -387,7 +457,8 @@ pub fn recover_prototype(
         .enumerate()
         .map(|(index, block)| (block.start_va, index))
         .collect();
-    let mut results = Vec::new();
+    let mut result_values = Vec::new();
+    let mut result_facts = Vec::new();
     for (block_idx, block) in lf.blocks.iter().enumerate() {
         for (instr_idx, ins) in block.instrs.iter().enumerate() {
             let (Some(VReg::Phys(dst)), _) = def_uses(&ins.op) else {
@@ -409,13 +480,31 @@ pub fn recover_prototype(
                 continue;
             };
             let hint = qualified_result_hint(&ins.op, &valued, &value, cc);
-            results.push(RecoveredResult { value, hint });
+            if let Some(hint) = hint {
+                let is_literal_null = matches!(
+                    &ins.op,
+                    Op::Assign {
+                        src: Value::Const(0),
+                        ..
+                    }
+                );
+                result_facts.push((hint, is_literal_null));
+            }
+            if !result_values.contains(&value) {
+                result_values.push(value);
+            }
         }
     }
-    // A source-level result is one role, but this first output-facing slice
-    // carries one exact SSA value rather than a value-set or phi expression.
-    // Do not select an arbitrary branch when multiple definitions can return.
-    let result = (results.len() == 1).then(|| results.remove(0));
+    // A function has one source-level result type even when control flow has
+    // several return sites. Join the qualified facts across their exact SSA
+    // definitions instead of selecting an arbitrary branch or discarding the
+    // role. The compatibility join lets pointer evidence type an exact null
+    // branch, while refusing to turn an unrelated nonzero scalar into a
+    // pointer merely because it shares the ABI result register.
+    let result = (!result_values.is_empty()).then_some(RecoveredResult {
+        values: result_values,
+        hint: join_result_hints(&result_facts),
+    });
 
     let parameters = ordered
         .into_iter()
@@ -2212,11 +2301,11 @@ mod tests {
         );
         let result = prototype.result().expect("recovered ARM return value");
         assert_eq!(
-            result.value,
-            SsaValue {
+            result.values,
+            vec![SsaValue {
                 base: VReg::phys("r0"),
                 version: 1,
-            },
+            }],
             "the loaded scalar must be a distinct SSA output"
         );
         assert!(
@@ -2230,7 +2319,7 @@ mod tests {
     }
 
     #[test]
-    fn prototype_result_fails_closed_for_multiple_returning_definitions() {
+    fn prototype_result_unifies_multiple_returning_definitions() {
         use crate::ir::call_args::CallConv;
 
         let block = |start_va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
@@ -2285,11 +2374,207 @@ mod tests {
         let ssa = compute_ssa(&lf);
         let prototype = recover_prototype(&lf, &ssa, CallConv::Arm, &HashSet::from([1]));
 
-        assert!(
-            prototype.result().is_none(),
-            "two branch-local SSA definitions cannot be represented as one exact output"
+        let result = prototype
+            .result()
+            .expect("compatible branch-local definitions form one source result");
+        assert_eq!(
+            result.values.len(),
+            2,
+            "the source result must retain both reaching SSA definitions"
+        );
+        assert!(matches!(
+            result.hint,
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4
+            })
+        ));
+        assert!(matches!(
+            prototype.result_type_map().get(&VReg::phys("ret")),
+            Some(TypeHint::Int { .. })
+        ));
+    }
+
+    #[test]
+    fn prototype_result_propagates_pointer_type_across_null_return() {
+        use crate::ir::call_args::CallConv;
+
+        let block = |start_va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va,
+            end_va: start_va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(index, op)| LlirInstr {
+                    va: start_va + index as u64 * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                block(
+                    0x1000,
+                    vec![
+                        Op::Load {
+                            dst: VReg::phys("r3"),
+                            addr: MemOp {
+                                base: Some(VReg::phys("r2")),
+                                size: 4,
+                                ..Default::default()
+                            },
+                        },
+                        Op::CondJump {
+                            cond: VReg::phys("r1"),
+                            target: 0x1020,
+                            inverted: false,
+                        },
+                    ],
+                    vec![0x1010, 0x1020],
+                ),
+                block(
+                    0x1010,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("r0"),
+                            src: Value::Reg(VReg::phys("r2")),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+                block(
+                    0x1020,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("r0"),
+                            src: Value::Const(0),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+            ],
+        };
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(&lf, &ssa, CallConv::Arm, &HashSet::from([2]));
+
+        let result = prototype
+            .result()
+            .expect("pointer and null branches form one source result");
+        assert_eq!(result.values.len(), 2);
+        assert_eq!(
+            result.hint,
+            Some(TypeHint::Pointer { pointee_width: 4 }),
+            "the canonical pointer type must propagate across the null branch"
+        );
+        assert_eq!(
+            prototype.result_type_map().get(&VReg::phys("ret")),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+    }
+
+    #[test]
+    fn prototype_result_rejects_pointer_and_nonzero_integer_join() {
+        use crate::ir::call_args::CallConv;
+
+        let block = |start_va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va,
+            end_va: start_va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(index, op)| LlirInstr {
+                    va: start_va + index as u64 * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                block(
+                    0x1000,
+                    vec![
+                        Op::Load {
+                            dst: VReg::phys("r3"),
+                            addr: MemOp {
+                                base: Some(VReg::phys("r2")),
+                                size: 4,
+                                ..Default::default()
+                            },
+                        },
+                        Op::CondJump {
+                            cond: VReg::phys("r1"),
+                            target: 0x1020,
+                            inverted: false,
+                        },
+                    ],
+                    vec![0x1010, 0x1020],
+                ),
+                block(
+                    0x1010,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("r0"),
+                            src: Value::Reg(VReg::phys("r2")),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+                block(
+                    0x1020,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("r0"),
+                            src: Value::Const(7),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+            ],
+        };
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(&lf, &ssa, CallConv::Arm, &HashSet::from([2]));
+
+        let result = prototype
+            .result()
+            .expect("both return-reaching SSA definitions remain represented");
+        assert_eq!(result.values.len(), 2);
+        assert_eq!(
+            result.hint, None,
+            "a non-null integer cannot share a source result type with a pointer"
         );
         assert!(prototype.result_type_map().is_empty());
+    }
+
+    #[test]
+    fn result_join_rejects_conflicting_scalar_signedness() {
+        assert_eq!(
+            join_result_hints(&[
+                (
+                    TypeHint::Int {
+                        signed: true,
+                        width: 4,
+                    },
+                    false,
+                ),
+                (
+                    TypeHint::Int {
+                        signed: false,
+                        width: 4,
+                    },
+                    false,
+                ),
+            ]),
+            None,
+            "branch-local results must agree before changing the source prototype"
+        );
     }
 
     #[test]
