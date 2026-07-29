@@ -610,8 +610,11 @@ fn insert_phi_copies(
 /// registers: a use reading version `V` is remapped identically to the def that
 /// produced `V`, so dataflow is preserved by construction.
 fn build_temp_remap(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo) -> TempRemap {
-    let mut versions_by_base: std::collections::HashMap<u32, HashSet<u32>> =
-        std::collections::HashMap::new();
+    // Stable key iteration is part of the rendered-artifact contract: assigning
+    // fresh ids by HashMap iteration made two identical decompilations spell the
+    // same temporary as (for example) t35 and t36 in separate processes.
+    let mut versions_by_base: std::collections::BTreeMap<u32, std::collections::BTreeSet<u32>> =
+        std::collections::BTreeMap::new();
     let mut max_temp_id = 0u32;
     for (bi, block) in lf.blocks.iter().enumerate() {
         for (ii, ins) in block.instrs.iter().enumerate() {

@@ -3905,6 +3905,12 @@ pub fn prepare_for_decbench(f: &Function) -> Function {
     // `SF ^ ((lhs <s rhs) ^ SF)`) that were not adjacent when the first fold
     // ran on the lowered AST.
     crate::ir::const_fold::fold_constants(&mut owned);
+    // Copy propagation and the second constant fold can replace a flag read in
+    // a condition with its recovered comparison. Prune the now-dead definition
+    // before shape recovery: otherwise a redundant `sf_N = ...` remains before
+    // an exit guard and blocks exact while/for/select recognition.
+    crate::ir::dce::prune_overwritten_flags(&mut owned);
+    crate::ir::dce::prune_dead_flags(&mut owned);
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
