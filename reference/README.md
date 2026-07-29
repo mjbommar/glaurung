@@ -1,6 +1,8 @@
 # Reference Implementations
 
-This directory contains git submodules of reference implementations that inform the design of Glaurung:
+This directory catalogs reference implementations that inform the design of
+Glaurung. Most are configured as git submodules; entries marked external are
+consulted directly from their upstream repository.
 
 ## Binary Analysis Frameworks
 - **angr**: Binary analysis framework with symbolic execution capabilities
@@ -42,6 +44,11 @@ This directory contains git submodules of reference implementations that inform 
 - **unicorn**: Lightweight CPU emulator engine
 
 ## Decompilers
+- **[kuna](https://github.com/Noelo-Lab/kuna)** *(external)*: Rust, agent-first decompiler
+  derived from Ghidra, with a phase-addressed P0-P9 pipeline, an explicit
+  SSA/call/type/variable fixed-point band, tunable transforms, and a DecBench
+  refinement loop. Use it as an active architecture and measurement comparator,
+  not only as a source of test cases.
 - **retdec**: Machine code to high-level language decompiler
 - **reko**: Open source decompiler for machine code binaries
 - **b2r2**: Binary analysis framework with advanced IR lifting and decompilation
