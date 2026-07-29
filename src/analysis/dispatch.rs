@@ -231,6 +231,36 @@ impl DispatchTracker {
         }
     }
 
+    /// Seed address constants that reach this block on every predecessor seen
+    /// by the CFG walker.
+    ///
+    /// Compilers commonly materialise a jump-table base in a loop preheader and
+    /// use it in a later dispatch block. Resetting all register facts at every
+    /// block loses that invariant and makes an otherwise explicit table jump
+    /// unrecoverable. The walker merges these maps by intersection, so a value
+    /// is inherited only while all incoming paths agree on the same address.
+    pub fn inherit_addresses(&mut self, addresses: Option<&HashMap<String, u64>>) {
+        if let Some(addresses) = addresses {
+            for (register, address) in addresses {
+                self.regs.insert(register.clone(), Val::Addr(*address));
+            }
+        }
+    }
+
+    /// Address constants still valid at the end of the current block.
+    ///
+    /// Table offsets/targets are deliberately excluded: only concrete address
+    /// values are stable enough to merge across CFG edges.
+    pub fn export_addresses(&self) -> HashMap<String, u64> {
+        self.regs
+            .iter()
+            .filter_map(|(register, value)| match value {
+                Val::Addr(address) => Some((register.clone(), *address)),
+                Val::TableOffset { .. } | Val::TableTarget { .. } => None,
+            })
+            .collect()
+    }
+
     /// The register/limit pair a range check just established, for the caller to
     /// hand to the in-range successor. `cmp $N, r` / `sub $N, r` followed by an
     /// unsigned-above branch means the fallthrough has `r <= N`.
@@ -702,6 +732,39 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_table_base_can_be_exported_to_a_later_dispatch_block() {
+        let mut preheader = DispatchTracker::new();
+        preheader.observe(&ins(
+            "lea",
+            vec![reg_op("rsi"), mem_op(Some("rip"), 0x2000, None)],
+        ));
+        let addresses = preheader.export_addresses();
+
+        let mut dispatch = DispatchTracker::new();
+        dispatch.inherit_addresses(Some(&addresses));
+        dispatch.observe(&ins("cmp", vec![reg_op("rdx"), imm_op(3)]));
+        dispatch.observe(&ins("mov", vec![reg_op("r10"), reg_op("rdx")]));
+        dispatch.observe(&ins(
+            "movsxd",
+            vec![reg_op("r10"), mem_op(Some("rsi"), 0, Some("r10"))],
+        ));
+        dispatch.observe(&ins("add", vec![reg_op("r10"), reg_op("rsi")]));
+        assert!(matches!(
+            dispatch.resolve(&ins("jmp", vec![reg_read("r10")]), &tables()),
+            Some(Resolution::Table { .. })
+        ));
+    }
+
+    #[test]
+    fn a_write_kills_an_inherited_table_base() {
+        let addresses = HashMap::from([("rsi".to_string(), 0x2000)]);
+        let mut dispatch = DispatchTracker::new();
+        dispatch.inherit_addresses(Some(&addresses));
+        dispatch.observe(&ins("xor", vec![reg_op("rsi"), reg_op("rsi")]));
+        assert!(dispatch.export_addresses().is_empty());
+    }
+
     /// A power-of-two switch is lowered as `and $2^k-1` and then NO comparison
     /// is emitted at all — the mask is the range proof. Both compilers do this
     /// at -O2 (`04_switch_shapes` gcc and clang).
@@ -967,8 +1030,9 @@ mod tests {
         );
     }
 
-    /// State must not cross a block boundary: the predecessor that set it up is
-    /// not guaranteed to be the one that runs.
+    /// Unmerged state must not cross a block boundary: the predecessor that set
+    /// it up is not guaranteed to be the one that runs. Cross-block address
+    /// facts use the explicit export/intersection/inherit path above.
     #[test]
     fn reset_clears_state_between_blocks() {
         let mut t = DispatchTracker::new();

@@ -628,6 +628,78 @@ fn pe_tail_target_looks_like_function_start(data: &[u8], target_va: u64) -> bool
 }
 
 /// Discover a single function starting at `entry` within executable regions.
+/// Merge one predecessor's concrete address facts into a block input.
+///
+/// The first predecessor establishes the candidate map; later predecessors can
+/// only remove facts. A register survives a join precisely when every incoming
+/// path agrees on the same address.
+fn merge_dispatch_addresses(
+    inputs: &mut std::collections::HashMap<u64, std::collections::HashMap<String, u64>>,
+    target: u64,
+    incoming: std::collections::HashMap<String, u64>,
+) -> bool {
+    use std::collections::hash_map::Entry;
+    match inputs.entry(target) {
+        Entry::Vacant(entry) => {
+            entry.insert(incoming);
+            true
+        }
+        Entry::Occupied(mut entry) => {
+            let before = entry.get().len();
+            entry
+                .get_mut()
+                .retain(|register, address| incoming.get(register) == Some(address));
+            entry.get().len() != before
+        }
+    }
+}
+
+/// Replay one decoded block through the dispatch abstract interpreter.
+///
+/// The first CFG walk must speculate with the predecessors known at that point
+/// in order to discover table arms. Once the graph is complete, this replay is
+/// used by a proper must-dataflow fixed point and validates every speculative
+/// resolution. That second check is what makes a late conflicting back-edge
+/// fail closed instead of leaving already-added, unsound successors behind.
+fn replay_dispatch_block(
+    data: &[u8],
+    arch: BArch,
+    endianness: Endianness,
+    thumb: Option<bool>,
+    start_va: u64,
+    end_va: u64,
+    bounds: Option<crate::analysis::dispatch::Bounds>,
+    addresses: Option<&std::collections::HashMap<String, u64>>,
+    stop_at: Option<u64>,
+) -> Option<(crate::analysis::dispatch::DispatchTracker, Option<Instruction>)> {
+    let darch: crate::core::disassembler::Architecture = arch.into();
+    let mut backend = registry::for_arch(darch, endianness)?;
+    if let Some(thumb) = thumb {
+        let _ = backend.set_thumb_mode(thumb);
+    }
+    let bits = darch.address_bits();
+    let mut tracker = crate::analysis::dispatch::DispatchTracker::new();
+    tracker.inherit_bound(bounds);
+    tracker.inherit_addresses(addresses);
+    let mut cur_va = start_va;
+    while cur_va < end_va {
+        let file_offset = crate::analysis::entry::va_to_code_file_offset(data, cur_va)?;
+        let bytes = data.get(file_offset..)?;
+        let address = Address::new(AddressKind::VA, cur_va, bits, None, None).ok()?;
+        let instruction = backend.disassemble_instruction(&address, bytes).ok()?;
+        let next_va = cur_va.saturating_add(instruction.length as u64);
+        tracker.observe(&instruction);
+        if stop_at == Some(cur_va) {
+            return Some((tracker, Some(instruction)));
+        }
+        if next_va <= cur_va {
+            return None;
+        }
+        cur_va = next_va;
+    }
+    Some((tracker, None))
+}
+
 fn discover_function(
     data: &[u8],
     arch: BArch,
@@ -667,8 +739,18 @@ fn discover_function(
     // block ends in a range check, read when its in-range successor is walked.
     // BFS reaches the guard before the dispatch, so the fact is always available.
     let mut index_bounds: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
+    // Concrete register addresses that reach a block on every predecessor seen
+    // so far. Unlike range bounds, these flow across ordinary branches too: a
+    // loop preheader commonly materialises the jump-table base once and a later
+    // dispatch block reads it. Values are merged by intersection at joins and
+    // killed by DispatchTracker on any write.
+    let mut dispatch_addresses: HashMap<u64, HashMap<String, u64>> = HashMap::new();
     let mut edges: Vec<(u64, u64, ControlFlowEdgeKind)> = Vec::new();
     let mut call_edges: Vec<FunctionXref> = Vec::new();
+    // (dispatch instruction, containing block, tentatively attached targets).
+    // Revalidated against the completed CFG's address-dataflow fixed point
+    // before the Function is built.
+    let mut resolved_dispatch_edges: Vec<(u64, u64, Vec<u64>)> = Vec::new();
 
     if let Some(r) = in_exec_regions(regions, entry.value) {
         let _ = r;
@@ -700,6 +782,7 @@ fn discover_function(
         // is the only thing that knows how many entries the table has. Carry it
         // across the in-range edge; see `DispatchTracker::inherit_bound`.
         dispatch.inherit_bound(index_bounds.get(&start_va).cloned());
+        dispatch.inherit_addresses(dispatch_addresses.get(&start_va));
         'block: loop {
             if decoded_instructions >= budgets.max_instructions {
                 stats.hit_instruction_limit = true;
@@ -718,6 +801,11 @@ fn discover_function(
             // back-edge so no natural loop is recovered.
             if cur_va != start_va && seen.contains(&cur_va) {
                 edges.push((start_va, cur_va, ControlFlowEdgeKind::Fallthrough));
+                merge_dispatch_addresses(
+                    &mut dispatch_addresses,
+                    cur_va,
+                    dispatch.export_addresses(),
+                );
                 blocks.insert(start_va, (cur_va, instrs));
                 break 'block;
             }
@@ -793,6 +881,11 @@ fn discover_function(
                         }
                         // Use block start as source for CFG edges
                         edges.push((start_va, tgt, ControlFlowEdgeKind::Branch));
+                        merge_dispatch_addresses(
+                            &mut dispatch_addresses,
+                            tgt,
+                            dispatch.export_addresses(),
+                        );
                     }
                 } else if unconditional {
                     if let Some(tgt) = indirect_memory_target(data, &ins, bits) {
@@ -812,6 +905,7 @@ fn discover_function(
                                 targets, ..
                             }) => {
                                 let mut arms = 0usize;
+                                let mut attached = Vec::new();
                                 for tgt in targets {
                                     if in_exec_regions(regions, tgt).is_none() {
                                         continue;
@@ -820,9 +914,16 @@ fn discover_function(
                                         queue.push_back(tgt);
                                     }
                                     edges.push((start_va, tgt, ControlFlowEdgeKind::Branch));
+                                    merge_dispatch_addresses(
+                                        &mut dispatch_addresses,
+                                        tgt,
+                                        dispatch.export_addresses(),
+                                    );
+                                    attached.push(tgt);
                                     arms += 1;
                                 }
                                 stats.resolved_dispatches.push((cur_va, arms));
+                                resolved_dispatch_edges.push((cur_va, start_va, attached));
                             }
                             Some(crate::analysis::dispatch::Resolution::Unresolved(why)) => {
                                 stats.unresolved_indirect.push((cur_va, why));
@@ -838,6 +939,11 @@ fn discover_function(
                         queue.push_back(end_va);
                     }
                     edges.push((start_va, end_va, ControlFlowEdgeKind::Fallthrough));
+                    merge_dispatch_addresses(
+                        &mut dispatch_addresses,
+                        end_va,
+                        dispatch.export_addresses(),
+                    );
                     // An unsigned-above branch to the default arm makes the
                     // FALLTHROUGH the in-range path, so the compare's immediate
                     // is that successor's inclusive index bound — and therefore
@@ -912,6 +1018,160 @@ fn discover_function(
             edges.push((s, t, ControlFlowEdgeKind::Fallthrough));
         }
     }
+
+    // Recompute concrete-address facts to a fixed point over the now-complete
+    // graph. The streaming walk above sees predecessors incrementally; a loop
+    // back-edge discovered after its header can invalidate a table-base fact
+    // that looked unique on the first visit. Must-dataflow makes that loss
+    // propagate through every downstream block before tentative table edges are
+    // accepted.
+    let thumb = arm32_mode.map(|mode| {
+        matches!(
+            mode,
+            crate::analysis::arm32_mode::Arm32Mode::Thumb
+        )
+    });
+    let mut final_address_inputs: HashMap<u64, HashMap<String, u64>> = HashMap::new();
+    final_address_inputs.insert(entry.value, HashMap::new());
+    let mut address_queue: VecDeque<u64> = VecDeque::from([entry.value]);
+    let mut address_steps = 0usize;
+    let address_step_limit = blocks.len().saturating_mul(64).max(64);
+    while let Some(block_start) = address_queue.pop_front() {
+        address_steps += 1;
+        if address_steps > address_step_limit {
+            // The domain is finite and only shrinks after first arrival; hitting
+            // this limit indicates malformed graph churn. Clear inherited facts
+            // so validation fails closed rather than trusting an incomplete run.
+            final_address_inputs.clear();
+            final_address_inputs.insert(entry.value, HashMap::new());
+            break;
+        }
+        let Some(&(block_end, _)) = blocks.get(&block_start) else {
+            continue;
+        };
+        let input = final_address_inputs
+            .get(&block_start)
+            .cloned()
+            .unwrap_or_default();
+        let Some((tracker, _)) = replay_dispatch_block(
+            data,
+            arch,
+            end,
+            thumb,
+            block_start,
+            block_end,
+            index_bounds.get(&block_start).cloned(),
+            Some(&input),
+            None,
+        ) else {
+            continue;
+        };
+        let output = tracker.export_addresses();
+        let successors: Vec<u64> = edges
+            .iter()
+            .filter_map(|(source, target, _)| (*source == block_start).then_some(*target))
+            .collect();
+        for successor in successors {
+            if merge_dispatch_addresses(
+                &mut final_address_inputs,
+                successor,
+                output.clone(),
+            ) {
+                address_queue.push_back(successor);
+            }
+        }
+    }
+
+    let mut invalid_dispatches: Vec<(
+        u64,
+        u64,
+        Vec<u64>,
+        crate::analysis::dispatch::Unresolved,
+    )> = Vec::new();
+    for (site, block_start, attached) in &resolved_dispatch_edges {
+        let resolution = blocks.get(block_start).and_then(|(block_end, _)| {
+            replay_dispatch_block(
+                data,
+                arch,
+                end,
+                thumb,
+                *block_start,
+                *block_end,
+                index_bounds.get(block_start).cloned(),
+                final_address_inputs.get(block_start),
+                Some(*site),
+            )
+            .and_then(|(tracker, instruction)| {
+                instruction.and_then(|instruction| tracker.resolve(&instruction, tables))
+            })
+        });
+        let still_exact = matches!(
+            &resolution,
+            Some(crate::analysis::dispatch::Resolution::Table { targets, .. })
+                if targets
+                    .iter()
+                    .copied()
+                    .filter(|target| in_exec_regions(regions, *target).is_some())
+                    .eq(attached.iter().copied())
+        );
+        if !still_exact {
+            let why = match resolution {
+                Some(crate::analysis::dispatch::Resolution::Unresolved(why)) => why,
+                Some(crate::analysis::dispatch::Resolution::Table { .. }) | None => {
+                    crate::analysis::dispatch::Unresolved::UnknownBase
+                }
+            };
+            invalid_dispatches.push((*site, *block_start, attached.clone(), why));
+        }
+    }
+    for (site, block_start, attached, why) in invalid_dispatches {
+        edges.retain(|(source, target, _)| {
+            !(*source == block_start && attached.contains(target))
+        });
+        stats.resolved_dispatches.retain(|(resolved, _)| *resolved != site);
+        if !stats
+            .unresolved_indirect
+            .iter()
+            .any(|(unresolved, _)| *unresolved == site)
+        {
+            stats.unresolved_indirect.push((site, why));
+        }
+    }
+
+    // Tentative dispatch arms that failed validation must not remain owned by
+    // the function merely because they were decoded once. Retain only blocks
+    // still reachable from the semantic entry through validated edges.
+    let mut reachable = std::collections::BTreeSet::from([entry.value]);
+    let mut reachable_queue = VecDeque::from([entry.value]);
+    while let Some(source) = reachable_queue.pop_front() {
+        for target in edges
+            .iter()
+            .filter_map(|(edge_source, target, _)| (*edge_source == source).then_some(*target))
+        {
+            if blocks.contains_key(&target) && reachable.insert(target) {
+                reachable_queue.push_back(target);
+            }
+        }
+    }
+    blocks.retain(|start, _| reachable.contains(start));
+    edges.retain(|(source, target, _)| {
+        reachable.contains(source) && reachable.contains(target)
+    });
+    call_edges.retain(|xref| {
+        blocks.iter().any(|(start, (end, _))| {
+            xref.callsite_va >= *start && xref.callsite_va < *end
+        })
+    });
+    stats.resolved_dispatches.retain(|(site, _)| {
+        blocks
+            .iter()
+            .any(|(start, (end, _))| *site >= *start && *site < *end)
+    });
+    stats.unresolved_indirect.retain(|(site, _)| {
+        blocks
+            .iter()
+            .any(|(start, (end, _))| *site >= *start && *site < *end)
+    });
 
     // Build Function object
     let fname = format!("sub_{:x}", entry.value);
@@ -4136,6 +4396,77 @@ mod gcc_dispatch_corpus_tests {
                 .all(|(site, _reason)| *site != dispatch_site),
             "the resolved table jump must not also be reported unresolved: {:?}",
             stats.unresolved_indirect
+        );
+    }
+
+    #[test]
+    fn clang_o2_real_state_machine_carries_the_table_base_to_the_dispatch() {
+        let tmp = tempfile::tempdir().expect("temporary Clang state-machine build directory");
+        let source = tmp.path().join("statemachine.c");
+        let binary = tmp.path().join("statemachine.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decbench_corpus/src/statemachine.c"
+                ))
+            })
+            .expect("write the real DecBench state-machine source");
+        let build = match Command::new("clang")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch Clang: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile statemachine.c with Clang -O2: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read Clang output");
+        let object = object::read::File::parse(data.as_slice()).expect("parse Clang ELF");
+        let fsm_va = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("fsm"))
+            .map(|symbol| symbol.address())
+            .expect("exported fsm symbol");
+        let (functions, _callgraph, stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let function = functions
+            .iter()
+            .find(|function| function.name == "fsm" && function.entry_point.value == fsm_va)
+            .expect("discover the exported fsm function");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift the real state-machine CFG");
+        let dispatch_block = lifted
+            .blocks
+            .iter()
+            .find(|block| block.succs.len() == 4)
+            .unwrap_or_else(|| {
+                panic!(
+                    "four-way dispatch missing; resolved={:?}, unresolved={:?}, blocks={:#?}",
+                    stats.resolved_dispatches, stats.unresolved_indirect, lifted.blocks
+                )
+            });
+        assert!(matches!(
+            dispatch_block
+                .instrs
+                .last()
+                .map(|instruction| &instruction.op),
+            Some(crate::ir::types::Op::IndirectJump { .. })
+        ));
+        assert!(
+            stats.resolved_dispatches.iter().any(|(_site, arms)| *arms == 4),
+            "the real Clang O2 table jump must contribute all four case arms: {:?}",
+            stats.resolved_dispatches
         );
     }
 }

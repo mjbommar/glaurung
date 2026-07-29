@@ -103,3 +103,62 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
     results = json.loads(compared.stdout)
     assert compared.returncode == 0, results
     assert results["fsm"]["status"] == "pass", results
+
+
+def test_cross_block_table_base_recovers_clang_o2_switch(tmp_path: Path) -> None:
+    """A table base materialized in the loop preheader must reach its dispatch."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "statemachine.c"
+    binary = tmp_path / "statemachine-clang-O2.so"
+    compiled = subprocess.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["fsm"])
+    assert code is not None
+    switch_at = code.find("switch (")
+    assert switch_at >= 0, code
+    switch_open = code.find("{", switch_at)
+    switch_close = _matching_brace(code, switch_open)
+    switch_body = code[switch_open:switch_close]
+    for case in (0, 1, 2, 3):
+        assert f"case {case}:" in switch_body, code
+    assert "unrecovered indirect jump" not in code, code
+    assert D.build_so(code, tmp_path, "dec_fsm_o2", link_against=str(binary))
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "statemachine",
+            "--function",
+            "fsm",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "64",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["fsm"]["status"] == "pass", results
