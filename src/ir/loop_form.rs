@@ -18,7 +18,287 @@ use crate::ir::types::{BinOp, VReg};
 /// the guard. If even one statement remains there, the conservative form stays
 /// intact.
 pub fn recover_head_tested_whiles(f: &mut Function) {
+    seed_exit_value_copies(&mut f.body);
     recover_body(&mut f.body);
+}
+
+/// Move an exact loop-exit value seed before a guarded infinite loop.
+///
+/// Dead-store elimination must retain `exit = carried` before a conditional
+/// break: that copy supplies the value when the loop exits at its first guard.
+/// Keeping it inside the body, however, prevents the exact head-test recovery
+/// below.  Moving it once before the loop is equivalent when every fall-through
+/// backedge unconditionally assigns `carried` and `exit` the same expression.
+/// The equality is structural and the proof deliberately rejects a bypass of
+/// those tail assignments; this is a narrow value-identity rule, not a general
+/// loop-hoisting heuristic.
+fn seed_exit_value_copies(stmts: &mut Vec<Stmt>) {
+    for stmt in stmts.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                seed_exit_value_copies(then_body);
+                if let Some(body) = else_body {
+                    seed_exit_value_copies(body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => seed_exit_value_copies(body),
+            Stmt::For { body, .. } => seed_exit_value_copies(body),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    seed_exit_value_copies(body);
+                }
+                if let Some(body) = default {
+                    seed_exit_value_copies(body);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut index = 0;
+    while index < stmts.len() {
+        let Some(seeds) = exit_value_seed_candidate(&stmts[index]) else {
+            index += 1;
+            continue;
+        };
+        let seed_count = seeds.len();
+        let Stmt::While { body, .. } = &mut stmts[index] else {
+            unreachable!("exit-value candidates are always while loops");
+        };
+        body.drain(..seed_count);
+        stmts.splice(index..index, seeds);
+        index += seed_count + 1;
+    }
+}
+
+fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
+    let Stmt::While {
+        cond: Expr::Const(1),
+        body,
+    } = stmt
+    else {
+        return None;
+    };
+    let mut pairs = Vec::new();
+    for stmt in body {
+        let Stmt::Assign {
+            dst: exit_value,
+            src: Expr::Reg(carried),
+        } = stmt
+        else {
+            break;
+        };
+        if exit_value == carried
+            || pairs.iter().any(|(other_exit, other_carried)| {
+                exit_value == other_exit
+                    || exit_value == other_carried
+                    || carried == other_exit
+                    || carried == other_carried
+            })
+        {
+            return None;
+        }
+        pairs.push((exit_value.clone(), carried.clone()));
+    }
+    let seed_count = pairs.len();
+    if seed_count == 0 {
+        return None;
+    }
+    let Stmt::If {
+        then_body,
+        else_body: None,
+        ..
+    } = body.get(seed_count)?
+    else {
+        return None;
+    };
+    if then_body.as_slice() != [Stmt::Break] {
+        return None;
+    }
+
+    let tail = &body[seed_count + 1..];
+    let all_targets: Vec<&VReg> = pairs
+        .iter()
+        .flat_map(|(exit_value, carried)| [exit_value, carried])
+        .collect();
+    let mut final_assignment = 0;
+    for (exit_value, carried) in &pairs {
+        let (carried_index, carried_value) = last_assignment(tail, carried)?;
+        let (exit_index, exit_tail_value) = last_assignment(tail, exit_value)?;
+        if carried_value != exit_tail_value
+            || !stable_value_expr(carried_value)
+            || all_targets
+                .iter()
+                .any(|target| contains_reg(carried_value, target))
+        {
+            return None;
+        }
+
+        // The same RHS must still denote the same value at both assignments.
+        // Intervening writes to one of its inputs invalidate the proof even
+        // though the expression trees remain textually equal.
+        let lo = carried_index.min(exit_index);
+        let hi = carried_index.max(exit_index);
+        let mut dependencies = Vec::new();
+        collect_expr_regs(carried_value, &mut dependencies);
+        if tail[lo + 1..hi].iter().any(|stmt| {
+            dependencies
+                .iter()
+                .any(|dependency| writes_reg(stmt, dependency))
+        }) || tail[carried_index + 1..]
+            .iter()
+            .any(|stmt| writes_reg(stmt, carried))
+            || tail[exit_index + 1..]
+                .iter()
+                .any(|stmt| writes_reg(stmt, exit_value))
+        {
+            return None;
+        }
+        final_assignment = final_assignment.max(hi);
+    }
+    if tail[..=final_assignment].iter().any(bypasses_loop_tail) {
+        return None;
+    }
+
+    Some(body[..seed_count].to_vec())
+}
+
+/// Restrict the equality proof to side-effect-free values. In particular, two
+/// identical dereferences separated by a store or call are not necessarily the
+/// same value, and an opaque expression has no inspectable dependency set.
+fn stable_value_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Deref { .. } | Expr::Unknown(_) => false,
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            stable_value_expr(lhs) && stable_value_expr(rhs)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => stable_value_expr(cond) && stable_value_expr(if_true) && stable_value_expr(if_false),
+        Expr::Un { src, .. } => stable_value_expr(src),
+        Expr::Cast { expr, .. } => stable_value_expr(expr),
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => true,
+    }
+}
+
+fn collect_expr_regs(expr: &Expr, out: &mut Vec<VReg>) {
+    match expr {
+        Expr::Reg(reg) | Expr::StackAddr { object: reg, .. } => out.push(reg.clone()),
+        Expr::Deref { addr, .. } => collect_expr_regs(addr, out),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            collect_expr_regs(lhs, out);
+            collect_expr_regs(rhs, out);
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            collect_expr_regs(cond, out);
+            collect_expr_regs(if_true, out);
+            collect_expr_regs(if_false, out);
+        }
+        Expr::Un { src, .. } => collect_expr_regs(src, out),
+        Expr::Cast { expr, .. } => collect_expr_regs(expr, out),
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            out.extend(base.iter().cloned());
+            out.extend(index.iter().cloned());
+        }
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => {}
+    }
+}
+
+fn last_assignment<'a>(body: &'a [Stmt], target: &VReg) -> Option<(usize, &'a Expr)> {
+    body.iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, stmt)| match stmt {
+            Stmt::Assign { dst, src } if dst == target => Some((index, src)),
+            _ => None,
+        })
+}
+
+/// Whether a statement can re-enter the current loop without reaching later
+/// unconditional tail assignments. Returns leave the function and nested-loop
+/// breaks leave only that nested loop, so neither is a bypass of this backedge.
+fn bypasses_loop_tail(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break => true,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body.iter().any(bypasses_loop_tail)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(bypasses_loop_tail))
+        }
+        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => false,
+        // A structured switch owns its ordinary `break`, but it can still
+        // contain a non-local goto. Keep this proof local instead of trying to
+        // distinguish the two kinds of exit here.
+        Stmt::Switch { .. } => true,
+        Stmt::Assign { .. }
+        | Stmt::Store { .. }
+        | Stmt::Call { .. }
+        | Stmt::Return { .. }
+        | Stmt::Push { .. }
+        | Stmt::Pop { .. }
+        | Stmt::Label(_)
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => false,
+    }
+}
+
+fn writes_reg(stmt: &Stmt, target: &VReg) -> bool {
+    match stmt {
+        Stmt::Assign { dst, .. } => dst == target,
+        Stmt::Call { dst, .. } => dst.as_ref() == Some(target),
+        Stmt::Pop { target: dst } => dst == target,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body.iter().any(|stmt| writes_reg(stmt, target))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| writes_reg(stmt, target)))
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            body.iter().any(|stmt| writes_reg(stmt, target))
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| body.iter().any(|stmt| writes_reg(stmt, target)))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| writes_reg(stmt, target)))
+        }
+        _ => false,
+    }
 }
 
 /// Promote a narrow, structurally exact counted-loop shape to `Stmt::For`.
@@ -306,6 +586,278 @@ mod tests {
         };
         let mut f = Function {
             name: "protected".into(),
+            entry_va: 0,
+            body: vec![original.clone()],
+        };
+
+        recover_head_tested_whiles(&mut f);
+
+        assert_eq!(f.body, vec![original]);
+    }
+
+    #[test]
+    fn exit_value_copy_is_seeded_before_a_head_tested_loop() {
+        // Both GCC's optimized `fib` and the real `sum_until_zero` fixture
+        // carry a value to the loop exit with this shape:
+        //
+        //   while (1) {
+        //       exit_value = carried;
+        //       if (done) break;
+        //       ...
+        //       carried = next;
+        //       exit_value = next;
+        //   }
+        //
+        // The header copy is live when the first guard exits, so DSE must not
+        // delete it.  It also need not block head-test recovery: seeding the
+        // copy once before the loop is exact because the tail re-establishes
+        // the same value on every fall-through backedge.
+        let exit_value = reg("exit_value");
+        let carried = reg("carried");
+        let next = reg("next");
+        let tail_value = Expr::Cast {
+            signed: false,
+            width: 4,
+            expr: Box::new(Expr::Reg(next.clone())),
+        };
+        let mut f = Function {
+            name: "seeded_head_test".into(),
+            entry_va: 0,
+            body: vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::Assign {
+                        dst: exit_value.clone(),
+                        src: Expr::Reg(carried.clone()),
+                    },
+                    Stmt::If {
+                        cond: Expr::Reg(reg("done")),
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                    Stmt::Assign {
+                        dst: carried.clone(),
+                        src: tail_value.clone(),
+                    },
+                    Stmt::Assign {
+                        dst: exit_value.clone(),
+                        src: tail_value.clone(),
+                    },
+                ],
+            }],
+        };
+
+        recover_head_tested_whiles(&mut f);
+
+        assert_eq!(
+            f.body,
+            vec![
+                Stmt::Assign {
+                    dst: exit_value.clone(),
+                    src: Expr::Reg(carried.clone()),
+                },
+                Stmt::While {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(reg("done"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    body: vec![
+                        Stmt::Assign {
+                            dst: carried,
+                            src: tail_value.clone(),
+                        },
+                        Stmt::Assign {
+                            dst: exit_value,
+                            src: tail_value,
+                        },
+                    ],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn exit_value_copy_group_is_seeded_before_a_head_tested_loop() {
+        // Optimized GCC recursion carries several values through each loop
+        // header. Their matching backedge writes are interleaved with the
+        // rest of the loop-state tuple, so this is the real multi-value shape
+        // rather than repeated adjacent pairs.
+        let original_loop = Stmt::While {
+            cond: Expr::Const(1),
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("exit_a"),
+                    src: Expr::Reg(reg("carried_a")),
+                },
+                Stmt::Assign {
+                    dst: reg("exit_b"),
+                    src: Expr::Reg(reg("carried_b")),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("done")),
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: reg("carried_a"),
+                    src: Expr::Reg(reg("next_a")),
+                },
+                Stmt::Assign {
+                    dst: reg("unrelated"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Assign {
+                    dst: reg("carried_b"),
+                    src: Expr::Reg(reg("next_b")),
+                },
+                Stmt::Assign {
+                    dst: reg("exit_a"),
+                    src: Expr::Reg(reg("next_a")),
+                },
+                Stmt::Assign {
+                    dst: reg("exit_b"),
+                    src: Expr::Reg(reg("next_b")),
+                },
+            ],
+        };
+        let mut f = Function {
+            name: "seeded_head_test_group".into(),
+            entry_va: 0,
+            body: vec![original_loop],
+        };
+
+        recover_head_tested_whiles(&mut f);
+
+        assert_eq!(f.body.len(), 3);
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Assign { dst, src: Expr::Reg(carried) }
+                if dst == &reg("exit_a") && carried == &reg("carried_a")
+        ));
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Assign { dst, src: Expr::Reg(carried) }
+                if dst == &reg("exit_b") && carried == &reg("carried_b")
+        ));
+        let Stmt::While { cond, body } = &f.body[2] else {
+            panic!("copy group should be followed by the recovered loop");
+        };
+        assert!(!matches!(cond, Expr::Const(1)));
+        assert_eq!(body.len(), 5);
+        assert!(matches!(body.first(), Some(Stmt::Assign { dst, .. }) if dst == &reg("carried_a")));
+    }
+
+    #[test]
+    fn exit_value_copy_stays_in_loop_when_tail_values_differ() {
+        let original = Stmt::While {
+            cond: Expr::Const(1),
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("exit_value"),
+                    src: Expr::Reg(reg("carried")),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("done")),
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: reg("carried"),
+                    src: Expr::Reg(reg("next")),
+                },
+                Stmt::Assign {
+                    dst: reg("exit_value"),
+                    src: Expr::Reg(reg("different")),
+                },
+            ],
+        };
+        let mut f = Function {
+            name: "not_seedable".into(),
+            entry_va: 0,
+            body: vec![original.clone()],
+        };
+
+        recover_head_tested_whiles(&mut f);
+
+        assert_eq!(f.body, vec![original]);
+    }
+
+    #[test]
+    fn exit_value_copy_stays_in_loop_when_tail_reads_a_destination() {
+        // The two expressions are structurally equal, but assignment order
+        // makes their values differ. After the original backedge, the header
+        // copy repairs that difference before testing the guard; hoisting it
+        // would expose the second value at loop exit.
+        let increment = Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(reg("carried"))),
+            rhs: Box::new(Expr::Const(1)),
+        };
+        let original = Stmt::While {
+            cond: Expr::Const(1),
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("exit_value"),
+                    src: Expr::Reg(reg("carried")),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("done")),
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: reg("carried"),
+                    src: increment.clone(),
+                },
+                Stmt::Assign {
+                    dst: reg("exit_value"),
+                    src: increment,
+                },
+            ],
+        };
+        let mut f = Function {
+            name: "order_sensitive_tail".into(),
+            entry_va: 0,
+            body: vec![original.clone()],
+        };
+
+        recover_head_tested_whiles(&mut f);
+
+        assert_eq!(f.body, vec![original]);
+    }
+
+    #[test]
+    fn exit_value_copy_stays_in_loop_when_control_bypasses_the_tail() {
+        let original = Stmt::While {
+            cond: Expr::Const(1),
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("exit_value"),
+                    src: Expr::Reg(reg("carried")),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("done")),
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("skip_tail")),
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: reg("carried"),
+                    src: Expr::Reg(reg("next")),
+                },
+                Stmt::Assign {
+                    dst: reg("exit_value"),
+                    src: Expr::Reg(reg("next")),
+                },
+            ],
+        };
+        let mut f = Function {
+            name: "bypassed_tail".into(),
             entry_va: 0,
             body: vec![original.clone()],
         };
