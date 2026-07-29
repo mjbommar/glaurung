@@ -200,11 +200,22 @@ impl TypeMapV {
     /// The full value map is analysis evidence, but output-facing prototype
     /// recovery is not yet a fixed point with function boundaries and callee
     /// prototypes. Until that architecture lands, qualify only the concrete
-    /// O0 chain `live-in -> frame spill -> reload -> dereference`; projecting
-    /// every live-in fact can replace a better legacy prototype with evidence
-    /// from an over-discovered tail or an unknown direct callee.
+    /// O0 chain `live-in -> frame spill -> reload -> dereference`, and require
+    /// two independently qualified entry values before changing the prototype.
+    /// A lone address-taken scalar can otherwise acquire pointer evidence from
+    /// an over-discovered tail. Projecting every live-in fact can also replace a
+    /// better legacy prototype with evidence from an unknown direct callee.
     pub fn parameter_refinements(&self) -> TypeMap {
         let mut out = TypeMap::default();
+        if self
+            .parameter_refinements
+            .keys()
+            .filter(|value| value.version == 0)
+            .count()
+            < 2
+        {
+            return out;
+        }
         for (value, hint) in &self.parameter_refinements {
             if value.version == 0 {
                 out.upsert(value.base.clone(), *hint);
@@ -1771,6 +1782,65 @@ mod tests {
         assert!(
             tm.parameter_refinements().is_empty(),
             "unqualified live-in facts must remain analysis evidence, not rendered prototype facts"
+        );
+    }
+
+    #[test]
+    fn lone_spilled_pointer_fact_is_not_yet_a_rendered_parameter_refinement() {
+        // A single address-taken scalar can have this same machine shape after
+        // optimization: spill one incoming value, reload it, then let an
+        // over-discovered tail use the reload as an address. Requiring a second
+        // independently qualified entry value keeps that case from rewriting
+        // the public prototype until prototype recovery and function bounds are
+        // authoritative.
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 1,
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 1,
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+            },
+            Op::Load {
+                dst: VReg::phys("ecx"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rax")),
+                    index: None,
+                    scale: 1,
+                    disp: 0,
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let tm = recover_types_valued(&lf, &ssa);
+
+        assert_eq!(
+            tm.get(&SsaValue {
+                base: VReg::phys("rdi"),
+                version: 0,
+            }),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+        assert!(
+            tm.parameter_refinements().is_empty(),
+            "one qualified live-in is not enough to rewrite a rendered prototype"
         );
     }
 
