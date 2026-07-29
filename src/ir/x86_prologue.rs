@@ -44,6 +44,31 @@ fn is_rsp(v: &VReg) -> bool {
     matches!(v, VReg::Phys(n) if n == "rsp" || n == "esp")
 }
 
+fn is_promoted_stack_slot(v: &VReg) -> bool {
+    matches!(v, VReg::Phys(name) if name == "stack_top" || name.starts_with("stack_"))
+}
+
+fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
+    let Stmt::Assign {
+        dst,
+        src: Expr::Bin {
+            op: BinOp::Sub,
+            lhs,
+            rhs,
+        },
+    } = stmt
+    else {
+        return None;
+    };
+    if !is_rsp(dst) || !matches!(lhs.as_ref(), Expr::Reg(reg) if reg == dst) {
+        return None;
+    }
+    match rhs.as_ref() {
+        Expr::Const(width) if *width > 0 => Some(*width),
+        _ => None,
+    }
+}
+
 fn collapse_prologue(body: &mut Vec<Stmt>) {
     // Skip leading nops (the lifter emits them for ENDBR64).
     let mut i = 0usize;
@@ -54,12 +79,30 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
         return;
     }
 
-    // Step 1: `push %rbp;`
-    if !matches!(&body[i], Stmt::Push { value: Expr::Reg(v) } if is_rbp(v)) {
+    // Step 1: `push %rbp;`. Stack-slot normalisation may preserve the lifter's
+    // two-statement form (`rsp -= 8; stack_0 = rbp`) instead of rematerialising
+    // `Stmt::Push`; accept it only when the decrement exactly equals the store
+    // width and is immediately followed by the canonical frame-pointer setup.
+    let set_fp_idx = if matches!(&body[i], Stmt::Push { value: Expr::Reg(v) } if is_rbp(v)) {
+        i + 1
+    } else if body.len() - i >= 3 {
+        match (&body[i + 1], rsp_sub_width(&body[i])) {
+            (
+                Stmt::Store {
+                    addr: Expr::Reg(slot),
+                    src: Expr::Reg(value),
+                    size,
+                },
+                Some(width),
+            ) if is_promoted_stack_slot(slot) && is_rbp(value) && width == i64::from(*size) => {
+                i + 2
+            }
+            _ => return,
+        }
+    } else {
         return;
-    }
+    };
     // Step 2: `%rbp = %rsp;`
-    let set_fp_idx = i + 1;
     if !matches!(
         &body[set_fp_idx],
         Stmt::Assign { dst, src: Expr::Reg(s) } if is_rbp(dst) && is_rsp(s)
@@ -103,6 +146,35 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
 }
 
 fn collapse_epilogue(body: &mut Vec<Stmt>) {
+    // Returns can remain inside recovered branches/loops. Collapse those
+    // lexical epilogues before handling this statement list itself.
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collapse_epilogue(then_body);
+                if let Some(else_body) = else_body {
+                    collapse_epilogue(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collapse_epilogue(body);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    collapse_epilogue(case_body);
+                }
+                if let Some(default_body) = default {
+                    collapse_epilogue(default_body);
+                }
+            }
+            _ => {}
+        }
+    }
+
     // For every Return, check if the preceding stmts are `rsp = rbp; pop rbp`.
     let return_positions: Vec<usize> = body
         .iter()
@@ -135,6 +207,27 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
             ret_idx -= 1;
             // Pattern B': `%rsp += N;` immediately before the pop — fold it
             // into the same epilogue collapse.
+            if ret_idx > 0 && is_rsp_add(&body[ret_idx - 1]) {
+                body.remove(ret_idx - 1);
+                ret_idx -= 1;
+            }
+            body.insert(
+                ret_idx,
+                Stmt::Comment("x86-64 epilogue: restore rbp".to_string()),
+            );
+            continue;
+        }
+        // Pattern B in the pre-rematerialised stack-slot form:
+        // `rbp = stack_N; return`, optionally after the frame teardown.
+        if ret_idx >= 1
+            && matches!(
+                &body[ret_idx - 1],
+                Stmt::Assign { dst, src: Expr::Reg(slot) }
+                    if is_rbp(dst) && is_promoted_stack_slot(slot)
+            )
+        {
+            body.remove(ret_idx - 1);
+            ret_idx -= 1;
             if ret_idx > 0 && is_rsp_add(&body[ret_idx - 1]) {
                 body.remove(ret_idx - 1);
                 ret_idx -= 1;
@@ -233,6 +326,73 @@ mod tests {
         assert!(matches!(
             &f.body[0],
             Stmt::Comment(s) if s.contains("x86-64 prologue") && !s.contains("frame")
+        ));
+    }
+
+    #[test]
+    fn promoted_stack_slot_prologue_and_epilogue_collapse() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                sub_rsp(8),
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_0")),
+                    src: Expr::Reg(reg("rbp")),
+                    size: 8,
+                },
+                mov_rbp_rsp(),
+                sub_rsp(32),
+                rsp_add(32),
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("stack_0")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Comment(text) if text == "x86-64 prologue: save rbp, frame 32 bytes"
+        ));
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Comment(text) if text == "x86-64 epilogue: restore rbp"
+        ));
+        assert!(matches!(&f.body[2], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn promoted_stack_slot_epilogue_collapses_inside_a_branch() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(reg("cond")),
+                then_body: vec![
+                    Stmt::Assign {
+                        dst: reg("rbp"),
+                        src: Expr::Reg(reg("stack_0")),
+                    },
+                    Stmt::Return { value: None },
+                ],
+                else_body: None,
+            }],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::If { then_body, .. }
+                if matches!(
+                    then_body.as_slice(),
+                    [Stmt::Comment(text), Stmt::Return { .. }]
+                        if text == "x86-64 epilogue: restore rbp"
+                )
         ));
     }
 
