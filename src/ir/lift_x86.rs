@@ -1503,7 +1503,19 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     // a read-modify-write of its 64-bit parent, not a write to a
                     // register of its own — see `partial_alu_ops`.
                     let partial = partial_gp_view(&dst_name);
-                    if let Some(src) = value_of_operand(instr, 1) {
+                    let src = if matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar)
+                        && instr.op_kind(1) == OpKind::Register
+                        && instr.op_register(1) == Register::CL
+                    {
+                        // Variable shifts encode CL, but the value is defined
+                        // through ECX/RCX. Use the canonical 32-bit view so SSA
+                        // connects the count to the preceding ECX write instead
+                        // of inventing an unrelated live-in `cl` value.
+                        Some(Value::Reg(VReg::phys("ecx")))
+                    } else {
+                        value_of_operand(instr, 1)
+                    };
+                    if let Some(src) = src {
                         return match partial {
                             Some(v) => partial_alu_ops(v, op, src, bits),
                             None => {
@@ -3207,6 +3219,25 @@ mod tests {
                 reason,
             } if reason.contains("multi-bit shift")
         )));
+    }
+
+    #[test]
+    fn variable_shift_count_uses_the_canonical_ecx_view() {
+        // shr edx, cl. The CL encoding reads the value previously written via
+        // ECX; leaving it as a separate `cl` register creates an undefined
+        // pseudo-argument after SSA and naming.
+        let ops = lift64(&[0xd3, 0xea]);
+        assert!(
+            ops.iter().any(|ins| matches!(
+                &ins.op,
+                Op::Bin {
+                    op: BinOp::Shr,
+                    rhs: Value::Reg(VReg::Phys(count)),
+                    ..
+                } if count == "ecx"
+            )),
+            "got: {ops:#?}"
+        );
     }
 
     #[test]

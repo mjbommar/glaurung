@@ -324,11 +324,12 @@ fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<Stri
                     None => undefined_reads(addr, defined, found),
                 }
             }
-            Stmt::Call { target, args, .. } => {
+            Stmt::Call { target, args, dst } => {
                 undefined_reads(target, defined, found);
                 for a in args {
                     undefined_reads(a, defined, found);
                 }
+                defined.extend(dst.as_ref().and_then(checked_name));
                 defined.insert(RETURN_ROLE.to_string());
             }
             Stmt::Return { value } => {
@@ -810,6 +811,25 @@ mod tests {
         let v = check(&f);
         assert_eq!(names(&v), vec!["var7"]);
         assert_eq!(v[0].kind, ViolationKind::NeverDefined);
+    }
+
+    #[test]
+    fn an_explicit_call_destination_is_defined_by_the_call() {
+        let f = func(vec![
+            Stmt::Call {
+                dst: Some(VReg::phys("var2")),
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "callee".into(),
+                },
+                args: vec![reg("arg0")],
+            },
+            Stmt::Return {
+                value: Some(reg("var2")),
+            },
+        ]);
+
+        assert_eq!(check(&f), vec![]);
     }
 
     #[test]
