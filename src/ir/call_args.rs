@@ -644,8 +644,13 @@ fn fold_one_call(
                             // change its value, so the argument keeps referring
                             // to that SSA definition instead.
                             if is_pure_arg_normalisation(src) {
-                                let replaced = substitute_exact_reg(captured, dst, src);
-                                debug_assert!(replaced);
+                                // `reads_reg_in_expr` also sees VReg-only address
+                                // components (`Lea`, `PdbFieldAddr`, `StackAddr`).
+                                // A non-register source cannot be substituted into
+                                // those fields, by design. In that case the older
+                                // definition remains in the body and the captured
+                                // argument keeps its exact reaching reference.
+                                let _ = substitute_exact_reg(captured, dst, src);
                             }
                             mark_arg_reads_in_expr(src, arch, &mut read_between);
                             continue;
@@ -2220,6 +2225,59 @@ mod tests {
                 width: 8,
                 expr: Box::new(Expr::Const(0)),
             }
+        );
+    }
+
+    #[test]
+    fn nonsubstitutable_address_dependency_stays_statement_rooted() {
+        // ARM address formation can reuse one ABI slot through two SSA
+        // definitions. The later argument expression reads the older value as
+        // a LEA component, but substituting an arithmetic expression into that
+        // VReg-only component is intentionally unsupported. That is not an
+        // invariant failure: keep the older definition and let the call
+        // argument continue to reference it.
+        let older = Stmt::Assign {
+            dst: reg("r0#1"),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(reg("r4#1"))),
+                rhs: Box::new(Expr::Const(4)),
+            },
+        };
+        let mut f = Function {
+            name: "arm_address_arg".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                older.clone(),
+                Stmt::Assign {
+                    dst: reg("r0#2"),
+                    src: Expr::Lea {
+                        base: Some(reg("r0#1")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                },
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::Arm);
+
+        assert_eq!(f.body.first(), Some(&older));
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {:#?}", f.body)
+        };
+        assert_eq!(
+            args,
+            &[Expr::Lea {
+                base: Some(reg("r0#1")),
+                index: None,
+                scale: 1,
+                disp: 0,
+                segment: None,
+            }]
         );
     }
 
