@@ -280,11 +280,11 @@ def test_sum_array_recovers_a_for_loop(tmp_path):
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
-@pytest.mark.parametrize(("opt", "expected_else_count"), [("-O0", 1), ("-O2", 0)])
-def test_signs_renders_lifted_select_as_one_armed_if(
-    tmp_path: Path, opt: str, expected_else_count: int
+@pytest.mark.parametrize("opt", ["-O0", "-O2"])
+def test_signs_renders_lifted_select_as_pure_ternary(
+    tmp_path: Path, opt: str
 ) -> None:
-    """Real compiled selects must remain statement-rooted conditional updates."""
+    """Real compiled selects must retain both pure value alternatives."""
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
@@ -315,9 +315,9 @@ def test_signs_renders_lifted_select_as_one_armed_if(
         env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
     )
 
-    assert " ? " not in result.stdout, result.stdout
-    assert result.stdout.count("if (") == 2, result.stdout
-    assert result.stdout.count("else") == expected_else_count, result.stdout
+    assert result.stdout.count(" ? ") == 2, result.stdout
+    assert "if (" not in result.stdout, result.stdout
+    assert "else" not in result.stdout, result.stdout
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
@@ -353,9 +353,9 @@ def test_nested_select_under_existing_branch_retains_inner_else(tmp_path: Path) 
         env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
     )
 
-    assert " ? " not in result.stdout, result.stdout
-    assert result.stdout.count("if (") == 2, result.stdout
-    assert result.stdout.count("else") == 1, result.stdout
+    assert result.stdout.count(" ? ") == 1, result.stdout
+    assert result.stdout.count("if (") == 1, result.stdout
+    assert "else" not in result.stdout, result.stdout
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
