@@ -913,6 +913,11 @@ fn decbench_text(
         crate::ir::ast::refine_decbench_abi_widths(&prepared, tm);
     }
     if let Some(tm) = refined_decl.as_ref() {
+        crate::ir::const_fold::fold_typed_declared_views(&mut prepared, tm);
+        crate::ir::const_fold::fold_typed_comparison_extensions(&mut prepared, tm);
+        crate::ir::const_fold::fold_constants(&mut prepared);
+    }
+    if let Some(tm) = refined_decl.as_ref() {
         crate::ir::guarded_switch::collapse_range_guards_with_types(&mut prepared, tm);
     }
     // A typed range proof may have synthesized an exhaustive switch default,
@@ -921,6 +926,9 @@ fn decbench_text(
     crate::ir::ast::fold_exhaustive_switch_returns(&mut prepared);
     let decl = refined_decl.as_ref();
     let width = refined_width.as_ref();
+    if let Some(tm) = decl {
+        crate::ir::ast::fold_typed_return_abi_extensions(&mut prepared, tm);
+    }
     // Declarations are recovered at true machine width, so a value read in a wider
     // context needs the extension the hardware performed made explicit. Runs before
     // verification and rendering; it changes no definition, use, or value identity.

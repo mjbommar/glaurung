@@ -1846,8 +1846,9 @@ fn apply_default_return(body: &mut [Stmt], ret_reg: &VReg) {
 /// AArch64 without having to thread arch info through the AST.
 const RETURN_REGS: &[&str] = &[
     "rax", "eax", "ax", "al", // x86 / x86-64
-    "x0", "w0", // AArch64
-    "r0", // ARM32 AAPCS
+    "x0", "w0",  // AArch64
+    "r0",  // ARM32 AAPCS
+    "ret", // canonical role name after apply_role_names
 ];
 
 fn is_return_reg(v: &VReg) -> bool {
@@ -1871,12 +1872,12 @@ fn width_ctype(size: u8) -> &'static str {
     }
 }
 
-/// Collapse `Stmt::Assign { dst: return_reg, src: E }` immediately followed
-/// by `Stmt::Return { value: None }` into `Stmt::Return { value: Some(E) }`.
+/// Collapse `return_reg = E; [comments]; return [return_reg];` into a direct
+/// `return E`, retaining provenance comments in place.
 ///
 /// Recurses into nested If / While bodies. Conservative — only fires on the
-/// exact adjacent-pair shape so we never relocate a side-effectful
-/// expression.
+/// Only comments/Nops may intervene, so the expression stays at the same
+/// observable point and no state-changing operation is crossed.
 fn fold_returns(body: &mut Vec<Stmt>) {
     // Recurse first so inner bodies are folded before we inspect an outer
     // fall-through return.
@@ -1907,19 +1908,31 @@ fn fold_returns(body: &mut Vec<Stmt>) {
     }
 
     let mut i = 0;
-    while i + 1 < body.len() {
-        let fold_here = matches!(
-            (&body[i], &body[i + 1]),
-            (
-                Stmt::Assign { dst, .. },
-                Stmt::Return { value: None }
-            ) if is_return_reg(dst)
-        );
+    while i < body.len() {
+        let Some(dst) = (match &body[i] {
+            Stmt::Assign { dst, .. } if is_return_reg(dst) => Some(dst.clone()),
+            _ => None,
+        }) else {
+            i += 1;
+            continue;
+        };
+        let mut return_index = i + 1;
+        while matches!(body.get(return_index), Some(Stmt::Comment(_) | Stmt::Nop)) {
+            return_index += 1;
+        }
+        let fold_here = match body.get(return_index) {
+            Some(Stmt::Return { value: None }) => true,
+            Some(Stmt::Return {
+                value: Some(Expr::Reg(returned)),
+            }) => returned == &dst,
+            _ => false,
+        };
         if fold_here {
             let Stmt::Assign { src, .. } = body.remove(i) else {
                 unreachable!()
             };
-            body[i] = Stmt::Return { value: Some(src) };
+            body[return_index - 1] = Stmt::Return { value: Some(src) };
+            continue;
         }
         i += 1;
     }
@@ -1934,6 +1947,10 @@ fn fold_returns(body: &mut Vec<Stmt>) {
 /// The optional terminal `Break` is the structured spelling of the edge to that
 /// join and disappears with the join itself.
 pub fn fold_exhaustive_switch_returns(function: &mut Function) {
+    // Typed/lossless range recovery can expose the switch only after an
+    // adjacent `ret = cast(join); return ret` pair was first prepared. Normalize
+    // that pair here as well so every caller sees the same join shape.
+    fold_returns(&mut function.body);
     fold_exhaustive_switch_returns_body(&mut function.body);
 }
 
@@ -1974,10 +1991,10 @@ fn fold_exhaustive_switch_returns_body(body: &mut Vec<Stmt>) {
         while matches!(body.get(return_index), Some(Stmt::Comment(_) | Stmt::Nop)) {
             return_index += 1;
         }
-        let Some(result) = (match body.get(return_index) {
-            Some(Stmt::Return {
-                value: Some(Expr::Reg(result)),
-            }) => Some(result.clone()),
+        let Some((result, return_template)) = (match body.get(return_index) {
+            Some(Stmt::Return { value: Some(value) }) => {
+                cast_chain_root_reg(value).map(|result| (result.clone(), value.clone()))
+            }
             _ => None,
         }) else {
             index += 1;
@@ -1993,10 +2010,9 @@ fn fold_exhaustive_switch_returns_body(body: &mut Vec<Stmt>) {
             continue;
         };
 
-        if !cases
-            .iter_mut()
-            .all(|(_, case_body)| turn_terminal_result_into_return(case_body, &result))
-            || !turn_terminal_result_into_return(&mut default, &result)
+        if !cases.iter_mut().all(|(_, case_body)| {
+            turn_terminal_result_into_return(case_body, &result, &return_template)
+        }) || !turn_terminal_result_into_return(&mut default, &result, &return_template)
         {
             index += 1;
             continue;
@@ -2012,7 +2028,35 @@ fn fold_exhaustive_switch_returns_body(body: &mut Vec<Stmt>) {
     }
 }
 
-fn turn_terminal_result_into_return(body: &mut Vec<Stmt>, result: &VReg) -> bool {
+fn cast_chain_root_reg(expr: &Expr) -> Option<&VReg> {
+    match expr {
+        Expr::Reg(reg) => Some(reg),
+        Expr::Cast { expr, .. } => cast_chain_root_reg(expr),
+        _ => None,
+    }
+}
+
+fn apply_return_cast_template(template: &Expr, result: &VReg, value: Expr) -> Option<Expr> {
+    match template {
+        Expr::Reg(reg) if reg == result => Some(value),
+        Expr::Cast {
+            signed,
+            width,
+            expr,
+        } => Some(Expr::Cast {
+            signed: *signed,
+            width: *width,
+            expr: Box::new(apply_return_cast_template(expr, result, value)?),
+        }),
+        _ => None,
+    }
+}
+
+fn turn_terminal_result_into_return(
+    body: &mut Vec<Stmt>,
+    result: &VReg,
+    return_template: &Expr,
+) -> bool {
     if matches!(body.last(), Some(Stmt::Break)) {
         body.pop();
     }
@@ -2021,7 +2065,10 @@ fn turn_terminal_result_into_return(body: &mut Vec<Stmt>, result: &VReg) -> bool
     };
     match last {
         Stmt::Assign { dst, src } if dst == result => {
-            let value = src.clone();
+            let Some(value) = apply_return_cast_template(return_template, result, src.clone())
+            else {
+                return false;
+            };
             *last = Stmt::Return { value: Some(value) };
             true
         }
@@ -2030,7 +2077,10 @@ fn turn_terminal_result_into_return(body: &mut Vec<Stmt>, result: &VReg) -> bool
             src,
             ..
         } if dst == result && matches!(&*dst, VReg::Phys(name) if is_promoted_local(name)) => {
-            let value = src.clone();
+            let Some(value) = apply_return_cast_template(return_template, result, src.clone())
+            else {
+                return false;
+            };
             *last = Stmt::Return { value: Some(value) };
             true
         }
@@ -3313,6 +3363,8 @@ fn ctype_for(ident: &str, tm: Option<&TypeMap>) -> &'static str {
 /// casts/operations must not inherit a stray final `eax` hint and render as
 /// `int`, which truncates a valid machine `long` at the C ABI boundary.
 pub(crate) fn refine_decbench_abi_widths(f: &Function, tm: &mut TypeMap) {
+    refine_signed_comparison_operands(&f.body, tm);
+
     let mut required_wide = std::collections::HashSet::new();
     collect_high_half_requirements(&f.body, &mut required_wide);
 
@@ -3349,12 +3401,150 @@ pub(crate) fn refine_decbench_abi_widths(f: &Function, tm: &mut TypeMap) {
             // when every definition is explicitly scalar, the function cannot
             // have a pointer return merely because one physical register once
             // held an address.
-            tm.force_scalar_int(VReg::phys("ret"), true, width);
+            let ret = VReg::phys("ret");
+            if let Some(TypeHint::Int {
+                signed,
+                width: recovered_width,
+            }) = tm.get(&ret)
+            {
+                tm.force_scalar_int(ret, signed, recovered_width.max(width));
+            } else {
+                tm.force_scalar_int(ret, true, width);
+            }
         } else if width >= 8 {
             tm.force_int_width(VReg::phys("ret"), 8);
         }
     }
     refine_pointer_access_widths(&f.body, tm);
+}
+
+/// Signed comparison operators carry source-level signedness evidence that is
+/// lost when raw-register recovery also observes a zero-extended/index use.
+/// Apply that evidence only to direct integer operands: signed arithmetic over
+/// a composite expression does not prove every leaf has a signed declaration,
+/// and semantic pointer hints must remain pointers.
+fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
+    fn direct_signed_value(expr: &Expr) -> Option<&VReg> {
+        match expr {
+            Expr::Reg(reg) => Some(reg),
+            Expr::Cast {
+                signed: true, expr, ..
+            } => direct_signed_value(expr),
+            _ => None,
+        }
+    }
+
+    fn expression(expr: &Expr, tm: &mut TypeMap) {
+        match expr {
+            Expr::Cmp { op, lhs, rhs } => {
+                if matches!(op, CmpOp::Slt | CmpOp::Sle) {
+                    for operand in [lhs.as_ref(), rhs.as_ref()] {
+                        if let Some(reg) = direct_signed_value(operand) {
+                            tm.force_int_signedness(reg.clone(), true);
+                        }
+                    }
+                }
+                expression(lhs, tm);
+                expression(rhs, tm);
+            }
+            Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Bin { lhs, rhs, .. } => {
+                expression(lhs, tm);
+                expression(rhs, tm);
+            }
+            Expr::Un { src, .. } => expression(src, tm),
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                expression(cond, tm);
+                expression(if_true, tm);
+                expression(if_false, tm);
+            }
+            Expr::Cast { expr, .. } => expression(expr, tm),
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn statements(body: &[Stmt], tm: &mut TypeMap) {
+        for statement in body {
+            match statement {
+                Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => expression(src, tm),
+                Stmt::Store { addr, src, .. } => {
+                    expression(addr, tm);
+                    expression(src, tm);
+                }
+                Stmt::Call { target, args, .. } => {
+                    expression(target, tm);
+                    for arg in args {
+                        expression(arg, tm);
+                    }
+                }
+                Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
+                    expression(target, tm);
+                }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    expression(cond, tm);
+                    statements(then_body, tm);
+                    if let Some(else_body) = else_body {
+                        statements(else_body, tm);
+                    }
+                }
+                Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+                    expression(cond, tm);
+                    statements(body, tm);
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    statements(std::slice::from_ref(init.as_ref()), tm);
+                    expression(cond, tm);
+                    statements(std::slice::from_ref(step.as_ref()), tm);
+                    statements(body, tm);
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    expression(discriminant, tm);
+                    for (_, case_body) in cases {
+                        statements(case_body, tm);
+                    }
+                    if let Some(default) = default {
+                        statements(default, tm);
+                    }
+                }
+                Stmt::Return { value: None }
+                | Stmt::Label(_)
+                | Stmt::Goto { .. }
+                | Stmt::Break
+                | Stmt::Nop
+                | Stmt::Unknown(_)
+                | Stmt::Comment(_)
+                | Stmt::Pop { .. } => {}
+            }
+        }
+    }
+
+    statements(body, tm);
 }
 
 fn all_definitions_proven_scalar(body: &[Stmt], target: &str, tm: &TypeMap) -> bool {
@@ -3971,6 +4161,46 @@ fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
         Expr::Reg(VReg::Phys(n)) => tm
             .and_then(|m| m.get(&VReg::Phys(n.clone())))
             .map(hint_to_ctype),
+        // A 32-bit x86 return write is represented losslessly as
+        // `zext64(cast32(value))`. The outer cast is ABI register
+        // housekeeping, not evidence that the source function returned
+        // `unsigned long`. Prefer the inner value's recovered integer type,
+        // then the recovered return hint, when either has the exact inner
+        // width. This also prevents an unrelated earlier pointer use of `rax`
+        // from deciding the signature.
+        Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: inner,
+        } if matches!(inner.as_ref(), Expr::Cast { width: 1..=4, .. }) => {
+            let Expr::Cast {
+                signed,
+                width,
+                expr: value,
+            } = inner.as_ref()
+            else {
+                unreachable!()
+            };
+            expr_ctype(value, tm)
+                .filter(|ctype| integer_ctype_width(ctype) == Some(*width))
+                .or_else(|| {
+                    tm.and_then(|types| types.get(&VReg::phys("ret")))
+                        .and_then(|hint| match hint {
+                            TypeHint::Int {
+                                signed,
+                                width: recovered_width,
+                            } if recovered_width == *width => {
+                                Some(int_ctype(signed, recovered_width))
+                            }
+                            _ => None,
+                        })
+                })
+                .or_else(|| Some(int_ctype(*signed, *width)))
+        }
+        // `Expr::Cast` is an integer cast by construction. Its target type is
+        // stronger return-type evidence than a flow-insensitive physical
+        // register hint.
+        Expr::Cast { signed, width, .. } if tm.is_some() => Some(int_ctype(*signed, *width)),
         // C comparison operators produce `int`.  This is an expression-level
         // language rule and therefore outranks whichever narrow sub-register
         // (`al` for SETcc) happened to materialise the value on the machine.
@@ -3980,6 +4210,16 @@ fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
         // claim this on the typed render path; the untyped path (`tm` is None)
         // stays blanket-`long` by contract.
         Expr::Const(_) if tm.is_some() => Some("int"),
+        _ => None,
+    }
+}
+
+fn integer_ctype_width(ctype: &str) -> Option<u8> {
+    match ctype {
+        "signed char" | "unsigned char" | "char" => Some(1),
+        "short" | "unsigned short" => Some(2),
+        "int" | "unsigned int" => Some(4),
+        "long" | "unsigned long" => Some(8),
         _ => None,
     }
 }
@@ -4008,6 +4248,69 @@ pub(crate) fn inferred_return_width(body: &[Stmt], tm: Option<&TypeMap>) -> u8 {
         "short" | "unsigned short" => 2,
         "int" | "unsigned int" => 4,
         _ => 8,
+    }
+}
+
+/// Remove a machine-only zero-extension around a returned narrow integer once
+/// the recovered C signature proves that the return conversion has that exact
+/// narrow width.
+///
+/// The typed AST deliberately retains `zext64(cast32(value))` until this late
+/// boundary so dataflow, predicates, and widening see the real machine value.
+/// Printing the outer wrapper in `return`, however, turns ABI bookkeeping into
+/// noisy source C. A function declared to return the inner width performs that
+/// widening at the ABI boundary, so the outer cast alone is removed. The inner
+/// cast remains because it may carry a real truncation or signedness conversion;
+/// arbitrary casts and wide-return signatures remain untouched.
+pub(crate) fn fold_typed_return_abi_extensions(f: &mut Function, tm: &TypeMap) {
+    let return_width = inferred_return_width(&f.body, Some(tm));
+    fold_return_abi_extensions_body(&mut f.body, return_width);
+}
+
+fn fold_return_abi_extensions_body(body: &mut [Stmt], return_width: u8) {
+    for statement in body {
+        match statement {
+            Stmt::Return { value: Some(value) } => {
+                let replacement = match value {
+                    Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: inner,
+                    } => match inner.as_ref() {
+                        Expr::Cast { width, .. } if *width <= 4 && *width == return_width => {
+                            Some(inner.as_ref().clone())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(replacement) = replacement {
+                    *value = replacement;
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                fold_return_abi_extensions_body(then_body, return_width);
+                if let Some(else_body) = else_body {
+                    fold_return_abi_extensions_body(else_body, return_width);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                fold_return_abi_extensions_body(body, return_width);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    fold_return_abi_extensions_body(case_body, return_width);
+                }
+                if let Some(default) = default {
+                    fold_return_abi_extensions_body(default, return_width);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -4393,7 +4696,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These nine steps change *definitions, uses, value identities, or control-flow
+/// These ten steps change *definitions, uses, value identities, or control-flow
 /// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
@@ -4411,17 +4714,20 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 4. `select_fold::collapse_assignment_diamonds` turns a proven two-arm,
 ///    same-destination diamond into one pure select expression, then the narrow
 ///    promoted-select propagator removes an adjacent one-use stack temporary.
-/// 5. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+/// 5. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
+///    immediately adjacent, sole eager guard use without claiming that physical
+///    role is globally SSA.
+/// 6. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 6. `switch_ladder::recover_switches` converts proven comparison ladders into
+/// 7. `switch_ladder::recover_switches` converts proven comparison ladders into
 ///    `switch` nodes.
-/// 7. `guarded_switch::collapse_range_guards` removes a compiler range-check
+/// 8. `guarded_switch::collapse_range_guards` removes a compiler range-check
 ///    wrapper only when its unsigned domain and every switch label prove that
 ///    the wrapper cannot select a case the switch would not select itself.
-/// 8. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+/// 9. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
-/// 9. `fold_exhaustive_switch_returns` moves an immediately joined result return
+/// 10. `fold_exhaustive_switch_returns` moves an immediately joined result return
 ///    into every arm only when an explicit default makes the switch exhaustive.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
@@ -4450,6 +4756,10 @@ pub fn prepare_for_decbench(f: &Function) -> Function {
             break;
         }
     }
+    // Propagation can expose a casted result copy directly before its return.
+    // Collapse it before exhaustive-switch joining so the lossless cast chain
+    // can be carried into each arm instead of blocking source-level returns.
+    fold_returns(&mut owned.body);
     // Copy propagation and the second constant fold can replace a flag read in
     // a condition with its recovered comparison. Prune the now-dead definition
     // before shape recovery: otherwise a redundant `sf_N = ...` remains before
@@ -4458,6 +4768,7 @@ pub fn prepare_for_decbench(f: &Function) -> Function {
     crate::ir::dce::prune_dead_flags(&mut owned);
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
+    crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
@@ -5661,10 +5972,16 @@ fn write_unit_step(
     if !integer_local {
         return false;
     }
-    let Expr::Bin { op, lhs, rhs } = src else {
+    fn without_casts(mut expr: &Expr) -> &Expr {
+        while let Expr::Cast { expr: inner, .. } = expr {
+            expr = inner;
+        }
+        expr
+    }
+    let Expr::Bin { op, lhs, rhs } = without_casts(src) else {
         return false;
     };
-    if !matches!(lhs.as_ref(), Expr::Reg(read) if read == dst)
+    if !matches!(without_casts(lhs), Expr::Reg(read) if read == dst)
         || !matches!(rhs.as_ref(), Expr::Const(1))
     {
         return false;
@@ -7789,6 +8106,130 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn decbench_abi_zero_extension_return_uses_the_inner_typed_value() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        // `mov eax, local_4` is represented losslessly as a 32-to-64-bit zero
+        // extension. The reused physical return register previously held an
+        // address, but that stale pointer hint cannot outrank the typed value
+        // that is actually returned.
+        let f = Function {
+            name: "str_len".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys("local_4"))),
+                    }),
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("local_4"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        tm.upsert_public(VReg::phys("ret"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+
+        assert!(
+            text.contains("int str_len(") && !text.contains("char * str_len("),
+            "the returned int value must outrank stale physical-register uses:\n{text}"
+        );
+    }
+
+    #[test]
+    fn typed_return_conversion_removes_only_the_abi_zero_extension() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let mut f = Function {
+            name: "str_len".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys("local_4"))),
+                    }),
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("local_4"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        tm.upsert_public(
+            VReg::phys("ret"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        fold_typed_return_abi_extensions(&mut f, &tm);
+
+        assert_eq!(
+            f.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: false,
+                    width: 4,
+                    expr: Box::new(Expr::Reg(VReg::phys("local_4"))),
+                }),
+            }],
+            "only the ABI-wide wrapper is redundant; the source-width cast remains"
+        );
+    }
+
+    #[test]
+    fn typed_return_conversion_preserves_an_explicit_wide_cast() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let mut f = Function {
+            name: "widen".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                }),
+            }],
+        };
+        let expected = f.clone();
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("ret"),
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        );
+
+        fold_typed_return_abi_extensions(&mut f, &tm);
+
+        assert_eq!(
+            f, expected,
+            "a source-level 64-bit cast must remain explicit"
+        );
+    }
+
+    #[test]
     fn decbench_return_type_comes_from_returned_value_not_bare_ret() {
         // Value-keyed return typing: the returned value is a promoted local
         // (`local_8`, an `int`) and there is *no* `ret` entry in the type map.
@@ -7864,6 +8305,171 @@ function f @ 0x1000 {
         crate::ir::widen::insert_widening_casts(&mut f, &tm);
         let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
         assert!(text.contains("int state_result("), "got:\n{text}");
+    }
+
+    #[test]
+    fn decbench_signed_comparison_refines_integer_parameter_signedness() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let key = VReg::phys("arg2");
+        let f = Function {
+            name: "bisect_step".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Sle,
+                    lhs: Box::new(Expr::Reg(key.clone())),
+                    rhs: Box::new(Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        size: 4,
+                    }),
+                },
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(-1)),
+                }],
+                else_body: None,
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            key.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        refine_decbench_abi_widths(&f, &mut tm);
+
+        assert_eq!(
+            tm.get(&key),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn decbench_signed_comparison_refines_a_direct_sign_extended_parameter() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let key = VReg::phys("arg0");
+        let sign_extended = Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(key.clone())),
+            }),
+        };
+        let f = Function {
+            name: "signs".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(sign_extended),
+                    rhs: Box::new(Expr::Const(0)),
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            key.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        refine_decbench_abi_widths(&f, &mut tm);
+
+        assert_eq!(
+            tm.get(&key),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn decbench_signed_comparison_does_not_overwrite_a_pointer_hint() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let pointer = VReg::phys("arg0");
+        let f = Function {
+            name: "pointer_order".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(pointer.clone())),
+                    rhs: Box::new(Expr::Const(0)),
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(pointer.clone(), TypeHint::Pointer { pointee_width: 4 });
+
+        refine_decbench_abi_widths(&f, &mut tm);
+
+        assert_eq!(
+            tm.get(&pointer),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+    }
+
+    #[test]
+    fn decbench_scalar_refinement_preserves_a_wide_integer_return_hint() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "widen_mul".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Bin {
+                        op: BinOp::Mul,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                },
+            ],
+        };
+        let mut tm = TypeMap::default();
+        for name in ["arg0", "arg1"] {
+            tm.upsert_public(
+                VReg::phys(name),
+                TypeHint::Int {
+                    signed: false,
+                    width: 4,
+                },
+            );
+        }
+        tm.upsert_public(
+            VReg::phys("ret"),
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        );
+
+        refine_decbench_abi_widths(&f, &mut tm);
+
+        assert_eq!(
+            tm.get(&VReg::phys("ret")),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 8,
+            })
+        );
     }
 
     #[test]
@@ -8438,6 +9044,86 @@ function f @ 0x1000 {
             ),
             "{default:#?}"
         );
+    }
+
+    #[test]
+    fn prepare_carries_a_lossless_join_cast_into_exhaustive_switch_returns() {
+        let result = VReg::phys("local_4");
+        let ret = VReg::phys("ret");
+        let f = Function {
+            name: "dispatch".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: ret.clone(),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        }),
+                    },
+                },
+                Stmt::Switch {
+                    discriminant: Expr::Reg(ret.clone()),
+                    cases: vec![(
+                        Some(0),
+                        vec![Stmt::Assign {
+                            dst: result.clone(),
+                            src: Expr::Const(10),
+                        }],
+                    )],
+                    default: Some(vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(-1),
+                    }]),
+                },
+                Stmt::Assign {
+                    dst: ret.clone(),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(result)),
+                        }),
+                    },
+                },
+                Stmt::Comment("x86-64 epilogue: restore rbp".to_string()),
+                Stmt::Return {
+                    value: Some(Expr::Reg(ret)),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+
+        let switch_index = prepared
+            .body
+            .iter()
+            .position(|statement| matches!(statement, Stmt::Switch { .. }))
+            .expect("expected exhaustive switch");
+        assert!(
+            prepared.body[switch_index + 1..]
+                .iter()
+                .all(|statement| matches!(statement, Stmt::Comment(_))),
+            "{:#?}",
+            prepared.body
+        );
+        let Stmt::Switch { cases, default, .. } = &prepared.body[switch_index] else {
+            panic!("expected one exhaustive switch: {:#?}", prepared.body)
+        };
+        for arm in cases.iter().map(|(_, body)| body).chain(default.iter()) {
+            assert!(matches!(
+                arm.last(),
+                Some(Stmt::Return {
+                    value: Some(Expr::Cast { width: 8, .. })
+                })
+            ));
+        }
     }
 
     #[test]

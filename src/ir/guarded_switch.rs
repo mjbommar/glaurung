@@ -61,7 +61,13 @@ fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>) {
 
     let mut index = 0;
     while index < body.len() {
-        let Some((mut switch, guarded_value)) = guarded_switch(&body[index]) else {
+        let Some(GuardedSwitchCandidate {
+            mut switch,
+            guarded_value,
+            consumed,
+            hoisted,
+        }) = guarded_switch_at(body, index)
+        else {
             index += 1;
             continue;
         };
@@ -70,8 +76,9 @@ fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>) {
             unreachable!("guarded_switch only returns switch statements")
         };
         if is_unsigned_extension_of(discriminant, &guarded_value, types) {
-            body[index] = switch;
-            index += 1;
+            let replacement_len = hoisted.len() + 1;
+            install_candidate(body, index, consumed, hoisted, switch);
+            index += replacement_len;
             continue;
         }
 
@@ -99,14 +106,86 @@ fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>) {
         }
 
         *discriminant = value;
-        body[index] = switch;
+        install_candidate(body, index, consumed, hoisted, switch);
         body.remove(index - 1);
         // The replacement moved left by one. Continue after it.
     }
 }
 
+fn install_candidate(
+    body: &mut Vec<Stmt>,
+    index: usize,
+    consumed: usize,
+    hoisted: Vec<Stmt>,
+    switch: Stmt,
+) {
+    body.splice(
+        index..index + consumed,
+        hoisted.into_iter().chain(std::iter::once(switch)),
+    );
+}
+
 /// Return the sole switch and its guarded unsigned view when eliminating the
 /// wrapper is semantically justified by the case domain.
+struct GuardedSwitchCandidate {
+    switch: Stmt,
+    guarded_value: Expr,
+    consumed: usize,
+    hoisted: Vec<Stmt>,
+}
+
+fn guarded_switch_at(body: &[Stmt], index: usize) -> Option<GuardedSwitchCandidate> {
+    guarded_switch(&body[index])
+        .map(|(switch, guarded_value)| GuardedSwitchCandidate {
+            switch,
+            guarded_value,
+            consumed: 1,
+            hoisted: Vec::new(),
+        })
+        .or_else(|| {
+            guarded_switch_after_early_return(body.get(index)?, body.get(index + 1)?).map(
+                |(switch, guarded_value)| GuardedSwitchCandidate {
+                    switch,
+                    guarded_value,
+                    consumed: 2,
+                    hoisted: Vec::new(),
+                },
+            )
+        })
+        .or_else(|| {
+            let middle = body.get(index + 1)?;
+            if !safe_to_speculate_before_guard(&body[index], middle) {
+                return None;
+            }
+            guarded_switch_after_early_return(&body[index], body.get(index + 2)?).map(
+                |(switch, guarded_value)| GuardedSwitchCandidate {
+                    switch,
+                    guarded_value,
+                    consumed: 3,
+                    hoisted: vec![middle.clone()],
+                },
+            )
+        })
+}
+
+/// Whether the sole interstitial statement can execute before the range guard.
+/// Restrict this to a register copy/cast with no guard dependency: loads, calls,
+/// arithmetic, and memory stores may trap, overflow, or carry observable effects.
+fn safe_to_speculate_before_guard(guard: &Stmt, statement: &Stmt) -> bool {
+    let Stmt::Assign { dst, src } = statement else {
+        return false;
+    };
+    count_reads_in_statement(guard, dst) == 0 && is_total_copy_expression(src)
+}
+
+fn is_total_copy_expression(expr: &Expr) -> bool {
+    match expr {
+        Expr::Reg(_) | Expr::Const(_) => true,
+        Expr::Cast { expr, .. } => is_total_copy_expression(expr),
+        _ => false,
+    }
+}
+
 fn guarded_switch(statement: &Stmt) -> Option<(Stmt, Expr)> {
     let Stmt::If {
         cond,
@@ -170,6 +249,44 @@ fn guarded_switch(statement: &Stmt) -> Option<(Stmt, Expr)> {
     Some((switch, rhs.as_ref().clone()))
 }
 
+/// Recognize optimized `if (bound < value) return default; switch (value)`.
+/// The early arm becomes a default only when the following switch exhaustively
+/// covers the guard's inside range; otherwise an in-range case gap would change
+/// from falling out of the switch to taking the synthesized default.
+fn guarded_switch_after_early_return(guard: &Stmt, following: &Stmt) -> Option<(Stmt, Expr)> {
+    let Stmt::If {
+        cond: Expr::Cmp {
+            op: CmpOp::Ult,
+            lhs,
+            rhs,
+        },
+        then_body,
+        else_body: None,
+    } = guard
+    else {
+        return None;
+    };
+    let Expr::Const(bound) = lhs.as_ref() else {
+        return None;
+    };
+    if !matches!(then_body.as_slice(), [Stmt::Return { .. }]) {
+        return None;
+    }
+    let Stmt::Switch { cases, default, .. } = following else {
+        return None;
+    };
+    if default.is_some() || !labels_exhaust_unsigned_bound(cases, *bound) {
+        return None;
+    }
+
+    let mut switch = following.clone();
+    let Stmt::Switch { default, .. } = &mut switch else {
+        unreachable!()
+    };
+    *default = Some(then_body.clone());
+    Some((switch, rhs.as_ref().clone()))
+}
+
 fn labels_within_unsigned_bound(cases: &[(Option<i64>, Vec<Stmt>)], bound: i64) -> bool {
     bound >= 0
         && !cases.is_empty()
@@ -198,6 +315,39 @@ fn labels_exhaust_unsigned_bound(cases: &[(Option<i64>, Vec<Stmt>)], bound: i64)
 /// preserve the range proof and is rejected.
 fn is_unsigned_extension_of(candidate: &Expr, guarded: &Expr, types: Option<&TypeMap>) -> bool {
     if candidate == guarded {
+        return true;
+    }
+
+    // Lossless unsigned views of the same recovered-width source are
+    // equivalent for case selection even when the guard, rather than the
+    // discriminator, carries the wider spelling. This is the shape produced
+    // by Clang -O0 after x86 32-bit writes are represented explicitly:
+    //
+    //   tmp = u32(state); if (u64(u32(state)) <= K) switch (tmp)
+    //
+    // Requiring the source width to fit through the narrowest cast on both
+    // sides rules out every truncating view.
+    fn unsigned_view(expr: &Expr) -> (&Expr, u8) {
+        let mut current = expr;
+        let mut narrowest = u8::MAX;
+        while let Expr::Cast {
+            signed: false,
+            width,
+            expr,
+        } = current
+        {
+            narrowest = narrowest.min(*width);
+            current = expr;
+        }
+        (current, narrowest)
+    }
+
+    let (candidate_root, candidate_narrowest) = unsigned_view(candidate);
+    let (guarded_root, guarded_narrowest) = unsigned_view(guarded);
+    if candidate_root == guarded_root
+        && known_width(candidate_root, types)
+            .is_some_and(|width| width <= candidate_narrowest && width <= guarded_narrowest)
+    {
         return true;
     }
 
@@ -565,6 +715,197 @@ mod tests {
     }
 
     #[test]
+    fn merges_terminating_range_guard_with_its_following_exhaustive_switch() {
+        let guarded_value = unsigned(4, Expr::Reg(VReg::phys("op")));
+        let cases: Vec<(Option<i64>, Vec<Stmt>)> = (0..=3)
+            .map(|case| {
+                (
+                    Some(case),
+                    vec![Stmt::Return {
+                        value: Some(Expr::Const(case)),
+                    }],
+                )
+            })
+            .collect();
+        let default_body = vec![Stmt::Return {
+            value: Some(Expr::Const(-1)),
+        }];
+        let mut function = Function {
+            name: "optimized_dispatch".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ult,
+                        lhs: Box::new(Expr::Const(3)),
+                        rhs: Box::new(guarded_value.clone()),
+                    },
+                    then_body: default_body.clone(),
+                    else_body: None,
+                },
+                Stmt::Switch {
+                    discriminant: guarded_value.clone(),
+                    cases: cases.clone(),
+                    default: None,
+                },
+            ],
+        };
+
+        collapse_range_guards(&mut function);
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Switch {
+                discriminant: guarded_value,
+                cases,
+                default: Some(default_body),
+            }]
+        );
+    }
+
+    #[test]
+    fn keeps_nonterminating_guard_before_a_following_switch() {
+        let guarded_value = unsigned(4, Expr::Reg(VReg::phys("op")));
+        let original = vec![
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Const(1)),
+                    rhs: Box::new(guarded_value.clone()),
+                },
+                then_body: vec![Stmt::Assign {
+                    dst: VReg::phys("observed"),
+                    src: Expr::Const(-1),
+                }],
+                else_body: None,
+            },
+            Stmt::Switch {
+                discriminant: guarded_value,
+                cases: vec![(Some(0), vec![Stmt::Nop]), (Some(1), vec![Stmt::Nop])],
+                default: None,
+            },
+        ];
+        let mut function = Function {
+            name: "fallthrough_guard".to_string(),
+            entry_va: 0,
+            body: original.clone(),
+        };
+
+        collapse_range_guards(&mut function);
+
+        assert_eq!(function.body, original);
+    }
+
+    #[test]
+    fn hoists_a_total_copy_between_terminating_guard_and_switch() {
+        let guarded_value = unsigned(4, Expr::Reg(VReg::phys("op")));
+        let copy = Stmt::Assign {
+            dst: VReg::phys("case_operand"),
+            src: Expr::Cast {
+                signed: true,
+                width: 8,
+                expr: Box::new(Expr::Reg(VReg::phys("rhs"))),
+            },
+        };
+        let cases = vec![
+            (
+                Some(0),
+                vec![Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("case_operand"))),
+                }],
+            ),
+            (
+                Some(1),
+                vec![Stmt::Return {
+                    value: Some(Expr::Const(1)),
+                }],
+            ),
+        ];
+        let default_body = vec![Stmt::Return {
+            value: Some(Expr::Const(-1)),
+        }];
+        let mut function = Function {
+            name: "copy_before_dispatch".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ult,
+                        lhs: Box::new(Expr::Const(1)),
+                        rhs: Box::new(guarded_value.clone()),
+                    },
+                    then_body: default_body.clone(),
+                    else_body: None,
+                },
+                copy.clone(),
+                Stmt::Switch {
+                    discriminant: guarded_value.clone(),
+                    cases: cases.clone(),
+                    default: None,
+                },
+            ],
+        };
+
+        collapse_range_guards(&mut function);
+
+        assert_eq!(
+            function.body,
+            vec![
+                copy,
+                Stmt::Switch {
+                    discriminant: guarded_value,
+                    cases,
+                    default: Some(default_body),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_a_potentially_trapping_load_after_the_early_return_guard() {
+        let guarded_value = unsigned(4, Expr::Reg(VReg::phys("op")));
+        let original = vec![
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Const(0)),
+                    rhs: Box::new(guarded_value.clone()),
+                },
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(-1)),
+                }],
+                else_body: None,
+            },
+            Stmt::Assign {
+                dst: VReg::phys("loaded"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Reg(VReg::phys("ptr"))),
+                    size: 4,
+                },
+            },
+            Stmt::Switch {
+                discriminant: guarded_value,
+                cases: vec![(
+                    Some(0),
+                    vec![Stmt::Return {
+                        value: Some(Expr::Const(0)),
+                    }],
+                )],
+                default: None,
+            },
+        ];
+        let mut function = Function {
+            name: "trapping_load".to_string(),
+            entry_va: 0,
+            body: original.clone(),
+        };
+
+        collapse_range_guards(&mut function);
+
+        assert_eq!(function.body, original);
+    }
+
+    #[test]
     fn keeps_discriminant_copy_when_it_has_a_later_read() {
         let source = VReg::phys("state");
         let temporary = VReg::phys("switch_value");
@@ -645,6 +986,65 @@ mod tests {
             function.body,
             vec![Stmt::Switch {
                 discriminant: discriminant_value,
+                cases: (0..=3).map(|case| (Some(case), vec![Stmt::Nop])).collect(),
+                default: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn recovered_width_equates_guard_widening_with_narrow_discriminant_copy() {
+        // Clang -O0 materializes the 32-bit switch word into an eight-byte
+        // stack slot, while its range guard keeps the canonical 64-bit parent
+        // view. Both spell the same value when the recovered source is exactly
+        // four bytes; the wider guard must not prevent switch recovery.
+        let source = VReg::phys("local_18");
+        let temporary = VReg::phys("local_28");
+        let narrow = unsigned(4, Expr::Reg(source.clone()));
+        let guarded_value = unsigned(8, unsigned(8, narrow.clone()));
+        let mut function = Function {
+            name: "clang_o0_guarded_switch".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(temporary.clone()),
+                    src: narrow,
+                    size: 8,
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ule,
+                        lhs: Box::new(guarded_value),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                    then_body: vec![Stmt::Switch {
+                        discriminant: Expr::Reg(temporary),
+                        cases: (0..=3).map(|case| (Some(case), vec![Stmt::Nop])).collect(),
+                        default: None,
+                    }],
+                    else_body: None,
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            source.clone(),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        collapse_range_guards_with_types(&mut function, &types);
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Switch {
+                discriminant: Expr::Cast {
+                    signed: false,
+                    width: 4,
+                    expr: Box::new(Expr::Reg(source)),
+                },
                 cases: (0..=3).map(|case| (Some(case), vec![Stmt::Nop])).collect(),
                 default: None,
             }]

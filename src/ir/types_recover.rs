@@ -76,6 +76,16 @@ impl TypeMap {
         }
     }
 
+    /// Replace an existing integer's signedness while preserving its recovered
+    /// width. A signed AST comparison is stronger evidence than an earlier
+    /// zero-extension/index use, but it is not evidence that a pointer or code
+    /// pointer should become an integer.
+    pub(crate) fn force_int_signedness(&mut self, reg: VReg, signed: bool) {
+        if let Some(TypeHint::Int { width, .. }) = self.inner.get(&reg).copied() {
+            self.inner.insert(reg, TypeHint::Int { signed, width });
+        }
+    }
+
     /// Replace a stale pointee width after the prepared AST proves that every
     /// direct access through this value has one different width. Raw-register
     /// recovery can merge unrelated SSA-era uses of the same architectural
@@ -186,11 +196,12 @@ fn int_for_reg(v: &VReg) -> TypeHint {
 /// classification (pointer / bool / code-pointer / narrower width), so this only
 /// fills in the width for registers nothing else has typed.
 fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
-    let mut tag = |val: &Value, tm: &mut TypeMap| {
+    let tag = |val: &Value, tm: &mut TypeMap| {
         if let Value::Reg(r @ VReg::Phys(_)) = val {
             tm.upsert(r.clone(), int_for_reg(r));
         }
     };
+    let bytes = |width: crate::ir::types::Width| width.bytes().min(u8::MAX as u16) as u8;
     match op {
         // Jumps through a computed value; the target is an address, and the
         // width hint this pass applies would be wrong for one.
@@ -218,6 +229,66 @@ fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
         Op::Cmp { lhs, rhs, .. } => {
             tag(lhs, tm);
             tag(rhs, tm);
+        }
+        Op::ZExt { dst, src, from, to } => {
+            if let VReg::Phys(_) = dst {
+                tm.upsert(
+                    dst.clone(),
+                    TypeHint::Int {
+                        signed: false,
+                        width: bytes(*to),
+                    },
+                );
+            }
+            if let Value::Reg(src @ VReg::Phys(_)) = src {
+                tm.upsert(
+                    src.clone(),
+                    TypeHint::Int {
+                        signed: true,
+                        width: bytes(*from),
+                    },
+                );
+            }
+        }
+        Op::SExt { dst, src, from, to } => {
+            if let VReg::Phys(_) = dst {
+                tm.upsert(
+                    dst.clone(),
+                    TypeHint::Int {
+                        signed: true,
+                        width: bytes(*to),
+                    },
+                );
+            }
+            if let Value::Reg(src @ VReg::Phys(_)) = src {
+                tm.upsert(
+                    src.clone(),
+                    TypeHint::Int {
+                        signed: true,
+                        width: bytes(*from),
+                    },
+                );
+            }
+        }
+        Op::Trunc { dst, src, from, to } => {
+            if let VReg::Phys(_) = dst {
+                tm.upsert(
+                    dst.clone(),
+                    TypeHint::Int {
+                        signed: true,
+                        width: bytes(*to),
+                    },
+                );
+            }
+            if let Value::Reg(src @ VReg::Phys(_)) = src {
+                tm.upsert(
+                    src.clone(),
+                    TypeHint::Int {
+                        signed: true,
+                        width: bytes(*from),
+                    },
+                );
+            }
         }
         _ => {}
     }
@@ -689,6 +760,33 @@ mod tests {
         assert_eq!(
             tm.get(&VReg::phys("rbp")),
             Some(TypeHint::Pointer { pointee_width: 8 })
+        );
+    }
+
+    #[test]
+    fn explicit_zero_extension_recovers_source_and_result_widths() {
+        let lf = mk_block(vec![Op::ZExt {
+            dst: VReg::phys("eax"),
+            src: Value::Reg(VReg::phys("edi")),
+            from: crate::ir::types::Width::W32,
+            to: crate::ir::types::Width::W64,
+        }]);
+
+        let tm = recover_types(&lf);
+
+        assert_eq!(
+            tm.get(&VReg::phys("edi")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+        assert_eq!(
+            tm.get(&VReg::phys("eax")),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 8,
+            })
         );
     }
 

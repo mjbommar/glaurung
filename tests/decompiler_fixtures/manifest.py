@@ -175,7 +175,19 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     ("13_loop_early_exit", "find_first"): {"len_args": [1]},
     ("13_loop_early_exit", "bisect"): {"len_args": [1]},
     ("13_loop_early_exit", "classify_run"): {"len_args": [1]},
-    ("13_loop_early_exit", "has_pair"): {"len_args": [1]},
+    ("13_loop_early_exit", "has_pair"): {
+        "len_args": [1],
+        # GCC -O2's nested-loop CFG has a match exit and an exhaustion exit.
+        # This deterministic no-match vector caught a lossy one-exit `While`
+        # recovery that the smaller seeded sample happened not to exercise.
+        "extra_vectors": [
+            [
+                [-61, -46, 38, 10, 61, 34, 29, -7, 30, 57, -45, -20, -33, 18, 43, -27],
+                16,
+                100,
+            ],
+        ],
+    },
     ("13_loop_early_exit", "sum_until_zero"): {"len_args": [1]},
     ("13_loop_early_exit", "sum_positive"): {"len_args": [1]},
     # `fib` is exponential. Once argument reconstruction started working the

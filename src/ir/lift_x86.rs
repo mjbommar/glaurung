@@ -57,6 +57,14 @@ fn partial_gp_view(name: &str) -> Option<regview::RegView> {
     regview::view(regview::Arch::X86_64, name).filter(|v| v.preserves_parent())
 }
 
+/// A 32-bit GP view whose write clears the upper half of its 64-bit parent.
+fn zero_extending_gp_view(name: &str, bits: u32) -> Option<regview::RegView> {
+    (bits == 64)
+        .then(|| regview::view(regview::Arch::X86_64, name))
+        .flatten()
+        .filter(|view| view.zero_extends())
+}
+
 /// The constant a write through `dst_name` actually leaves in its canonical parent.
 ///
 /// A 32-bit GP write on x86-64 zero-extends: `mov $0x80808081,%eax` leaves `rax`
@@ -402,6 +410,33 @@ fn signed_cmp_value(value: Value, width: Width, temp: VReg, ops: &mut Vec<Op>) -
     }
 }
 
+/// Give equality/carry predicates the unsigned word the machine actually
+/// observes at `width`. Canonical parent registers may otherwise carry
+/// different high halves depending on whether their latest 32-bit source was
+/// made explicit, even though x86 ZF/CF compare only the encoded low word.
+fn unsigned_cmp_value(value: Value, width: Width, temp: VReg, ops: &mut Vec<Op>) -> Value {
+    if width.bits() >= 64 {
+        return value;
+    }
+    match value {
+        value @ Value::Reg(_) => {
+            ops.push(Op::ZExt {
+                dst: temp.clone(),
+                src: value,
+                from: width,
+                to: Width::W64,
+            });
+            Value::Reg(temp)
+        }
+        Value::Const(value) => {
+            let bits = width.bits();
+            let mask = if bits == 0 { 0 } else { (1u64 << bits) - 1 };
+            Value::Const((value as u64 & mask) as i64)
+        }
+        other => other,
+    }
+}
+
 /// ZF for an already-written arithmetic result.
 fn zero_flag_of(result: VReg) -> Op {
     Op::Cmp {
@@ -435,10 +470,11 @@ fn append_undef_flags(ops: &mut Vec<Op>, flags: &[Flag], reason: &str) {
 
 /// Define ZF and the actual architectural SF for `result` at `width`.
 fn zero_sign_flags(result: Value, width: Width, signed_temp: u32, ops: &mut Vec<Op>) {
+    let unsigned = unsigned_cmp_value(result.clone(), width, VReg::Temp(signed_temp + 100), ops);
     ops.push(Op::Cmp {
         dst: VReg::Flag(Flag::Z),
         op: CmpOp::Eq,
-        lhs: result.clone(),
+        lhs: unsigned,
         rhs: Value::Const(0),
     });
     let signed = signed_cmp_value(result, width, VReg::Temp(signed_temp), ops);
@@ -458,6 +494,8 @@ fn emit_sub_with_flags(dst: VReg, rhs: Value, width: Width) -> Vec<Op> {
     let lhs = Value::Reg(dst.clone());
     let signed_lhs = signed_cmp_value(lhs.clone(), width, VReg::Temp(30), &mut ops);
     let signed_rhs = signed_cmp_value(rhs.clone(), width, VReg::Temp(31), &mut ops);
+    let unsigned_lhs = unsigned_cmp_value(lhs.clone(), width, VReg::Temp(34), &mut ops);
+    let unsigned_rhs = unsigned_cmp_value(rhs.clone(), width, VReg::Temp(35), &mut ops);
     let signed_less = VReg::Temp(32);
     ops.push(Op::Cmp {
         dst: signed_less.clone(),
@@ -468,8 +506,8 @@ fn emit_sub_with_flags(dst: VReg, rhs: Value, width: Width) -> Vec<Op> {
     ops.push(Op::Cmp {
         dst: VReg::Flag(Flag::C),
         op: CmpOp::Ult,
-        lhs,
-        rhs: rhs.clone(),
+        lhs: unsigned_lhs,
+        rhs: unsigned_rhs,
     });
     ops.push(emit_bin(dst.clone(), BinOp::Sub, rhs));
     zero_sign_flags(Value::Reg(dst), width, 33, &mut ops);
@@ -492,6 +530,8 @@ fn cmp_flag_ops(lhs: Value, rhs: Value, width: Width) -> Vec<Op> {
     let mut ops = Vec::new();
     let signed_lhs = signed_cmp_value(lhs.clone(), width, VReg::Temp(30), &mut ops);
     let signed_rhs = signed_cmp_value(rhs.clone(), width, VReg::Temp(31), &mut ops);
+    let unsigned_lhs = unsigned_cmp_value(lhs.clone(), width, VReg::Temp(35), &mut ops);
+    let unsigned_rhs = unsigned_cmp_value(rhs.clone(), width, VReg::Temp(36), &mut ops);
     let signed_less = VReg::Temp(32);
     let result = VReg::Temp(33);
     ops.extend([
@@ -510,14 +550,14 @@ fn cmp_flag_ops(lhs: Value, rhs: Value, width: Width) -> Vec<Op> {
         Op::Cmp {
             dst: VReg::Flag(Flag::Z),
             op: CmpOp::Eq,
-            lhs: lhs.clone(),
-            rhs: rhs.clone(),
+            lhs: unsigned_lhs.clone(),
+            rhs: unsigned_rhs.clone(),
         },
         Op::Cmp {
             dst: VReg::Flag(Flag::C),
             op: CmpOp::Ult,
-            lhs,
-            rhs,
+            lhs: unsigned_lhs,
+            rhs: unsigned_rhs,
         },
     ]);
     zero_sign_flags(Value::Reg(result), width, 34, &mut ops);
@@ -584,11 +624,19 @@ fn emit_add_with_flags(dst: VReg, rhs: Value, width: Width) -> Vec<Op> {
         emit_bin(dst.clone(), BinOp::Add, rhs),
     ]);
     zero_sign_flags(Value::Reg(dst.clone()), width, 35, &mut ops);
+    let unsigned_result =
+        unsigned_cmp_value(Value::Reg(dst.clone()), width, VReg::Temp(38), &mut ops);
+    let unsigned_original = unsigned_cmp_value(
+        Value::Reg(original.clone()),
+        width,
+        VReg::Temp(39),
+        &mut ops,
+    );
     ops.push(Op::Cmp {
         dst: VReg::Flag(Flag::C),
         op: CmpOp::Ult,
-        lhs: Value::Reg(dst),
-        rhs: Value::Reg(original),
+        lhs: unsigned_result,
+        rhs: unsigned_original,
     });
     let same_sign = VReg::Temp(36);
     let sign_changed = VReg::Temp(37);
@@ -1607,6 +1655,20 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         }];
                         ops.extend(partial_write_ops(view, Value::Reg(value)));
                         ops
+                    } else if zero_extending_gp_view(&dst_name, bits).is_some() {
+                        let value = VReg::Temp(0);
+                        vec![
+                            Op::Load {
+                                dst: value.clone(),
+                                addr: mem_op_of(instr),
+                            },
+                            Op::ZExt {
+                                dst: VReg::phys(dst_name),
+                                src: Value::Reg(value),
+                                from: Width::W32,
+                                to: Width::W64,
+                            },
+                        ]
                     } else {
                         vec![Op::Load {
                             dst: VReg::phys(dst_name),
@@ -1657,6 +1719,16 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     // low-byte-clear `mov $0, %al`).
                     if let Some(v) = partial_gp_view(&dst_name) {
                         return partial_write_ops(v, src);
+                    }
+                    if zero_extending_gp_view(&dst_name, bits).is_some()
+                        && !matches!(src, Value::Const(_))
+                    {
+                        return vec![Op::ZExt {
+                            dst: VReg::phys(dst_name),
+                            src,
+                            from: Width::W32,
+                            to: Width::W64,
+                        }];
                     }
                     let src = const_written_through_view(&dst_name, src, bits);
                     vec![Op::Assign {
@@ -3779,6 +3851,28 @@ mod tests {
     }
 
     #[test]
+    fn mov_reg32_into_reg32_keeps_the_zero_extension_explicit() {
+        // `mov eax, edi` is the first half of GCC's `uint64_t` multiply
+        // lowering. A later `imul rax, rsi` consumes all 64 bits, so reducing
+        // this to a bare parent-register copy loses the fact that bits 32..63
+        // were cleared and lets C perform the product at 32-bit width.
+        let ops = lift64(&[0x89, 0xf8]);
+        assert_eq!(ops.len(), 1, "expected one explicit extension: {ops:#?}");
+        assert!(
+            matches!(
+                &ops[0].op,
+                Op::ZExt {
+                    dst: VReg::Phys(dst),
+                    src: Value::Reg(VReg::Phys(src)),
+                    from: Width::W32,
+                    to: Width::W64,
+                } if dst == "eax" && src == "edi"
+            ),
+            "32-bit MOV semantics must remain explicit: {ops:#?}"
+        );
+    }
+
+    #[test]
     fn mov_store_from_low_byte_reads_the_canonical_parent_value() {
         // `mov byte ptr [rbp-9], al` (88 45 f7), as emitted immediately after
         // `movzx eax, byte ptr [rax]` in the real GCC -O0 DecBench `fsm`.
@@ -4831,6 +4925,53 @@ mod tests {
             )),
             "CMP must define architectural OF: {ops:#?}"
         );
+    }
+
+    #[test]
+    fn cmp_reg32_normalizes_both_operands_for_equality_and_carry() {
+        // `cmp eax, edx`. The canonical parents may have reached this point via
+        // different signed/zero-extending paths, but ZF and CF observe the same
+        // low 32-bit machine words. Both operands must therefore be normalized
+        // before equality or unsigned ordering is computed.
+        let ops = lift64(&[0x39, 0xd0]);
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::ZExt {
+                    dst: VReg::Temp(35),
+                    src: Value::Reg(VReg::Phys(src)),
+                    from: Width::W32,
+                    to: Width::W64,
+                } if src == "eax"
+            )),
+            "left comparison operand was not normalized: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::ZExt {
+                    dst: VReg::Temp(36),
+                    src: Value::Reg(VReg::Phys(src)),
+                    from: Width::W32,
+                    to: Width::W64,
+                } if src == "edx"
+            )),
+            "right comparison operand was not normalized: {ops:#?}"
+        );
+        for (flag, op) in [(Flag::Z, CmpOp::Eq), (Flag::C, CmpOp::Ult)] {
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Cmp {
+                        dst: VReg::Flag(got_flag),
+                        op: got_op,
+                        lhs: Value::Reg(VReg::Temp(35)),
+                        rhs: Value::Reg(VReg::Temp(36)),
+                    } if *got_flag == flag && *got_op == op
+                )),
+                "{flag:?} did not compare normalized words: {ops:#?}"
+            );
+        }
     }
 
     #[test]

@@ -27,10 +27,309 @@
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, CmpOp};
+use crate::ir::types_recover::{TypeHint, TypeMap};
 
 /// Rewrite `f`'s body in place, folding the patterns above.
 pub fn fold_constants(f: &mut Function) {
     fold_body(&mut f.body);
+}
+
+/// Remove matching extension pairs from comparisons only when recovered C
+/// declarations prove that the uncast operands already have the exact source
+/// width and signedness. The untyped algebraic pass cannot make this decision:
+/// a zero-extended 32-bit load may live in a default-`long` scratch, and dropping
+/// its signed cast changes a negative machine value into a positive C value.
+pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
+    fn declared_source_type(expr: &Expr, signed: bool, width: u8, tm: &TypeMap) -> bool {
+        matches!(
+            expr,
+            Expr::Reg(reg)
+                if tm.get(reg) == Some(TypeHint::Int { signed, width })
+        )
+    }
+
+    fn expression(expr: &mut Expr, tm: &TypeMap) {
+        match expr {
+            Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                expression(lhs, tm);
+                expression(rhs, tm);
+            }
+            Expr::Un { src, .. } => expression(src, tm),
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                expression(cond, tm);
+                expression(if_true, tm);
+                expression(if_false, tm);
+            }
+            Expr::Cast { expr, .. } => expression(expr, tm),
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => {}
+        }
+
+        let Expr::Cmp { op, lhs, rhs } = expr else {
+            return;
+        };
+        let (Some(left), Some(right)) = (
+            common_extended_operand(lhs, *op),
+            common_extended_operand(rhs, *op),
+        ) else {
+            return;
+        };
+        if left.0 == right.0
+            && left.1 == right.1
+            && left.2 == right.2
+            && declared_source_type(left.3, left.0, left.2, tm)
+            && declared_source_type(right.3, right.0, right.2, tm)
+        {
+            *lhs = Box::new(left.3.clone());
+            *rhs = Box::new(right.3.clone());
+        }
+    }
+
+    fn body(statements: &mut [Stmt], tm: &TypeMap) {
+        for statement in statements {
+            match statement {
+                Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
+                    expression(src, tm);
+                }
+                Stmt::Store { addr, src, .. } => {
+                    expression(addr, tm);
+                    expression(src, tm);
+                }
+                Stmt::Call { target, args, .. } => {
+                    expression(target, tm);
+                    for arg in args {
+                        expression(arg, tm);
+                    }
+                }
+                Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
+                    expression(target, tm);
+                }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    expression(cond, tm);
+                    body(then_body, tm);
+                    if let Some(else_body) = else_body {
+                        body(else_body, tm);
+                    }
+                }
+                Stmt::While {
+                    cond,
+                    body: loop_body,
+                }
+                | Stmt::DoWhile {
+                    cond,
+                    body: loop_body,
+                } => {
+                    expression(cond, tm);
+                    body(loop_body, tm);
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body: loop_body,
+                } => {
+                    body(std::slice::from_mut(init.as_mut()), tm);
+                    expression(cond, tm);
+                    body(std::slice::from_mut(step.as_mut()), tm);
+                    body(loop_body, tm);
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    expression(discriminant, tm);
+                    for (_, case_body) in cases {
+                        body(case_body, tm);
+                    }
+                    if let Some(default) = default {
+                        body(default, tm);
+                    }
+                }
+                Stmt::Return { value: None }
+                | Stmt::Pop { .. }
+                | Stmt::Goto { .. }
+                | Stmt::Label(_)
+                | Stmt::Break
+                | Stmt::Nop
+                | Stmt::Unknown(_)
+                | Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    body(&mut f.body, tm);
+}
+
+/// Remove a matching extension view around a register whose recovered C
+/// declaration already has the exact inner width and signedness.
+///
+/// The lossless AST retains machine views until types are known. At this late
+/// boundary the declaration supplies that view in every rvalue context; the
+/// subsequent widening pass reintroduces an explicit extension only where a
+/// wider consumer genuinely needs one. Mismatched signedness or width is left
+/// untouched.
+pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
+    fn expression(expr: &mut Expr, tm: &TypeMap) {
+        match expr {
+            Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                expression(lhs, tm);
+                expression(rhs, tm);
+            }
+            Expr::Un { src, .. } => expression(src, tm),
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                expression(cond, tm);
+                expression(if_true, tm);
+                expression(if_false, tm);
+            }
+            Expr::Cast { expr, .. } => expression(expr, tm),
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => {}
+        }
+
+        let replacement = match expr {
+            Expr::Cast {
+                signed: outer_signed,
+                width: outer_width,
+                expr: inner,
+            } => match inner.as_ref() {
+                Expr::Cast {
+                    signed: inner_signed,
+                    width: inner_width,
+                    expr: source,
+                } if inner_width < outer_width && outer_signed == inner_signed => {
+                    match source.as_ref() {
+                        Expr::Reg(reg)
+                            if tm.get(reg)
+                                == Some(TypeHint::Int {
+                                    signed: *inner_signed,
+                                    width: *inner_width,
+                                }) =>
+                        {
+                            Some(source.as_ref().clone())
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            *expr = replacement;
+        }
+    }
+
+    fn body(statements: &mut [Stmt], tm: &TypeMap) {
+        for statement in statements {
+            match statement {
+                Stmt::Assign { src, .. } => expression(src, tm),
+                Stmt::Store { addr, src, .. } => {
+                    expression(addr, tm);
+                    expression(src, tm);
+                }
+                Stmt::Call { target, args, .. } => {
+                    expression(target, tm);
+                    for arg in args {
+                        expression(arg, tm);
+                    }
+                }
+                Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
+                    expression(target, tm);
+                }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    expression(cond, tm);
+                    body(then_body, tm);
+                    if let Some(else_body) = else_body {
+                        body(else_body, tm);
+                    }
+                }
+                Stmt::While {
+                    cond,
+                    body: loop_body,
+                }
+                | Stmt::DoWhile {
+                    cond,
+                    body: loop_body,
+                } => {
+                    expression(cond, tm);
+                    body(loop_body, tm);
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body: loop_body,
+                } => {
+                    body(std::slice::from_mut(init.as_mut()), tm);
+                    expression(cond, tm);
+                    body(std::slice::from_mut(step.as_mut()), tm);
+                    body(loop_body, tm);
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    expression(discriminant, tm);
+                    for (_, case_body) in cases {
+                        body(case_body, tm);
+                    }
+                    if let Some(default) = default {
+                        body(default, tm);
+                    }
+                }
+                // A root return extension also carries the source-level return
+                // width (notably signed-char/short promoted to `int`). Keep it
+                // until the signature is bound; erasing it here narrows the
+                // declaration even when the expression value is unchanged.
+                Stmt::Return { .. }
+                | Stmt::Pop { .. }
+                | Stmt::Goto { .. }
+                | Stmt::Label(_)
+                | Stmt::Break
+                | Stmt::Nop
+                | Stmt::Unknown(_)
+                | Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    body(&mut f.body, tm);
 }
 
 fn fold_body(body: &mut [Stmt]) {
@@ -179,6 +478,85 @@ fn fold_expr(e: &mut Expr) {
         Expr::Cast { expr, .. } => fold_expr(expr),
         Expr::Deref { addr, .. } => fold_expr(addr),
         _ => {}
+    }
+
+    // `castN(extW(castN(x))) == castN(x)`: the widening step cannot alter the
+    // low N bits that the outer cast immediately observes. Preserve the outer
+    // cast's signedness because a later wider consumer may depend on it.
+    let narrowed_round_trip = match e {
+        Expr::Cast {
+            signed,
+            width,
+            expr: widened,
+        } => match widened.as_ref() {
+            Expr::Cast {
+                width: widened_width,
+                expr: original_narrow,
+                ..
+            } if widened_width > width => match original_narrow.as_ref() {
+                Expr::Cast {
+                    width: original_width,
+                    expr: source,
+                    ..
+                } if original_width == width => Some(Expr::Cast {
+                    signed: *signed,
+                    width: *width,
+                    expr: Box::new(source.as_ref().clone()),
+                }),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(replacement) = narrowed_round_trip {
+        *e = replacement;
+        return;
+    }
+
+    // Propagating a pure machine view to more than one use can expose the
+    // idempotent composition
+    // `extW(castN(extW(castN(x))))`. The first pair already guarantees that
+    // the value is a canonical N-bit integer in W bits, so applying the exact
+    // same view again cannot change any bit.
+    let repeated_view = match e {
+        Expr::Cast {
+            signed: outer_signed,
+            width: outer_width,
+            expr: outer_inner,
+        } => match outer_inner.as_ref() {
+            Expr::Cast {
+                signed: inner_signed,
+                width: inner_width,
+                expr: prior_outer,
+            } => match prior_outer.as_ref() {
+                Expr::Cast {
+                    signed: prior_outer_signed,
+                    width: prior_outer_width,
+                    expr: prior_inner,
+                } => match prior_inner.as_ref() {
+                    Expr::Cast {
+                        signed: prior_inner_signed,
+                        width: prior_inner_width,
+                        ..
+                    } if outer_signed == prior_outer_signed
+                        && outer_width == prior_outer_width
+                        && inner_signed == prior_inner_signed
+                        && inner_width == prior_inner_width =>
+                    {
+                        Some(prior_outer.as_ref().clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(replacement) = repeated_view {
+        *e = replacement;
+        return;
     }
 
     // Now try to collapse the current node.
@@ -404,21 +782,6 @@ fn fold_expr(e: &mut Expr) {
     // negation, not a bitwise operation; invert it into the corresponding
     // relation so it remains readable and type-correct.
     if let Expr::Cmp { op, lhs, rhs } = e {
-        // Comparing two values after the same lossless extension is exactly the
-        // comparison at the common source width. Clang -O0 emits this around
-        // signed-int loop tests (`movsxd` on both operands); retaining both
-        // machine casts in C obscures the source relation without preserving
-        // any additional semantics.
-        if let (Some(left), Some(right)) = (
-            common_extended_operand(lhs, *op),
-            common_extended_operand(rhs, *op),
-        ) {
-            if left.0 == right.0 && left.1 == right.1 && left.2 == right.2 {
-                *lhs = Box::new(left.3.clone());
-                *rhs = Box::new(right.3.clone());
-            }
-        }
-
         // Subtraction sets x86's zero flag: `(X - Y) == 0` is exactly
         // `X == Y` (and likewise for `!=`) in modular machine arithmetic.
         // Recover that relation before merging ZF with CF/SF into inclusive
@@ -944,7 +1307,176 @@ mod tests {
     }
 
     #[test]
-    fn equal_sign_extensions_do_not_change_a_signed_comparison() {
+    fn repeated_identical_machine_view_collapses_to_one_view() {
+        let view = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg("arg0"))),
+            }),
+        };
+        let mut f = one_stmt(Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(view.clone()),
+            }),
+        });
+
+        fold_constants(&mut f);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Assign { src, .. } if src == &view
+        ));
+    }
+
+    #[test]
+    fn narrowing_after_a_same_width_extension_discards_the_round_trip() {
+        let expected = Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg("arg0"))),
+            }),
+        };
+        let mut f = one_stmt(Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(reg("arg0"))),
+                    }),
+                }),
+            }),
+        });
+
+        fold_constants(&mut f);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Assign { src, .. } if src == &expected
+        ));
+    }
+
+    #[test]
+    fn exact_typed_register_view_is_removed_before_contextual_widening() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let mut f = one_stmt(Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg("arg0"))),
+            }),
+        });
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            reg("arg0"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        fold_typed_declared_views(&mut f, &tm);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Assign {
+                src: Expr::Reg(source),
+                ..
+            } if source == &reg("arg0")
+        ));
+    }
+
+    #[test]
+    fn typed_register_view_with_different_signedness_is_preserved() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let view = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg("arg0"))),
+            }),
+        };
+        let mut f = one_stmt(view.clone());
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            reg("arg0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        fold_typed_declared_views(&mut f, &tm);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Assign { src, .. } if src == &view
+        ));
+    }
+
+    #[test]
+    fn typed_declared_view_keeps_a_return_promotion_explicit() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let promoted = Expr::Cast {
+            signed: true,
+            width: 4,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 1,
+                expr: Box::new(Expr::Reg(reg("local_1"))),
+            }),
+        };
+        let mut f = Function {
+            name: "sext_i8".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(promoted.clone()),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            reg("local_1"),
+            TypeHint::Int {
+                signed: true,
+                width: 1,
+            },
+        );
+
+        fold_typed_declared_views(&mut f, &tm);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Return { value: Some(value) } if value == &promoted
+        ));
+    }
+
+    #[test]
+    fn equal_sign_extensions_fold_only_with_matching_declared_types() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
         let extended = |name| Expr::Cast {
             signed: true,
             width: 8,
@@ -961,6 +1493,30 @@ mod tests {
         });
 
         fold_constants(&mut f);
+
+        assert!(
+            matches!(
+                &f.body[0],
+                Stmt::Assign {
+                    src: Expr::Cmp { lhs, rhs, .. },
+                    ..
+                } if matches!(lhs.as_ref(), Expr::Cast { .. })
+                    && matches!(rhs.as_ref(), Expr::Cast { .. })
+            ),
+            "an untyped fold must preserve machine-width casts: {f:#?}"
+        );
+
+        let mut tm = TypeMap::default();
+        for name in ["lhs", "rhs"] {
+            tm.upsert_public(
+                reg(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+        fold_typed_comparison_extensions(&mut f, &tm);
 
         assert!(matches!(
             &f.body[0],

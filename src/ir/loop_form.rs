@@ -114,23 +114,27 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
 }
 
 fn is_unit_increment(stmt: &Stmt, target: &VReg) -> bool {
-    let mut src = match stmt {
+    let src = match stmt {
         Stmt::Assign { src, .. } | Stmt::Store { src, .. } => src,
         _ => return false,
     };
     // Width-changing ops are part of the update's machine semantics and remain
     // intact in the `for` step. They should not hide the exact underlying
     // `i + 1` identity from shape recognition.
-    while let Expr::Cast { expr, .. } = src {
-        src = expr;
+    fn without_casts(mut expr: &Expr) -> &Expr {
+        while let Expr::Cast { expr: inner, .. } = expr {
+            expr = inner;
+        }
+        expr
     }
+    let src = without_casts(src);
     matches!(
         src,
         Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
-        } if matches!(lhs.as_ref(), Expr::Reg(read) if read == target)
+        } if matches!(without_casts(lhs), Expr::Reg(read) if read == target)
             && matches!(rhs.as_ref(), Expr::Const(1))
     )
 }
@@ -521,6 +525,29 @@ mod tests {
                 }),
             },
             size: 4,
+        };
+
+        assert!(is_unit_increment(&step, &induction));
+    }
+
+    #[test]
+    fn operand_width_casts_do_not_hide_a_unit_increment() {
+        let induction = reg("local_i");
+        let step = Stmt::Assign {
+            dst: induction.clone(),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(induction.clone())),
+                    }),
+                }),
+                rhs: Box::new(Expr::Const(1)),
+            },
         };
 
         assert!(is_unit_increment(&step, &induction));

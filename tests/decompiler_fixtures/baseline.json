@@ -246,7 +246,7 @@
     "explicit_fallthrough": "pass",
     "fallthrough_chain": "fail",
     "negative_cases": "fail",
-    "negative_sparse": "fail",
+    "negative_sparse": "pass",
     "nested_switch": "pass",
     "no_default": "pass",
     "shared_bodies": "fail",
@@ -612,7 +612,7 @@
     "wrap_byte": "pass"
   },
   "11_call_shapes:gcc:O2": {
-    "call_accumulate_bytes": "fail",
+    "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "fail",
     "call_fold_wide_result": "fail",
     "call_forward_result": "pass",
@@ -678,7 +678,7 @@
     "bisect": "pass",
     "classify_run": "pass",
     "find_first": "pass",
-    "has_pair": "fail",
+    "has_pair": "pass",
     "sum_positive": "fail",
     "sum_until_zero": "pass"
   },
@@ -686,7 +686,7 @@
     "bisect": "pass",
     "classify_run": "pass",
     "find_first": "pass",
-    "has_pair": "fail",
+    "has_pair": "pass",
     "sum_positive": "pass",
     "sum_until_zero": "pass"
   },
@@ -694,7 +694,7 @@
     "bisect": "pass",
     "classify_run": "pass",
     "find_first": "pass",
-    "has_pair": "fail",
+    "has_pair": "pass",
     "sum_positive": "pass",
     "sum_until_zero": "pass"
   },

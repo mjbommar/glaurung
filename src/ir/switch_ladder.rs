@@ -432,6 +432,15 @@ fn classify(cond: &Expr, disc: &mut Option<VReg>) -> Option<Test> {
         return Some(Test::Prune(Bound::AtMost(k)));
     }
 
+    if let Some((v, k)) = equality_on_reg(cond) {
+        match disc {
+            Some(seen) if seen != v => return None,
+            Some(_) => {}
+            None => *disc = Some(v.clone()),
+        }
+        return Some(Test::Case(k));
+    }
+
     let Expr::Cmp { op, lhs, rhs } = cond else {
         return None;
     };
@@ -487,6 +496,32 @@ fn signed_i32_view(expr: &Expr) -> Option<&VReg> {
     Some(register)
 }
 
+/// The exact zero-extending 32-to-64-bit view used for x86 equality/carry
+/// flags. Equality still compares the same signed switch word; only its
+/// canonical parent representation is unsigned.
+fn unsigned_i32_view(expr: &Expr) -> Option<&VReg> {
+    let Expr::Cast {
+        signed: false,
+        width: 8,
+        expr,
+    } = expr
+    else {
+        return None;
+    };
+    let Expr::Cast {
+        signed: false,
+        width: 4,
+        expr,
+    } = expr.as_ref()
+    else {
+        return None;
+    };
+    let Expr::Reg(register) = expr.as_ref() else {
+        return None;
+    };
+    Some(register)
+}
+
 fn equality_on_reg(expr: &Expr) -> Option<(&VReg, i64)> {
     let Expr::Cmp {
         op: CmpOp::Eq,
@@ -499,6 +534,9 @@ fn equality_on_reg(expr: &Expr) -> Option<(&VReg, i64)> {
     match (lhs.as_ref(), rhs.as_ref()) {
         (Expr::Reg(register), Expr::Const(value)) | (Expr::Const(value), Expr::Reg(register)) => {
             Some((register, *value))
+        }
+        (view, Expr::Const(value)) | (Expr::Const(value), view) => {
+            unsigned_i32_view(view).map(|register| (register, i64::from(*value as u32 as i32)))
         }
         _ => None,
     }
@@ -764,6 +802,18 @@ mod tests {
         }
     }
 
+    fn unsigned_i32(v: &str) -> Expr {
+        Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(reg(v)),
+            }),
+        }
+    }
+
     fn assign(dst: &str, k: i64) -> Stmt {
         Stmt::Assign {
             dst: VReg::phys(dst),
@@ -840,7 +890,7 @@ mod tests {
             CmpOp::Eq,
             Expr::Bin {
                 op: crate::ir::types::BinOp::Or,
-                lhs: Box::new(cmp(CmpOp::Eq, reg(v), Expr::Const(k))),
+                lhs: Box::new(cmp(CmpOp::Eq, unsigned_i32(v), Expr::Const(k))),
                 rhs: Box::new(cmp(CmpOp::Slt, signed_i32, Expr::Const(k))),
             },
             Expr::Const(0),
@@ -862,7 +912,7 @@ mod tests {
                 else_body: Some(vec![inner]),
             };
             inner = Stmt::If {
-                cond: cmp(CmpOp::Eq, reg("arg0"), Expr::Const(k)),
+                cond: cmp(CmpOp::Eq, unsigned_i32("arg0"), Expr::Const(k)),
                 then_body: vec![assign("ret", 100 + k)],
                 else_body: Some(vec![prune]),
             };
@@ -872,7 +922,7 @@ mod tests {
 
     fn goto_case(value: i64, label: u64) -> Stmt {
         Stmt::If {
-            cond: cmp(CmpOp::Eq, reg("state"), Expr::Const(value)),
+            cond: cmp(CmpOp::Eq, unsigned_i32("state"), Expr::Const(value)),
             then_body: vec![Stmt::Goto { target: label }],
             else_body: None,
         }

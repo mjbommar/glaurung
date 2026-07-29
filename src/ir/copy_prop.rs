@@ -74,6 +74,112 @@ pub fn propagate_adjacent_promoted_values(f: &mut Function) {
     }
 }
 
+/// Inline a physical/scratch value definition into its immediately following,
+/// sole eager guard use.
+///
+/// Explicit machine-width lifting can produce
+/// `ret = zext(load); if ((ret & mask) == 0) break;`. The physical role name is
+/// not globally SSA, so ordinary counted propagation correctly refuses it. This
+/// local def-use proof needs no global SSA claim: only comments may intervene,
+/// the guard is the value's sole read in the whole function, neither arm nor the
+/// remaining linear body reads it, and no conditional [`Expr::Select`] can defer
+/// the moved load. The whole-function count matters for loop-carried values: a
+/// guard definition may also reach a read after the loop. Under these constraints
+/// the expression stays at the same observable evaluation point while the
+/// loop-form pass gets the source-level guard back.
+pub fn propagate_adjacent_guard_values(f: &mut Function) {
+    loop {
+        let mut reads = HashMap::new();
+        count_reads_body(&f.body, &mut reads);
+        if !fold_one_adjacent_guard_value(&mut f.body, &reads) {
+            break;
+        }
+    }
+}
+
+fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
+    for statement in body.iter_mut() {
+        let changed = match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                fold_one_adjacent_guard_value(then_body, reads)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(|body| fold_one_adjacent_guard_value(body, reads))
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                fold_one_adjacent_guard_value(body, reads)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| fold_one_adjacent_guard_value(body, reads))
+                    || default
+                        .as_mut()
+                        .is_some_and(|body| fold_one_adjacent_guard_value(body, reads))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+
+    for index in 0..body.len().saturating_sub(1) {
+        let Some((dst, source)) = (match &body[index] {
+            Stmt::Assign { dst, src }
+                if is_scratch_reg(dst)
+                    && !is_promoted_local_reg(dst)
+                    && reads.get(dst).copied() == Some(1)
+                    && !contains_reg(src, dst)
+                    && !contains_unknown(src)
+                    && !contains_select(src) =>
+            {
+                Some((dst.clone(), src.clone()))
+            }
+            _ => None,
+        }) else {
+            continue;
+        };
+        let Some(guard_index) = (index + 1..body.len())
+            .find(|next| !matches!(body[*next], Stmt::Comment(_) | Stmt::Nop))
+        else {
+            continue;
+        };
+        let Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } = &body[guard_index]
+        else {
+            continue;
+        };
+        if contains_select(cond) || count_reg_uses(cond, &dst) != 1 {
+            continue;
+        }
+        let mut other_reads = HashMap::new();
+        count_reads_body(then_body, &mut other_reads);
+        if let Some(else_body) = else_body {
+            count_reads_body(else_body, &mut other_reads);
+        }
+        count_reads_body(&body[guard_index + 1..], &mut other_reads);
+        if other_reads.get(&dst).copied().unwrap_or(0) != 0 {
+            continue;
+        }
+
+        let Stmt::If { cond, .. } = &mut body[guard_index] else {
+            unreachable!()
+        };
+        subst(cond, &HashMap::from([(dst, source)]));
+        body.remove(index);
+        return true;
+    }
+    false
+}
+
 fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>) -> bool {
     for index in 0..body.len().saturating_sub(1) {
         let candidate = match &body[index] {
@@ -188,10 +294,20 @@ fn promoted_value_width(e: &Expr) -> Option<u8> {
 /// address/name. Memory loads (`Deref`) and arithmetic are excluded — their
 /// value can change or their operands be clobbered before the use.
 fn is_pure_copyable(e: &Expr) -> bool {
-    matches!(
-        e,
-        Expr::Reg(_) | Expr::Const(_) | Expr::Addr(_) | Expr::Named { .. } | Expr::StringLit { .. }
-    )
+    match e {
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. } => true,
+        // Integer view changes are pure, cheap, and retain the source register
+        // in the expression, so the ordinary invalidation rule still removes
+        // the alias if that source is overwritten. Treating the view as a copy
+        // prevents a machine-width SSA value from becoming a fake mutable C
+        // variable merely because it has more than one use.
+        Expr::Cast { expr, .. } => is_pure_copyable(expr),
+        _ => false,
+    }
 }
 
 /// A promoted stack slot is represented as a store whose bare-register address
@@ -636,6 +752,27 @@ fn contains_unknown(e: &Expr) -> bool {
         } => contains_unknown(cond) || contains_unknown(if_true) || contains_unknown(if_false),
         Expr::Un { src, .. } => contains_unknown(src),
         Expr::Cast { expr, .. } => contains_unknown(expr),
+    }
+}
+
+fn contains_select(e: &Expr) -> bool {
+    match e {
+        Expr::Select { .. } => true,
+        Expr::Deref { addr, .. } | Expr::Un { src: addr, .. } | Expr::Cast { expr: addr, .. } => {
+            contains_select(addr)
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            contains_select(lhs) || contains_select(rhs)
+        }
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_)
+        | Expr::Reg(_)
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => false,
     }
 }
 
@@ -1360,6 +1497,52 @@ mod tests {
     }
 
     #[test]
+    fn pure_register_view_propagates_to_multiple_linear_uses() {
+        let view = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg("arg0"))),
+            }),
+        };
+        let mut f = Function {
+            name: "views".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var0"),
+                    src: view.clone(),
+                },
+                Stmt::Store {
+                    addr: Expr::Addr(0x4000),
+                    src: Expr::Reg(reg("var0")),
+                    size: 8,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("var0"))),
+                },
+            ],
+        };
+
+        propagate_copies(&mut f);
+
+        assert!(
+            !format!("{f:?}").contains("var0"),
+            "a pure view alias should not survive as a fake source variable: {f:#?}"
+        );
+        let Stmt::Store { src, .. } = &f.body[0] else {
+            panic!("expected the first consumer")
+        };
+        assert!(format!("{src:?}").contains("arg0"));
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Return { value: Some(value) } if value == &view
+        ));
+    }
+
+    #[test]
     fn overwritten_scratch_write_is_dead_store_eliminated() {
         // ret = local_c; ret = (local_c >> 1); return ret
         // The first write is overwritten before any read -> dead, removed.
@@ -1555,6 +1738,240 @@ mod tests {
                     value: Some(predicate),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn adjacent_physical_load_folds_into_its_only_eager_guard_use() {
+        // x86-64 `movzx eax, byte ptr [base+index]; test eax,eax` now carries
+        // the architectural zero-extension explicitly. After role naming the
+        // destination is the physical `ret` role rather than an SSA Temp, but
+        // the immediately following guard is still its one reaching use. Keep
+        // the load at the same evaluation point while exposing the loop guard.
+        let loaded = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 1,
+                expr: Box::new(Expr::Deref {
+                    addr: Box::new(Expr::Reg(reg("cursor"))),
+                    size: 1,
+                }),
+            }),
+        };
+        let mut f = Function {
+            name: "str_len".into(),
+            entry_va: 0,
+            body: vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::Assign {
+                        dst: reg("ret"),
+                        src: loaded.clone(),
+                    },
+                    Stmt::If {
+                        cond: Expr::Cmp {
+                            op: CmpOp::Eq,
+                            lhs: Box::new(Expr::Bin {
+                                op: BinOp::And,
+                                lhs: Box::new(Expr::Reg(reg("ret"))),
+                                rhs: Box::new(Expr::Const(255)),
+                            }),
+                            rhs: Box::new(Expr::Const(0)),
+                        },
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                    Stmt::Assign {
+                        dst: reg("cursor"),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("cursor"))),
+                            rhs: Box::new(Expr::Const(1)),
+                        },
+                    },
+                ],
+            }],
+        };
+
+        propagate_adjacent_guard_values(&mut f);
+
+        let Stmt::While { body, .. } = &f.body[0] else {
+            panic!("expected loop")
+        };
+        assert_eq!(
+            body.len(),
+            2,
+            "the physical scratch definition should disappear"
+        );
+        let Stmt::If { cond, .. } = &body[0] else {
+            panic!("the reconstructed guard must remain first")
+        };
+        let dump = format!("{cond:?}");
+        assert!(
+            dump.contains("Deref"),
+            "the load must move into the guard: {dump}"
+        );
+        assert!(
+            !dump.contains("ret"),
+            "the scratch read must be replaced: {dump}"
+        );
+    }
+
+    #[test]
+    fn adjacent_physical_guard_value_with_an_arm_read_is_kept() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Reg(reg("cursor"))),
+                        size: 1,
+                    },
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(reg("ret"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Reg(reg("ret"))),
+                    }],
+                    else_body: None,
+                },
+            ],
+        };
+        let expected = f.clone();
+
+        propagate_adjacent_guard_values(&mut f);
+
+        assert_eq!(
+            f, expected,
+            "a second reaching read must keep the definition"
+        );
+    }
+
+    #[test]
+    fn loop_header_value_read_after_the_loop_is_kept() {
+        // `while_reload_header` uses the last loaded element both to decide
+        // whether to leave the loop and in the joined return. Moving the load
+        // into the loop condition would make that joined read undefined.
+        let mut f = Function {
+            name: "while_reload_header".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::While {
+                    cond: Expr::Const(1),
+                    body: vec![
+                        Stmt::Assign {
+                            dst: reg("var3"),
+                            src: Expr::Deref {
+                                addr: Box::new(Expr::Reg(reg("cursor"))),
+                                size: 4,
+                            },
+                        },
+                        Stmt::If {
+                            cond: Expr::Cmp {
+                                op: CmpOp::Ne,
+                                lhs: Box::new(Expr::Bin {
+                                    op: BinOp::And,
+                                    lhs: Box::new(Expr::Reg(reg("var3"))),
+                                    rhs: Box::new(Expr::Const(1)),
+                                }),
+                                rhs: Box::new(Expr::Const(0)),
+                            },
+                            then_body: vec![Stmt::Break],
+                            else_body: None,
+                        },
+                    ],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("var3"))),
+                },
+            ],
+        };
+        let expected = f.clone();
+
+        propagate_adjacent_guard_values(&mut f);
+
+        assert_eq!(
+            f, expected,
+            "a joined post-loop read must keep the reaching loop definition"
+        );
+    }
+
+    #[test]
+    fn adjacent_physical_value_is_not_moved_across_select_evaluation() {
+        let mut source_select = Function {
+            name: "source_select".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Select {
+                        cond: Box::new(Expr::Reg(reg("choose_load"))),
+                        if_true: Box::new(Expr::Deref {
+                            addr: Box::new(Expr::Reg(reg("cursor"))),
+                            size: 1,
+                        }),
+                        if_false: Box::new(Expr::Const(0)),
+                        width: 1,
+                    },
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(reg("ret"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                },
+            ],
+        };
+        let expected_source = source_select.clone();
+
+        propagate_adjacent_guard_values(&mut source_select);
+
+        assert_eq!(
+            source_select, expected_source,
+            "a select source must retain its original conditional evaluation"
+        );
+
+        let mut guard_select = Function {
+            name: "guard_select".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Reg(reg("cursor"))),
+                        size: 1,
+                    },
+                },
+                Stmt::If {
+                    cond: Expr::Select {
+                        cond: Box::new(Expr::Reg(reg("skip_read"))),
+                        if_true: Box::new(Expr::Const(1)),
+                        if_false: Box::new(Expr::Reg(reg("ret"))),
+                        width: 1,
+                    },
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                },
+            ],
+        };
+        let expected_guard = guard_select.clone();
+
+        propagate_adjacent_guard_values(&mut guard_select);
+
+        assert_eq!(
+            guard_select, expected_guard,
+            "a select guard must not make an eager load conditional"
         );
     }
 

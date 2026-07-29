@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import re
 import subprocess
@@ -415,3 +416,88 @@ def test_clang_o0_range_default_recovers_direct_return_switch(
     results = json.loads(compared.stdout)
     assert compared.returncode == 0, results
     assert results["dispatch"]["status"] == "pass", results
+
+
+@pytest.mark.parametrize("compiler", ["gcc", "clang"])
+def test_optimized_early_default_recovers_one_exhaustive_switch(
+    tmp_path: Path, compiler: str
+) -> None:
+    """An optimized early default return must join the following switch."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "switch_jt.c"
+    binary = tmp_path / f"switch_jt-{compiler}-O2.so"
+    compiled = subprocess.run(
+        [
+            compiler,
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["dispatch"])
+    assert code is not None
+    switch_at = code.find("switch (")
+    assert switch_at >= 0, code
+    switch_open = code.find("{", switch_at)
+    switch_close = _matching_brace(code, switch_open)
+    switch_body = code[switch_open:switch_close]
+    for case in range(8):
+        assert f"case {case}:" in switch_body, code
+    assert "default:" in switch_body, code
+    assert switch_body.count("return ") >= 9, code
+    assert "if (" not in code[:switch_at], code
+
+    rebuilt = D.build_so(
+        code,
+        tmp_path,
+        f"dec_dispatch_{compiler}_o2",
+        link_against=str(binary),
+    )
+    assert rebuilt is not None, code
+
+    # GCC can fragment the O2 DWARF signature beyond what the generic harness
+    # currently reconstructs. Execute the known source prototype directly so
+    # that missing debug metadata cannot turn this semantic check structural.
+    original_lib = ctypes.CDLL(str(binary))
+    rebuilt_lib = ctypes.CDLL(str(rebuilt))
+    original_dispatch = original_lib.dispatch
+    rebuilt_dispatch = rebuilt_lib.dispatch
+    for function in [original_dispatch, rebuilt_dispatch]:
+        function.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
+        function.restype = ctypes.c_int
+    for op in range(-2, 10):
+        for lhs, rhs in [(-9, -3), (-3, 9), (0, -1), (7, 5)]:
+            assert rebuilt_dispatch(op, lhs, rhs) == original_dispatch(op, lhs, rhs)
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "switch_jt",
+            "--function",
+            "dispatch",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "64",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["dispatch"]["status"] in {"pass", "structural"}, results

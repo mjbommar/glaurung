@@ -550,6 +550,7 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
     // exits; `Unstructured` is explicitly the lossless fallback contract.
     if has_multi_latch_loop_with_distinct_exits(cfg)
         || has_loop_conditional_with_join_beyond_loop(cfg)
+        || has_inner_loop_exit_that_reenters_via_outer_cycle(cfg)
     {
         return Region::Unstructured((0..lf.blocks.len()).collect());
     }
@@ -565,6 +566,57 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
         parts.push(Region::Unstructured(leftover));
         Region::Seq(parts)
     }
+}
+
+/// An inner natural loop can return through its header while its latch takes an
+/// exhaustion edge, executes an outer-loop reload/reset, and later re-enters the
+/// inner header. `Region::While` has only the header's distinguished exit, so
+/// absorbing that latch exit into the body drops the intervening outer-loop
+/// blocks. Preserve the labelled CFG until the region algebra can express an
+/// owned `break` followed by outer-loop work.
+///
+/// The terminal-header-exit restriction is load-bearing. Ordinary nested loops
+/// also leave an inner cycle and later re-enter it through an outer latch, but
+/// their header exit is the non-terminal continuation after the inner loop. They
+/// remain representable by the existing nested-loop path and must not force a
+/// whole-function fallback.
+fn has_inner_loop_exit_that_reenters_via_outer_cycle(cfg: &Cfg) -> bool {
+    for header in 0..cfg.succs.len() {
+        let tails: Vec<usize> = cfg.preds[header]
+            .iter()
+            .copied()
+            .filter(|&tail| cfg.dominates(header, tail))
+            .collect();
+        if tails.is_empty() {
+            continue;
+        }
+
+        let mut body = HashSet::new();
+        for tail in tails {
+            body.extend(natural_loop_body(header, tail, cfg));
+        }
+        let header_exits: HashSet<usize> = cfg.succs[header]
+            .iter()
+            .copied()
+            .filter(|succ| !body.contains(succ))
+            .collect();
+        if header_exits.len() != 1 || !header_exits.iter().all(|&exit| cfg.succs[exit].is_empty()) {
+            continue;
+        }
+
+        for block in body.iter().copied().filter(|&block| block != header) {
+            for exit in cfg.succs[block]
+                .iter()
+                .copied()
+                .filter(|succ| !body.contains(succ))
+            {
+                if !header_exits.contains(&exit) && can_reach(exit, header, cfg) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn has_multi_latch_loop_with_distinct_exits(cfg: &Cfg) -> bool {
@@ -2012,6 +2064,66 @@ mod tests {
         let r = recover_for(&lf);
         assert_eq!(r, Region::Unstructured((0..8).collect()), "{r:#?}");
         assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
+    fn nested_loop_with_distinct_match_and_exhaustion_exits_falls_back_totally() {
+        // Reduced GCC -O2 `has_pair`. B4/B3 is the inner search loop: B4's
+        // match edge returns through B5, while B3's exhausted edge reaches the
+        // outer latch B6 and eventually re-enters through B2. A Region::While
+        // has only one distinguished exit. Treating B5 as that exit absorbed
+        // B6 into the loop body but dropped B2's reload/reset, causing an
+        // out-of-bounds search and false positive return on a real 16-element
+        // differential vector.
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, cond(0x1700), vec![0x1100, 0x1700]), // empty input guard
+            (0x1100, cond(0x1700), vec![0x1200, 0x1700]), // one-element guard
+            (0x1200, vec![Op::Nop], vec![0x1400]),        // load a[i], reset j
+            (0x1300, cond(0x1600), vec![0x1400, 0x1600]), // inner latch/exhausted
+            (0x1400, cond(0x1500), vec![0x1300, 0x1500]), // compare/match
+            (0x1500, vec![Op::Return], vec![]),           // found
+            (0x1600, cond(0x1200), vec![0x1200, 0x1700]), // outer latch/back-edge
+            (0x1700, vec![Op::Return], vec![]),           // not found
+        ]);
+
+        let r = recover_for(&lf);
+        assert_eq!(r, Region::Unstructured((0..8).collect()), "{r:#?}");
+        assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
+    fn nonterminal_inner_exit_does_not_force_a_whole_function_fallback() {
+        // Both exits from the inner cycle continue into outer-loop work. This
+        // is the ordinary nested-loop class used by matrix/sort code, not the
+        // `has_pair` class where the header exit returns from the function.
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1200]),
+            (0x1100, vec![Op::Nop], vec![0x1200]),
+            (0x1200, cond(0x1400), vec![0x1300, 0x1400]), // inner header / normal exit
+            (0x1300, cond(0x1600), vec![0x1200, 0x1600]), // back-edge / secondary exit
+            (0x1400, vec![Op::Nop], vec![0x1600]),        // post-inner continuation
+            (0x1500, vec![Op::Nop], vec![0x1600]),
+            (0x1600, cond(0x1200), vec![0x1200, 0x1700]), // outer latch / re-entry
+            (0x1700, vec![Op::Return], vec![]),
+        ]);
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+
+        assert!(!has_inner_loop_exit_that_reenters_via_outer_cycle(&cfg));
     }
 
     #[test]
