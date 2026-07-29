@@ -28,7 +28,7 @@
 //! `push %X;` and drops the trailing `rsp += N; return;`.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::{BinOp, VReg};
+use crate::ir::types::{BinOp, CmpOp, VReg};
 
 /// Run the pass over `f`'s body.
 pub fn recognise_x86_prologue(f: &mut Function) {
@@ -67,6 +67,33 @@ fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
         Expr::Const(width) if *width > 0 => Some(*width),
         _ => None,
     }
+}
+
+/// Return the stack-allocation width when `predicate` is the dead unsigned
+/// borrow generated for the immediately following `sub rsp, N`.
+fn dead_rsp_sub_predicate(predicate: &Stmt, sub: &Stmt, suffix: &[Stmt]) -> Option<i64> {
+    let width = rsp_sub_width(sub)?;
+    let Stmt::Assign {
+        dst: VReg::Temp(temp),
+        src: Expr::Cmp {
+            op: CmpOp::Ult,
+            lhs,
+            rhs,
+        },
+    } = predicate
+    else {
+        return None;
+    };
+    if !matches!(lhs.as_ref(), Expr::Reg(reg) if is_rsp(reg))
+        || !matches!(rhs.as_ref(), Expr::Const(n) if *n == width)
+    {
+        return None;
+    }
+    let predicate_reg = VReg::Temp(*temp);
+    (!suffix
+        .iter()
+        .any(|stmt| crate::ir::dead_stores::stmt_reads(stmt, &predicate_reg)))
+    .then_some(width)
 }
 
 fn collapse_prologue(body: &mut Vec<Stmt>) {
@@ -112,7 +139,13 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
     // Step 3 (optional): `%rsp = (%rsp - N);` or `%rsp = (%rsp + -N);`
     let mut end = set_fp_idx + 1;
     let mut frame_size: Option<i64> = None;
-    if end < body.len() {
+    if end + 1 < body.len() {
+        if let Some(width) = dead_rsp_sub_predicate(&body[end], &body[end + 1], &body[end + 2..]) {
+            frame_size = Some(width);
+            end += 2;
+        }
+    }
+    if frame_size.is_none() && end < body.len() {
         if let Stmt::Assign {
             dst,
             src: Expr::Bin { op, lhs, rhs },
@@ -344,6 +377,79 @@ mod tests {
             Stmt::Comment(s) if s.contains("x86-64 prologue") && s.contains("32")
         ));
         assert!(matches!(&f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn dead_stack_allocation_carry_does_not_split_the_frame_prologue() {
+        // Lowering `sub rsp, 0x30` records its unsigned-borrow predicate before
+        // the stack-pointer write.  The predicate is machine-only when no later
+        // statement reads it, so it must not strand the allocation in emitted C.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                push_rbp(),
+                mov_rbp_rsp(),
+                Stmt::Assign {
+                    dst: VReg::Temp(32),
+                    src: Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Ult,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(0x30)),
+                    },
+                },
+                sub_rsp(0x30),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2, "stranded frame setup: {:#?}", f.body);
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Comment(text) if text == "x86-64 prologue: save rbp, frame 48 bytes"
+        ));
+        assert!(matches!(&f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn live_stack_allocation_predicate_is_not_hidden() {
+        let predicate = VReg::Temp(32);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                push_rbp(),
+                mov_rbp_rsp(),
+                Stmt::Assign {
+                    dst: predicate.clone(),
+                    src: Expr::Cmp {
+                        op: CmpOp::Ult,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(0x30)),
+                    },
+                },
+                sub_rsp(0x30),
+                Stmt::If {
+                    cond: Expr::Reg(predicate),
+                    then_body: vec![Stmt::Return { value: None }],
+                    else_body: None,
+                },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Comment(text) if text == "x86-64 prologue: save rbp"
+        ));
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Assign { dst, .. } if dst == &VReg::Temp(32)
+        ));
+        assert!(matches!(&f.body[2], Stmt::Assign { dst, .. } if is_rsp(dst)));
     }
 
     #[test]

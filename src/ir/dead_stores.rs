@@ -200,7 +200,7 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
     }
 }
 
-fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
+pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
     match s {
         Stmt::Assign { src, .. } => expr_reads(src, dst),
         Stmt::Store { addr, src, .. } => expr_reads(addr, dst) || expr_reads(src, dst),
