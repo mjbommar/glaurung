@@ -187,7 +187,26 @@ fn drop_unreferenced(body: &mut Vec<Stmt>, referenced: &HashSet<u64>) {
         }
     }
 
-    body.retain(|s| !matches!(s, Stmt::Label(va) if !referenced.contains(va)));
+    // An imported/thunk region can end in an indirect jump or in the Call +
+    // Return produced by tail-call recovery. Region recovery may place that
+    // stub before the current function's lexical fallthrough. The following
+    // label is then the only remaining boundary for that fallthrough because
+    // structuring consumed its explicit conditional edge. Keep every label
+    // immediately after an unconditional terminator: without CFG provenance at
+    // this layer, deleting such a boundary is not a sound reachability proof.
+    let after_terminator: HashSet<u64> =
+        body.windows(2)
+            .filter_map(|pair| match pair {
+                [Stmt::Return { .. }
+                | Stmt::Goto { .. }
+                | Stmt::IndirectGoto { .. }
+                | Stmt::Break, Stmt::Label(va)] => Some(*va),
+                _ => None,
+            })
+            .collect();
+    body.retain(|s| {
+        !matches!(s, Stmt::Label(va) if !referenced.contains(va) && !after_terminator.contains(va))
+    });
 }
 
 #[cfg(test)]
@@ -347,5 +366,83 @@ mod tests {
         prune_unreachable_tails(&mut f);
 
         assert_eq!(f, expected, "a live goto keeps its target entry reachable");
+    }
+
+    #[test]
+    fn block_after_indirect_tail_jump_remains_a_region_entry() {
+        // Real `describe_change` contains imported tail-call blocks in the
+        // recovered region before the function's conditional fallthrough.
+        // The fallthrough label has no explicit Goto after structuring, but it
+        // is still the boundary that prevents unreachable-tail cleanup from
+        // deleting the rest of the function after the imported IndirectGoto.
+        let mut f = Function {
+            name: "describe_change".into(),
+            entry_va: 0x3630,
+            body: vec![
+                Stmt::IndirectGoto {
+                    target: Expr::Reg(crate::ir::types::VReg::phys("plt_target")),
+                },
+                Stmt::Label(0x364a),
+                Stmt::Assign {
+                    dst: crate::ir::types::VReg::phys("result"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(crate::ir::types::VReg::phys("result"))),
+                },
+            ],
+        };
+
+        prune_unreachable_tails(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            4,
+            "fallthrough region was deleted: {:#?}",
+            f.body
+        );
+        assert!(matches!(f.body[1], Stmt::Label(0x364a)));
+        assert!(matches!(f.body[2], Stmt::Assign { .. }));
+    }
+
+    #[test]
+    fn block_after_recovered_tail_call_return_remains_a_region_entry() {
+        // Tail-call recovery turns the indirect PLT jump into Call + Return
+        // before label cleanup. `describe_change` therefore reaches this exact
+        // spelling when its real fallthrough region follows imported stubs.
+        let mut f = Function {
+            name: "describe_change".into(),
+            entry_va: 0x3630,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2480,
+                        name: "free".into(),
+                    },
+                    args: vec![],
+                    dst: None,
+                },
+                Stmt::Return { value: None },
+                Stmt::Label(0x364a),
+                Stmt::Assign {
+                    dst: crate::ir::types::VReg::phys("result"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(crate::ir::types::VReg::phys("result"))),
+                },
+            ],
+        };
+
+        prune_unreachable_tails(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            5,
+            "fallthrough region was deleted: {:#?}",
+            f.body
+        );
+        assert!(matches!(f.body[2], Stmt::Label(0x364a)));
+        assert!(matches!(f.body[3], Stmt::Assign { .. }));
     }
 }
